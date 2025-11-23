@@ -1,6 +1,8 @@
 use adk_core::{CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Tool, ToolContext};
 use adk_tool::FunctionTool;
 use async_trait::async_trait;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -43,6 +45,17 @@ impl ToolContext for MockToolContext {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct AddParams {
+    a: i32,
+    b: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct AddResult {
+    sum: i32,
+}
+
 #[tokio::test]
 async fn test_function_tool_basic() {
     let tool = FunctionTool::new("add", "Adds two numbers", |_ctx, args| async move {
@@ -58,6 +71,28 @@ async fn test_function_tool_basic() {
     let ctx = Arc::new(MockToolContext::new()) as Arc<dyn ToolContext>;
     let result = tool.execute(ctx, json!({"a": 5, "b": 3})).await.unwrap();
     assert_eq!(result, json!(8));
+}
+
+#[tokio::test]
+async fn test_function_tool_with_schema() {
+    let tool = FunctionTool::new("add", "Adds two numbers", |_ctx, args| async move {
+        let a = args["a"].as_i64().unwrap();
+        let b = args["b"].as_i64().unwrap();
+        Ok(json!({"sum": a + b}))
+    })
+    .with_parameters_schema::<AddParams>()
+    .with_response_schema::<AddResult>();
+
+    assert!(tool.parameters_schema().is_some());
+    assert!(tool.response_schema().is_some());
+
+    let params_schema = tool.parameters_schema().unwrap();
+    assert!(params_schema["properties"]["a"].is_object());
+    assert!(params_schema["properties"]["b"].is_object());
+
+    let ctx = Arc::new(MockToolContext::new()) as Arc<dyn ToolContext>;
+    let result = tool.execute(ctx, json!({"a": 5, "b": 3})).await.unwrap();
+    assert_eq!(result["sum"], json!(8));
 }
 
 #[tokio::test]
@@ -92,3 +127,4 @@ async fn test_function_tool_error() {
     let result = tool.execute(ctx, json!({})).await;
     assert!(result.is_err());
 }
+
