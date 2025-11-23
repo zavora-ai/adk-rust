@@ -31,12 +31,19 @@ path = "parallel.rs"
 name = "loop_workflow"
 path = "loop_workflow.rs"
 
+[[example]]
+name = "load_artifacts"
+path = "load_artifacts.rs"
+
 [dependencies]
 adk-core = { path = "../adk-core" }
 adk-agent = { path = "../adk-agent" }
 adk-model = { path = "../adk-model" }
 adk-tool = { path = "../adk-tool" }
 adk-cli = { path = "../adk-cli" }
+adk-artifact = { path = "../adk-artifact" }
+adk-runner = { path = "../adk-runner" }
+adk-session = { path = "../adk-session" }
 tokio = { version = "1.40", features = ["full"] }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
