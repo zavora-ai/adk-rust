@@ -14,6 +14,7 @@ pub struct LlmAgent {
     instruction: Option<String>,
     tools: Vec<Arc<dyn Tool>>,
     sub_agents: Vec<Arc<dyn Agent>>,
+    output_key: Option<String>,
 }
 
 impl std::fmt::Debug for LlmAgent {
@@ -36,6 +37,7 @@ pub struct LlmAgentBuilder {
     instruction: Option<String>,
     tools: Vec<Arc<dyn Tool>>,
     sub_agents: Vec<Arc<dyn Agent>>,
+    output_key: Option<String>,
 }
 
 impl LlmAgentBuilder {
@@ -47,6 +49,7 @@ impl LlmAgentBuilder {
             instruction: None,
             tools: Vec::new(),
             sub_agents: Vec::new(),
+            output_key: None,
         }
     }
 
@@ -62,6 +65,11 @@ impl LlmAgentBuilder {
 
     pub fn instruction(mut self, instruction: impl Into<String>) -> Self {
         self.instruction = Some(instruction.into());
+        self
+    }
+
+    pub fn output_key(mut self, key: impl Into<String>) -> Self {
+        self.output_key = Some(key.into());
         self
     }
 
@@ -87,6 +95,7 @@ impl LlmAgentBuilder {
             instruction: self.instruction,
             tools: self.tools,
             sub_agents: self.sub_agents,
+            output_key: self.output_key,
         })
     }
 }
@@ -164,6 +173,7 @@ impl Agent for LlmAgent {
         let invocation_id = ctx.invocation_id().to_string();
         let tools = self.tools.clone();
         let instruction = self.instruction.clone();
+        let output_key = self.output_key.clone();
 
         let s = stream! {
             let mut conversation_history = Vec::new();
@@ -247,6 +257,25 @@ impl Agent for LlmAgent {
                 let mut event = Event::new(&invocation_id);
                 event.author = agent_name.clone();
                 event.content = response.content.clone();
+                
+                // Handle output_key: save agent output to state_delta
+                if let Some(ref output_key) = output_key {
+                    if let Some(ref content) = event.content {
+                        let mut text_parts = String::new();
+                        for part in &content.parts {
+                            if let Part::Text { text } = part {
+                                text_parts.push_str(text);
+                            }
+                        }
+                        if !text_parts.is_empty() {
+                            event.actions.state_delta.insert(
+                                output_key.clone(),
+                                serde_json::Value::String(text_parts),
+                            );
+                        }
+                    }
+                }
+                
                 yield Ok(event);
 
                 if !has_function_calls {

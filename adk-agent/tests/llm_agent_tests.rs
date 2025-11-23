@@ -240,3 +240,37 @@ async fn test_llm_agent_with_function_tool() {
 
     assert!(has_time_info, "Response should mention time");
 }
+
+#[tokio::test]
+async fn test_llm_agent_output_key() {
+    let api_key = std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY not set");
+    let model = GeminiModel::new(&api_key, "gemini-2.0-flash-exp")
+        .expect("Failed to create model");
+
+    let agent = LlmAgentBuilder::new("test_agent")
+        .description("Test agent")
+        .model(Arc::new(model))
+        .instruction("Say 'Hello World' and nothing else")
+        .output_key("agent_response")
+        .build()
+        .expect("Failed to build agent");
+
+    let ctx = Arc::new(TestContext::new("test"));
+    let mut stream = agent.run(ctx).await.expect("Failed to run agent");
+
+    use futures::StreamExt;
+    let mut found_state_delta = false;
+    while let Some(result) = stream.next().await {
+        let event = result.expect("Event error");
+        if !event.actions.state_delta.is_empty() {
+            assert!(event.actions.state_delta.contains_key("agent_response"));
+            let value = &event.actions.state_delta["agent_response"];
+            assert!(value.is_string());
+            let text = value.as_str().unwrap();
+            assert!(text.contains("Hello") || text.contains("hello"));
+            found_state_delta = true;
+        }
+    }
+
+    assert!(found_state_delta, "No state_delta found in events");
+}
