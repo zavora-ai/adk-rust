@@ -1,0 +1,17 @@
+[package]
+name = "adk-examples"
+version = "0.1.0"
+edition = "2021"
+
+[[example]]
+name = "quickstart"
+path = "quickstart.rs"
+
+[dependencies]
+adk-core = { path = "../adk-core" }
+adk-agent = { path = "../adk-agent" }
+adk-model = { path = "../adk-model" }
+adk-tool = { path = "../adk-tool" }
+adk-cli = { path = "../adk-cli" }
+tokio = { version = "1.40", features = ["full"] }
+anyhow = "1.0"

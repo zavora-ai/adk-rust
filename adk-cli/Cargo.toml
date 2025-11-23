@@ -1,0 +1,27 @@
+[package]
+name = "adk-cli"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "adk_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "adk"
+path = "src/main.rs"
+
+[dependencies]
+adk-core = { path = "../adk-core" }
+adk-agent = { path = "../adk-agent" }
+adk-model = { path = "../adk-model" }
+adk-runner = { path = "../adk-runner" }
+adk-server = { path = "../adk-server" }
+adk-session = { path = "../adk-session" }
+adk-artifact = { path = "../adk-artifact" }
+clap = { version = "4.5", features = ["derive"] }
+rustyline = "14.0"
+tokio = { version = "1.40", features = ["full"] }
+anyhow = "1.0"
+futures = "0.3"
+axum = "0.7"
