@@ -78,6 +78,14 @@ impl Tool for FunctionTool {
         self.long_running
     }
 
+    fn parameters_schema(&self) -> Option<Value> {
+        self.parameters_schema.clone()
+    }
+
+    fn response_schema(&self) -> Option<Value> {
+        self.response_schema.clone()
+    }
+
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         (self.handler)(ctx, args).await
     }

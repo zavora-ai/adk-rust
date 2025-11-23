@@ -12,6 +12,8 @@ async-trait.workspace = true
 tokio.workspace = true
 futures.workspace = true
 async-stream.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 adk-model = { path = "../adk-model" }
+adk-tool = { path = "../adk-tool" }

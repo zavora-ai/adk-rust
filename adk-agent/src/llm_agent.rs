@@ -1,8 +1,10 @@
 use adk_core::{
-    Agent, Content, Event, EventStream, InvocationContext, Llm, LlmRequest, Part, Result, Tool,
+    Agent, CallbackContext, Content, Event, EventActions, EventStream, InvocationContext, Llm,
+    LlmRequest, MemoryEntry, Part, ReadonlyContext, Result, Tool, ToolContext,
 };
 use async_stream::stream;
 use async_trait::async_trait;
+use serde_json::Value;
 use std::sync::Arc;
 
 pub struct LlmAgent {
@@ -89,30 +91,56 @@ impl LlmAgentBuilder {
     }
 }
 
-impl LlmAgent {
-    fn build_request(&self, ctx: &Arc<dyn InvocationContext>) -> LlmRequest {
-        let mut contents = Vec::new();
+// Simple ToolContext implementation for tool execution
+struct SimpleToolContext {
+    invocation_id: String,
+    agent_name: String,
+    actions: EventActions,
+    content: Content,
+}
 
-        // Add instruction as system message if present
-        if let Some(instruction) = &self.instruction {
-            contents.push(Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text {
-                    text: instruction.clone(),
-                }],
-            });
-        }
+#[async_trait]
+impl ReadonlyContext for SimpleToolContext {
+    fn invocation_id(&self) -> &str {
+        &self.invocation_id
+    }
+    fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+    fn user_id(&self) -> &str {
+        ""
+    }
+    fn app_name(&self) -> &str {
+        ""
+    }
+    fn session_id(&self) -> &str {
+        ""
+    }
+    fn branch(&self) -> &str {
+        ""
+    }
+    fn user_content(&self) -> &Content {
+        &self.content
+    }
+}
 
-        // Add user content
-        let user_content = ctx.user_content();
-        contents.push(user_content.clone());
+#[async_trait]
+impl CallbackContext for SimpleToolContext {
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
+}
 
-        LlmRequest {
-            model: self.model.name().to_string(),
-            contents,
-            tools: Default::default(),
-            config: None,
-        }
+#[async_trait]
+impl ToolContext for SimpleToolContext {
+    fn function_call_id(&self) -> &str {
+        &self.invocation_id
+    }
+    fn actions(&self) -> &EventActions {
+        &self.actions
+    }
+    async fn search_memory(&self, _query: &str) -> Result<Vec<MemoryEntry>> {
+        Ok(vec![])
     }
 }
 
@@ -131,26 +159,145 @@ impl Agent for LlmAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
-        let request = self.build_request(&ctx);
         let model = self.model.clone();
         let agent_name = self.name.clone();
         let invocation_id = ctx.invocation_id().to_string();
+        let tools = self.tools.clone();
+        let instruction = self.instruction.clone();
 
         let s = stream! {
-            // Call model (non-streaming for now)
-            let mut response_stream = model.generate_content(request, false).await?;
+            let mut conversation_history = Vec::new();
 
-            // Get first (and only) response
-            use futures::StreamExt;
-            if let Some(result) = response_stream.next().await {
-                let response = result?;
+            // Add instruction if present
+            if let Some(instr) = instruction {
+                conversation_history.push(Content {
+                    role: "user".to_string(),
+                    parts: vec![Part::Text { text: instr }],
+                });
+            }
+
+            // Add user content
+            conversation_history.push(ctx.user_content().clone());
+
+            // Build tool declarations for Gemini
+            let mut tool_declarations = std::collections::HashMap::new();
+            for tool in &tools {
+                // Build FunctionDeclaration JSON
+                let mut decl = serde_json::json!({
+                    "name": tool.name(),
+                    "description": tool.description(),
+                });
                 
-                // Create event with response content
+                if let Some(params) = tool.parameters_schema() {
+                    decl["parameters"] = params;
+                }
+                
+                if let Some(response) = tool.response_schema() {
+                    decl["response"] = response;
+                }
+                
+                tool_declarations.insert(tool.name().to_string(), decl);
+            }
+
+            // Multi-turn loop with max iterations
+            let max_iterations = 10;
+            let mut iteration = 0;
+            
+            loop {
+                iteration += 1;
+                if iteration > max_iterations {
+                    yield Err(adk_core::AdkError::Agent(
+                        format!("Max iterations ({}) exceeded", max_iterations)
+                    ));
+                    return;
+                }
+
+                // Build request with conversation history
+                let request = LlmRequest {
+                    model: model.name().to_string(),
+                    contents: conversation_history.clone(),
+                    tools: tool_declarations.clone(),
+                    config: None,
+                };
+
+                // Call model
+                let mut response_stream = model.generate_content(request, false).await?;
+
+                use futures::StreamExt;
+                let response = match response_stream.next().await {
+                    Some(Ok(resp)) => resp,
+                    Some(Err(e)) => {
+                        yield Err(e);
+                        return;
+                    }
+                    None => return,
+                };
+
+                // Check if response has function calls
+                let has_function_calls = response.content.as_ref()
+                    .map(|c| c.parts.iter().any(|p| matches!(p, Part::FunctionCall { .. })))
+                    .unwrap_or(false);
+
+                // Add model response to history FIRST (before executing tools)
+                if let Some(content) = response.content.clone() {
+                    conversation_history.push(content);
+                }
+
+                // Yield model response event
                 let mut event = Event::new(&invocation_id);
                 event.author = agent_name.clone();
                 event.content = response.content.clone();
-                
                 yield Ok(event);
+
+                if !has_function_calls {
+                    // No function calls, we're done
+                    break;
+                }
+
+                // Execute function calls and add responses to history
+                if let Some(content) = &response.content {
+                    for part in &content.parts {
+                        if let Part::FunctionCall { name, args } = part {
+                            // Find and execute tool
+                            let tool_result = if let Some(tool) = tools.iter().find(|t| t.name() == name) {
+                                let tool_ctx = Arc::new(SimpleToolContext {
+                                    invocation_id: invocation_id.clone(),
+                                    agent_name: agent_name.clone(),
+                                    actions: EventActions::default(),
+                                    content: Content::new("user"),
+                                }) as Arc<dyn ToolContext>;
+                                
+                                match tool.execute(tool_ctx, args.clone()).await {
+                                    Ok(result) => result,
+                                    Err(e) => serde_json::json!({ "error": e.to_string() }),
+                                }
+                            } else {
+                                serde_json::json!({ "error": format!("Tool {} not found", name) })
+                            };
+
+                            // Yield tool execution event
+                            let mut tool_event = Event::new(&invocation_id);
+                            tool_event.author = agent_name.clone();
+                            tool_event.content = Some(Content {
+                                role: "function".to_string(),
+                                parts: vec![Part::FunctionResponse {
+                                    name: name.clone(),
+                                    response: tool_result.clone(),
+                                }],
+                            });
+                            yield Ok(tool_event);
+
+                            // Add function response to history
+                            conversation_history.push(Content {
+                                role: "function".to_string(),
+                                parts: vec![Part::FunctionResponse {
+                                    name: name.clone(),
+                                    response: tool_result,
+                                }],
+                            });
+                        }
+                    }
+                }
             }
         };
 

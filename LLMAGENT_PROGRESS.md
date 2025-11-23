@@ -3,6 +3,41 @@
 ## Overview
 LlmAgent is the most critical agent type - it wraps an LLM model and orchestrates tool execution, multi-turn conversations, and agent transfers.
 
+## ⚠️ CRITICAL LIMITATION: Tool Type Mixing
+
+**GenAI API Limitation:** Cannot mix different tool types in a single agent!
+
+### The Problem:
+- ❌ **Cannot** have both `GoogleSearch` (Gemini built-in) AND `FunctionTool` (custom) in same agent
+- ❌ **Cannot** mix different Gemini tool types (search, code execution, etc.)
+
+### The Solution: Agent-as-Tool Pattern
+- ✅ Create **separate sub-agents** for each tool type
+- ✅ Use **AgentTool** to wrap sub-agents as tools
+- ✅ Root agent delegates to sub-agents via tool calls
+
+### Example Architecture:
+```
+Root Agent (no direct tools)
+├── SearchAgent (GoogleSearch only)
+├── PoemAgent (FunctionTool only)
+└── CodeAgent (CodeExecution only)
+```
+
+### Implementation Status:
+- ✅ GoogleSearchTool marked as Gemini-internal (cannot execute locally)
+- ✅ FunctionTool supports custom functions
+- ❌ **AgentTool not yet implemented** (Phase 3)
+- ❌ Agent transfer not yet implemented (Phase 3)
+
+### Current Workaround:
+For Phase 2, we'll test with **single tool type per agent**:
+- Test 1: Agent with FunctionTool only
+- Test 2: Agent with GoogleSearch only (when Gemini supports it)
+- Phase 3: Implement AgentTool for proper composition
+
+---
+
 ## Phase 1: Core LlmAgent ✅ COMPLETE
 
 **Completed:** 2025-11-23

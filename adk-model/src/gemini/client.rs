@@ -81,16 +81,63 @@ impl Llm for GeminiModel {
     async fn generate_content(&self, req: LlmRequest, stream: bool) -> Result<LlmResponseStream> {
         let mut builder = self.client.generate_content();
 
-        // Add contents
+        // Add contents using proper builder methods
         for content in &req.contents {
-            for part in &content.parts {
-                if let Part::Text { text } = part {
-                    if content.role == "user" {
-                        builder = builder.with_user_message(text);
-                    } else {
-                        builder = builder.with_model_message(text);
+            match content.role.as_str() {
+                "user" => {
+                    // For user messages, extract text parts
+                    for part in &content.parts {
+                        if let Part::Text { text } = part {
+                            builder = builder.with_user_message(text);
+                        }
                     }
                 }
+                "model" => {
+                    // For model messages, build gemini Content
+                    let mut gemini_parts = Vec::new();
+                    for part in &content.parts {
+                        match part {
+                            Part::Text { text } => {
+                                gemini_parts.push(gemini::Part::Text {
+                                    text: text.clone(),
+                                    thought: None,
+                                    thought_signature: None,
+                                });
+                            }
+                            Part::FunctionCall { name, args } => {
+                                gemini_parts.push(gemini::Part::FunctionCall {
+                                    function_call: gemini::FunctionCall {
+                                        name: name.clone(),
+                                        args: args.clone(),
+                                        thought_signature: None,
+                                    },
+                                    thought_signature: None,
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !gemini_parts.is_empty() {
+                        let model_content = gemini::Content {
+                            role: Some(gemini::Role::Model),
+                            parts: Some(gemini_parts),
+                        };
+                        builder = builder.with_message(gemini::Message {
+                            content: model_content,
+                            role: gemini::Role::Model,
+                        });
+                    }
+                }
+                "function" => {
+                    // For function responses
+                    for part in &content.parts {
+                        if let Part::FunctionResponse { name, response } = part {
+                            builder = builder.with_function_response(name, response.clone())
+                                .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -107,8 +154,18 @@ impl Llm for GeminiModel {
         }
 
         // Add tools
-        for (_name, tool_value) in &req.tools {
-            if let Ok(tool) = serde_json::from_value::<gemini::Tool>(tool_value.clone()) {
+        if !req.tools.is_empty() {
+            let mut function_declarations = Vec::new();
+            
+            for (_name, tool_decl) in &req.tools {
+                // Deserialize our tool declaration into gemini::FunctionDeclaration
+                if let Ok(func_decl) = serde_json::from_value::<gemini::FunctionDeclaration>(tool_decl.clone()) {
+                    function_declarations.push(func_decl);
+                }
+            }
+            
+            if !function_declarations.is_empty() {
+                let tool = gemini::Tool::with_functions(function_declarations);
                 builder = builder.with_tool(tool);
             }
         }

@@ -10,6 +10,12 @@ pub trait Tool: Send + Sync {
     fn is_long_running(&self) -> bool {
         false
     }
+    fn parameters_schema(&self) -> Option<Value> {
+        None
+    }
+    fn response_schema(&self) -> Option<Value> {
+        None
+    }
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
 }
 
