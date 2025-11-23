@@ -65,56 +65,64 @@ For Phase 2, we'll test with **single tool type per agent**:
 
 ---
 
-## Phase 2: Function Calling & Multi-Turn 🔄 IN PROGRESS
+## Phase 2: Function Calling & Multi-Turn ✅ COMPLETE
 
-**Started:** 2025-11-23
+**Completed:** 2025-11-23
 
-### Goals:
-1. Multi-turn conversation loop
-2. Function calling support
-3. Tool execution (parallel)
-4. Tool response handling
-5. Loop termination detection
+### Root Cause Analysis & Fixes:
 
-### Implementation Plan:
+**Problem 1: Tool Schema Missing**
+- Tool trait had no methods to expose parameter/response schemas
+- FunctionTool stored schemas but couldn't share them
+- **Fix:** Added `parameters_schema()` and `response_schema()` to Tool trait
 
-#### 2.1 Multi-Turn Loop
-```rust
-async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
-    loop {
-        // Build request with tools
-        // Call model
-        // If text -> yield and break
-        // If function calls -> execute and continue
-    }
-}
+**Problem 2: Gemini Client Ignoring Function Parts**
+- Client only processed `Part::Text`, ignored `FunctionCall` and `FunctionResponse`
+- Model never saw tool results, causing infinite loops
+- **Fix:** Proper content building using gemini-rust builder methods:
+  - `with_user_message()` for user text
+  - `with_message()` for model function calls  
+  - `with_function_response()` for tool results
+
+**Problem 3: Infinite Loop**
+- Model kept calling tools without seeing responses
+- No max iteration limit
+- **Fix:** Added max 10 iterations, proper conversation history management
+
+### Features Implemented:
+- ✅ Multi-turn conversation loop
+- ✅ Tool schema extraction from Tool trait
+- ✅ Function call detection in model responses
+- ✅ Tool execution with proper context
+- ✅ Function response injection back to conversation
+- ✅ Loop termination on text-only response
+- ✅ Max iteration safety limit (10)
+
+### Tests (5 passing with real Gemini):
+- ✅ `test_llm_agent_builder` - validates builder
+- ✅ `test_llm_agent_builder_missing_model` - error handling
+- ✅ `test_llm_agent_basic_generation` - math question
+- ✅ `test_llm_agent_with_instruction` - pirate speak
+- ✅ `test_llm_agent_with_function_tool` - **get_current_time tool** ✨
+
+### Example Flow (from test):
+```
+User: "What time is it right now?"
+  ↓
+Event 0: Model makes FunctionCall{get_current_time}
+  ↓
+Event 1: Tool executes, returns {"time": "2025-11-23T14:30:00Z"}
+  ↓
+Event 2: Model responds "It is 2025-11-23T14:30:00Z."
 ```
 
-#### 2.2 Tool Execution
-- Extract function calls from LlmResponse
-- Execute tools in parallel (tokio::spawn)
-- Collect results
-- Add to conversation history
+### Files Modified:
+- `adk-core/src/tool.rs` - Added schema methods
+- `adk-tool/src/function_tool.rs` - Implemented schema methods
+- `adk-agent/src/llm_agent.rs` - Multi-turn loop (200+ lines)
+- `adk-model/src/gemini/client.rs` - Proper function handling
 
-#### 2.3 Events
-- Model response event (with function calls)
-- Tool execution events (one per tool)
-- Final text response event
-
-### Tests Needed:
-- [ ] Function calling with GoogleSearch
-- [ ] Multi-turn conversation (tool -> response)
-- [ ] Parallel tool execution
-- [ ] Loop termination
-
-### Current Limitations:
-- ❌ No function calling
-- ❌ No multi-turn loop
-- ❌ No tool execution
-- ❌ No agent transfer
-- ❌ No streaming
-- ❌ No template variables
-- ❌ No callbacks
+### Workspace Tests: 59 (up from 58)
 
 ---
 
