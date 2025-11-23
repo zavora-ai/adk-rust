@@ -1,4 +1,4 @@
-use adk_core::{Agent, EventStream, InvocationContext, Result};
+use adk_core::{AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -11,6 +11,8 @@ pub struct ConditionalAgent {
     condition: ConditionFn,
     if_agent: Arc<dyn Agent>,
     else_agent: Option<Arc<dyn Agent>>,
+    before_callbacks: Vec<BeforeAgentCallback>,
+    after_callbacks: Vec<AfterAgentCallback>,
 }
 
 impl ConditionalAgent {
@@ -28,6 +30,8 @@ impl ConditionalAgent {
             condition: Box::new(condition),
             if_agent,
             else_agent: None,
+            before_callbacks: Vec::new(),
+            after_callbacks: Vec::new(),
         }
     }
 
@@ -38,6 +42,16 @@ impl ConditionalAgent {
 
     pub fn with_else(mut self, else_agent: Arc<dyn Agent>) -> Self {
         self.else_agent = Some(else_agent);
+        self
+    }
+
+    pub fn before_callback(mut self, callback: BeforeAgentCallback) -> Self {
+        self.before_callbacks.push(callback);
+        self
+    }
+
+    pub fn after_callback(mut self, callback: AfterAgentCallback) -> Self {
+        self.after_callbacks.push(callback);
         self
     }
 }

@@ -1,4 +1,4 @@
-use adk_core::{Agent, EventStream, InvocationContext, Result};
+use adk_core::{AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result};
 use async_stream::stream;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -9,6 +9,8 @@ pub struct LoopAgent {
     description: String,
     sub_agents: Vec<Arc<dyn Agent>>,
     max_iterations: Option<u32>,
+    before_callbacks: Vec<BeforeAgentCallback>,
+    after_callbacks: Vec<AfterAgentCallback>,
 }
 
 impl LoopAgent {
@@ -18,6 +20,8 @@ impl LoopAgent {
             description: String::new(),
             sub_agents,
             max_iterations: None,
+            before_callbacks: Vec::new(),
+            after_callbacks: Vec::new(),
         }
     }
 
@@ -28,6 +32,16 @@ impl LoopAgent {
 
     pub fn with_max_iterations(mut self, max: u32) -> Self {
         self.max_iterations = Some(max);
+        self
+    }
+
+    pub fn before_callback(mut self, callback: BeforeAgentCallback) -> Self {
+        self.before_callbacks.push(callback);
+        self
+    }
+
+    pub fn after_callback(mut self, callback: AfterAgentCallback) -> Self {
+        self.after_callbacks.push(callback);
         self
     }
 }
