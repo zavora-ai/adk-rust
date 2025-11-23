@@ -1,5 +1,5 @@
 use adk_core::{
-    Agent, CallbackContext, Content, Event, EventActions, EventStream, InvocationContext, Llm,
+    Agent, AfterAgentCallback, BeforeAgentCallback, CallbackContext, Content, Event, EventActions, EventStream, InvocationContext, Llm,
     LlmRequest, MemoryEntry, Part, ReadonlyContext, Result, Tool, ToolContext,
 };
 use async_stream::stream;
@@ -15,6 +15,8 @@ pub struct LlmAgent {
     tools: Vec<Arc<dyn Tool>>,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
+    before_callbacks: Vec<BeforeAgentCallback>,
+    after_callbacks: Vec<AfterAgentCallback>,
 }
 
 impl std::fmt::Debug for LlmAgent {
@@ -38,6 +40,8 @@ pub struct LlmAgentBuilder {
     tools: Vec<Arc<dyn Tool>>,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
+    before_callbacks: Vec<BeforeAgentCallback>,
+    after_callbacks: Vec<AfterAgentCallback>,
 }
 
 impl LlmAgentBuilder {
@@ -50,6 +54,8 @@ impl LlmAgentBuilder {
             tools: Vec::new(),
             sub_agents: Vec::new(),
             output_key: None,
+            before_callbacks: Vec::new(),
+            after_callbacks: Vec::new(),
         }
     }
 
@@ -83,6 +89,16 @@ impl LlmAgentBuilder {
         self
     }
 
+    pub fn before_callback(mut self, callback: BeforeAgentCallback) -> Self {
+        self.before_callbacks.push(callback);
+        self
+    }
+
+    pub fn after_callback(mut self, callback: AfterAgentCallback) -> Self {
+        self.after_callbacks.push(callback);
+        self
+    }
+
     pub fn build(self) -> Result<LlmAgent> {
         let model = self
             .model
@@ -96,6 +112,8 @@ impl LlmAgentBuilder {
             tools: self.tools,
             sub_agents: self.sub_agents,
             output_key: self.output_key,
+            before_callbacks: self.before_callbacks,
+            after_callbacks: self.after_callbacks,
         })
     }
 }

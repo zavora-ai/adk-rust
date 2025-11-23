@@ -274,3 +274,53 @@ async fn test_llm_agent_output_key() {
 
     assert!(found_state_delta, "No state_delta found in events");
 }
+
+#[test]
+fn test_llm_agent_builder_with_callbacks() {
+    use std::sync::{Arc, Mutex};
+    
+    let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_else(|_| "test".to_string());
+    let model = GeminiModel::new(&api_key, "gemini-2.0-flash-exp")
+        .expect("Failed to create model");
+
+    let before_called = Arc::new(Mutex::new(false));
+    let after_called = Arc::new(Mutex::new(false));
+    
+    let before_flag = before_called.clone();
+    let after_flag = after_called.clone();
+
+    let agent = LlmAgentBuilder::new("test_agent")
+        .description("Test agent with callbacks")
+        .model(Arc::new(model))
+        .instruction("Say hello")
+        .before_callback(Box::new(move |_ctx| {
+            let flag = before_flag.clone();
+            Box::pin(async move {
+                *flag.lock().unwrap() = true;
+                Ok(Some(Content {
+                    role: "system".to_string(),
+                    parts: vec![Part::Text {
+                        text: "Before callback".to_string(),
+                    }],
+                }))
+            })
+        }))
+        .after_callback(Box::new(move |_ctx| {
+            let flag = after_flag.clone();
+            Box::pin(async move {
+                *flag.lock().unwrap() = true;
+                Ok(Some(Content {
+                    role: "system".to_string(),
+                    parts: vec![Part::Text {
+                        text: "After callback".to_string(),
+                    }],
+                }))
+            })
+        }))
+        .build()
+        .expect("Failed to build agent");
+
+    // Verify agent was created successfully
+    assert_eq!(agent.name(), "test_agent");
+    assert_eq!(agent.description(), "Test agent with callbacks");
+}
