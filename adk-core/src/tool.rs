@@ -1,4 +1,4 @@
-use crate::{CallbackContext, Result};
+use crate::{CallbackContext, EventActions, MemoryEntry, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
@@ -16,6 +16,8 @@ pub trait Tool: Send + Sync {
 #[async_trait]
 pub trait ToolContext: CallbackContext {
     fn function_call_id(&self) -> &str;
+    fn actions(&self) -> &EventActions;
+    async fn search_memory(&self, query: &str) -> Result<Vec<MemoryEntry>>;
 }
 
 #[async_trait]
@@ -29,7 +31,7 @@ pub type ToolPredicate = Box<dyn Fn(&dyn Tool) -> bool + Send + Sync>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Content, ReadonlyContext, RunConfig};
+    use crate::{Content, EventActions, ReadonlyContext, RunConfig};
 
     struct TestTool {
         name: String,
@@ -39,6 +41,7 @@ mod tests {
     struct TestContext {
         content: Content,
         config: RunConfig,
+        actions: EventActions,
     }
 
     impl TestContext {
@@ -46,6 +49,7 @@ mod tests {
             Self {
                 content: Content::new("user"),
                 config: RunConfig::default(),
+                actions: EventActions::default(),
             }
         }
     }
@@ -69,6 +73,10 @@ mod tests {
     #[async_trait]
     impl ToolContext for TestContext {
         fn function_call_id(&self) -> &str { "call-123" }
+        fn actions(&self) -> &EventActions { &self.actions }
+        async fn search_memory(&self, _query: &str) -> Result<Vec<crate::MemoryEntry>> {
+            Ok(vec![])
+        }
     }
 
     #[async_trait]

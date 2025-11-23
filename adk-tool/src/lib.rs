@@ -1,4 +1,4 @@
-// Tool implementations will be added in Phase 4
-// This crate provides concrete tool implementations
+mod function_tool;
 
 pub use adk_core::{Tool, ToolContext, Toolset};
+pub use function_tool::FunctionTool;
