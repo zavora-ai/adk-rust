@@ -8,6 +8,7 @@ members = [
     "adk-artifact",
     "adk-memory",
 ]
+exclude = ["gemini-rust"]
 
 [workspace.package]
 version = "0.1.0"
@@ -27,3 +28,4 @@ thiserror = "1.0"
 anyhow = "1.0"
 uuid = { version = "1.10", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+gemini = { version = "1.5", package = "gemini-rust" }
