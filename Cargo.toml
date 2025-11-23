@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "adk-runner",
     "adk-core",
     "adk-model",
     "adk-tool",

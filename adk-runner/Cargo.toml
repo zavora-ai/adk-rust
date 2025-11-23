@@ -1,0 +1,13 @@
+[package]
+name = "adk-runner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+adk-core = { path = "../adk-core" }
+adk-session = { path = "../adk-session" }
+async-trait = "0.1"
+tokio = { version = "1.42", features = ["full"] }
+futures = "0.3"
+
+[dev-dependencies]
