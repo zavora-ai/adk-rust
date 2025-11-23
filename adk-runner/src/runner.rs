@@ -166,7 +166,7 @@ impl Runner {
     }
 
     /// Find which agent should handle the request based on session history
-    fn find_agent_to_run(root_agent: &Arc<dyn Agent>, session: &dyn adk_session::Session) -> Arc<dyn Agent> {
+    pub fn find_agent_to_run(root_agent: &Arc<dyn Agent>, session: &dyn adk_session::Session) -> Arc<dyn Agent> {
         // Look at recent events to find last agent that responded
         let events = session.events();
         for i in (0..events.len()).rev() {
@@ -198,7 +198,7 @@ impl Runner {
     }
 
     /// Recursively search agent tree for agent with given name
-    fn find_agent(current: &Arc<dyn Agent>, target_name: &str) -> Option<Arc<dyn Agent>> {
+    pub fn find_agent(current: &Arc<dyn Agent>, target_name: &str) -> Option<Arc<dyn Agent>> {
         if current.name() == target_name {
             return Some(current.clone());
         }

@@ -189,3 +189,126 @@ async fn test_runner_run() {
 
     assert!(result.is_ok());
 }
+
+#[test]
+fn test_find_agent_in_tree() {
+    let sub_agent: Arc<dyn Agent> = Arc::new(MockAgent {
+        name: "sub_agent".to_string(),
+    });
+
+    let root_agent: Arc<dyn Agent> = Arc::new(MockAgentWithSubs {
+        name: "root".to_string(),
+        sub_agents: vec![sub_agent.clone()],
+    });
+
+    // Find root
+    let found = Runner::find_agent(&root_agent, "root");
+    assert!(found.is_some());
+    assert_eq!(found.unwrap().name(), "root");
+
+    // Find sub-agent
+    let found = Runner::find_agent(&root_agent, "sub_agent");
+    assert!(found.is_some());
+    assert_eq!(found.unwrap().name(), "sub_agent");
+
+    // Not found
+    let found = Runner::find_agent(&root_agent, "nonexistent");
+    assert!(found.is_none());
+}
+
+#[tokio::test]
+async fn test_find_agent_to_run_with_history() {
+    let sub_agent: Arc<dyn Agent> = Arc::new(MockAgent {
+        name: "assistant".to_string(),
+    });
+
+    let root_with_subs: Arc<dyn Agent> = Arc::new(MockAgentWithSubs {
+        name: "root".to_string(),
+        sub_agents: vec![sub_agent.clone()],
+    });
+
+    // Session with assistant event
+    let mut events = vec![];
+    let mut event = adk_session::Event::new("inv-1");
+    event.author = "assistant".to_string();
+    events.push(event);
+
+    let session = MockSession {
+        id: "session1".to_string(),
+        app_name: "test".to_string(),
+        user_id: "user1".to_string(),
+        events: MockEvents { events },
+        state: MockState,
+    };
+
+    let agent = Runner::find_agent_to_run(&root_with_subs, &session);
+    assert_eq!(agent.name(), "assistant");
+}
+
+#[tokio::test]
+async fn test_find_agent_to_run_defaults_to_root() {
+    let root_agent: Arc<dyn Agent> = Arc::new(MockAgent {
+        name: "root".to_string(),
+    });
+
+    // Empty session
+    let session = MockSession {
+        id: "session1".to_string(),
+        app_name: "test".to_string(),
+        user_id: "user1".to_string(),
+        events: MockEvents { events: vec![] },
+        state: MockState,
+    };
+
+    let agent = Runner::find_agent_to_run(&root_agent, &session);
+    assert_eq!(agent.name(), "root");
+}
+
+#[tokio::test]
+async fn test_find_agent_to_run_skips_user_events() {
+    let root_agent: Arc<dyn Agent> = Arc::new(MockAgent {
+        name: "root".to_string(),
+    });
+
+    // Session with only user events
+    let mut events = vec![];
+    let mut event = adk_session::Event::new("inv-1");
+    event.author = "user".to_string();
+    events.push(event);
+
+    let session = MockSession {
+        id: "session1".to_string(),
+        app_name: "test".to_string(),
+        user_id: "user1".to_string(),
+        events: MockEvents { events },
+        state: MockState,
+    };
+
+    let agent = Runner::find_agent_to_run(&root_agent, &session);
+    assert_eq!(agent.name(), "root");
+}
+
+// Mock agent with sub-agents
+struct MockAgentWithSubs {
+    name: String,
+    sub_agents: Vec<Arc<dyn Agent>>,
+}
+
+#[async_trait]
+impl Agent for MockAgentWithSubs {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        "Mock agent with subs"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &self.sub_agents
+    }
+
+    async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+}
