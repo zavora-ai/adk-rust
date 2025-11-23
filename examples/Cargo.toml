@@ -7,6 +7,30 @@ edition = "2021"
 name = "quickstart"
 path = "quickstart.rs"
 
+[[example]]
+name = "server"
+path = "server.rs"
+
+[[example]]
+name = "function_tool"
+path = "function_tool.rs"
+
+[[example]]
+name = "multiple_tools"
+path = "multiple_tools.rs"
+
+[[example]]
+name = "sequential"
+path = "sequential.rs"
+
+[[example]]
+name = "parallel"
+path = "parallel.rs"
+
+[[example]]
+name = "loop_workflow"
+path = "loop_workflow.rs"
+
 [dependencies]
 adk-core = { path = "../adk-core" }
 adk-agent = { path = "../adk-agent" }
@@ -15,3 +39,5 @@ adk-tool = { path = "../adk-tool" }
 adk-cli = { path = "../adk-cli" }
 tokio = { version = "1.40", features = ["full"] }
 anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

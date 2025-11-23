@@ -13,15 +13,15 @@ async fn main() -> Result<()> {
     
     match cli.command {
         Commands::Console { app_name: _, user_id: _ } => {
-            println!("Console mode not yet fully implemented");
-            println!("Need to provide agent implementation");
-            println!("See examples/quickstart.rs for usage");
+            println!("Console mode requires an agent implementation.");
+            println!("Use the quickstart example instead:");
+            println!("  cargo run --example quickstart");
             Ok(())
         }
         Commands::Serve { port: _ } => {
-            println!("Serve mode not yet fully implemented");
-            println!("Need to provide agent loader");
-            println!("See examples/quickstart.rs for usage");
+            println!("Serve mode requires an agent loader.");
+            println!("Create a custom binary that uses adk_cli::serve::run_serve()");
+            println!("See examples for usage patterns.");
             Ok(())
         }
     }
