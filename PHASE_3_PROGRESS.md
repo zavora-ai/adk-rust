@@ -1,6 +1,6 @@
 # Phase 3: Model Integration - Progress
 
-## Status: Task 3.1 Complete ✅
+## Status: Tasks 3.1 & 3.2 Complete ✅
 
 ### Completed Tasks
 
@@ -16,12 +16,24 @@
 - ✅ Streaming support (both streaming and non-streaming modes)
 - ✅ Integration tests with real API calls
 
+#### Task 3.2: Gemini Streaming
+**Requirements**: FR-2.3  
+**Status**: ✅ Complete
+
+**Deliverables**:
+- ✅ Streaming response handling (implemented in Task 3.1)
+- ✅ Stream aggregation utility
+- ✅ Handle partial responses (marks as `partial: true`)
+- ✅ Streaming tests with real API
+
 **Files Created/Modified**:
 ```
 adk-model/src/gemini/mod.rs                    - Module exports
 adk-model/src/gemini/client.rs                 - GeminiModel implementation
+adk-model/src/gemini/streaming.rs              - Stream aggregation utilities
 adk-model/tests/gemini_tests.rs                - Unit tests
 adk-model/tests/gemini_integration_tests.rs    - Real API integration tests
+adk-model/tests/streaming_tests.rs             - Streaming aggregation tests
 adk-model/Cargo.toml                           - Added gemini-rust dependency
 Cargo.toml                                     - Excluded gemini-rust reference folder
 ```
@@ -60,8 +72,8 @@ Cargo.toml                                     - Excluded gemini-rust reference 
 
 **Test Results**:
 - Unit tests: 2 tests ✅
-- Integration tests: 4 tests ✅ (run with `--ignored` flag)
-- Total adk-model tests: 6 tests
+- Integration tests: 5 tests ✅ (4 basic + 1 streaming, run with `--ignored` flag)
+- Total adk-model tests: 7 tests
 - **Workspace total: 36 tests passing**
 
 **Integration Test Details**:
@@ -87,17 +99,14 @@ Tests:
 
 ### Next Steps
 
-#### Task 3.2: Gemini Streaming
-- ✅ Streaming already implemented in Task 3.1
-- [ ] Add stream aggregation utilities (optional)
-- [ ] Add streaming-specific helper functions (optional)
-
-#### Task 3.3: Content Generation
+#### Task 3.3: Content Generation (In Progress)
 - ✅ Basic content generation complete
 - ✅ Configuration options complete
 - ✅ Conversation history complete
 - [ ] Function calling integration (requires Tool system from Phase 4)
 - [ ] Add comprehensive generation tests
+
+**Note**: Function calling will be implemented after Phase 4 (Tool System) is complete.
 
 ### Notes
 
@@ -125,10 +134,13 @@ Workspace Tests: 36 passing
 ├── adk-memory: 5 tests ✅
 └── adk-model: 4 tests ✅ (2 unit + 2 basic)
 
-Integration Tests (--ignored): 4 passing
-└── adk-model: 4 tests ✅ (with real API)
+Integration Tests (--ignored): 5 passing
+└── adk-model: 5 tests ✅ (4 basic + 1 streaming, with real API)
 ```
 
-**Total: 40 tests (36 regular + 4 integration)** ✅
+**Total: 41 tests (36 regular + 5 integration)** ✅
 
-## Task 3.1 Status: ✅ COMPLETE
+## Tasks Status:
+- Task 3.1: ✅ COMPLETE
+- Task 3.2: ✅ COMPLETE
+- Task 3.3: ⚠️ Partial (function calling pending Phase 4)
