@@ -7,6 +7,7 @@ members = [
     "adk-session",
     "adk-artifact",
     "adk-memory",
+    "adk-agent",
 ]
 exclude = ["gemini-rust"]
 
