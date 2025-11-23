@@ -744,7 +744,7 @@ docs/tutorials/
 - [ ] Reduce cloning
 - [ ] Benchmark improvements
 
-#### Task 10.4: Security Audit
+#### Task 10.4: Security Audit/compact
 **Requirements**: NFR-2.1, NFR-2.2  
 **Deliverables**:
 - [ ] Run `cargo audit`
