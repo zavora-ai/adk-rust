@@ -3,6 +3,7 @@ pub mod callbacks;
 pub mod context;
 pub mod error;
 pub mod event;
+pub mod model;
 pub mod types;
 
 pub use agent::{Agent, EventStream};
@@ -13,4 +14,8 @@ pub use context::{
 };
 pub use error::{AdkError, Result};
 pub use event::{Event, EventActions, KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER};
+pub use model::{
+    FinishReason, GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream,
+    MockLlm, UsageMetadata,
+};
 pub use types::{Content, Part};
