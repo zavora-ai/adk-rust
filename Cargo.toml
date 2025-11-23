@@ -2,6 +2,11 @@
 resolver = "2"
 members = [
     "adk-core",
+    "adk-model",
+    "adk-tool",
+    "adk-session",
+    "adk-artifact",
+    "adk-memory",
 ]
 
 [workspace.package]

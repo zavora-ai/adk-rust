@@ -6,7 +6,7 @@ pub struct Content {
     pub parts: Vec<Part>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Part {
     Text { text: String },

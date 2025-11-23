@@ -1,0 +1,15 @@
+[package]
+name = "adk-memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+adk-core = { path = "../adk-core" }
+async-trait.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
