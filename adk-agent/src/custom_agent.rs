@@ -1,4 +1,6 @@
-use adk_core::{Agent, Event, EventStream, InvocationContext, Result};
+use adk_core::{
+    AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result,
+};
 use async_trait::async_trait;
 use std::future::Future;
 use std::pin::Pin;
@@ -13,6 +15,9 @@ type RunHandler = Box<
 pub struct CustomAgent {
     name: String,
     description: String,
+    sub_agents: Vec<Arc<dyn Agent>>,
+    before_callbacks: Vec<BeforeAgentCallback>,
+    after_callbacks: Vec<AfterAgentCallback>,
     handler: RunHandler,
 }
 
@@ -33,7 +38,7 @@ impl Agent for CustomAgent {
     }
 
     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
-        &[]
+        &self.sub_agents
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
@@ -44,6 +49,9 @@ impl Agent for CustomAgent {
 pub struct CustomAgentBuilder {
     name: String,
     description: String,
+    sub_agents: Vec<Arc<dyn Agent>>,
+    before_callbacks: Vec<BeforeAgentCallback>,
+    after_callbacks: Vec<AfterAgentCallback>,
     handler: Option<RunHandler>,
 }
 
@@ -52,12 +60,35 @@ impl CustomAgentBuilder {
         Self {
             name: name.into(),
             description: String::new(),
+            sub_agents: Vec::new(),
+            before_callbacks: Vec::new(),
+            after_callbacks: Vec::new(),
             handler: None,
         }
     }
 
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
+        self
+    }
+
+    pub fn sub_agent(mut self, agent: Arc<dyn Agent>) -> Self {
+        self.sub_agents.push(agent);
+        self
+    }
+
+    pub fn sub_agents(mut self, agents: Vec<Arc<dyn Agent>>) -> Self {
+        self.sub_agents = agents;
+        self
+    }
+
+    pub fn before_callback(mut self, callback: BeforeAgentCallback) -> Self {
+        self.before_callbacks.push(callback);
+        self
+    }
+
+    pub fn after_callback(mut self, callback: AfterAgentCallback) -> Self {
+        self.after_callbacks.push(callback);
         self
     }
 
@@ -75,9 +106,23 @@ impl CustomAgentBuilder {
             adk_core::AdkError::Agent("CustomAgent requires a handler".to_string())
         })?;
 
+        // Validate sub-agents have unique names
+        let mut seen_names = std::collections::HashSet::new();
+        for agent in &self.sub_agents {
+            if !seen_names.insert(agent.name()) {
+                return Err(adk_core::AdkError::Agent(format!(
+                    "Duplicate sub-agent name: {}",
+                    agent.name()
+                )));
+            }
+        }
+
         Ok(CustomAgent {
             name: self.name,
             description: self.description,
+            sub_agents: self.sub_agents,
+            before_callbacks: self.before_callbacks,
+            after_callbacks: self.after_callbacks,
             handler,
         })
     }
