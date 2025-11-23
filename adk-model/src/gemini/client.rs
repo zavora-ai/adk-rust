@@ -106,6 +106,13 @@ impl Llm for GeminiModel {
             builder = builder.with_generation_config(gen_config);
         }
 
+        // Add tools
+        for (_name, tool_value) in &req.tools {
+            if let Ok(tool) = serde_json::from_value::<gemini::Tool>(tool_value.clone()) {
+                builder = builder.with_tool(tool);
+            }
+        }
+
         if stream {
             let response_stream = builder
                 .execute_stream()
