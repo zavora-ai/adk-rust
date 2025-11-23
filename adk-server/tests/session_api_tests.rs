@@ -105,7 +105,36 @@ impl adk_session::Events for MockEvents {
 }
 
 #[tokio::test]
-async fn test_health_check() {
+async fn test_create_session() {
+    let config = adk_server::ServerConfig::new(
+        Arc::new(MockAgentLoader),
+        Arc::new(MockSessionService),
+    );
+    let app = create_app(config);
+
+    let body = serde_json::json!({
+        "app_name": "test-app",
+        "user_id": "user123",
+        "session_id": "session456"
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_get_session() {
     let config = adk_server::ServerConfig::new(
         Arc::new(MockAgentLoader),
         Arc::new(MockSessionService),
@@ -113,9 +142,36 @@ async fn test_health_check() {
     let app = create_app(config);
 
     let response = app
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/test-app/user123/session456")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_delete_session() {
+    let config = adk_server::ServerConfig::new(
+        Arc::new(MockAgentLoader),
+        Arc::new(MockSessionService),
+    );
+    let app = create_app(config);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/sessions/test-app/user123/session456")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }

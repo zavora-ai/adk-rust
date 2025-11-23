@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_loader;
 pub mod callbacks;
 pub mod context;
 pub mod error;
@@ -8,6 +9,7 @@ pub mod tool;
 pub mod types;
 
 pub use agent::{Agent, EventStream};
+pub use agent_loader::{AgentLoader, SingleAgentLoader};
 pub use callbacks::{AfterAgentCallback, BeforeAgentCallback};
 pub use context::{
     Artifacts, CallbackContext, InvocationContext, Memory, MemoryEntry, ReadonlyContext,

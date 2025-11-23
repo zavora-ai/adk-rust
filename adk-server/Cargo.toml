@@ -4,16 +4,23 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+adk-artifact = { path = "../adk-artifact" }
 adk-core = { path = "../adk-core" }
 adk-runner = { path = "../adk-runner" }
 adk-session = { path = "../adk-session" }
 axum = "0.7"
+base64 = "0.21"
+chrono = "0.4"
+futures = "0.3"
+serde_json = "1.0"
 tokio = { version = "1.42", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+uuid = { version = "1.0", features = ["v4"] }
 
 [dev-dependencies]
+async-trait = "0.1"
+chrono = "0.4"
