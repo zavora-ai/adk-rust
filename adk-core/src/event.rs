@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+// State scope prefixes
+pub const KEY_PREFIX_APP: &str = "app:";
+pub const KEY_PREFIX_TEMP: &str = "temp:";
+pub const KEY_PREFIX_USER: &str = "user:";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub id: String,
@@ -54,5 +59,12 @@ mod tests {
         let actions = EventActions::default();
         assert!(actions.state_delta.is_empty());
         assert!(!actions.skip_summarization);
+    }
+
+    #[test]
+    fn test_state_prefixes() {
+        assert_eq!(KEY_PREFIX_APP, "app:");
+        assert_eq!(KEY_PREFIX_TEMP, "temp:");
+        assert_eq!(KEY_PREFIX_USER, "user:");
     }
 }
