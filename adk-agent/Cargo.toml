@@ -12,3 +12,6 @@ async-trait.workspace = true
 tokio.workspace = true
 futures.workspace = true
 async-stream.workspace = true
+
+[dev-dependencies]
+adk-model = { path = "../adk-model" }
