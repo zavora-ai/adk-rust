@@ -8,6 +8,7 @@ authors.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+async-stream = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
