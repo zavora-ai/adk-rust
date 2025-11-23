@@ -4,6 +4,7 @@ pub mod context;
 pub mod error;
 pub mod event;
 pub mod model;
+pub mod tool;
 pub mod types;
 
 pub use agent::{Agent, EventStream};
@@ -18,4 +19,5 @@ pub use model::{
     FinishReason, GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream,
     MockLlm, UsageMetadata,
 };
+pub use tool::{Tool, ToolContext, ToolPredicate, Toolset};
 pub use types::{Content, Part};
