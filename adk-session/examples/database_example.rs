@@ -1,6 +1,9 @@
+#[cfg(feature = "database")]
 use adk_session::*;
+#[cfg(feature = "database")]
 use std::collections::HashMap;
 
+#[cfg(feature = "database")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = "test_adk.db";
@@ -45,3 +48,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     Ok(())
 }
+
+#[cfg(not(feature = "database"))]
+fn main() {
+    println!("This example requires the 'database' feature.");
+    println!("Run with: cargo run --example database_example --features database");
+}
+
