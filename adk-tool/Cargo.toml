@@ -13,3 +13,4 @@ tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars = "0.8"
+rmcp = { version = "0.9", features = ["client"] }
