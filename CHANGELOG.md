@@ -12,7 +12,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Core traits: Agent, Llm, Tool, Toolset, SessionService
 - Agent types: LlmAgent, CustomAgent, SequentialAgent, ParallelAgent, LoopAgent
 - Gemini 2.0 Flash model integration with streaming
-- Tool system with GoogleSearch, ExitLoop, LoadArtifacts
 - MCP (Model Context Protocol) integration with rmcp SDK
 - Session management (in-memory and SQLite)
 - Artifact storage (in-memory and SQLite)

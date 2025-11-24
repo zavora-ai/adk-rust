@@ -1,5 +1,7 @@
+#[cfg(feature = "database")]
 use adk_session::*;
 
+#[cfg(feature = "database")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔍 Verifying existing database...\n");
@@ -24,4 +26,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n✅ Database verification complete!");
     
     Ok(())
+}
+
+#[cfg(not(feature = "database"))]
+fn main() {
+    println!("This example requires the 'database' feature.");
+    println!("Run with: cargo run --example verify_database --features database");
 }
