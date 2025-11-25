@@ -4,23 +4,29 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-adk-artifact = { path = "../adk-artifact" }
 adk-core = { path = "../adk-core" }
+adk-agent = { path = "../adk-agent" }
 adk-runner = { path = "../adk-runner" }
 adk-session = { path = "../adk-session" }
-axum = "0.7"
-base64 = "0.21"
-chrono = "0.4"
-futures = "0.3"
-serde_json = "1.0"
-tokio = { version = "1.42", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
+adk-artifact = { path = "../adk-artifact" }
+tokio.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+axum = { version = "0.7", features = ["macros"] }
 tower = { version = "0.4", features = ["util"] }
-tower-http = { version = "0.5", features = ["cors", "trace"] }
+tower-http = { version = "0.5", features = ["trace", "cors"] }
 tracing = "0.1"
-tracing-subscriber = "0.3"
-uuid = { version = "1.0", features = ["v4"] }
+base64 = "0.22"
 
 [dev-dependencies]
+async-stream.workspace = true
+tracing-subscriber = "0.3"
+uuid = { version = "1.0", features = ["v4"] }
 async-trait = "0.1"
 chrono = "0.4"

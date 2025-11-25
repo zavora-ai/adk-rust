@@ -13,6 +13,14 @@ impl adk_core::AgentLoader for MockAgentLoader {
     async fn load_agent(&self, _app_name: &str) -> adk_core::Result<Arc<dyn adk_core::Agent>> {
         Err(adk_core::AdkError::Agent("not implemented".to_string()))
     }
+    
+    fn list_agents(&self) -> Vec<String> {
+        vec![]
+    }
+    
+    fn root_agent(&self) -> Arc<dyn adk_core::Agent> {
+        panic!("MockAgentLoader has no root agent")
+    }
 }
 
 struct MockSessionService;

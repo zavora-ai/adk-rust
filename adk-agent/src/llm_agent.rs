@@ -248,53 +248,79 @@ impl Agent for LlmAgent {
                     config: None,
                 };
 
-                // Call model
-                let mut response_stream = model.generate_content(request, false).await?;
+                // Call model with STREAMING ENABLED
+                let mut response_stream = model.generate_content(request, true).await?;
 
                 use futures::StreamExt;
-                let response = match response_stream.next().await {
-                    Some(Ok(resp)) => resp,
-                    Some(Err(e)) => {
-                        yield Err(e);
-                        return;
-                    }
-                    None => return,
-                };
-
-                // Check if response has function calls
-                let has_function_calls = response.content.as_ref()
-                    .map(|c| c.parts.iter().any(|p| matches!(p, Part::FunctionCall { .. })))
-                    .unwrap_or(false);
-
-                // Add model response to history FIRST (before executing tools)
-                if let Some(content) = response.content.clone() {
-                    conversation_history.push(content);
-                }
-
-                // Yield model response event
-                let mut event = Event::new(&invocation_id);
-                event.author = agent_name.clone();
-                event.content = response.content.clone();
                 
-                // Handle output_key: save agent output to state_delta
-                if let Some(ref output_key) = output_key {
-                    if let Some(ref content) = event.content {
-                        let mut text_parts = String::new();
-                        for part in &content.parts {
-                            if let Part::Text { text } = part {
-                                text_parts.push_str(text);
+                // Accumulate chunks as they arrive
+                let mut accumulated_content: Option<Content> = None;
+                let mut has_function_calls = false;
+                let mut turn_complete = false;
+                
+                // Stream and yield chunks immediately
+                while let Some(chunk_result) = response_stream.next().await {
+                    let chunk = match chunk_result {
+                        Ok(c) => c,
+                        Err(e) => {
+                            yield Err(e);
+                            return;
+                        }
+                    };
+                    
+                    // Yield partial event immediately for user feedback
+                    let mut partial_event = Event::new(&invocation_id);
+                    partial_event.author = agent_name.clone();
+                    partial_event.content = chunk.content.clone();
+                    yield Ok(partial_event);
+                    
+                    // Accumulate content for history
+                    if let Some(chunk_content) = chunk.content {
+                        if let Some(ref mut acc) = accumulated_content {
+                            // Merge parts from this chunk into accumulated content
+                            acc.parts.extend(chunk_content.parts);
+                        } else {
+                            // First chunk - initialize accumulator
+                            accumulated_content = Some(chunk_content);
+                        }
+                    }
+                    
+                    // Check if turn is complete
+                    if chunk.turn_complete {
+                        turn_complete = true;
+                        break;
+                    }
+                }
+                
+                // After streaming completes, check for function calls in accumulated content
+                if let Some(ref content) = accumulated_content {
+                    has_function_calls = content.parts.iter().any(|p| matches!(p, Part::FunctionCall { .. }));
+                    
+                    // Add accumulated response to history
+                    conversation_history.push(content.clone());
+                    
+                    // Handle output_key: save final agent output to state_delta
+                    if let Some(ref output_key) = output_key {
+                        if !has_function_calls {  // Only save if not calling tools
+                            let mut text_parts = String::new();
+                            for part in &content.parts {
+                                if let Part::Text { text } = part {
+                                    text_parts.push_str(text);
+                                }
+                            }
+                            if !text_parts.is_empty() {
+                                // Yield a final state update event
+                                let mut state_event = Event::new(&invocation_id);
+                                state_event.author = agent_name.clone();
+                                state_event.actions.state_delta.insert(
+                                    output_key.clone(),
+                                    serde_json::Value::String(text_parts),
+                                );
+                                yield Ok(state_event);
                             }
                         }
-                        if !text_parts.is_empty() {
-                            event.actions.state_delta.insert(
-                                output_key.clone(),
-                                serde_json::Value::String(text_parts),
-                            );
-                        }
                     }
                 }
-                
-                yield Ok(event);
 
                 if !has_function_calls {
                     // No function calls, we're done
@@ -302,7 +328,7 @@ impl Agent for LlmAgent {
                 }
 
                 // Execute function calls and add responses to history
-                if let Some(content) = &response.content {
+                if let Some(content) = &accumulated_content {
                     for part in &content.parts {
                         if let Part::FunctionCall { name, args } = part {
                             // Find and execute tool
