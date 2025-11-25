@@ -118,56 +118,84 @@ impl LlmAgentBuilder {
     }
 }
 
-// Simple ToolContext implementation for tool execution
-struct SimpleToolContext {
-    invocation_id: String,
-    agent_name: String,
+
+// AgentToolContext wraps the parent InvocationContext and preserves all context
+// instead of throwing it away like SimpleToolContext did
+struct AgentToolContext {
+    parent_ctx: Arc<dyn InvocationContext>,
+    function_call_id: String,
     actions: EventActions,
-    content: Content,
+}
+
+impl AgentToolContext {
+    fn new(parent_ctx: Arc<dyn InvocationContext>, function_call_id: String) -> Self {
+        Self {
+            parent_ctx,
+            function_call_id,
+            actions: EventActions::default(),
+        }
+    }
 }
 
 #[async_trait]
-impl ReadonlyContext for SimpleToolContext {
+impl ReadonlyContext for AgentToolContext {
     fn invocation_id(&self) -> &str {
-        &self.invocation_id
+        self.parent_ctx.invocation_id()
     }
+    
     fn agent_name(&self) -> &str {
-        &self.agent_name
+        self.parent_ctx.agent_name()
     }
+    
     fn user_id(&self) -> &str {
-        ""
+        // ✅ Delegate to parent - now tools get the real user_id!
+        self.parent_ctx.user_id()
     }
+    
     fn app_name(&self) -> &str {
-        ""
+        // ✅ Delegate to parent - now tools get the real app_name!
+        self.parent_ctx.app_name()
     }
+    
     fn session_id(&self) -> &str {
-        ""
+        // ✅ Delegate to parent - now tools get the real session_id!
+        self.parent_ctx.session_id()
     }
+    
     fn branch(&self) -> &str {
-        ""
+        self.parent_ctx.branch()
     }
+    
     fn user_content(&self) -> &Content {
-        &self.content
+        self.parent_ctx.user_content()
     }
 }
 
 #[async_trait]
-impl CallbackContext for SimpleToolContext {
+impl CallbackContext for AgentToolContext {
     fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
-        None
+        // ✅ Delegate to parent - tools can now access artifacts!
+        self.parent_ctx.artifacts()
     }
 }
 
 #[async_trait]
-impl ToolContext for SimpleToolContext {
+impl ToolContext for AgentToolContext {
     fn function_call_id(&self) -> &str {
-        &self.invocation_id
+        &self.function_call_id
     }
+    
     fn actions(&self) -> &EventActions {
         &self.actions
     }
-    async fn search_memory(&self, _query: &str) -> Result<Vec<MemoryEntry>> {
-        Ok(vec![])
+    
+    async fn search_memory(&self, query: &str) -> Result<Vec<MemoryEntry>> {
+        // ✅ Delegate to parent's memory if available
+        if let Some(memory) = self.parent_ctx.memory() {
+            memory.search(query).await
+        } else {
+            Ok(vec![])
+        }
     }
 }
 
@@ -333,12 +361,11 @@ impl Agent for LlmAgent {
                         if let Part::FunctionCall { name, args } = part {
                             // Find and execute tool
                             let tool_result = if let Some(tool) = tools.iter().find(|t| t.name() == name) {
-                                let tool_ctx = Arc::new(SimpleToolContext {
-                                    invocation_id: invocation_id.clone(),
-                                    agent_name: agent_name.clone(),
-                                    actions: EventActions::default(),
-                                    content: Content::new("user"),
-                                }) as Arc<dyn ToolContext>;
+                                // ✅ Use AgentToolContext that preserves parent context
+                                let tool_ctx = Arc::new(AgentToolContext::new(
+                                    ctx.clone(),
+                                    format!("{}_{}", invocation_id, name),
+                                )) as Arc<dyn ToolContext>;
                                 
                                 match tool.execute(tool_ctx, args.clone()).await {
                                     Ok(result) => result,
