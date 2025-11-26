@@ -1,6 +1,8 @@
 use adk_core::{
-    Agent, AfterAgentCallback, BeforeAgentCallback, CallbackContext, Content, Event, EventActions, EventStream, InvocationContext, Llm,
-    LlmRequest, MemoryEntry, Part, ReadonlyContext, Result, Tool, ToolContext,
+    Agent, AfterAgentCallback, AfterModelCallback, AfterToolCallback, BeforeAgentCallback,
+    BeforeModelCallback, BeforeToolCallback, CallbackContext, Content, Event, EventActions,
+    EventStream, InvocationContext, Llm, LlmRequest, MemoryEntry, Part, ReadonlyContext, Result,
+    Tool, ToolContext,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -17,6 +19,10 @@ pub struct LlmAgent {
     output_key: Option<String>,
     before_callbacks: Vec<BeforeAgentCallback>,
     after_callbacks: Vec<AfterAgentCallback>,
+    before_model_callbacks: Vec<BeforeModelCallback>,
+    after_model_callbacks: Vec<AfterModelCallback>,
+    before_tool_callbacks: Vec<BeforeToolCallback>,
+    after_tool_callbacks: Vec<AfterToolCallback>,
 }
 
 impl std::fmt::Debug for LlmAgent {
@@ -42,6 +48,10 @@ pub struct LlmAgentBuilder {
     output_key: Option<String>,
     before_callbacks: Vec<BeforeAgentCallback>,
     after_callbacks: Vec<AfterAgentCallback>,
+    before_model_callbacks: Vec<BeforeModelCallback>,
+    after_model_callbacks: Vec<AfterModelCallback>,
+    before_tool_callbacks: Vec<BeforeToolCallback>,
+    after_tool_callbacks: Vec<AfterToolCallback>,
 }
 
 impl LlmAgentBuilder {
@@ -56,6 +66,10 @@ impl LlmAgentBuilder {
             output_key: None,
             before_callbacks: Vec::new(),
             after_callbacks: Vec::new(),
+            before_model_callbacks: Vec::new(),
+            after_model_callbacks: Vec::new(),
+            before_tool_callbacks: Vec::new(),
+            after_tool_callbacks: Vec::new(),
         }
     }
 
@@ -99,6 +113,26 @@ impl LlmAgentBuilder {
         self
     }
 
+    pub fn before_model_callback(mut self, callback: BeforeModelCallback) -> Self {
+        self.before_model_callbacks.push(callback);
+        self
+    }
+
+    pub fn after_model_callback(mut self, callback: AfterModelCallback) -> Self {
+        self.after_model_callbacks.push(callback);
+        self
+    }
+
+    pub fn before_tool_callback(mut self, callback: BeforeToolCallback) -> Self {
+        self.before_tool_callbacks.push(callback);
+        self
+    }
+
+    pub fn after_tool_callback(mut self, callback: AfterToolCallback) -> Self {
+        self.after_tool_callbacks.push(callback);
+        self
+    }
+
     pub fn build(self) -> Result<LlmAgent> {
         let model = self
             .model
@@ -114,6 +148,10 @@ impl LlmAgentBuilder {
             output_key: self.output_key,
             before_callbacks: self.before_callbacks,
             after_callbacks: self.after_callbacks,
+            before_model_callbacks: self.before_model_callbacks,
+            after_model_callbacks: self.after_model_callbacks,
+            before_tool_callbacks: self.before_tool_callbacks,
+            after_tool_callbacks: self.after_tool_callbacks,
         })
     }
 }
