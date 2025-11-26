@@ -16,8 +16,8 @@ pub use callbacks::{
     BeforeModelCallback, BeforeToolCallback, GlobalInstructionProvider, InstructionProvider,
 };
 pub use context::{
-    Artifacts, CallbackContext, InvocationContext, Memory, MemoryEntry, ReadonlyContext,
-    ReadonlyState, RunConfig, Session, State, StreamingMode,
+    Artifacts, CallbackContext, IncludeContents, InvocationContext, Memory, MemoryEntry,
+    ReadonlyContext, ReadonlyState, RunConfig, Session, State, StreamingMode,
 };
 pub use error::{AdkError, Result};
 pub use event::{Event, EventActions, KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER};

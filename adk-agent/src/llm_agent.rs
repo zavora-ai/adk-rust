@@ -17,6 +17,11 @@ pub struct LlmAgent {
     instruction_provider: Option<Arc<InstructionProvider>>,
     global_instruction: Option<String>,
     global_instruction_provider: Option<Arc<GlobalInstructionProvider>>,
+    input_schema: Option<serde_json::Value>,
+    output_schema: Option<serde_json::Value>,
+    disallow_transfer_to_parent: bool,
+    disallow_transfer_to_peers: bool,
+    include_contents: adk_core::IncludeContents,
     tools: Vec<Arc<dyn Tool>>,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
@@ -49,6 +54,11 @@ pub struct LlmAgentBuilder {
     instruction_provider: Option<Arc<InstructionProvider>>,
     global_instruction: Option<String>,
     global_instruction_provider: Option<Arc<GlobalInstructionProvider>>,
+    input_schema: Option<serde_json::Value>,
+    output_schema: Option<serde_json::Value>,
+    disallow_transfer_to_parent: bool,
+    disallow_transfer_to_peers: bool,
+    include_contents: adk_core::IncludeContents,
     tools: Vec<Arc<dyn Tool>>,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
@@ -70,6 +80,11 @@ impl LlmAgentBuilder {
             instruction_provider: None,
             global_instruction: None,
             global_instruction_provider: None,
+            input_schema: None,
+            output_schema: None,
+            disallow_transfer_to_parent: false,
+            disallow_transfer_to_peers: false,
+            include_contents: adk_core::IncludeContents::Default,
             tools: Vec::new(),
             sub_agents: Vec::new(),
             output_key: None,
@@ -109,6 +124,31 @@ impl LlmAgentBuilder {
 
     pub fn global_instruction_provider(mut self, provider: GlobalInstructionProvider) -> Self {
         self.global_instruction_provider = Some(Arc::new(provider));
+        self
+    }
+
+    pub fn input_schema(mut self, schema: serde_json::Value) -> Self {
+        self.input_schema = Some(schema);
+        self
+    }
+
+    pub fn output_schema(mut self, schema: serde_json::Value) -> Self {
+        self.output_schema = Some(schema);
+        self
+    }
+
+    pub fn disallow_transfer_to_parent(mut self, disallow: bool) -> Self {
+        self.disallow_transfer_to_parent = disallow;
+        self
+    }
+
+    pub fn disallow_transfer_to_peers(mut self, disallow: bool) -> Self {
+        self.disallow_transfer_to_peers = disallow;
+        self
+    }
+
+    pub fn include_contents(mut self, include: adk_core::IncludeContents) -> Self {
+        self.include_contents = include;
         self
     }
 
@@ -170,6 +210,11 @@ impl LlmAgentBuilder {
             instruction_provider: self.instruction_provider,
             global_instruction: self.global_instruction,
             global_instruction_provider: self.global_instruction_provider,
+            input_schema: self.input_schema,
+            output_schema: self.output_schema,
+            disallow_transfer_to_parent: self.disallow_transfer_to_parent,
+            disallow_transfer_to_peers: self.disallow_transfer_to_peers,
+            include_contents: self.include_contents,
             tools: self.tools,
             sub_agents: self.sub_agents,
             output_key: self.output_key,
@@ -288,6 +333,8 @@ impl Agent for LlmAgent {
         let global_instruction = self.global_instruction.clone();
         let global_instruction_provider = self.global_instruction_provider.clone();
         let output_key = self.output_key.clone();
+        let output_schema = self.output_schema.clone();
+        let include_contents = self.include_contents;
         // Clone Arc references (cheap)
         let before_agent_callbacks = self.before_callbacks.clone();
         let after_agent_callbacks = self.after_callbacks.clone();
@@ -390,6 +437,44 @@ impl Agent for LlmAgent {
             // Add user content
             conversation_history.push(ctx.user_content().clone());
 
+            // ===== APPLY INCLUDE_CONTENTS FILTERING =====
+            // Control what conversation history the agent sees
+            let mut conversation_history = match include_contents {
+                adk_core::IncludeContents::None => {
+                    // Agent operates solely on current turn - only keep the latest user input
+                    // Remove all previous history except instructions and current user message
+                    let mut filtered = Vec::new();
+                    
+                    // Keep global and agent instructions (already added above)
+                    let instruction_count = conversation_history.iter()
+                        .take_while(|c| c.role == "user" && c.parts.iter().any(|p| {
+                            if let Part::Text { text } = p {
+                                // These are likely instructions, not user queries
+                                text.len() > 0
+                            } else {
+                                false
+                            }
+                        }))
+                        .count();
+                    
+                    // Take instructions
+                    filtered.extend(conversation_history.iter().take(instruction_count).cloned());
+                    
+                    // Take only the last user message (current turn)
+                    if let Some(last) = conversation_history.last() {
+                        if last.role == "user" {
+                            filtered.push(last.clone());
+                        }
+                    }
+                    
+                    filtered
+                }
+                adk_core::IncludeContents::Default => {
+                    // Default behavior - keep full conversation history
+                    conversation_history
+                }
+            };
+
             // Build tool declarations for Gemini
             let mut tool_declarations = std::collections::HashMap::new();
             for tool in &tools {
@@ -424,11 +509,21 @@ impl Agent for LlmAgent {
                 }
 
                 // Build request with conversation history
+                let config = output_schema.as_ref().map(|schema| {
+                    adk_core::GenerateContentConfig {
+                        temperature: None,
+                        top_p: None,
+                        top_k: None,
+                        max_output_tokens: None,
+                        response_schema: Some(schema.clone()),
+                    }
+                });
+                
                 let request = LlmRequest {
                     model: model.name().to_string(),
                     contents: conversation_history.clone(),
                     tools: tool_declarations.clone(),
-                    config: None,
+                    config,
                 };
 
                 // ===== BEFORE MODEL CALLBACKS =====

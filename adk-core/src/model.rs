@@ -28,6 +28,8 @@ pub struct GenerateContentConfig {
     pub top_p: Option<f32>,
     pub top_k: Option<i32>,
     pub max_output_tokens: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

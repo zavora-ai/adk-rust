@@ -71,21 +71,41 @@ pub struct MemoryEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamingMode {
+    Auto,
+    Enabled,
+    Disabled,
+}
+
+impl Default for StreamingMode {
+    fn default() -> Self {
+        StreamingMode::Auto
+    }
+}
+
+/// Controls what parts of prior conversation history is received by llmagent
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncludeContents {
+    /// The llmagent operates solely on its current turn (latest user input + any following agent events)
     None,
-    SSE,
+    /// Default - The llmagent receives the relevant conversation history
+    Default,
+}
+
+impl Default for IncludeContents {
+    fn default() -> Self {
+        IncludeContents::Default
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct RunConfig {
     pub streaming_mode: StreamingMode,
-    pub save_input_blobs_as_artifacts: bool,
 }
 
 impl Default for RunConfig {
     fn default() -> Self {
         Self {
-            streaming_mode: StreamingMode::None,
-            save_input_blobs_as_artifacts: false,
+            streaming_mode: StreamingMode::Auto,
         }
     }
 }
