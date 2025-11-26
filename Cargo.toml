@@ -34,3 +34,4 @@ anyhow = "1.0"
 uuid = { version = "1.10", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 gemini = { version = "1.5", package = "gemini-rust" }
+regex = "1.10"

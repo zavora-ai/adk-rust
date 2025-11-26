@@ -29,6 +29,16 @@ impl Content {
     }
 }
 
+impl Part {
+    /// Returns the text content if this is a Text part, None otherwise
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Part::Text { text } => Some(text.as_str()),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

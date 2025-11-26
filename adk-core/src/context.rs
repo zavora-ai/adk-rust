@@ -22,6 +22,7 @@ pub trait CallbackContext: ReadonlyContext {
 pub trait InvocationContext: CallbackContext {
     fn agent(&self) -> Arc<dyn Agent>;
     fn memory(&self) -> Option<Arc<dyn Memory>>;
+    fn session(&self) -> &dyn adk_session::Session;
     fn run_config(&self) -> &RunConfig;
     fn end_invocation(&self);
     fn ended(&self) -> bool;
