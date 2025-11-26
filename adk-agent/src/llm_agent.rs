@@ -1,8 +1,8 @@
 use adk_core::{
     Agent, AfterAgentCallback, AfterModelCallback, AfterToolCallback, BeforeAgentCallback,
     BeforeModelCallback, BeforeToolCallback, CallbackContext, Content, Event, EventActions,
-    EventStream, InvocationContext, Llm, LlmRequest, MemoryEntry, Part, ReadonlyContext, Result,
-    Tool, ToolContext,
+    EventStream, GlobalInstructionProvider, InstructionProvider, InvocationContext, Llm,
+    LlmRequest, MemoryEntry, Part, ReadonlyContext, Result, Tool, ToolContext,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -14,6 +14,9 @@ pub struct LlmAgent {
     description: String,
     model: Arc<dyn Llm>,
     instruction: Option<String>,
+    instruction_provider: Option<Arc<InstructionProvider>>,
+    global_instruction: Option<String>,
+    global_instruction_provider: Option<Arc<GlobalInstructionProvider>>,
     tools: Vec<Arc<dyn Tool>>,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
@@ -43,6 +46,9 @@ pub struct LlmAgentBuilder {
     description: Option<String>,
     model: Option<Arc<dyn Llm>>,
     instruction: Option<String>,
+    instruction_provider: Option<Arc<InstructionProvider>>,
+    global_instruction: Option<String>,
+    global_instruction_provider: Option<Arc<GlobalInstructionProvider>>,
     tools: Vec<Arc<dyn Tool>>,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
@@ -61,6 +67,9 @@ impl LlmAgentBuilder {
             description: None,
             model: None,
             instruction: None,
+            instruction_provider: None,
+            global_instruction: None,
+            global_instruction_provider: None,
             tools: Vec::new(),
             sub_agents: Vec::new(),
             output_key: None,
@@ -85,6 +94,21 @@ impl LlmAgentBuilder {
 
     pub fn instruction(mut self, instruction: impl Into<String>) -> Self {
         self.instruction = Some(instruction.into());
+        self
+    }
+
+    pub fn instruction_provider(mut self, provider: InstructionProvider) -> Self {
+        self.instruction_provider = Some(Arc::new(provider));
+        self
+    }
+
+    pub fn global_instruction(mut self, instruction: impl Into<String>) -> Self {
+        self.global_instruction = Some(instruction.into());
+        self
+    }
+
+    pub fn global_instruction_provider(mut self, provider: GlobalInstructionProvider) -> Self {
+        self.global_instruction_provider = Some(Arc::new(provider));
         self
     }
 
@@ -143,6 +167,9 @@ impl LlmAgentBuilder {
             description: self.description.unwrap_or_default(),
             model,
             instruction: self.instruction,
+            instruction_provider: self.instruction_provider,
+            global_instruction: self.global_instruction,
+            global_instruction_provider: self.global_instruction_provider,
             tools: self.tools,
             sub_agents: self.sub_agents,
             output_key: self.output_key,
@@ -257,6 +284,9 @@ impl Agent for LlmAgent {
         let invocation_id = ctx.invocation_id().to_string();
         let tools = self.tools.clone();
         let instruction = self.instruction.clone();
+        let instruction_provider = self.instruction_provider.clone();
+        let global_instruction = self.global_instruction.clone();
+        let global_instruction_provider = self.global_instruction_provider.clone();
         let output_key = self.output_key.clone();
         // Clone Arc references (cheap)
         let before_agent_callbacks = self.before_callbacks.clone();
@@ -313,12 +343,48 @@ impl Agent for LlmAgent {
             // ===== MAIN AGENT EXECUTION =====
             let mut conversation_history = Vec::new();
 
-            // Add instruction if present
-            if let Some(instr) = instruction {
-                conversation_history.push(Content {
-                    role: "user".to_string(),
-                    parts: vec![Part::Text { text: instr }],
-                });
+            // ===== PROCESS GLOBAL INSTRUCTION =====
+            // GlobalInstruction provides tree-wide personality/identity
+            if let Some(provider) = &global_instruction_provider {
+                // Dynamic global instruction via provider
+                let global_inst = provider(ctx.clone() as Arc<dyn ReadonlyContext>).await?;
+                if !global_inst.is_empty() {
+                    conversation_history.push(Content {
+                        role: "user".to_string(),
+                        parts: vec![Part::Text { text: global_inst }],
+                    });
+                }
+            } else if let Some(ref template) = global_instruction {
+                // Static global instruction with template injection
+                let processed = adk_core::inject_session_state(ctx.as_ref(), template).await?;
+                if !processed.is_empty() {
+                    conversation_history.push(Content {
+                        role: "user".to_string(),
+                        parts: vec![Part::Text { text: processed }],
+                    });
+                }
+            }
+
+            // ===== PROCESS AGENT INSTRUCTION =====
+            // Agent-specific instruction
+            if let Some(provider) = &instruction_provider {
+                // Dynamic instruction via provider
+                let inst = provider(ctx.clone() as Arc<dyn ReadonlyContext>).await?;
+                if !inst.is_empty() {
+                    conversation_history.push(Content {
+                        role: "user".to_string(),
+                        parts: vec![Part::Text { text: inst }],
+                    });
+                }
+            } else if let Some(ref template) = instruction {
+                // Static instruction with template injection
+                let processed = adk_core::inject_session_state(ctx.as_ref(), template).await?;
+                if !processed.is_empty() {
+                    conversation_history.push(Content {
+                        role: "user".to_string(),
+                        parts: vec![Part::Text { text: processed }],
+                    });
+                }
             }
 
             // Add user content
