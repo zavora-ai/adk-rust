@@ -17,8 +17,8 @@ pub struct LlmAgent {
     tools: Vec<Arc<dyn Tool>>,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
-    before_callbacks: Vec<BeforeAgentCallback>,
-    after_callbacks: Vec<AfterAgentCallback>,
+    before_callbacks: Arc<Vec<BeforeAgentCallback>>,
+    after_callbacks: Arc<Vec<AfterAgentCallback>>,
     before_model_callbacks: Arc<Vec<BeforeModelCallback>>,
     after_model_callbacks: Arc<Vec<AfterModelCallback>>,
     before_tool_callbacks: Arc<Vec<BeforeToolCallback>>,
@@ -146,8 +146,8 @@ impl LlmAgentBuilder {
             tools: self.tools,
             sub_agents: self.sub_agents,
             output_key: self.output_key,
-            before_callbacks: self.before_callbacks,
-            after_callbacks: self.after_callbacks,
+            before_callbacks: Arc::new(self.before_callbacks),
+            after_callbacks: Arc::new(self.after_callbacks),
             before_model_callbacks: Arc::new(self.before_model_callbacks),
             after_model_callbacks: Arc::new(self.after_model_callbacks),
             before_tool_callbacks: Arc::new(self.before_tool_callbacks),
@@ -259,12 +259,58 @@ impl Agent for LlmAgent {
         let instruction = self.instruction.clone();
         let output_key = self.output_key.clone();
         // Clone Arc references (cheap)
+        let before_agent_callbacks = self.before_callbacks.clone();
+        let after_agent_callbacks = self.after_callbacks.clone();
         let before_model_callbacks = self.before_model_callbacks.clone();
         let after_model_callbacks = self.after_model_callbacks.clone();
         let before_tool_callbacks = self.before_tool_callbacks.clone();
         let after_tool_callbacks = self.after_tool_callbacks.clone();
 
         let s = stream! {
+            // ===== BEFORE AGENT CALLBACKS =====
+            // Execute before the agent starts running
+            // If any returns content, skip agent execution
+            for callback in before_agent_callbacks.as_ref() {
+                match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                    Ok(Some(content)) => {
+                        // Callback returned content - yield it and skip agent execution
+                        let mut early_event = Event::new(&invocation_id);
+                        early_event.author = agent_name.clone();
+                        early_event.content = Some(content);
+                        yield Ok(early_event);
+                        
+                        // Skip rest of agent execution and go to after callbacks
+                        for after_callback in after_agent_callbacks.as_ref() {
+                            match after_callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                                Ok(Some(after_content)) => {
+                                    let mut after_event = Event::new(&invocation_id);
+                                    after_event.author = agent_name.clone();
+                                    after_event.content = Some(after_content);
+                                    yield Ok(after_event);
+                                    return;
+                                }
+                                Ok(None) => continue,
+                                Err(e) => {
+                                    yield Err(e);
+                                    return;
+                                }
+                            }
+                        }
+                        return;
+                    }
+                    Ok(None) => {
+                        // Continue to next callback
+                        continue;
+                    }
+                    Err(e) => {
+                        // Callback failed - propagate error
+                        yield Err(e);
+                        return;
+                    }
+                }
+            }
+            
+            // ===== MAIN AGENT EXECUTION =====
             let mut conversation_history = Vec::new();
 
             // Add instruction if present
@@ -312,7 +358,7 @@ impl Agent for LlmAgent {
                 }
 
                 // Build request with conversation history
-                let mut request = LlmRequest {
+                let request = LlmRequest {
                     model: model.name().to_string(),
                     contents: conversation_history.clone(),
                     tools: tool_declarations.clone(),
@@ -341,23 +387,27 @@ impl Agent for LlmAgent {
                     }
                 }
 
-                // Determine if we call the model or use override
-                let accumulated_content = if let Some(override_response) = model_response_override {
+                // Determine streaming source: cached response or real model
+                let mut accumulated_content: Option<Content> = None;
+                
+                if let Some(cached_response) = model_response_override {
                     // Use callback-provided response (e.g., from cache)
-                    override_response.content
+                    // Yield it as an event
+                    let mut cached_event = Event::new(&invocation_id);
+                    cached_event.author = agent_name.clone();
+                    cached_event.content = cached_response.content.clone();
+                    yield Ok(cached_event);
+                    
+                    accumulated_content = cached_response.content;
                 } else {
                     // Call model with STREAMING ENABLED
                     let mut response_stream = model.generate_content(request, true).await?;
 
                     use futures::StreamExt;
                     
-                    // Accumulate chunks as they arrive
-                    let mut accumulated_content: Option<Content> = None;
-                    let mut turn_complete = false;
-                    
-                    // Stream and yield chunks immediately
+                    // Stream and process chunks with AfterModel callbacks
                     while let Some(chunk_result) = response_stream.next().await {
-                        let chunk = match chunk_result {
+                        let mut chunk = match chunk_result {
                             Ok(c) => c,
                             Err(e) => {
                                 yield Err(e);
@@ -365,7 +415,28 @@ impl Agent for LlmAgent {
                             }
                         };
                         
-                        // Yield partial event immediately for user feedback
+                        // ===== AFTER MODEL CALLBACKS (per chunk) =====
+                        // Callbacks can modify each streaming chunk
+                        for callback in after_model_callbacks.as_ref() {
+                            match callback(ctx.clone() as Arc<dyn CallbackContext>, chunk.clone()).await {
+                                Ok(Some(modified_chunk)) => {
+                                    // Callback modified this chunk
+                                    chunk = modified_chunk;
+                                    break;
+                                }
+                                Ok(None) => {
+                                    // Continue to next callback
+                                    continue;
+                                }
+                                Err(e) => {
+                                    // Callback failed - propagate error
+                                    yield Err(e);
+                                    return;
+                                }
+                            }
+                        }
+                        
+                        // Yield the (possibly modified) partial event
                         let mut partial_event = Event::new(&invocation_id);
                         partial_event.author = agent_name.clone();
                         partial_event.content = chunk.content.clone();
@@ -384,57 +455,18 @@ impl Agent for LlmAgent {
                         
                         // Check if turn is complete
                         if chunk.turn_complete {
-                            turn_complete = true;
                             break;
-                        }
-                    }
-
-                    accumulated_content
-                };
-                
-                // ===== AFTER MODEL CALLBACKS =====
-                // These can modify the model response
-                let mut final_content = accumulated_content;
-                if let Some(content) = final_content.clone() {
-                    // Create an LlmResponse for callbacks
-                    let response = adk_core::LlmResponse {
-                        content: Some(content),
-                        usage_metadata: None,
-                        finish_reason: Some(adk_core::FinishReason::Stop),
-                        partial: false,
-                        turn_complete: true,
-                        interrupted: false,
-                        error_code: None,
-                        error_message: None,
-                    };
-
-                    for callback in after_model_callbacks.as_ref() {
-                        match callback(ctx.clone() as Arc<dyn CallbackContext>, response.clone()).await {
-                            Ok(Some(modified_response)) => {
-                                // Callback modified the response
-                                final_content = modified_response.content;
-                                break;
-                            }
-                            Ok(None) => {
-                                // Continue to next callback
-                                continue;
-                            }
-                            Err(e) => {
-                                // Callback failed - propagate error
-                                yield Err(e);
-                                return;
-                            }
                         }
                     }
                 }
                 
-                // After callbacks, check for function calls in final content
-                let has_function_calls = final_content.as_ref()
+                // After streaming/caching completes, check for function calls in accumulated content
+                let has_function_calls = accumulated_content.as_ref()
                     .map(|c| c.parts.iter().any(|p| matches!(p, Part::FunctionCall { .. })))
                     .unwrap_or(false);
                 
                 // Add final content to history
-                if let Some(ref content) = final_content {
+                if let Some(ref content) = accumulated_content {
                     conversation_history.push(content.clone());
                     
                     // Handle output_key: save final agent output to state_delta
@@ -466,7 +498,7 @@ impl Agent for LlmAgent {
                 }
 
                 // Execute function calls and add responses to history
-                if let Some(content) = &final_content {
+                if let Some(content) = &accumulated_content {
                     for part in &content.parts {
                         if let Part::FunctionCall { name, args } = part {
                             // Find and execute tool
@@ -506,6 +538,30 @@ impl Agent for LlmAgent {
                                 }],
                             });
                         }
+                    }
+                }
+            }
+            
+            // ===== AFTER AGENT CALLBACKS =====
+            // Execute after the agent completes
+            for callback in after_agent_callbacks.as_ref() {
+                match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                    Ok(Some(content)) => {
+                        // Callback returned content - yield it
+                        let mut after_event = Event::new(&invocation_id);
+                        after_event.author = agent_name.clone();
+                        after_event.content = Some(content);
+                        yield Ok(after_event);
+                        break; // First callback that returns content wins
+                    }
+                    Ok(None) => {
+                        // Continue to next callback
+                        continue;
+                    }
+                    Err(e) => {
+                        // Callback failed - propagate error
+                        yield Err(e);
+                        return;
                     }
                 }
             }
