@@ -72,6 +72,34 @@ impl InvocationContext for TestContext {
     fn ended(&self) -> bool {
         false
     }
+
+    fn session(&self) -> &dyn adk_core::Session {
+        &DummySession
+    }
+}
+
+// Dummy session for testing
+struct DummySession;
+
+impl adk_core::Session for DummySession {
+    fn id(&self) -> &str { "test-session" }
+    fn app_name(&self) -> &str { "test-app" }
+    fn user_id(&self) -> &str { "test-user" }
+    fn state(&self) -> &dyn adk_core::State {
+        &DummyState
+    }
+}
+
+struct DummyState;
+
+impl adk_core::State for DummyState {
+    fn get(&self, _key: &str) -> Option<serde_json::Value> {
+        None
+    }
+    fn set(&mut self, _key: String, _value: serde_json::Value) {}
+    fn all(&self) -> std::collections::HashMap<String, serde_json::Value> {
+        std::collections::HashMap::new()
+    }
 }
 
 #[test]
