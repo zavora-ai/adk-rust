@@ -1,5 +1,7 @@
 use crate::{types::Content, Agent, Result};
 use async_trait::async_trait;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[async_trait]
@@ -13,6 +15,26 @@ pub trait ReadonlyContext: Send + Sync {
     fn user_content(&self) -> &Content;
 }
 
+// State management traits
+pub trait State: Send + Sync {
+    fn get(&self, key: &str) -> Option<Value>;
+    fn set(&mut self, key: String, value: Value);
+    fn all(&self) -> HashMap<String, Value>;
+}
+
+pub trait ReadonlyState: Send + Sync {
+    fn get(&self, key: &str) -> Option<Value>;
+    fn all(&self) -> HashMap<String, Value>;
+}
+
+// Session trait
+pub trait Session: Send + Sync {
+    fn id(&self) -> &str;
+    fn app_name(&self) -> &str;
+    fn user_id(&self) -> &str;
+    fn state(&self) -> &dyn State;
+}
+
 #[async_trait]
 pub trait CallbackContext: ReadonlyContext {
     fn artifacts(&self) -> Option<Arc<dyn Artifacts>>;
@@ -22,7 +44,7 @@ pub trait CallbackContext: ReadonlyContext {
 pub trait InvocationContext: CallbackContext {
     fn agent(&self) -> Arc<dyn Agent>;
     fn memory(&self) -> Option<Arc<dyn Memory>>;
-    fn session(&self) -> &dyn adk_session::Session;
+    fn session(&self) -> &dyn Session;
     fn run_config(&self) -> &RunConfig;
     fn end_invocation(&self);
     fn ended(&self) -> bool;

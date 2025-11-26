@@ -16,7 +16,6 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
-adk-session = { path = "../adk-session" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
