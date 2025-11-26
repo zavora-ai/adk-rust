@@ -19,9 +19,8 @@ pub trait CallbackContext: ReadonlyContext {
 }
 
 #[async_trait]
-pub trait InvocationContext: ReadonlyContext {
+pub trait InvocationContext: CallbackContext {
     fn agent(&self) -> Arc<dyn Agent>;
-    fn artifacts(&self) -> Option<Arc<dyn Artifacts>>;
     fn memory(&self) -> Option<Arc<dyn Memory>>;
     fn run_config(&self) -> &RunConfig;
     fn end_invocation(&self);

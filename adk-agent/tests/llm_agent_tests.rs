@@ -51,12 +51,16 @@ impl ReadonlyContext for TestContext {
 }
 
 #[async_trait]
+impl adk_core::CallbackContext for TestContext {
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
+}
+
+#[async_trait]
 impl InvocationContext for TestContext {
     fn agent(&self) -> Arc<dyn Agent> {
         unimplemented!()
-    }
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
-        None
     }
     fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
         None
