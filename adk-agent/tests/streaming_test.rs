@@ -1,118 +1,189 @@
 use adk_agent::LlmAgentBuilder;
-use adk_core::{Agent, Content, Event, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part, Result};
+use adk_core::{
+    Agent, Content, InvocationContext, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part,
+    Result, RunConfig, Session, State, UsageMetadata, FinishReason,
+};
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::StreamExt;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Mock model that simulates streaming responses with multiple chunks
-struct MockStreamingModel {
-    chunks: Vec<&'static str>,
+// --- Mocks ---
+
+struct MockModel {
+    chunks: Vec<String>,
+}
+
+impl MockModel {
+    fn new(chunks: Vec<&str>) -> Self {
+        Self {
+            chunks: chunks.iter().map(|s| s.to_string()).collect(),
+        }
+    }
 }
 
 #[async_trait]
-impl Llm for MockStreamingModel {
+impl Llm for MockModel {
     fn name(&self) -> &str {
-        "mock-streaming"
+        "mock-model"
     }
 
     async fn generate_content(&self, _req: LlmRequest, stream: bool) -> Result<LlmResponseStream> {
-        let chunks = self.chunks.clone();
+        assert!(stream, "Agent should request streaming");
         
-        if stream {
-            // Simulate streaming: yield multiple partial chunks
-            let s = stream! {
-                for (i, chunk_text) in chunks.iter().enumerate() {
-                    let is_last = i == chunks.len() - 1;
-                    
-                    yield Ok(LlmResponse {
-                        content: Some(Content {
-                            role: "model".to_string(),
-                            parts: vec![Part::Text { text: chunk_text.to_string() }],
-                        }),
-                        usage_metadata: None,
-                        finish_reason: if is_last { Some(adk_core::FinishReason::Stop) } else { None },
-                        partial: !is_last,
-                        turn_complete: is_last,
-                        interrupted: false,
-                        error_code: None,
-                        error_message: None,
-                    });
-                }
-            };
-            Ok(Box::pin(s))
-        } else {
-            // Non-streaming: return all content in one chunk (old behavior)
-            let full_text = chunks.join("");
-            let s = stream! {
+        let chunks = self.chunks.clone();
+        let s = stream! {
+            for (i, text) in chunks.iter().enumerate() {
+                let is_last = i == chunks.len() - 1;
+                
+                let content = Content {
+                    role: "model".to_string(),
+                    parts: vec![Part::Text { text: text.clone() }],
+                };
+                
                 yield Ok(LlmResponse {
-                    content: Some(Content {
-                        role: "model".to_string(),
-                        parts: vec![Part::Text { text: full_text }],
-                    }),
+                    content: Some(content),
                     usage_metadata: None,
-                    finish_reason: Some(adk_core::FinishReason::Stop),
-                    partial: false,
-                    turn_complete: true,
+                    finish_reason: if is_last { Some(FinishReason::Stop) } else { None },
+                    partial: !is_last,
+                    turn_complete: is_last,
                     interrupted: false,
                     error_code: None,
                     error_message: None,
                 });
-            };
-            Ok(Box::pin(s))
-        }
+            }
+        };
+        
+        Ok(Box::pin(s))
     }
 }
 
-#[tokio::test]
-async fn test_streaming_yields_multiple_events() {
-    // Create a mock model that returns 3 chunks
-    let model = Arc::new(MockStreamingModel {
-        chunks: vec!["Hello ", "world", "!"],
-    });
+struct MockSession;
+impl Session for MockSession {
+    fn id(&self) -> &str { "session-1" }
+    fn app_name(&self) -> &str { "test-app" }
+    fn user_id(&self) -> &str { "user-1" }
+    fn state(&self) -> &dyn State { &MockState }
+}
 
-    let agent = LlmAgentBuilder::new("streaming_agent")
-        .description("Test agent for streaming")
+struct MockState;
+impl State for MockState {
+    fn get(&self, _key: &str) -> Option<Value> { None }
+    fn set(&mut self, _key: String, _value: Value) {}
+    fn all(&self) -> HashMap<String, Value> { HashMap::new() }
+}
+
+struct MockContext {
+    session: MockSession,
+}
+
+impl MockContext {
+    fn new() -> Self {
+        Self { session: MockSession }
+    }
+}
+
+#[async_trait]
+impl adk_core::ReadonlyContext for MockContext {
+    fn invocation_id(&self) -> &str { "inv-1" }
+    fn agent_name(&self) -> &str { "test-agent" }
+    fn user_id(&self) -> &str { "user-1" }
+    fn app_name(&self) -> &str { "test-app" }
+    fn session_id(&self) -> &str { "session-1" }
+    fn branch(&self) -> &str { "main" }
+    fn user_content(&self) -> &Content { unimplemented!() }
+}
+
+#[async_trait]
+impl adk_core::CallbackContext for MockContext {
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
+}
+
+#[async_trait]
+impl InvocationContext for MockContext {
+    fn agent(&self) -> Arc<dyn Agent> { unimplemented!() }
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> { None }
+    fn session(&self) -> &dyn Session { &self.session }
+    fn run_config(&self) -> &RunConfig { unimplemented!() }
+    fn end_invocation(&self) {}
+    fn ended(&self) -> bool { false }
+}
+
+// --- Tests ---
+
+#[tokio::test]
+async fn test_streaming_chunks() {
+    let model = Arc::new(MockModel::new(vec!["Hello", " ", "World", "!"]));
+    let agent = LlmAgentBuilder::new("test-agent")
         .model(model)
         .build()
-        .expect("Failed to build agent");
+        .unwrap();
 
-    // Create a simple test context using the runner
-    use adk_runner::Runner;
-    use adk_session::InMemorySessionService;
+    let ctx = Arc::new(MockContext::new());
     
-    let session_service = Arc::new(InMemorySessionService::new());
-    let runner = Runner::new(Arc::new(agent), session_service.clone(), None, None);
+    // We need to provide user content in the context, but MockContext panics on user_content()
+    // Let's fix MockContext to return dummy content
+    // Actually, LlmAgent calls ctx.user_content()
     
-    let user_content = Content {
-        role: "user".to_string(),
-        parts: vec![Part::Text { text: "test".to_string() }],
-    };
+    // Let's refine MockContext
+    struct BetterMockContext {
+        session: MockSession,
+        user_content: Content,
+    }
     
-    // Run the agent
-    let mut event_stream = runner.run("test-user", "test-session", user_content).await.unwrap();
-
-    // Collect all events
-    let mut events = Vec::new();
-    while let Some(result) = event_stream.next().await {
-        match result {
-            Ok(event) => {
-                println!("Event: author={}, has_content={}", event.author, event.content.is_some());
-                events.push(event);
+    impl BetterMockContext {
+        fn new() -> Self {
+            Self {
+                session: MockSession,
+                user_content: Content {
+                    role: "user".to_string(),
+                    parts: vec![Part::Text { text: "Hi".to_string() }],
+                },
             }
-            Err(e) => panic!("Error in event stream: {:?}", e),
+        }
+    }
+    
+    #[async_trait]
+    impl adk_core::ReadonlyContext for BetterMockContext {
+        fn invocation_id(&self) -> &str { "inv-1" }
+        fn agent_name(&self) -> &str { "test-agent" }
+        fn user_id(&self) -> &str { "user-1" }
+        fn app_name(&self) -> &str { "test-app" }
+        fn session_id(&self) -> &str { "session-1" }
+        fn branch(&self) -> &str { "main" }
+        fn user_content(&self) -> &Content { &self.user_content }
+    }
+    
+    #[async_trait]
+    impl adk_core::CallbackContext for BetterMockContext {
+        fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
+    }
+    
+    #[async_trait]
+    impl InvocationContext for BetterMockContext {
+        fn agent(&self) -> Arc<dyn Agent> { unimplemented!() }
+        fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> { None }
+        fn session(&self) -> &dyn Session { &self.session }
+        fn run_config(&self) -> &RunConfig { unimplemented!() }
+        fn end_invocation(&self) {}
+        fn ended(&self) -> bool { false }
+    }
+
+    let ctx = Arc::new(BetterMockContext::new());
+    let mut stream = agent.run(ctx).await.unwrap();
+
+    let mut received_chunks = Vec::new();
+    
+    while let Some(result) = stream.next().await {
+        let event = result.unwrap();
+        if let Some(content) = event.content {
+            if let Some(Part::Text { text }) = content.parts.first() {
+                received_chunks.push(text.clone());
+            }
         }
     }
 
-    // Verify we got multiple events (one per chunk)
-    println!("Total events received: {}", events.len());
-    assert!(
-        events.len() >= 3,
-        "Expected at least 3 events (3 chunks), got {}",
-        events.len()
-    );
-
-    // Verify early events have content (not waiting for full response)
-    let first_event = events.iter().find(|e| e.content.is_some());
-    assert!(first_event.is_some(), "Should have at least one event with content");
+    assert_eq!(received_chunks, vec!["Hello", " ", "World", "!"]);
 }

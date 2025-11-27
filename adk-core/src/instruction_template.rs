@@ -3,12 +3,14 @@ use regex::Regex;
 use std::sync::OnceLock;
 
 /// Regex pattern to match template placeholders like {variable} or {artifact.file_name}
-/// Matches {+[^{}]*}+ to handle nested braces
+/// Optimized pattern matches only valid identifiers: {[a-zA-Z_][a-zA-Z0-9_:]*[?]?}
+/// This reduces backtracking compared to the previous pattern: \{+[^{}]*\}+
 static PLACEHOLDER_REGEX: OnceLock<Regex> = OnceLock::new();
 
 fn get_placeholder_regex() -> &'static Regex {
     PLACEHOLDER_REGEX.get_or_init(|| {
-        Regex::new(r"\{+[^{}]*\}+").expect("Invalid regex pattern")
+        // Match: { + identifier (with dots for artifact.name) + optional ? + }
+        Regex::new(r"\{[a-zA-Z_][a-zA-Z0-9_:.]*\??\}").expect("Invalid regex pattern")
     })
 }
 
@@ -88,7 +90,11 @@ async fn replace_match(ctx: &dyn InvocationContext, match_str: &str) -> Result<S
         match state_value {
             Some(value) => {
                 // Convert value to string
-                Ok(format!("{}", value))
+                if let Some(s) = value.as_str() {
+                    Ok(s.to_string())
+                } else {
+                    Ok(format!("{}", value))
+                }
             }
             None => {
                 if optional {
@@ -128,7 +134,8 @@ async fn replace_match(ctx: &dyn InvocationContext, match_str: &str) -> Result<S
 /// - The artifact service is not initialized
 pub async fn inject_session_state(ctx: &dyn InvocationContext, template: &str) -> Result<String> {
     let regex = get_placeholder_regex();
-    let mut result = String::with_capacity(template.len());
+    // Pre-allocate 20% extra capacity to reduce reallocations when placeholders expand
+    let mut result = String::with_capacity((template.len() as f32 * 1.2) as usize);
     let mut last_end = 0;
     
     for captures in regex.find_iter(template) {

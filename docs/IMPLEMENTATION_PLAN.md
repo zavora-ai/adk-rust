@@ -142,9 +142,9 @@ Transform `adk-rust` from a ~48% complete prototype into a production-ready impl
 - Expand existing tests in all crates
 
 #### [NEW] [tests/integration_tests/](file:///data/projects/adk-rust/tests/integration_tests/)
-- End-to-end tests with real Gemini API (optional, gated by env var)
-- Multi-agent workflow tests
-- MCP integration tests
+- [x] End-to-end tests with real Gemini API (optional, gated by env var)
+- [ ] Multi-agent workflow tests
+- [ ] MCP integration tests
 
 ---
 
