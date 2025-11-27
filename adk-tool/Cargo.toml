@@ -8,9 +8,11 @@ authors.workspace = true
 
 [dependencies]
 adk-core = { path = "../adk-core" }
+adk-telemetry = { path = "../adk-telemetry" }
 async-trait.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars = "0.8"
 rmcp = { version = "0.9", features = ["client"] }
+tracing.workspace = true

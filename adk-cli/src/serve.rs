@@ -8,6 +8,11 @@ pub async fn run_serve(
     agent_loader: Arc<dyn AgentLoader>,
     port: u16,
 ) -> Result<()> {
+    // Initialize telemetry
+    if let Err(e) = adk_telemetry::init_telemetry("adk-server") {
+        eprintln!("Failed to initialize telemetry: {}", e);
+    }
+
     let session_service = Arc::new(InMemorySessionService::new());
     
     let config = ServerConfig {

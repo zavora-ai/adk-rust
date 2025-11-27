@@ -78,7 +78,17 @@ impl Llm for GeminiModel {
         &self.model_name
     }
 
+    #[adk_telemetry::instrument(
+        skip(self, req),
+        fields(
+            model.name = %self.model_name,
+            stream = %stream,
+            request.contents_count = %req.contents.len(),
+            request.tools_count = %req.tools.len()
+        )
+    )]
     async fn generate_content(&self, req: LlmRequest, stream: bool) -> Result<LlmResponseStream> {
+        adk_telemetry::info!("Generating content");
         let mut builder = self.client.generate_content();
 
         // Add contents using proper builder methods
@@ -171,10 +181,14 @@ impl Llm for GeminiModel {
         }
 
         if stream {
+            adk_telemetry::debug!("Executing streaming request");
             let response_stream = builder
                 .execute_stream()
                 .await
-                .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+                .map_err(|e| {
+                    adk_telemetry::error!(error = %e, "Model request failed");
+                    adk_core::AdkError::Model(e.to_string())
+                })?;
 
             let mapped_stream = async_stream::stream! {
                 use futures::TryStreamExt;
@@ -188,20 +202,30 @@ impl Llm for GeminiModel {
                                     llm_resp.turn_complete = false;
                                     yield Ok(llm_resp);
                                 }
-                                Err(e) => yield Err(e),
+                                Err(e) => {
+                                    adk_telemetry::error!(error = %e, "Failed to convert response");
+                                    yield Err(e);
+                                }
                             }
                         }
-                        Err(e) => yield Err(adk_core::AdkError::Model(e.to_string())),
+                        Err(e) => {
+                            adk_telemetry::error!(error = %e, "Stream error");
+                            yield Err(adk_core::AdkError::Model(e.to_string()));
+                        }
                     }
                 }
             };
 
             Ok(Box::pin(mapped_stream))
         } else {
+            adk_telemetry::debug!("Executing blocking request");
             let response = builder
                 .execute()
                 .await
-                .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+                .map_err(|e| {
+                    adk_telemetry::error!(error = %e, "Model request failed");
+                    adk_core::AdkError::Model(e.to_string())
+                })?;
 
             let llm_response = Self::convert_response(&response)?;
 

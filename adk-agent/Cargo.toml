@@ -8,12 +8,15 @@ authors.workspace = true
 
 [dependencies]
 adk-core = { path = "../adk-core" }
-async-trait.workspace = true
-tokio.workspace = true
-futures.workspace = true
-async-stream.workspace = true
-serde_json.workspace = true
-
-[dev-dependencies]
 adk-model = { path = "../adk-model" }
 adk-tool = { path = "../adk-tool" }
+adk-telemetry = { path = "../adk-telemetry" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+async-stream = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]

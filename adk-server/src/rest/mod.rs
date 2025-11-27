@@ -8,7 +8,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use tower_http::cors::CorsLayer;
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 pub fn create_app(config: ServerConfig) -> Router {
     let session_controller = SessionController::new(config.session_service.clone());
@@ -28,6 +28,7 @@ pub fn create_app(config: ServerConfig) -> Router {
             post(controllers::runtime::run_sse),
         )
         .with_state(runtime_controller)
+        .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
 }
 

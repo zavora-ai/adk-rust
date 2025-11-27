@@ -19,6 +19,7 @@ adk-runner = { path = "../adk-runner" }
 adk-server = { path = "../adk-server" }
 adk-session = { path = "../adk-session" }
 adk-artifact = { path = "../adk-artifact" }
+adk-telemetry = { path = "../adk-telemetry" }
 clap = { version = "4.5", features = ["derive"] }
 rustyline = "14.0"
 tokio = { version = "1.40", features = ["full"] }

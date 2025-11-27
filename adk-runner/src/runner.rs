@@ -74,6 +74,7 @@ impl Runner {
                 app_name.clone(),
                 session_id.clone(),
                 user_content.clone(),
+                Arc::from(session),
             );
 
             // Add optional services

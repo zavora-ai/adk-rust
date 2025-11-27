@@ -86,7 +86,17 @@ impl Tool for FunctionTool {
         self.response_schema.clone()
     }
 
+    #[adk_telemetry::instrument(
+        skip(self, ctx, args),
+        fields(
+            tool.name = %self.name,
+            tool.description = %self.description,
+            tool.long_running = %self.long_running,
+            function_call.id = %ctx.function_call_id()
+        )
+    )]
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        adk_telemetry::debug!("Executing tool");
         (self.handler)(ctx, args).await
     }
 }

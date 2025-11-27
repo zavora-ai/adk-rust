@@ -12,8 +12,14 @@ members = [
     "adk-agent",
     "adk-cli",
     "examples",
+    "adk-telemetry",
 ]
 exclude = ["gemini-rust"]
+
+[profile.release]
+strip = true
+opt-level = 3
+lto = true
 
 [workspace.package]
 version = "0.1.0"
@@ -35,3 +41,6 @@ uuid = { version = "1.10", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 gemini = { version = "1.5", package = "gemini-rust" }
 regex = "1.10"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+opentelemetry = "0.21"

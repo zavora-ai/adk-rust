@@ -323,11 +323,27 @@ impl Agent for LlmAgent {
         &self.sub_agents
     }
 
-    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
-        let model = self.model.clone();
+    #[adk_telemetry::instrument(
+        skip(self, ctx),
+        fields(
+            agent.name = %self.name,
+            agent.description = %self.description,
+            invocation.id = %ctx.invocation_id(),
+            user.id = %ctx.user_id(),
+            session.id = %ctx.session_id()
+        )
+    )]
+    async fn run(
+        &self,
+        ctx: Arc<dyn InvocationContext>,
+    ) -> Result<adk_core::EventStream> {
+        adk_telemetry::info!("Starting agent execution");
+        
         let agent_name = self.name.clone();
         let invocation_id = ctx.invocation_id().to_string();
+        let model = self.model.clone();
         let tools = self.tools.clone();
+        let sub_agents = self.sub_agents.clone();
         let instruction = self.instruction.clone();
         let instruction_provider = self.instruction_provider.clone();
         let global_instruction = self.global_instruction.clone();
@@ -340,8 +356,8 @@ impl Agent for LlmAgent {
         let after_agent_callbacks = self.after_callbacks.clone();
         let before_model_callbacks = self.before_model_callbacks.clone();
         let after_model_callbacks = self.after_model_callbacks.clone();
-        let before_tool_callbacks = self.before_tool_callbacks.clone();
-        let after_tool_callbacks = self.after_tool_callbacks.clone();
+        let _before_tool_callbacks = self.before_tool_callbacks.clone();
+        let _after_tool_callbacks = self.after_tool_callbacks.clone();
 
         let s = stream! {
             // ===== BEFORE AGENT CALLBACKS =====
