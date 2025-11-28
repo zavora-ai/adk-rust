@@ -1,53 +1,62 @@
 use adk_agent::{CustomAgentBuilder, LlmAgentBuilder, SequentialAgent};
 use adk_core::{
-    Agent, Content, Event, InvocationContext, Part, ReadonlyContext, Result, RunConfig,
+    Agent, CallbackContext, Content, Event, InvocationContext, Memory, Part, ReadonlyContext,
+    Result, RunConfig, Session, State,
 };
 use adk_model::gemini::GeminiModel;
 use async_trait::async_trait;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
+
+struct TestSession;
+impl Session for TestSession {
+    fn id(&self) -> &str { "test-session" }
+    fn app_name(&self) -> &str { "test-app" }
+    fn user_id(&self) -> &str { "test-user" }
+    fn state(&self) -> &dyn State { &TestState }
+}
+
+struct TestState;
+impl State for TestState {
+    fn get(&self, _key: &str) -> Option<Value> { None }
+    fn set(&mut self, _key: String, _value: Value) {}
+    fn all(&self) -> HashMap<String, Value> { HashMap::new() }
+}
 
 // Simple test context
 struct TestContext {
-    content: Content,
-    config: RunConfig,
+    session: TestSession,
+    user_content: Content,
 }
 
 impl TestContext {
-    fn new(message: &str) -> Self {
+    fn new(text: &str) -> Self {
         Self {
-            content: Content {
+            session: TestSession,
+            user_content: Content {
                 role: "user".to_string(),
-                parts: vec![Part::Text {
-                    text: message.to_string(),
-                }],
+                parts: vec![Part::Text { text: text.to_string() }],
             },
-            config: RunConfig::default(),
         }
     }
 }
 
 #[async_trait]
 impl ReadonlyContext for TestContext {
-    fn invocation_id(&self) -> &str {
-        "demo-invocation"
-    }
-    fn agent_name(&self) -> &str {
-        "demo-agent"
-    }
-    fn user_id(&self) -> &str {
-        "demo-user"
-    }
-    fn app_name(&self) -> &str {
-        "demo-app"
-    }
-    fn session_id(&self) -> &str {
-        "demo-session"
-    }
-    fn branch(&self) -> &str {
-        ""
-    }
-    fn user_content(&self) -> &Content {
-        &self.content
+    fn invocation_id(&self) -> &str { "test-inv" }
+    fn agent_name(&self) -> &str { "test-agent" }
+    fn user_id(&self) -> &str { "test-user" }
+    fn app_name(&self) -> &str { "test-app" }
+    fn session_id(&self) -> &str { "test-session" }
+    fn branch(&self) -> &str { "main" }
+    fn user_content(&self) -> &Content { &self.user_content }
+}
+
+#[async_trait]
+impl CallbackContext for TestContext {
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
     }
 }
 
@@ -56,16 +65,21 @@ impl InvocationContext for TestContext {
     fn agent(&self) -> Arc<dyn Agent> {
         unimplemented!()
     }
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+
+    fn memory(&self) -> Option<Arc<dyn Memory>> {
         None
     }
-    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
-        None
+
+    fn session(&self) -> &dyn Session {
+        &self.session
     }
+
     fn run_config(&self) -> &RunConfig {
-        &self.config
+        unimplemented!()
     }
+
     fn end_invocation(&self) {}
+
     fn ended(&self) -> bool {
         false
     }

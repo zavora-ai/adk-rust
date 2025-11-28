@@ -1,7 +1,26 @@
-use adk_core::{Agent, Content, InvocationContext as InvocationContextTrait, Part, ReadonlyContext, RunConfig, StreamingMode};
+use adk_core::{Agent, CallbackContext, Content, InvocationContext as InvocationContextTrait, Part, ReadonlyContext, RunConfig, StreamingMode};
 use adk_runner::InvocationContext;
+use adk_session::{Session, State};
 use async_trait::async_trait;
 use std::sync::Arc;
+use std::collections::HashMap;
+
+struct MockState;
+impl State for MockState {
+    fn get(&self, _key: &str) -> Option<serde_json::Value> { None }
+    fn set(&mut self, _key: String, _value: serde_json::Value) {}
+    fn all(&self) -> HashMap<String, serde_json::Value> { HashMap::new() }
+}
+
+struct MockSession;
+impl Session for MockSession {
+    fn id(&self) -> &str { "session-789" }
+    fn app_name(&self) -> &str { "test-app" }
+    fn user_id(&self) -> &str { "user-456" }
+    fn state(&self) -> &dyn State { &MockState }
+    fn events(&self) -> &dyn adk_session::Events { unimplemented!() }
+    fn last_update_time(&self) -> chrono::DateTime<chrono::Utc> { chrono::Utc::now() }
+}
 
 // Mock agent for testing
 struct MockAgent {
@@ -50,6 +69,7 @@ fn test_context_creation() {
         "test-app".to_string(),
         "session-789".to_string(),
         content.clone(),
+        Arc::new(MockSession),
     );
 
     assert_eq!(ctx.invocation_id(), "inv-123");
@@ -76,6 +96,7 @@ fn test_context_with_branch() {
         "test-app".to_string(),
         "session-789".to_string(),
         content,
+        Arc::new(MockSession),
     )
     .with_branch("main.sub".to_string());
 
@@ -91,8 +112,7 @@ fn test_context_with_run_config() {
     let content = Content::new("user");
 
     let config = RunConfig {
-        streaming_mode: StreamingMode::SSE,
-        save_input_blobs_as_artifacts: true,
+        streaming_mode: StreamingMode::Enabled,
     };
 
     let ctx = InvocationContext::new(
@@ -102,11 +122,11 @@ fn test_context_with_run_config() {
         "test-app".to_string(),
         "session-789".to_string(),
         content,
+        Arc::new(MockSession),
     )
     .with_run_config(config);
 
-    assert_eq!(ctx.run_config().streaming_mode, StreamingMode::SSE);
-    assert!(ctx.run_config().save_input_blobs_as_artifacts);
+    assert_eq!(ctx.run_config().streaming_mode, StreamingMode::Enabled);
 }
 
 #[test]
@@ -124,6 +144,7 @@ fn test_context_end_invocation() {
         "test-app".to_string(),
         "session-789".to_string(),
         content,
+        Arc::new(MockSession),
     );
 
     assert!(!ctx.ended());
@@ -146,6 +167,7 @@ fn test_context_agent_access() {
         "test-app".to_string(),
         "session-789".to_string(),
         content,
+        Arc::new(MockSession),
     );
 
     let retrieved_agent = ctx.agent();
@@ -167,6 +189,7 @@ fn test_context_optional_services() {
         "test-app".to_string(),
         "session-789".to_string(),
         content,
+        Arc::new(MockSession),
     );
 
     assert!(ctx.artifacts().is_none());

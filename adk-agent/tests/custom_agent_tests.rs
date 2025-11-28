@@ -1,42 +1,62 @@
 use adk_agent::CustomAgent;
-use adk_core::{Agent, Content, Event, InvocationContext, ReadonlyContext, Result, RunConfig};
+use adk_core::{Agent, CallbackContext, Content, Event, InvocationContext, Memory, Part, ReadonlyContext, Result, RunConfig, Session};
 use async_trait::async_trait;
 use futures::StreamExt;
 use std::sync::Arc;
 
+struct MockSession;
+
+impl Session for MockSession {
+    fn id(&self) -> &str { "test-session" }
+    fn app_name(&self) -> &str { "test-app" }
+    fn user_id(&self) -> &str { "test-user" }
+    fn state(&self) -> &dyn adk_core::State { unimplemented!() }
+}
+
 struct MockContext {
     content: Content,
-    config: RunConfig,
+    session: MockSession,
+    user_content: Content,
 }
 
 impl MockContext {
     fn new() -> Self {
         Self {
-            content: Content::new("user").with_text("test"),
-            config: RunConfig::default(),
+            content: Content {
+                role: "user".to_string(),
+                parts: vec![Part::Text { text: "test".to_string() }],
+            },
+            session: MockSession,
+            user_content: Content {
+                role: "user".to_string(),
+                parts: vec![Part::Text { text: "test".to_string() }],
+            },
         }
     }
 }
 
 #[async_trait]
 impl ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str { "inv-1" }
+    fn invocation_id(&self) -> &str { "test-inv" }
     fn agent_name(&self) -> &str { "test-agent" }
-    fn user_id(&self) -> &str { "user-1" }
+    fn user_id(&self) -> &str { "test-user" }
     fn app_name(&self) -> &str { "test-app" }
-    fn session_id(&self) -> &str { "session-1" }
-    fn branch(&self) -> &str { "" }
-    fn user_content(&self) -> &Content { &self.content }
+    fn session_id(&self) -> &str { "test-session" }
+    fn branch(&self) -> &str { "main" }
+    fn user_content(&self) -> &Content { &self.user_content }
+}
+
+#[async_trait]
+impl CallbackContext for MockContext {
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
 }
 
 #[async_trait]
 impl InvocationContext for MockContext {
-    fn agent(&self) -> Arc<dyn Agent> {
-        unimplemented!()
-    }
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
-    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> { None }
-    fn run_config(&self) -> &RunConfig { &self.config }
+    fn agent(&self) -> Arc<dyn Agent> { unimplemented!() }
+    fn memory(&self) -> Option<Arc<dyn Memory>> { None }
+    fn session(&self) -> &dyn Session { &self.session }
+    fn run_config(&self) -> &RunConfig { unimplemented!() }
     fn end_invocation(&self) {}
     fn ended(&self) -> bool { false }
 }

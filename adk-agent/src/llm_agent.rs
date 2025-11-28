@@ -1,12 +1,11 @@
 use adk_core::{
     Agent, AfterAgentCallback, AfterModelCallback, AfterToolCallback, BeforeAgentCallback,
     BeforeModelCallback, BeforeToolCallback, CallbackContext, Content, Event, EventActions,
-    EventStream, GlobalInstructionProvider, InstructionProvider, InvocationContext, Llm,
+    GlobalInstructionProvider, InstructionProvider, InvocationContext, Llm,
     LlmRequest, MemoryEntry, Part, ReadonlyContext, Result, Tool, ToolContext,
 };
 use async_stream::stream;
 use async_trait::async_trait;
-use serde_json::Value;
 use std::sync::Arc;
 
 pub struct LlmAgent {
@@ -17,9 +16,12 @@ pub struct LlmAgent {
     instruction_provider: Option<Arc<InstructionProvider>>,
     global_instruction: Option<String>,
     global_instruction_provider: Option<Arc<GlobalInstructionProvider>>,
+    #[allow(dead_code)] // Part of public API via builder
     input_schema: Option<serde_json::Value>,
     output_schema: Option<serde_json::Value>,
+    #[allow(dead_code)] // Part of public API via builder
     disallow_transfer_to_parent: bool,
+    #[allow(dead_code)] // Part of public API via builder
     disallow_transfer_to_peers: bool,
     include_contents: adk_core::IncludeContents,
     tools: Vec<Arc<dyn Tool>>,
@@ -343,7 +345,7 @@ impl Agent for LlmAgent {
         let invocation_id = ctx.invocation_id().to_string();
         let model = self.model.clone();
         let tools = self.tools.clone();
-        let sub_agents = self.sub_agents.clone();
+        let _sub_agents = self.sub_agents.clone();
         let instruction = self.instruction.clone();
         let instruction_provider = self.instruction_provider.clone();
         let global_instruction = self.global_instruction.clone();

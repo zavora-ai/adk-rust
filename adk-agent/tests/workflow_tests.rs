@@ -4,9 +4,19 @@ use async_trait::async_trait;
 use futures::stream;
 use std::sync::Arc;
 
+struct MockSession;
+
+impl adk_core::Session for MockSession {
+    fn id(&self) -> &str { "test-session" }
+    fn app_name(&self) -> &str { "test-app" }
+    fn user_id(&self) -> &str { "test-user" }
+    fn state(&self) -> &dyn adk_core::State { unimplemented!() }
+}
+
 struct TestContext {
     content: Content,
     config: RunConfig,
+    session: MockSession,
 }
 
 impl TestContext {
@@ -19,6 +29,7 @@ impl TestContext {
                 }],
             },
             config: RunConfig::default(),
+            session: MockSession,
         }
     }
 }
@@ -49,15 +60,22 @@ impl ReadonlyContext for TestContext {
 }
 
 #[async_trait]
+impl adk_core::CallbackContext for TestContext {
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
+}
+
+#[async_trait]
 impl InvocationContext for TestContext {
     fn agent(&self) -> Arc<dyn Agent> {
         unimplemented!()
     }
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
-        None
-    }
     fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
         None
+    }
+    fn session(&self) -> &dyn adk_core::Session {
+        &self.session
     }
     fn run_config(&self) -> &RunConfig {
         &self.config

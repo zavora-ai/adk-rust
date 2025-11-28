@@ -55,7 +55,6 @@ pub fn init_with_otlp(
     service_name: &str,
     endpoint: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use opentelemetry::trace::TracerProvider;
     use opentelemetry_otlp::WithExportConfig;
     use tracing_opentelemetry::OpenTelemetryLayer;
 

@@ -1,5 +1,4 @@
-use crate::{CallbackContext, Content, InvocationContext, LlmRequest, LlmResponse, ReadonlyContext, Result};
-use async_trait::async_trait;
+use crate::{CallbackContext, Content, LlmRequest, LlmResponse, ReadonlyContext, Result};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;

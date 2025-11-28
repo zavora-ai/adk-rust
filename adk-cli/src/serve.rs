@@ -4,6 +4,7 @@ use adk_server::{ServerConfig, create_app};
 use adk_session::InMemorySessionService;
 use std::sync::Arc;
 
+#[allow(dead_code)] // Part of CLI API, not currently used
 pub async fn run_serve(
     agent_loader: Arc<dyn AgentLoader>,
     port: u16,

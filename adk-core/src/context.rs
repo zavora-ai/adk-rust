@@ -117,13 +117,12 @@ mod tests {
     #[test]
     fn test_run_config_default() {
         let config = RunConfig::default();
-        assert_eq!(config.streaming_mode, StreamingMode::None);
-        assert!(!config.save_input_blobs_as_artifacts);
+        assert_eq!(config.streaming_mode, StreamingMode::Auto);
     }
 
     #[test]
     fn test_streaming_mode() {
-        assert_eq!(StreamingMode::None, StreamingMode::None);
-        assert_ne!(StreamingMode::None, StreamingMode::SSE);
+        assert_eq!(StreamingMode::Auto, StreamingMode::Auto);
+        assert_ne!(StreamingMode::Auto, StreamingMode::Enabled);
     }
 }

@@ -83,10 +83,11 @@ async fn test_gemini_with_config() {
     let content = Content::new("user").with_text("Say hello");
     let mut request = LlmRequest::new("gemini-2.0-flash-exp", vec![content]);
     request.config = Some(adk_core::GenerateContentConfig {
-        temperature: Some(0.1),
+        temperature: Some(0.7),
         top_p: Some(0.95),
         top_k: Some(40),
-        max_output_tokens: Some(50),
+        max_output_tokens: Some(1024),
+        response_schema: None,
     });
     
     let mut stream = model.generate_content(request, false).await.unwrap();

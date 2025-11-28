@@ -1,5 +1,5 @@
 use crate::a2a::{
-    metadata::{set_actions_meta, to_event_meta, InvocationMeta},
+    metadata::{to_event_meta, InvocationMeta},
     parts::adk_parts_to_a2a,
     Artifact, TaskArtifactUpdateEvent, TaskState, TaskStatus, TaskStatusUpdateEvent,
 };
@@ -96,8 +96,6 @@ impl EventProcessor {
 
         // Terminal status
         let state = self.terminal_state.clone().unwrap_or(TaskState::Completed);
-        let mut metadata = self.meta.event_meta.clone();
-        metadata = set_actions_meta(metadata, &self.terminal_actions);
 
         events.push(TaskStatusUpdateEvent {
             task_id: self.task_id.clone(),

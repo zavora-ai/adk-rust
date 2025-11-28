@@ -25,10 +25,29 @@ mod tests {
         name: String,
     }
 
+    use crate::{CallbackContext, Session, State};
+    use std::collections::HashMap;
+
+    struct MockState;
+    impl State for MockState {
+        fn get(&self, _key: &str) -> Option<serde_json::Value> { None }
+        fn set(&mut self, _key: String, _value: serde_json::Value) {}
+        fn all(&self) -> HashMap<String, serde_json::Value> { HashMap::new() }
+    }
+
+    struct MockSession;
+    impl Session for MockSession {
+        fn id(&self) -> &str { "session" }
+        fn app_name(&self) -> &str { "app" }
+        fn user_id(&self) -> &str { "user" }
+        fn state(&self) -> &dyn State { &MockState }
+    }
+
     #[allow(dead_code)]
     struct TestContext {
         content: Content,
         config: RunConfig,
+        session: MockSession,
     }
 
     #[allow(dead_code)]
@@ -37,6 +56,7 @@ mod tests {
             Self {
                 content: Content::new("user"),
                 config: RunConfig::default(),
+                session: MockSession,
             }
         }
     }
@@ -55,12 +75,17 @@ mod tests {
     }
 
     #[async_trait]
+    impl CallbackContext for TestContext {
+        fn artifacts(&self) -> Option<Arc<dyn crate::Artifacts>> { None }
+    }
+
+    #[async_trait]
     impl InvocationContext for TestContext {
         fn agent(&self) -> Arc<dyn Agent> {
             unimplemented!()
         }
-        fn artifacts(&self) -> Option<Arc<dyn crate::Artifacts>> { None }
         fn memory(&self) -> Option<Arc<dyn crate::Memory>> { None }
+        fn session(&self) -> &dyn Session { &self.session }
         fn run_config(&self) -> &RunConfig { &self.config }
         fn end_invocation(&self) {}
         fn ended(&self) -> bool { false }

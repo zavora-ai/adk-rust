@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::{atomic::AtomicBool, Arc};
 
 // Adapter to bridge adk_session::State to adk_core::State
+#[allow(dead_code)] // Used via trait implementation
 struct StateAdapter<'a>(&'a dyn AdkState);
 
 impl<'a> adk_core::State for StateAdapter<'a> {

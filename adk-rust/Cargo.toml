@@ -1,0 +1,74 @@
+[package]
+name = "adk-rust"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Agent Development Kit - Build AI agents in Rust (Google ADK)"
+homepage = "https://github.com/zavora-ai/adk-rust"
+repository = "https://github.com/zavora-ai/adk-rust"
+documentation = "https://docs.rs/adk-rust"
+keywords = ["ai", "agent", "gemini", "llm", "adk"]
+categories = ["api-bindings", "asynchronous", "web-programming"]
+readme = "README.md"
+
+[features]
+default = ["full"]
+
+# Full installation (everything)
+full = [
+    "agents",
+    "models", 
+    "tools",
+    "sessions",
+    "artifacts",
+    "memory",
+    "runner",
+    "server",
+    "telemetry"
+]
+
+# Component features
+agents = ["dep:adk-agent"]
+models = ["dep:adk-model"]
+tools = ["dep:adk-tool"]
+sessions = ["dep:adk-session"]
+artifacts = ["dep:adk-artifact"]
+memory = ["dep:adk-memory"]
+runner = ["dep:adk-runner"]
+server = ["dep:adk-server"]
+telemetry = ["dep:adk-telemetry"]
+
+# Minimal preset (just agents + models + runner)
+minimal = ["agents", "models", "runner"]
+
+[dependencies]
+# Core is always included
+adk-core = { path = "../adk-core", version = "0.1.0" }
+
+# Optional components
+adk-agent = { path = "../adk-agent", version = "0.1.0", optional = true }
+adk-model = { path = "../adk-model", version = "0.1.0", optional = true }
+adk-tool = { path = "../adk-tool", version = "0.1.0", optional = true }
+adk-session = { path = "../adk-session", version = "0.1.0", optional = true }
+adk-artifact = { path = "../adk-artifact", version = "0.1.0", optional = true }
+adk-memory = { path = "../adk-memory", version = "0.1.0", optional = true }
+adk-runner = { path = "../adk-runner", version = "0.1.0", optional = true }
+adk-server = { path = "../adk-server", version = "0.1.0", optional = true }
+adk-telemetry = { path = "../adk-telemetry", version = "0.1.0", optional = true }
+
+# Re-export common dependencies
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

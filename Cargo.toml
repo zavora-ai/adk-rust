@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "adk-rust",
     "adk-server",
     "adk-runner",
     "adk-core",
@@ -13,7 +14,7 @@ members = [
     "adk-cli",
     "examples",
     "adk-telemetry",
-    "benches",
+    "benches", "adk-rust-guide",
 ]
 exclude = ["gemini-rust"]
 

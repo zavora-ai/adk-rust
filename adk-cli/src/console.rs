@@ -7,6 +7,7 @@ use rustyline::DefaultEditor;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[allow(dead_code)] // Part of CLI API, not currently used
 pub async fn run_console(
     agent: Arc<dyn Agent>,
     app_name: String,

@@ -44,7 +44,12 @@ impl adk_core::Agent for MockAgent {
     }
     
     async fn run(&self, _ctx: Arc<dyn adk_core::InvocationContext>) -> adk_core::Result<adk_core::EventStream> {
-        let s = stream! {};
+        let s = stream! {
+            // Yield nothing, but satisfy type inference
+            if false {
+                yield Ok(adk_core::Event::new("mock"));
+            }
+        };
         Ok(Box::pin(s))
     }
 }

@@ -1,16 +1,47 @@
 use adk_agent::LlmAgentBuilder;
 use adk_core::{Agent, CallbackContext, Content, Part};
-use adk_model::gemini::GeminiModel;
+use async_trait::async_trait;
 use futures::StreamExt;
 use std::sync::{Arc, Mutex};
 
 mod test_context;
 use test_context::TestContext;
 
+struct MockLlm;
+
+#[async_trait]
+impl adk_core::Llm for MockLlm {
+    fn name(&self) -> &str {
+        "mock-llm"
+    }
+
+    async fn generate_content(
+        &self,
+        _request: adk_core::LlmRequest,
+        _stream: bool,
+    ) -> adk_core::Result<adk_core::LlmResponseStream> {
+        let s = async_stream::stream! {
+            yield Ok(adk_core::LlmResponse {
+                content: Some(adk_core::Content {
+                    role: "model".to_string(),
+                    parts: vec![adk_core::Part::Text { text: "mock response".to_string() }],
+                }),
+                usage_metadata: None,
+                finish_reason: None,
+                partial: false,
+                turn_complete: true,
+                interrupted: false,
+                error_code: None,
+                error_message: None,
+            });
+        };
+        Ok(Box::pin(s))
+    }
+}
+
 #[tokio::test]
 async fn test_before_agent_callback() {
-    let api_key = std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY not set");
-    let model = GeminiModel::new(api_key, "gemini-2.0-flash-exp").unwrap();
+    let model = MockLlm;
 
     let callback_called = Arc::new(Mutex::new(false));
     let flag = callback_called.clone();
@@ -38,8 +69,7 @@ async fn test_before_agent_callback() {
 
 #[tokio::test]
 async fn test_before_agent_callback_skip_execution() {
-    let api_key = std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY not set");
-    let model = GeminiModel::new(api_key, "gemini-2.0-flash-exp").unwrap();
+    let model = MockLlm;
 
     let agent = LlmAgentBuilder::new("skip_agent")
         .description("Agent that gets skipped")
@@ -81,8 +111,7 @@ async fn test_before_agent_callback_skip_execution() {
 
 #[tokio::test]
 async fn test_after_agent_callback() {
-    let api_key = std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY not set");
-    let model = GeminiModel::new(api_key, "gemini-2.0-flash-exp").unwrap();
+    let model = MockLlm;
 
     let callback_called = Arc::new(Mutex::new(false));
     let flag = callback_called.clone();

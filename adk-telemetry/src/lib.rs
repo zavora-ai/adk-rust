@@ -13,13 +13,16 @@
 //! ```rust
 //! use adk_telemetry::{init_telemetry, info, instrument};
 //!
-//! // Initialize telemetry in your main
-//! init_telemetry("my-service")?;
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Initialize telemetry in your main
+//!     init_telemetry("my-service")?;
 //!
-//! // Use logging macros
-//! #[instrument]
-//! async fn my_function() {
-//!     info!("Function called");
+//!     // Use logging macros
+//!     #[instrument]
+//!     async fn my_function() {
+//!         info!("Function called");
+//!     }
+//!     Ok(())
 //! }
 //! ```
 

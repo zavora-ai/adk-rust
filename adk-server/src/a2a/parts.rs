@@ -1,5 +1,6 @@
 use adk_core::{Part, Result};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
+use base64::{Engine as _, engine::general_purpose};
 
 pub fn adk_parts_to_a2a(
     parts: &[Part],
@@ -10,7 +11,7 @@ pub fn adk_parts_to_a2a(
         .map(|part| match part {
             Part::Text { text } => Ok(crate::a2a::Part::text(text.clone())),
             Part::InlineData { mime_type, data } => {
-                let encoded = base64::encode(data);
+                let encoded = general_purpose::STANDARD.encode(data);
                 Ok(crate::a2a::Part::file(crate::a2a::FileContent {
                     name: None,
                     mime_type: Some(mime_type.clone()),
@@ -59,7 +60,7 @@ pub fn a2a_parts_to_adk(parts: &[crate::a2a::Part]) -> Result<Vec<Part>> {
             }),
             crate::a2a::Part::File { file, .. } => {
                 if let Some(bytes) = &file.bytes {
-                    let data = base64::decode(bytes)
+                    let data = general_purpose::STANDARD.decode(bytes)
                         .map_err(|e| adk_core::AdkError::Agent(format!("Base64 decode error: {}", e)))?;
                     Ok(Part::InlineData {
                         mime_type: file.mime_type.clone().unwrap_or_default(),

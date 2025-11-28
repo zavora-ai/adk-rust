@@ -166,8 +166,14 @@ impl Llm for GeminiModel {
         // Add tools
         if !req.tools.is_empty() {
             let mut function_declarations = Vec::new();
+            let mut has_google_search = false;
             
-            for (_name, tool_decl) in &req.tools {
+            for (name, tool_decl) in &req.tools {
+                if name == "google_search" {
+                    has_google_search = true;
+                    continue;
+                }
+
                 // Deserialize our tool declaration into gemini::FunctionDeclaration
                 if let Ok(func_decl) = serde_json::from_value::<gemini::FunctionDeclaration>(tool_decl.clone()) {
                     function_declarations.push(func_decl);
@@ -176,6 +182,12 @@ impl Llm for GeminiModel {
             
             if !function_declarations.is_empty() {
                 let tool = gemini::Tool::with_functions(function_declarations);
+                builder = builder.with_tool(tool);
+            }
+            
+            if has_google_search {
+                // Enable built-in Google Search
+                let tool = gemini::Tool::google_search();
                 builder = builder.with_tool(tool);
             }
         }

@@ -1,10 +1,52 @@
-use adk_agent::{LlmAgentBuilder};
-use adk_core::{Agent, Content, InvocationContext, Part, ReadonlyContext, Result, RunConfig, Tool, ToolContext};
-use adk_model::gemini::GeminiModel;
+use adk_agent::LlmAgentBuilder;
+use adk_core::{Agent, Content, InvocationContext, Part, ReadonlyContext, RunConfig, Tool, ToolContext};
 use adk_tool::FunctionTool;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
+
+struct MockLlm {
+    response_text: String,
+}
+
+impl MockLlm {
+    fn new(response_text: &str) -> Self {
+        Self {
+            response_text: response_text.to_string(),
+        }
+    }
+}
+
+#[async_trait]
+impl adk_core::Llm for MockLlm {
+    fn name(&self) -> &str {
+        "mock-llm"
+    }
+
+    async fn generate_content(
+        &self,
+        _request: adk_core::LlmRequest,
+        _stream: bool,
+    ) -> adk_core::Result<adk_core::LlmResponseStream> {
+        let text = self.response_text.clone();
+        let s = async_stream::stream! {
+            yield Ok(adk_core::LlmResponse {
+                content: Some(adk_core::Content {
+                    role: "model".to_string(),
+                    parts: vec![adk_core::Part::Text { text }],
+                }),
+                usage_metadata: None,
+                finish_reason: None,
+                partial: false,
+                turn_complete: true,
+                interrupted: false,
+                error_code: None,
+                error_message: None,
+            });
+        };
+        Ok(Box::pin(s))
+    }
+}
 
 struct TestContext {
     content: Content,
@@ -27,55 +69,28 @@ impl TestContext {
 
 #[async_trait]
 impl ReadonlyContext for TestContext {
-    fn invocation_id(&self) -> &str {
-        "test-invocation"
-    }
-    fn agent_name(&self) -> &str {
-        "test-agent"
-    }
-    fn user_id(&self) -> &str {
-        "test-user"
-    }
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-    fn session_id(&self) -> &str {
-        "test-session"
-    }
-    fn branch(&self) -> &str {
-        ""
-    }
-    fn user_content(&self) -> &Content {
-        &self.content
-    }
+    fn invocation_id(&self) -> &str { "test-invocation" }
+    fn agent_name(&self) -> &str { "test-agent" }
+    fn user_id(&self) -> &str { "test-user" }
+    fn app_name(&self) -> &str { "test-app" }
+    fn session_id(&self) -> &str { "test-session" }
+    fn branch(&self) -> &str { "" }
+    fn user_content(&self) -> &Content { &self.content }
 }
 
 #[async_trait]
 impl adk_core::CallbackContext for TestContext {
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
-        None
-    }
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
 }
 
 #[async_trait]
 impl InvocationContext for TestContext {
-    fn agent(&self) -> Arc<dyn Agent> {
-        unimplemented!()
-    }
-    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
-        None
-    }
-    fn run_config(&self) -> &RunConfig {
-        &self.config
-    }
+    fn agent(&self) -> Arc<dyn Agent> { unimplemented!() }
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> { None }
+    fn run_config(&self) -> &RunConfig { &self.config }
     fn end_invocation(&self) {}
-    fn ended(&self) -> bool {
-        false
-    }
-
-    fn session(&self) -> &dyn adk_core::Session {
-        &DummySession
-    }
+    fn ended(&self) -> bool { false }
+    fn session(&self) -> &dyn adk_core::Session { &DummySession }
 }
 
 // Dummy session for testing
@@ -85,17 +100,13 @@ impl adk_core::Session for DummySession {
     fn id(&self) -> &str { "test-session" }
     fn app_name(&self) -> &str { "test-app" }
     fn user_id(&self) -> &str { "test-user" }
-    fn state(&self) -> &dyn adk_core::State {
-        &DummyState
-    }
+    fn state(&self) -> &dyn adk_core::State { &DummyState }
 }
 
 struct DummyState;
 
 impl adk_core::State for DummyState {
-    fn get(&self, _key: &str) -> Option<serde_json::Value> {
-        None
-    }
+    fn get(&self, _key: &str) -> Option<serde_json::Value> { None }
     fn set(&mut self, _key: String, _value: serde_json::Value) {}
     fn all(&self) -> std::collections::HashMap<String, serde_json::Value> {
         std::collections::HashMap::new()
@@ -104,8 +115,7 @@ impl adk_core::State for DummyState {
 
 #[test]
 fn test_llm_agent_builder() {
-    let api_key = std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY not set");
-    let model = GeminiModel::new(api_key, "gemini-2.0-flash-exp").unwrap();
+    let model = MockLlm::new("test");
 
     let agent = LlmAgentBuilder::new("test_agent")
         .description("A test agent")
@@ -131,8 +141,7 @@ fn test_llm_agent_builder_missing_model() {
 
 #[tokio::test]
 async fn test_llm_agent_basic_generation() {
-    let api_key = std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY not set");
-    let model = GeminiModel::new(api_key, "gemini-2.0-flash-exp").unwrap();
+    let model = MockLlm::new("4");
 
     let agent = LlmAgentBuilder::new("math_agent")
         .description("Answers math questions")
@@ -168,13 +177,12 @@ async fn test_llm_agent_basic_generation() {
         .join("");
 
     println!("Response: {}", text);
-    assert!(text.contains("4") || text.contains("four"));
+    assert!(text.contains("4"));
 }
 
 #[tokio::test]
 async fn test_llm_agent_with_instruction() {
-    let api_key = std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY not set");
-    let model = GeminiModel::new(api_key, "gemini-2.0-flash-exp").unwrap();
+    let model = MockLlm::new("Ahoy matey!");
 
     let agent = LlmAgentBuilder::new("pirate_agent")
         .description("Talks like a pirate")
@@ -211,22 +219,18 @@ async fn test_llm_agent_with_instruction() {
         .to_lowercase();
 
     println!("Pirate response: {}", text);
-    // Check for pirate-like language
-    assert!(
-        text.contains("ahoy")
-            || text.contains("matey")
-            || text.contains("arr")
-            || text.contains("ye")
-            || text.contains("aye")
-    );
+    assert!(text.contains("ahoy") || text.contains("matey"));
 }
 
 #[tokio::test]
 async fn test_llm_agent_with_function_tool() {
-    let api_key = std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY not set");
-    let model = GeminiModel::new(api_key, "gemini-2.0-flash-exp").unwrap();
+    // For this test, we want to verify the agent CAN be built with a tool.
+    // Verifying the LLM *calls* the tool requires a smarter MockLlm that returns a FunctionCall part.
+    // For now, let's just verify the agent runs and returns the mock response.
+    // A more advanced test would mock the LLM returning a function call.
+    
+    let model = MockLlm::new("The time is 2025-11-23T14:30:00Z");
 
-    // Create a tool that returns current time (something the model can't know)
     let get_time_tool = FunctionTool::new(
         "get_current_time",
         "Returns the current time in ISO format",
@@ -250,34 +254,15 @@ async fn test_llm_agent_with_function_tool() {
     let mut events = Vec::new();
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
-        println!("Event {}: author={}, content={:?}", events.len(), event.author, event.content);
         events.push(event);
     }
 
-    println!("Total events: {}", events.len());
-
-    // Model might answer directly or use tool - both are valid
-    // Just verify we got a response
-    assert!(!events.is_empty(), "Should have at least one event");
-
-    // Check if any event mentions time
-    let has_time_info = events.iter().any(|e| {
-        e.content.as_ref().map(|c| {
-            c.parts.iter().any(|p| match p {
-                Part::Text { text } => text.contains("2025") || text.contains("14:30") || text.contains("time"),
-                _ => false,
-            })
-        }).unwrap_or(false)
-    });
-
-    assert!(has_time_info, "Response should mention time");
+    assert!(!events.is_empty());
 }
 
 #[tokio::test]
 async fn test_llm_agent_output_key() {
-    let api_key = std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY not set");
-    let model = GeminiModel::new(&api_key, "gemini-2.0-flash-exp")
-        .expect("Failed to create model");
+    let model = MockLlm::new("Hello World");
 
     let agent = LlmAgentBuilder::new("test_agent")
         .description("Test agent")
@@ -299,7 +284,7 @@ async fn test_llm_agent_output_key() {
             let value = &event.actions.state_delta["agent_response"];
             assert!(value.is_string());
             let text = value.as_str().unwrap();
-            assert!(text.contains("Hello") || text.contains("hello"));
+            assert!(text.contains("Hello"));
             found_state_delta = true;
         }
     }
@@ -311,9 +296,7 @@ async fn test_llm_agent_output_key() {
 fn test_llm_agent_builder_with_callbacks() {
     use std::sync::{Arc, Mutex};
     
-    let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_else(|_| "test".to_string());
-    let model = GeminiModel::new(&api_key, "gemini-2.0-flash-exp")
-        .expect("Failed to create model");
+    let model = MockLlm::new("response");
 
     let before_called = Arc::new(Mutex::new(false));
     let after_called = Arc::new(Mutex::new(false));
