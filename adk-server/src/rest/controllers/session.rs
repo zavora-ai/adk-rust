@@ -5,6 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tracing::info;
 
 #[derive(Clone)]
 pub struct SessionController {
@@ -38,8 +39,17 @@ pub async fn create_session(
     State(controller): State<SessionController>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<Json<SessionResponse>, StatusCode> {
+    info!(
+        app_name = %req.app_name,
+        user_id = %req.user_id,
+        session_id = ?req.session_id,
+        "POST /sessions - Creating session"
+    );
+    
     // Generate session ID if not provided
     let session_id = req.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    
+    info!(generated_session_id = %session_id, "Session ID resolved");
     
     let session = controller
         .session_service
@@ -52,11 +62,15 @@ pub async fn create_session(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Json(SessionResponse {
+    let response = SessionResponse {
         id: session.id().to_string(),
         app_name: session.app_name().to_string(),
         user_id: session.user_id().to_string(),
-    }))
+    };
+    
+    info!(session_id = %response.id, "Session created successfully");
+
+    Ok(Json(response))
 }
 
 pub async fn get_session(

@@ -8,6 +8,7 @@ use axum::{
 use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
+use tracing::{info, error};
 
 #[derive(Clone)]
 pub struct RuntimeController {
@@ -134,6 +135,13 @@ pub async fn run_sse_compat(
     let user_id = req.user_id;
     let session_id = req.session_id;
 
+    info!(
+        app_name = %app_name,
+        user_id = %user_id,
+        session_id = %session_id,
+        "POST /run_sse request received"
+    );
+
     // Extract text from message parts
     let message_text = req
         .new_message
@@ -144,8 +152,10 @@ pub async fn run_sse_compat(
         .collect::<Vec<_>>()
         .join(" ");
 
+    info!(message = %message_text, "Extracted message text");
+
     // Validate session exists
-    controller
+    let session_result = controller
         .config
         .session_service
         .get(adk_session::GetRequest {
@@ -155,8 +165,14 @@ pub async fn run_sse_compat(
             num_recent_events: None,
             after: None,
         })
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+        .await;
+    
+    if let Err(ref e) = session_result {
+        error!(error = ?e, "Session not found");
+        return Err(StatusCode::NOT_FOUND);
+    }
+    
+    info!("Session validated successfully");
 
     // Load agent
     let agent = controller
