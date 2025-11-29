@@ -2,6 +2,7 @@
 name = "adk-server"
 version = "0.1.0"
 edition = "2021"
+include = ["src/**/*", "assets/**/*", "Cargo.toml"]
 
 [dependencies]
 adk-core = { path = "../adk-core" }
@@ -24,6 +25,8 @@ tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["trace", "cors"] }
 tracing = "0.1"
 base64 = "0.22"
+rust-embed = "8.9.0"
+mime_guess = "2.0.5"
 
 [dev-dependencies]
 async-stream.workspace = true
@@ -31,3 +34,5 @@ tracing-subscriber = "0.3"
 uuid = { version = "1.0", features = ["v4"] }
 async-trait = "0.1"
 chrono = "0.4"
+hyper = "1.8.1"
+http-body-util = "0.1.3"

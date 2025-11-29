@@ -20,6 +20,7 @@ pub async fn run_serve(
         agent_loader,
         session_service,
         artifact_service: None,
+        backend_url: None,
     };
     
     let app = create_app(config);

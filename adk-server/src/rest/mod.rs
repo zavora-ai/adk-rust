@@ -1,9 +1,11 @@
 pub mod controllers;
 mod routes;
 
-pub use controllers::{RuntimeController, SessionController};
+pub use controllers::{
+    AppsController, ArtifactsController, DebugController, RuntimeController, SessionController,
+};
 
-use crate::ServerConfig;
+use crate::{web_ui, ServerConfig};
 use axum::{
     routing::{get, post},
     Router,
@@ -13,14 +15,18 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 pub fn create_app(config: ServerConfig) -> Router {
     let session_controller = SessionController::new(config.session_service.clone());
     let runtime_controller = RuntimeController::new(config.clone());
+    let apps_controller = AppsController::new(config.clone());
+    let artifacts_controller = ArtifactsController::new(config.clone());
+    let debug_controller = DebugController::new(config.clone());
 
-    Router::new()
+    let api_router = Router::new()
         .route("/health", get(health_check))
+        .route("/apps", get(controllers::apps::list_apps))
+        .with_state(apps_controller)
         .route("/sessions", post(controllers::session::create_session))
         .route(
             "/sessions/:app_name/:user_id/:session_id",
-            get(controllers::session::get_session)
-                .delete(controllers::session::delete_session),
+            get(controllers::session::get_session).delete(controllers::session::delete_session),
         )
         .with_state(session_controller)
         .route(
@@ -28,6 +34,35 @@ pub fn create_app(config: ServerConfig) -> Router {
             post(controllers::runtime::run_sse),
         )
         .with_state(runtime_controller)
+        .route(
+            "/sessions/:app_name/:user_id/:session_id/artifacts",
+            get(controllers::artifacts::list_artifacts),
+        )
+        .route(
+            "/sessions/:app_name/:user_id/:session_id/artifacts/:artifact_name",
+            get(controllers::artifacts::get_artifact),
+        )
+        .with_state(artifacts_controller)
+        .route(
+            "/debug/trace/:event_id",
+            get(controllers::debug::get_trace),
+        )
+        .route(
+            "/debug/graph/:app_name/:user_id/:session_id/:event_id",
+            get(controllers::debug::get_graph),
+        )
+        .with_state(debug_controller);
+
+    let ui_router = Router::new()
+        .route("/", get(web_ui::root_redirect))
+        .route("/ui/", get(web_ui::serve_ui_index))
+        .route("/ui/assets/config/runtime-config.json", get(web_ui::serve_runtime_config))
+        .with_state(config)
+        .route("/ui/*path", get(web_ui::serve_ui_assets));
+
+    Router::new()
+        .nest("/api", api_router)
+        .merge(ui_router)
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
 }

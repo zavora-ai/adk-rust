@@ -1,0 +1,14 @@
+[package]
+name = "adk-rust-guide"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Using path dependency for validation since it's not published yet
+adk-rust = { path = "../adk-rust", features = ["full"] }
+tokio = { version = "1.40", features = ["full"] }
+dotenv = "0.15"
+rustyline = "14.0"
+futures = "0.3"
+clap = { version = "4.4", features = ["derive"] }
+axum = "0.7"
