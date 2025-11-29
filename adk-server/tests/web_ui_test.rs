@@ -126,3 +126,31 @@ async fn test_api_apps() {
     let body_str = String::from_utf8(body.to_vec()).unwrap();
     assert!(body_str.contains("mock-agent"));
 }
+
+
+#[tokio::test]
+async fn test_api_list_apps_compat() {
+    let agent = Arc::new(MockAgent);
+    let agent_loader = Arc::new(SingleAgentLoader::new(agent));
+    let session_service = Arc::new(InMemorySessionService::new());
+    let config = ServerConfig::new(agent_loader, session_service);
+    let app = create_app(config);
+
+    // Test /api/list-apps (adk-go compatible endpoint)
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/list-apps?relative_path=./")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+    // Should return array with name and description
+    assert!(body_str.contains("mock-agent"));
+    assert!(body_str.contains("Mock Agent"));
+}

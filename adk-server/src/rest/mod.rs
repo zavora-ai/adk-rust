@@ -22,6 +22,7 @@ pub fn create_app(config: ServerConfig) -> Router {
     let api_router = Router::new()
         .route("/health", get(health_check))
         .route("/apps", get(controllers::apps::list_apps))
+        .route("/list-apps", get(controllers::apps::list_apps_compat))
         .with_state(apps_controller)
         .route("/sessions", post(controllers::session::create_session))
         .route(
