@@ -133,10 +133,38 @@ path = "examples/artifacts/chat_image.rs"
 name = "direct_image_test"
 path = "examples/artifacts/direct_image_test.rs"
 
+[[example]]
+name = "chat_pdf"
+path = "examples/artifacts/chat_pdf.rs"
+
 # Event examples
 [[example]]
 name = "event_inspection"
 path = "examples/events/event_inspection.rs"
+
+[[example]]
+name = "event_flow"
+path = "examples/events/event_flow.rs"
+
+[[example]]
+name = "event_types"
+path = "examples/events/event_types.rs"
+
+[[example]]
+name = "event_state_changes"
+path = "examples/events/event_state_changes.rs"
+
+[[example]]
+name = "event_artifacts"
+path = "examples/events/event_artifacts.rs"
+
+[[example]]
+name = "event_control_flow"
+path = "examples/events/event_control_flow.rs"
+
+[[example]]
+name = "event_grouping"
+path = "examples/events/event_grouping.rs"
 
 # Deployment examples
 [[example]]

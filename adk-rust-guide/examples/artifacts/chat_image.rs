@@ -18,7 +18,7 @@ use std::sync::Arc;
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let api_key = init_env();
     // Use a model that supports vision/multimodal input
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
 
     // Create artifact service and save the image
     let artifact_service = Arc::new(InMemoryArtifactService::new());
@@ -66,7 +66,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     if let Some(last_content) = request.contents.last_mut() {
                         if last_content.role == "user" {
                             last_content.parts.push(response.part);
-                            println!("[CALLBACK] Injected image into user content");
                         }
                     }
                 }

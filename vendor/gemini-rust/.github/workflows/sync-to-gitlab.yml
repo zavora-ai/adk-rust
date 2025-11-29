@@ -1,0 +1,18 @@
+name: Sync to GitLab
+on:
+  push:
+    branches:
+      - main # 您可以指定要同步的分支
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Push to GitLab
+        run: |
+          git remote set-url --add --push origin https://oauth2:${{ secrets.GITLAB_TOKEN }}@gitlab.com/flachesis/gemini-rust.git
+          git push --force --all origin
+          git push --force --tags origin

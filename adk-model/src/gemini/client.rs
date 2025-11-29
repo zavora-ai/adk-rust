@@ -89,6 +89,7 @@ impl Llm for GeminiModel {
     )]
     async fn generate_content(&self, req: LlmRequest, stream: bool) -> Result<LlmResponseStream> {
         adk_telemetry::info!("Generating content");
+
         let mut builder = self.client.generate_content();
 
         // Add contents using proper builder methods

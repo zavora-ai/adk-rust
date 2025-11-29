@@ -1,0 +1,48 @@
+[package]
+name = "gemini-rust"
+version = "1.5.1"
+edition = "2021"
+description = "Rust client for Google Gemini API"
+license = "MIT"
+repository = "https://github.com/flachesis/gemini-rust"
+readme = "README.md"
+keywords = ["gemini", "embed", "google", "ai", "client"]
+categories = ["api-bindings"]
+
+[dependencies.reqwest]
+version = "^0.12.15"
+default-features = false
+features = [
+    "charset",
+    "h2",
+    "http2",
+    "json",
+    "stream",
+    "macos-system-configuration",
+    "rustls-tls",
+]
+
+[dependencies]
+serde = { version = "^1.0", features = ["derive"] }
+serde_json = "^1.0"
+url = { version = "^2.4", features = ["serde"] }
+async-trait = "^0.1"
+futures = "^0.3.1"
+futures-util = "^0.3"
+base64 = "0.22"
+async-stream = "0.3"
+snafu = { version = "0.8", features = ["backtrace"] }
+eventsource-stream = "0.2"
+mime_guess = "2.0"
+mime = "0.3"
+tokio = { version = "1", features = ["io-util"] }
+time = { version = "0.3", features = ["serde", "parsing", "formatting"] }
+tracing = "0.1.41"
+strum = { version = "0.27", features = ["derive"] }
+strum_macros = "0.27"
+schemars = { version = "1.0" }
+
+[dev-dependencies]
+display-error-chain = "0.2"
+tokio = { version = "^1.47", features = ["full"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }

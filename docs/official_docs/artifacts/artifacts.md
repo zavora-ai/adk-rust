@@ -414,7 +414,53 @@ async fn main() -> Result<()> {
 - Use `BeforeModelResult::Continue(request)` to pass the modified request to the model
 - Use `BeforeModelResult::Skip(response)` if you want to return a cached response instead
 - The image is injected as `Part::InlineData`, which Gemini interprets as actual image data
-- Use `user:` prefix for images that should be accessible across sessions
+- Use `user:` prefix for artifacts that should be accessible across sessions
+
+### PDF Document Analysis
+
+Gemini models can process PDF documents natively using the same BeforeModel callback pattern. PDFs are injected with MIME type `application/pdf`:
+
+```rust
+// Save PDF as artifact
+artifact_service.save(SaveRequest {
+    app_name: "my_app".to_string(),
+    user_id: "user".to_string(),
+    session_id: "init".to_string(),
+    file_name: "user:document.pdf".to_string(),
+    part: Part::InlineData {
+        data: pdf_bytes,
+        mime_type: "application/pdf".to_string(),
+    },
+    version: None,
+}).await?;
+
+// Use BeforeModel callback to inject PDF (same pattern as images)
+.before_model_callback(Box::new(move |_ctx, mut request| {
+    let service = callback_service.clone();
+    Box::pin(async move {
+        if let Ok(response) = service.load(LoadRequest {
+            file_name: "user:document.pdf".to_string(),
+            // ... other fields
+        }).await {
+            if let Some(last_content) = request.contents.last_mut() {
+                if last_content.role == "user" {
+                    last_content.parts.push(response.part);
+                }
+            }
+        }
+        Ok(BeforeModelResult::Continue(request))
+    })
+}))
+```
+
+**Gemini PDF capabilities:**
+- Extract and analyze text content
+- Answer questions about documents
+- Summarize sections or entire documents
+- Process up to ~1000 pages
+- OCR support for scanned documents
+
+See `examples/artifacts/chat_pdf.rs` for a complete working example.
 
 ### Storing Generated Images
 
