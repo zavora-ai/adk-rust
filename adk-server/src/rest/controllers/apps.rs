@@ -40,22 +40,11 @@ pub struct AppInfo {
 }
 
 /// Response format for /api/list-apps (adk-go compatible)
+/// Returns just the agent names as strings - the frontend expects this format
 pub async fn list_apps_compat(
     State(controller): State<AppsController>,
     Query(_query): Query<ListAppsQuery>,
-) -> Result<Json<Vec<AppInfo>>, StatusCode> {
-    let agent_names = controller.config.agent_loader.list_agents();
-    
-    // Get agent info for each agent
-    let mut apps = Vec::new();
-    for name in agent_names {
-        if let Ok(agent) = controller.config.agent_loader.load_agent(&name).await {
-            apps.push(AppInfo {
-                name: agent.name().to_string(),
-                description: agent.description().to_string(),
-            });
-        }
-    }
-    
+) -> Result<Json<Vec<String>>, StatusCode> {
+    let apps = controller.config.agent_loader.list_agents();
     Ok(Json(apps))
 }

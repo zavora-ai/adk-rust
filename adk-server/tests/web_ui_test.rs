@@ -150,7 +150,6 @@ async fn test_api_list_apps_compat() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let body_str = String::from_utf8(body.to_vec()).unwrap();
-    // Should return array with name and description
+    // Should return array of agent names (strings)
     assert!(body_str.contains("mock-agent"));
-    assert!(body_str.contains("Mock Agent"));
 }
