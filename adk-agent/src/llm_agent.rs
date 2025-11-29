@@ -1,7 +1,7 @@
 use adk_core::{
     Agent, AfterAgentCallback, AfterModelCallback, AfterToolCallback, BeforeAgentCallback,
-    BeforeModelCallback, BeforeToolCallback, CallbackContext, Content, Event, EventActions,
-    GlobalInstructionProvider, InstructionProvider, InvocationContext, Llm,
+    BeforeModelCallback, BeforeModelResult, BeforeToolCallback, CallbackContext, Content, Event,
+    EventActions, GlobalInstructionProvider, InstructionProvider, InvocationContext, Llm,
     LlmRequest, MemoryEntry, Part, ReadonlyContext, Result, Tool, ToolContext,
 };
 use async_stream::stream;
@@ -452,7 +452,12 @@ impl Agent for LlmAgent {
                 }
             }
 
-            // Add user content
+            // ===== LOAD SESSION HISTORY =====
+            // Load previous conversation turns from the session
+            let session_history = ctx.session().conversation_history();
+            conversation_history.extend(session_history);
+
+            // Add user content (current turn)
             conversation_history.push(ctx.user_content().clone());
 
             // ===== APPLY INCLUDE_CONTENTS FILTERING =====
@@ -468,7 +473,7 @@ impl Agent for LlmAgent {
                         .take_while(|c| c.role == "user" && c.parts.iter().any(|p| {
                             if let Part::Text { text } = p {
                                 // These are likely instructions, not user queries
-                                text.len() > 0
+                                !text.is_empty()
                             } else {
                                 false
                             }
@@ -545,18 +550,19 @@ impl Agent for LlmAgent {
                 };
 
                 // ===== BEFORE MODEL CALLBACKS =====
-                // These can skip the model call by returning a cached response
+                // These can modify the request or skip the model call by returning a response
+                let mut current_request = request;
                 let mut model_response_override = None;
                 for callback in before_model_callbacks.as_ref() {
-                    match callback(ctx.clone() as Arc<dyn CallbackContext>, request.clone()).await {
-                        Ok(Some(response)) => {
+                    match callback(ctx.clone() as Arc<dyn CallbackContext>, current_request.clone()).await {
+                        Ok(BeforeModelResult::Continue(modified_request)) => {
+                            // Callback may have modified the request, continue with it
+                            current_request = modified_request;
+                        }
+                        Ok(BeforeModelResult::Skip(response)) => {
                             // Callback returned a response - skip model call
                             model_response_override = Some(response);
                             break;
-                        }
-                        Ok(None) => {
-                            // Continue to next callback
-                            continue;
                         }
                         Err(e) => {
                             // Callback failed - propagate error
@@ -565,6 +571,7 @@ impl Agent for LlmAgent {
                         }
                     }
                 }
+                let request = current_request;
 
                 // Determine streaming source: cached response or real model
                 let mut accumulated_content: Option<Content> = None;

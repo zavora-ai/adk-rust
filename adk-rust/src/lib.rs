@@ -170,6 +170,13 @@ pub mod telemetry {
     pub use adk_telemetry::*;
 }
 
+/// CLI launcher for running agents.
+///
+/// Available with feature: `cli`
+#[cfg(feature = "cli")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cli")))]
+pub use adk_cli::{Launcher, SingleAgentLoader};
+
 // ============================================================================
 // Prelude
 // ============================================================================
@@ -190,6 +197,7 @@ pub mod prelude {
         Session, State,
         InvocationContext, RunConfig,
         AdkError, Result,
+        BeforeModelResult,
     };
 
     // Agents

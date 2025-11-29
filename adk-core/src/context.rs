@@ -33,6 +33,8 @@ pub trait Session: Send + Sync {
     fn app_name(&self) -> &str;
     fn user_id(&self) -> &str;
     fn state(&self) -> &dyn State;
+    /// Returns the conversation history from this session as Content items
+    fn conversation_history(&self) -> Vec<Content>;
 }
 
 #[async_trait]
@@ -69,32 +71,22 @@ pub struct MemoryEntry {
     pub author: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StreamingMode {
+    #[default]
     Auto,
     Enabled,
     Disabled,
 }
 
-impl Default for StreamingMode {
-    fn default() -> Self {
-        StreamingMode::Auto
-    }
-}
-
 /// Controls what parts of prior conversation history is received by llmagent
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum IncludeContents {
     /// The llmagent operates solely on its current turn (latest user input + any following agent events)
     None,
     /// Default - The llmagent receives the relevant conversation history
+    #[default]
     Default,
-}
-
-impl Default for IncludeContents {
-    fn default() -> Self {
-        IncludeContents::Default
-    }
 }
 
 #[derive(Debug, Clone)]

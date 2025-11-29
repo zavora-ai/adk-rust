@@ -7,6 +7,7 @@ use std::sync::Arc;
 /// models to retrieve search results from Google Search.
 /// The tool operates internally within the model and does not require or
 /// perform local code execution.
+#[derive(Default)]
 pub struct GoogleSearchTool;
 
 impl GoogleSearchTool {

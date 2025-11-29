@@ -13,7 +13,8 @@ pub use agent::{Agent, EventStream};
 pub use agent_loader::{AgentLoader, MultiAgentLoader, SingleAgentLoader};
 pub use callbacks::{
     AfterAgentCallback, AfterModelCallback, AfterToolCallback, BeforeAgentCallback,
-    BeforeModelCallback, BeforeToolCallback, GlobalInstructionProvider, InstructionProvider,
+    BeforeModelCallback, BeforeModelResult, BeforeToolCallback, GlobalInstructionProvider,
+    InstructionProvider,
 };
 pub use context::{
     Artifacts, CallbackContext, IncludeContents, InvocationContext, Memory, MemoryEntry,

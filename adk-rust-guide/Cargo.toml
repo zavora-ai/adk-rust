@@ -2,6 +2,7 @@
 name = "adk-rust-guide"
 version = "0.1.0"
 edition = "2021"
+description = "Validation examples for ADK-Rust official documentation"
 
 [dependencies]
 # Using path dependency for validation since it's not published yet
@@ -12,3 +13,141 @@ rustyline = "14.0"
 futures = "0.3"
 clap = { version = "4.4", features = ["derive"] }
 axum = "0.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+schemars = "0.8"
+
+[dev-dependencies]
+proptest = "1.4"
+walkdir = "2.4"
+regex = "1.10"
+
+# Example configurations - each validates a documentation page
+
+[[example]]
+name = "quickstart"
+path = "examples/quickstart.rs"
+
+[[example]]
+name = "interactive_cli"
+path = "examples/interactive_cli.rs"
+
+# Agent examples
+[[example]]
+name = "llm_agent_basic"
+path = "examples/agents/llm_agent_basic.rs"
+
+[[example]]
+name = "llm_agent_config"
+path = "examples/agents/llm_agent_config.rs"
+
+[[example]]
+name = "sequential_agent"
+path = "examples/agents/sequential_agent.rs"
+
+[[example]]
+name = "parallel_agent"
+path = "examples/agents/parallel_agent.rs"
+
+[[example]]
+name = "loop_agent"
+path = "examples/agents/loop_agent.rs"
+
+[[example]]
+name = "multi_agent"
+path = "examples/agents/multi_agent.rs"
+
+# Tool examples
+[[example]]
+name = "function_tool"
+path = "examples/tools/function_tool.rs"
+
+[[example]]
+name = "built_in_google_search"
+path = "examples/tools/built_in_google_search.rs"
+
+[[example]]
+name = "built_in_exit_loop"
+path = "examples/tools/built_in_exit_loop.rs"
+
+[[example]]
+name = "built_in_load_artifacts"
+path = "examples/tools/built_in_load_artifacts.rs"
+
+[[example]]
+name = "mcp_tool"
+path = "examples/tools/mcp_tool.rs"
+
+# Session examples
+[[example]]
+name = "session_basic"
+path = "examples/sessions/session_basic.rs"
+
+[[example]]
+name = "state_management"
+path = "examples/sessions/state_management.rs"
+
+# Callback examples
+[[example]]
+name = "before_agent"
+path = "examples/callbacks/before_agent.rs"
+
+[[example]]
+name = "after_agent"
+path = "examples/callbacks/after_agent.rs"
+
+[[example]]
+name = "model_callbacks"
+path = "examples/callbacks/model_callbacks.rs"
+
+[[example]]
+name = "tool_callbacks"
+path = "examples/callbacks/tool_callbacks.rs"
+
+# Artifact examples
+[[example]]
+name = "artifact_ops"
+path = "examples/artifacts/artifact_ops.rs"
+
+[[example]]
+name = "test_real_files"
+path = "examples/artifacts/test_real_files.rs"
+
+[[example]]
+name = "chat_csv"
+path = "examples/artifacts/chat_csv.rs"
+
+[[example]]
+name = "chat_txt"
+path = "examples/artifacts/chat_txt.rs"
+
+[[example]]
+name = "chat_json"
+path = "examples/artifacts/chat_json.rs"
+
+[[example]]
+name = "chat_image"
+path = "examples/artifacts/chat_image.rs"
+
+[[example]]
+name = "direct_image_test"
+path = "examples/artifacts/direct_image_test.rs"
+
+# Event examples
+[[example]]
+name = "event_inspection"
+path = "examples/events/event_inspection.rs"
+
+# Deployment examples
+[[example]]
+name = "console_mode"
+path = "examples/deployment/console_mode.rs"
+
+[[example]]
+name = "server_mode"
+path = "examples/deployment/server_mode.rs"
+
+# Observability examples
+[[example]]
+name = "telemetry"
+path = "examples/observability/telemetry.rs"

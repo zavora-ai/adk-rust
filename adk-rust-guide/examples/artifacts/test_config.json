@@ -1,0 +1,22 @@
+{
+  "app_name": "ADK-Rust Test",
+  "version": "1.0.0",
+  "features": {
+    "agents": true,
+    "tools": true,
+    "sessions": true,
+    "artifacts": true
+  },
+  "models": [
+    {
+      "name": "gemini-2.0-flash-exp",
+      "provider": "google",
+      "capabilities": ["text", "reasoning", "tools"]
+    }
+  ],
+  "settings": {
+    "max_tokens": 4096,
+    "temperature": 0.7,
+    "timeout": 30
+  }
+}

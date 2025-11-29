@@ -17,3 +17,4 @@ serde_json.workspace = true
 gemini = { workspace = true }
 anyhow.workspace = true
 tracing.workspace = true
+base64 = "0.21"

@@ -95,11 +95,39 @@ impl Llm for GeminiModel {
         for content in &req.contents {
             match content.role.as_str() {
                 "user" => {
-                    // For user messages, extract text parts
+                    // For user messages, build gemini Content with potentially multiple parts
+                    let mut gemini_parts = Vec::new();
                     for part in &content.parts {
-                        if let Part::Text { text } = part {
-                            builder = builder.with_user_message(text);
+                        match part {
+                            Part::Text { text } => {
+                                gemini_parts.push(gemini::Part::Text {
+                                    text: text.clone(),
+                                    thought: None,
+                                    thought_signature: None,
+                                });
+                            }
+                            Part::InlineData { data, mime_type } => {
+                                use base64::{Engine as _, engine::general_purpose::STANDARD};
+                                let encoded = STANDARD.encode(data);
+                                gemini_parts.push(gemini::Part::InlineData {
+                                    inline_data: gemini::Blob {
+                                        mime_type: mime_type.clone(),
+                                        data: encoded,
+                                    },
+                                });
+                            }
+                            _ => {}
                         }
+                    }
+                    if !gemini_parts.is_empty() {
+                        let user_content = gemini::Content {
+                            role: Some(gemini::Role::User),
+                            parts: Some(gemini_parts),
+                        };
+                        builder = builder.with_message(gemini::Message {
+                            content: user_content,
+                            role: gemini::Role::User,
+                        });
                     }
                 }
                 "model" => {

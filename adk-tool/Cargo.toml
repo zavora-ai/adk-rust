@@ -16,3 +16,4 @@ serde_json.workspace = true
 schemars = "0.8"
 rmcp = { version = "0.9", features = ["client"] }
 tracing.workspace = true
+base64 = "0.21"
