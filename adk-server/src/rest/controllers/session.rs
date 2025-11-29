@@ -19,9 +19,12 @@ impl SessionController {
 
 #[derive(Serialize, Deserialize)]
 pub struct CreateSessionRequest {
+    #[serde(rename = "appName")]
     pub app_name: String,
+    #[serde(rename = "userId")]
     pub user_id: String,
-    pub session_id: String,
+    #[serde(rename = "sessionId", default)]
+    pub session_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -35,12 +38,15 @@ pub async fn create_session(
     State(controller): State<SessionController>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<Json<SessionResponse>, StatusCode> {
+    // Generate session ID if not provided
+    let session_id = req.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    
     let session = controller
         .session_service
         .create(adk_session::CreateRequest {
             app_name: req.app_name,
             user_id: req.user_id,
-            session_id: Some(req.session_id),
+            session_id: Some(session_id),
             state: std::collections::HashMap::new(),
         })
         .await

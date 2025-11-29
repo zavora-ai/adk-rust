@@ -34,6 +34,7 @@ pub fn create_app(config: ServerConfig) -> Router {
             "/run/:app_name/:user_id/:session_id",
             post(controllers::runtime::run_sse),
         )
+        .route("/run_sse", post(controllers::runtime::run_sse_compat))
         .with_state(runtime_controller)
         .route(
             "/sessions/:app_name/:user_id/:session_id/artifacts",
