@@ -29,6 +29,17 @@ pub fn create_app(config: ServerConfig) -> Router {
             "/sessions/:app_name/:user_id/:session_id",
             get(controllers::session::get_session).delete(controllers::session::delete_session),
         )
+        // adk-go compatible routes
+        .route(
+            "/apps/:app_name/users/:user_id/sessions",
+            get(controllers::session::list_sessions).post(controllers::session::create_session_from_path),
+        )
+        .route(
+            "/apps/:app_name/users/:user_id/sessions/:session_id",
+            get(controllers::session::get_session_from_path)
+                .post(controllers::session::create_session_from_path)
+                .delete(controllers::session::delete_session_from_path),
+        )
         .with_state(session_controller)
         .route(
             "/run/:app_name/:user_id/:session_id",

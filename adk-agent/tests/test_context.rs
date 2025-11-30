@@ -55,6 +55,7 @@ impl adk_core::Session for DummySession {
     fn app_name(&self) -> &str { "test-app" }
     fn user_id(&self) -> &str { "test-user" }
     fn state(&self) -> &dyn adk_core::State { &DummyState }
+    fn conversation_history(&self) -> Vec<adk_core::Content> { Vec::new() }
 }
 
 struct DummyState;

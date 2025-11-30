@@ -11,6 +11,7 @@ impl adk_core::Session for MockSession {
     fn app_name(&self) -> &str { "test-app" }
     fn user_id(&self) -> &str { "test-user" }
     fn state(&self) -> &dyn adk_core::State { unimplemented!() }
+    fn conversation_history(&self) -> Vec<adk_core::Content> { Vec::new() }
 }
 
 struct TestContext {
@@ -93,7 +94,7 @@ async fn test_sequential_agent_execution_order() {
         .handler(|_ctx| async move {
             let mut event = Event::new("test-invocation");
             event.author = "agent1".to_string();
-            event.content = Some(Content {
+            event.llm_response.content = Some(Content {
                 role: "assistant".to_string(),
                 parts: vec![Part::Text {
                     text: "Response from agent1".to_string(),
@@ -109,7 +110,7 @@ async fn test_sequential_agent_execution_order() {
         .handler(|_ctx| async move {
             let mut event = Event::new("test-invocation");
             event.author = "agent2".to_string();
-            event.content = Some(Content {
+            event.llm_response.content = Some(Content {
                 role: "assistant".to_string(),
                 parts: vec![Part::Text {
                     text: "Response from agent2".to_string(),

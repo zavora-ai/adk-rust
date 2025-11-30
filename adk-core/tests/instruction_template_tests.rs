@@ -54,6 +54,7 @@ impl Session for MockSession {
     fn app_name(&self) -> &str { "test-app" }
     fn user_id(&self) -> &str { "user-1" }
     fn state(&self) -> &dyn State { &self.state }
+    fn conversation_history(&self) -> Vec<Content> { Vec::new() }
 }
 
 struct MockArtifacts;

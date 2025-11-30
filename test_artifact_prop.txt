@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running tests/validation_tests.rs (target/debug/deps/validation_tests-731897b1b0bdc16d)
+
+running 1 test
+test prop_artifact_examples_valid ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 35 filtered out; finished in 0.01s
+

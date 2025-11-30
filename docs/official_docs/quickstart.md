@@ -1,212 +1,36 @@
-# Quickstart for ADK-Rust
+# Quickstart
 
-This guide shows you how to get up and running with Agent Development Kit for Rust. Before you start, make sure you have the following installed:
+This guide shows you how to get up and running with ADK-Rust. You'll create your first AI agent in under 10 minutes.
 
-- Rust 1.75 or later
-- ADK-Rust v0.1.0 or later
+## Prerequisites
 
-## Create an agent project
+Before you start, make sure you have:
 
-Create an agent project with the following files and directory structure through the command line:
+- Rust 1.75 or later (`rustup update stable`)
+- A Google API key for Gemini
+
+## Step 1: Create a New Project
+
+Create a new Rust project:
 
 ```bash
 cargo new my_agent
 cd my_agent
 ```
 
+Your project structure will look like this:
+
 ```
 my_agent/
-    Cargo.toml    # project configuration
-    src/
-        main.rs   # main agent code
-    .env          # API keys or project IDs
+├── Cargo.toml
+├── src/
+│   └── main.rs
+└── .env          # You'll create this for your API key
 ```
 
-## Define the agent code
+## Step 2: Add Dependencies
 
-Create the code for a basic agent that uses the built-in Google Search tool. Add the following code to the `my_agent/src/main.rs` file in your project directory:
-
-**my_agent/src/main.rs**
-
-```rust
-use adk_rust::prelude::*;
-use std::sync::Arc;
-use clap::{Parser, Subcommand};
-
-#[derive(Parser)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Run interactive console (default)
-    Chat,
-    /// Run web server
-    Serve {
-        #[arg(long, default_value_t = 8080)]
-        port: u16,
-    },
-}
-
-#[tokio::main]
-async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    // Load environment variables
-    dotenv::dotenv().ok();
-    
-    let api_key = std::env::var("GOOGLE_API_KEY")
-        .expect("GOOGLE_API_KEY environment variable not set");
-
-    // Create Gemini model
-    let model = GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?;
-
-    // Create agent with Google Search tool
-    let time_agent = LlmAgentBuilder::new("hello_time_agent")
-        .description("Tells the current time in a specified city.")
-        .instruction("You are a helpful assistant that tells the current time in a city.")
-        .model(Arc::new(model))
-        .tool(Arc::new(GoogleSearchTool::new()))
-        .build()?;
-
-    let agent = Arc::new(time_agent);
-    
-    // Parse CLI args
-    let cli = Cli::parse();
-    
-    match cli.command.unwrap_or(Commands::Chat) {
-        Commands::Chat => run_console(agent).await?,
-        Commands::Serve { port } => run_serve(agent, port).await?,
-    }
-
-    Ok(())
-}
-
-async fn run_console(agent: Arc<dyn Agent>) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    // Create session service
-    let session_service = Arc::new(InMemorySessionService::new());
-
-    // Create a session for the user
-    use adk_rust::session::{SessionService, CreateRequest};
-    use std::collections::HashMap;
-    
-    let user_id = "user1".to_string();
-    let app_name = "my-agent".to_string();
-    
-    let session = session_service.create(CreateRequest {
-        app_name: app_name.clone(),
-        user_id: user_id.clone(),
-        session_id: None, // Auto-generate session ID
-        state: HashMap::new(),
-    }).await?;
-    
-    let session_id = session.id().to_string();
-
-    // Create runner with RunnerConfig
-    let runner = Runner::new(RunnerConfig {
-        app_name,
-        agent: agent.clone(),
-        session_service,
-        artifact_service: None,
-        memory_service: None,
-    })?;
-
-    // Start interactive console
-    println!("🤖 Agent ready! Type your questions (or 'exit' to quit).\n");
-    
-    use rustyline::DefaultEditor;
-    let mut rl = DefaultEditor::new()?;
-    
-    loop {
-        match rl.readline("You: ") {
-            Ok(line) => {
-                let input = line.trim();
-                if input == "exit" || input == "quit" {
-                    println!("👋 Goodbye!");
-                    break;
-                }
-                
-                if input.is_empty() {
-                    continue;
-                }
-                
-                // Run agent with user input
-                let content = Content::new("user").with_text(input);
-                let mut events = runner.run(
-                    user_id.clone(),
-                    session_id.clone(),
-                    content
-                ).await?;
-                
-                print!("Assistant: ");
-                
-                // Stream response
-                use futures::StreamExt;
-                while let Some(event) = events.next().await {
-                    match event {
-                        Ok(evt) => {
-                            if let Some(content) = evt.content {
-                                for part in content.parts {
-                                    if let Some(text) = part.text() {
-                                        print!("{}", text);
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => eprintln!("\nError: {}", e),
-                    }
-                }
-                println!("\n");
-            }
-            Err(_) => break,
-        }
-    }
-
-    Ok(())
-}
-
-async fn run_serve(agent: Arc<dyn Agent>, port: u16) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    use adk_rust::server::{create_app, ServerConfig};
-    use adk_rust::SingleAgentLoader;
-    
-    // Initialize telemetry
-    if let Err(e) = adk_rust::telemetry::init_telemetry("adk-server") {
-        eprintln!("Failed to initialize telemetry: {}", e);
-    }
-
-    let session_service = Arc::new(InMemorySessionService::new());
-    let agent_loader = Arc::new(SingleAgentLoader::new(agent));
-    
-    let config = ServerConfig {
-        agent_loader,
-        session_service,
-        artifact_service: None,
-        backend_url: None,  // Uses default "/api" (relative URL)
-    };
-    
-    // Note: backend_url tells the Web UI where to find the API.
-    // - None (default): Uses "/api" - works when UI and API are on the same server
-    // - Some("http://api.example.com:3000/api"): Use when API is on different host/port
-    
-    let app = create_app(config);
-    
-    let addr = format!("0.0.0.0:{}", port);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    
-    println!("ADK Server starting on http://{}", addr);
-    println!("Press Ctrl+C to stop");
-    
-    axum::serve(listener, app).await?;
-    
-    Ok(())
-}
-```
-
-## Configure project and dependencies
-
-Update your `Cargo.toml` file to include the required dependencies:
-
-**my_agent/Cargo.toml**
+Update your `Cargo.toml` with the required dependencies:
 
 ```toml
 [package]
@@ -218,123 +42,221 @@ edition = "2021"
 adk-rust = "0.1"
 tokio = { version = "1.40", features = ["full"] }
 dotenv = "0.15"
-rustyline = "14.0"
-futures = "0.3"
-clap = { version = "4.4", features = ["derive"] }
-axum = "0.7"
 ```
 
-Then install the dependencies:
+Install the dependencies:
 
 ```bash
 cargo build
 ```
 
-## Set your API key
+## Step 3: Set Up Your API Key
 
-This project uses the Gemini API, which requires an API key. If you don't already have a Gemini API key, create a key in [Google AI Studio on the API Keys page](https://aistudio.google.com/app/apikey).
+This project uses the Gemini API, which requires an API key. If you don't have one, create a key in [Google AI Studio](https://aistudio.google.com/app/apikey).
 
-In a terminal window, write your API key into the `.env` file of your project to set environment variables:
+Create a `.env` file in your project root:
 
-### MacOS / Linux
-
-Update: `my_agent/.env`
+**Linux / macOS:**
 
 ```bash
-echo 'GOOGLE_API_KEY="YOUR_API_KEY"' > .env
+echo 'GOOGLE_API_KEY=your-api-key-here' > .env
 ```
 
-### Windows
-
-Update: `my_agent/.env`
+**Windows (PowerShell):**
 
 ```powershell
-echo GOOGLE_API_KEY="YOUR_API_KEY" > .env
+echo GOOGLE_API_KEY=your-api-key-here > .env
 ```
 
-> [!TIP]
-> **Using other AI models with ADK**
-> 
-> ADK is model-agnostic. You can implement the `Llm` trait to integrate other model providers like OpenAI, Anthropic, or local models.
+> **Security Tip:** Add `.env` to your `.gitignore` to avoid committing your API key.
 
-## Run your agent
+## Step 4: Write Your Agent
 
-You can run your ADK agent using the interactive command-line interface you defined or the ADK web user interface provided by the ADK Rust command line tool. Both these options allow you to test and interact with your agent.
+Replace the contents of `src/main.rs` with:
 
-### Run with command-line interface
+```rust
+use adk_rust::prelude::*;
+use adk_rust::Launcher;
+use std::sync::Arc;
 
-Run your agent using the following Rust command:
+#[tokio::main]
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    // Load environment variables from .env file
+    dotenv::dotenv().ok();
+    
+    // Get API key from environment
+    let api_key = std::env::var("GOOGLE_API_KEY")
+        .expect("GOOGLE_API_KEY environment variable not set");
 
-**Run from: `my_agent/` directory**
+    // Create the Gemini model
+    let model = GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?;
+
+    // Build your agent
+    let agent = LlmAgentBuilder::new("my_assistant")
+        .description("A helpful AI assistant")
+        .instruction("You are a friendly and helpful assistant. Answer questions clearly and concisely.")
+        .model(Arc::new(model))
+        .build()?;
+
+    // Run the agent with the CLI launcher
+    Launcher::new(Arc::new(agent)).run().await?;
+
+    Ok(())
+}
+```
+
+## Step 5: Run Your Agent
+
+Start your agent in interactive console mode:
 
 ```bash
-# The .env file will be loaded automatically by dotenv
 cargo run
 ```
 
-![ADK Console Interface](../assets/adk-run.png)
-
-You can now interact with your agent:
+You'll see a prompt where you can chat with your agent:
 
 ```
 🤖 Agent ready! Type your questions (or 'exit' to quit).
 
-You: What time is it in Tokyo?
-Assistant: Let me search for the current time in Tokyo...
-[Searching...]
-According to recent information, the current time in Tokyo is...
+You: Hello! What can you help me with?
+Assistant: Hello! I'm a helpful AI assistant. I can help you with:
+- Answering questions on various topics
+- Explaining concepts
+- Providing information and suggestions
+- Having a friendly conversation
+
+What would you like to know?
 
 You: exit
 👋 Goodbye!
 ```
 
-### Run with web interface
+## Step 6: Add a Tool (Optional)
 
-For a web-based chat interface, you can use the ADK CLI server mode:
-
-**Run from: `my_agent/` directory**
-
-```bash
-cargo run -- serve --port 8080
-```
-
-This command starts a web server with a chat interface for your agent. You can access the web interface at [http://localhost:8080](http://localhost:8080). Select your agent at the upper left corner and type a request.
-
-![ADK Web Interface](../assets/adk-web-dev-ui-chat.png)
-
-### Alternative: Use in your own server
-
-You can also integrate the agent into your own web application:
+Let's enhance your agent with the Google Search tool to give it access to real-time information:
 
 ```rust
 use adk_rust::prelude::*;
-use adk_rust::server::{start_server, ServerConfig};
+use adk_rust::Launcher;
+use std::sync::Arc;
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    // ... create agent as before ...
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    dotenv::dotenv().ok();
     
-    let config = ServerConfig {
-        host: "0.0.0.0".to_string(),
-        port: 8080,
-        app_name: "my-agent".to_string(),
-    };
-    
-    start_server(config, Arc::new(time_agent), session_service).await?;
+    let api_key = std::env::var("GOOGLE_API_KEY")
+        .expect("GOOGLE_API_KEY environment variable not set");
+
+    let model = GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?;
+
+    // Build agent with Google Search tool
+    let agent = LlmAgentBuilder::new("search_assistant")
+        .description("An assistant that can search the web")
+        .instruction("You are a helpful assistant. Use the search tool to find current information when needed.")
+        .model(Arc::new(model))
+        .tool(Arc::new(GoogleSearchTool::new()))  // Add search capability
+        .build()?;
+
+    Launcher::new(Arc::new(agent)).run().await?;
+
     Ok(())
 }
 ```
 
-## Next: Build your agent
+Now your agent can search the web:
 
-Now that you have ADK installed and your first agent running, try building your own agent with our build guides:
+```
+You: What's the weather like in Tokyo today?
+Assistant: Let me search for that information...
+[Using GoogleSearchTool]
+Based on current information, Tokyo is experiencing...
+```
 
-- [Core Concepts](concepts.md) - Understand agents, models, and tools
-- [Agent Types](agents.md) - Learn about different agent types
-- [Adding Tools](tools.md) - Extend your agent with custom tools
-- [Workflows](workflows.md) - Build multi-agent workflows
-- [Deployment](deployment.md) - Deploy your agent to production
+## Running as a Web Server
+
+For a web-based interface, run with the `serve` command:
+
+```bash
+cargo run -- serve
+```
+
+Or specify a custom port:
+
+```bash
+cargo run -- serve --port 3000
+```
+
+Access the web interface at [http://localhost:8080](http://localhost:8080).
+
+## Understanding the Code
+
+Let's break down what each part does:
+
+### Model Creation
+
+```rust
+let model = GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?;
+```
+
+Creates a Gemini model instance. The model handles all LLM interactions.
+
+### Agent Building
+
+```rust
+let agent = LlmAgentBuilder::new("my_assistant")
+    .description("A helpful AI assistant")
+    .instruction("You are a friendly assistant...")
+    .model(Arc::new(model))
+    .build()?;
+```
+
+- `new("name")`: Sets the agent's identifier
+- `description()`: Brief description of what the agent does
+- `instruction()`: System prompt that guides the agent's behavior
+- `model()`: The LLM to use for reasoning
+- `build()`: Creates the agent instance
+
+### Launcher
+
+```rust
+Launcher::new(Arc::new(agent)).run().await?;
+```
+
+The Launcher provides CLI support for running agents in console or server mode.
+
+## Using Other Models
+
+ADK-Rust is model-agnostic. You can implement the `Llm` trait to use other providers:
+
+```rust
+use adk_rust::prelude::*;
+
+pub struct MyCustomModel {
+    // Your model configuration
+}
+
+#[async_trait]
+impl Llm for MyCustomModel {
+    async fn generate(&self, request: LlmRequest) -> Result<LlmResponse> {
+        // Your implementation
+    }
+    
+    async fn generate_stream(&self, request: LlmRequest) -> Result<LlmResponseStream> {
+        // Your streaming implementation
+    }
+}
+```
+
+## Next Steps
+
+Now that you have your first agent running, explore these topics:
+
+- [LlmAgent Configuration](agents/llm-agent.md) - All configuration options
+- [Function Tools](tools/function-tools.md) - Create custom tools
+- [Workflow Agents](agents/workflow-agents.md) - Build multi-step pipelines
+- [Sessions](sessions/sessions.md) - Manage conversation state
+- [Callbacks](callbacks/callbacks.md) - Customize agent behavior
 
 ---
 
-**Previous**: [Introduction](introduction.md) | **Next**: [Core Concepts](concepts.md)
+**Previous**: [Introduction](introduction.md) | **Next**: [LlmAgent](agents/llm-agent.md)

@@ -9,7 +9,7 @@ pub fn event_to_message(event: &Event) -> Result<Message> {
         Role::Agent
     };
 
-    let content = event.content.as_ref().ok_or_else(|| {
+    let content = event.llm_response.content.as_ref().ok_or_else(|| {
         adk_core::AdkError::Agent("Event has no content".to_string())
     })?;
 
@@ -52,18 +52,14 @@ pub fn message_to_event(message: &Message, invocation_id: String) -> Result<Even
         Role::Agent => "agent".to_string(),
     };
 
-    Ok(Event {
-        id: uuid::Uuid::new_v4().to_string(),
-        timestamp: chrono::Utc::now(),
-        invocation_id,
-        author,
-        branch: String::new(),
-        content: Some(Content {
-            role: "user".to_string(),
-            parts: adk_parts,
-        }),
-        actions,
-    })
+    let mut event = Event::new(invocation_id);
+    event.author = author;
+    event.llm_response.content = Some(Content {
+        role: "user".to_string(),
+        parts: adk_parts,
+    });
+    event.actions = actions;
+    Ok(event)
 }
 
 #[cfg(test)]

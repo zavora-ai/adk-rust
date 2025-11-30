@@ -58,7 +58,7 @@ pub async fn run_console(
                 while let Some(event) = events.next().await {
                     match event {
                         Ok(evt) => {
-                            if let Some(content) = &evt.content {
+                            if let Some(content) = &evt.llm_response.content {
                                 for part in &content.parts {
                                     match part {
                                         Part::Text { text } => print!("{}", text),

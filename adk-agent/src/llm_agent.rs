@@ -345,7 +345,8 @@ impl Agent for LlmAgent {
         let invocation_id = ctx.invocation_id().to_string();
         let model = self.model.clone();
         let tools = self.tools.clone();
-        let _sub_agents = self.sub_agents.clone();
+        let sub_agents = self.sub_agents.clone();
+
         let instruction = self.instruction.clone();
         let instruction_provider = self.instruction_provider.clone();
         let global_instruction = self.global_instruction.clone();
@@ -371,16 +372,16 @@ impl Agent for LlmAgent {
                         // Callback returned content - yield it and skip agent execution
                         let mut early_event = Event::new(&invocation_id);
                         early_event.author = agent_name.clone();
-                        early_event.content = Some(content);
+                        early_event.llm_response.content = Some(content);
                         yield Ok(early_event);
-                        
+
                         // Skip rest of agent execution and go to after callbacks
                         for after_callback in after_agent_callbacks.as_ref() {
                             match after_callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                                 Ok(Some(after_content)) => {
                                     let mut after_event = Event::new(&invocation_id);
                                     after_event.author = agent_name.clone();
-                                    after_event.content = Some(after_content);
+                                    after_event.llm_response.content = Some(after_content);
                                     yield Ok(after_event);
                                     return;
                                 }
@@ -518,6 +519,27 @@ impl Agent for LlmAgent {
                 tool_declarations.insert(tool.name().to_string(), decl);
             }
 
+            // Inject transfer_to_agent tool if sub-agents exist
+            if !sub_agents.is_empty() {
+                let transfer_tool_name = "transfer_to_agent";
+                let transfer_tool_decl = serde_json::json!({
+                    "name": transfer_tool_name,
+                    "description": "Transfer execution to another agent.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "agent_name": {
+                                "type": "string",
+                                "description": "The name of the agent to transfer to."
+                            }
+                        },
+                        "required": ["agent_name"]
+                    }
+                });
+                tool_declarations.insert(transfer_tool_name.to_string(), transfer_tool_decl);
+            }
+
+
             // Multi-turn loop with max iterations
             let max_iterations = 10;
             let mut iteration = 0;
@@ -581,9 +603,9 @@ impl Agent for LlmAgent {
                     // Yield it as an event
                     let mut cached_event = Event::new(&invocation_id);
                     cached_event.author = agent_name.clone();
-                    cached_event.content = cached_response.content.clone();
+                    cached_event.llm_response.content = cached_response.content.clone();
                     yield Ok(cached_event);
-                    
+
                     accumulated_content = cached_response.content;
                 } else {
                     // Call model with STREAMING ENABLED
@@ -625,7 +647,7 @@ impl Agent for LlmAgent {
                         // Yield the (possibly modified) partial event
                         let mut partial_event = Event::new(&invocation_id);
                         partial_event.author = agent_name.clone();
-                        partial_event.content = chunk.content.clone();
+                        partial_event.llm_response.content = chunk.content.clone();
                         yield Ok(partial_event);
                         
                         // Accumulate content for history
@@ -687,6 +709,22 @@ impl Agent for LlmAgent {
                 if let Some(content) = &accumulated_content {
                     for part in &content.parts {
                         if let Part::FunctionCall { name, args } = part {
+                            // Handle transfer_to_agent specially
+                            if name == "transfer_to_agent" {
+                                let target_agent = args.get("agent_name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .to_string();
+
+                                let mut transfer_event = Event::new(&invocation_id);
+                                transfer_event.author = agent_name.clone();
+                                transfer_event.actions.transfer_to_agent = Some(target_agent);
+                                
+                                yield Ok(transfer_event);
+                                return;
+                            }
+
+
                             // Find and execute tool
                             let tool_result = if let Some(tool) = tools.iter().find(|t| t.name() == name) {
                                 // ✅ Use AgentToolContext that preserves parent context
@@ -706,7 +744,7 @@ impl Agent for LlmAgent {
                             // Yield tool execution event
                             let mut tool_event = Event::new(&invocation_id);
                             tool_event.author = agent_name.clone();
-                            tool_event.content = Some(Content {
+                            tool_event.llm_response.content = Some(Content {
                                 role: "function".to_string(),
                                 parts: vec![Part::FunctionResponse {
                                     name: name.clone(),
@@ -736,7 +774,7 @@ impl Agent for LlmAgent {
                         // Callback returned content - yield it
                         let mut after_event = Event::new(&invocation_id);
                         after_event.author = agent_name.clone();
-                        after_event.content = Some(content);
+                        after_event.llm_response.content = Some(content);
                         yield Ok(after_event);
                         break; // First callback that returns content wins
                     }

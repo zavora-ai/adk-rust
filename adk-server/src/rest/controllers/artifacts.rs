@@ -1,4 +1,5 @@
 use crate::ServerConfig;
+use adk_artifact::{ListRequest, LoadRequest};
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -20,14 +21,18 @@ impl ArtifactsController {
 
 pub async fn list_artifacts(
     State(controller): State<ArtifactsController>,
-    Path((_app_name, _user_id, _session_id)): Path<(String, String, String)>,
+    Path((app_name, user_id, session_id)): Path<(String, String, String)>,
 ) -> Result<Json<Vec<String>>, StatusCode> {
     if let Some(service) = &controller.config.artifact_service {
-        let artifacts = service
-            .list()
+        let resp = service
+            .list(ListRequest {
+                app_name,
+                user_id,
+                session_id,
+            })
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        Ok(Json(artifacts))
+        Ok(Json(resp.file_names))
     } else {
         Ok(Json(vec![]))
     }
@@ -35,18 +40,25 @@ pub async fn list_artifacts(
 
 pub async fn get_artifact(
     State(controller): State<ArtifactsController>,
-    Path((_app_name, _user_id, _session_id, artifact_name)): Path<(String, String, String, String)>,
+    Path((app_name, user_id, session_id, artifact_name)): Path<(String, String, String, String)>,
 ) -> Result<impl IntoResponse, StatusCode> {
     if let Some(service) = &controller.config.artifact_service {
-        let content = service
-            .load(&artifact_name)
+        let resp = service
+            .load(LoadRequest {
+                app_name,
+                user_id,
+                session_id,
+                file_name: artifact_name.clone(),
+                version: None,
+            })
             .await
             .map_err(|_| StatusCode::NOT_FOUND)?;
 
         let mime = mime_guess::from_path(&artifact_name).first_or_octet_stream();
-        let mime_header = header::HeaderValue::from_str(mime.as_ref()).unwrap_or_else(|_| header::HeaderValue::from_static("application/octet-stream"));
+        let mime_header = header::HeaderValue::from_str(mime.as_ref())
+            .unwrap_or_else(|_| header::HeaderValue::from_static("application/octet-stream"));
 
-        match content {
+        match resp.part {
             adk_core::Part::InlineData { data, .. } => Ok((
                 [(header::CONTENT_TYPE, mime_header)],
                 Body::from(data),

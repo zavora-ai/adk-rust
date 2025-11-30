@@ -27,6 +27,7 @@ impl Session for MockSession {
     fn app_name(&self) -> &str { "mcp-app" }
     fn user_id(&self) -> &str { "mcp-user" }
     fn state(&self) -> &dyn State { &MockState }
+    fn conversation_history(&self) -> Vec<adk_core::Content> { Vec::new() }
 }
 
 struct MockState;
@@ -136,7 +137,7 @@ async fn test_mcp_tool_integration() {
     let mut received_response = false;
     while let Some(result) = stream.next().await {
         if let Ok(event) = result {
-            if let Some(_content) = event.content {
+            if let Some(_content) = event.llm_response.content {
                 received_response = true;
             }
         }

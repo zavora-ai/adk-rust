@@ -60,6 +60,30 @@ impl adk_core::Session for SessionAdapter {
         // and return self.
         unsafe { &*(self as *const Self as *const dyn adk_core::State) }
     }
+    
+    fn conversation_history(&self) -> Vec<adk_core::Content> {
+        // Convert session events to Content items for conversation history
+        let events = self.0.events();
+        let mut history = Vec::new();
+        
+        for event in events.all() {
+            // Get content from the LlmResponse
+            if let Some(content) = event.llm_response.content {
+                // Map author to role
+                let role = match event.author.as_str() {
+                    "user" => "user".to_string(),
+                    _ => "model".to_string(),
+                };
+                
+                // Create content with correct role
+                let mut mapped_content = content;
+                mapped_content.role = role;
+                history.push(mapped_content);
+            }
+        }
+        
+        history
+    }
 }
 
 impl adk_core::State for SessionAdapter {

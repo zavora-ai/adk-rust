@@ -1,3 +1,14 @@
+//! Validates: docs/official_docs/artifacts/artifacts.md
+//!
+//! This example demonstrates using artifacts with text documents.
+//! It shows how to save text data as user-scoped artifacts and load them
+//! using the LoadArtifactsTool.
+//!
+//! Run modes:
+//!   cargo run --example chat_txt -p adk-rust-guide              # Validation mode
+//!   cargo run --example chat_txt -p adk-rust-guide -- chat      # Interactive console
+//!   cargo run --example chat_txt -p adk-rust-guide -- serve     # Web server mode
+
 use adk_rust::prelude::*;
 use adk_rust::artifact::{ArtifactService, InMemoryArtifactService, SaveRequest};
 use adk_rust::Launcher;

@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/validation_tests.rs (target/debug/deps/validation_tests-731897b1b0bdc16d)
+
+running 2 tests
+test test_artifact_example_compilation ... ok
+test unit_tests::test_artifact_examples_in_list ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 34 filtered out; finished in 0.00s
+

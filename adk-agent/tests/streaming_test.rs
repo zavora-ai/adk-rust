@@ -66,6 +66,7 @@ impl Session for MockSession {
     fn app_name(&self) -> &str { "test-app" }
     fn user_id(&self) -> &str { "user-1" }
     fn state(&self) -> &dyn State { &MockState }
+    fn conversation_history(&self) -> Vec<adk_core::Content> { Vec::new() }
 }
 
 struct MockState;
@@ -178,7 +179,7 @@ async fn test_streaming_chunks() {
     
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
-        if let Some(content) = event.content {
+        if let Some(content) = event.llm_response.content {
             if let Some(Part::Text { text }) = content.parts.first() {
                 received_chunks.push(text.clone());
             }

@@ -69,7 +69,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     while let Some(event_result) = stream.next().await {
         match event_result {
             Ok(event) => {
-                if let Some(content) = &event.content {
+                if let Some(content) = &event.llm_response.content {
                     for part in &content.parts {
                         if let Part::Text { text } = part {
                             print!("{}", text);

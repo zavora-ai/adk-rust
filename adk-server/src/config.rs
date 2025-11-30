@@ -5,7 +5,7 @@ use std::sync::Arc;
 pub struct ServerConfig {
     pub agent_loader: Arc<dyn adk_core::AgentLoader>,
     pub session_service: Arc<dyn adk_session::SessionService>,
-    pub artifact_service: Option<Arc<dyn adk_core::Artifacts>>,
+    pub artifact_service: Option<Arc<dyn adk_artifact::ArtifactService>>,
     pub backend_url: Option<String>,
 }
 
@@ -22,7 +22,7 @@ impl ServerConfig {
         }
     }
 
-    pub fn with_artifact_service(mut self, artifact_service: Arc<dyn adk_core::Artifacts>) -> Self {
+    pub fn with_artifact_service(mut self, artifact_service: Arc<dyn adk_artifact::ArtifactService>) -> Self {
         self.artifact_service = Some(artifact_service);
         self
     }

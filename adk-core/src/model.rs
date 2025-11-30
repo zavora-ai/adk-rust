@@ -86,6 +86,21 @@ impl LlmResponse {
     }
 }
 
+impl Default for LlmResponse {
+    fn default() -> Self {
+        Self {
+            content: None,
+            usage_metadata: None,
+            finish_reason: None,
+            partial: false,
+            turn_complete: false,
+            interrupted: false,
+            error_code: None,
+            error_message: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

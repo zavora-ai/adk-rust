@@ -1,3 +1,12 @@
+//! Validates: docs/official_docs/artifacts/artifacts.md
+//!
+//! This example demonstrates artifact operations with various real file types
+//! including CSV, TXT, JSON, and binary PNG files. It validates save, load,
+//! and list operations while verifying content integrity.
+//!
+//! Run modes:
+//!   cargo run --example test_real_files -p adk-rust-guide              # Validation mode
+
 use adk_rust::prelude::*;
 use adk_rust::artifact::{ArtifactService, InMemoryArtifactService, SaveRequest, LoadRequest, ListRequest};
 use adk_rust_guide::{print_success, print_validating};

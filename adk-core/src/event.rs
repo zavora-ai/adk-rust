@@ -1,3 +1,4 @@
+use crate::model::LlmResponse;
 use crate::types::Content;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,8 @@ pub const KEY_PREFIX_APP: &str = "app:";
 pub const KEY_PREFIX_TEMP: &str = "temp:";
 pub const KEY_PREFIX_USER: &str = "user:";
 
+/// Event represents a single interaction in a conversation.
+/// This struct embeds LlmResponse to match ADK-Go's design pattern.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub id: String,
@@ -16,8 +19,14 @@ pub struct Event {
     pub invocation_id: String,
     pub branch: String,
     pub author: String,
-    pub content: Option<Content>,
+    /// The LLM response containing content and metadata.
+    /// Access content via `event.llm_response.content`.
+    #[serde(flatten)]
+    pub llm_response: LlmResponse,
     pub actions: EventActions,
+    /// IDs of long-running tools associated with this event.
+    #[serde(default)]
+    pub long_running_tool_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -37,9 +46,20 @@ impl Event {
             invocation_id: invocation_id.into(),
             branch: String::new(),
             author: String::new(),
-            content: None,
+            llm_response: LlmResponse::default(),
             actions: EventActions::default(),
+            long_running_tool_ids: Vec::new(),
         }
+    }
+
+    /// Convenience method to access content directly.
+    pub fn content(&self) -> Option<&Content> {
+        self.llm_response.content.as_ref()
+    }
+
+    /// Convenience method to set content directly.
+    pub fn set_content(&mut self, content: Content) {
+        self.llm_response.content = Some(content);
     }
 }
 

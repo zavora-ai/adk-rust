@@ -41,6 +41,7 @@ mod tests {
         fn app_name(&self) -> &str { "app" }
         fn user_id(&self) -> &str { "user" }
         fn state(&self) -> &dyn State { &MockState }
+        fn conversation_history(&self) -> Vec<Content> { Vec::new() }
     }
 
     #[allow(dead_code)]

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct DebugController {
+    #[allow(dead_code)] // Reserved for future debug functionality
     config: ServerConfig,
 }
 

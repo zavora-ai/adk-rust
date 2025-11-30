@@ -45,11 +45,13 @@ async fn main() -> Result<()> {
         
         // Test 6: Runner
         println!("✅ Creating runner...");
-        let runner = Runner::new(
-            "test-app",
-            Arc::new(agent),
-            Arc::new(session_service),
-        );
+        let _runner = Runner::new(RunnerConfig {
+            app_name: "test-app".to_string(),
+            agent: Arc::new(agent),
+            session_service: Arc::new(session_service),
+            artifact_service: None,
+            memory_service: None,
+        })?;
         println!("   Runner created successfully");
         
     } else {

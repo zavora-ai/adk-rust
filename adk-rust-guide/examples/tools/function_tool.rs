@@ -41,16 +41,13 @@ struct TemperatureParams {
 /// Calculator tool handler - demonstrates parameter handling
 async fn calculator(_ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
     // Extract parameters from JSON args
-    let operation = args
-        .get("operation")
+    let operation = args.get("operation")
         .and_then(|v| v.as_str())
         .unwrap_or("add");
-    let a = args
-        .get("a")
+    let a = args.get("a")
         .and_then(|v| v.as_f64())
         .ok_or_else(|| AdkError::Tool("Parameter 'a' is required".into()))?;
-    let b = args
-        .get("b")
+    let b = args.get("b")
         .and_then(|v| v.as_f64())
         .ok_or_else(|| AdkError::Tool("Parameter 'b' is required".into()))?;
 
@@ -77,16 +74,13 @@ async fn calculator(_ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
 
 /// Unit converter tool handler - demonstrates another tool pattern
 async fn convert_temperature(_ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-    let value = args
-        .get("value")
+    let value = args.get("value")
         .and_then(|v| v.as_f64())
         .ok_or_else(|| AdkError::Tool("Parameter 'value' is required".into()))?;
-    let from = args
-        .get("from")
+    let from = args.get("from")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AdkError::Tool("Parameter 'from' is required".into()))?;
-    let to = args
-        .get("to")
+    let to = args.get("to")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AdkError::Tool("Parameter 'to' is required".into()))?;
 

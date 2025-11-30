@@ -80,7 +80,7 @@ impl Executor {
         }));
 
         // Run agent
-        let content = event.content.ok_or_else(|| {
+        let content = event.llm_response.content.ok_or_else(|| {
             adk_core::AdkError::Agent("Event has no content".to_string())
         })?;
 

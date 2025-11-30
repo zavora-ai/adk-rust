@@ -19,6 +19,7 @@ impl Session for MockSession {
     fn app_name(&self) -> &str { "test-app" }
     fn user_id(&self) -> &str { "user-real" }
     fn state(&self) -> &dyn State { &MockState }
+    fn conversation_history(&self) -> Vec<adk_core::Content> { Vec::new() }
 }
 
 struct MockState;
@@ -98,7 +99,7 @@ async fn test_real_gemini_interaction() {
     while let Some(result) = stream.next().await {
         match result {
             Ok(event) => {
-                if let Some(content) = event.content {
+                if let Some(content) = event.llm_response.content {
                     for part in content.parts {
                         if let Part::Text { text } = part {
                             print!("{}", text);

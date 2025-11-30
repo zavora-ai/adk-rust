@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (/data/projects/adk-rust/target/debug/deps/adk_rust_guide-7899e5f3bce3c44e)
+
+running 2 tests
+test tests::test_is_interactive_mode_default ... ok
+test tests::test_try_init_env_returns_option ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

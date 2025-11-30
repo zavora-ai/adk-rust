@@ -35,7 +35,7 @@ impl EventProcessor {
         let event_meta_map: serde_json::Map<String, serde_json::Value> = event_meta.into_iter().collect();
 
         // Get content
-        let content = match &event.content {
+        let content = match &event.llm_response.content {
             Some(c) => c,
             None => return Ok(None),
         };

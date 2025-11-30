@@ -16,6 +16,7 @@ impl Session for MockSession {
     fn app_name(&self) -> &str { "multi-agent-app" }
     fn user_id(&self) -> &str { "multi-agent-user" }
     fn state(&self) -> &dyn State { &MockState }
+    fn conversation_history(&self) -> Vec<adk_core::Content> { Vec::new() }
 }
 
 struct MockState;
@@ -100,7 +101,7 @@ async fn test_multi_agent_workflow() {
     let mut response_text = String::new();
     while let Some(result) = stream.next().await {
         if let Ok(event) = result {
-            if let Some(content) = event.content {
+            if let Some(content) = event.llm_response.content {
                 for part in content.parts {
                     if let Part::Text { text } = part {
                         response_text.push_str(&text);
@@ -147,7 +148,7 @@ async fn test_agent_delegation() {
     let mut has_answer = false;
     while let Some(result) = stream.next().await {
         if let Ok(event) = result {
-            if let Some(content) = event.content {
+            if let Some(content) = event.llm_response.content {
                 for part in content.parts {
                     if let Part::Text { text } = part {
                         if text.contains("345") {

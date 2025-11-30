@@ -1,0 +1,14 @@
+warning: field `config` is never read
+  --> adk-server/src/rest/controllers/debug.rs:12:5
+   |
+11 | pub struct DebugController {
+   |            --------------- field in this struct
+12 |     config: ServerConfig,
+   |     ^^^^^^
+   |
+   = note: `DebugController` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `adk-server` (lib) generated 1 warning
+    Checking adk-benchmarks v0.1.0 (/data/projects/adk-rust/benches)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.42s

@@ -1,0 +1,63 @@
+
+running 40 tests
+test prop_artifact_examples_valid ... ok
+test prop_built_in_tools_example_valid ... ok
+test prop_callback_examples_valid ... ok
+test prop_event_examples_valid ... ok
+test prop_example_has_valid_structure ... FAILED
+test prop_doc_has_example ... ok
+test prop_llm_agent_examples_valid ... ok
+test prop_session_examples_valid ... ok
+test prop_function_tool_example_valid ... ok
+test test_artifact_example_compilation ... ok
+test test_built_in_tools_example_compilation ... ok
+test test_callback_example_compilation ... ok
+test test_documentation_example_correspondence ... ok
+test test_event_example_compilation ... ok
+test test_function_tool_example_compilation ... ok
+test test_llm_agent_example_compilation ... ok
+test test_quickstart_example_compilation ... ok
+test test_session_example_compilation ... ok
+test test_workflow_agent_example_compilation ... ok
+test unit_tests::test_artifact_examples_in_list ... ok
+test prop_workflow_agent_examples_valid ... ok
+test unit_tests::test_built_in_tools_examples_in_list ... ok
+test unit_tests::test_doc_to_example_mapping_artifacts ... ok
+test unit_tests::test_callback_examples_in_list ... ok
+test unit_tests::test_doc_to_example_mapping_built_in_tools ... ok
+test unit_tests::test_doc_to_example_mapping_callbacks ... ok
+test unit_tests::test_doc_to_example_mapping_events ... ok
+test unit_tests::test_doc_to_example_mapping_function_tools ... ok
+test unit_tests::test_doc_to_example_mapping_llm_agent ... ok
+test unit_tests::test_doc_to_example_mapping_quickstart ... ok
+test unit_tests::test_doc_to_example_mapping_sessions ... ok
+test unit_tests::test_doc_to_example_mapping_state ... ok
+test unit_tests::test_doc_to_example_mapping_workflow_agents ... ok
+test unit_tests::test_event_examples_in_list ... ok
+test unit_tests::test_example_files_exist ... ok
+test unit_tests::test_get_doc_pages_excludes_index ... ok
+test unit_tests::test_function_tool_example_in_list ... ok
+test unit_tests::test_llm_agent_examples_in_list ... ok
+test unit_tests::test_session_examples_in_list ... ok
+test unit_tests::test_workflow_agent_examples_in_list ... ok
+
+failures:
+
+---- prop_example_has_valid_structure stdout ----
+proptest: FileFailurePersistence::SourceParallel set, but failed to find lib.rs or main.rs
+
+thread 'prop_example_has_valid_structure' (98159) panicked at adk-rust-guide/tests/validation_tests.rs:269:1:
+Test failed: Example artifacts/chat_csv.rs should have documentation comments at adk-rust-guide/tests/validation_tests.rs:301.
+minimal failing input: index = 45
+	successes: 0
+	local rejects: 0
+	global rejects: 0
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    prop_example_has_valid_structure
+
+test result: FAILED. 39 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+

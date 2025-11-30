@@ -11,6 +11,7 @@ impl Session for MockSession {
     fn app_name(&self) -> &str { "test-app" }
     fn user_id(&self) -> &str { "test-user" }
     fn state(&self) -> &dyn adk_core::State { unimplemented!() }
+    fn conversation_history(&self) -> Vec<Content> { Vec::new() }
 }
 
 struct MockContext {
@@ -84,7 +85,7 @@ async fn test_custom_agent_run() {
         .description("Echoes input")
         .handler(|ctx| async move {
             let mut event = Event::new(ctx.invocation_id());
-            event.content = Some(ctx.user_content().clone());
+            event.llm_response.content = Some(ctx.user_content().clone());
             
             let stream = async_stream::stream! {
                 yield Ok(event);
@@ -98,7 +99,7 @@ async fn test_custom_agent_run() {
     let mut stream = agent.run(ctx).await.unwrap();
     
     let event = stream.next().await.unwrap().unwrap();
-    assert!(event.content.is_some());
+    assert!(event.llm_response.content.is_some());
 }
 
 #[test]

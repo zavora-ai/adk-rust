@@ -101,6 +101,7 @@ impl adk_core::Session for DummySession {
     fn app_name(&self) -> &str { "test-app" }
     fn user_id(&self) -> &str { "test-user" }
     fn state(&self) -> &dyn adk_core::State { &DummyState }
+    fn conversation_history(&self) -> Vec<adk_core::Content> { Vec::new() }
 }
 
 struct DummyState;
@@ -163,9 +164,9 @@ async fn test_llm_agent_basic_generation() {
     assert!(!events.is_empty());
     let event = &events[0];
     assert_eq!(event.author, "math_agent");
-    assert!(event.content.is_some());
+    assert!(event.llm_response.content.is_some());
 
-    let content = event.content.as_ref().unwrap();
+    let content = event.llm_response.content.as_ref().unwrap();
     let text = content
         .parts
         .iter()
@@ -204,9 +205,9 @@ async fn test_llm_agent_with_instruction() {
     assert!(!events.is_empty());
     let event = &events[0];
     assert_eq!(event.author, "pirate_agent");
-    assert!(event.content.is_some());
+    assert!(event.llm_response.content.is_some());
 
-    let content = event.content.as_ref().unwrap();
+    let content = event.llm_response.content.as_ref().unwrap();
     let text = content
         .parts
         .iter()

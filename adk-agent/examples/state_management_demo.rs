@@ -15,6 +15,7 @@ impl Session for TestSession {
     fn app_name(&self) -> &str { "test-app" }
     fn user_id(&self) -> &str { "test-user" }
     fn state(&self) -> &dyn State { &TestState }
+    fn conversation_history(&self) -> Vec<Content> { Vec::new() }
 }
 
 struct TestState;
@@ -111,7 +112,7 @@ async fn main() -> Result<()> {
     while let Some(result) = stream.next().await {
         let event = result?;
         
-        if let Some(content) = &event.content {
+        if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
                 if let Part::Text { text } = part {
                     println!("Response: {}", text);
@@ -165,7 +166,7 @@ async fn main() -> Result<()> {
         
         println!("\nAgent: {}", event.author);
         
-        if let Some(content) = &event.content {
+        if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
                 if let Part::Text { text } = part {
                     println!("Response: {}", text);
@@ -204,7 +205,7 @@ async fn main() -> Result<()> {
                     text.push_str(&format!("- {}: {}\n", key, value));
                 }
                 
-                event.content = Some(Content {
+                event.llm_response.content = Some(Content {
                     role: "assistant".to_string(),
                     parts: vec![Part::Text { text }],
                 });
@@ -219,7 +220,7 @@ async fn main() -> Result<()> {
 
     while let Some(result) = stream3.next().await {
         let event = result?;
-        if let Some(content) = &event.content {
+        if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
                 if let Part::Text { text } = part {
                     println!("{}", text);

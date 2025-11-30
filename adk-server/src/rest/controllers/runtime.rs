@@ -8,7 +8,7 @@ use axum::{
 use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
-use tracing::{info, error};
+use tracing::{error, info};
 
 #[derive(Clone)]
 pub struct RuntimeController {
@@ -124,7 +124,6 @@ pub async fn run_sse(
     Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
 }
 
-
 /// POST /run_sse - adk-go compatible endpoint
 /// Accepts JSON body with appName, userId, sessionId, newMessage
 pub async fn run_sse_compat(
@@ -152,10 +151,8 @@ pub async fn run_sse_compat(
         .collect::<Vec<_>>()
         .join(" ");
 
-    info!(message = %message_text, "Extracted message text");
-
     // Validate session exists
-    let session_result = controller
+    controller
         .config
         .session_service
         .get(adk_session::GetRequest {
@@ -165,14 +162,11 @@ pub async fn run_sse_compat(
             num_recent_events: None,
             after: None,
         })
-        .await;
-    
-    if let Err(ref e) = session_result {
-        error!(error = ?e, "Session not found");
-        return Err(StatusCode::NOT_FOUND);
-    }
-    
-    info!("Session validated successfully");
+        .await
+        .map_err(|e| {
+            error!(error = ?e, "Session not found");
+            StatusCode::NOT_FOUND
+        })?;
 
     // Load agent
     let agent = controller

@@ -1,0 +1,27 @@
+Deploying Your Agent¶
+Once you've built and tested your agent using ADK, the next step is to deploy it so it can be accessed, queried, and used in production or integrated with other applications. Deployment moves your agent from your local development machine to a scalable and reliable environment.
+
+Deploying your agent
+
+Deployment Options¶
+Your ADK agent can be deployed to a range of different environments based on your needs for production readiness or custom flexibility:
+
+Agent Engine in Vertex AI¶
+Agent Engine is a fully managed auto-scaling service on Google Cloud specifically designed for deploying, managing, and scaling AI agents built with frameworks such as ADK.
+
+Learn more about deploying your agent to Vertex AI Agent Engine.
+
+Cloud Run¶
+Cloud Run is a managed auto-scaling compute platform on Google Cloud that enables you to run your agent as a container-based application.
+
+Learn more about deploying your agent to Cloud Run.
+
+Google Kubernetes Engine (GKE)¶
+Google Kubernetes Engine (GKE) is a managed Kubernetes service of Google Cloud that allows you to run your agent in a containerized environment. GKE is a good option if you need more control over the deployment as well as for running Open Models.
+
+Learn more about deploying your agent to GKE.
+
+Other Container-friendly Infrastructure¶
+You can manually package your Agent into a container image and then run it in any environment that supports container images. For example you can run it locally in Docker or Podman. This is a good option if you prefer to run offline or disconnected, or otherwise in a system that has no connection to Google Cloud.
+
+Follow the instructions for deploying your agent to Cloud Run. In the "Deployment Commands" section for gcloud CLI, you will find an example FastAPI entry point and Dockerfile.

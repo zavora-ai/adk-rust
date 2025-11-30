@@ -1,0 +1,2 @@
+   Compiling adk-rust-guide v0.1.0 (/data/projects/adk-rust/adk-rust-guide)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.03s

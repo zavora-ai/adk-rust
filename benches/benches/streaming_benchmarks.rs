@@ -119,7 +119,7 @@ fn benchmark_streaming_throughput(c: &mut Criterion) {
             
             while let Some(result) = stream.next().await {
                 if let Ok(event) = result {
-                    if let Some(content) = event.content {
+                    if let Some(content) = event.llm_response.content {
                         for part in content.parts {
                             if let Part::Text { text } = part {
                                 token_count += text.split_whitespace().count();

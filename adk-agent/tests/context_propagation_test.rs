@@ -89,6 +89,7 @@ impl Session for MockSession {
     fn app_name(&self) -> &str { "test-app" }
     fn user_id(&self) -> &str { "user-123" }
     fn state(&self) -> &dyn State { &MockState }
+    fn conversation_history(&self) -> Vec<adk_core::Content> { Vec::new() }
 }
 
 struct MockState;

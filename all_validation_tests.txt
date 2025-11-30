@@ -1,0 +1,68 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/validation_tests.rs (target/debug/deps/validation_tests-70006f4fa2f837b0)
+
+running 32 tests
+test prop_callback_examples_valid ... ok
+test prop_built_in_tools_example_valid ... ok
+test prop_doc_has_example ... ok
+test prop_example_has_valid_structure ... ok
+test prop_function_tool_example_valid ... FAILED
+test prop_session_examples_valid ... ok
+test prop_llm_agent_examples_valid ... ok
+test test_built_in_tools_example_compilation ... ok
+test test_callback_example_compilation ... ok
+test test_documentation_example_correspondence ... ok
+test test_function_tool_example_compilation ... FAILED
+test test_llm_agent_example_compilation ... ok
+test test_quickstart_example_compilation ... ok
+test test_session_example_compilation ... ok
+test test_workflow_agent_example_compilation ... ok
+test unit_tests::test_built_in_tools_examples_in_list ... ok
+test unit_tests::test_callback_examples_in_list ... ok
+test unit_tests::test_doc_to_example_mapping_built_in_tools ... ok
+test unit_tests::test_doc_to_example_mapping_callbacks ... ok
+test unit_tests::test_doc_to_example_mapping_function_tools ... ok
+test unit_tests::test_doc_to_example_mapping_llm_agent ... ok
+test unit_tests::test_doc_to_example_mapping_quickstart ... ok
+test unit_tests::test_doc_to_example_mapping_sessions ... ok
+test unit_tests::test_doc_to_example_mapping_state ... ok
+test unit_tests::test_doc_to_example_mapping_workflow_agents ... ok
+test unit_tests::test_example_files_exist ... ok
+test unit_tests::test_function_tool_example_in_list ... ok
+test unit_tests::test_get_doc_pages_excludes_index ... ok
+test unit_tests::test_llm_agent_examples_in_list ... ok
+test unit_tests::test_session_examples_in_list ... ok
+test unit_tests::test_workflow_agent_examples_in_list ... ok
+test prop_workflow_agent_examples_valid ... ok
+
+failures:
+
+---- prop_function_tool_example_valid stdout ----
+proptest: FileFailurePersistence::SourceParallel set, but failed to find lib.rs or main.rs
+proptest: FileFailurePersistence::SourceParallel set, but failed to find lib.rs or main.rs
+proptest: Saving this and future failures in /data/projects/adk-rust/adk-rust-guide/tests/validation_tests.proptest-regressions
+proptest: If this test was run on a CI system, you may wish to add the following line to your copy of the file. (You may need to create it.)
+cc a3b9f7c7097c927c4f24c3898d98cdf2327ce4451455887708a9d7403eb56413
+
+thread 'prop_function_tool_example_valid' (1301858) panicked at adk-rust-guide/tests/validation_tests.rs:687:1:
+Test failed: Example tools/function_tool.rs should demonstrate parameter extraction at adk-rust-guide/tests/validation_tests.rs:730.
+minimal failing input: index = 0
+	successes: 0
+	local rejects: 0
+	global rejects: 0
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- test_function_tool_example_compilation stdout ----
+
+thread 'test_function_tool_example_compilation' (1301865) panicked at adk-rust-guide/tests/validation_tests.rs:654:5:
+FunctionTool example must demonstrate parameter extraction from args
+
+
+failures:
+    prop_function_tool_example_valid
+    test_function_tool_example_compilation
+
+test result: FAILED. 30 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p adk-rust-guide --test validation_tests`
