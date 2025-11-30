@@ -92,4 +92,4 @@ Apache-2.0
 
 ## Part of ADK-Rust
 
-This crate is part of the [ADK-Rust](https://github.com/anthropics/adk-rust) framework for building AI agents in Rust.
+This crate is part of the [ADK-Rust](https://github.com/zavora-ai/adk-rust) framework for building AI agents in Rust.

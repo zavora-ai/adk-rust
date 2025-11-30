@@ -123,7 +123,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "{description}"
-repository = "https://github.com/anthropics/adk-rust"
+repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-{name}"
 keywords = ["ai", "agent", "adk", "gemini", "llm"]
 categories = ["api-bindings", "asynchronous"]
@@ -201,7 +201,7 @@ Apache-2.0
 
 ## Part of ADK-Rust
 
-This crate is part of the [ADK-Rust](https://github.com/anthropics/adk-rust) framework.
+This crate is part of the [ADK-Rust](https://github.com/zavora-ai/adk-rust) framework.
 ```
 
 ## Lib.rs Documentation Template

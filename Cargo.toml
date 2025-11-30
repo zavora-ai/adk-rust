@@ -41,7 +41,9 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 license = "Apache-2.0"
-authors = ["James Karanja <james.karanja@zavora.ai>"]
+authors = ["James Karanja Maina <james.karanja@zavora.ai>"]
+homepage = "https://www.zavora.ai"
+repository = "https://github.com/zavora-ai/adk-rust"
 
 [workspace.dependencies]
 tokio = { version = "1.40", features = ["full"] }
