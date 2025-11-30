@@ -1,6 +1,6 @@
 use crate::{
-    CreateRequest, DeleteRequest, Event, Events, GetRequest, ListRequest, Session,
-    SessionService, State, KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER,
+    CreateRequest, DeleteRequest, Event, Events, GetRequest, ListRequest, Session, SessionService,
+    State, KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER,
 };
 use adk_core::Result;
 use async_trait::async_trait;
@@ -16,9 +16,9 @@ pub struct DatabaseSessionService {
 
 impl DatabaseSessionService {
     pub async fn new(database_url: &str) -> Result<Self> {
-        let pool = SqlitePool::connect(database_url)
-            .await
-            .map_err(|e| adk_core::AdkError::Session(format!("database connection failed: {}", e)))?;
+        let pool = SqlitePool::connect(database_url).await.map_err(|e| {
+            adk_core::AdkError::Session(format!("database connection failed: {}", e))
+        })?;
         Ok(Self { pool })
     }
 
@@ -94,7 +94,9 @@ impl DatabaseSessionService {
         Ok(())
     }
 
-    fn extract_state_deltas(delta: &HashMap<String, Value>) -> (HashMap<String, Value>, HashMap<String, Value>, HashMap<String, Value>) {
+    fn extract_state_deltas(
+        delta: &HashMap<String, Value>,
+    ) -> (HashMap<String, Value>, HashMap<String, Value>, HashMap<String, Value>) {
         let mut app_delta = HashMap::new();
         let mut user_delta = HashMap::new();
         let mut session_delta = HashMap::new();
@@ -112,7 +114,11 @@ impl DatabaseSessionService {
         (app_delta, user_delta, session_delta)
     }
 
-    fn merge_states(app: &HashMap<String, Value>, user: &HashMap<String, Value>, session: &HashMap<String, Value>) -> HashMap<String, Value> {
+    fn merge_states(
+        app: &HashMap<String, Value>,
+        user: &HashMap<String, Value>,
+        session: &HashMap<String, Value>,
+    ) -> HashMap<String, Value> {
         let mut merged = session.clone();
         for (k, v) in app {
             merged.insert(format!("{}{}", KEY_PREFIX_APP, k), v.clone());
@@ -132,38 +138,51 @@ impl SessionService for DatabaseSessionService {
 
         let (app_delta, user_delta, session_state) = Self::extract_state_deltas(&req.state);
 
-        let mut tx = self.pool.begin().await
+        let mut tx = self
+            .pool
+            .begin()
+            .await
             .map_err(|e| adk_core::AdkError::Session(format!("transaction failed: {}", e)))?;
 
         // Get or create app state
-        let app_state: HashMap<String, Value> = sqlx::query("SELECT state FROM app_states WHERE app_name = ?")
-            .bind(&req.app_name)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {}", e)))?
-            .map(|row| serde_json::from_str::<HashMap<String, Value>>(row.get("state")).unwrap_or_default())
-            .unwrap_or_default();
+        let app_state: HashMap<String, Value> =
+            sqlx::query("SELECT state FROM app_states WHERE app_name = ?")
+                .bind(&req.app_name)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| adk_core::AdkError::Session(format!("query failed: {}", e)))?
+                .map(|row| {
+                    serde_json::from_str::<HashMap<String, Value>>(row.get("state"))
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default();
 
         let mut new_app_state = app_state.clone();
         new_app_state.extend(app_delta);
 
-        sqlx::query("INSERT OR REPLACE INTO app_states (app_name, state, updated_at) VALUES (?, ?, ?)")
-            .bind(&req.app_name)
-            .bind(serde_json::to_string(&new_app_state).unwrap())
-            .bind(now.to_rfc3339())
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| adk_core::AdkError::Session(format!("insert failed: {}", e)))?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO app_states (app_name, state, updated_at) VALUES (?, ?, ?)",
+        )
+        .bind(&req.app_name)
+        .bind(serde_json::to_string(&new_app_state).unwrap())
+        .bind(now.to_rfc3339())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| adk_core::AdkError::Session(format!("insert failed: {}", e)))?;
 
         // Get or create user state
-        let user_state: HashMap<String, Value> = sqlx::query("SELECT state FROM user_states WHERE app_name = ? AND user_id = ?")
-            .bind(&req.app_name)
-            .bind(&req.user_id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {}", e)))?
-            .map(|row| serde_json::from_str::<HashMap<String, Value>>(row.get("state")).unwrap_or_default())
-            .unwrap_or_default();
+        let user_state: HashMap<String, Value> =
+            sqlx::query("SELECT state FROM user_states WHERE app_name = ? AND user_id = ?")
+                .bind(&req.app_name)
+                .bind(&req.user_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| adk_core::AdkError::Session(format!("query failed: {}", e)))?
+                .map(|row| {
+                    serde_json::from_str::<HashMap<String, Value>>(row.get("state"))
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default();
 
         let mut new_user_state = user_state.clone();
         new_user_state.extend(user_delta);
@@ -191,7 +210,8 @@ impl SessionService for DatabaseSessionService {
             .await
             .map_err(|e| adk_core::AdkError::Session(format!("insert failed: {}", e)))?;
 
-        tx.commit().await
+        tx.commit()
+            .await
             .map_err(|e| adk_core::AdkError::Session(format!("commit failed: {}", e)))?;
 
         Ok(Box::new(DatabaseSession {
@@ -262,12 +282,14 @@ impl SessionService for DatabaseSessionService {
     }
 
     async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
-        let rows = sqlx::query("SELECT session_id, state, updated_at FROM sessions WHERE app_name = ? AND user_id = ?")
-            .bind(&req.app_name)
-            .bind(&req.user_id)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {}", e)))?;
+        let rows = sqlx::query(
+            "SELECT session_id, state, updated_at FROM sessions WHERE app_name = ? AND user_id = ?",
+        )
+        .bind(&req.app_name)
+        .bind(&req.user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| adk_core::AdkError::Session(format!("query failed: {}", e)))?;
 
         let mut sessions = Vec::new();
         for row in rows {

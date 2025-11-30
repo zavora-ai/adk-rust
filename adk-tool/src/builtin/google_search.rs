@@ -29,8 +29,6 @@ impl Tool for GoogleSearchTool {
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
         // Google Search is handled internally by Gemini models
         // This should not be called directly
-        Err(adk_core::AdkError::Tool(
-            "GoogleSearch is handled internally by Gemini".to_string(),
-        ))
+        Err(adk_core::AdkError::Tool("GoogleSearch is handled internally by Gemini".to_string()))
     }
 }

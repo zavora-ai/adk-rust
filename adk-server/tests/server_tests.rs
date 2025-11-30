@@ -1,5 +1,7 @@
 use adk_server::create_app;
-use adk_session::{CreateRequest, DeleteRequest, Event, GetRequest, ListRequest, Session, SessionService};
+use adk_session::{
+    CreateRequest, DeleteRequest, Event, GetRequest, ListRequest, Session, SessionService,
+};
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -13,11 +15,11 @@ impl adk_core::AgentLoader for MockAgentLoader {
     async fn load_agent(&self, _app_name: &str) -> adk_core::Result<Arc<dyn adk_core::Agent>> {
         Err(adk_core::AdkError::Agent("not implemented".to_string()))
     }
-    
+
     fn list_agents(&self) -> Vec<String> {
         vec![]
     }
-    
+
     fn root_agent(&self) -> Arc<dyn adk_core::Agent> {
         panic!("MockAgentLoader has no root agent")
     }
@@ -114,10 +116,8 @@ impl adk_session::Events for MockEvents {
 
 #[tokio::test]
 async fn test_health_check() {
-    let config = adk_server::ServerConfig::new(
-        Arc::new(MockAgentLoader),
-        Arc::new(MockSessionService),
-    );
+    let config =
+        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(MockSessionService));
     let app = create_app(config);
 
     let response = app

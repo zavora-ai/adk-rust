@@ -51,9 +51,7 @@ pub async fn create_session(
     );
 
     // Generate session ID if not provided
-    let session_id = req
-        .session_id
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let session_id = req.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let session = controller
         .session_service
@@ -112,11 +110,7 @@ pub async fn delete_session(
 ) -> Result<StatusCode, StatusCode> {
     controller
         .session_service
-        .delete(adk_session::DeleteRequest {
-            app_name,
-            user_id,
-            session_id,
-        })
+        .delete(adk_session::DeleteRequest { app_name, user_id, session_id })
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -149,9 +143,7 @@ pub async fn create_session_from_path(
     Path(params): Path<SessionPathParams>,
     body: Option<Json<CreateSessionBodyRequest>>,
 ) -> Result<Json<SessionResponse>, StatusCode> {
-    let session_id = params
-        .session_id
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let session_id = params.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let session = controller
         .session_service
@@ -159,11 +151,7 @@ pub async fn create_session_from_path(
             app_name: params.app_name.clone(),
             user_id: params.user_id.clone(),
             session_id: Some(session_id),
-            state: body
-                .map(|b| b.state.clone())
-                .unwrap_or_default()
-                .into_iter()
-                .collect(),
+            state: body.map(|b| b.state.clone()).unwrap_or_default().into_iter().collect(),
         })
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -234,10 +222,7 @@ pub async fn list_sessions(
 ) -> Result<Json<Vec<SessionResponse>>, StatusCode> {
     let sessions = controller
         .session_service
-        .list(adk_session::ListRequest {
-            app_name: params.app_name,
-            user_id: params.user_id,
-        })
+        .list(adk_session::ListRequest { app_name: params.app_name, user_id: params.user_id })
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

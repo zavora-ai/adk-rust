@@ -8,8 +8,8 @@ use std::sync::Arc;
 /// Only processes the current turn without any conversation history
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let api_key = std::env::var("GEMINI_API_KEY")
-        .expect("GEMINI_API_KEY environment variable must be set");
+    let api_key =
+        std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY environment variable must be set");
 
     println!("=== Agent Control Features Demo ===\n");
 
@@ -42,8 +42,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .description("Agent that cannot delegate to others")
         .model(Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?))
         .instruction("You must handle all requests yourself.")
-        .disallow_transfer_to_parent(true)  // Cannot go back to parent agent
-        .disallow_transfer_to_peers(true)   // Cannot transfer to sibling agents
+        .disallow_transfer_to_parent(true) // Cannot go back to parent agent
+        .disallow_transfer_to_peers(true) // Cannot transfer to sibling agents
         .build()?;
 
     println!("   → This agent CANNOT transfer to parent or peer agents");
@@ -63,7 +63,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let structured_agent = LlmAgentBuilder::new("sentiment_analyzer")
         .description("Analyzes sentiment and returns structured JSON")
         .model(Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?))
-        .instruction("Analyze the sentiment of the text and return JSON with sentiment and confidence.")
+        .instruction(
+            "Analyze the sentiment of the text and return JSON with sentiment and confidence.",
+        )
         .output_schema(schema)
         .build()?;
 

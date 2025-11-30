@@ -261,15 +261,9 @@ mod tests {
         event.llm_response.content = Some(Content {
             role: "model".to_string(),
             parts: vec![
-                Part::FunctionCall {
-                    name: "get_weather".to_string(),
-                    args: serde_json::json!({}),
-                },
+                Part::FunctionCall { name: "get_weather".to_string(), args: serde_json::json!({}) },
                 Part::Text { text: "I'll check the weather".to_string() },
-                Part::FunctionCall {
-                    name: "get_time".to_string(),
-                    args: serde_json::json!({}),
-                },
+                Part::FunctionCall { name: "get_time".to_string(), args: serde_json::json!({}) },
             ],
         });
 

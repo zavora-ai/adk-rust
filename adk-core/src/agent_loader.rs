@@ -8,10 +8,10 @@ use std::sync::Arc;
 pub trait AgentLoader: Send + Sync {
     /// Load an agent by name (or app_name for compatibility).
     async fn load_agent(&self, name: &str) -> Result<Arc<dyn crate::Agent>>;
-    
+
     /// List all available agent names.
     fn list_agents(&self) -> Vec<String>;
-    
+
     /// Get the root (default) agent.
     fn root_agent(&self) -> Arc<dyn crate::Agent>;
 }
@@ -40,11 +40,11 @@ impl AgentLoader for SingleAgentLoader {
             )))
         }
     }
-    
+
     fn list_agents(&self) -> Vec<String> {
         vec![self.agent.name().to_string()]
     }
-    
+
     fn root_agent(&self) -> Arc<dyn crate::Agent> {
         self.agent.clone()
     }
@@ -73,10 +73,7 @@ impl MultiAgentLoader {
         for agent in agents {
             let name = agent.name().to_string();
             if agent_map.contains_key(&name) {
-                return Err(AdkError::Config(format!(
-                    "Duplicate agent name: {}",
-                    name
-                )));
+                return Err(AdkError::Config(format!("Duplicate agent name: {}", name)));
             }
             agent_map.insert(name, agent);
         }
@@ -92,22 +89,19 @@ impl AgentLoader for MultiAgentLoader {
             return Ok(self.root.clone());
         }
 
-        self.agent_map
-            .get(name)
-            .cloned()
-            .ok_or_else(|| {
-                AdkError::Config(format!(
-                    "Agent '{}' not found. Available agents: {:?}",
-                    name,
-                    self.list_agents()
-                ))
-            })
+        self.agent_map.get(name).cloned().ok_or_else(|| {
+            AdkError::Config(format!(
+                "Agent '{}' not found. Available agents: {:?}",
+                name,
+                self.list_agents()
+            ))
+        })
     }
-    
+
     fn list_agents(&self) -> Vec<String> {
         self.agent_map.keys().cloned().collect()
     }
-    
+
     fn root_agent(&self) -> Arc<dyn crate::Agent> {
         self.root.clone()
     }

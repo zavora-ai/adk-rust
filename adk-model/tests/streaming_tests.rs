@@ -19,14 +19,14 @@ async fn test_stream_aggregation() {
     let model = GeminiModel::new(api_key, "gemini-2.0-flash-exp").unwrap();
     let content = Content::new("user").with_text("Count from 1 to 5");
     let request = LlmRequest::new("gemini-2.0-flash-exp", vec![content]);
-    
+
     let stream = model.generate_content(request, true).await.unwrap();
     let aggregated = aggregate_stream(stream).await.unwrap();
-    
+
     assert!(aggregated.content.is_some());
     assert!(!aggregated.partial);
     assert!(aggregated.turn_complete);
-    
+
     let content = aggregated.content.unwrap();
     let part = content.parts.first().unwrap();
     if let Part::Text { text } = part {

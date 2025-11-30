@@ -18,7 +18,7 @@ pub struct CustomAgent {
     sub_agents: Vec<Arc<dyn Agent>>,
     #[allow(dead_code)] // Part of public API, callbacks not yet implemented
     before_callbacks: Vec<BeforeAgentCallback>,
-    #[allow(dead_code)] // Part of public API, callbacks not yet implemented  
+    #[allow(dead_code)] // Part of public API, callbacks not yet implemented
     after_callbacks: Vec<AfterAgentCallback>,
     handler: RunHandler,
 }

@@ -1,4 +1,6 @@
-use adk_core::{AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result};
+use adk_core::{
+    AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result,
+};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -16,11 +18,7 @@ pub struct ConditionalAgent {
 }
 
 impl ConditionalAgent {
-    pub fn new<F>(
-        name: impl Into<String>,
-        condition: F,
-        if_agent: Arc<dyn Agent>,
-    ) -> Self
+    pub fn new<F>(name: impl Into<String>, condition: F, if_agent: Arc<dyn Agent>) -> Self
     where
         F: Fn(&dyn InvocationContext) -> bool + Send + Sync + 'static,
     {

@@ -1,8 +1,6 @@
 use crate::a2a::{
-    events::message_to_event,
-    metadata::to_invocation_meta,
-    processor::EventProcessor,
-    Message, TaskState, TaskStatus, TaskStatusUpdateEvent, UpdateEvent,
+    events::message_to_event, metadata::to_invocation_meta, processor::EventProcessor, Message,
+    TaskState, TaskStatus, TaskStatusUpdateEvent, UpdateEvent,
 };
 use adk_core::Result;
 use adk_runner::{Runner, RunnerConfig};
@@ -49,11 +47,8 @@ impl Executor {
         })?;
 
         // Create processor
-        let mut processor = EventProcessor::new(
-            context_id.to_string(),
-            task_id.to_string(),
-            meta.clone(),
-        );
+        let mut processor =
+            EventProcessor::new(context_id.to_string(), task_id.to_string(), meta.clone());
 
         let mut results = vec![];
 
@@ -61,10 +56,7 @@ impl Executor {
         results.push(UpdateEvent::TaskStatusUpdate(TaskStatusUpdateEvent {
             task_id: task_id.to_string(),
             context_id: Some(context_id.to_string()),
-            status: TaskStatus {
-                state: TaskState::Submitted,
-                message: None,
-            },
+            status: TaskStatus { state: TaskState::Submitted, message: None },
             final_update: false,
         }));
 
@@ -72,21 +64,18 @@ impl Executor {
         results.push(UpdateEvent::TaskStatusUpdate(TaskStatusUpdateEvent {
             task_id: task_id.to_string(),
             context_id: Some(context_id.to_string()),
-            status: TaskStatus {
-                state: TaskState::Working,
-                message: None,
-            },
+            status: TaskStatus { state: TaskState::Working, message: None },
             final_update: false,
         }));
 
         // Run agent
-        let content = event.llm_response.content.ok_or_else(|| {
-            adk_core::AdkError::Agent("Event has no content".to_string())
-        })?;
+        let content = event
+            .llm_response
+            .content
+            .ok_or_else(|| adk_core::AdkError::Agent("Event has no content".to_string()))?;
 
-        let mut event_stream = runner
-            .run(meta.user_id.clone(), meta.session_id.clone(), content)
-            .await?;
+        let mut event_stream =
+            runner.run(meta.user_id.clone(), meta.session_id.clone(), content).await?;
 
         // Process events
         while let Some(result) = event_stream.next().await {
@@ -124,10 +113,7 @@ impl Executor {
         Ok(TaskStatusUpdateEvent {
             task_id: task_id.to_string(),
             context_id: Some(context_id.to_string()),
-            status: TaskStatus {
-                state: TaskState::Canceled,
-                message: None,
-            },
+            status: TaskStatus { state: TaskState::Canceled, message: None },
             final_update: true,
         })
     }

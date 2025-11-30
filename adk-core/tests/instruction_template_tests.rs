@@ -43,18 +43,26 @@ struct MockSession {
 
 impl MockSession {
     fn new() -> Self {
-        Self {
-            state: MockState::new(),
-        }
+        Self { state: MockState::new() }
     }
 }
 
 impl Session for MockSession {
-    fn id(&self) -> &str { "session-1" }
-    fn app_name(&self) -> &str { "test-app" }
-    fn user_id(&self) -> &str { "user-1" }
-    fn state(&self) -> &dyn State { &self.state }
-    fn conversation_history(&self) -> Vec<Content> { Vec::new() }
+    fn id(&self) -> &str {
+        "session-1"
+    }
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+    fn user_id(&self) -> &str {
+        "user-1"
+    }
+    fn state(&self) -> &dyn State {
+        &self.state
+    }
+    fn conversation_history(&self) -> Vec<Content> {
+        Vec::new()
+    }
 }
 
 struct MockArtifacts;
@@ -85,10 +93,7 @@ struct MockContext {
 
 impl MockContext {
     fn new() -> Self {
-        Self {
-            session: MockSession::new(),
-            artifacts: None,
-        }
+        Self { session: MockSession::new(), artifacts: None }
     }
 
     fn with_artifacts(mut self) -> Self {
@@ -99,13 +104,27 @@ impl MockContext {
 
 #[async_trait]
 impl ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str { "inv-1" }
-    fn agent_name(&self) -> &str { "test-agent" }
-    fn user_id(&self) -> &str { "user-1" }
-    fn app_name(&self) -> &str { "test-app" }
-    fn session_id(&self) -> &str { "session-1" }
-    fn branch(&self) -> &str { "main" }
-    fn user_content(&self) -> &Content { unimplemented!() }
+    fn invocation_id(&self) -> &str {
+        "inv-1"
+    }
+    fn agent_name(&self) -> &str {
+        "test-agent"
+    }
+    fn user_id(&self) -> &str {
+        "user-1"
+    }
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+    fn session_id(&self) -> &str {
+        "session-1"
+    }
+    fn branch(&self) -> &str {
+        "main"
+    }
+    fn user_content(&self) -> &Content {
+        unimplemented!()
+    }
 }
 
 #[async_trait]
@@ -117,12 +136,22 @@ impl CallbackContext for MockContext {
 
 #[async_trait]
 impl InvocationContext for MockContext {
-    fn agent(&self) -> Arc<dyn Agent> { unimplemented!() }
-    fn memory(&self) -> Option<Arc<dyn Memory>> { None }
-    fn session(&self) -> &dyn Session { &self.session }
-    fn run_config(&self) -> &RunConfig { unimplemented!() }
+    fn agent(&self) -> Arc<dyn Agent> {
+        unimplemented!()
+    }
+    fn memory(&self) -> Option<Arc<dyn Memory>> {
+        None
+    }
+    fn session(&self) -> &dyn Session {
+        &self.session
+    }
+    fn run_config(&self) -> &RunConfig {
+        unimplemented!()
+    }
     fn end_invocation(&self) {}
-    fn ended(&self) -> bool { false }
+    fn ended(&self) -> bool {
+        false
+    }
 }
 
 // --- Tests ---

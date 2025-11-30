@@ -15,12 +15,12 @@ pub enum Commands {
         /// Agent application name
         #[arg(short, long, default_value = "console_app")]
         app_name: String,
-        
+
         /// User ID for session
         #[arg(short, long, default_value = "console_user")]
         user_id: String,
     },
-    
+
     /// Start web server
     Serve {
         /// Server port

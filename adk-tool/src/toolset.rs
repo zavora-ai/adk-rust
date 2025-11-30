@@ -10,11 +10,7 @@ pub struct BasicToolset {
 
 impl BasicToolset {
     pub fn new(name: impl Into<String>, tools: Vec<Arc<dyn Tool>>) -> Self {
-        Self {
-            name: name.into(),
-            tools,
-            predicate: None,
-        }
+        Self { name: name.into(), tools, predicate: None }
     }
 
     pub fn with_predicate(mut self, predicate: ToolPredicate) -> Self {
@@ -31,10 +27,7 @@ impl Toolset for BasicToolset {
 
     async fn tools(&self, _ctx: Arc<dyn ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
         if let Some(predicate) = &self.predicate {
-            Ok(self.tools.iter()
-                .filter(|tool| predicate(tool.as_ref()))
-                .cloned()
-                .collect())
+            Ok(self.tools.iter().filter(|tool| predicate(tool.as_ref())).cloned().collect())
         } else {
             Ok(self.tools.clone())
         }

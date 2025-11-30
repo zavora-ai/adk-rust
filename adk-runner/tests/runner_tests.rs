@@ -142,9 +142,7 @@ impl SessionService for MockSessionService {
 
 #[test]
 fn test_runner_creation() {
-    let agent = Arc::new(MockAgent {
-        name: "test_agent".to_string(),
-    });
+    let agent = Arc::new(MockAgent { name: "test_agent".to_string() });
 
     let session_service = Arc::new(MockSessionService);
 
@@ -161,9 +159,7 @@ fn test_runner_creation() {
 
 #[tokio::test]
 async fn test_runner_run() {
-    let agent = Arc::new(MockAgent {
-        name: "test_agent".to_string(),
-    });
+    let agent = Arc::new(MockAgent { name: "test_agent".to_string() });
 
     let session_service = Arc::new(MockSessionService);
 
@@ -176,25 +172,17 @@ async fn test_runner_run() {
     })
     .unwrap();
 
-    let content = Content {
-        role: "user".to_string(),
-        parts: vec![Part::Text {
-            text: "Hello".to_string(),
-        }],
-    };
+    let content =
+        Content { role: "user".to_string(), parts: vec![Part::Text { text: "Hello".to_string() }] };
 
-    let result = runner
-        .run("user123".to_string(), "session456".to_string(), content)
-        .await;
+    let result = runner.run("user123".to_string(), "session456".to_string(), content).await;
 
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_find_agent_in_tree() {
-    let sub_agent: Arc<dyn Agent> = Arc::new(MockAgent {
-        name: "sub_agent".to_string(),
-    });
+    let sub_agent: Arc<dyn Agent> = Arc::new(MockAgent { name: "sub_agent".to_string() });
 
     let root_agent: Arc<dyn Agent> = Arc::new(MockAgentWithSubs {
         name: "root".to_string(),
@@ -218,9 +206,7 @@ fn test_find_agent_in_tree() {
 
 #[tokio::test]
 async fn test_find_agent_to_run_with_history() {
-    let sub_agent: Arc<dyn Agent> = Arc::new(MockAgent {
-        name: "assistant".to_string(),
-    });
+    let sub_agent: Arc<dyn Agent> = Arc::new(MockAgent { name: "assistant".to_string() });
 
     let root_with_subs: Arc<dyn Agent> = Arc::new(MockAgentWithSubs {
         name: "root".to_string(),
@@ -247,9 +233,7 @@ async fn test_find_agent_to_run_with_history() {
 
 #[tokio::test]
 async fn test_find_agent_to_run_defaults_to_root() {
-    let root_agent: Arc<dyn Agent> = Arc::new(MockAgent {
-        name: "root".to_string(),
-    });
+    let root_agent: Arc<dyn Agent> = Arc::new(MockAgent { name: "root".to_string() });
 
     // Empty session
     let session = MockSession {
@@ -266,9 +250,7 @@ async fn test_find_agent_to_run_defaults_to_root() {
 
 #[tokio::test]
 async fn test_find_agent_to_run_skips_user_events() {
-    let root_agent: Arc<dyn Agent> = Arc::new(MockAgent {
-        name: "root".to_string(),
-    });
+    let root_agent: Arc<dyn Agent> = Arc::new(MockAgent { name: "root".to_string() });
 
     // Session with only user events
     let mut events = vec![];

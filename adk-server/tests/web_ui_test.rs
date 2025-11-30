@@ -43,10 +43,8 @@ async fn test_web_ui_redirect() {
     let config = ServerConfig::new(agent_loader, session_service);
     let app = create_app(config);
 
-    let response = app
-        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
+    let response =
+        app.oneshot(Request::builder().uri("/").body(Body::empty()).unwrap()).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert_eq!(response.headers().get("location").unwrap(), "/ui/");
@@ -68,10 +66,7 @@ async fn test_web_ui_assets() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response.headers().get("content-type").unwrap(),
-        "text/html"
-    );
+    assert_eq!(response.headers().get("content-type").unwrap(), "text/html");
 
     // Test runtime-config.json
     let response = app
@@ -99,13 +94,17 @@ async fn test_web_ui_index_route() {
     let app = create_app(config);
 
     // Test /ui/ serves index.html
-    let response = app
-        .oneshot(Request::builder().uri("/ui/").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
+    let response =
+        app.oneshot(Request::builder().uri("/ui/").body(Body::empty()).unwrap()).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.headers().get("content-type").unwrap().to_str().unwrap().contains("text/html"));
+    assert!(response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("text/html"));
 }
 
 #[tokio::test]
@@ -127,7 +126,6 @@ async fn test_api_apps() {
     assert!(body_str.contains("mock-agent"));
 }
 
-
 #[tokio::test]
 async fn test_api_list_apps_compat() {
     let agent = Arc::new(MockAgent);
@@ -139,10 +137,7 @@ async fn test_api_list_apps_compat() {
     // Test /api/list-apps (adk-go compatible endpoint)
     let response = app
         .oneshot(
-            Request::builder()
-                .uri("/api/list-apps?relative_path=./")
-                .body(Body::empty())
-                .unwrap(),
+            Request::builder().uri("/api/list-apps?relative_path=./").body(Body::empty()).unwrap(),
         )
         .await
         .unwrap();

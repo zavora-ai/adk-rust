@@ -1,6 +1,6 @@
 use adk_core::{Part, Result};
+use base64::{engine::general_purpose, Engine as _};
 use serde_json::{Map, Value};
-use base64::{Engine as _, engine::general_purpose};
 
 pub fn adk_parts_to_a2a(
     parts: &[Part],
@@ -30,10 +30,7 @@ pub fn adk_parts_to_a2a(
                 let mut metadata = Map::new();
                 metadata.insert("long_running".to_string(), Value::Bool(is_long_running));
 
-                Ok(crate::a2a::Part::Data {
-                    data,
-                    metadata: Some(metadata),
-                })
+                Ok(crate::a2a::Part::Data { data, metadata: Some(metadata) })
             }
             Part::FunctionResponse { name, response } => {
                 let mut data = Map::new();
@@ -42,10 +39,7 @@ pub fn adk_parts_to_a2a(
                 resp_data.insert("response".to_string(), response.clone());
                 data.insert("function_response".to_string(), Value::Object(resp_data));
 
-                Ok(crate::a2a::Part::Data {
-                    data,
-                    metadata: None,
-                })
+                Ok(crate::a2a::Part::Data { data, metadata: None })
             }
         })
         .collect()
@@ -55,21 +49,18 @@ pub fn a2a_parts_to_adk(parts: &[crate::a2a::Part]) -> Result<Vec<Part>> {
     parts
         .iter()
         .map(|part| match part {
-            crate::a2a::Part::Text { text, .. } => Ok(Part::Text {
-                text: text.clone(),
-            }),
+            crate::a2a::Part::Text { text, .. } => Ok(Part::Text { text: text.clone() }),
             crate::a2a::Part::File { file, .. } => {
                 if let Some(bytes) = &file.bytes {
-                    let data = general_purpose::STANDARD.decode(bytes)
-                        .map_err(|e| adk_core::AdkError::Agent(format!("Base64 decode error: {}", e)))?;
+                    let data = general_purpose::STANDARD.decode(bytes).map_err(|e| {
+                        adk_core::AdkError::Agent(format!("Base64 decode error: {}", e))
+                    })?;
                     Ok(Part::InlineData {
                         mime_type: file.mime_type.clone().unwrap_or_default(),
                         data,
                     })
                 } else {
-                    Err(adk_core::AdkError::Agent(
-                        "File part with URI not supported".to_string(),
-                    ))
+                    Err(adk_core::AdkError::Agent("File part with URI not supported".to_string()))
                 }
             }
             crate::a2a::Part::Data { data, .. } => {
@@ -77,28 +68,25 @@ pub fn a2a_parts_to_adk(parts: &[crate::a2a::Part]) -> Result<Vec<Part>> {
                     let name = call
                         .get("name")
                         .and_then(|v| v.as_str())
-                        .ok_or_else(|| adk_core::AdkError::Agent("Missing function name".to_string()))?
+                        .ok_or_else(|| {
+                            adk_core::AdkError::Agent("Missing function name".to_string())
+                        })?
                         .to_string();
-                    let args = call
-                        .get("args")
-                        .cloned()
-                        .unwrap_or(Value::Object(Map::new()));
+                    let args = call.get("args").cloned().unwrap_or(Value::Object(Map::new()));
                     Ok(Part::FunctionCall { name, args })
                 } else if let Some(resp) = data.get("function_response") {
                     let name = resp
                         .get("name")
                         .and_then(|v| v.as_str())
-                        .ok_or_else(|| adk_core::AdkError::Agent("Missing function name".to_string()))?
+                        .ok_or_else(|| {
+                            adk_core::AdkError::Agent("Missing function name".to_string())
+                        })?
                         .to_string();
-                    let response = resp
-                        .get("response")
-                        .cloned()
-                        .unwrap_or(Value::Object(Map::new()));
+                    let response =
+                        resp.get("response").cloned().unwrap_or(Value::Object(Map::new()));
                     Ok(Part::FunctionResponse { name, response })
                 } else {
-                    Err(adk_core::AdkError::Agent(
-                        "Unknown data part format".to_string(),
-                    ))
+                    Err(adk_core::AdkError::Agent("Unknown data part format".to_string()))
                 }
             }
         })
@@ -112,25 +100,21 @@ mod tests {
 
     #[test]
     fn test_text_conversion() {
-        let adk_parts = vec![Part::Text {
-            text: "Hello".to_string(),
-        }];
+        let adk_parts = vec![Part::Text { text: "Hello".to_string() }];
         let a2a_parts = adk_parts_to_a2a(&adk_parts, &[]).unwrap();
         assert_eq!(a2a_parts.len(), 1);
-        
+
         let back = a2a_parts_to_adk(&a2a_parts).unwrap();
         assert_eq!(back.len(), 1);
     }
 
     #[test]
     fn test_function_call_conversion() {
-        let adk_parts = vec![Part::FunctionCall {
-            name: "test".to_string(),
-            args: json!({"key": "value"}),
-        }];
+        let adk_parts =
+            vec![Part::FunctionCall { name: "test".to_string(), args: json!({"key": "value"}) }];
         let a2a_parts = adk_parts_to_a2a(&adk_parts, &[]).unwrap();
         assert_eq!(a2a_parts.len(), 1);
-        
+
         let back = a2a_parts_to_adk(&a2a_parts).unwrap();
         assert_eq!(back.len(), 1);
     }

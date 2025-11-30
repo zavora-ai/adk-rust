@@ -1,5 +1,5 @@
 use adk_core::{
-    Agent, AfterAgentCallback, AfterModelCallback, AfterToolCallback, BeforeAgentCallback,
+    AfterAgentCallback, AfterModelCallback, AfterToolCallback, Agent, BeforeAgentCallback,
     BeforeModelCallback, BeforeModelResult, BeforeToolCallback, CallbackContext, Content, Event,
     EventActions, GlobalInstructionProvider, InstructionProvider, InvocationContext, Llm,
     LlmRequest, MemoryEntry, Part, ReadonlyContext, Result, Tool, ToolContext,
@@ -200,9 +200,8 @@ impl LlmAgentBuilder {
     }
 
     pub fn build(self) -> Result<LlmAgent> {
-        let model = self
-            .model
-            .ok_or_else(|| adk_core::AdkError::Agent("Model is required".to_string()))?;
+        let model =
+            self.model.ok_or_else(|| adk_core::AdkError::Agent("Model is required".to_string()))?;
 
         Ok(LlmAgent {
             name: self.name,
@@ -230,7 +229,6 @@ impl LlmAgentBuilder {
     }
 }
 
-
 // AgentToolContext wraps the parent InvocationContext and preserves all context
 // instead of throwing it away like SimpleToolContext did
 struct AgentToolContext {
@@ -241,11 +239,7 @@ struct AgentToolContext {
 
 impl AgentToolContext {
     fn new(parent_ctx: Arc<dyn InvocationContext>, function_call_id: String) -> Self {
-        Self {
-            parent_ctx,
-            function_call_id,
-            actions: EventActions::default(),
-        }
+        Self { parent_ctx, function_call_id, actions: EventActions::default() }
     }
 }
 
@@ -254,30 +248,30 @@ impl ReadonlyContext for AgentToolContext {
     fn invocation_id(&self) -> &str {
         self.parent_ctx.invocation_id()
     }
-    
+
     fn agent_name(&self) -> &str {
         self.parent_ctx.agent_name()
     }
-    
+
     fn user_id(&self) -> &str {
         // ✅ Delegate to parent - now tools get the real user_id!
         self.parent_ctx.user_id()
     }
-    
+
     fn app_name(&self) -> &str {
         // ✅ Delegate to parent - now tools get the real app_name!
         self.parent_ctx.app_name()
     }
-    
+
     fn session_id(&self) -> &str {
         // ✅ Delegate to parent - now tools get the real session_id!
         self.parent_ctx.session_id()
     }
-    
+
     fn branch(&self) -> &str {
         self.parent_ctx.branch()
     }
-    
+
     fn user_content(&self) -> &Content {
         self.parent_ctx.user_content()
     }
@@ -296,11 +290,11 @@ impl ToolContext for AgentToolContext {
     fn function_call_id(&self) -> &str {
         &self.function_call_id
     }
-    
+
     fn actions(&self) -> &EventActions {
         &self.actions
     }
-    
+
     async fn search_memory(&self, query: &str) -> Result<Vec<MemoryEntry>> {
         // ✅ Delegate to parent's memory if available
         if let Some(memory) = self.parent_ctx.memory() {
@@ -335,12 +329,9 @@ impl Agent for LlmAgent {
             session.id = %ctx.session_id()
         )
     )]
-    async fn run(
-        &self,
-        ctx: Arc<dyn InvocationContext>,
-    ) -> Result<adk_core::EventStream> {
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<adk_core::EventStream> {
         adk_telemetry::info!("Starting agent execution");
-        
+
         let agent_name = self.name.clone();
         let invocation_id = ctx.invocation_id().to_string();
         let model = self.model.clone();
@@ -405,7 +396,7 @@ impl Agent for LlmAgent {
                     }
                 }
             }
-            
+
             // ===== MAIN AGENT EXECUTION =====
             let mut conversation_history = Vec::new();
 
@@ -468,7 +459,7 @@ impl Agent for LlmAgent {
                     // Agent operates solely on current turn - only keep the latest user input
                     // Remove all previous history except instructions and current user message
                     let mut filtered = Vec::new();
-                    
+
                     // Keep global and agent instructions (already added above)
                     let instruction_count = conversation_history.iter()
                         .take_while(|c| c.role == "user" && c.parts.iter().any(|p| {
@@ -480,17 +471,17 @@ impl Agent for LlmAgent {
                             }
                         }))
                         .count();
-                    
+
                     // Take instructions
                     filtered.extend(conversation_history.iter().take(instruction_count).cloned());
-                    
+
                     // Take only the last user message (current turn)
                     if let Some(last) = conversation_history.last() {
                         if last.role == "user" {
                             filtered.push(last.clone());
                         }
                     }
-                    
+
                     filtered
                 }
                 adk_core::IncludeContents::Default => {
@@ -545,7 +536,7 @@ impl Agent for LlmAgent {
             // Multi-turn loop with max iterations
             let max_iterations = 10;
             let mut iteration = 0;
-            
+
             loop {
                 iteration += 1;
                 if iteration > max_iterations {
@@ -565,7 +556,7 @@ impl Agent for LlmAgent {
                         response_schema: Some(schema.clone()),
                     }
                 });
-                
+
                 let request = LlmRequest {
                     model: model.name().to_string(),
                     contents: conversation_history.clone(),
@@ -599,7 +590,7 @@ impl Agent for LlmAgent {
 
                 // Determine streaming source: cached response or real model
                 let mut accumulated_content: Option<Content> = None;
-                
+
                 if let Some(cached_response) = model_response_override {
                     // Use callback-provided response (e.g., from cache)
                     // Yield it as an event
@@ -632,7 +623,7 @@ impl Agent for LlmAgent {
                     let mut response_stream = model.generate_content(request, true).await?;
 
                     use futures::StreamExt;
-                    
+
                     // Stream and process chunks with AfterModel callbacks
                     while let Some(chunk_result) = response_stream.next().await {
                         let mut chunk = match chunk_result {
@@ -642,7 +633,7 @@ impl Agent for LlmAgent {
                                 return;
                             }
                         };
-                        
+
                         // ===== AFTER MODEL CALLBACKS (per chunk) =====
                         // Callbacks can modify each streaming chunk
                         for callback in after_model_callbacks.as_ref() {
@@ -663,7 +654,7 @@ impl Agent for LlmAgent {
                                 }
                             }
                         }
-                        
+
                         // Yield the (possibly modified) partial event
                         let mut partial_event = Event::new(&invocation_id);
                         partial_event.author = agent_name.clone();
@@ -689,7 +680,7 @@ impl Agent for LlmAgent {
                         }
 
                         yield Ok(partial_event);
-                        
+
                         // Accumulate content for history
                         if let Some(chunk_content) = chunk.content {
                             if let Some(ref mut acc) = accumulated_content {
@@ -700,14 +691,14 @@ impl Agent for LlmAgent {
                                 accumulated_content = Some(chunk_content);
                             }
                         }
-                        
+
                         // Check if turn is complete
                         if chunk.turn_complete {
                             break;
                         }
                     }
                 }
-                
+
                 // After streaming/caching completes, check for function calls in accumulated content
                 let function_call_names: Vec<String> = accumulated_content.as_ref()
                     .map(|c| c.parts.iter()
@@ -779,7 +770,7 @@ impl Agent for LlmAgent {
                                 let mut transfer_event = Event::new(&invocation_id);
                                 transfer_event.author = agent_name.clone();
                                 transfer_event.actions.transfer_to_agent = Some(target_agent);
-                                
+
                                 yield Ok(transfer_event);
                                 return;
                             }
@@ -792,7 +783,7 @@ impl Agent for LlmAgent {
                                     ctx.clone(),
                                     format!("{}_{}", invocation_id, name),
                                 )) as Arc<dyn ToolContext>;
-                                
+
                                 match tool.execute(tool_ctx, args.clone()).await {
                                     Ok(result) => result,
                                     Err(e) => serde_json::json!({ "error": e.to_string() }),
@@ -831,7 +822,7 @@ impl Agent for LlmAgent {
                     break;
                 }
             }
-            
+
             // ===== AFTER AGENT CALLBACKS =====
             // Execute after the agent completes
             for callback in after_agent_callbacks.as_ref() {

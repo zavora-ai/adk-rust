@@ -121,9 +121,7 @@ pub async fn handle_jsonrpc_stream(
     let stream = create_message_stream(controller, params, request_id);
 
     Ok(Sse::new(stream).keep_alive(
-        axum::response::sse::KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("ping"),
+        axum::response::sse::KeepAlive::new().interval(Duration::from_secs(15)).text("ping"),
     ))
 }
 
@@ -212,23 +210,14 @@ async fn handle_message_send(
             }
         },
         None => {
-            return Json(JsonRpcResponse::error(
-                id,
-                JsonRpcError::invalid_params("Missing params"),
-            ))
+            return Json(JsonRpcResponse::error(id, JsonRpcError::invalid_params("Missing params")))
         }
     };
 
-    let context_id = params
-        .message
-        .context_id
-        .clone()
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let task_id = params
-        .message
-        .task_id
-        .clone()
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let context_id =
+        params.message.context_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let task_id =
+        params.message.task_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let root_agent = controller.config.agent_loader.root_agent();
 
@@ -249,10 +238,7 @@ async fn handle_message_send(
             let mut task = Task {
                 id: task_id,
                 context_id: Some(context_id),
-                status: TaskStatus {
-                    state: TaskState::Completed,
-                    message: None,
-                },
+                status: TaskStatus { state: TaskState::Completed, message: None },
                 artifacts: Some(vec![]),
                 history: None,
             };
@@ -270,15 +256,9 @@ async fn handle_message_send(
                 }
             }
 
-            Json(JsonRpcResponse::success(
-                id,
-                serde_json::to_value(task).unwrap_or_default(),
-            ))
+            Json(JsonRpcResponse::success(id, serde_json::to_value(task).unwrap_or_default()))
         }
-        Err(e) => Json(JsonRpcResponse::error(
-            id,
-            JsonRpcError::internal_error(e.to_string()),
-        )),
+        Err(e) => Json(JsonRpcResponse::error(id, JsonRpcError::internal_error(e.to_string()))),
     }
 }
 
@@ -298,10 +278,7 @@ async fn handle_tasks_get(
             }
         },
         None => {
-            return Json(JsonRpcResponse::error(
-                id,
-                JsonRpcError::invalid_params("Missing params"),
-            ))
+            return Json(JsonRpcResponse::error(id, JsonRpcError::invalid_params("Missing params")))
         }
     };
 
@@ -328,10 +305,7 @@ async fn handle_tasks_cancel(
             }
         },
         None => {
-            return Json(JsonRpcResponse::error(
-                id,
-                JsonRpcError::invalid_params("Missing params"),
-            ))
+            return Json(JsonRpcResponse::error(id, JsonRpcError::invalid_params("Missing params")))
         }
     };
 
@@ -352,13 +326,9 @@ async fn handle_tasks_cancel(
     let context_id = uuid::Uuid::new_v4().to_string();
 
     match executor.cancel(&context_id, &params.task_id).await {
-        Ok(status) => Json(JsonRpcResponse::success(
-            id,
-            serde_json::to_value(status).unwrap_or_default(),
-        )),
-        Err(e) => Json(JsonRpcResponse::error(
-            id,
-            JsonRpcError::internal_error(e.to_string()),
-        )),
+        Ok(status) => {
+            Json(JsonRpcResponse::success(id, serde_json::to_value(status).unwrap_or_default()))
+        }
+        Err(e) => Json(JsonRpcResponse::error(id, JsonRpcError::internal_error(e.to_string()))),
     }
 }

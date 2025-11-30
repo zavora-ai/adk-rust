@@ -48,18 +48,11 @@ async fn main() -> Result<()> {
     let agent_loader = Arc::new(SingleAgentLoader::new(Arc::new(weather_agent)));
     let session_service = Arc::new(InMemorySessionService::new());
 
-    let config = ServerConfig {
-        agent_loader,
-        session_service,
-        artifact_service: None,
-        backend_url: None,
-    };
+    let config =
+        ServerConfig { agent_loader, session_service, artifact_service: None, backend_url: None };
 
     // Start the A2A server
-    let port = std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(8081);
+    let port = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8081);
 
     let base_url = format!("http://localhost:{}", port);
 
@@ -82,7 +75,8 @@ async fn main() -> Result<()> {
     println!("  curl http://localhost:{}/.well-known/agent.json | jq", port);
 
     println!("\nExample: Send A2A message with curl:");
-    println!(r#"  curl -X POST http://localhost:{}/a2a \
+    println!(
+        r#"  curl -X POST http://localhost:{}/a2a \
     -H "Content-Type: application/json" \
     -d '{{
       "jsonrpc": "2.0",
@@ -95,17 +89,22 @@ async fn main() -> Result<()> {
         }}
       }},
       "id": 1
-    }}'"#, port);
+    }}'"#,
+        port
+    );
 
     println!("\n\nRemoteA2aAgent Usage (for calling this server from another agent):");
-    println!(r#"
+    println!(
+        r#"
     use adk_server::RemoteA2aAgent;
 
     let remote_agent = RemoteA2aAgent::builder("remote_weather")
         .description("Remote weather agent via A2A")
         .agent_url("http://localhost:{}")
         .build()?;
-"#, port);
+"#,
+        port
+    );
 
     println!("\nPress Ctrl+C to stop the server\n");
 

@@ -39,7 +39,8 @@ pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> 
         // adk-go compatible routes
         .route(
             "/apps/:app_name/users/:user_id/sessions",
-            get(controllers::session::list_sessions).post(controllers::session::create_session_from_path),
+            get(controllers::session::list_sessions)
+                .post(controllers::session::create_session_from_path),
         )
         .route(
             "/apps/:app_name/users/:user_id/sessions/:session_id",
@@ -48,10 +49,7 @@ pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> 
                 .delete(controllers::session::delete_session_from_path),
         )
         .with_state(session_controller)
-        .route(
-            "/run/:app_name/:user_id/:session_id",
-            post(controllers::runtime::run_sse),
-        )
+        .route("/run/:app_name/:user_id/:session_id", post(controllers::runtime::run_sse))
         .route("/run_sse", post(controllers::runtime::run_sse_compat))
         .with_state(runtime_controller)
         .route(
@@ -63,10 +61,7 @@ pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> 
             get(controllers::artifacts::get_artifact),
         )
         .with_state(artifacts_controller)
-        .route(
-            "/debug/trace/:event_id",
-            get(controllers::debug::get_trace),
-        )
+        .route("/debug/trace/:event_id", get(controllers::debug::get_trace))
         .route(
             "/debug/graph/:app_name/:user_id/:session_id/:event_id",
             get(controllers::debug::get_graph),
@@ -80,26 +75,20 @@ pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> 
         .with_state(config.clone())
         .route("/ui/*path", get(web_ui::serve_ui_assets));
 
-    let mut app = Router::new()
-        .nest("/api", api_router)
-        .merge(ui_router);
+    let mut app = Router::new().nest("/api", api_router).merge(ui_router);
 
     // Add A2A routes if base URL is provided
     if let Some(base_url) = a2a_base_url {
         let a2a_controller = A2aController::new(config, base_url);
         let a2a_router = Router::new()
-            .route(
-                "/.well-known/agent.json",
-                get(controllers::a2a::get_agent_card),
-            )
+            .route("/.well-known/agent.json", get(controllers::a2a::get_agent_card))
             .route("/a2a", post(controllers::a2a::handle_jsonrpc))
             .route("/a2a/stream", post(controllers::a2a::handle_jsonrpc_stream))
             .with_state(a2a_controller);
         app = app.merge(a2a_router);
     }
 
-    app.layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
+    app.layer(TraceLayer::new_for_http()).layer(CorsLayer::permissive())
 }
 
 async fn health_check() -> &'static str {

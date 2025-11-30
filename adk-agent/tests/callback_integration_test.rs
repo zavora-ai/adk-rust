@@ -1,7 +1,7 @@
 use adk_agent::LlmAgentBuilder;
 use adk_core::{
-    Agent, CallbackContext, Content, InvocationContext, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Part, Result, RunConfig, Session, State, Tool, ToolContext, FinishReason,
+    Agent, CallbackContext, Content, FinishReason, InvocationContext, Llm, LlmRequest, LlmResponse,
+    LlmResponseStream, Part, Result, RunConfig, Session, State, Tool, ToolContext,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -19,12 +19,9 @@ impl MockModel {
     fn new_function_call(name: &str, args: Value) -> Self {
         let content = Content {
             role: "model".to_string(),
-            parts: vec![Part::FunctionCall {
-                name: name.to_string(),
-                args,
-            }],
+            parts: vec![Part::FunctionCall { name: name.to_string(), args }],
         };
-        
+
         Self {
             response: LlmResponse {
                 content: Some(content),
@@ -42,7 +39,9 @@ impl MockModel {
 
 #[async_trait]
 impl Llm for MockModel {
-    fn name(&self) -> &str { "mock-model" }
+    fn name(&self) -> &str {
+        "mock-model"
+    }
 
     async fn generate_content(&self, _req: LlmRequest, _stream: bool) -> Result<LlmResponseStream> {
         let response = self.response.clone();
@@ -57,10 +56,18 @@ struct MockTool;
 
 #[async_trait]
 impl Tool for MockTool {
-    fn name(&self) -> &str { "test_tool" }
-    fn description(&self) -> &str { "Test tool" }
-    fn parameters_schema(&self) -> Option<Value> { None }
-    fn response_schema(&self) -> Option<Value> { None }
+    fn name(&self) -> &str {
+        "test_tool"
+    }
+    fn description(&self) -> &str {
+        "Test tool"
+    }
+    fn parameters_schema(&self) -> Option<Value> {
+        None
+    }
+    fn response_schema(&self) -> Option<Value> {
+        None
+    }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
         Ok(json!({ "status": "ok" }))
@@ -69,18 +76,32 @@ impl Tool for MockTool {
 
 struct MockSession;
 impl Session for MockSession {
-    fn id(&self) -> &str { "session-1" }
-    fn app_name(&self) -> &str { "test-app" }
-    fn user_id(&self) -> &str { "user-1" }
-    fn state(&self) -> &dyn State { &MockState }
-    fn conversation_history(&self) -> Vec<Content> { Vec::new() }
+    fn id(&self) -> &str {
+        "session-1"
+    }
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+    fn user_id(&self) -> &str {
+        "user-1"
+    }
+    fn state(&self) -> &dyn State {
+        &MockState
+    }
+    fn conversation_history(&self) -> Vec<Content> {
+        Vec::new()
+    }
 }
 
 struct MockState;
 impl State for MockState {
-    fn get(&self, _key: &str) -> Option<Value> { None }
+    fn get(&self, _key: &str) -> Option<Value> {
+        None
+    }
     fn set(&mut self, _key: String, _value: Value) {}
-    fn all(&self) -> HashMap<String, Value> { HashMap::new() }
+    fn all(&self) -> HashMap<String, Value> {
+        HashMap::new()
+    }
 }
 
 struct MockContext {
@@ -102,28 +123,54 @@ impl MockContext {
 
 #[async_trait]
 impl adk_core::ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str { "inv-1" }
-    fn agent_name(&self) -> &str { "test-agent" }
-    fn user_id(&self) -> &str { "user-1" }
-    fn app_name(&self) -> &str { "test-app" }
-    fn session_id(&self) -> &str { "session-1" }
-    fn branch(&self) -> &str { "main" }
-    fn user_content(&self) -> &Content { &self.user_content }
+    fn invocation_id(&self) -> &str {
+        "inv-1"
+    }
+    fn agent_name(&self) -> &str {
+        "test-agent"
+    }
+    fn user_id(&self) -> &str {
+        "user-1"
+    }
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+    fn session_id(&self) -> &str {
+        "session-1"
+    }
+    fn branch(&self) -> &str {
+        "main"
+    }
+    fn user_content(&self) -> &Content {
+        &self.user_content
+    }
 }
 
 #[async_trait]
 impl adk_core::CallbackContext for MockContext {
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
 }
 
 #[async_trait]
 impl InvocationContext for MockContext {
-    fn agent(&self) -> Arc<dyn Agent> { unimplemented!() }
-    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> { None }
-    fn session(&self) -> &dyn Session { &self.session }
-    fn run_config(&self) -> &RunConfig { unimplemented!() }
+    fn agent(&self) -> Arc<dyn Agent> {
+        unimplemented!()
+    }
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
+        None
+    }
+    fn session(&self) -> &dyn Session {
+        &self.session
+    }
+    fn run_config(&self) -> &RunConfig {
+        unimplemented!()
+    }
     fn end_invocation(&self) {}
-    fn ended(&self) -> bool { false }
+    fn ended(&self) -> bool {
+        false
+    }
 }
 
 // --- Tests ---
@@ -132,20 +179,16 @@ impl InvocationContext for MockContext {
 async fn test_callbacks_execution_order() {
     // Simpler test: just verify that callbacks can be added and agent runs
     // without checking exact execution order (which requires matching complex async types)
-    
+
     let tool = Arc::new(MockTool);
     let model = Arc::new(MockModel::new_function_call("test_tool", json!({})));
-    
-    let agent = LlmAgentBuilder::new("test-agent")
-        .model(model)
-        .tool(tool)
-        .build()
-        .unwrap();
+
+    let agent = LlmAgentBuilder::new("test-agent").model(model).tool(tool).build().unwrap();
 
     let ctx = Arc::new(MockContext::new());
-    
+
     let mut stream = agent.run(ctx).await.unwrap();
-    
+
     let mut event_count = 0;
     while let Some(result) = stream.next().await {
         match result {
@@ -166,7 +209,7 @@ async fn test_callbacks_execution_order() {
 async fn test_callback_short_circuit() {
     // Test that before_agent callback can short-circuit execution
     let model = Arc::new(MockModel::new_function_call("test_tool", json!({})));
-    
+
     let short_circuit_callback = |_ctx: Arc<dyn CallbackContext>| {
         Box::pin(async move {
             // Return Some(content) to short-circuit
@@ -174,9 +217,10 @@ async fn test_callback_short_circuit() {
                 role: "assistant".to_string(),
                 parts: vec![Part::Text { text: "Short-circuited!".to_string() }],
             }))
-        }) as std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Content>>> + Send>>
+        })
+            as std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Content>>> + Send>>
     };
-    
+
     let agent = LlmAgentBuilder::new("test-agent")
         .model(model)
         .before_callback(Box::new(short_circuit_callback))
@@ -184,9 +228,9 @@ async fn test_callback_short_circuit() {
         .unwrap();
 
     let ctx = Arc::new(MockContext::new());
-    
+
     let mut stream = agent.run(ctx).await.unwrap();
-    
+
     let mut found_short_circuit = false;
     while let Some(result) = stream.next().await {
         let event = result.unwrap();

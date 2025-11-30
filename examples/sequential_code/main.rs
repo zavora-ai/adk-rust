@@ -1,5 +1,5 @@
 // Sequential Code Generation Workflow Example
-// 
+//
 // This example demonstrates a multi-stage code generation workflow
 // using sequential agents: designer → implementer → reviewer
 

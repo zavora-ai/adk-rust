@@ -1,4 +1,4 @@
-use crate::{InvocationContext, Result, AdkError};
+use crate::{AdkError, InvocationContext, Result};
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -20,14 +20,14 @@ fn is_identifier(s: &str) -> bool {
     if s.is_empty() {
         return false;
     }
-    
+
     let mut chars = s.chars();
     let first = chars.next().unwrap();
-    
+
     if !first.is_alphabetic() && first != '_' {
         return false;
     }
-    
+
     chars.all(|c| c.is_alphanumeric() || c == '_')
 }
 
@@ -35,7 +35,7 @@ fn is_identifier(s: &str) -> bool {
 /// Supports prefixes: app:, user:, temp:
 fn is_valid_state_name(var_name: &str) -> bool {
     let parts: Vec<&str> = var_name.split(':').collect();
-    
+
     match parts.len() {
         1 => is_identifier(var_name),
         2 => {
@@ -52,20 +52,17 @@ fn is_valid_state_name(var_name: &str) -> bool {
 async fn replace_match(ctx: &dyn InvocationContext, match_str: &str) -> Result<String> {
     // Trim curly braces: "{var_name}" -> "var_name"
     let var_name = match_str.trim_matches(|c| c == '{' || c == '}').trim();
-    
+
     // Check if optional (ends with ?)
-    let (var_name, optional) = if let Some(name) = var_name.strip_suffix('?') {
-        (name, true)
-    } else {
-        (var_name, false)
-    };
-    
+    let (var_name, optional) =
+        if let Some(name) = var_name.strip_suffix('?') { (name, true) } else { (var_name, false) };
+
     // Handle artifact.{name} pattern
     if let Some(file_name) = var_name.strip_prefix("artifact.") {
-        let artifacts = ctx.artifacts().ok_or_else(|| {
-            AdkError::Agent("Artifact service is not initialized".to_string())
-        })?;
-        
+        let artifacts = ctx
+            .artifacts()
+            .ok_or_else(|| AdkError::Agent("Artifact service is not initialized".to_string()))?;
+
         match artifacts.load(file_name).await {
             Ok(part) => {
                 // Extract text from the part
@@ -86,7 +83,7 @@ async fn replace_match(ctx: &dyn InvocationContext, match_str: &str) -> Result<S
     } else if is_valid_state_name(var_name) {
         // Handle session state variable
         let state_value = ctx.session().state().get(var_name);
-        
+
         match state_value {
             Some(value) => {
                 // Convert value to string
@@ -137,24 +134,24 @@ pub async fn inject_session_state(ctx: &dyn InvocationContext, template: &str) -
     // Pre-allocate 20% extra capacity to reduce reallocations when placeholders expand
     let mut result = String::with_capacity((template.len() as f32 * 1.2) as usize);
     let mut last_end = 0;
-    
+
     for captures in regex.find_iter(template) {
         let match_range = captures.range();
-        
+
         // Append text between last match and this one
         result.push_str(&template[last_end..match_range.start]);
-        
+
         // Get the replacement for the current match
         let match_str = captures.as_str();
         let replacement = replace_match(ctx, match_str).await?;
         result.push_str(&replacement);
-        
+
         last_end = match_range.end;
     }
-    
+
     // Append any remaining text
     result.push_str(&template[last_end..]);
-    
+
     Ok(result)
 }
 

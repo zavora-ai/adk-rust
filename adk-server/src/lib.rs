@@ -41,4 +41,6 @@ pub use a2a::{
     RemoteA2aAgentBuilder, RemoteA2aConfig,
 };
 pub use config::ServerConfig;
-pub use rest::{create_app, create_app_with_a2a, A2aController, RuntimeController, SessionController};
+pub use rest::{
+    create_app, create_app_with_a2a, A2aController, RuntimeController, SessionController,
+};

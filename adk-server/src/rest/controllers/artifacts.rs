@@ -25,11 +25,7 @@ pub async fn list_artifacts(
 ) -> Result<Json<Vec<String>>, StatusCode> {
     if let Some(service) = &controller.config.artifact_service {
         let resp = service
-            .list(ListRequest {
-                app_name,
-                user_id,
-                session_id,
-            })
+            .list(ListRequest { app_name, user_id, session_id })
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         Ok(Json(resp.file_names))
@@ -59,14 +55,12 @@ pub async fn get_artifact(
             .unwrap_or_else(|_| header::HeaderValue::from_static("application/octet-stream"));
 
         match resp.part {
-            adk_core::Part::InlineData { data, .. } => Ok((
-                [(header::CONTENT_TYPE, mime_header)],
-                Body::from(data),
-            )),
-            adk_core::Part::Text { text } => Ok((
-                [(header::CONTENT_TYPE, mime_header)],
-                Body::from(text),
-            )),
+            adk_core::Part::InlineData { data, .. } => {
+                Ok(([(header::CONTENT_TYPE, mime_header)], Body::from(data)))
+            }
+            adk_core::Part::Text { text } => {
+                Ok(([(header::CONTENT_TYPE, mime_header)], Body::from(text)))
+            }
             _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
         }
     } else {

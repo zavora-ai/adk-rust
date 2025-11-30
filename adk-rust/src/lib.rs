@@ -446,12 +446,12 @@
 pub use adk_core::*;
 
 // Re-export common dependencies for convenience
-pub use tokio;
+pub use anyhow;
 pub use async_trait::async_trait;
 pub use futures;
 pub use serde;
 pub use serde_json;
-pub use anyhow;
+pub use tokio;
 
 // ============================================================================
 // Component Modules (feature-gated)
@@ -621,67 +621,46 @@ pub use adk_cli::{Launcher, SingleAgentLoader};
 pub mod prelude {
     // Core types (always available)
     pub use crate::{
-        Agent, Content, Part, Event, EventStream,
-        Llm, LlmRequest, LlmResponse,
-        Tool, ToolContext, Toolset,
-        Session, State,
-        InvocationContext, RunConfig,
-        AdkError, Result,
-        BeforeModelResult,
+        AdkError, Agent, BeforeModelResult, Content, Event, EventStream, InvocationContext, Llm,
+        LlmRequest, LlmResponse, Part, Result, RunConfig, Session, State, Tool, ToolContext,
+        Toolset,
     };
 
     // Agents
     #[cfg(feature = "agents")]
     pub use crate::agent::{
-        LlmAgent, LlmAgentBuilder,
-        CustomAgent, CustomAgentBuilder,
-        SequentialAgent, ParallelAgent, LoopAgent, ConditionalAgent,
+        ConditionalAgent, CustomAgent, CustomAgentBuilder, LlmAgent, LlmAgentBuilder, LoopAgent,
+        ParallelAgent, SequentialAgent,
     };
 
     // Models
     #[cfg(feature = "models")]
-    pub use crate::model::{
-        GeminiModel,
-    };
+    pub use crate::model::GeminiModel;
 
     // Tools
     #[cfg(feature = "tools")]
     pub use crate::tool::{
-        FunctionTool,
-        GoogleSearchTool,
-        ExitLoopTool,
-        LoadArtifactsTool,
-        BasicToolset,
-        McpToolset,
+        BasicToolset, ExitLoopTool, FunctionTool, GoogleSearchTool, LoadArtifactsTool, McpToolset,
     };
 
     // Sessions
     #[cfg(feature = "sessions")]
-    pub use crate::session::{
-        InMemorySessionService,
-    };
+    pub use crate::session::InMemorySessionService;
 
     // Artifacts
     #[cfg(feature = "artifacts")]
-    pub use crate::artifact::{
-        InMemoryArtifactService,
-    };
+    pub use crate::artifact::InMemoryArtifactService;
 
     // Memory
     #[cfg(feature = "memory")]
-    pub use crate::memory::{
-        InMemoryMemoryService,
-    };
+    pub use crate::memory::InMemoryMemoryService;
 
     // Runner
     #[cfg(feature = "runner")]
-    pub use crate::runner::{
-        Runner,
-        RunnerConfig,
-    };
+    pub use crate::runner::{Runner, RunnerConfig};
 
     // Common re-exports
-    pub use std::sync::Arc;
-    pub use crate::async_trait;
     pub use crate::anyhow::Result as AnyhowResult;
+    pub use crate::async_trait;
+    pub use std::sync::Arc;
 }

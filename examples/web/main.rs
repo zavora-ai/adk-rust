@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
 
     println!("Multi-agent web server starting on http://127.0.0.1:8080");
     println!("Available agents: weather_agent, research_agent, summary_agent");
-    
+
     adk_cli::serve::run_serve(agent_loader, 8080).await?;
 
     Ok(())

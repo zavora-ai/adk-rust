@@ -32,7 +32,7 @@ pub struct GenerateContentConfig {
     pub response_schema: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LlmResponse {
     pub content: Option<Content>,
     pub usage_metadata: Option<UsageMetadata>,
@@ -62,12 +62,7 @@ pub enum FinishReason {
 
 impl LlmRequest {
     pub fn new(model: impl Into<String>, contents: Vec<Content>) -> Self {
-        Self {
-            model: model.into(),
-            contents,
-            config: None,
-            tools: HashMap::new(),
-        }
+        Self { model: model.into(), contents, config: None, tools: HashMap::new() }
     }
 }
 
@@ -86,20 +81,6 @@ impl LlmResponse {
     }
 }
 
-impl Default for LlmResponse {
-    fn default() -> Self {
-        Self {
-            content: None,
-            usage_metadata: None,
-            finish_reason: None,
-            partial: false,
-            turn_complete: false,
-            interrupted: false,
-            error_code: None,
-            error_message: None,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

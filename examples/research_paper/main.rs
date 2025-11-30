@@ -21,9 +21,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 async fn conduct_research(_ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value, AdkError> {
-    let topic = args["topic"].as_str().ok_or_else(|| {
-        AdkError::Tool("topic is required".to_string())
-    })?;
+    let topic =
+        args["topic"].as_str().ok_or_else(|| AdkError::Tool("topic is required".to_string()))?;
 
     let depth = args["depth"].as_str().unwrap_or("comprehensive");
 
@@ -61,13 +60,12 @@ async fn conduct_research(_ctx: Arc<dyn ToolContext>, args: Value) -> Result<Val
 }
 
 async fn generate_pdf(ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value, AdkError> {
-    let title = args["title"].as_str().ok_or_else(|| {
-        AdkError::Tool("title is required".to_string())
-    })?;
+    let title =
+        args["title"].as_str().ok_or_else(|| AdkError::Tool("title is required".to_string()))?;
 
-    let content = args["content"].as_str().ok_or_else(|| {
-        AdkError::Tool("content is required".to_string())
-    })?;
+    let content = args["content"]
+        .as_str()
+        .ok_or_else(|| AdkError::Tool("content is required".to_string()))?;
 
     let author = args["author"].as_str().unwrap_or("Research Assistant");
 
@@ -83,10 +81,8 @@ async fn generate_pdf(ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value, A
     // Save as artifact
     if let Some(artifact_service) = ctx.artifacts() {
         let filename = format!("{}.pdf", title.replace(' ', "_").to_lowercase());
-        let part = Part::Text {
-            text: pdf_content.clone(),
-        };
-        
+        let part = Part::Text { text: pdf_content.clone() };
+
         artifact_service
             .save(&filename, &part)
             .await
@@ -96,25 +92,22 @@ async fn generate_pdf(ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value, A
             "status": "success",
             "filename": filename,
             "size_bytes": pdf_content.len(),
-            "download_url": format!("/api/sessions/{}/{}/{}/artifacts/{}", 
-                ctx.app_name(), 
-                ctx.user_id(), 
-                ctx.session_id(), 
+            "download_url": format!("/api/sessions/{}/{}/{}/artifacts/{}",
+                ctx.app_name(),
+                ctx.user_id(),
+                ctx.session_id(),
                 filename
             ),
             "message": "PDF generated successfully"
         }))
     } else {
-        Err(AdkError::Tool(
-            "Artifact service not available".to_string(),
-        ))
+        Err(AdkError::Tool("Artifact service not available".to_string()))
     }
 }
 
 async fn format_citation(_ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value, AdkError> {
-    let title = args["title"].as_str().ok_or_else(|| {
-        AdkError::Tool("title is required".to_string())
-    })?;
+    let title =
+        args["title"].as_str().ok_or_else(|| AdkError::Tool("title is required".to_string()))?;
 
     let authors = args["authors"].as_str().unwrap_or("Unknown");
     let year = args["year"].as_str().unwrap_or("n.d.");
@@ -152,11 +145,8 @@ async fn main() -> Result<()> {
     );
 
     // Create citation tool
-    let citation_tool = FunctionTool::new(
-        "format_citation",
-        "Format a citation in APA style",
-        format_citation,
-    );
+    let citation_tool =
+        FunctionTool::new("format_citation", "Format a citation in APA style", format_citation);
 
     // Create the research agent
     let research_agent = LlmAgentBuilder::new("research_assistant")
@@ -202,10 +192,7 @@ Always maintain a professional, academic tone."#
     println!("  • Integration: REST API with SSE streaming\n");
 
     // Run with Launcher (supports both console and server modes)
-    Launcher::new(Arc::new(research_agent))
-        .app_name("research_paper_generator")
-        .run()
-        .await?;
+    Launcher::new(Arc::new(research_agent)).app_name("research_paper_generator").run().await?;
 
     Ok(())
 }

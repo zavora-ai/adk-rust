@@ -1,6 +1,6 @@
 use crate::{
-    CreateRequest, DeleteRequest, Event, Events, GetRequest, ListRequest, Session,
-    SessionService, State, KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER,
+    CreateRequest, DeleteRequest, Event, Events, GetRequest, ListRequest, Session, SessionService,
+    State, KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER,
 };
 use adk_core::Result;
 use async_trait::async_trait;
@@ -88,7 +88,7 @@ impl Default for InMemorySessionService {
 impl SessionService for InMemorySessionService {
     async fn create(&self, req: CreateRequest) -> Result<Box<dyn Session>> {
         let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
-        
+
         let id = SessionId {
             app_name: req.app_name.clone(),
             user_id: req.user_id.clone(),
@@ -98,14 +98,14 @@ impl SessionService for InMemorySessionService {
         let (app_delta, user_delta, session_state) = Self::extract_state_deltas(&req.state);
 
         let mut app_state_lock = self.app_state.write().unwrap();
-        let app_state = app_state_lock.entry(req.app_name.clone()).or_insert_with(HashMap::new);
+        let app_state = app_state_lock.entry(req.app_name.clone()).or_default();
         app_state.extend(app_delta);
         let app_state_clone = app_state.clone();
         drop(app_state_lock);
 
         let mut user_state_lock = self.user_state.write().unwrap();
-        let user_map = user_state_lock.entry(req.app_name.clone()).or_insert_with(HashMap::new);
-        let user_state = user_map.entry(req.user_id.clone()).or_insert_with(HashMap::new);
+        let user_map = user_state_lock.entry(req.app_name.clone()).or_default();
+        let user_state = user_map.entry(req.user_id.clone()).or_default();
         user_state.extend(user_delta);
         let user_state_clone = user_state.clone();
         drop(user_state_lock);
@@ -139,7 +139,8 @@ impl SessionService for InMemorySessionService {
         };
 
         let sessions = self.sessions.read().unwrap();
-        let data = sessions.get(&id.key())
+        let data = sessions
+            .get(&id.key())
             .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
 
         let app_state_lock = self.app_state.read().unwrap();
@@ -192,11 +193,8 @@ impl SessionService for InMemorySessionService {
     }
 
     async fn delete(&self, req: DeleteRequest) -> Result<()> {
-        let id = SessionId {
-            app_name: req.app_name,
-            user_id: req.user_id,
-            session_id: req.session_id,
-        };
+        let id =
+            SessionId { app_name: req.app_name, user_id: req.user_id, session_id: req.session_id };
 
         let mut sessions = self.sessions.write().unwrap();
         sessions.remove(&id.key());
@@ -208,29 +206,37 @@ impl SessionService for InMemorySessionService {
 
         let (app_name, user_id, app_delta, user_delta, _session_delta) = {
             let mut sessions = self.sessions.write().unwrap();
-            let data = sessions.values_mut()
+            let data = sessions
+                .values_mut()
                 .find(|d| d.id.session_id == session_id)
                 .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
 
             data.events.push(event.clone());
             data.updated_at = event.timestamp;
 
-            let (app_delta, user_delta, session_delta) = Self::extract_state_deltas(&event.actions.state_delta);
+            let (app_delta, user_delta, session_delta) =
+                Self::extract_state_deltas(&event.actions.state_delta);
             data.state.extend(session_delta.clone());
 
-            (data.id.app_name.clone(), data.id.user_id.clone(), app_delta, user_delta, session_delta)
+            (
+                data.id.app_name.clone(),
+                data.id.user_id.clone(),
+                app_delta,
+                user_delta,
+                session_delta,
+            )
         };
 
         if !app_delta.is_empty() {
             let mut app_state_lock = self.app_state.write().unwrap();
-            let app_state = app_state_lock.entry(app_name.clone()).or_insert_with(HashMap::new);
+            let app_state = app_state_lock.entry(app_name.clone()).or_default();
             app_state.extend(app_delta);
         }
 
         if !user_delta.is_empty() {
             let mut user_state_lock = self.user_state.write().unwrap();
-            let user_map = user_state_lock.entry(app_name).or_insert_with(HashMap::new);
-            let user_state = user_map.entry(user_id).or_insert_with(HashMap::new);
+            let user_map = user_state_lock.entry(app_name).or_default();
+            let user_state = user_map.entry(user_id).or_default();
             user_state.extend(user_delta);
         }
 

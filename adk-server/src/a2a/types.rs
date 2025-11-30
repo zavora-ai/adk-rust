@@ -42,17 +42,11 @@ pub enum Part {
 
 impl Part {
     pub fn text(text: String) -> Self {
-        Part::Text {
-            text,
-            metadata: None,
-        }
+        Part::Text { text, metadata: None }
     }
 
     pub fn file(file: FileContent) -> Self {
-        Part::File {
-            file,
-            metadata: None,
-        }
+        Part::File { file, metadata: None }
     }
 }
 
@@ -193,13 +187,7 @@ pub struct AgentSkill {
 
 impl AgentSkill {
     pub fn new(id: String, name: String, description: String, tags: Vec<String>) -> Self {
-        Self {
-            id,
-            name,
-            description,
-            tags,
-            examples: None,
-        }
+        Self { id, name, description, tags, examples: None }
     }
 }
 

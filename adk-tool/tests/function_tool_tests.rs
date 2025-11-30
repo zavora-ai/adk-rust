@@ -1,4 +1,6 @@
-use adk_core::{CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Tool, ToolContext};
+use adk_core::{
+    CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Tool, ToolContext,
+};
 use adk_tool::FunctionTool;
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -13,33 +15,50 @@ struct MockToolContext {
 
 impl MockToolContext {
     fn new() -> Self {
-        Self {
-            actions: EventActions::default(),
-            content: Content::new("user"),
-        }
+        Self { actions: EventActions::default(), content: Content::new("user") }
     }
 }
 
 #[async_trait]
 impl ReadonlyContext for MockToolContext {
-    fn invocation_id(&self) -> &str { "inv-1" }
-    fn agent_name(&self) -> &str { "test-agent" }
-    fn user_id(&self) -> &str { "user-1" }
-    fn app_name(&self) -> &str { "test-app" }
-    fn session_id(&self) -> &str { "session-1" }
-    fn branch(&self) -> &str { "" }
-    fn user_content(&self) -> &Content { &self.content }
+    fn invocation_id(&self) -> &str {
+        "inv-1"
+    }
+    fn agent_name(&self) -> &str {
+        "test-agent"
+    }
+    fn user_id(&self) -> &str {
+        "user-1"
+    }
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+    fn session_id(&self) -> &str {
+        "session-1"
+    }
+    fn branch(&self) -> &str {
+        ""
+    }
+    fn user_content(&self) -> &Content {
+        &self.content
+    }
 }
 
 #[async_trait]
 impl CallbackContext for MockToolContext {
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
 }
 
 #[async_trait]
 impl ToolContext for MockToolContext {
-    fn function_call_id(&self) -> &str { "call-1" }
-    fn actions(&self) -> &EventActions { &self.actions }
+    fn function_call_id(&self) -> &str {
+        "call-1"
+    }
+    fn actions(&self) -> &EventActions {
+        &self.actions
+    }
     async fn search_memory(&self, _query: &str) -> Result<Vec<MemoryEntry>> {
         Ok(vec![])
     }
@@ -109,10 +128,13 @@ async fn test_function_tool_string() {
 
 #[tokio::test]
 async fn test_function_tool_long_running() {
-    let tool = FunctionTool::new("process", "Long process", |_ctx, _args| async move {
-        Ok(json!("done"))
-    })
-    .with_long_running(true);
+    let tool =
+        FunctionTool::new(
+            "process",
+            "Long process",
+            |_ctx, _args| async move { Ok(json!("done")) },
+        )
+        .with_long_running(true);
 
     assert!(tool.is_long_running());
 }
@@ -120,10 +142,11 @@ async fn test_function_tool_long_running() {
 #[tokio::test]
 async fn test_function_tool_long_running_enhanced_description() {
     // Test with description
-    let tool = FunctionTool::new("process_video", "Process a video file", |_ctx, _args| async move {
-        Ok(json!({"status": "pending", "task_id": "task-123"}))
-    })
-    .with_long_running(true);
+    let tool =
+        FunctionTool::new("process_video", "Process a video file", |_ctx, _args| async move {
+            Ok(json!({"status": "pending", "task_id": "task-123"}))
+        })
+        .with_long_running(true);
 
     let enhanced = tool.enhanced_description();
     assert!(enhanced.contains("Process a video file"));
@@ -134,10 +157,13 @@ async fn test_function_tool_long_running_enhanced_description() {
 #[tokio::test]
 async fn test_function_tool_long_running_enhanced_description_empty() {
     // Test with empty description
-    let tool = FunctionTool::new("process", "", |_ctx, _args| async move {
-        Ok(json!({"status": "pending"}))
-    })
-    .with_long_running(true);
+    let tool =
+        FunctionTool::new(
+            "process",
+            "",
+            |_ctx, _args| async move { Ok(json!({"status": "pending"})) },
+        )
+        .with_long_running(true);
 
     let enhanced = tool.enhanced_description();
     assert!(enhanced.contains("NOTE: This is a long-running operation"));
@@ -161,15 +187,16 @@ async fn test_function_tool_non_long_running_enhanced_description() {
 #[tokio::test]
 async fn test_function_tool_long_running_returns_pending_status() {
     // Simulate typical long-running tool behavior - return task ID and status
-    let tool = FunctionTool::new("analyze_data", "Analyze large dataset", |_ctx, _args| async move {
-        Ok(json!({
-            "status": "processing",
-            "task_id": "task-abc123",
-            "progress": 0,
-            "estimated_time": "5 minutes"
-        }))
-    })
-    .with_long_running(true);
+    let tool =
+        FunctionTool::new("analyze_data", "Analyze large dataset", |_ctx, _args| async move {
+            Ok(json!({
+                "status": "processing",
+                "task_id": "task-abc123",
+                "progress": 0,
+                "estimated_time": "5 minutes"
+            }))
+        })
+        .with_long_running(true);
 
     let ctx = Arc::new(MockToolContext::new()) as Arc<dyn ToolContext>;
     let result = tool.execute(ctx, json!({"dataset_path": "/data/large.csv"})).await.unwrap();
@@ -189,4 +216,3 @@ async fn test_function_tool_error() {
     let result = tool.execute(ctx, json!({})).await;
     assert!(result.is_err());
 }
-

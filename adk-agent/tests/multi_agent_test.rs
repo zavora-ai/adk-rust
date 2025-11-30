@@ -12,18 +12,32 @@ use std::sync::Arc;
 
 struct MockSession;
 impl Session for MockSession {
-    fn id(&self) -> &str { "multi-agent-session" }
-    fn app_name(&self) -> &str { "multi-agent-app" }
-    fn user_id(&self) -> &str { "multi-agent-user" }
-    fn state(&self) -> &dyn State { &MockState }
-    fn conversation_history(&self) -> Vec<adk_core::Content> { Vec::new() }
+    fn id(&self) -> &str {
+        "multi-agent-session"
+    }
+    fn app_name(&self) -> &str {
+        "multi-agent-app"
+    }
+    fn user_id(&self) -> &str {
+        "multi-agent-user"
+    }
+    fn state(&self) -> &dyn State {
+        &MockState
+    }
+    fn conversation_history(&self) -> Vec<adk_core::Content> {
+        Vec::new()
+    }
 }
 
 struct MockState;
 impl State for MockState {
-    fn get(&self, _key: &str) -> Option<Value> { None }
+    fn get(&self, _key: &str) -> Option<Value> {
+        None
+    }
     fn set(&mut self, _key: String, _value: Value) {}
-    fn all(&self) -> HashMap<String, Value> { HashMap::new() }
+    fn all(&self) -> HashMap<String, Value> {
+        HashMap::new()
+    }
 }
 
 struct MockContext {
@@ -45,37 +59,63 @@ impl MockContext {
 
 #[async_trait]
 impl ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str { "multi-agent-inv" }
-    fn agent_name(&self) -> &str { "multi-agent" }
-    fn user_id(&self) -> &str { "multi-agent-user" }
-    fn app_name(&self) -> &str { "multi-agent-app" }
-    fn session_id(&self) -> &str { "multi-agent-session" }
-    fn branch(&self) -> &str { "main" }
-    fn user_content(&self) -> &Content { &self.user_content }
+    fn invocation_id(&self) -> &str {
+        "multi-agent-inv"
+    }
+    fn agent_name(&self) -> &str {
+        "multi-agent"
+    }
+    fn user_id(&self) -> &str {
+        "multi-agent-user"
+    }
+    fn app_name(&self) -> &str {
+        "multi-agent-app"
+    }
+    fn session_id(&self) -> &str {
+        "multi-agent-session"
+    }
+    fn branch(&self) -> &str {
+        "main"
+    }
+    fn user_content(&self) -> &Content {
+        &self.user_content
+    }
 }
 
 #[async_trait]
 impl adk_core::CallbackContext for MockContext {
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
 }
 
 #[async_trait]
 impl InvocationContext for MockContext {
-    fn agent(&self) -> Arc<dyn Agent> { unimplemented!() }
-    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> { None }
-    fn session(&self) -> &dyn Session { &self.session }
-    fn run_config(&self) -> &RunConfig { unimplemented!() }
+    fn agent(&self) -> Arc<dyn Agent> {
+        unimplemented!()
+    }
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
+        None
+    }
+    fn session(&self) -> &dyn Session {
+        &self.session
+    }
+    fn run_config(&self) -> &RunConfig {
+        unimplemented!()
+    }
     fn end_invocation(&self) {}
-    fn ended(&self) -> bool { false }
+    fn ended(&self) -> bool {
+        false
+    }
 }
 
 #[tokio::test]
 async fn test_multi_agent_workflow() {
     dotenv::dotenv().ok();
     let api_key = env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY must be set");
-    
+
     let model = Arc::new(GeminiModel::new(api_key.clone(), "gemini-1.5-flash").unwrap());
-    
+
     // Create a research agent
     let research_agent = Arc::new(
         LlmAgentBuilder::new("researcher")
@@ -83,9 +123,9 @@ async fn test_multi_agent_workflow() {
             .model(model.clone())
             .instruction("You are a research assistant. Provide factual, concise information.")
             .build()
-            .unwrap()
+            .unwrap(),
     );
-    
+
     // Create a writer agent with research agent as sub-agent
     let writer_agent = LlmAgentBuilder::new("writer")
         .description("Writing agent that creates content")
@@ -95,9 +135,10 @@ async fn test_multi_agent_workflow() {
         .build()
         .unwrap();
 
-    let ctx = Arc::new(MockContext::new("Write a brief paragraph about Rust programming language."));
+    let ctx =
+        Arc::new(MockContext::new("Write a brief paragraph about Rust programming language."));
     let mut stream = writer_agent.run(ctx).await.unwrap();
-    
+
     let mut response_text = String::new();
     while let Some(result) = stream.next().await {
         if let Ok(event) = result {
@@ -120,9 +161,9 @@ async fn test_multi_agent_workflow() {
 async fn test_agent_delegation() {
     dotenv::dotenv().ok();
     let api_key = env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY must be set");
-    
+
     let model = Arc::new(GeminiModel::new(api_key, "gemini-1.5-flash").unwrap());
-    
+
     // Create specialist agent
     let specialist = Arc::new(
         LlmAgentBuilder::new("math_specialist")
@@ -130,9 +171,9 @@ async fn test_agent_delegation() {
             .model(model.clone())
             .instruction("You are a math specialist. Solve math problems accurately.")
             .build()
-            .unwrap()
+            .unwrap(),
     );
-    
+
     // Create coordinator agent
     let coordinator = LlmAgentBuilder::new("coordinator")
         .description("Task coordinator")
@@ -144,7 +185,7 @@ async fn test_agent_delegation() {
 
     let ctx = Arc::new(MockContext::new("What is 15 * 23?"));
     let mut stream = coordinator.run(ctx).await.unwrap();
-    
+
     let mut has_answer = false;
     while let Some(result) = stream.next().await {
         if let Ok(event) = result {

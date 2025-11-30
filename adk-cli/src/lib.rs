@@ -28,9 +28,9 @@
 //! - **Interactive**: REPL with history and colored output
 //! - **Server**: HTTP server with web UI
 
-pub mod console;
-pub mod serve;
 pub mod config;
+pub mod console;
 pub mod launcher;
+pub mod serve;
 
 pub use launcher::{Launcher, SingleAgentLoader};

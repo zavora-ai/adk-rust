@@ -96,9 +96,7 @@ pub struct RunConfig {
 
 impl Default for RunConfig {
     fn default() -> Self {
-        Self {
-            streaming_mode: StreamingMode::Auto,
-        }
+        Self { streaming_mode: StreamingMode::Auto }
     }
 }
 

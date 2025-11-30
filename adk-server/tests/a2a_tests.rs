@@ -1,5 +1,5 @@
-use adk_server::{create_app_with_a2a, ServerConfig};
 use adk_core::{Agent, EventStream, InvocationContext, Result as AdkResult};
+use adk_server::{create_app_with_a2a, ServerConfig};
 use adk_session::InMemorySessionService;
 use async_trait::async_trait;
 use axum::body::Body;
@@ -16,10 +16,7 @@ struct TestAgent {
 
 impl TestAgent {
     fn new(name: &str, description: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            description: description.to_string(),
-        }
+        Self { name: name.to_string(), description: description.to_string() }
     }
 }
 
@@ -86,12 +83,7 @@ fn create_test_config() -> ServerConfig {
     let agent_loader = Arc::new(TestAgentLoader { agent });
     let session_service = Arc::new(InMemorySessionService::new());
 
-    ServerConfig {
-        agent_loader,
-        session_service,
-        artifact_service: None,
-        backend_url: None,
-    }
+    ServerConfig { agent_loader, session_service, artifact_service: None, backend_url: None }
 }
 
 #[tokio::test]
@@ -144,7 +136,7 @@ async fn test_a2a_jsonrpc_invalid_version() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert!(json["error"].is_object());
-    assert_eq!(json["error"]["code"], -32600);  // Invalid request
+    assert_eq!(json["error"]["code"], -32600); // Invalid request
 }
 
 #[tokio::test]
@@ -174,7 +166,7 @@ async fn test_a2a_jsonrpc_method_not_found() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert!(json["error"].is_object());
-    assert_eq!(json["error"]["code"], -32601);  // Method not found
+    assert_eq!(json["error"]["code"], -32601); // Method not found
 }
 
 #[tokio::test]
@@ -204,7 +196,7 @@ async fn test_a2a_jsonrpc_invalid_params() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert!(json["error"].is_object());
-    assert_eq!(json["error"]["code"], -32602);  // Invalid params
+    assert_eq!(json["error"]["code"], -32602); // Invalid params
 }
 
 #[tokio::test]

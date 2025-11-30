@@ -32,7 +32,8 @@ impl EventProcessor {
         self.update_terminal_actions(event);
 
         let event_meta = to_event_meta(&self.meta, event);
-        let event_meta_map: serde_json::Map<String, serde_json::Value> = event_meta.into_iter().collect();
+        let event_meta_map: serde_json::Map<String, serde_json::Value> =
+            event_meta.into_iter().collect();
 
         // Get content
         let content = match &event.llm_response.content {
@@ -46,7 +47,7 @@ impl EventProcessor {
 
         // Convert parts
         let parts = adk_parts_to_a2a(&content.parts, &[])?;
-        
+
         if parts.is_empty() {
             return Ok(None);
         }
@@ -71,7 +72,7 @@ impl EventProcessor {
         } else {
             let artifact_id = uuid::Uuid::new_v4().to_string();
             self.response_id = Some(artifact_id.clone());
-            
+
             TaskArtifactUpdateEvent {
                 task_id: self.task_id.clone(),
                 context_id: Some(self.context_id.clone()),
@@ -100,10 +101,7 @@ impl EventProcessor {
         events.push(TaskStatusUpdateEvent {
             task_id: self.task_id.clone(),
             context_id: Some(self.context_id.clone()),
-            status: TaskStatus {
-                state,
-                message: None,
-            },
+            status: TaskStatus { state, message: None },
             final_update: true,
         });
 

@@ -1,6 +1,6 @@
 use adk_core::{AdkError, Result, Tool, ToolContext};
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -55,7 +55,8 @@ impl Tool for LoadArtifactsTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let artifact_service = ctx.artifacts()
+        let artifact_service = ctx
+            .artifacts()
             .ok_or_else(|| AdkError::Tool("ArtifactService not available".to_string()))?;
 
         let artifact_names = args["artifact_names"]
@@ -85,7 +86,7 @@ impl Tool for LoadArtifactsTool {
                                 "data_base64": encoded,
                                 "size_bytes": data.len(),
                             })
-                        },
+                        }
                         _ => json!({ "type": "unknown" }),
                     };
 

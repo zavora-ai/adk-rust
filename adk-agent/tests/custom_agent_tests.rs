@@ -1,5 +1,8 @@
 use adk_agent::CustomAgent;
-use adk_core::{Agent, CallbackContext, Content, Event, InvocationContext, Memory, Part, ReadonlyContext, Result, RunConfig, Session};
+use adk_core::{
+    Agent, CallbackContext, Content, Event, InvocationContext, Memory, Part, ReadonlyContext,
+    Result, RunConfig, Session,
+};
 use async_trait::async_trait;
 use futures::StreamExt;
 use std::sync::Arc;
@@ -7,11 +10,21 @@ use std::sync::Arc;
 struct MockSession;
 
 impl Session for MockSession {
-    fn id(&self) -> &str { "test-session" }
-    fn app_name(&self) -> &str { "test-app" }
-    fn user_id(&self) -> &str { "test-user" }
-    fn state(&self) -> &dyn adk_core::State { unimplemented!() }
-    fn conversation_history(&self) -> Vec<Content> { Vec::new() }
+    fn id(&self) -> &str {
+        "test-session"
+    }
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+    fn user_id(&self) -> &str {
+        "test-user"
+    }
+    fn state(&self) -> &dyn adk_core::State {
+        unimplemented!()
+    }
+    fn conversation_history(&self) -> Vec<Content> {
+        Vec::new()
+    }
 }
 
 struct MockContext {
@@ -38,28 +51,54 @@ impl MockContext {
 
 #[async_trait]
 impl ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str { "test-inv" }
-    fn agent_name(&self) -> &str { "test-agent" }
-    fn user_id(&self) -> &str { "test-user" }
-    fn app_name(&self) -> &str { "test-app" }
-    fn session_id(&self) -> &str { "test-session" }
-    fn branch(&self) -> &str { "main" }
-    fn user_content(&self) -> &Content { &self.user_content }
+    fn invocation_id(&self) -> &str {
+        "test-inv"
+    }
+    fn agent_name(&self) -> &str {
+        "test-agent"
+    }
+    fn user_id(&self) -> &str {
+        "test-user"
+    }
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+    fn session_id(&self) -> &str {
+        "test-session"
+    }
+    fn branch(&self) -> &str {
+        "main"
+    }
+    fn user_content(&self) -> &Content {
+        &self.user_content
+    }
 }
 
 #[async_trait]
 impl CallbackContext for MockContext {
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
 }
 
 #[async_trait]
 impl InvocationContext for MockContext {
-    fn agent(&self) -> Arc<dyn Agent> { unimplemented!() }
-    fn memory(&self) -> Option<Arc<dyn Memory>> { None }
-    fn session(&self) -> &dyn Session { &self.session }
-    fn run_config(&self) -> &RunConfig { unimplemented!() }
+    fn agent(&self) -> Arc<dyn Agent> {
+        unimplemented!()
+    }
+    fn memory(&self) -> Option<Arc<dyn Memory>> {
+        None
+    }
+    fn session(&self) -> &dyn Session {
+        &self.session
+    }
+    fn run_config(&self) -> &RunConfig {
+        unimplemented!()
+    }
     fn end_invocation(&self) {}
-    fn ended(&self) -> bool { false }
+    fn ended(&self) -> bool {
+        false
+    }
 }
 
 #[test]
@@ -86,7 +125,7 @@ async fn test_custom_agent_run() {
         .handler(|ctx| async move {
             let mut event = Event::new(ctx.invocation_id());
             event.llm_response.content = Some(ctx.user_content().clone());
-            
+
             let stream = async_stream::stream! {
                 yield Ok(event);
             };
@@ -97,17 +136,15 @@ async fn test_custom_agent_run() {
 
     let ctx = Arc::new(MockContext::new()) as Arc<dyn InvocationContext>;
     let mut stream = agent.run(ctx).await.unwrap();
-    
+
     let event = stream.next().await.unwrap().unwrap();
     assert!(event.llm_response.content.is_some());
 }
 
 #[test]
 fn test_custom_agent_requires_handler() {
-    let result = CustomAgent::builder("incomplete")
-        .description("Missing handler")
-        .build();
-    
+    let result = CustomAgent::builder("incomplete").description("Missing handler").build();
+
     assert!(result.is_err());
 }
 

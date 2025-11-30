@@ -1,7 +1,9 @@
 use adk_server::create_app;
-use adk_session::{CreateRequest, DeleteRequest, Event, GetRequest, ListRequest, Session, SessionService};
-use async_trait::async_trait;
+use adk_session::{
+    CreateRequest, DeleteRequest, Event, GetRequest, ListRequest, Session, SessionService,
+};
 use async_stream::stream;
+use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use std::sync::Arc;
@@ -14,11 +16,11 @@ impl adk_core::AgentLoader for MockAgentLoader {
     async fn load_agent(&self, _app_name: &str) -> adk_core::Result<Arc<dyn adk_core::Agent>> {
         Err(adk_core::AdkError::Agent("not implemented".to_string()))
     }
-    
+
     fn list_agents(&self) -> Vec<String> {
         vec![]
     }
-    
+
     fn root_agent(&self) -> Arc<dyn adk_core::Agent> {
         // This is a mock - we'll never actually use this in these tests
         // Create a minimal agent that satisfies the trait
@@ -34,16 +36,19 @@ impl adk_core::Agent for MockAgent {
     fn name(&self) -> &str {
         "mock"
     }
-    
+
     fn description(&self) -> &str {
         "Mock agent for testing"
     }
-    
+
     fn sub_agents(&self) -> &[Arc<dyn adk_core::Agent>] {
         &[]
     }
-    
-    async fn run(&self, _ctx: Arc<dyn adk_core::InvocationContext>) -> adk_core::Result<adk_core::EventStream> {
+
+    async fn run(
+        &self,
+        _ctx: Arc<dyn adk_core::InvocationContext>,
+    ) -> adk_core::Result<adk_core::EventStream> {
         let s = stream! {
             // Yield nothing, but satisfy type inference
             if false {
@@ -145,10 +150,8 @@ impl adk_session::Events for MockEvents {
 
 #[tokio::test]
 async fn test_create_session() {
-    let config = adk_server::ServerConfig::new(
-        Arc::new(MockAgentLoader),
-        Arc::new(MockSessionService),
-    );
+    let config =
+        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(MockSessionService));
     let app = create_app(config);
 
     let body = serde_json::json!({
@@ -174,10 +177,8 @@ async fn test_create_session() {
 
 #[tokio::test]
 async fn test_get_session() {
-    let config = adk_server::ServerConfig::new(
-        Arc::new(MockAgentLoader),
-        Arc::new(MockSessionService),
-    );
+    let config =
+        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(MockSessionService));
     let app = create_app(config);
 
     let response = app
@@ -195,10 +196,8 @@ async fn test_get_session() {
 
 #[tokio::test]
 async fn test_delete_session() {
-    let config = adk_server::ServerConfig::new(
-        Arc::new(MockAgentLoader),
-        Arc::new(MockSessionService),
-    );
+    let config =
+        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(MockSessionService));
     let app = create_app(config);
 
     let response = app

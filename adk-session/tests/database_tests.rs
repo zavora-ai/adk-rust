@@ -76,10 +76,7 @@ mod tests {
             .unwrap();
 
         let sessions = service
-            .list(ListRequest {
-                app_name: "test_app".to_string(),
-                user_id: "user1".to_string(),
-            })
+            .list(ListRequest { app_name: "test_app".to_string(), user_id: "user1".to_string() })
             .await
             .unwrap();
 

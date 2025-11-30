@@ -1,6 +1,6 @@
 use crate::a2a::{
     AgentCard, JsonRpcRequest, JsonRpcResponse, Message, MessageSendParams,
-    TaskStatusUpdateEvent, TaskArtifactUpdateEvent, UpdateEvent,
+    TaskArtifactUpdateEvent, TaskStatusUpdateEvent, UpdateEvent,
 };
 use adk_core::Result;
 use futures::stream::Stream;
@@ -16,25 +16,18 @@ pub struct A2aClient {
 impl A2aClient {
     /// Create a new A2A client from an agent card
     pub fn new(agent_card: AgentCard) -> Self {
-        Self {
-            http_client: reqwest::Client::new(),
-            agent_card,
-        }
+        Self { http_client: reqwest::Client::new(), agent_card }
     }
 
     /// Resolve an agent card from a URL (fetch from /.well-known/agent.json)
     pub async fn resolve_agent_card(base_url: &str) -> Result<AgentCard> {
-        let url = format!(
-            "{}/.well-known/agent.json",
-            base_url.trim_end_matches('/')
-        );
+        let url = format!("{}/.well-known/agent.json", base_url.trim_end_matches('/'));
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| adk_core::AdkError::Agent(format!("Failed to fetch agent card: {}", e)))?;
+        let response =
+            client.get(&url).send().await.map_err(|e| {
+                adk_core::AdkError::Agent(format!("Failed to fetch agent card: {}", e))
+            })?;
 
         if !response.status().is_success() {
             return Err(adk_core::AdkError::Agent(format!(
@@ -67,10 +60,10 @@ impl A2aClient {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: "message/send".to_string(),
-            params: Some(serde_json::to_value(MessageSendParams {
-                message,
-                config: None,
-            }).map_err(|e| adk_core::AdkError::Agent(e.to_string()))?),
+            params: Some(
+                serde_json::to_value(MessageSendParams { message, config: None })
+                    .map_err(|e| adk_core::AdkError::Agent(e.to_string()))?,
+            ),
             id: Some(Value::String(uuid::Uuid::new_v4().to_string())),
         };
 
@@ -107,10 +100,10 @@ impl A2aClient {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: "message/stream".to_string(),
-            params: Some(serde_json::to_value(MessageSendParams {
-                message,
-                config: None,
-            }).map_err(|e| adk_core::AdkError::Agent(e.to_string()))?),
+            params: Some(
+                serde_json::to_value(MessageSendParams { message, config: None })
+                    .map_err(|e| adk_core::AdkError::Agent(e.to_string()))?,
+            ),
             id: Some(Value::String(uuid::Uuid::new_v4().to_string())),
         };
 

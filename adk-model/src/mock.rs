@@ -8,10 +8,7 @@ pub struct MockLlm {
 
 impl MockLlm {
     pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            responses: vec![],
-        }
+        Self { name: name.into(), responses: vec![] }
     }
 
     pub fn with_response(mut self, response: LlmResponse) -> Self {
@@ -44,8 +41,8 @@ mod tests {
 
     #[test]
     fn test_mock_llm() {
-        let mock = MockLlm::new("test-llm")
-            .with_response(LlmResponse::new(Content::new("assistant")));
+        let mock =
+            MockLlm::new("test-llm").with_response(LlmResponse::new(Content::new("assistant")));
         assert_eq!(mock.name(), "test-llm");
         assert_eq!(mock.responses.len(), 1);
     }
@@ -56,10 +53,10 @@ mod tests {
 
         let mock = MockLlm::new("test")
             .with_response(LlmResponse::new(Content::new("assistant").with_text("Hello")));
-        
+
         let req = LlmRequest::new("test", vec![]);
         let mut stream = mock.generate_content(req, false).await.unwrap();
-        
+
         let response = stream.next().await.unwrap().unwrap();
         assert!(response.content.is_some());
     }

@@ -1,5 +1,7 @@
 use adk_agent::LlmAgentBuilder;
-use adk_core::{Agent, Content, InvocationContext, Part, ReadonlyContext, RunConfig, Tool, ToolContext};
+use adk_core::{
+    Agent, Content, InvocationContext, Part, ReadonlyContext, RunConfig, Tool, ToolContext,
+};
 use adk_tool::FunctionTool;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -11,9 +13,7 @@ struct MockLlm {
 
 impl MockLlm {
     fn new(response_text: &str) -> Self {
-        Self {
-            response_text: response_text.to_string(),
-        }
+        Self { response_text: response_text.to_string() }
     }
 }
 
@@ -58,9 +58,7 @@ impl TestContext {
         Self {
             content: Content {
                 role: "user".to_string(),
-                parts: vec![Part::Text {
-                    text: message.to_string(),
-                }],
+                parts: vec![Part::Text { text: message.to_string() }],
             },
             config: RunConfig::default(),
         }
@@ -69,45 +67,83 @@ impl TestContext {
 
 #[async_trait]
 impl ReadonlyContext for TestContext {
-    fn invocation_id(&self) -> &str { "test-invocation" }
-    fn agent_name(&self) -> &str { "test-agent" }
-    fn user_id(&self) -> &str { "test-user" }
-    fn app_name(&self) -> &str { "test-app" }
-    fn session_id(&self) -> &str { "test-session" }
-    fn branch(&self) -> &str { "" }
-    fn user_content(&self) -> &Content { &self.content }
+    fn invocation_id(&self) -> &str {
+        "test-invocation"
+    }
+    fn agent_name(&self) -> &str {
+        "test-agent"
+    }
+    fn user_id(&self) -> &str {
+        "test-user"
+    }
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+    fn session_id(&self) -> &str {
+        "test-session"
+    }
+    fn branch(&self) -> &str {
+        ""
+    }
+    fn user_content(&self) -> &Content {
+        &self.content
+    }
 }
 
 #[async_trait]
 impl adk_core::CallbackContext for TestContext {
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
 }
 
 #[async_trait]
 impl InvocationContext for TestContext {
-    fn agent(&self) -> Arc<dyn Agent> { unimplemented!() }
-    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> { None }
-    fn run_config(&self) -> &RunConfig { &self.config }
+    fn agent(&self) -> Arc<dyn Agent> {
+        unimplemented!()
+    }
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
+        None
+    }
+    fn run_config(&self) -> &RunConfig {
+        &self.config
+    }
     fn end_invocation(&self) {}
-    fn ended(&self) -> bool { false }
-    fn session(&self) -> &dyn adk_core::Session { &DummySession }
+    fn ended(&self) -> bool {
+        false
+    }
+    fn session(&self) -> &dyn adk_core::Session {
+        &DummySession
+    }
 }
 
 // Dummy session for testing
 struct DummySession;
 
 impl adk_core::Session for DummySession {
-    fn id(&self) -> &str { "test-session" }
-    fn app_name(&self) -> &str { "test-app" }
-    fn user_id(&self) -> &str { "test-user" }
-    fn state(&self) -> &dyn adk_core::State { &DummyState }
-    fn conversation_history(&self) -> Vec<adk_core::Content> { Vec::new() }
+    fn id(&self) -> &str {
+        "test-session"
+    }
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+    fn user_id(&self) -> &str {
+        "test-user"
+    }
+    fn state(&self) -> &dyn adk_core::State {
+        &DummyState
+    }
+    fn conversation_history(&self) -> Vec<adk_core::Content> {
+        Vec::new()
+    }
 }
 
 struct DummyState;
 
 impl adk_core::State for DummyState {
-    fn get(&self, _key: &str) -> Option<serde_json::Value> { None }
+    fn get(&self, _key: &str) -> Option<serde_json::Value> {
+        None
+    }
     fn set(&mut self, _key: String, _value: serde_json::Value) {}
     fn all(&self) -> std::collections::HashMap<String, serde_json::Value> {
         std::collections::HashMap::new()
@@ -132,9 +168,7 @@ fn test_llm_agent_builder() {
 
 #[test]
 fn test_llm_agent_builder_missing_model() {
-    let result = LlmAgentBuilder::new("test_agent")
-        .description("A test agent")
-        .build();
+    let result = LlmAgentBuilder::new("test_agent").description("A test agent").build();
 
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("Model is required"));
@@ -229,7 +263,7 @@ async fn test_llm_agent_with_function_tool() {
     // Verifying the LLM *calls* the tool requires a smarter MockLlm that returns a FunctionCall part.
     // For now, let's just verify the agent runs and returns the mock response.
     // A more advanced test would mock the LLM returning a function call.
-    
+
     let model = MockLlm::new("The time is 2025-11-23T14:30:00Z");
 
     let get_time_tool = FunctionTool::new(
@@ -296,12 +330,12 @@ async fn test_llm_agent_output_key() {
 #[test]
 fn test_llm_agent_builder_with_callbacks() {
     use std::sync::{Arc, Mutex};
-    
+
     let model = MockLlm::new("response");
 
     let before_called = Arc::new(Mutex::new(false));
     let after_called = Arc::new(Mutex::new(false));
-    
+
     let before_flag = before_called.clone();
     let after_flag = after_called.clone();
 
@@ -315,9 +349,7 @@ fn test_llm_agent_builder_with_callbacks() {
                 *flag.lock().unwrap() = true;
                 Ok(Some(Content {
                     role: "system".to_string(),
-                    parts: vec![Part::Text {
-                        text: "Before callback".to_string(),
-                    }],
+                    parts: vec![Part::Text { text: "Before callback".to_string() }],
                 }))
             })
         }))
@@ -327,9 +359,7 @@ fn test_llm_agent_builder_with_callbacks() {
                 *flag.lock().unwrap() = true;
                 Ok(Some(Content {
                     role: "system".to_string(),
-                    parts: vec![Part::Text {
-                        text: "After callback".to_string(),
-                    }],
+                    parts: vec![Part::Text { text: "After callback".to_string() }],
                 }))
             })
         }))

@@ -96,11 +96,7 @@ pub struct Launcher {
 impl Launcher {
     /// Create a new launcher with the given agent.
     pub fn new(agent: Arc<dyn Agent>) -> Self {
-        Self {
-            agent,
-            app_name: None,
-            artifact_service: None,
-        }
+        Self { agent, app_name: None, artifact_service: None }
     }
 
     /// Set a custom application name (defaults to agent name).
@@ -192,20 +188,21 @@ impl Launcher {
             }
 
             let content = adk_core::Content::new("user").with_text(input);
-            let mut events = runner
-                .run(user_id.clone(), session_id.clone(), content)
-                .await?;
+            let mut events = runner.run(user_id.clone(), session_id.clone(), content).await?;
 
             print!("Assistant: ");
             stdout.flush()?;
 
             let mut current_agent = String::new();
-            
+
             while let Some(event) = events.next().await {
                 match event {
                     Ok(evt) => {
                         // Track which agent is responding
-                        if !evt.author.is_empty() && evt.author != "user" && evt.author != current_agent {
+                        if !evt.author.is_empty()
+                            && evt.author != "user"
+                            && evt.author != current_agent
+                        {
                             if !current_agent.is_empty() {
                                 println!();
                             }
@@ -214,12 +211,12 @@ impl Launcher {
                             print!("Assistant: ");
                             stdout.flush()?;
                         }
-                        
+
                         // Check for transfer action
                         if let Some(target) = &evt.actions.transfer_to_agent {
                             println!("\n🔄 [Transfer requested to: {}]", target);
                         }
-                        
+
                         if let Some(content) = evt.llm_response.content {
                             for part in content.parts {
                                 if let Some(text) = part.text() {

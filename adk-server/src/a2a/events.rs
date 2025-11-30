@@ -3,15 +3,13 @@ use adk_core::{Content, Event, EventActions, Result};
 use serde_json::{Map, Value};
 
 pub fn event_to_message(event: &Event) -> Result<Message> {
-    let role = if event.author == "user" {
-        Role::User
-    } else {
-        Role::Agent
-    };
+    let role = if event.author == "user" { Role::User } else { Role::Agent };
 
-    let content = event.llm_response.content.as_ref().ok_or_else(|| {
-        adk_core::AdkError::Agent("Event has no content".to_string())
-    })?;
+    let content = event
+        .llm_response
+        .content
+        .as_ref()
+        .ok_or_else(|| adk_core::AdkError::Agent("Event has no content".to_string()))?;
 
     let a2a_parts = parts::adk_parts_to_a2a(&content.parts, &[])?;
 
@@ -20,10 +18,7 @@ pub fn event_to_message(event: &Event) -> Result<Message> {
         metadata.insert(to_a2a_meta_key("escalate"), Value::Bool(true));
     }
     if let Some(agent) = &event.actions.transfer_to_agent {
-        metadata.insert(
-            to_a2a_meta_key("transfer_to_agent"),
-            Value::String(agent.clone()),
-        );
+        metadata.insert(to_a2a_meta_key("transfer_to_agent"), Value::String(agent.clone()));
     }
 
     Ok(Message::builder()
@@ -36,7 +31,7 @@ pub fn event_to_message(event: &Event) -> Result<Message> {
 
 pub fn message_to_event(message: &Message, invocation_id: String) -> Result<Event> {
     let adk_parts = parts::a2a_parts_to_adk(&message.parts)?;
-    
+
     let mut actions = EventActions::default();
     if let Some(meta) = &message.metadata {
         if let Some(Value::Bool(true)) = meta.get(&to_a2a_meta_key("escalate")) {
@@ -54,10 +49,7 @@ pub fn message_to_event(message: &Message, invocation_id: String) -> Result<Even
 
     let mut event = Event::new(invocation_id);
     event.author = author;
-    event.llm_response.content = Some(Content {
-        role: "user".to_string(),
-        parts: adk_parts,
-    });
+    event.llm_response.content = Some(Content { role: "user".to_string(), parts: adk_parts });
     event.actions = actions;
     Ok(event)
 }

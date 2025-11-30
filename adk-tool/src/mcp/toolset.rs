@@ -167,14 +167,9 @@ where
 
             let adk_tool = McpTool {
                 name: tool_name,
-                description: mcp_tool
-                    .description
-                    .map(|d| d.to_string())
-                    .unwrap_or_default(),
+                description: mcp_tool.description.map(|d| d.to_string()).unwrap_or_default(),
                 input_schema: Some(Value::Object(mcp_tool.input_schema.as_ref().clone())),
-                output_schema: mcp_tool
-                    .output_schema
-                    .map(|s| Value::Object(s.as_ref().clone())),
+                output_schema: mcp_tool.output_schema.map(|s| Value::Object(s.as_ref().clone())),
                 client: self.client.clone(),
             };
 
@@ -246,7 +241,9 @@ where
                 },
             })
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to call MCP tool '{}': {}", self.name, e)))?;
+            .map_err(|e| {
+                AdkError::Tool(format!("Failed to call MCP tool '{}': {}", self.name, e))
+            })?;
 
         // Check for error response
         if result.is_error.unwrap_or(false) {
@@ -305,10 +302,7 @@ where
         }
 
         if text_parts.is_empty() {
-            return Err(AdkError::Tool(format!(
-                "MCP tool '{}' returned no content",
-                self.name
-            )));
+            return Err(AdkError::Tool(format!("MCP tool '{}' returned no content", self.name)));
         }
 
         Ok(json!({ "output": text_parts.join("\n") }))
@@ -316,5 +310,11 @@ where
 }
 
 // Ensure McpTool is Send + Sync
-unsafe impl<S> Send for McpTool<S> where S: rmcp::service::Service<RoleClient> + Send + Sync + 'static {}
-unsafe impl<S> Sync for McpTool<S> where S: rmcp::service::Service<RoleClient> + Send + Sync + 'static {}
+unsafe impl<S> Send for McpTool<S> where
+    S: rmcp::service::Service<RoleClient> + Send + Sync + 'static
+{
+}
+unsafe impl<S> Sync for McpTool<S> where
+    S: rmcp::service::Service<RoleClient> + Send + Sync + 'static
+{
+}

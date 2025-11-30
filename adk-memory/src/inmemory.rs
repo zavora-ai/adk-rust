@@ -16,22 +16,19 @@ struct StoredEntry {
     words: HashSet<String>,
 }
 
+type MemoryStore = HashMap<MemoryKey, HashMap<String, Vec<StoredEntry>>>;
+
 pub struct InMemoryMemoryService {
-    store: Arc<RwLock<HashMap<MemoryKey, HashMap<String, Vec<StoredEntry>>>>>,
+    store: Arc<RwLock<MemoryStore>>,
 }
 
 impl InMemoryMemoryService {
     pub fn new() -> Self {
-        Self {
-            store: Arc::new(RwLock::new(HashMap::new())),
-        }
+        Self { store: Arc::new(RwLock::new(HashMap::new())) }
     }
 
     fn extract_words(text: &str) -> HashSet<String> {
-        text.split_whitespace()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_lowercase())
-            .collect()
+        text.split_whitespace().filter(|s| !s.is_empty()).map(|s| s.to_lowercase()).collect()
     }
 
     fn extract_words_from_content(content: &adk_core::Content) -> HashSet<String> {
@@ -60,11 +57,14 @@ impl Default for InMemoryMemoryService {
 
 #[async_trait]
 impl MemoryService for InMemoryMemoryService {
-    async fn add_session(&self, app_name: &str, user_id: &str, session_id: &str, entries: Vec<MemoryEntry>) -> Result<()> {
-        let key = MemoryKey {
-            app_name: app_name.to_string(),
-            user_id: user_id.to_string(),
-        };
+    async fn add_session(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        entries: Vec<MemoryEntry>,
+    ) -> Result<()> {
+        let key = MemoryKey { app_name: app_name.to_string(), user_id: user_id.to_string() };
 
         let stored_entries: Vec<StoredEntry> = entries
             .into_iter()
@@ -80,7 +80,7 @@ impl MemoryService for InMemoryMemoryService {
         }
 
         let mut store = self.store.write().unwrap();
-        let sessions = store.entry(key).or_insert_with(HashMap::new);
+        let sessions = store.entry(key).or_default();
         sessions.insert(session_id.to_string(), stored_entries);
 
         Ok(())
@@ -88,11 +88,8 @@ impl MemoryService for InMemoryMemoryService {
 
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {
         let query_words = Self::extract_words(&req.query);
-        
-        let key = MemoryKey {
-            app_name: req.app_name,
-            user_id: req.user_id,
-        };
+
+        let key = MemoryKey { app_name: req.app_name, user_id: req.user_id };
 
         let store = self.store.read().unwrap();
         let sessions = match store.get(&key) {

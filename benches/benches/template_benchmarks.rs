@@ -19,10 +19,18 @@ impl MockSession {
 }
 
 impl Session for MockSession {
-    fn id(&self) -> &str { "template-bench-session" }
-    fn app_name(&self) -> &str { "template-bench-app" }
-    fn user_id(&self) -> &str { "template-bench-user" }
-    fn state(&self) -> &dyn State { &self.state }
+    fn id(&self) -> &str {
+        "template-bench-session"
+    }
+    fn app_name(&self) -> &str {
+        "template-bench-app"
+    }
+    fn user_id(&self) -> &str {
+        "template-bench-user"
+    }
+    fn state(&self) -> &dyn State {
+        &self.state
+    }
 }
 
 struct MockState {
@@ -69,33 +77,59 @@ impl BenchContext {
 
 #[async_trait]
 impl ReadonlyContext for BenchContext {
-    fn invocation_id(&self) -> &str { "template-bench-inv" }
-    fn agent_name(&self) -> &str { "template-bench-agent" }
-    fn user_id(&self) -> &str { "template-bench-user" }
-    fn app_name(&self) -> &str { "template-bench-app" }
-    fn session_id(&self) -> &str { "template-bench-session" }
-    fn branch(&self) -> &str { "main" }
-    fn user_content(&self) -> &Content { &self.user_content }
+    fn invocation_id(&self) -> &str {
+        "template-bench-inv"
+    }
+    fn agent_name(&self) -> &str {
+        "template-bench-agent"
+    }
+    fn user_id(&self) -> &str {
+        "template-bench-user"
+    }
+    fn app_name(&self) -> &str {
+        "template-bench-app"
+    }
+    fn session_id(&self) -> &str {
+        "template-bench-session"
+    }
+    fn branch(&self) -> &str {
+        "main"
+    }
+    fn user_content(&self) -> &Content {
+        &self.user_content
+    }
 }
 
 #[async_trait]
 impl CallbackContext for BenchContext {
-    fn artifacts(&self) -> Option<Arc<dyn Artifacts>> { None }
+    fn artifacts(&self) -> Option<Arc<dyn Artifacts>> {
+        None
+    }
 }
 
 #[async_trait]
 impl InvocationContext for BenchContext {
-    fn agent(&self) -> Arc<dyn adk_core::Agent> { unimplemented!() }
-    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> { None }
-    fn session(&self) -> &dyn Session { &self.session }
-    fn run_config(&self) -> &RunConfig { unimplemented!() }
+    fn agent(&self) -> Arc<dyn adk_core::Agent> {
+        unimplemented!()
+    }
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
+        None
+    }
+    fn session(&self) -> &dyn Session {
+        &self.session
+    }
+    fn run_config(&self) -> &RunConfig {
+        unimplemented!()
+    }
     fn end_invocation(&self) {}
-    fn ended(&self) -> bool { false }
+    fn ended(&self) -> bool {
+        false
+    }
 }
 
 fn benchmark_simple_template(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    
+
     c.bench_function("template_simple_substitution", |b| {
         b.to_async(&rt).iter(|| async {
             let ctx = BenchContext::new();
@@ -107,7 +141,7 @@ fn benchmark_simple_template(c: &mut Criterion) {
 
 fn benchmark_complex_template(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    
+
     c.bench_function("template_complex_substitution", |b| {
         b.to_async(&rt).iter(|| async {
             let ctx = BenchContext::new();
@@ -122,13 +156,13 @@ fn benchmark_complex_template(c: &mut Criterion) {
 
 fn benchmark_template_with_many_placeholders(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    
+
     c.bench_function("template_many_placeholders", |b| {
         b.to_async(&rt).iter(|| async {
             let ctx = BenchContext::new();
             let template = black_box(
                 "{user_name} {user_name} {user_name} {role} {role} {role} \
-                 {app:version} {app:version} {user:theme} {user:theme}"
+                 {app:version} {app:version} {user:theme} {user:theme}",
             );
             let _ = inject_session_state(&ctx, template).await.unwrap();
         });

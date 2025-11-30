@@ -101,7 +101,10 @@ mod tests {
             &self.description
         }
 
-        async fn run(&self, _ctx: Arc<dyn adk_core::InvocationContext>) -> adk_core::Result<EventStream> {
+        async fn run(
+            &self,
+            _ctx: Arc<dyn adk_core::InvocationContext>,
+        ) -> adk_core::Result<EventStream> {
             unimplemented!()
         }
 
@@ -112,10 +115,8 @@ mod tests {
 
     #[test]
     fn test_build_agent_skills() {
-        let agent = TestAgent {
-            name: "test_agent".to_string(),
-            description: "A test agent".to_string(),
-        };
+        let agent =
+            TestAgent { name: "test_agent".to_string(), description: "A test agent".to_string() };
 
         let skills = build_agent_skills(&agent);
         assert_eq!(skills.len(), 1);
@@ -125,10 +126,8 @@ mod tests {
 
     #[test]
     fn test_build_agent_card() {
-        let agent = TestAgent {
-            name: "test_agent".to_string(),
-            description: "A test agent".to_string(),
-        };
+        let agent =
+            TestAgent { name: "test_agent".to_string(), description: "A test agent".to_string() };
 
         let card = build_agent_card(&agent, "https://example.com");
         assert_eq!(card.name, "test_agent");

@@ -1,6 +1,6 @@
 use adk_core::{
-    Agent, Artifacts, CallbackContext, Content, InvocationContext as InvocationContextTrait, Memory,
-    ReadonlyContext, RunConfig,
+    Agent, Artifacts, CallbackContext, Content, InvocationContext as InvocationContextTrait,
+    Memory, ReadonlyContext, RunConfig,
 };
 use adk_session::{Session as AdkSession, State as AdkState};
 use async_trait::async_trait;
@@ -51,21 +51,21 @@ impl adk_core::Session for SessionAdapter {
         // Actually, since we can't return a reference to a temporary, we might need to implement State on the SessionAdapter itself?
         // Or change adk_core::Session to return a Box or Arc?
         // But we can't change adk_core easily.
-        
+
         // HACK: For now, we will panic if state is accessed, or we need a better solution.
         // Wait, we can implement adk_core::State for SessionAdapter directly and return self?
         // No, SessionAdapter implements Session.
-        
+
         // Let's implement adk_core::State for SessionAdapter (delegating to inner state)
         // and return self.
         unsafe { &*(self as *const Self as *const dyn adk_core::State) }
     }
-    
+
     fn conversation_history(&self) -> Vec<adk_core::Content> {
         // Convert session events to Content items for conversation history
         let events = self.0.events();
         let mut history = Vec::new();
-        
+
         for event in events.all() {
             // Get content from the LlmResponse
             if let Some(content) = event.llm_response.content {
@@ -74,14 +74,14 @@ impl adk_core::Session for SessionAdapter {
                     "user" => "user".to_string(),
                     _ => "model".to_string(),
                 };
-                
+
                 // Create content with correct role
                 let mut mapped_content = content;
                 mapped_content.role = role;
                 history.push(mapped_content);
             }
         }
-        
+
         history
     }
 }
@@ -90,11 +90,11 @@ impl adk_core::State for SessionAdapter {
     fn get(&self, key: &str) -> Option<serde_json::Value> {
         self.0.state().get(key)
     }
-    
+
     fn set(&mut self, _key: String, _value: serde_json::Value) {
         panic!("Direct state mutation not supported");
     }
-    
+
     fn all(&self) -> HashMap<String, serde_json::Value> {
         self.0.state().all()
     }
@@ -209,7 +209,7 @@ impl InvocationContextTrait for InvocationContext {
     fn memory(&self) -> Option<Arc<dyn Memory>> {
         self.memory.clone()
     }
-    
+
     fn session(&self) -> &dyn adk_core::Session {
         self.session.as_ref()
     }
@@ -219,8 +219,7 @@ impl InvocationContextTrait for InvocationContext {
     }
 
     fn end_invocation(&self) {
-        self.ended
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.ended.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn ended(&self) -> bool {

@@ -1,25 +1,44 @@
-use adk_core::{Agent, CallbackContext, Content, InvocationContext as InvocationContextTrait, Part, ReadonlyContext, RunConfig, StreamingMode};
+use adk_core::{
+    Agent, CallbackContext, Content, InvocationContext as InvocationContextTrait, Part,
+    ReadonlyContext, RunConfig, StreamingMode,
+};
 use adk_runner::InvocationContext;
 use adk_session::{Session, State};
 use async_trait::async_trait;
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 struct MockState;
 impl State for MockState {
-    fn get(&self, _key: &str) -> Option<serde_json::Value> { None }
+    fn get(&self, _key: &str) -> Option<serde_json::Value> {
+        None
+    }
     fn set(&mut self, _key: String, _value: serde_json::Value) {}
-    fn all(&self) -> HashMap<String, serde_json::Value> { HashMap::new() }
+    fn all(&self) -> HashMap<String, serde_json::Value> {
+        HashMap::new()
+    }
 }
 
 struct MockSession;
 impl Session for MockSession {
-    fn id(&self) -> &str { "session-789" }
-    fn app_name(&self) -> &str { "test-app" }
-    fn user_id(&self) -> &str { "user-456" }
-    fn state(&self) -> &dyn State { &MockState }
-    fn events(&self) -> &dyn adk_session::Events { unimplemented!() }
-    fn last_update_time(&self) -> chrono::DateTime<chrono::Utc> { chrono::Utc::now() }
+    fn id(&self) -> &str {
+        "session-789"
+    }
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+    fn user_id(&self) -> &str {
+        "user-456"
+    }
+    fn state(&self) -> &dyn State {
+        &MockState
+    }
+    fn events(&self) -> &dyn adk_session::Events {
+        unimplemented!()
+    }
+    fn last_update_time(&self) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc::now()
+    }
 }
 
 // Mock agent for testing
@@ -51,16 +70,10 @@ impl Agent for MockAgent {
 
 #[test]
 fn test_context_creation() {
-    let agent = Arc::new(MockAgent {
-        name: "test_agent".to_string(),
-    });
+    let agent = Arc::new(MockAgent { name: "test_agent".to_string() });
 
-    let content = Content {
-        role: "user".to_string(),
-        parts: vec![Part::Text {
-            text: "Hello".to_string(),
-        }],
-    };
+    let content =
+        Content { role: "user".to_string(), parts: vec![Part::Text { text: "Hello".to_string() }] };
 
     let ctx = InvocationContext::new(
         "inv-123".to_string(),
@@ -83,9 +96,7 @@ fn test_context_creation() {
 
 #[test]
 fn test_context_with_branch() {
-    let agent = Arc::new(MockAgent {
-        name: "test_agent".to_string(),
-    });
+    let agent = Arc::new(MockAgent { name: "test_agent".to_string() });
 
     let content = Content::new("user");
 
@@ -105,15 +116,11 @@ fn test_context_with_branch() {
 
 #[test]
 fn test_context_with_run_config() {
-    let agent = Arc::new(MockAgent {
-        name: "test_agent".to_string(),
-    });
+    let agent = Arc::new(MockAgent { name: "test_agent".to_string() });
 
     let content = Content::new("user");
 
-    let config = RunConfig {
-        streaming_mode: StreamingMode::Enabled,
-    };
+    let config = RunConfig { streaming_mode: StreamingMode::Enabled };
 
     let ctx = InvocationContext::new(
         "inv-123".to_string(),
@@ -131,9 +138,7 @@ fn test_context_with_run_config() {
 
 #[test]
 fn test_context_end_invocation() {
-    let agent = Arc::new(MockAgent {
-        name: "test_agent".to_string(),
-    });
+    let agent = Arc::new(MockAgent { name: "test_agent".to_string() });
 
     let content = Content::new("user");
 
@@ -154,9 +159,7 @@ fn test_context_end_invocation() {
 
 #[test]
 fn test_context_agent_access() {
-    let agent = Arc::new(MockAgent {
-        name: "test_agent".to_string(),
-    });
+    let agent = Arc::new(MockAgent { name: "test_agent".to_string() });
 
     let content = Content::new("user");
 
@@ -176,9 +179,7 @@ fn test_context_agent_access() {
 
 #[test]
 fn test_context_optional_services() {
-    let agent = Arc::new(MockAgent {
-        name: "test_agent".to_string(),
-    });
+    let agent = Arc::new(MockAgent { name: "test_agent".to_string() });
 
     let content = Content::new("user");
 

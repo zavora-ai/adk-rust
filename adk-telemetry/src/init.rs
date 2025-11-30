@@ -27,7 +27,7 @@ pub fn init_telemetry(service_name: &str) -> Result<(), Box<dyn std::error::Erro
                 tracing_subscriber::fmt::layer()
                     .with_target(true)
                     .with_thread_ids(true)
-                    .with_line_number(true)
+                    .with_line_number(true),
             )
             .init();
 
@@ -62,31 +62,24 @@ pub fn init_with_otlp(
         // install_batch returns a Tracer directly
         let tracer = opentelemetry_otlp::new_pipeline()
             .tracing()
-            .with_exporter(
-                opentelemetry_otlp::new_exporter()
-                    .tonic()
-                    .with_endpoint(endpoint)
-            )
-            .with_trace_config(
-                opentelemetry_sdk::trace::config()
-                    .with_resource(opentelemetry_sdk::Resource::new(vec![
-                        opentelemetry::KeyValue::new("service.name", service_name.to_string()),
-                    ]))
-            )
+            .with_exporter(opentelemetry_otlp::new_exporter().tonic().with_endpoint(endpoint))
+            .with_trace_config(opentelemetry_sdk::trace::config().with_resource(
+                opentelemetry_sdk::Resource::new(vec![opentelemetry::KeyValue::new(
+                    "service.name",
+                    service_name.to_string(),
+                )]),
+            ))
             .install_batch(opentelemetry_sdk::runtime::Tokio)
             .expect("Failed to install OTLP pipeline");
 
         // Initialize metrics
         let meter_provider = opentelemetry_otlp::new_pipeline()
             .metrics(opentelemetry_sdk::runtime::Tokio)
-            .with_exporter(
-                opentelemetry_otlp::new_exporter()
-                    .tonic()
-                    .with_endpoint(endpoint)
-            )
-            .with_resource(opentelemetry_sdk::Resource::new(vec![
-                opentelemetry::KeyValue::new("service.name", service_name.to_string()),
-            ]))
+            .with_exporter(opentelemetry_otlp::new_exporter().tonic().with_endpoint(endpoint))
+            .with_resource(opentelemetry_sdk::Resource::new(vec![opentelemetry::KeyValue::new(
+                "service.name",
+                service_name.to_string(),
+            )]))
             .build()
             .expect("Failed to build meter provider");
 
@@ -104,7 +97,7 @@ pub fn init_with_otlp(
                 tracing_subscriber::fmt::layer()
                     .with_target(true)
                     .with_thread_ids(true)
-                    .with_line_number(true)
+                    .with_line_number(true),
             )
             .with(telemetry_layer)
             .init();

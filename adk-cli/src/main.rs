@@ -10,7 +10,7 @@ use cli::{Cli, Commands};
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    
+
     match cli.command {
         Commands::Console { app_name: _, user_id: _ } => {
             println!("Console mode requires an agent implementation.");

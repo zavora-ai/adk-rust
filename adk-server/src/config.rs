@@ -14,15 +14,13 @@ impl ServerConfig {
         agent_loader: Arc<dyn adk_core::AgentLoader>,
         session_service: Arc<dyn adk_session::SessionService>,
     ) -> Self {
-        Self {
-            agent_loader,
-            session_service,
-            artifact_service: None,
-            backend_url: None,
-        }
+        Self { agent_loader, session_service, artifact_service: None, backend_url: None }
     }
 
-    pub fn with_artifact_service(mut self, artifact_service: Arc<dyn adk_artifact::ArtifactService>) -> Self {
+    pub fn with_artifact_service(
+        mut self,
+        artifact_service: Arc<dyn adk_artifact::ArtifactService>,
+    ) -> Self {
         self.artifact_service = Some(artifact_service);
         self
     }

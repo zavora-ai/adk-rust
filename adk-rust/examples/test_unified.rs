@@ -18,31 +18,31 @@ async fn main() -> Result<()> {
     // Test 2: Create model
     println!("✅ Creating Gemini model...");
     let model_result = GeminiModel::new(&api_key, "gemini-2.0-flash-exp");
-    
+
     if model_result.is_ok() {
         let model = model_result.unwrap();
         println!("   Model: {}", model.name());
-        
+
         // Test 3: Build agent
         println!("✅ Building LLM agent...");
         let agent = LlmAgentBuilder::new("test-agent")
             .description("Test agent from unified crate")
             .model(Arc::new(model))
             .build()?;
-        
+
         println!("   Agent: {}", agent.name());
         println!("   Description: {}", agent.description());
-        
+
         // Test 4: Verify tools
         println!("✅ Creating tools...");
         let search_tool = GoogleSearchTool::new();
         println!("   Tool: {}", search_tool.name());
-        
+
         // Test 5: Session service
         println!("✅ Creating session service...");
         let session_service = InMemorySessionService::new();
         println!("   Session service: InMemory");
-        
+
         // Test 6: Runner
         println!("✅ Creating runner...");
         let _runner = Runner::new(RunnerConfig {
@@ -53,16 +53,15 @@ async fn main() -> Result<()> {
             memory_service: None,
         })?;
         println!("   Runner created successfully");
-        
     } else {
         println!("⚠️  Skipping agent tests (API key needed for real usage)");
     }
-    
+
     println!("\n🎉 All tests passed!");
     println!("\n📦 The unified adk-rust crate is working correctly!");
     println!("\nUsage:");
     println!("  cargo add adk-rust");
     println!("  use adk_rust::prelude::*;");
-    
+
     Ok(())
 }

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 /// Scoped wrapper around ArtifactService that binds session context.
-/// 
+///
 /// This wrapper implements the simple `adk_core::Artifacts` trait by automatically
 /// injecting app_name, user_id, and session_id into service requests. This mirrors
 /// the adk-go architecture where agents use a simple API but service calls include
@@ -55,12 +55,7 @@ impl ScopedArtifacts {
         user_id: String,
         session_id: String,
     ) -> Self {
-        Self {
-            service,
-            app_name,
-            user_id,
-            session_id,
-        }
+        Self { service, app_name, user_id, session_id }
     }
 }
 
@@ -131,18 +126,8 @@ mod tests {
         );
 
         // Save different data to same filename in different sessions
-        sess1
-            .save("file.txt", &Part::Text {
-                text: "session 1 data".to_string(),
-            })
-            .await
-            .unwrap();
-        sess2
-            .save("file.txt", &Part::Text {
-                text: "session 2 data".to_string(),
-            })
-            .await
-            .unwrap();
+        sess1.save("file.txt", &Part::Text { text: "session 1 data".to_string() }).await.unwrap();
+        sess2.save("file.txt", &Part::Text { text: "session 2 data".to_string() }).await.unwrap();
 
         // Load from each session - should get isolated data
         let loaded1 = sess1.load("file.txt").await.unwrap();
@@ -204,7 +189,10 @@ mod tests {
         );
 
         // Save user-scoped artifact (with "user:" prefix)
-        sess1.save("user:shared.txt", &Part::Text { text: "shared data".to_string() }).await.unwrap();
+        sess1
+            .save("user:shared.txt", &Part::Text { text: "shared data".to_string() })
+            .await
+            .unwrap();
 
         // Should be accessible from both sessions (user-scoped)
         let loaded1 = sess1.load("user:shared.txt").await.unwrap();

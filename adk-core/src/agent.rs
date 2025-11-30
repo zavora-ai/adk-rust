@@ -11,7 +11,7 @@ pub trait Agent: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn sub_agents(&self) -> &[Arc<dyn Agent>];
-    
+
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream>;
 }
 
@@ -30,18 +30,32 @@ mod tests {
 
     struct MockState;
     impl State for MockState {
-        fn get(&self, _key: &str) -> Option<serde_json::Value> { None }
+        fn get(&self, _key: &str) -> Option<serde_json::Value> {
+            None
+        }
         fn set(&mut self, _key: String, _value: serde_json::Value) {}
-        fn all(&self) -> HashMap<String, serde_json::Value> { HashMap::new() }
+        fn all(&self) -> HashMap<String, serde_json::Value> {
+            HashMap::new()
+        }
     }
 
     struct MockSession;
     impl Session for MockSession {
-        fn id(&self) -> &str { "session" }
-        fn app_name(&self) -> &str { "app" }
-        fn user_id(&self) -> &str { "user" }
-        fn state(&self) -> &dyn State { &MockState }
-        fn conversation_history(&self) -> Vec<Content> { Vec::new() }
+        fn id(&self) -> &str {
+            "session"
+        }
+        fn app_name(&self) -> &str {
+            "app"
+        }
+        fn user_id(&self) -> &str {
+            "user"
+        }
+        fn state(&self) -> &dyn State {
+            &MockState
+        }
+        fn conversation_history(&self) -> Vec<Content> {
+            Vec::new()
+        }
     }
 
     #[allow(dead_code)]
@@ -64,12 +78,24 @@ mod tests {
 
     #[async_trait]
     impl ReadonlyContext for TestContext {
-        fn invocation_id(&self) -> &str { "test" }
-        fn agent_name(&self) -> &str { "test" }
-        fn user_id(&self) -> &str { "user" }
-        fn app_name(&self) -> &str { "app" }
-        fn session_id(&self) -> &str { "session" }
-        fn branch(&self) -> &str { "" }
+        fn invocation_id(&self) -> &str {
+            "test"
+        }
+        fn agent_name(&self) -> &str {
+            "test"
+        }
+        fn user_id(&self) -> &str {
+            "user"
+        }
+        fn app_name(&self) -> &str {
+            "app"
+        }
+        fn session_id(&self) -> &str {
+            "session"
+        }
+        fn branch(&self) -> &str {
+            ""
+        }
         fn user_content(&self) -> &Content {
             &self.content
         }
@@ -77,7 +103,9 @@ mod tests {
 
     #[async_trait]
     impl CallbackContext for TestContext {
-        fn artifacts(&self) -> Option<Arc<dyn crate::Artifacts>> { None }
+        fn artifacts(&self) -> Option<Arc<dyn crate::Artifacts>> {
+            None
+        }
     }
 
     #[async_trait]
@@ -85,11 +113,19 @@ mod tests {
         fn agent(&self) -> Arc<dyn Agent> {
             unimplemented!()
         }
-        fn memory(&self) -> Option<Arc<dyn crate::Memory>> { None }
-        fn session(&self) -> &dyn Session { &self.session }
-        fn run_config(&self) -> &RunConfig { &self.config }
+        fn memory(&self) -> Option<Arc<dyn crate::Memory>> {
+            None
+        }
+        fn session(&self) -> &dyn Session {
+            &self.session
+        }
+        fn run_config(&self) -> &RunConfig {
+            &self.config
+        }
         fn end_invocation(&self) {}
-        fn ended(&self) -> bool { false }
+        fn ended(&self) -> bool {
+            false
+        }
     }
 
     #[async_trait]
@@ -116,9 +152,7 @@ mod tests {
 
     #[test]
     fn test_agent_trait() {
-        let agent = TestAgent {
-            name: "test".to_string(),
-        };
+        let agent = TestAgent { name: "test".to_string() };
         assert_eq!(agent.name(), "test");
         assert_eq!(agent.description(), "test agent");
     }

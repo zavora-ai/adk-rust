@@ -21,9 +21,7 @@ pub struct InMemoryArtifactService {
 
 impl InMemoryArtifactService {
     pub fn new() -> Self {
-        Self {
-            artifacts: Arc::new(RwLock::new(HashMap::new())),
-        }
+        Self { artifacts: Arc::new(RwLock::new(HashMap::new())) }
     }
 
     fn is_user_scoped(file_name: &str) -> bool {
@@ -38,7 +36,13 @@ impl InMemoryArtifactService {
         }
     }
 
-    fn find_latest_version(&self, app_name: &str, user_id: &str, session_id: &str, file_name: &str) -> Option<(i64, Part)> {
+    fn find_latest_version(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        file_name: &str,
+    ) -> Option<(i64, Part)> {
         let artifacts = self.artifacts.read().unwrap();
         let mut versions: Vec<_> = artifacts
             .iter()
@@ -49,7 +53,7 @@ impl InMemoryArtifactService {
                     && k.file_name == file_name
             })
             .collect();
-        
+
         versions.sort_by(|a, b| b.0.version.cmp(&a.0.version));
         versions.first().map(|(k, v)| (k.version, (*v).clone()))
     }
@@ -65,11 +69,12 @@ impl Default for InMemoryArtifactService {
 impl ArtifactService for InMemoryArtifactService {
     async fn save(&self, req: SaveRequest) -> Result<SaveResponse> {
         let session_id = Self::get_session_id(&req.session_id, &req.file_name);
-        
+
         let version = if let Some(v) = req.version {
             v
         } else {
-            let latest = self.find_latest_version(&req.app_name, &req.user_id, &session_id, &req.file_name);
+            let latest =
+                self.find_latest_version(&req.app_name, &req.user_id, &session_id, &req.file_name);
             latest.map(|(v, _)| v + 1).unwrap_or(1)
         };
 
@@ -100,14 +105,16 @@ impl ArtifactService for InMemoryArtifactService {
             };
 
             let artifacts = self.artifacts.read().unwrap();
-            let part = artifacts.get(&key)
+            let part = artifacts
+                .get(&key)
                 .ok_or_else(|| adk_core::AdkError::Artifact("artifact not found".into()))?;
-            
+
             Ok(LoadResponse { part: part.clone() })
         } else {
-            let (_, part) = self.find_latest_version(&req.app_name, &req.user_id, &session_id, &req.file_name)
+            let (_, part) = self
+                .find_latest_version(&req.app_name, &req.user_id, &session_id, &req.file_name)
                 .ok_or_else(|| adk_core::AdkError::Artifact("artifact not found".into()))?;
-            
+
             Ok(LoadResponse { part })
         }
     }
@@ -143,10 +150,11 @@ impl ArtifactService for InMemoryArtifactService {
         let mut file_names = std::collections::HashSet::new();
 
         for key in artifacts.keys() {
-            if key.app_name == req.app_name && key.user_id == req.user_id {
-                if key.session_id == req.session_id || key.session_id == USER_SCOPED_KEY {
-                    file_names.insert(key.file_name.clone());
-                }
+            if key.app_name == req.app_name
+                && key.user_id == req.user_id
+                && (key.session_id == req.session_id || key.session_id == USER_SCOPED_KEY)
+            {
+                file_names.insert(key.file_name.clone());
             }
         }
 

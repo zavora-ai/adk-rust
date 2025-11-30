@@ -79,9 +79,7 @@ async fn test_before_agent_callback_skip_execution() {
                 println!("BeforeAgent: Skipping agent execution");
                 Ok(Some(Content {
                     role: "model".to_string(),
-                    parts: vec![Part::Text {
-                        text: "AGENT SKIPPED BY CALLBACK".to_string(),
-                    }],
+                    parts: vec![Part::Text { text: "AGENT SKIPPED BY CALLBACK".to_string() }],
                 }))
             })
         }))
@@ -126,9 +124,7 @@ async fn test_after_agent_callback() {
                 println!("AfterAgent callback executed");
                 Ok(Some(Content {
                     role: "model".to_string(),
-                    parts: vec![Part::Text {
-                        text: "AFTER AGENT CALLBACK".to_string(),
-                    }],
+                    parts: vec![Part::Text { text: "AFTER AGENT CALLBACK".to_string() }],
                 }))
             })
         }))

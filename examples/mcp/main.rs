@@ -12,7 +12,9 @@
 //   GEMINI_API_KEY=your_key cargo run --example mcp
 
 use adk_agent::LlmAgentBuilder;
-use adk_core::{Agent, Content, InvocationContext, Part, ReadonlyContext, RunConfig, Session, State};
+use adk_core::{
+    Agent, Content, InvocationContext, Part, ReadonlyContext, RunConfig, Session, State,
+};
 use adk_model::GeminiModel;
 use adk_tool::McpToolset;
 use async_trait::async_trait;
@@ -25,18 +27,32 @@ use std::sync::Arc;
 // Mock session for the example
 struct MockSession;
 impl Session for MockSession {
-    fn id(&self) -> &str { "mcp-session" }
-    fn app_name(&self) -> &str { "mcp-example" }
-    fn user_id(&self) -> &str { "user" }
-    fn state(&self) -> &dyn State { &MockState }
-    fn conversation_history(&self) -> Vec<Content> { Vec::new() }
+    fn id(&self) -> &str {
+        "mcp-session"
+    }
+    fn app_name(&self) -> &str {
+        "mcp-example"
+    }
+    fn user_id(&self) -> &str {
+        "user"
+    }
+    fn state(&self) -> &dyn State {
+        &MockState
+    }
+    fn conversation_history(&self) -> Vec<Content> {
+        Vec::new()
+    }
 }
 
 struct MockState;
 impl State for MockState {
-    fn get(&self, _key: &str) -> Option<Value> { None }
+    fn get(&self, _key: &str) -> Option<Value> {
+        None
+    }
     fn set(&mut self, _key: String, _value: Value) {}
-    fn all(&self) -> HashMap<String, Value> { HashMap::new() }
+    fn all(&self) -> HashMap<String, Value> {
+        HashMap::new()
+    }
 }
 
 struct MockContext {
@@ -58,28 +74,54 @@ impl MockContext {
 
 #[async_trait]
 impl ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str { "mcp-inv" }
-    fn agent_name(&self) -> &str { "mcp-agent" }
-    fn user_id(&self) -> &str { "user" }
-    fn app_name(&self) -> &str { "mcp-example" }
-    fn session_id(&self) -> &str { "mcp-session" }
-    fn branch(&self) -> &str { "main" }
-    fn user_content(&self) -> &Content { &self.user_content }
+    fn invocation_id(&self) -> &str {
+        "mcp-inv"
+    }
+    fn agent_name(&self) -> &str {
+        "mcp-agent"
+    }
+    fn user_id(&self) -> &str {
+        "user"
+    }
+    fn app_name(&self) -> &str {
+        "mcp-example"
+    }
+    fn session_id(&self) -> &str {
+        "mcp-session"
+    }
+    fn branch(&self) -> &str {
+        "main"
+    }
+    fn user_content(&self) -> &Content {
+        &self.user_content
+    }
 }
 
 #[async_trait]
 impl adk_core::CallbackContext for MockContext {
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
 }
 
 #[async_trait]
 impl InvocationContext for MockContext {
-    fn agent(&self) -> Arc<dyn Agent> { unimplemented!() }
-    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> { None }
-    fn session(&self) -> &dyn Session { &self.session }
-    fn run_config(&self) -> &RunConfig { unimplemented!() }
+    fn agent(&self) -> Arc<dyn Agent> {
+        unimplemented!()
+    }
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
+        None
+    }
+    fn session(&self) -> &dyn Session {
+        &self.session
+    }
+    fn run_config(&self) -> &RunConfig {
+        unimplemented!()
+    }
     fn end_invocation(&self) {}
-    fn ended(&self) -> bool { false }
+    fn ended(&self) -> bool {
+        false
+    }
 }
 
 #[tokio::main]
@@ -160,7 +202,8 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn print_usage_pattern() {
-    println!(r#"
+    println!(
+        r#"
 // MCP Toolset Usage Pattern
 // =========================
 
@@ -203,5 +246,6 @@ async fn main() -> anyhow::Result<()> {{
 // Alternative: Filter by tool names
 let toolset = McpToolset::new(client)
     .with_tools(&["read_file", "write_file", "list_directory"]);
-"#);
+"#
+    );
 }

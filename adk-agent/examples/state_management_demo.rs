@@ -11,18 +11,32 @@ use std::sync::Arc;
 
 struct TestSession;
 impl Session for TestSession {
-    fn id(&self) -> &str { "test-session" }
-    fn app_name(&self) -> &str { "test-app" }
-    fn user_id(&self) -> &str { "test-user" }
-    fn state(&self) -> &dyn State { &TestState }
-    fn conversation_history(&self) -> Vec<Content> { Vec::new() }
+    fn id(&self) -> &str {
+        "test-session"
+    }
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+    fn user_id(&self) -> &str {
+        "test-user"
+    }
+    fn state(&self) -> &dyn State {
+        &TestState
+    }
+    fn conversation_history(&self) -> Vec<Content> {
+        Vec::new()
+    }
 }
 
 struct TestState;
 impl State for TestState {
-    fn get(&self, _key: &str) -> Option<Value> { None }
+    fn get(&self, _key: &str) -> Option<Value> {
+        None
+    }
     fn set(&mut self, _key: String, _value: Value) {}
-    fn all(&self) -> HashMap<String, Value> { HashMap::new() }
+    fn all(&self) -> HashMap<String, Value> {
+        HashMap::new()
+    }
 }
 
 // Simple test context
@@ -45,13 +59,27 @@ impl TestContext {
 
 #[async_trait]
 impl ReadonlyContext for TestContext {
-    fn invocation_id(&self) -> &str { "test-inv" }
-    fn agent_name(&self) -> &str { "test-agent" }
-    fn user_id(&self) -> &str { "test-user" }
-    fn app_name(&self) -> &str { "test-app" }
-    fn session_id(&self) -> &str { "test-session" }
-    fn branch(&self) -> &str { "main" }
-    fn user_content(&self) -> &Content { &self.user_content }
+    fn invocation_id(&self) -> &str {
+        "test-inv"
+    }
+    fn agent_name(&self) -> &str {
+        "test-agent"
+    }
+    fn user_id(&self) -> &str {
+        "test-user"
+    }
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+    fn session_id(&self) -> &str {
+        "test-session"
+    }
+    fn branch(&self) -> &str {
+        "main"
+    }
+    fn user_content(&self) -> &Content {
+        &self.user_content
+    }
 }
 
 #[async_trait]
@@ -111,7 +139,7 @@ async fn main() -> Result<()> {
     println!("\nAgent: summarizer");
     while let Some(result) = stream.next().await {
         let event = result?;
-        
+
         if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
                 if let Part::Text { text } = part {
@@ -138,7 +166,9 @@ async fn main() -> Result<()> {
     let analyzer = LlmAgentBuilder::new("analyzer")
         .description("Analyzes sentiment")
         .model(Arc::new(model2))
-        .instruction("Analyze the sentiment of the message. Reply with only: positive, negative, or neutral")
+        .instruction(
+            "Analyze the sentiment of the message. Reply with only: positive, negative, or neutral",
+        )
         .output_key("sentiment")
         .build()?;
 
@@ -149,23 +179,21 @@ async fn main() -> Result<()> {
         .output_key("response")
         .build()?;
 
-    let pipeline = SequentialAgent::new(
-        "sentiment_pipeline",
-        vec![Arc::new(analyzer), Arc::new(responder)],
-    )
-    .with_description("Analyzes sentiment then responds");
+    let pipeline =
+        SequentialAgent::new("sentiment_pipeline", vec![Arc::new(analyzer), Arc::new(responder)])
+            .with_description("Analyzes sentiment then responds");
 
     let ctx2 = Arc::new(TestContext::new("I love this amazing product!"));
     let mut stream2 = pipeline.run(ctx2).await?;
 
     println!("\nPipeline: sentiment_pipeline");
     let mut all_state = std::collections::HashMap::new();
-    
+
     while let Some(result) = stream2.next().await {
         let event = result?;
-        
+
         println!("\nAgent: {}", event.author);
-        
+
         if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
                 if let Part::Text { text } = part {
@@ -199,17 +227,17 @@ async fn main() -> Result<()> {
             async move {
                 let mut event = Event::new("demo-invocation");
                 event.author = "state_reader".to_string();
-                
+
                 let mut text = String::from("State summary:\n");
                 for (key, value) in &state {
                     text.push_str(&format!("- {}: {}\n", key, value));
                 }
-                
+
                 event.llm_response.content = Some(Content {
                     role: "assistant".to_string(),
                     parts: vec![Part::Text { text }],
                 });
-                
+
                 Ok(Box::pin(futures::stream::iter(vec![Ok(event)])) as adk_core::EventStream)
             }
         })

@@ -1,4 +1,6 @@
-use adk_core::{AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result};
+use adk_core::{
+    AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result,
+};
 use async_stream::stream;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -55,19 +57,19 @@ impl Agent for ParallelAgent {
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
         let sub_agents = self.sub_agents.clone();
-        
+
         let s = stream! {
             use futures::stream::{FuturesUnordered, StreamExt};
-            
+
             let mut futures = FuturesUnordered::new();
-            
+
             for agent in sub_agents {
                 let ctx = ctx.clone();
                 futures.push(async move {
                     agent.run(ctx).await
                 });
             }
-            
+
             while let Some(result) = futures.next().await {
                 match result {
                     Ok(mut stream) => {

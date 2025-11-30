@@ -19,18 +19,32 @@ use std::sync::Arc;
 
 struct MockSession;
 impl Session for MockSession {
-    fn id(&self) -> &str { "mcp-session" }
-    fn app_name(&self) -> &str { "mcp-app" }
-    fn user_id(&self) -> &str { "mcp-user" }
-    fn state(&self) -> &dyn State { &MockState }
-    fn conversation_history(&self) -> Vec<adk_core::Content> { Vec::new() }
+    fn id(&self) -> &str {
+        "mcp-session"
+    }
+    fn app_name(&self) -> &str {
+        "mcp-app"
+    }
+    fn user_id(&self) -> &str {
+        "mcp-user"
+    }
+    fn state(&self) -> &dyn State {
+        &MockState
+    }
+    fn conversation_history(&self) -> Vec<adk_core::Content> {
+        Vec::new()
+    }
 }
 
 struct MockState;
 impl State for MockState {
-    fn get(&self, _key: &str) -> Option<Value> { None }
+    fn get(&self, _key: &str) -> Option<Value> {
+        None
+    }
     fn set(&mut self, _key: String, _value: Value) {}
-    fn all(&self) -> HashMap<String, Value> { HashMap::new() }
+    fn all(&self) -> HashMap<String, Value> {
+        HashMap::new()
+    }
 }
 
 struct MockContext {
@@ -52,28 +66,54 @@ impl MockContext {
 
 #[async_trait]
 impl ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str { "mcp-inv" }
-    fn agent_name(&self) -> &str { "mcp-agent" }
-    fn user_id(&self) -> &str { "mcp-user" }
-    fn app_name(&self) -> &str { "mcp-app" }
-    fn session_id(&self) -> &str { "mcp-session" }
-    fn branch(&self) -> &str { "main" }
-    fn user_content(&self) -> &Content { &self.user_content }
+    fn invocation_id(&self) -> &str {
+        "mcp-inv"
+    }
+    fn agent_name(&self) -> &str {
+        "mcp-agent"
+    }
+    fn user_id(&self) -> &str {
+        "mcp-user"
+    }
+    fn app_name(&self) -> &str {
+        "mcp-app"
+    }
+    fn session_id(&self) -> &str {
+        "mcp-session"
+    }
+    fn branch(&self) -> &str {
+        "main"
+    }
+    fn user_content(&self) -> &Content {
+        &self.user_content
+    }
 }
 
 #[async_trait]
 impl adk_core::CallbackContext for MockContext {
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
 }
 
 #[async_trait]
 impl InvocationContext for MockContext {
-    fn agent(&self) -> Arc<dyn Agent> { unimplemented!() }
-    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> { None }
-    fn session(&self) -> &dyn Session { &self.session }
-    fn run_config(&self) -> &RunConfig { unimplemented!() }
+    fn agent(&self) -> Arc<dyn Agent> {
+        unimplemented!()
+    }
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
+        None
+    }
+    fn session(&self) -> &dyn Session {
+        &self.session
+    }
+    fn run_config(&self) -> &RunConfig {
+        unimplemented!()
+    }
     fn end_invocation(&self) {}
-    fn ended(&self) -> bool { false }
+    fn ended(&self) -> bool {
+        false
+    }
 }
 
 // Mock MCP Tool - simulates an MCP-provided tool
@@ -81,8 +121,12 @@ struct McpFileTool;
 
 #[async_trait]
 impl Tool for McpFileTool {
-    fn name(&self) -> &str { "mcp_read_file" }
-    fn description(&self) -> &str { "Read file content via MCP" }
+    fn name(&self) -> &str {
+        "mcp_read_file"
+    }
+    fn description(&self) -> &str {
+        "Read file content via MCP"
+    }
     fn parameters_schema(&self) -> Option<Value> {
         Some(json!({
             "type": "object",
@@ -95,13 +139,13 @@ impl Tool for McpFileTool {
             "required": ["path"]
         }))
     }
-    fn response_schema(&self) -> Option<Value> { None }
+    fn response_schema(&self) -> Option<Value> {
+        None
+    }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
-        let path = args.get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        
+        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("unknown");
+
         // Simulate MCP file read
         Ok(json!({
             "content": format!("Mock content of file: {}", path),
@@ -115,10 +159,10 @@ impl Tool for McpFileTool {
 async fn test_mcp_tool_integration() {
     dotenv::dotenv().ok();
     let api_key = env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY must be set");
-    
+
     let model = Arc::new(GeminiModel::new(api_key, "gemini-1.5-flash").unwrap());
     let mcp_tool = Arc::new(McpFileTool);
-    
+
     let agent = LlmAgentBuilder::new("mcp-agent")
         .description("Agent with MCP tools")
         .model(model)
@@ -129,7 +173,7 @@ async fn test_mcp_tool_integration() {
 
     let ctx = Arc::new(MockContext::new("Read the file /tmp/test.txt"));
     let mut stream = agent.run(ctx).await.unwrap();
-    
+
     let mut received_response = false;
     while let Some(result) = stream.next().await {
         if let Ok(event) = result {

@@ -102,11 +102,7 @@ pub struct RemoteA2aAgentBuilder {
 
 impl RemoteA2aAgentBuilder {
     pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            description: String::new(),
-            agent_url: None,
-        }
+        Self { name: name.into(), description: String::new(), agent_url: None }
     }
 
     pub fn description(mut self, description: impl Into<String>) -> Self {
@@ -176,10 +172,7 @@ fn convert_update_event(
 
             let mut event = Event::new(invocation_id.to_string());
             event.author = agent_name.to_string();
-            event.llm_response.content = Some(Content {
-                role: "model".to_string(),
-                parts,
-            });
+            event.llm_response.content = Some(Content { role: "model".to_string(), parts });
             event.llm_response.partial = !artifact_event.last_chunk;
             Some(event)
         }

@@ -1,4 +1,6 @@
-use adk_core::{CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Tool, ToolContext};
+use adk_core::{
+    CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Tool, ToolContext,
+};
 use adk_tool::{ExitLoopTool, GoogleSearchTool};
 use async_trait::async_trait;
 use serde_json::json;
@@ -11,33 +13,50 @@ struct MockToolContext {
 
 impl MockToolContext {
     fn new() -> Self {
-        Self {
-            actions: EventActions::default(),
-            content: Content::new("user"),
-        }
+        Self { actions: EventActions::default(), content: Content::new("user") }
     }
 }
 
 #[async_trait]
 impl ReadonlyContext for MockToolContext {
-    fn invocation_id(&self) -> &str { "inv-1" }
-    fn agent_name(&self) -> &str { "test-agent" }
-    fn user_id(&self) -> &str { "user-1" }
-    fn app_name(&self) -> &str { "test-app" }
-    fn session_id(&self) -> &str { "session-1" }
-    fn branch(&self) -> &str { "" }
-    fn user_content(&self) -> &Content { &self.content }
+    fn invocation_id(&self) -> &str {
+        "inv-1"
+    }
+    fn agent_name(&self) -> &str {
+        "test-agent"
+    }
+    fn user_id(&self) -> &str {
+        "user-1"
+    }
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+    fn session_id(&self) -> &str {
+        "session-1"
+    }
+    fn branch(&self) -> &str {
+        ""
+    }
+    fn user_content(&self) -> &Content {
+        &self.content
+    }
 }
 
 #[async_trait]
 impl CallbackContext for MockToolContext {
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
 }
 
 #[async_trait]
 impl ToolContext for MockToolContext {
-    fn function_call_id(&self) -> &str { "call-1" }
-    fn actions(&self) -> &EventActions { &self.actions }
+    fn function_call_id(&self) -> &str {
+        "call-1"
+    }
+    fn actions(&self) -> &EventActions {
+        &self.actions
+    }
     async fn search_memory(&self, _query: &str) -> Result<Vec<MemoryEntry>> {
         Ok(vec![])
     }

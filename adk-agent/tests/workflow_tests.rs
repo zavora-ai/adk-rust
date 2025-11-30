@@ -7,11 +7,21 @@ use std::sync::Arc;
 struct MockSession;
 
 impl adk_core::Session for MockSession {
-    fn id(&self) -> &str { "test-session" }
-    fn app_name(&self) -> &str { "test-app" }
-    fn user_id(&self) -> &str { "test-user" }
-    fn state(&self) -> &dyn adk_core::State { unimplemented!() }
-    fn conversation_history(&self) -> Vec<adk_core::Content> { Vec::new() }
+    fn id(&self) -> &str {
+        "test-session"
+    }
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+    fn user_id(&self) -> &str {
+        "test-user"
+    }
+    fn state(&self) -> &dyn adk_core::State {
+        unimplemented!()
+    }
+    fn conversation_history(&self) -> Vec<adk_core::Content> {
+        Vec::new()
+    }
 }
 
 struct TestContext {
@@ -25,9 +35,7 @@ impl TestContext {
         Self {
             content: Content {
                 role: "user".to_string(),
-                parts: vec![Part::Text {
-                    text: message.to_string(),
-                }],
+                parts: vec![Part::Text { text: message.to_string() }],
             },
             config: RunConfig::default(),
             session: MockSession,
@@ -96,9 +104,7 @@ async fn test_sequential_agent_execution_order() {
             event.author = "agent1".to_string();
             event.llm_response.content = Some(Content {
                 role: "assistant".to_string(),
-                parts: vec![Part::Text {
-                    text: "Response from agent1".to_string(),
-                }],
+                parts: vec![Part::Text { text: "Response from agent1".to_string() }],
             });
             Ok(Box::pin(stream::iter(vec![Ok(event)])) as adk_core::EventStream)
         })
@@ -112,19 +118,14 @@ async fn test_sequential_agent_execution_order() {
             event.author = "agent2".to_string();
             event.llm_response.content = Some(Content {
                 role: "assistant".to_string(),
-                parts: vec![Part::Text {
-                    text: "Response from agent2".to_string(),
-                }],
+                parts: vec![Part::Text { text: "Response from agent2".to_string() }],
             });
             Ok(Box::pin(stream::iter(vec![Ok(event)])) as adk_core::EventStream)
         })
         .build()
         .unwrap();
 
-    let sequential = SequentialAgent::new(
-        "sequential",
-        vec![Arc::new(agent1), Arc::new(agent2)],
-    );
+    let sequential = SequentialAgent::new("sequential", vec![Arc::new(agent1), Arc::new(agent2)]);
 
     let ctx = Arc::new(TestContext::new("test"));
     let mut stream = sequential.run(ctx).await.unwrap();
@@ -161,10 +162,7 @@ async fn test_parallel_agent_execution() {
         .build()
         .unwrap();
 
-    let parallel = ParallelAgent::new(
-        "parallel",
-        vec![Arc::new(agent1), Arc::new(agent2)],
-    );
+    let parallel = ParallelAgent::new("parallel", vec![Arc::new(agent1), Arc::new(agent2)]);
 
     let ctx = Arc::new(TestContext::new("test"));
     let mut stream = parallel.run(ctx).await.unwrap();
@@ -208,8 +206,7 @@ async fn test_parallel_agent_empty() {
 
 #[tokio::test]
 async fn test_sequential_agent_with_description() {
-    let agent = SequentialAgent::new("test", vec![])
-        .with_description("Test description");
+    let agent = SequentialAgent::new("test", vec![]).with_description("Test description");
 
     assert_eq!(agent.name(), "test");
     assert_eq!(agent.description(), "Test description");
@@ -234,8 +231,7 @@ async fn test_loop_agent_with_max_iterations() {
         .build()
         .unwrap();
 
-    let loop_agent = LoopAgent::new("loop", vec![Arc::new(agent)])
-        .with_max_iterations(3);
+    let loop_agent = LoopAgent::new("loop", vec![Arc::new(agent)]).with_max_iterations(3);
 
     let ctx = Arc::new(TestContext::new("test"));
     let mut stream = loop_agent.run(ctx).await.unwrap();
@@ -272,8 +268,7 @@ async fn test_loop_agent_with_escalation() {
         .build()
         .unwrap();
 
-    let loop_agent = LoopAgent::new("loop", vec![Arc::new(agent)])
-        .with_max_iterations(10);
+    let loop_agent = LoopAgent::new("loop", vec![Arc::new(agent)]).with_max_iterations(10);
 
     let ctx = Arc::new(TestContext::new("test"));
     let mut stream = loop_agent.run(ctx).await.unwrap();
@@ -345,12 +340,8 @@ async fn test_conditional_agent_if_branch() {
         .build()
         .unwrap();
 
-    let conditional = ConditionalAgent::new(
-        "conditional",
-        |_ctx| true,
-        Arc::new(if_agent),
-    )
-    .with_else(Arc::new(else_agent));
+    let conditional = ConditionalAgent::new("conditional", |_ctx| true, Arc::new(if_agent))
+        .with_else(Arc::new(else_agent));
 
     let ctx = Arc::new(TestContext::new("test"));
     let mut stream = conditional.run(ctx).await.unwrap();
@@ -385,12 +376,8 @@ async fn test_conditional_agent_else_branch() {
         .build()
         .unwrap();
 
-    let conditional = ConditionalAgent::new(
-        "conditional",
-        |_ctx| false,
-        Arc::new(if_agent),
-    )
-    .with_else(Arc::new(else_agent));
+    let conditional = ConditionalAgent::new("conditional", |_ctx| false, Arc::new(if_agent))
+        .with_else(Arc::new(else_agent));
 
     let ctx = Arc::new(TestContext::new("test"));
     let mut stream = conditional.run(ctx).await.unwrap();
@@ -416,11 +403,7 @@ async fn test_conditional_agent_no_else() {
         .build()
         .unwrap();
 
-    let conditional = ConditionalAgent::new(
-        "conditional",
-        |_ctx| false,
-        Arc::new(if_agent),
-    );
+    let conditional = ConditionalAgent::new("conditional", |_ctx| false, Arc::new(if_agent));
 
     let ctx = Arc::new(TestContext::new("test"));
     let mut stream = conditional.run(ctx).await.unwrap();

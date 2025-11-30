@@ -7,7 +7,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-type AsyncHandler = Box<dyn Fn(Arc<dyn ToolContext>, Value) -> Pin<Box<dyn Future<Output = Result<Value>> + Send>> + Send + Sync>;
+type AsyncHandler = Box<
+    dyn Fn(Arc<dyn ToolContext>, Value) -> Pin<Box<dyn Future<Output = Result<Value>> + Send>>
+        + Send
+        + Sync,
+>;
 
 pub struct FunctionTool {
     name: String,

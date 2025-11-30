@@ -77,10 +77,7 @@ impl Callbacks {
     }
 
     /// Execute all after_model callbacks
-    pub async fn execute_after_model(
-        &self,
-        ctx: Arc<dyn CallbackContext>,
-    ) -> Result<Vec<Content>> {
+    pub async fn execute_after_model(&self, ctx: Arc<dyn CallbackContext>) -> Result<Vec<Content>> {
         let mut results = Vec::new();
         for callback in &self.after_model {
             if let Some(content) = callback(ctx.clone()).await? {
@@ -91,10 +88,7 @@ impl Callbacks {
     }
 
     /// Execute all before_tool callbacks
-    pub async fn execute_before_tool(
-        &self,
-        ctx: Arc<dyn CallbackContext>,
-    ) -> Result<Vec<Content>> {
+    pub async fn execute_before_tool(&self, ctx: Arc<dyn CallbackContext>) -> Result<Vec<Content>> {
         let mut results = Vec::new();
         for callback in &self.before_tool {
             if let Some(content) = callback(ctx.clone()).await? {
@@ -105,10 +99,7 @@ impl Callbacks {
     }
 
     /// Execute all after_tool callbacks
-    pub async fn execute_after_tool(
-        &self,
-        ctx: Arc<dyn CallbackContext>,
-    ) -> Result<Vec<Content>> {
+    pub async fn execute_after_tool(&self, ctx: Arc<dyn CallbackContext>) -> Result<Vec<Content>> {
         let mut results = Vec::new();
         for callback in &self.after_tool {
             if let Some(content) = callback(ctx.clone()).await? {

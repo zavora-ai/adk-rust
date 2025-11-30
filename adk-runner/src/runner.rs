@@ -121,7 +121,7 @@ impl Runner {
             // Stream events and check for transfers
             use futures::StreamExt;
             let mut transfer_target: Option<String> = None;
-            
+
             while let Some(result) = agent_stream.next().await {
                 match result {
                     Ok(event) => {
@@ -129,7 +129,7 @@ impl Runner {
                         if let Some(target) = &event.actions.transfer_to_agent {
                             transfer_target = Some(target.clone());
                         }
-                        
+
                         // Append event to session (Event types are now unified)
                         if let Err(e) = session_service.append_event(&session_id, event.clone()).await {
                             yield Err(e);
@@ -143,7 +143,7 @@ impl Runner {
                     }
                 }
             }
-            
+
             // If a transfer was requested, automatically invoke the target agent
             if let Some(target_name) = transfer_target {
                 if let Some(target_agent) = Self::find_agent(&root_agent, &target_name) {
@@ -164,7 +164,7 @@ impl Runner {
                             return;
                         }
                     };
-                    
+
                     // Create new context for the transferred agent
                     let transfer_invocation_id = format!("inv-{}", uuid::Uuid::new_v4());
                     let mut transfer_ctx = InvocationContext::new(
@@ -176,7 +176,7 @@ impl Runner {
                         user_content.clone(),
                         Arc::from(transfer_session),
                     );
-                    
+
                     if let Some(service) = artifact_service_clone {
                         let scoped = adk_artifact::ScopedArtifacts::new(
                             service,
@@ -189,9 +189,9 @@ impl Runner {
                     if let Some(memory) = memory_service_clone {
                         transfer_ctx = transfer_ctx.with_memory(memory);
                     }
-                    
+
                     let transfer_ctx = Arc::new(transfer_ctx);
-                    
+
                     // Run the transferred agent
                     let mut transfer_stream = match target_agent.run(transfer_ctx).await {
                         Ok(s) => s,
@@ -200,7 +200,7 @@ impl Runner {
                             return;
                         }
                     };
-                    
+
                     // Stream events from the transferred agent
                     while let Some(result) = transfer_stream.next().await {
                         match result {
@@ -225,7 +225,10 @@ impl Runner {
     }
 
     /// Find which agent should handle the request based on session history
-    pub fn find_agent_to_run(root_agent: &Arc<dyn Agent>, session: &dyn adk_session::Session) -> Arc<dyn Agent> {
+    pub fn find_agent_to_run(
+        root_agent: &Arc<dyn Agent>,
+        session: &dyn adk_session::Session,
+    ) -> Arc<dyn Agent> {
         // Look at recent events to find last agent that responded
         let events = session.events();
         for i in (0..events.len()).rev() {
@@ -240,7 +243,6 @@ impl Runner {
                 if event.author == "user" {
                     continue;
                 }
-
 
                 // Try to find this agent in the tree
                 if let Some(agent) = Self::find_agent(root_agent, &event.author) {
@@ -281,4 +283,3 @@ impl Runner {
 }
 
 // TODO: Add unit tests for transfer logic
-

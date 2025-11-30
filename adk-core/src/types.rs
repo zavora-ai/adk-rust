@@ -17,10 +17,7 @@ pub enum Part {
 
 impl Content {
     pub fn new(role: impl Into<String>) -> Self {
-        Self {
-            role: role.into(),
-            parts: Vec::new(),
-        }
+        Self { role: role.into(), parts: Vec::new() }
     }
 
     pub fn with_text(mut self, text: impl Into<String>) -> Self {

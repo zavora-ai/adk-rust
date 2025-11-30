@@ -24,21 +24,11 @@ pub struct JsonRpcResponse {
 
 impl JsonRpcResponse {
     pub fn success(id: Option<Value>, result: Value) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            result: Some(result),
-            error: None,
-            id,
-        }
+        Self { jsonrpc: "2.0".to_string(), result: Some(result), error: None, id }
     }
 
     pub fn error(id: Option<Value>, error: JsonRpcError) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            result: None,
-            error: Some(error),
-            id,
-        }
+        Self { jsonrpc: "2.0".to_string(), result: None, error: Some(error), id }
     }
 }
 
@@ -53,43 +43,23 @@ pub struct JsonRpcError {
 
 impl JsonRpcError {
     pub fn parse_error(message: impl Into<String>) -> Self {
-        Self {
-            code: -32700,
-            message: message.into(),
-            data: None,
-        }
+        Self { code: -32700, message: message.into(), data: None }
     }
 
     pub fn invalid_request(message: impl Into<String>) -> Self {
-        Self {
-            code: -32600,
-            message: message.into(),
-            data: None,
-        }
+        Self { code: -32600, message: message.into(), data: None }
     }
 
     pub fn method_not_found(method: &str) -> Self {
-        Self {
-            code: -32601,
-            message: format!("Method not found: {}", method),
-            data: None,
-        }
+        Self { code: -32601, message: format!("Method not found: {}", method), data: None }
     }
 
     pub fn invalid_params(message: impl Into<String>) -> Self {
-        Self {
-            code: -32602,
-            message: message.into(),
-            data: None,
-        }
+        Self { code: -32602, message: message.into(), data: None }
     }
 
     pub fn internal_error(message: impl Into<String>) -> Self {
-        Self {
-            code: -32603,
-            message: message.into(),
-            data: None,
-        }
+        Self { code: -32603, message: message.into(), data: None }
     }
 }
 
@@ -163,7 +133,8 @@ mod tests {
 
     #[test]
     fn test_jsonrpc_response_success() {
-        let resp = JsonRpcResponse::success(Some(Value::Number(1.into())), Value::String("ok".into()));
+        let resp =
+            JsonRpcResponse::success(Some(Value::Number(1.into())), Value::String("ok".into()));
         assert!(resp.result.is_some());
         assert!(resp.error.is_none());
     }

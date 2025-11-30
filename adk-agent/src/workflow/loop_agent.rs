@@ -1,4 +1,6 @@
-use adk_core::{AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result};
+use adk_core::{
+    AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result,
+};
 use async_stream::stream;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -63,18 +65,18 @@ impl Agent for LoopAgent {
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
         let sub_agents = self.sub_agents.clone();
         let max_iterations = self.max_iterations;
-        
+
         let s = stream! {
             use futures::StreamExt;
-            
+
             let mut count = max_iterations;
-            
+
             loop {
                 let mut should_exit = false;
-                
+
                 for agent in &sub_agents {
                     let mut stream = agent.run(ctx.clone()).await?;
-                    
+
                     while let Some(result) = stream.next().await {
                         match result {
                             Ok(event) => {
@@ -89,12 +91,12 @@ impl Agent for LoopAgent {
                             }
                         }
                     }
-                    
+
                     if should_exit {
                         return;
                     }
                 }
-                
+
                 if let Some(ref mut c) = count {
                     *c -= 1;
                     if *c == 0 {

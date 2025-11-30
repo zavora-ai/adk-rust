@@ -1,5 +1,7 @@
 use crate::workflow::LoopAgent;
-use adk_core::{AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result};
+use adk_core::{
+    AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result,
+};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -10,9 +12,7 @@ pub struct SequentialAgent {
 
 impl SequentialAgent {
     pub fn new(name: impl Into<String>, sub_agents: Vec<Arc<dyn Agent>>) -> Self {
-        Self {
-            loop_agent: LoopAgent::new(name, sub_agents).with_max_iterations(1),
-        }
+        Self { loop_agent: LoopAgent::new(name, sub_agents).with_max_iterations(1) }
     }
 
     pub fn with_description(mut self, desc: impl Into<String>) -> Self {

@@ -101,11 +101,7 @@ pub async fn run_sse(
 
     // Run agent
     let event_stream = runner
-        .run(
-            user_id,
-            session_id,
-            adk_core::Content::new("user").with_text(&req.new_message),
-        )
+        .run(user_id, session_id, adk_core::Content::new("user").with_text(&req.new_message))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -188,11 +184,7 @@ pub async fn run_sse_compat(
 
     // Run agent
     let event_stream = runner
-        .run(
-            user_id,
-            session_id,
-            adk_core::Content::new("user").with_text(&message_text),
-        )
+        .run(user_id, session_id, adk_core::Content::new("user").with_text(&message_text))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

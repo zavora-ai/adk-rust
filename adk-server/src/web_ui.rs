@@ -21,9 +21,7 @@ pub struct RuntimeConfig {
 pub async fn serve_runtime_config(State(config): State<crate::ServerConfig>) -> impl IntoResponse {
     // Use configured backend URL or default to relative "/api"
     // Relative URLs work better as they adapt to the actual host/port
-    let backend_url = config
-        .backend_url
-        .unwrap_or_else(|| "/api".to_string());
+    let backend_url = config.backend_url.unwrap_or_else(|| "/api".to_string());
 
     Json(RuntimeConfig { backend_url })
 }
@@ -38,12 +36,9 @@ pub async fn serve_ui_assets(uri: Uri) -> impl IntoResponse {
     match Assets::get(&path) {
         Some(content) => {
             let mime = mime_guess::from_path(&path).first_or_octet_stream();
-            let mime_header = header::HeaderValue::from_str(mime.as_ref()).unwrap_or_else(|_| header::HeaderValue::from_static("application/octet-stream"));
-            (
-                [(header::CONTENT_TYPE, mime_header)],
-                Body::from(content.data),
-            )
-                .into_response()
+            let mime_header = header::HeaderValue::from_str(mime.as_ref())
+                .unwrap_or_else(|_| header::HeaderValue::from_static("application/octet-stream"));
+            ([(header::CONTENT_TYPE, mime_header)], Body::from(content.data)).into_response()
         }
         None => {
             // If file not found, serve index.html for SPA routing (if we were doing that),
@@ -57,12 +52,10 @@ pub async fn serve_ui_assets(uri: Uri) -> impl IntoResponse {
                 // Fallback to index.html
                 match Assets::get("index.html") {
                     Some(content) => {
-                         let mime = mime_guess::from_path("index.html").first_or_octet_stream();
-                         let mime_header = header::HeaderValue::from_str(mime.as_ref()).unwrap_or_else(|_| header::HeaderValue::from_static("text/html"));
-                        (
-                            [(header::CONTENT_TYPE, mime_header)],
-                            Body::from(content.data),
-                        )
+                        let mime = mime_guess::from_path("index.html").first_or_octet_stream();
+                        let mime_header = header::HeaderValue::from_str(mime.as_ref())
+                            .unwrap_or_else(|_| header::HeaderValue::from_static("text/html"));
+                        ([(header::CONTENT_TYPE, mime_header)], Body::from(content.data))
                             .into_response()
                     }
                     None => StatusCode::NOT_FOUND.into_response(),
@@ -80,11 +73,7 @@ pub async fn serve_ui_index() -> impl IntoResponse {
     match Assets::get("index.html") {
         Some(content) => {
             let mime_header = header::HeaderValue::from_static("text/html; charset=utf-8");
-            (
-                [(header::CONTENT_TYPE, mime_header)],
-                Body::from(content.data),
-            )
-                .into_response()
+            ([(header::CONTENT_TYPE, mime_header)], Body::from(content.data)).into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }

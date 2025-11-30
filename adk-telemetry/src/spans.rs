@@ -39,11 +39,7 @@ pub fn agent_run_span(agent_name: &str, invocation_id: &str) -> Span {
 /// // Model call code here
 /// ```
 pub fn model_call_span(model_name: &str) -> Span {
-    tracing::info_span!(
-        "model.call",
-        model.name = model_name,
-        otel.kind = "client"
-    )
+    tracing::info_span!("model.call", model.name = model_name, otel.kind = "client")
 }
 
 /// Create a span for tool execution
@@ -59,11 +55,7 @@ pub fn model_call_span(model_name: &str) -> Span {
 /// // Tool execution code here
 /// ```
 pub fn tool_execute_span(tool_name: &str) -> Span {
-    tracing::info_span!(
-        "tool.execute",
-        tool.name = tool_name,
-        otel.kind = "internal"
-    )
+    tracing::info_span!("tool.execute", tool.name = tool_name, otel.kind = "internal")
 }
 
 /// Create a span for callback execution

@@ -74,24 +74,44 @@ mod tests {
 
     #[async_trait]
     impl ReadonlyContext for TestContext {
-        fn invocation_id(&self) -> &str { "test" }
-        fn agent_name(&self) -> &str { "test" }
-        fn user_id(&self) -> &str { "user" }
-        fn app_name(&self) -> &str { "app" }
-        fn session_id(&self) -> &str { "session" }
-        fn branch(&self) -> &str { "" }
-        fn user_content(&self) -> &Content { &self.content }
+        fn invocation_id(&self) -> &str {
+            "test"
+        }
+        fn agent_name(&self) -> &str {
+            "test"
+        }
+        fn user_id(&self) -> &str {
+            "user"
+        }
+        fn app_name(&self) -> &str {
+            "app"
+        }
+        fn session_id(&self) -> &str {
+            "session"
+        }
+        fn branch(&self) -> &str {
+            ""
+        }
+        fn user_content(&self) -> &Content {
+            &self.content
+        }
     }
 
     #[async_trait]
     impl CallbackContext for TestContext {
-        fn artifacts(&self) -> Option<Arc<dyn crate::Artifacts>> { None }
+        fn artifacts(&self) -> Option<Arc<dyn crate::Artifacts>> {
+            None
+        }
     }
 
     #[async_trait]
     impl ToolContext for TestContext {
-        fn function_call_id(&self) -> &str { "call-123" }
-        fn actions(&self) -> &EventActions { &self.actions }
+        fn function_call_id(&self) -> &str {
+            "call-123"
+        }
+        fn actions(&self) -> &EventActions {
+            &self.actions
+        }
         async fn search_memory(&self, _query: &str) -> Result<Vec<crate::MemoryEntry>> {
             Ok(vec![])
         }
@@ -114,9 +134,7 @@ mod tests {
 
     #[test]
     fn test_tool_trait() {
-        let tool = TestTool {
-            name: "test".to_string(),
-        };
+        let tool = TestTool { name: "test".to_string() };
         assert_eq!(tool.name(), "test");
         assert_eq!(tool.description(), "test tool");
         assert!(!tool.is_long_running());
@@ -124,9 +142,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_execute() {
-        let tool = TestTool {
-            name: "test".to_string(),
-        };
+        let tool = TestTool { name: "test".to_string() };
         let ctx = Arc::new(TestContext::new()) as Arc<dyn ToolContext>;
         let result = tool.execute(ctx, Value::Null).await.unwrap();
         assert_eq!(result, Value::String("result".to_string()));
