@@ -21,14 +21,14 @@ name = "adk"
 path = "src/main.rs"
 
 [dependencies]
-adk-core = { path = "../adk-core" }
-adk-agent = { path = "../adk-agent" }
-adk-model = { path = "../adk-model" }
-adk-runner = { path = "../adk-runner" }
-adk-server = { path = "../adk-server" }
-adk-session = { path = "../adk-session" }
-adk-artifact = { path = "../adk-artifact" }
-adk-telemetry = { path = "../adk-telemetry" }
+adk-core = { path = "../adk-core", version = "0.1.0" }
+adk-agent = { path = "../adk-agent", version = "0.1.0" }
+adk-model = { path = "../adk-model", version = "0.1.0" }
+adk-runner = { path = "../adk-runner", version = "0.1.0" }
+adk-server = { path = "../adk-server", version = "0.1.0" }
+adk-session = { path = "../adk-session", version = "0.1.0" }
+adk-artifact = { path = "../adk-artifact", version = "0.1.0" }
+adk-telemetry = { path = "../adk-telemetry", version = "0.1.0" }
 clap = { version = "4.5", features = ["derive"] }
 rustyline = "14.0"
 tokio = { version = "1.40", features = ["full"] }

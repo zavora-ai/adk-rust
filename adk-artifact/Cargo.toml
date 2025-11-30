@@ -13,7 +13,7 @@ categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 
 [dependencies]
-adk-core = { path = "../adk-core" }
+adk-core = { path = "../adk-core", version = "0.1.0" }
 async-trait.workspace = true
 tokio.workspace = true
 
