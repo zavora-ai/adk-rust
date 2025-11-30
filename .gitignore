@@ -54,5 +54,10 @@ Thumbs.db
 # Learning materials (not part of main crate)
 /learning/
 
+# Development tooling
+/scripts/
+/.kiro/
+/.claude/
+
 # Vendor (patched dependencies)
 # Note: vendor/ IS tracked for gemini-rust patch
