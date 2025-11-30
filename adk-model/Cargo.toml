@@ -1,0 +1,26 @@
+[package]
+name = "adk-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "LLM model integrations for ADK (Gemini, etc.)"
+repository = "https://github.com/zavora-ai/adk-rust"
+documentation = "https://docs.rs/adk-model"
+keywords = ["ai", "agent", "adk", "gemini", "llm"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
+
+[dependencies]
+adk-core = { path = "../adk-core", version = "0.1.0" }
+adk-telemetry = { path = "../adk-telemetry", version = "0.1.0" }
+async-trait.workspace = true
+tokio.workspace = true
+futures.workspace = true
+async-stream.workspace = true
+serde_json.workspace = true
+gemini = { workspace = true }
+anyhow.workspace = true
+tracing.workspace = true
+base64 = "0.21"

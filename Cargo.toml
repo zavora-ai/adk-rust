@@ -1,0 +1,67 @@
+[workspace]
+resolver = "2"
+members = [
+    # Core packages (publishable to crates.io)
+    "adk-core",
+    "adk-telemetry",
+    "adk-model",
+    "adk-session",
+    "adk-artifact",
+    "adk-memory",
+    "adk-tool",
+    "adk-agent",
+    "adk-runner",
+    "adk-server",
+    "adk-cli",
+    "adk-rust",
+
+    # Development packages (not published)
+    "examples",
+]
+exclude = [
+    # Reference implementations (not part of workspace)
+    "reference/adk-go",
+    "reference/mcp-rust-sdk",
+    "reference/gemini-rust",
+    # Patched vendor dependency
+    "vendor/gemini-rust",
+    # Learning materials (gitignored, not part of CI)
+    "learning",
+]
+
+[profile.release]
+strip = true
+opt-level = 3
+lto = true
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+authors = ["James Karanja Maina <james.karanja@zavora.ai>"]
+homepage = "https://www.zavora.ai"
+repository = "https://github.com/zavora-ai/adk-rust"
+
+[workspace.dependencies]
+tokio = { version = "1.40", features = ["full"] }
+tokio-stream = "0.1"
+async-trait = "0.1"
+futures = "0.3"
+async-stream = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+anyhow = "1.0"
+uuid = { version = "1.10", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+gemini = { version = "1.5", package = "gemini-rust" }
+regex = "1.10"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+opentelemetry = "0.21"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+
+# Patch gemini-rust to add DOCUMENT modality support for PDFs
+[patch.crates-io]
+gemini-rust = { path = "vendor/gemini-rust" }

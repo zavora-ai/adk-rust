@@ -1,0 +1,30 @@
+[package]
+name = "adk-tool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Tool system for ADK agents (FunctionTool, MCP, Google Search)"
+repository = "https://github.com/zavora-ai/adk-rust"
+documentation = "https://docs.rs/adk-tool"
+keywords = ["ai", "agent", "adk", "tools", "mcp"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
+
+[dependencies]
+adk-core = { path = "../adk-core", version = "0.1.0" }
+adk-telemetry = { path = "../adk-telemetry", version = "0.1.0" }
+async-trait.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars = "0.8"
+rmcp = { version = "0.9", features = ["client"] }
+tracing.workspace = true
+base64 = "0.21"
+uuid.workspace = true
+futures.workspace = true
+
+[dev-dependencies]
+async-stream.workspace = true

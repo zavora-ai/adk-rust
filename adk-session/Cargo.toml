@@ -1,0 +1,29 @@
+[package]
+name = "adk-session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Session management and state persistence for ADK agents"
+repository = "https://github.com/zavora-ai/adk-rust"
+documentation = "https://docs.rs/adk-session"
+keywords = ["ai", "agent", "adk", "session", "state"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
+
+[dependencies]
+adk-core = { path = "../adk-core", version = "0.1.0" }
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"], optional = true }
+
+[dev-dependencies]
+tokio.workspace = true
+
+[features]
+default = []
+database = ["sqlx"]

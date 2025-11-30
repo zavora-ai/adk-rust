@@ -1,0 +1,50 @@
+[package]
+name = "adk-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "HTTP server and A2A protocol for ADK agents"
+repository = "https://github.com/zavora-ai/adk-rust"
+documentation = "https://docs.rs/adk-server"
+keywords = ["ai", "agent", "adk", "server", "a2a"]
+categories = ["api-bindings", "web-programming::http-server"]
+readme = "README.md"
+include = ["src/**/*", "assets/**/*", "Cargo.toml", "README.md"]
+
+[dependencies]
+adk-core = { path = "../adk-core", version = "0.1.0" }
+adk-agent = { path = "../adk-agent", version = "0.1.0" }
+adk-runner = { path = "../adk-runner", version = "0.1.0" }
+adk-session = { path = "../adk-session", version = "0.1.0" }
+adk-artifact = { path = "../adk-artifact", version = "0.1.0" }
+adk-telemetry = { path = "../adk-telemetry", version = "0.1.0" }
+tokio.workspace = true
+tokio-stream.workspace = true
+async-trait.workspace = true
+async-stream.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+axum = { version = "0.7", features = ["macros"] }
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["trace", "cors", "timeout", "set-header", "limit"] }
+tracing = "0.1"
+base64 = "0.22"
+rust-embed = "8.9.0"
+mime_guess = "2.0.5"
+reqwest.workspace = true
+
+[dev-dependencies]
+async-stream.workspace = true
+tracing-subscriber = "0.3"
+uuid = { version = "1.0", features = ["v4"] }
+async-trait = "0.1"
+chrono = "0.4"
+hyper = "1.8.1"
+http-body-util = "0.1.3"

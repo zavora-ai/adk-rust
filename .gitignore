@@ -1,0 +1,68 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Testing
+*.profraw
+*.profdata
+
+# Documentation
+/target/doc/
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Logs
+*.log
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.txt
+
+# OS
+Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# Reference materials (not part of main crate)
+/reference/
+
+# Learning materials (not part of main crate)
+/learning/
+
+# Development tooling
+/scripts/
+/.kiro/
+/.claude/
+
+# Internal working documents
+PUBLISHING.md
+docs/CRATES_IO_PUBLICATION_PLAN.md
+
+# Vendor (patched dependencies)
+# Note: vendor/ IS tracked for gemini-rust patch

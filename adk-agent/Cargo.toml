@@ -1,0 +1,29 @@
+[package]
+name = "adk-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Agent implementations for ADK (LLM, Custom, Workflow agents)"
+repository = "https://github.com/zavora-ai/adk-rust"
+documentation = "https://docs.rs/adk-agent"
+keywords = ["ai", "agent", "adk", "llm", "workflow"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
+
+[dependencies]
+adk-core = { path = "../adk-core", version = "0.1.0" }
+adk-model = { path = "../adk-model", version = "0.1.0" }
+adk-tool = { path = "../adk-tool", version = "0.1.0" }
+adk-telemetry = { path = "../adk-telemetry", version = "0.1.0" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+async-stream = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+dotenv = "0.15"

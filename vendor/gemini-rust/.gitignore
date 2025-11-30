@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+Cargo.lock
+**/.env
+.idea/
+.vscode/
+**/.DS_Store
+.qodo
+.cargo/config.toml
