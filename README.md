@@ -1,108 +1,177 @@
-# ADK-Rust: Agent Development Kit in Rust
+# ADK-Rust
 
-A Rust implementation of Google's Agent Development Kit (ADK), providing a high-performance, memory-safe framework for building AI agents.
+Production-ready Rust implementation of Google's Agent Development Kit (ADK). Build high-performance, memory-safe AI agent systems with streaming responses, workflow orchestration, and extensible tool integration.
 
-## 📋 Project Status
+## Overview
 
-**Phase**: ✅ **Phases 1-9 Complete** (Implementation 90% done)  
-**Current**: Phase 10 - Polish & Documentation  
-**Version**: 0.1.0-dev
+ADK-Rust provides a comprehensive framework for building AI agents in Rust, featuring:
 
-## 🎯 Features
+- **Type-safe agent abstractions** with async execution and event streaming
+- **Multiple agent types**: LLM agents, workflow agents (sequential, parallel, loop), and custom agents
+- **Tool ecosystem**: Function tools, Google Search, MCP (Model Context Protocol) integration
+- **Production features**: Session management, artifact storage, memory systems, REST/A2A APIs
+- **Developer experience**: Interactive CLI, 8+ working examples, comprehensive documentation
 
-### ✅ Implemented
+**Status**: Core implementation complete (90%), actively maintained
 
-- **Core Framework**
-  - Agent trait with async execution
-  - Event streaming with futures
-  - Type-safe error handling
-  - Content and Part types
+## Quick Start
 
-- **Agent Types**
-  - LLM Agent (Gemini integration)
-  - Custom Agent
-  - Sequential Agent (workflow)
-  - Parallel Agent (concurrent)
-  - Loop Agent (iterative)
+### Installation
 
-- **Model Integration**
-  - Gemini 2.0 Flash support
-  - Streaming responses
-  - Function calling
-  - Multi-turn conversations
-
-- **Tool System**
-  - Function tools
-  - Google Search tool
-  - Exit Loop tool
-  - Load Artifacts tool
-  - **MCP Integration** (Model Context Protocol)
-  - Toolsets for composition
-
-- **Session Management**
-  - In-memory sessions
-  - Database sessions (SQLite)
-  - Event history
-  - State management
-
-- **Artifact Storage**
-  - In-memory artifacts
-  - Database artifacts
-  - File versioning
-
-- **Memory System**
-  - Long-term memory
-  - Semantic search
-  - Vector embeddings
-
-- **Server & APIs**
-  - REST API
-  - A2A Protocol (Agent-to-Agent)
-  - SSE streaming
-  - Health checks
-
-- **CLI & Examples**
-  - Interactive console (rustyline)
-  - Server mode
-  - 8 working examples
-
-### 🚧 In Progress
-
-- Documentation completion
-- Performance optimization
-- Deployment guides
-
-## 🚀 Quick Start
-
-### Prerequisites
+Requires Rust 1.75 or later:
 
 ```bash
-# Rust 1.75+
 rustup update
+export GOOGLE_API_KEY="your-api-key"
+```
 
-# Set API key
-export GOOGLE_API_KEY="your-key-here"
+### Basic Example
+
+```rust
+use adk_agent::LlmAgentBuilder;
+use adk_model::gemini::GeminiModel;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?;
+    
+    let agent = LlmAgentBuilder::new("assistant")
+        .description("Helpful AI assistant")
+        .instruction("You are a helpful assistant. Be concise and accurate.")
+        .model(Arc::new(model))
+        .build()?;
+    
+    // Run agent (see examples for full usage)
+    Ok(())
+}
 ```
 
 ### Run Examples
 
 ```bash
-# Interactive console with weather agent
+# Interactive console
 cargo run --example quickstart
 
-# HTTP server
+# REST API server
 cargo run --example server
 
-# Function tools
-cargo run --example function_tool
-
 # Workflow agents
-cargo run --example sequential
-cargo run --example parallel
-cargo run --example loop_workflow
+cargo run --example sequential_agent
+cargo run --example parallel_agent
+
+# See all examples
+ls examples/*.rs
 ```
 
-### Use as Library
+## Architecture
+
+![ADK-Rust Architecture](assets/architecture.png)
+
+ADK-Rust follows a clean layered architecture from application interface down to foundational services.
+
+### Core Crates
+
+| Crate | Purpose | Key Features |
+|-------|---------|--------------|
+| `adk-core` | Foundational traits and types | `Agent` trait, `Content`, `Part`, error types, streaming primitives |
+| `adk-agent` | Agent implementations | `LlmAgent`, `SequentialAgent`, `ParallelAgent`, `LoopAgent`, builder patterns |
+| `adk-model` | LLM integrations | Gemini API client, `GenerativeModel` trait, streaming, function calling |
+| `adk-tool` | Tool system and extensibility | `FunctionTool`, Google Search, MCP protocol, schema validation |
+| `adk-session` | Session and state management | SQLite/in-memory backends, conversation history, state persistence |
+| `adk-artifact` | Artifact storage system | File-based storage, MIME type handling, image/PDF/video support |
+| `adk-memory` | Long-term memory | Vector embeddings, semantic search, Qdrant integration |
+| `adk-runner` | Agent execution runtime | Context management, event streaming, session lifecycle, callbacks |
+| `adk-server` | Production API servers | REST API, A2A protocol, middleware, health checks |
+| `adk-cli` | Command-line interface | Interactive REPL, session management, MCP server integration |
+
+## Key Features
+
+### Agent Types
+
+**LLM Agents**: Powered by large language models with tool use, function calling, and streaming responses.
+
+**Workflow Agents**: Deterministic orchestration patterns.
+- `SequentialAgent`: Execute agents in sequence
+- `ParallelAgent`: Execute agents concurrently
+- `LoopAgent`: Iterative execution with exit conditions
+
+**Custom Agents**: Implement the `Agent` trait for specialized behavior.
+
+### Tool System
+
+Built-in tools:
+- Function tools (custom Rust functions)
+- Google Search
+- Artifact loading
+- Loop termination
+
+**MCP Integration**: Connect to Model Context Protocol servers for extended capabilities.
+
+### Production Features
+
+**Session Management**:
+- In-memory and database-backed sessions
+- Conversation history and state persistence
+- SQLite support for production deployments
+
+**Memory System**:
+- Long-term memory with semantic search
+- Vector embeddings for context retrieval
+- Scalable knowledge storage
+
+**Servers**:
+- REST API with streaming support (SSE)
+- A2A protocol for agent-to-agent communication
+- Health checks and monitoring endpoints
+
+## Documentation
+
+- **Book**: [adk-rust-book/](adk-rust-book/) - Comprehensive guide from basics to production
+- **Examples**: [examples/README.md](examples/README.md) - 13 working examples with detailed explanations
+- **Official Docs**: [docs/official_docs/](docs/official_docs/) - ADK framework documentation
+
+## Development
+
+### Testing
+
+```bash
+# Run all tests
+cargo test
+
+# Test specific crate
+cargo test --package adk-core
+
+# With output
+cargo test -- --nocapture
+```
+
+### Code Quality
+
+```bash
+# Linting
+cargo clippy
+
+# Formatting
+cargo fmt
+
+# Security audit
+cargo audit
+```
+
+### Building
+
+```bash
+# Development build
+cargo build
+
+# Optimized release build
+cargo build --release
+```
+
+## Use as Library
+
+Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
@@ -110,159 +179,71 @@ adk-core = { path = "path/to/adk-rust/adk-core" }
 adk-agent = { path = "path/to/adk-rust/adk-agent" }
 adk-model = { path = "path/to/adk-rust/adk-model" }
 adk-tool = { path = "path/to/adk-rust/adk-tool" }
+adk-runner = { path = "path/to/adk-rust/adk-runner" }
+
+# Optional dependencies
+adk-session = { path = "path/to/adk-rust/adk-session", optional = true }
+adk-artifact = { path = "path/to/adk-rust/adk-artifact", optional = true }
+adk-memory = { path = "path/to/adk-rust/adk-memory", optional = true }
 ```
 
-```rust
-use adk_agent::LlmAgentBuilder;
-use adk_model::gemini::GeminiModel;
-use adk_tool::GoogleSearchTool;
-use std::sync::Arc;
+## Examples
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let model = GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?;
-    
-    let agent = LlmAgentBuilder::new("my_agent")
-        .description("Helpful assistant")
-        .model(Arc::new(model))
-        .tool(Arc::new(GoogleSearchTool::new()))
-        .build()?;
-    
-    // Use agent...
-    Ok(())
-}
-```
+See [examples/](examples/) directory for 13 complete, runnable examples:
 
-## 📚 Documentation
+- `quickstart/` - Basic agent setup and chat loop
+- `function_tool/` - Custom tool implementation
+- `multiple_tools/` - Agent with multiple tools
+- `sequential/` - Sequential workflow execution
+- `parallel/` - Concurrent agent execution
+- `loop_workflow/` - Iterative refinement patterns
+- `load_artifacts/` - Working with images and PDFs
+- `mcp/` - Model Context Protocol integration
+- `server/` - REST API deployment
+- `a2a/` - Agent-to-Agent communication
+- `web/` - Web UI with streaming
+- `research_paper/` - Complex multi-agent workflow
+- `sequential_code/` - Code generation pipeline
 
-- [Architecture Guide](docs/ARCHITECTURE.md) - System design and patterns
-- [API Documentation](https://docs.rs/adk-rust) - Generated docs
-- [Examples](examples/README.md) - Usage examples
-- [Deployment Guide](docs/DEPLOYMENT.md) - Production deployment
+## Performance
 
-## 🏗️ Architecture
+Optimized for production use:
+- Zero-cost abstractions with Rust's ownership model
+- Efficient async I/O via Tokio runtime
+- Minimal allocations and copying
+- Streaming responses for lower latency
+- Connection pooling and caching support
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Application Layer                         │
-│         (CLI, REST Server, A2A Server, Examples)            │
-└─────────────────────────────────────────────────────────────┘
-                              │
-┌─────────────────────────────────────────────────────────────┐
-│                       Runner Layer                           │
-│    (Agent Execution, Context Management, Event Streaming)    │
-└─────────────────────────────────────────────────────────────┘
-                              │
-┌─────────────────────────────────────────────────────────────┐
-│                       Agent Layer                            │
-│   (Agent Trait, LLMAgent, WorkflowAgents, CustomAgent)      │
-└─────────────────────────────────────────────────────────────┘
-                              │
-┌──────────────┬──────────────┬──────────────┬────────────────┐
-│   Model      │    Tool      │   Session    │   Services     │
-│   Layer      │    Layer     │   Layer      │   Layer        │
-└──────────────┴──────────────┴──────────────┴────────────────┘
-```
+## License
 
-## 📦 Crates
+Apache 2.0 (same as Google's ADK)
 
-| Crate | Description | Status |
-|-------|-------------|--------|
-| `adk-core` | Core traits and types | ✅ Complete |
-| `adk-agent` | Agent implementations | ✅ Complete |
-| `adk-model` | Model integrations (Gemini) | ✅ Complete |
-| `adk-tool` | Tool system + MCP | ✅ Complete |
-| `adk-session` | Session management | ✅ Complete |
-| `adk-artifact` | Artifact storage | ✅ Complete |
-| `adk-memory` | Memory system | ✅ Complete |
-| `adk-runner` | Execution runtime | ✅ Complete |
-| `adk-server` | REST + A2A servers | ✅ Complete |
-| `adk-cli` | CLI application | ✅ Complete |
+## Related Projects
 
-## 🔑 Key Features
+- [ADK](https://google.github.io/adk-docs/) - Google's Agent Development Kit
+- [MCP Protocol](https://modelcontextprotocol.io/) - Model Context Protocol for tool integration
+- [Gemini API](https://ai.google.dev/gemini-api/docs) - Google's multimodal AI model
 
-### MCP Integration
+## Contributing
 
-Model Context Protocol support for connecting to MCP servers:
+Contributions welcome! Please open an issue or pull request on GitHub.
 
-```rust
-use adk_tool::McpToolset;
-// See MCP_IMPLEMENTATION_PLAN.md for integration guide
-```
+## Project Status
 
-### Workflow Agents
+**Current Phase**: Documentation and polish (90% implementation complete)
 
-Chain agents for complex tasks:
+**Completed**:
+- Core framework and agent types
+- Model integration (Gemini)
+- Tool system with MCP support
+- Session and artifact management
+- Memory system with vector search
+- REST and A2A servers
+- CLI with interactive mode
+- 8+ production-quality examples
 
-```rust
-let sequential = SequentialAgent::new(
-    "workflow",
-    vec![analyzer, expander, summarizer],
-);
-```
-
-### Streaming Responses
-
-Real-time event streaming:
-
-```rust
-let mut events = runner.run(user_id, session_id, content).await?;
-while let Some(event) = events.next().await {
-    // Process event
-}
-```
-
-## 🧪 Testing
-
-```bash
-# Run all tests
-cargo test
-
-# Run specific crate tests
-cargo test --package adk-core
-
-# Run with output
-cargo test -- --nocapture
-```
-
-## 🔒 Security
-
-```bash
-# Audit dependencies
-cargo audit
-
-# Check for issues
-cargo clippy
-```
-
-## 📊 Performance
-
-- Zero-cost abstractions
-- Efficient async I/O with Tokio
-- Minimal allocations
-- Streaming responses
-
-## 🤝 Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## 📄 License
-
-Apache 2.0 - Same as Google's ADK
-
-## 🔗 Related Projects
-
-- [ADK for Go](https://github.com/google/adk-go) - Original implementation
-- [ADK for Python](https://github.com/google/adk-python) - Python version
-- [MCP Rust SDK](https://github.com/modelcontextprotocol/rust-sdk) - Official MCP SDK
-
-## 📞 Status
-
-This is a complete implementation of Google's ADK in Rust with:
-- ✅ All core features from Go ADK
-- ✅ MCP integration (gold standard for 2025)
-- ✅ 8 working examples
-- ✅ REST and A2A server support
-- ✅ Production-ready architecture
-
-**Next**: Documentation polish and 0.1.0 release preparation.
+**Next Steps**:
+- Complete comprehensive book/guide
+- Performance benchmarking
+- Deployment best practices documentation
+- 0.1.0 release preparation
