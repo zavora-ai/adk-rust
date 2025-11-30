@@ -156,6 +156,7 @@ impl Tool for McpFileTool {
 }
 
 #[tokio::test]
+#[ignore] // Requires GEMINI_API_KEY - run with: cargo test --ignored
 async fn test_mcp_tool_integration() {
     dotenv::dotenv().ok();
     let api_key = env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY must be set");

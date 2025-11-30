@@ -110,6 +110,7 @@ impl InvocationContext for MockContext {
 }
 
 #[tokio::test]
+#[ignore] // Requires GEMINI_API_KEY - run with: cargo test --ignored
 async fn test_multi_agent_workflow() {
     dotenv::dotenv().ok();
     let api_key = env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY must be set");
@@ -158,6 +159,7 @@ async fn test_multi_agent_workflow() {
 }
 
 #[tokio::test]
+#[ignore] // Requires GEMINI_API_KEY - run with: cargo test --ignored
 async fn test_agent_delegation() {
     dotenv::dotenv().ok();
     let api_key = env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY must be set");
