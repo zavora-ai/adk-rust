@@ -56,11 +56,16 @@ When an `LlmAgent` has sub-agents configured, it gains the ability to transfer e
 
 ### How Transfer Works
 
-1. The parent agent's LLM analyzes the user request
-2. Based on sub-agent descriptions, it decides which agent is most suitable
-3. The LLM generates a `transfer_to_agent` function call
-4. The framework routes execution to the specified sub-agent
-5. The sub-agent processes the request and returns results
+The transfer mechanism is **automatic** and seamless. When you configure sub-agents using `.sub_agent()`, the framework handles the entire transfer flow:
+
+1. **Automatic Tool Injection**: The framework injects a `transfer_to_agent` tool into the parent agent's available tools
+2. **LLM Analysis**: The parent agent's LLM analyzes the user request and sub-agent descriptions
+3. **Tool Call**: The LLM calls `transfer_to_agent(agent_name="target_agent")`
+4. **Framework Detection**: The Runner detects the transfer action in the event stream
+5. **Immediate Continuation**: The target agent is invoked automatically with the same user input
+6. **Seamless Response**: The target agent responds immediately - no second user prompt needed
+
+This creates a **seamless handoff** where the user experiences uninterrupted service as different specialists handle their request.
 
 ### Transfer Scope
 
@@ -215,6 +220,31 @@ let coordinator = LlmAgentBuilder::new("coordinator")
     .build()?;
 ```
 
+**Example Conversation:**
+
+```
+User: I have a question about my last invoice
+
+[Agent: coordinator]
+Assistant: I'll connect you with our billing specialist.
+🔄 [Transfer requested to: billing]
+
+[Agent: billing]
+Assistant: Hello! I can help you with your invoice. 
+What specific question do you have?
+
+User: Why was I charged twice?
+
+[Agent: billing]
+Assistant: Let me investigate that duplicate charge for you...
+```
+
+**Key Points:**
+- The coordinator analyzes the request and transfers to the billing agent
+- The billing agent responds **immediately** in the same turn
+- Subsequent messages continue with the billing agent
+- Transfer indicators (`🔄`) show when handoffs occur
+
 ### Hierarchical Task Decomposition
 
 Multi-level hierarchies for breaking down complex tasks:
@@ -301,6 +331,59 @@ let agent_b = LlmAgentBuilder::new("agent_b")
 ```
 
 The `output_key` configuration automatically saves an agent's final response to the session state, making it available to subsequent agents.
+
+## Running Multi-Agent Systems
+
+### Using the Launcher
+
+The `Launcher` provides an easy way to run and test multi-agent systems:
+
+```rust
+use adk_rust::Launcher;
+
+let coordinator = /* your multi-agent setup */;
+
+Launcher::new(Arc::new(coordinator))
+    .run()
+    .await?;
+```
+
+**Run Modes:**
+
+```bash
+# Interactive console mode
+cargo run --example multi_agent -- chat
+
+# Web server mode with UI
+cargo run --example multi_agent -- serve
+cargo run --example multi_agent -- serve --port 3000
+```
+
+**Features:**
+- **Agent indicators**: Shows which agent is responding `[Agent: coordinator]`
+- **Transfer visualization**: Displays transfer events `🔄 [Transfer requested to: billing_agent]`
+- **Seamless handoffs**: Target agent responds immediately after transfer
+- **Conversation history**: Maintains context across agent transfers
+
+### Testing Transfers
+
+To verify your multi-agent system works correctly:
+
+1. **Check agent names** appear in brackets when they respond
+2. **Look for transfer indicators** (`🔄`) when agents hand off
+3. **Verify immediate responses** from target agents without re-prompting
+4. **Test different request types** to ensure proper routing
+5. **Check edge cases** like transferring to non-existent agents
+
+### Debugging Transfer Issues
+
+If transfers aren't working:
+
+- **Verify sub-agents are added** via `.sub_agent()` 
+- **Check agent descriptions** - the LLM uses these to decide transfers
+- **Review instructions** - parent should mention when to transfer
+- **Check agent names** - must match exactly in transfer calls
+- **Enable logging** to see transfer actions in event stream
 
 ## Best Practices
 
