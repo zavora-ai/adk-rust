@@ -64,6 +64,9 @@ impl FunctionTool {
     }
 }
 
+/// The note appended to long-running tool descriptions to prevent duplicate calls.
+const LONG_RUNNING_NOTE: &str = "NOTE: This is a long-running operation. Do not call this tool again if it has already returned some intermediate or pending status.";
+
 #[async_trait]
 impl Tool for FunctionTool {
     fn name(&self) -> &str {
@@ -72,6 +75,20 @@ impl Tool for FunctionTool {
 
     fn description(&self) -> &str {
         &self.description
+    }
+
+    /// Returns an enhanced description for long-running tools that includes
+    /// a note warning the model not to call the tool again if it's already pending.
+    fn enhanced_description(&self) -> String {
+        if self.long_running {
+            if self.description.is_empty() {
+                LONG_RUNNING_NOTE.to_string()
+            } else {
+                format!("{}\n\n{}", self.description, LONG_RUNNING_NOTE)
+            }
+        } else {
+            self.description.clone()
+        }
     }
 
     fn is_long_running(&self) -> bool {

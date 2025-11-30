@@ -65,7 +65,6 @@ pub fn message_to_event(message: &Message, invocation_id: String) -> Result<Even
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adk_core::Part;
 
     #[test]
     fn test_message_to_event() {

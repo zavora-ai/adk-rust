@@ -5,6 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "Session management and state persistence for ADK agents"
+repository = "https://github.com/anthropics/adk-rust"
+documentation = "https://docs.rs/adk-session"
+keywords = ["ai", "agent", "adk", "session", "state"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
 
 [dependencies]
 adk-core = { path = "../adk-core" }

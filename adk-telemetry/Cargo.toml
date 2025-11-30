@@ -1,7 +1,16 @@
 [package]
 name = "adk-telemetry"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OpenTelemetry integration for ADK agent observability"
+repository = "https://github.com/anthropics/adk-rust"
+documentation = "https://docs.rs/adk-telemetry"
+keywords = ["ai", "agent", "adk", "telemetry", "opentelemetry"]
+categories = ["api-bindings", "development-tools::debugging"]
+readme = "README.md"
 
 [dependencies]
 tracing = { workspace = true }

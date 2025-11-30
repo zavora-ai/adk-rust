@@ -1,7 +1,16 @@
 [package]
 name = "adk-runner"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Agent execution runtime for ADK"
+repository = "https://github.com/anthropics/adk-rust"
+documentation = "https://docs.rs/adk-runner"
+keywords = ["ai", "agent", "adk", "runtime", "executor"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
 
 [dependencies]
 adk-core = { path = "../adk-core" }

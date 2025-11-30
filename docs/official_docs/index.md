@@ -54,11 +54,14 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 
 Features planned but not yet implemented in ADK-Rust:
 
-- [Long Running Tools](../roadmap/long-running-tools.md) - Async tool execution with progress tracking
 - [VertexAI Session](../roadmap/vertex-ai-session.md) - Cloud-based session persistence
 - [GCS Artifacts](../roadmap/gcs-artifacts.md) - Google Cloud Storage for artifacts
 - [Agent Tool](../roadmap/agent-tool.md) - Using agents as tools
 - [Evaluation Framework](../roadmap/evaluation.md) - Testing and evaluating agent performance
+
+Recently implemented:
+- [Long Running Tools](../roadmap/long-running-tools.md) - ✅ Async tool execution with progress tracking
+- [MCP Tools](../roadmap/mcp-tools.md) - ✅ Model Context Protocol integration
 
 ## Validation Status
 

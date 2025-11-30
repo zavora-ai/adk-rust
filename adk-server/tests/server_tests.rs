@@ -121,7 +121,7 @@ async fn test_health_check() {
     let app = create_app(config);
 
     let response = app
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(Request::builder().uri("/api/health").body(Body::empty()).unwrap())
         .await
         .unwrap();
 

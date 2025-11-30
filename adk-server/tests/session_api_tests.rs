@@ -152,16 +152,16 @@ async fn test_create_session() {
     let app = create_app(config);
 
     let body = serde_json::json!({
-        "app_name": "test-app",
-        "user_id": "user123",
-        "session_id": "session456"
+        "appName": "test-app",
+        "userId": "user123",
+        "sessionId": "session456"
     });
 
     let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/sessions")
+                .uri("/api/sessions")
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&body).unwrap()))
                 .unwrap(),
@@ -183,7 +183,7 @@ async fn test_get_session() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/sessions/test-app/user123/session456")
+                .uri("/api/sessions/test-app/user123/session456")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -205,7 +205,7 @@ async fn test_delete_session() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/sessions/test-app/user123/session456")
+                .uri("/api/sessions/test-app/user123/session456")
                 .body(Body::empty())
                 .unwrap(),
         )

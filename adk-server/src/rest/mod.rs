@@ -2,7 +2,8 @@ pub mod controllers;
 mod routes;
 
 pub use controllers::{
-    AppsController, ArtifactsController, DebugController, RuntimeController, SessionController,
+    A2aController, AppsController, ArtifactsController, DebugController, RuntimeController,
+    SessionController,
 };
 
 use crate::{web_ui, ServerConfig};
@@ -12,7 +13,13 @@ use axum::{
 };
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
+/// Create the server application with optional A2A support
 pub fn create_app(config: ServerConfig) -> Router {
+    create_app_with_a2a(config, None)
+}
+
+/// Create the server application with A2A support at the specified base URL
+pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> Router {
     let session_controller = SessionController::new(config.session_service.clone());
     let runtime_controller = RuntimeController::new(config.clone());
     let apps_controller = AppsController::new(config.clone());
@@ -70,13 +77,28 @@ pub fn create_app(config: ServerConfig) -> Router {
         .route("/", get(web_ui::root_redirect))
         .route("/ui/", get(web_ui::serve_ui_index))
         .route("/ui/assets/config/runtime-config.json", get(web_ui::serve_runtime_config))
-        .with_state(config)
+        .with_state(config.clone())
         .route("/ui/*path", get(web_ui::serve_ui_assets));
 
-    Router::new()
+    let mut app = Router::new()
         .nest("/api", api_router)
-        .merge(ui_router)
-        .layer(TraceLayer::new_for_http())
+        .merge(ui_router);
+
+    // Add A2A routes if base URL is provided
+    if let Some(base_url) = a2a_base_url {
+        let a2a_controller = A2aController::new(config, base_url);
+        let a2a_router = Router::new()
+            .route(
+                "/.well-known/agent.json",
+                get(controllers::a2a::get_agent_card),
+            )
+            .route("/a2a", post(controllers::a2a::handle_jsonrpc))
+            .route("/a2a/stream", post(controllers::a2a::handle_jsonrpc_stream))
+            .with_state(a2a_controller);
+        app = app.merge(a2a_router);
+    }
+
+    app.layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
 }
 

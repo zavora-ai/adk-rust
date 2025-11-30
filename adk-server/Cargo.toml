@@ -1,8 +1,17 @@
 [package]
 name = "adk-server"
-version = "0.1.0"
-edition = "2021"
-include = ["src/**/*", "assets/**/*", "Cargo.toml"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "HTTP server and A2A protocol for ADK agents"
+repository = "https://github.com/anthropics/adk-rust"
+documentation = "https://docs.rs/adk-server"
+keywords = ["ai", "agent", "adk", "server", "a2a"]
+categories = ["api-bindings", "web-programming::http-server"]
+readme = "README.md"
+include = ["src/**/*", "assets/**/*", "Cargo.toml", "README.md"]
 
 [dependencies]
 adk-core = { path = "../adk-core" }
@@ -12,7 +21,9 @@ adk-session = { path = "../adk-session" }
 adk-artifact = { path = "../adk-artifact" }
 adk-telemetry = { path = "../adk-telemetry" }
 tokio.workspace = true
+tokio-stream.workspace = true
 async-trait.workspace = true
+async-stream.workspace = true
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -27,6 +38,7 @@ tracing = "0.1"
 base64 = "0.22"
 rust-embed = "8.9.0"
 mime_guess = "2.0.5"
+reqwest.workspace = true
 
 [dev-dependencies]
 async-stream.workspace = true

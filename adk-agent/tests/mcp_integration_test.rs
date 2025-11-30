@@ -1,12 +1,8 @@
 // MCP Integration Test
 // Tests the Model Context Protocol toolset integration with ADK agents
 //
-// Note: This is a placeholder test structure. Full MCP integration requires:
-// - MCP server implementation
-// - MCP client toolset
-// - MCP protocol handlers
-//
-// Current status: MCP implementation is on the roadmap but not yet complete
+// The McpToolset is now fully implemented and can connect to any MCP-compliant server.
+// These tests verify basic functionality with mock tools and integration patterns.
 
 use adk_agent::LlmAgentBuilder;
 use adk_core::{

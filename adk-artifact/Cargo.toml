@@ -5,6 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "Binary artifact storage for ADK agents"
+repository = "https://github.com/anthropics/adk-rust"
+documentation = "https://docs.rs/adk-artifact"
+keywords = ["ai", "agent", "adk", "artifact", "storage"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
 
 [dependencies]
 adk-core = { path = "../adk-core" }

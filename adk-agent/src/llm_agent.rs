@@ -500,22 +500,24 @@ impl Agent for LlmAgent {
             };
 
             // Build tool declarations for Gemini
+            // Uses enhanced_description() which includes NOTE for long-running tools
             let mut tool_declarations = std::collections::HashMap::new();
             for tool in &tools {
-                // Build FunctionDeclaration JSON
+                // Build FunctionDeclaration JSON with enhanced description
+                // For long-running tools, this includes a warning not to call again if pending
                 let mut decl = serde_json::json!({
                     "name": tool.name(),
-                    "description": tool.description(),
+                    "description": tool.enhanced_description(),
                 });
-                
+
                 if let Some(params) = tool.parameters_schema() {
                     decl["parameters"] = params;
                 }
-                
+
                 if let Some(response) = tool.response_schema() {
                     decl["response"] = response;
                 }
-                
+
                 tool_declarations.insert(tool.name().to_string(), decl);
             }
 
@@ -604,6 +606,24 @@ impl Agent for LlmAgent {
                     let mut cached_event = Event::new(&invocation_id);
                     cached_event.author = agent_name.clone();
                     cached_event.llm_response.content = cached_response.content.clone();
+
+                    // Populate long_running_tool_ids for function calls from long-running tools
+                    if let Some(ref content) = cached_response.content {
+                        let long_running_ids: Vec<String> = content.parts.iter()
+                            .filter_map(|p| {
+                                if let Part::FunctionCall { name, .. } = p {
+                                    if let Some(tool) = tools.iter().find(|t| t.name() == name) {
+                                        if tool.is_long_running() {
+                                            return Some(name.clone());
+                                        }
+                                    }
+                                }
+                                None
+                            })
+                            .collect();
+                        cached_event.long_running_tool_ids = long_running_ids;
+                    }
+
                     yield Ok(cached_event);
 
                     accumulated_content = cached_response.content;
@@ -648,6 +668,26 @@ impl Agent for LlmAgent {
                         let mut partial_event = Event::new(&invocation_id);
                         partial_event.author = agent_name.clone();
                         partial_event.llm_response.content = chunk.content.clone();
+
+                        // Populate long_running_tool_ids for function calls from long-running tools
+                        if let Some(ref content) = chunk.content {
+                            let long_running_ids: Vec<String> = content.parts.iter()
+                                .filter_map(|p| {
+                                    if let Part::FunctionCall { name, .. } = p {
+                                        // Check if this tool is long-running
+                                        if let Some(tool) = tools.iter().find(|t| t.name() == name) {
+                                            if tool.is_long_running() {
+                                                // Use tool name as ID (we don't have explicit call IDs)
+                                                return Some(name.clone());
+                                            }
+                                        }
+                                    }
+                                    None
+                                })
+                                .collect();
+                            partial_event.long_running_tool_ids = long_running_ids;
+                        }
+
                         yield Ok(partial_event);
                         
                         // Accumulate content for history
@@ -669,14 +709,34 @@ impl Agent for LlmAgent {
                 }
                 
                 // After streaming/caching completes, check for function calls in accumulated content
-                let has_function_calls = accumulated_content.as_ref()
-                    .map(|c| c.parts.iter().any(|p| matches!(p, Part::FunctionCall { .. })))
-                    .unwrap_or(false);
-                
+                let function_call_names: Vec<String> = accumulated_content.as_ref()
+                    .map(|c| c.parts.iter()
+                        .filter_map(|p| {
+                            if let Part::FunctionCall { name, .. } = p {
+                                Some(name.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect())
+                    .unwrap_or_default();
+
+                let has_function_calls = !function_call_names.is_empty();
+
+                // Check if ALL function calls are from long-running tools
+                // If so, we should NOT continue the loop - the tool returned a pending status
+                // and the agent/client will poll for completion later
+                let all_calls_are_long_running = has_function_calls && function_call_names.iter().all(|name| {
+                    tools.iter()
+                        .find(|t| t.name() == name)
+                        .map(|t| t.is_long_running())
+                        .unwrap_or(false)
+                });
+
                 // Add final content to history
                 if let Some(ref content) = accumulated_content {
                     conversation_history.push(content.clone());
-                    
+
                     // Handle output_key: save final agent output to state_delta
                     if let Some(ref output_key) = output_key {
                         if !has_function_calls {  // Only save if not calling tools
@@ -763,6 +823,12 @@ impl Agent for LlmAgent {
                             });
                         }
                     }
+                }
+
+                // If all function calls were from long-running tools, treat as final response
+                // The tools have been executed and returned pending status - don't continue the loop
+                if all_calls_are_long_running {
+                    break;
                 }
             }
             

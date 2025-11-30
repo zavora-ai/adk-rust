@@ -61,11 +61,90 @@ impl Event {
     pub fn set_content(&mut self, content: Content) {
         self.llm_response.content = Some(content);
     }
+
+    /// Returns whether the event is the final response of an agent.
+    ///
+    /// An event is considered final if:
+    /// - It has skip_summarization set, OR
+    /// - It has long_running_tool_ids (indicating async operations), OR
+    /// - It has no function calls, no function responses, is not partial,
+    ///   and has no trailing code execution results.
+    ///
+    /// Note: When multiple agents participate in one invocation, there could be
+    /// multiple events with is_final_response() as true, for each participating agent.
+    pub fn is_final_response(&self) -> bool {
+        // If skip_summarization is set or we have long-running tools, it's final
+        if self.actions.skip_summarization || !self.long_running_tool_ids.is_empty() {
+            return true;
+        }
+
+        // Check content for function calls/responses
+        let has_function_calls = self.has_function_calls();
+        let has_function_responses = self.has_function_responses();
+        let is_partial = self.llm_response.partial;
+        let has_trailing_code_result = self.has_trailing_code_execution_result();
+
+        !has_function_calls && !has_function_responses && !is_partial && !has_trailing_code_result
+    }
+
+    /// Returns true if the event content contains function calls.
+    fn has_function_calls(&self) -> bool {
+        if let Some(content) = &self.llm_response.content {
+            for part in &content.parts {
+                if matches!(part, crate::Part::FunctionCall { .. }) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Returns true if the event content contains function responses.
+    fn has_function_responses(&self) -> bool {
+        if let Some(content) = &self.llm_response.content {
+            for part in &content.parts {
+                if matches!(part, crate::Part::FunctionResponse { .. }) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Returns true if the event has a trailing code execution result.
+    /// Note: CodeExecutionResult is not yet implemented in the Part enum,
+    /// so this always returns false for now.
+    #[allow(clippy::match_like_matches_macro)]
+    fn has_trailing_code_execution_result(&self) -> bool {
+        // TODO: Implement when CodeExecutionResult is added to Part enum
+        // if let Some(content) = &self.llm_response.content {
+        //     if let Some(last_part) = content.parts.last() {
+        //         return matches!(last_part, crate::Part::CodeExecutionResult { .. });
+        //     }
+        // }
+        false
+    }
+
+    /// Extracts function call IDs from this event's content.
+    /// Used to identify which function calls are associated with long-running tools.
+    pub fn function_call_ids(&self) -> Vec<String> {
+        let mut ids = Vec::new();
+        if let Some(content) = &self.llm_response.content {
+            for part in &content.parts {
+                if let crate::Part::FunctionCall { name, .. } = part {
+                    // Use name as ID since we don't have explicit IDs in our Part enum
+                    ids.push(name.clone());
+                }
+            }
+        }
+        ids
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Part;
 
     #[test]
     fn test_event_creation() {
@@ -86,5 +165,124 @@ mod tests {
         assert_eq!(KEY_PREFIX_APP, "app:");
         assert_eq!(KEY_PREFIX_TEMP, "temp:");
         assert_eq!(KEY_PREFIX_USER, "user:");
+    }
+
+    #[test]
+    fn test_is_final_response_no_content() {
+        let event = Event::new("inv-123");
+        // No content, no function calls -> final
+        assert!(event.is_final_response());
+    }
+
+    #[test]
+    fn test_is_final_response_text_only() {
+        let mut event = Event::new("inv-123");
+        event.llm_response.content = Some(Content {
+            role: "model".to_string(),
+            parts: vec![Part::Text { text: "Hello!".to_string() }],
+        });
+        // Text only, no function calls -> final
+        assert!(event.is_final_response());
+    }
+
+    #[test]
+    fn test_is_final_response_with_function_call() {
+        let mut event = Event::new("inv-123");
+        event.llm_response.content = Some(Content {
+            role: "model".to_string(),
+            parts: vec![Part::FunctionCall {
+                name: "get_weather".to_string(),
+                args: serde_json::json!({"city": "NYC"}),
+            }],
+        });
+        // Has function call -> NOT final (need to execute it)
+        assert!(!event.is_final_response());
+    }
+
+    #[test]
+    fn test_is_final_response_with_function_response() {
+        let mut event = Event::new("inv-123");
+        event.llm_response.content = Some(Content {
+            role: "function".to_string(),
+            parts: vec![Part::FunctionResponse {
+                name: "get_weather".to_string(),
+                response: serde_json::json!({"temp": 72}),
+            }],
+        });
+        // Has function response -> NOT final (model needs to respond)
+        assert!(!event.is_final_response());
+    }
+
+    #[test]
+    fn test_is_final_response_partial() {
+        let mut event = Event::new("inv-123");
+        event.llm_response.partial = true;
+        event.llm_response.content = Some(Content {
+            role: "model".to_string(),
+            parts: vec![Part::Text { text: "Hello...".to_string() }],
+        });
+        // Partial response -> NOT final
+        assert!(!event.is_final_response());
+    }
+
+    #[test]
+    fn test_is_final_response_skip_summarization() {
+        let mut event = Event::new("inv-123");
+        event.actions.skip_summarization = true;
+        event.llm_response.content = Some(Content {
+            role: "function".to_string(),
+            parts: vec![Part::FunctionResponse {
+                name: "tool".to_string(),
+                response: serde_json::json!({"result": "done"}),
+            }],
+        });
+        // Even with function response, skip_summarization makes it final
+        assert!(event.is_final_response());
+    }
+
+    #[test]
+    fn test_is_final_response_long_running_tool_ids() {
+        let mut event = Event::new("inv-123");
+        event.long_running_tool_ids = vec!["process_video".to_string()];
+        event.llm_response.content = Some(Content {
+            role: "model".to_string(),
+            parts: vec![Part::FunctionCall {
+                name: "process_video".to_string(),
+                args: serde_json::json!({"file": "video.mp4"}),
+            }],
+        });
+        // Has long_running_tool_ids -> final (async operation started)
+        assert!(event.is_final_response());
+    }
+
+    #[test]
+    fn test_function_call_ids() {
+        let mut event = Event::new("inv-123");
+        event.llm_response.content = Some(Content {
+            role: "model".to_string(),
+            parts: vec![
+                Part::FunctionCall {
+                    name: "get_weather".to_string(),
+                    args: serde_json::json!({}),
+                },
+                Part::Text { text: "I'll check the weather".to_string() },
+                Part::FunctionCall {
+                    name: "get_time".to_string(),
+                    args: serde_json::json!({}),
+                },
+            ],
+        });
+
+        let ids = event.function_call_ids();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"get_weather".to_string()));
+        assert!(ids.contains(&"get_time".to_string()));
+    }
+
+    #[test]
+    fn test_function_call_ids_empty() {
+        let event = Event::new("inv-123");
+        let ids = event.function_call_ids();
+        assert!(ids.is_empty());
     }
 }

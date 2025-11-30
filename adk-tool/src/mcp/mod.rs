@@ -1,3 +1,3 @@
 mod toolset;
 
-pub use toolset::McpToolset;
+pub use toolset::{McpToolset, ToolFilter};

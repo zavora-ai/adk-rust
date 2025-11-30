@@ -7,6 +7,18 @@ use std::sync::Arc;
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
+
+    /// Returns an enhanced description that may include additional notes.
+    /// For long-running tools, this includes a warning not to call the tool
+    /// again if it has already returned a pending status.
+    /// Default implementation returns the base description.
+    fn enhanced_description(&self) -> String {
+        self.description().to_string()
+    }
+
+    /// Indicates whether the tool is a long-running operation.
+    /// Long-running tools typically return a task ID immediately and
+    /// complete the operation asynchronously.
     fn is_long_running(&self) -> bool {
         false
     }

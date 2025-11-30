@@ -118,6 +118,68 @@ async fn test_function_tool_long_running() {
 }
 
 #[tokio::test]
+async fn test_function_tool_long_running_enhanced_description() {
+    // Test with description
+    let tool = FunctionTool::new("process_video", "Process a video file", |_ctx, _args| async move {
+        Ok(json!({"status": "pending", "task_id": "task-123"}))
+    })
+    .with_long_running(true);
+
+    let enhanced = tool.enhanced_description();
+    assert!(enhanced.contains("Process a video file"));
+    assert!(enhanced.contains("NOTE: This is a long-running operation"));
+    assert!(enhanced.contains("Do not call this tool again if it has already returned"));
+}
+
+#[tokio::test]
+async fn test_function_tool_long_running_enhanced_description_empty() {
+    // Test with empty description
+    let tool = FunctionTool::new("process", "", |_ctx, _args| async move {
+        Ok(json!({"status": "pending"}))
+    })
+    .with_long_running(true);
+
+    let enhanced = tool.enhanced_description();
+    assert!(enhanced.contains("NOTE: This is a long-running operation"));
+    // Should not have double newlines from empty description
+    assert!(!enhanced.starts_with("\n\n"));
+}
+
+#[tokio::test]
+async fn test_function_tool_non_long_running_enhanced_description() {
+    // Regular tools should return description as-is
+    let tool = FunctionTool::new("quick_task", "Does something quick", |_ctx, _args| async move {
+        Ok(json!("done"))
+    });
+
+    assert!(!tool.is_long_running());
+    let enhanced = tool.enhanced_description();
+    assert_eq!(enhanced, "Does something quick");
+    assert!(!enhanced.contains("NOTE: This is a long-running operation"));
+}
+
+#[tokio::test]
+async fn test_function_tool_long_running_returns_pending_status() {
+    // Simulate typical long-running tool behavior - return task ID and status
+    let tool = FunctionTool::new("analyze_data", "Analyze large dataset", |_ctx, _args| async move {
+        Ok(json!({
+            "status": "processing",
+            "task_id": "task-abc123",
+            "progress": 0,
+            "estimated_time": "5 minutes"
+        }))
+    })
+    .with_long_running(true);
+
+    let ctx = Arc::new(MockToolContext::new()) as Arc<dyn ToolContext>;
+    let result = tool.execute(ctx, json!({"dataset_path": "/data/large.csv"})).await.unwrap();
+
+    assert_eq!(result["status"], "processing");
+    assert_eq!(result["task_id"], "task-abc123");
+    assert_eq!(result["progress"], 0);
+}
+
+#[tokio::test]
 async fn test_function_tool_error() {
     let tool = FunctionTool::new("fail", "Always fails", |_ctx, _args| async move {
         Err(adk_core::AdkError::Tool("intentional error".to_string()))

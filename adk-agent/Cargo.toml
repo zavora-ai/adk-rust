@@ -5,6 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "Agent implementations for ADK (LLM, Custom, Workflow agents)"
+repository = "https://github.com/anthropics/adk-rust"
+documentation = "https://docs.rs/adk-agent"
+keywords = ["ai", "agent", "adk", "llm", "workflow"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
 
 [dependencies]
 adk-core = { path = "../adk-core" }
