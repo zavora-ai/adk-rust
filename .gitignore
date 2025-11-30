@@ -2,10 +2,8 @@
 /target/
 **/*.rs.bk
 *.pdb
-Cargo.lock
 
 # IDE
-.vscode/
 .idea/
 *.swp
 *.swo
@@ -43,12 +41,18 @@ Cargo.lock
 tmp/
 temp/
 *.tmp
+*.txt
 
 # OS
 Thumbs.db
 .Spotlight-V100
 .Trashes
 
-# Go (from cloned repo)
-adk-go/
-gemini-rust/
+# Reference materials (not part of main crate)
+/reference/
+
+# Learning materials (not part of main crate)
+/learning/
+
+# Vendor (patched dependencies)
+# Note: vendor/ IS tracked for gemini-rust patch

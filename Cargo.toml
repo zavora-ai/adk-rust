@@ -1,22 +1,35 @@
 [workspace]
 resolver = "2"
 members = [
-    "adk-rust",
-    "adk-server",
-    "adk-runner",
+    # Core packages (publishable to crates.io)
     "adk-core",
+    "adk-telemetry",
     "adk-model",
-    "adk-tool",
     "adk-session",
     "adk-artifact",
     "adk-memory",
+    "adk-tool",
     "adk-agent",
+    "adk-runner",
+    "adk-server",
     "adk-cli",
+    "adk-rust",
+
+    # Development packages (not published)
     "examples",
-    "adk-telemetry",
-    "benches", "adk-rust-guide",
+    "benches",
+
+    # Learning materials (not published, in separate folder)
+    "learning/adk-rust-guide",
 ]
-exclude = ["gemini-rust"]
+exclude = [
+    # Reference implementations (not part of workspace)
+    "reference/adk-go",
+    "reference/mcp-rust-sdk",
+    "reference/gemini-rust",
+    # Patched vendor dependency
+    "vendor/gemini-rust",
+]
 
 [profile.release]
 strip = true

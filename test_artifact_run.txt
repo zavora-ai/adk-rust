@@ -1,8 +1,0 @@
-   Compiling adk-rust-guide v0.1.0 (/data/projects/adk-rust/adk-rust-guide)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.39s
-     Running `target/debug/examples/artifact_ops`
-📖 Validating: docs/official_docs/artifacts/artifacts.md
-Saved artifact with version: 1
-Loaded artifact successfully: 32 bytes
-Artifacts in session: ["my_artifact"]
-✅ Example 'artifact_ops' completed successfully

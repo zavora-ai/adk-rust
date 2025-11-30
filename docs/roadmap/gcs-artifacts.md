@@ -25,7 +25,7 @@
 
 ### Configuration
 
-```rust
+```rust,ignore
 use adk_artifact::GcsArtifactService;
 
 // Create GCS artifact service
@@ -91,7 +91,7 @@ IAM roles needed for the service account:
 
 ## Example Usage (Planned)
 
-```rust
+```rust,ignore
 use adk_artifact::{GcsArtifactService, SaveRequest};
 use adk_core::Part;
 
@@ -128,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 For users moving from `InMemoryArtifactService` to `GcsArtifactService`:
 
-```rust
+```rust,ignore
 // Before (development)
 let artifact_service = Arc::new(InMemoryArtifactService::new());
 

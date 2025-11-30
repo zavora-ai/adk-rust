@@ -1,1 +1,0 @@
-This is a simple test document for PDF processing.

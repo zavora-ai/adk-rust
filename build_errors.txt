@@ -1,4 +1,0 @@
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
-     Running unittests src/lib.rs (target/debug/deps/adk_rust_guide-b9c5c66f04a5b07e)
-     Running unittests src/main.rs (target/debug/deps/adk_rust_guide-2b3990af0cdc60ea)
-     Running tests/validation_tests.rs (target/debug/deps/validation_tests-d06a8a3c2ddb5fc9)

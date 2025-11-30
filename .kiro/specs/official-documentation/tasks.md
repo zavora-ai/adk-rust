@@ -323,61 +323,61 @@ if is_interactive_mode() {
     - **Property 1: Documentation Example Compilation**
     - **Validates: Requirements 13.4, 13.5**
 
-- [ ] 18. Checkpoint - Ensure all tests pass
+- [x] 18. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Phase 13: MCP and A2A Documentation
 
-- [ ] 19. Create MCP documentation
-  - [ ] 19.1 Assess MCP implementation status
+- [x] 19. Create MCP documentation
+  - [x] 19.1 Assess MCP implementation status
     - Review current McpToolset implementation
     - Determine what features are functional vs roadmap
     - _Requirements: 12.1, 12.2_
-  - [ ] 19.2 Write tools/mcp-tools.md (or roadmap/mcp-tools.md)
+  - [x] 19.2 Write tools/mcp-tools.md (or roadmap/mcp-tools.md)
     - Document implemented MCP features
     - Place unimplemented features in roadmap
     - _Requirements: 12.3_
-  - [ ] 19.3 Create MCP validation example (if applicable)
+  - [x] 19.3 Create MCP validation example (if applicable)
     - Create examples/tools/mcp_tool.rs if MCP is functional
     - _Requirements: 12.4_
 
-- [ ] 20. Create A2A documentation
-  - [ ] 20.1 Assess A2A implementation status
+- [x] 20. Create A2A documentation
+  - [x] 20.1 Assess A2A implementation status
     - Review current A2A protocol implementation
     - Determine what features are functional vs roadmap
     - _Requirements: 14.1, 14.2_
-  - [ ] 20.2 Write deployment/a2a.md (or roadmap/a2a.md)
+  - [x] 20.2 Write deployment/a2a.md (or roadmap/a2a.md)
     - Document implemented A2A features
     - Place unimplemented features in roadmap
     - _Requirements: 14.3_
-  - [ ] 20.3 Create A2A validation example (if applicable)
+  - [x] 20.3 Create A2A validation example (if applicable)
     - Create examples/deployment/a2a.rs if A2A is functional
     - _Requirements: 14.4_
 
 ## Phase 14: Roadmap Documentation
 
-- [ ] 21. Create roadmap documentation for unimplemented features
-  - [ ] 21.1 Write roadmap/long-running-tools.md
+- [x] 21. Create roadmap documentation for unimplemented features
+  - [x] 21.1 Write roadmap/long-running-tools.md
     - Describe planned Long Running Function Tools API
     - No runnable code samples
     - _Requirements: 17.1, 17.2, 17.3, 17.4, 17.5_
-  - [ ] 21.2 Write roadmap/vertex-ai-session.md
+  - [x] 21.2 Write roadmap/vertex-ai-session.md
     - Describe planned VertexAI Session Service
     - No runnable code samples
     - _Requirements: 17.1, 17.2, 17.3, 17.4, 17.5_
-  - [ ] 21.3 Write roadmap/gcs-artifacts.md
+  - [x] 21.3 Write roadmap/gcs-artifacts.md
     - Describe planned GCS Artifact Service
     - No runnable code samples
     - _Requirements: 17.1, 17.2, 17.3, 17.4, 17.5_
-  - [ ] 21.4 Write roadmap/agent-tool.md
+  - [x] 21.4 Write roadmap/agent-tool.md
     - Describe planned Agent-as-a-Tool pattern
     - No runnable code samples
     - _Requirements: 17.1, 17.2, 17.3, 17.4, 17.5_
-  - [ ] 21.5 Write roadmap/evaluation.md
+  - [x] 21.5 Write roadmap/evaluation.md
     - Describe planned Evaluation Framework
     - No runnable code samples
     - _Requirements: 17.1, 17.2, 17.3, 17.4, 17.5_
-  - [ ] 21.6 Write property test for roadmap no runnable code
+  - [x] 21.6 Write property test for roadmap no runnable code
     - **Property 4: Roadmap Files No Runnable Code**
     - **Validates: Requirements 17.4**
 

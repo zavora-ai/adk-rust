@@ -1,2 +1,0 @@
-cat: /tmp/adk_session_debug.log: No such file or directory
-No debug log found
