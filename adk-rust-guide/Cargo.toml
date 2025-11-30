@@ -7,6 +7,7 @@ description = "Validation examples for ADK-Rust official documentation"
 [dependencies]
 # Using path dependency for validation since it's not published yet
 adk-rust = { path = "../adk-rust", features = ["full"] }
+adk-telemetry = { path = "../adk-telemetry" }
 tokio = { version = "1.40", features = ["full"] }
 dotenv = "0.15"
 rustyline = "14.0"
@@ -16,6 +17,8 @@ axum = "0.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 schemars = "0.8"
+tracing = "0.1"
+chrono = "0.4"
 
 [dev-dependencies]
 proptest = "1.4"
@@ -174,6 +177,10 @@ path = "examples/deployment/console_mode.rs"
 [[example]]
 name = "server_mode"
 path = "examples/deployment/server_mode.rs"
+
+[[example]]
+name = "full_stack_research"
+path = "examples/deployment/full_stack_research.rs"
 
 # Observability examples
 [[example]]

@@ -51,6 +51,10 @@ path = "web/main.rs"
 name = "sequential_code"
 path = "sequential_code/main.rs"
 
+[[example]]
+name = "research_paper"
+path = "research_paper/main.rs"
+
 [dependencies]
 adk-core = { path = "../adk-core" }
 adk-agent = { path = "../adk-agent" }
@@ -67,3 +71,4 @@ anyhow = "1.0"
 futures = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+chrono = "0.4"

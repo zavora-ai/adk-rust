@@ -1851,3 +1851,403 @@ mod unit_tests {
         );
     }
 }
+
+/// **Feature: official-documentation, Property 1: Documentation Example Compilation**
+///
+/// *For any* telemetry example file, the file SHALL:
+/// 1. Exist on disk
+/// 2. Contain valid Rust syntax (verified by presence of expected patterns)
+/// 3. Reference the telemetry documentation
+/// 4. Demonstrate telemetry initialization and usage
+///
+/// **Validates: Requirements 15.3, 15.4**
+#[test]
+fn test_telemetry_example_compilation() {
+    let root = workspace_root();
+
+    // Test telemetry.rs
+    let telemetry_path = root.join("adk-rust-guide/examples/observability/telemetry.rs");
+    assert!(
+        telemetry_path.exists(),
+        "Telemetry example must exist at {:?}",
+        telemetry_path
+    );
+
+    let content = std::fs::read_to_string(&telemetry_path)
+        .expect("Should be able to read telemetry.rs");
+
+    assert!(
+        content.contains("Validates: docs/official_docs/observability/telemetry.md"),
+        "Telemetry example must reference the documentation it validates"
+    );
+    assert!(
+        content.contains("init_telemetry"),
+        "Telemetry example must demonstrate init_telemetry usage"
+    );
+    assert!(
+        content.contains("info!") || content.contains("debug!") || content.contains("warn!"),
+        "Telemetry example must demonstrate logging macros"
+    );
+    assert!(
+        content.contains("#[instrument]"),
+        "Telemetry example must demonstrate #[instrument] attribute"
+    );
+    assert!(
+        content.contains("agent_run_span") || content.contains("model_call_span") || content.contains("tool_execute_span"),
+        "Telemetry example must demonstrate pre-configured spans"
+    );
+    assert!(
+        content.contains("callback_span"),
+        "Telemetry example must demonstrate callback_span usage"
+    );
+    assert!(
+        content.contains("add_context_attributes"),
+        "Telemetry example must demonstrate add_context_attributes usage"
+    );
+    assert!(
+        content.contains("std::result::Result"),
+        "Telemetry example must use std::result::Result"
+    );
+    assert!(
+        content.contains("#[tokio::main]"),
+        "Telemetry example must be an async main function"
+    );
+    assert!(
+        content.contains("is_interactive_mode"),
+        "Telemetry example must support validation/interactive modes"
+    );
+}
+
+// Property test for telemetry examples
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(100))]
+
+    /// **Feature: official-documentation, Property 1: Documentation Example Compilation**
+    ///
+    /// *For any* telemetry example, the file SHALL contain proper documentation
+    /// references and demonstrate the documented API patterns.
+    ///
+    /// **Validates: Requirements 15.3, 15.4**
+    #[test]
+    fn prop_telemetry_examples_valid(index in 0usize..100) {
+        let root = workspace_root();
+        let telemetry_examples = vec![
+            ("observability/telemetry.rs", "init_telemetry"),
+        ];
+
+        let (example_file, key_pattern) = &telemetry_examples[index % telemetry_examples.len()];
+        let example_path = root.join("adk-rust-guide/examples").join(example_file);
+
+        // Verify file exists
+        prop_assert!(
+            example_path.exists(),
+            "Telemetry example should exist: {:?}",
+            example_path
+        );
+
+        // Read and verify structure
+        if let Ok(content) = std::fs::read_to_string(&example_path) {
+            // Must reference the documentation
+            prop_assert!(
+                content.contains("telemetry.md"),
+                "Example {} should reference telemetry.md documentation",
+                example_file
+            );
+
+            // Must use init_telemetry
+            prop_assert!(
+                content.contains(key_pattern),
+                "Example {} should use {}",
+                example_file,
+                key_pattern
+            );
+
+            // Must demonstrate logging macros
+            prop_assert!(
+                content.contains("info!") || content.contains("debug!") || content.contains("warn!"),
+                "Example {} should demonstrate logging macros",
+                example_file
+            );
+
+            // Must demonstrate instrumentation
+            prop_assert!(
+                content.contains("#[instrument]"),
+                "Example {} should demonstrate #[instrument] attribute",
+                example_file
+            );
+
+            // Must demonstrate pre-configured spans
+            prop_assert!(
+                content.contains("agent_run_span") || content.contains("model_call_span") || content.contains("tool_execute_span"),
+                "Example {} should demonstrate pre-configured spans",
+                example_file
+            );
+
+            // Must be async main
+            prop_assert!(
+                content.contains("#[tokio::main]"),
+                "Example {} should have async main",
+                example_file
+            );
+
+            // Must use std::result::Result pattern
+            prop_assert!(
+                content.contains("std::result::Result"),
+                "Example {} should use std::result::Result",
+                example_file
+            );
+        }
+    }
+}
+
+
+/// **Feature: official-documentation, Property 1: Documentation Example Compilation**
+///
+/// *For any* observability example file, the file SHALL:
+/// 1. Exist on disk
+/// 2. Contain valid Rust syntax (verified by presence of expected patterns)
+/// 3. Reference the observability documentation
+/// 4. Demonstrate telemetry setup
+///
+/// **Validates: Requirements 15.3, 15.4**
+#[test]
+fn test_observability_example_compilation() {
+    let root = workspace_root();
+
+    // Test telemetry.rs
+    let telemetry_path = root.join("adk-rust-guide/examples/observability/telemetry.rs");
+    assert!(
+        telemetry_path.exists(),
+        "Telemetry example must exist at {:?}",
+        telemetry_path
+    );
+
+    let content = std::fs::read_to_string(&telemetry_path)
+        .expect("Should be able to read telemetry.rs");
+
+    assert!(
+        content.contains("Validates: docs/official_docs/observability/telemetry.md"),
+        "Telemetry example must reference the documentation it validates"
+    );
+    assert!(
+        content.contains("init_telemetry"),
+        "Telemetry example must demonstrate init_telemetry usage"
+    );
+    assert!(
+        content.contains("std::result::Result"),
+        "Telemetry example must use std::result::Result"
+    );
+    assert!(
+        content.contains("#[tokio::main]"),
+        "Telemetry example must be an async main function"
+    );
+}
+
+// Property test for observability examples
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(100))]
+
+    /// **Feature: official-documentation, Property 1: Documentation Example Compilation**
+    ///
+    /// *For any* observability example, the file SHALL contain proper documentation
+    /// references and demonstrate the documented API patterns.
+    ///
+    /// **Validates: Requirements 15.3, 15.4**
+    #[test]
+    fn prop_observability_examples_valid(index in 0usize..100) {
+        let root = workspace_root();
+        let observability_examples = vec![
+            ("observability/telemetry.rs", "init_telemetry"),
+        ];
+
+        let (example_file, key_pattern) = &observability_examples[index % observability_examples.len()];
+        let example_path = root.join("adk-rust-guide/examples").join(example_file);
+
+        // Verify file exists
+        prop_assert!(
+            example_path.exists(),
+            "Observability example should exist: {:?}",
+            example_path
+        );
+
+        // Read and verify structure
+        if let Ok(content) = std::fs::read_to_string(&example_path) {
+            // Must reference the documentation
+            prop_assert!(
+                content.contains("telemetry.md"),
+                "Example {} should reference telemetry.md documentation",
+                example_file
+            );
+
+            // Must use the key pattern
+            prop_assert!(
+                content.contains(key_pattern),
+                "Example {} should use {}",
+                example_file,
+                key_pattern
+            );
+
+            // Must be async main
+            prop_assert!(
+                content.contains("#[tokio::main]"),
+                "Example {} should have async main",
+                example_file
+            );
+
+            // Must use std::result::Result pattern
+            prop_assert!(
+                content.contains("std::result::Result"),
+                "Example {} should use std::result::Result",
+                example_file
+            );
+        }
+    }
+}
+
+/// **Feature: official-documentation, Property 1: Documentation Example Compilation**
+///
+/// *For any* deployment example file, the file SHALL:
+/// 1. Exist on disk
+/// 2. Contain valid Rust syntax (verified by presence of expected patterns)
+/// 3. Reference the deployment documentation
+/// 4. Demonstrate Launcher usage
+///
+/// **Validates: Requirements 13.4, 13.5**
+#[test]
+fn test_deployment_example_compilation() {
+    let root = workspace_root();
+
+    // Test console_mode.rs
+    let console_mode_path = root.join("adk-rust-guide/examples/deployment/console_mode.rs");
+    assert!(
+        console_mode_path.exists(),
+        "Console mode example must exist at {:?}",
+        console_mode_path
+    );
+
+    let content = std::fs::read_to_string(&console_mode_path)
+        .expect("Should be able to read console_mode.rs");
+
+    assert!(
+        content.contains("Validates: docs/official_docs/deployment/launcher.md"),
+        "Console mode example must reference the documentation it validates"
+    );
+    assert!(
+        content.contains("Launcher::new"),
+        "Console mode example must demonstrate Launcher creation"
+    );
+    assert!(
+        content.contains("is_interactive_mode"),
+        "Console mode example must support validation/interactive modes"
+    );
+    assert!(
+        content.contains("std::result::Result"),
+        "Console mode example must use std::result::Result"
+    );
+    assert!(
+        content.contains("#[tokio::main]"),
+        "Console mode example must be an async main function"
+    );
+
+    // Test server_mode.rs
+    let server_mode_path = root.join("adk-rust-guide/examples/deployment/server_mode.rs");
+    assert!(
+        server_mode_path.exists(),
+        "Server mode example must exist at {:?}",
+        server_mode_path
+    );
+
+    let content = std::fs::read_to_string(&server_mode_path)
+        .expect("Should be able to read server_mode.rs");
+
+    assert!(
+        content.contains("Validates: docs/official_docs/deployment/server.md"),
+        "Server mode example must reference the documentation it validates"
+    );
+    assert!(
+        content.contains("Launcher::new"),
+        "Server mode example must demonstrate Launcher creation"
+    );
+    assert!(
+        content.contains("is_interactive_mode"),
+        "Server mode example must support validation/interactive modes"
+    );
+    assert!(
+        content.contains("std::result::Result"),
+        "Server mode example must use std::result::Result"
+    );
+    assert!(
+        content.contains("#[tokio::main]"),
+        "Server mode example must be an async main function"
+    );
+}
+
+// Property test for deployment examples
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(100))]
+
+    /// **Feature: official-documentation, Property 1: Documentation Example Compilation**
+    ///
+    /// *For any* deployment example, the file SHALL contain proper documentation
+    /// references and demonstrate the documented API patterns.
+    ///
+    /// **Validates: Requirements 13.4, 13.5**
+    #[test]
+    fn prop_deployment_examples_valid(index in 0usize..100) {
+        let root = workspace_root();
+        let deployment_examples = vec![
+            ("deployment/console_mode.rs", "launcher.md", "Launcher::new"),
+            ("deployment/server_mode.rs", "server.md", "Launcher::new"),
+        ];
+
+        let (example_file, doc_ref, key_pattern) = &deployment_examples[index % deployment_examples.len()];
+        let example_path = root.join("adk-rust-guide/examples").join(example_file);
+
+        // Verify file exists
+        prop_assert!(
+            example_path.exists(),
+            "Deployment example should exist: {:?}",
+            example_path
+        );
+
+        // Read and verify structure
+        if let Ok(content) = std::fs::read_to_string(&example_path) {
+            // Must reference the documentation
+            prop_assert!(
+                content.contains(doc_ref),
+                "Example {} should reference {} documentation",
+                example_file,
+                doc_ref
+            );
+
+            // Must use the key pattern
+            prop_assert!(
+                content.contains(key_pattern),
+                "Example {} should use {}",
+                example_file,
+                key_pattern
+            );
+
+            // Must support validation/interactive modes
+            prop_assert!(
+                content.contains("is_interactive_mode"),
+                "Example {} should support validation/interactive modes",
+                example_file
+            );
+
+            // Must be async main
+            prop_assert!(
+                content.contains("#[tokio::main]"),
+                "Example {} should have async main",
+                example_file
+            );
+
+            // Must use std::result::Result pattern
+            prop_assert!(
+                content.contains("std::result::Result"),
+                "Example {} should use std::result::Result",
+                example_file
+            );
+        }
+    }
+}

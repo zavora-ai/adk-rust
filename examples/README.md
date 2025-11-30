@@ -19,7 +19,8 @@ examples/
 ├── parallel/            # Parallel workflow
 ├── loop_workflow/       # Iterative loop
 ├── load_artifacts/      # Artifact loading
-└── mcp/                 # MCP integration
+├── mcp/                 # MCP integration
+└── research_paper/      # Full-stack research paper generator
 ```
 
 ## Prerequisites
@@ -134,6 +135,25 @@ cargo run --example mcp
 ```
 Demonstrates: McpToolset integration pattern.
 
+### Full-Stack Examples
+
+#### research_paper
+Complete client-server application for generating research papers:
+```bash
+cargo run --example research_paper -- serve --port 8080
+```
+Then open `examples/research_paper/frontend.html` in your browser.
+
+Demonstrates: 
+- Full-stack architecture (frontend + backend)
+- Custom research and PDF generation tools
+- Real-time SSE streaming to web client
+- Artifact storage and download
+- Session management
+- Production-ready integration patterns
+
+See [research_paper/README.md](research_paper/README.md) for detailed documentation.
+
 ## Example Categories
 
 | Category | Count | Examples |
@@ -142,7 +162,8 @@ Demonstrates: McpToolset integration pattern.
 | **Servers** | 3 | server, a2a, web |
 | **Workflows** | 4 | sequential, sequential_code, parallel, loop_workflow |
 | **Tools** | 2 | load_artifacts, mcp |
-| **Total** | **12** | |
+| **Full-Stack** | 1 | research_paper |
+| **Total** | **13** | |
 
 ## Parity with Go ADK
 
