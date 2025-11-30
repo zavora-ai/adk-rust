@@ -11,9 +11,61 @@ This document outlines the steps required to publish ADK-Rust packages to crates
 - **Main crate documentation**: `adk-rust/src/lib.rs` has comprehensive crate-level docs with examples
 - **Feature flags**: Well-organized with `default`, `full`, `minimal` presets
 
-### Blocking Issues
+### Completed Tasks
 
-#### 1. Patched Dependency: `gemini-rust`
+#### ✅ Package Metadata
+All packages now have complete crates.io metadata:
+
+| Package | description | repository | documentation | keywords | categories |
+|---------|-------------|------------|---------------|----------|------------|
+| adk-core | ✅ | ✅ | ✅ | ✅ | ✅ |
+| adk-agent | ✅ | ✅ | ✅ | ✅ | ✅ |
+| adk-model | ✅ | ✅ | ✅ | ✅ | ✅ |
+| adk-tool | ✅ | ✅ | ✅ | ✅ | ✅ |
+| adk-session | ✅ | ✅ | ✅ | ✅ | ✅ |
+| adk-artifact | ✅ | ✅ | ✅ | ✅ | ✅ |
+| adk-memory | ✅ | ✅ | ✅ | ✅ | ✅ |
+| adk-runner | ✅ | ✅ | ✅ | ✅ | ✅ |
+| adk-server | ✅ | ✅ | ✅ | ✅ | ✅ |
+| adk-cli | ✅ | ✅ | ✅ | ✅ | ✅ |
+| adk-telemetry | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+#### ✅ README Files
+All packages have README.md files:
+
+- [x] adk-core/README.md
+- [x] adk-agent/README.md
+- [x] adk-model/README.md
+- [x] adk-tool/README.md
+- [x] adk-session/README.md
+- [x] adk-artifact/README.md
+- [x] adk-memory/README.md
+- [x] adk-runner/README.md
+- [x] adk-server/README.md
+- [x] adk-cli/README.md
+- [x] adk-telemetry/README.md
+
+#### ✅ Crate-Level Documentation
+All `lib.rs` files have `//!` documentation:
+
+- [x] adk-core/src/lib.rs
+- [x] adk-agent/src/lib.rs
+- [x] adk-model/src/lib.rs
+- [x] adk-tool/src/lib.rs
+- [x] adk-session/src/lib.rs
+- [x] adk-artifact/src/lib.rs
+- [x] adk-memory/src/lib.rs
+- [x] adk-runner/src/lib.rs
+- [x] adk-server/src/lib.rs
+- [x] adk-cli/src/lib.rs
+- [x] adk-telemetry/src/lib.rs (already had docs)
+
+#### ✅ Version Constraints
+All internal dependencies now specify `version = "0.1.0"` for crates.io compatibility.
+
+### Blocking Issue
+
+#### Patched Dependency: `gemini-rust`
 The workspace uses a patched version of `gemini-rust` from `vendor/gemini-rust`:
 
 ```toml
@@ -29,53 +81,6 @@ gemini-rust = { path = "vendor/gemini-rust" }
 3. **Wait for upstream** to add PDF support
 
 **Recommendation**: Submit PR upstream first. If not merged quickly, fork and publish.
-
-#### 2. Missing Package Metadata
-The following packages need crates.io metadata added to their `Cargo.toml`:
-
-| Package | description | repository | documentation | keywords | categories |
-|---------|-------------|------------|---------------|----------|------------|
-| adk-core | ❌ | ❌ | ❌ | ❌ | ❌ |
-| adk-agent | ❌ | ❌ | ❌ | ❌ | ❌ |
-| adk-model | ❌ | ❌ | ❌ | ❌ | ❌ |
-| adk-tool | ❌ | ❌ | ❌ | ❌ | ❌ |
-| adk-session | ❌ | ❌ | ❌ | ❌ | ❌ |
-| adk-artifact | ❌ | ❌ | ❌ | ❌ | ❌ |
-| adk-memory | ❌ | ❌ | ❌ | ❌ | ❌ |
-| adk-runner | ❌ | ❌ | ❌ | ❌ | ❌ |
-| adk-server | ❌ | ❌ | ❌ | ❌ | ❌ |
-| adk-cli | ❌ | ❌ | ❌ | ❌ | ❌ |
-| adk-telemetry | ❌ | ❌ | ❌ | ❌ | ❌ |
-
-#### 3. Missing README Files
-Each package should have its own README.md for crates.io display:
-
-- [ ] adk-core/README.md
-- [ ] adk-agent/README.md
-- [ ] adk-model/README.md
-- [ ] adk-tool/README.md
-- [ ] adk-session/README.md
-- [ ] adk-artifact/README.md
-- [ ] adk-memory/README.md
-- [ ] adk-runner/README.md
-- [ ] adk-server/README.md
-- [ ] adk-cli/README.md
-- [ ] adk-telemetry/README.md
-
-#### 4. Missing Crate-Level Documentation
-Each `lib.rs` should have `//!` documentation for docs.rs:
-
-- [ ] adk-core/src/lib.rs - needs `//!` docs
-- [ ] adk-agent/src/lib.rs - needs `//!` docs
-- [ ] adk-model/src/lib.rs - needs `//!` docs
-- [ ] adk-tool/src/lib.rs - needs `//!` docs
-- [ ] adk-session/src/lib.rs - needs `//!` docs
-- [ ] adk-artifact/src/lib.rs - needs `//!` docs
-- [ ] adk-memory/src/lib.rs - needs `//!` docs
-- [ ] adk-runner/src/lib.rs - needs `//!` docs
-- [ ] adk-server/src/lib.rs - needs `//!` docs
-- [ ] adk-cli/src/lib.rs - needs `//!` docs
-- [ ] adk-telemetry/src/lib.rs - needs `//!` docs
 
 ## Publication Order
 
