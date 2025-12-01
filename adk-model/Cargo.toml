@@ -19,8 +19,11 @@ async-trait.workspace = true
 tokio.workspace = true
 futures.workspace = true
 async-stream.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 gemini = { workspace = true }
 anyhow.workspace = true
 tracing.workspace = true
 base64 = "0.21"
+reqwest.workspace = true
+uuid.workspace = true

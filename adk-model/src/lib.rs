@@ -41,6 +41,8 @@
 
 pub mod gemini;
 pub mod mock;
+pub mod openai;
 
 pub use gemini::GeminiModel;
 pub use mock::MockLlm;
+pub use openai::OpenaiModel;

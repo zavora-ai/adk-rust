@@ -122,9 +122,12 @@ dependencies = [
  "base64 0.21.7",
  "futures",
  "gemini-rust",
+ "reqwest",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

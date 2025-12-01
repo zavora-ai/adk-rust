@@ -1,5 +1,6 @@
 use adk_agent::LlmAgentBuilder;
 use adk_model::gemini::GeminiModel;
+use adk_model::openai::OpenaiModel;
 use adk_tool::GoogleSearchTool;
 use anyhow::Result;
 use std::sync::Arc;
@@ -12,10 +13,12 @@ async fn main() -> Result<()> {
 
     let model = GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?;
 
+    let openai_model = OpenaiModel::new("http://127.0.0.1:8317/v1", "123456", "jan_v1")?;
+
     let agent = LlmAgentBuilder::new("weather_time_agent")
         .description("Agent to answer questions about the time and weather in a city.")
         .instruction("Your SOLE purpose is to answer questions about the current time and weather in a specific city. You MUST refuse to answer any questions unrelated to time or weather.")
-        .model(Arc::new(model))
+        .model(Arc::new(openai_model))
         .tool(Arc::new(GoogleSearchTool::new()))
         .build()?;
 
