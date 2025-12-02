@@ -6,7 +6,7 @@ use adk_core::{
 };
 use async_stream::stream;
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub struct LlmAgent {
     name: String,
@@ -234,12 +234,12 @@ impl LlmAgentBuilder {
 struct AgentToolContext {
     parent_ctx: Arc<dyn InvocationContext>,
     function_call_id: String,
-    actions: EventActions,
+    actions: Mutex<EventActions>,
 }
 
 impl AgentToolContext {
     fn new(parent_ctx: Arc<dyn InvocationContext>, function_call_id: String) -> Self {
-        Self { parent_ctx, function_call_id, actions: EventActions::default() }
+        Self { parent_ctx, function_call_id, actions: Mutex::new(EventActions::default()) }
     }
 }
 
@@ -291,8 +291,12 @@ impl ToolContext for AgentToolContext {
         &self.function_call_id
     }
 
-    fn actions(&self) -> &EventActions {
-        &self.actions
+    fn actions(&self) -> EventActions {
+        self.actions.lock().unwrap().clone()
+    }
+
+    fn set_actions(&self, actions: EventActions) {
+        *self.actions.lock().unwrap() = actions;
     }
 
     async fn search_memory(&self, query: &str) -> Result<Vec<MemoryEntry>> {
@@ -589,7 +593,8 @@ impl Agent for LlmAgent {
                 let request = current_request;
 
                 // Determine streaming source: cached response or real model
-                let mut accumulated_content: Option<Content> = None;
+            let mut accumulated_content: Option<Content> = None;
+            let mut terminate_agent = false;
 
                 if let Some(cached_response) = model_response_override {
                     let mut cached_response = cached_response;
@@ -783,24 +788,27 @@ impl Agent for LlmAgent {
 
 
                             // Find and execute tool
-                            let tool_result = if let Some(tool) = tools.iter().find(|t| t.name() == name) {
+                            let (tool_result, tool_actions) = if let Some(tool) = tools.iter().find(|t| t.name() == name) {
                                 // ✅ Use AgentToolContext that preserves parent context
-                                let tool_ctx = Arc::new(AgentToolContext::new(
+                                let tool_ctx: Arc<dyn ToolContext> = Arc::new(AgentToolContext::new(
                                     ctx.clone(),
                                     format!("{}_{}", invocation_id, name),
-                                )) as Arc<dyn ToolContext>;
+                                ));
 
-                                match tool.execute(tool_ctx, args.clone()).await {
+                                let result = match tool.execute(tool_ctx.clone(), args.clone()).await {
                                     Ok(result) => result,
                                     Err(e) => serde_json::json!({ "error": e.to_string() }),
-                                }
+                                };
+
+                                (result, tool_ctx.actions())
                             } else {
-                                serde_json::json!({ "error": format!("Tool {} not found", name) })
+                                (serde_json::json!({ "error": format!("Tool {} not found", name) }), EventActions::default())
                             };
 
                             // Yield tool execution event
                             let mut tool_event = Event::new(&invocation_id);
                             tool_event.author = agent_name.clone();
+                            tool_event.actions = tool_actions.clone();
                             tool_event.llm_response.content = Some(Content {
                                 role: "function".to_string(),
                                 parts: vec![Part::FunctionResponse {
@@ -809,6 +817,10 @@ impl Agent for LlmAgent {
                                 }],
                             });
                             yield Ok(tool_event);
+
+                            if tool_actions.escalate || tool_actions.skip_summarization {
+                                terminate_agent = true;
+                            }
 
                             // Add function response to history
                             conversation_history.push(Content {
@@ -820,6 +832,10 @@ impl Agent for LlmAgent {
                             });
                         }
                     }
+                }
+
+                if terminate_agent {
+                    break;
                 }
 
                 // If all function calls were from long-running tools, treat as final response

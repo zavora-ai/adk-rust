@@ -4,16 +4,20 @@ use adk_core::{
 use adk_tool::{ExitLoopTool, GoogleSearchTool};
 use async_trait::async_trait;
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 struct MockToolContext {
-    actions: EventActions,
+    actions: Mutex<EventActions>,
     content: Content,
 }
 
 impl MockToolContext {
     fn new() -> Self {
-        Self { actions: EventActions::default(), content: Content::new("user") }
+        Self { actions: Mutex::new(EventActions::default()), content: Content::new("user") }
+    }
+
+    fn current_actions(&self) -> EventActions {
+        self.actions.lock().unwrap().clone()
     }
 }
 
@@ -54,8 +58,11 @@ impl ToolContext for MockToolContext {
     fn function_call_id(&self) -> &str {
         "call-1"
     }
-    fn actions(&self) -> &EventActions {
-        &self.actions
+    fn actions(&self) -> EventActions {
+        self.actions.lock().unwrap().clone()
+    }
+    fn set_actions(&self, actions: EventActions) {
+        *self.actions.lock().unwrap() = actions;
     }
     async fn search_memory(&self, _query: &str) -> Result<Vec<MemoryEntry>> {
         Ok(vec![])
@@ -73,9 +80,13 @@ fn test_exit_loop_tool_metadata() {
 #[tokio::test]
 async fn test_exit_loop_execute() {
     let tool = ExitLoopTool::new();
-    let ctx = Arc::new(MockToolContext::new()) as Arc<dyn ToolContext>;
-    let result = tool.execute(ctx, json!({})).await;
+    let ctx = Arc::new(MockToolContext::new());
+    let tool_ctx: Arc<dyn ToolContext> = ctx.clone();
+    let result = tool.execute(tool_ctx, json!({})).await;
     assert!(result.is_ok());
+    let actions = ctx.current_actions();
+    assert!(actions.escalate);
+    assert!(actions.skip_summarization);
 }
 
 #[test]
