@@ -17,6 +17,7 @@
 use adk_agent::LlmAgentBuilder;
 use adk_core::ToolContext;
 use adk_model::gemini::GeminiModel;
+use adk_model::openai::OpenaiModel;
 use adk_tool::{AgentTool, FunctionTool};
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -61,7 +62,8 @@ async fn main() -> Result<()> {
         .or_else(|_| std::env::var("GEMINI_API_KEY"))
         .expect("GOOGLE_API_KEY or GEMINI_API_KEY must be set");
 
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?);
+    // let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?);
+    let model = Arc::new(OpenaiModel::new("http://127.0.0.1:8317/v1", "123456", "glm-4.6")?);
 
     // Create the calculator tool
     let calc_tool = FunctionTool::new(

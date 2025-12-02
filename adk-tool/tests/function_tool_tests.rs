@@ -6,16 +6,16 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 struct MockToolContext {
-    actions: EventActions,
+    actions: Mutex<EventActions>,
     content: Content,
 }
 
 impl MockToolContext {
     fn new() -> Self {
-        Self { actions: EventActions::default(), content: Content::new("user") }
+        Self { actions: Mutex::new(EventActions::default()), content: Content::new("user") }
     }
 }
 
@@ -56,8 +56,11 @@ impl ToolContext for MockToolContext {
     fn function_call_id(&self) -> &str {
         "call-1"
     }
-    fn actions(&self) -> &EventActions {
-        &self.actions
+    fn actions(&self) -> EventActions {
+        self.actions.lock().unwrap().clone()
+    }
+    fn set_actions(&self, actions: EventActions) {
+        *self.actions.lock().unwrap() = actions;
     }
     async fn search_memory(&self, _query: &str) -> Result<Vec<MemoryEntry>> {
         Ok(vec![])

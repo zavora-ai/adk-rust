@@ -3,6 +3,7 @@ use adk_model::gemini::GeminiModel;
 use adk_tool::ExitLoopTool;
 use anyhow::Result;
 use std::sync::Arc;
+use adk_model::openai::OpenaiModel;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -10,7 +11,8 @@ async fn main() -> Result<()> {
         .or_else(|_| std::env::var("GEMINI_API_KEY"))
         .expect("GOOGLE_API_KEY or GEMINI_API_KEY must be set");
 
-    let model = GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?;
+    // let model = GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?;
+    let model = OpenaiModel::new("http://127.0.0.1:8317/v1", "123456", "glm-4.6")?;
 
     let refiner = LlmAgentBuilder::new("refiner")
         .description("Refines and improves content iteratively")

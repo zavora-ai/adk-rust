@@ -1,9 +1,9 @@
 use adk_agent::LlmAgentBuilder;
 use adk_core::{Agent, Content, InvocationContext, Part, ReadonlyContext, RunConfig, ToolContext};
-use adk_tool::FunctionTool;
+use adk_tool::{ExitLoopTool, FunctionTool};
 use async_trait::async_trait;
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 struct MockLlm {
     response_text: String,
@@ -12,6 +12,16 @@ struct MockLlm {
 impl MockLlm {
     fn new(response_text: &str) -> Self {
         Self { response_text: response_text.to_string() }
+    }
+}
+
+struct FunctionCallMockLlm {
+    call_count: Arc<Mutex<u32>>,
+}
+
+impl FunctionCallMockLlm {
+    fn new(call_count: Arc<Mutex<u32>>) -> Self {
+        Self { call_count }
     }
 }
 
@@ -32,6 +42,44 @@ impl adk_core::Llm for MockLlm {
                 content: Some(adk_core::Content {
                     role: "model".to_string(),
                     parts: vec![adk_core::Part::Text { text }],
+                }),
+                usage_metadata: None,
+                finish_reason: None,
+                partial: false,
+                turn_complete: true,
+                interrupted: false,
+                error_code: None,
+                error_message: None,
+            });
+        };
+        Ok(Box::pin(s))
+    }
+}
+
+#[async_trait]
+impl adk_core::Llm for FunctionCallMockLlm {
+    fn name(&self) -> &str {
+        "function-call-mock-llm"
+    }
+
+    async fn generate_content(
+        &self,
+        _request: adk_core::LlmRequest,
+        _stream: bool,
+    ) -> adk_core::Result<adk_core::LlmResponseStream> {
+        {
+            let mut count = self.call_count.lock().unwrap();
+            *count += 1;
+        }
+
+        let s = async_stream::stream! {
+            yield Ok(adk_core::LlmResponse {
+                content: Some(adk_core::Content {
+                    role: "model".to_string(),
+                    parts: vec![adk_core::Part::FunctionCall {
+                        name: "exit_loop".to_string(),
+                        args: serde_json::json!({}),
+                    }],
                 }),
                 usage_metadata: None,
                 finish_reason: None,
@@ -367,4 +415,35 @@ fn test_llm_agent_builder_with_callbacks() {
     // Verify agent was created successfully
     assert_eq!(agent.name(), "test_agent");
     assert_eq!(agent.description(), "Test agent with callbacks");
+}
+
+#[tokio::test]
+async fn test_exit_loop_tool_stops_iterations() {
+    let call_count = Arc::new(Mutex::new(0));
+    let model = FunctionCallMockLlm::new(call_count.clone());
+
+    let agent = LlmAgentBuilder::new("exit_loop_agent")
+        .description("Agent that should stop after exit_loop")
+        .model(Arc::new(model))
+        .instruction("Call exit_loop when the task is complete")
+        .tool(Arc::new(ExitLoopTool::new()))
+        .build()
+        .unwrap();
+
+    let ctx = Arc::new(TestContext::new("Refine the provided content"));
+    let mut stream = agent.run(ctx).await.unwrap();
+
+    use futures::StreamExt;
+    let mut events = Vec::new();
+    while let Some(result) = stream.next().await {
+        events.push(result.unwrap());
+    }
+
+    assert_eq!(events.len(), 2, "Expected one function call event and one tool response event");
+    assert!(events.iter().any(|evt| evt.actions.escalate));
+    assert_eq!(
+        *call_count.lock().unwrap(),
+        1,
+        "LLM should be invoked only once when exit_loop is triggered"
+    );
 }

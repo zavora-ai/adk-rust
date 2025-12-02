@@ -23,10 +23,10 @@ impl Tool for ExitLoopTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
-        let actions = ctx.actions();
-        let mut actions = actions.clone();
+        let mut actions = ctx.actions();
         actions.escalate = true;
         actions.skip_summarization = true;
+        ctx.set_actions(actions);
         Ok(json!({}))
     }
 }
