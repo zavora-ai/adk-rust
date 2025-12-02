@@ -27,3 +27,4 @@ tracing.workspace = true
 base64 = "0.21"
 reqwest.workspace = true
 uuid.workspace = true
+regex.workspace = true

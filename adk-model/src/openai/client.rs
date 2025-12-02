@@ -5,6 +5,7 @@ use adk_core::{
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 pub struct OpenaiModel {
     client: Client,
@@ -30,6 +31,7 @@ impl OpenaiModel {
 
     fn convert_to_openai_messages(contents: &[Content]) -> Vec<OpenaiMessage> {
         let mut messages = Vec::new();
+        let mut pending_tool_calls: VecDeque<(String, String)> = VecDeque::new();
 
         for content in contents {
             let role = match content.role.as_str() {
@@ -48,8 +50,11 @@ impl OpenaiModel {
                         text_parts.push(text.clone());
                     }
                     Part::FunctionCall { name, args } => {
+                        let call_id = format!("call_{}", uuid::Uuid::new_v4());
+                        pending_tool_calls.push_back((name.clone(), call_id.clone()));
+
                         tool_calls.push(OpenaiToolCall {
-                            id: format!("call_{}", uuid::Uuid::new_v4()),
+                            id: call_id,
                             r#type: "function".to_string(),
                             function: OpenaiFunction {
                                 name: name.clone(),
@@ -58,7 +63,11 @@ impl OpenaiModel {
                         });
                     }
                     Part::FunctionResponse { name: _, response } => {
-                        tool_call_id = Some(format!("call_{}", uuid::Uuid::new_v4()));
+                        let call_id = pending_tool_calls
+                            .pop_front()
+                            .map(|(_, id)| id)
+                            .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4()));
+                        tool_call_id = Some(call_id);
                         text_parts.push(serde_json::to_string(response).unwrap_or_default());
                     }
                     _ => {}

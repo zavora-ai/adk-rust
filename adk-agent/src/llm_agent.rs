@@ -592,6 +592,8 @@ impl Agent for LlmAgent {
                 let mut accumulated_content: Option<Content> = None;
 
                 if let Some(cached_response) = model_response_override {
+                    let mut cached_response = cached_response;
+                    normalize_option_content(&mut cached_response.content);
                     // Use callback-provided response (e.g., from cache)
                     // Yield it as an event
                     let mut cached_event = Event::new(&invocation_id);
@@ -655,6 +657,8 @@ impl Agent for LlmAgent {
                             }
                         }
 
+                        normalize_option_content(&mut chunk.content);
+
                         // Yield the (possibly modified) partial event
                         let mut partial_event = Event::new(&invocation_id);
                         partial_event.author = agent_name.clone();
@@ -698,6 +702,8 @@ impl Agent for LlmAgent {
                         }
                     }
                 }
+
+                normalize_option_content(&mut accumulated_content);
 
                 // After streaming/caching completes, check for function calls in accumulated content
                 let function_call_names: Vec<String> = accumulated_content.as_ref()
@@ -850,4 +856,139 @@ impl Agent for LlmAgent {
 
         Ok(Box::pin(s))
     }
+}
+
+fn normalize_option_content(content: &mut Option<Content>) {
+    if let Some(ref mut content) = content {
+        normalize_tool_call_markup(content);
+    }
+}
+
+fn normalize_tool_call_markup(content: &mut Content) {
+    let parts = std::mem::take(&mut content.parts);
+    let mut normalized = Vec::new();
+
+    for part in parts {
+        match part {
+            Part::Text { text } => {
+                normalized.extend(convert_text_to_parts(text));
+            }
+            other => normalized.push(other),
+        }
+    }
+
+    content.parts = normalized;
+}
+
+fn convert_text_to_parts(text: String) -> Vec<Part> {
+    const TOOL_CALL_START: &str = "<tool_call>";
+    const TOOL_CALL_END: &str = "</tool_call>";
+
+    if !text.contains(TOOL_CALL_START) {
+        return vec![Part::Text { text }];
+    }
+
+    let mut parts = Vec::new();
+    let mut remainder = text.as_str();
+
+    while let Some(start_idx) = remainder.find(TOOL_CALL_START) {
+        let (before, after_start_tag) = remainder.split_at(start_idx);
+        if !before.is_empty() {
+            parts.push(Part::Text { text: before.to_string() });
+        }
+
+        let after_start = &after_start_tag[TOOL_CALL_START.len()..];
+        if let Some(end_idx) = after_start.find(TOOL_CALL_END) {
+            let block = &after_start[..end_idx];
+            if let Some(call_part) = parse_tool_call_block(block) {
+                parts.push(call_part);
+            } else {
+                parts.push(Part::Text {
+                    text: format!("{}{}{}", TOOL_CALL_START, block, TOOL_CALL_END),
+                });
+            }
+            remainder = &after_start[end_idx + TOOL_CALL_END.len()..];
+        } else {
+            parts.push(Part::Text { text: format!("{}{}", TOOL_CALL_START, after_start) });
+            remainder = "";
+            break;
+        }
+    }
+
+    if !remainder.is_empty() {
+        parts.push(Part::Text { text: remainder.to_string() });
+    }
+
+    if parts.is_empty() {
+        vec![Part::Text { text }]
+    } else {
+        parts
+    }
+}
+
+fn parse_tool_call_block(block: &str) -> Option<Part> {
+    let trimmed = block.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut lines = trimmed.lines();
+    let name_line = lines.next()?.trim();
+    if name_line.is_empty() {
+        return None;
+    }
+
+    let remainder = lines.collect::<Vec<_>>().join("\n");
+    let mut slice = remainder.as_str();
+    let mut args_map = serde_json::Map::new();
+    let mut found_arg = false;
+
+    loop {
+        slice = slice.trim_start();
+        if slice.is_empty() {
+            break;
+        }
+
+        let rest = if let Some(rest) = slice.strip_prefix("<arg_key>") {
+            rest
+        } else {
+            break;
+        };
+
+        let key_end = rest.find("</arg_key>")?;
+        let key = rest[..key_end].trim().to_string();
+        let mut after_key = &rest[key_end + "</arg_key>".len()..];
+
+        after_key = after_key.trim_start();
+        let rest = if let Some(rest) = after_key.strip_prefix("<arg_value>") {
+            rest
+        } else {
+            break;
+        };
+
+        let value_end = rest.find("</arg_value>")?;
+        let value_text = rest[..value_end].trim();
+        let value = parse_arg_value(value_text);
+        args_map.insert(key, value);
+        slice = &rest[value_end + "</arg_value>".len()..];
+        found_arg = true;
+    }
+
+    if !found_arg {
+        return None;
+    }
+
+    Some(Part::FunctionCall {
+        name: name_line.to_string(),
+        args: serde_json::Value::Object(args_map),
+    })
+}
+
+fn parse_arg_value(raw: &str) -> serde_json::Value {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return serde_json::Value::String(String::new());
+    }
+
+    serde_json::from_str(trimmed).unwrap_or_else(|_| serde_json::Value::String(trimmed.to_string()))
 }

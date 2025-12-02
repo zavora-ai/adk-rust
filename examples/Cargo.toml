@@ -75,6 +75,7 @@ anyhow = "1.0"
 futures = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+schemars = { version = "0.8", features = ["derive"] }
 chrono = "0.4"
 tracing-subscriber = "0.3"
 axum = "0.7"

@@ -1,10 +1,13 @@
 use adk_core::{Agent, Content, Part};
 use adk_runner::{Runner, RunnerConfig};
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+use adk_telemetry::debug;
 use anyhow::Result;
 use futures::StreamExt;
 use rustyline::DefaultEditor;
+use serde_json::Value;
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::sync::Arc;
 
 #[allow(dead_code)] // Part of CLI API, not currently used
@@ -51,15 +54,20 @@ pub async fn run_console(agent: Arc<dyn Agent>, app_name: String, user_id: Strin
                 let session_id = session.id().to_string();
                 let mut events = runner.run(user_id.clone(), session_id, user_content).await?;
 
+                let mut stream_printer = StreamPrinter::default();
+
                 while let Some(event) = events.next().await {
                     match event {
                         Ok(evt) => {
+                            debug!(author = %evt.author, content = ?evt.llm_response.content, "Event received");
                             if let Some(content) = &evt.llm_response.content {
-                                for part in &content.parts {
-                                    if let Part::Text { text } = part {
-                                        print!("{}", text);
-                                    }
+                                debug!(role = %content.role, parts = content.parts.len(), "Processing content");
+                                for (i, part) in content.parts.iter().enumerate() {
+                                    debug!(part_index = i, part = ?part, "Processing part");
+                                    stream_printer.handle_part(part);
                                 }
+                            } else {
+                                debug!("Event has no content");
                             }
                         }
                         Err(e) => {
@@ -68,6 +76,7 @@ pub async fn run_console(agent: Arc<dyn Agent>, app_name: String, user_id: Strin
                     }
                 }
 
+                stream_printer.finish();
                 println!("\n");
             }
             Err(rustyline::error::ReadlineError::Interrupted) => {
@@ -86,4 +95,94 @@ pub async fn run_console(agent: Arc<dyn Agent>, app_name: String, user_id: Strin
     }
 
     Ok(())
+}
+
+#[derive(Default)]
+struct StreamPrinter {
+    in_think_block: bool,
+    think_buffer: String,
+}
+
+impl StreamPrinter {
+    fn handle_part(&mut self, part: &Part) {
+        match part {
+            Part::Text { text } => self.handle_text_chunk(text),
+            Part::FunctionCall { name, args } => self.print_tool_call(name, args),
+            Part::FunctionResponse { name, response } => self.print_tool_response(name, response),
+            Part::InlineData { mime_type, data } => self.print_inline_data(mime_type, data.len()),
+        }
+    }
+
+    fn handle_text_chunk(&mut self, chunk: &str) {
+        const THINK_START: &str = "<think>";
+        const THINK_END: &str = "</think>";
+
+        let mut remaining = chunk;
+
+        while !remaining.is_empty() {
+            if self.in_think_block {
+                if let Some(end_idx) = remaining.find(THINK_END) {
+                    self.think_buffer.push_str(&remaining[..end_idx]);
+                    self.flush_think();
+                    self.in_think_block = false;
+                    remaining = &remaining[end_idx + THINK_END.len()..];
+                } else {
+                    self.think_buffer.push_str(remaining);
+                    break;
+                }
+            } else if let Some(start_idx) = remaining.find(THINK_START) {
+                let visible = &remaining[..start_idx];
+                self.print_visible(visible);
+                self.in_think_block = true;
+                self.think_buffer.clear();
+                remaining = &remaining[start_idx + THINK_START.len()..];
+            } else {
+                self.print_visible(remaining);
+                break;
+            }
+        }
+    }
+
+    fn print_visible(&self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+
+        print!("{}", text);
+        let _ = io::stdout().flush();
+    }
+
+    fn flush_think(&mut self) {
+        let content = self.think_buffer.trim();
+        if content.is_empty() {
+            self.think_buffer.clear();
+            return;
+        }
+
+        print!("\n[think] {}\n", content);
+        let _ = io::stdout().flush();
+        self.think_buffer.clear();
+    }
+
+    fn finish(&mut self) {
+        if self.in_think_block {
+            self.flush_think();
+            self.in_think_block = false;
+        }
+    }
+
+    fn print_tool_call(&self, name: &str, args: &Value) {
+        print!("\n[tool-call] {} {}\n", name, args);
+        let _ = io::stdout().flush();
+    }
+
+    fn print_tool_response(&self, name: &str, response: &Value) {
+        print!("\n[tool-response] {} {}\n", name, response);
+        let _ = io::stdout().flush();
+    }
+
+    fn print_inline_data(&self, mime_type: &str, len: usize) {
+        print!("\n[inline-data] mime={} bytes={}\n", mime_type, len);
+        let _ = io::stdout().flush();
+    }
 }
