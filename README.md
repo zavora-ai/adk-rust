@@ -1,6 +1,8 @@
 # ADK-Rust
 
 [![CI](https://github.com/zavora-ai/adk-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/zavora-ai/adk-rust/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/adk-rust.svg)](https://crates.io/crates/adk-rust)
+[![docs.rs](https://docs.rs/adk-rust/badge.svg)](https://docs.rs/adk-rust)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)
 
@@ -22,14 +24,34 @@ ADK-Rust provides a comprehensive framework for building AI agents in Rust, feat
 
 ### Installation
 
-Requires Rust 1.75 or later:
+Requires Rust 1.75 or later. Add to your `Cargo.toml`:
 
-```bash
-rustup update
-export GOOGLE_API_KEY="your-api-key"
+```toml
+[dependencies]
+adk-rust = "0.1"
+
+# Or individual crates
+adk-core = "0.1"
+adk-agent = "0.1"
+adk-model = "0.1"  # Add features for providers: features = ["openai", "anthropic"]
+adk-tool = "0.1"
+adk-runner = "0.1"
 ```
 
-### Basic Example
+Set your API key:
+
+```bash
+# For Gemini (default)
+export GOOGLE_API_KEY="your-api-key"
+
+# For OpenAI
+export OPENAI_API_KEY="your-api-key"
+
+# For Anthropic
+export ANTHROPIC_API_KEY="your-api-key"
+```
+
+### Basic Example (Gemini)
 
 ```rust
 use adk_agent::LlmAgentBuilder;
@@ -39,14 +61,54 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = GeminiModel::new(&api_key, "gemini-2.0-flash-exp")?;
-    
+
     let agent = LlmAgentBuilder::new("assistant")
         .description("Helpful AI assistant")
         .instruction("You are a helpful assistant. Be concise and accurate.")
         .model(Arc::new(model))
         .build()?;
-    
+
     // Run agent (see examples for full usage)
+    Ok(())
+}
+```
+
+### OpenAI Example
+
+```rust
+use adk_agent::LlmAgentBuilder;
+use adk_model::openai::OpenAIModel;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = OpenAIModel::from_env("gpt-4o")?;
+
+    let agent = LlmAgentBuilder::new("assistant")
+        .instruction("You are a helpful assistant.")
+        .model(Arc::new(model))
+        .build()?;
+
+    Ok(())
+}
+```
+
+### Anthropic Example
+
+```rust
+use adk_agent::LlmAgentBuilder;
+use adk_model::anthropic::AnthropicModel;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = AnthropicModel::from_env("claude-sonnet-4-20250514")?;
+
+    let agent = LlmAgentBuilder::new("assistant")
+        .instruction("You are a helpful assistant.")
+        .model(Arc::new(model))
+        .build()?;
+
     Ok(())
 }
 ```
@@ -54,8 +116,12 @@ async fn main() -> Result<()> {
 ### Run Examples
 
 ```bash
-# Interactive console
+# Interactive console (Gemini)
 cargo run --example quickstart
+
+# OpenAI examples (requires --features openai)
+cargo run --example openai_basic --features openai
+cargo run --example openai_tools --features openai
 
 # REST API server
 cargo run --example server
@@ -65,7 +131,7 @@ cargo run --example sequential_agent
 cargo run --example parallel_agent
 
 # See all examples
-ls examples/*.rs
+ls examples/
 ```
 
 ## Architecture
@@ -111,6 +177,27 @@ Built-in tools:
 - Loop termination
 
 **MCP Integration**: Connect to Model Context Protocol servers for extended capabilities.
+
+**XML Tool Call Markup**: For models without native function calling, ADK supports XML-based tool call parsing:
+```text
+<tool_call>
+function_name
+<arg_key>param1</arg_key>
+<arg_value>value1</arg_value>
+</tool_call>
+```
+
+### Multi-Provider Support
+
+ADK supports multiple LLM providers with a unified API:
+
+| Provider | Model Examples | Feature Flag |
+|----------|---------------|--------------|
+| Gemini | `gemini-2.0-flash-exp`, `gemini-1.5-pro` | (default) |
+| OpenAI | `gpt-4o`, `gpt-4-turbo`, `gpt-3.5-turbo` | `openai` |
+| Anthropic | `claude-sonnet-4-20250514`, `claude-3-opus` | `anthropic` |
+
+All providers support streaming, function calling, and multimodal inputs (where available).
 
 ### Production Features
 
@@ -179,36 +266,53 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-core = { path = "path/to/adk-rust/adk-core" }
-adk-agent = { path = "path/to/adk-rust/adk-agent" }
-adk-model = { path = "path/to/adk-rust/adk-model" }
-adk-tool = { path = "path/to/adk-rust/adk-tool" }
-adk-runner = { path = "path/to/adk-rust/adk-runner" }
+# All-in-one crate
+adk-rust = "0.1"
+
+# Or individual crates for finer control
+adk-core = "0.1"
+adk-agent = "0.1"
+adk-model = { version = "0.1", features = ["openai", "anthropic"] }  # Enable providers
+adk-tool = "0.1"
+adk-runner = "0.1"
 
 # Optional dependencies
-adk-session = { path = "path/to/adk-rust/adk-session", optional = true }
-adk-artifact = { path = "path/to/adk-rust/adk-artifact", optional = true }
-adk-memory = { path = "path/to/adk-rust/adk-memory", optional = true }
+adk-session = { version = "0.1", optional = true }
+adk-artifact = { version = "0.1", optional = true }
+adk-memory = { version = "0.1", optional = true }
+adk-server = { version = "0.1", optional = true }
+adk-cli = { version = "0.1", optional = true }
 ```
 
 ## Examples
 
-See [examples/](examples/) directory for 14 complete, runnable examples:
+See [examples/](examples/) directory for complete, runnable examples:
 
+**Getting Started**
 - `quickstart/` - Basic agent setup and chat loop
 - `function_tool/` - Custom tool implementation
 - `multiple_tools/` - Agent with multiple tools
 - `agent_tool/` - Use agents as callable tools
+
+**OpenAI Integration** (requires `--features openai`)
+- `openai_basic/` - Simple OpenAI GPT agent
+- `openai_tools/` - OpenAI with function calling
+- `openai_multimodal/` - Vision and image support
+- `openai_workflow/` - Multi-agent workflows with OpenAI
+
+**Workflow Agents**
 - `sequential/` - Sequential workflow execution
 - `parallel/` - Concurrent agent execution
 - `loop_workflow/` - Iterative refinement patterns
+- `sequential_code/` - Code generation pipeline
+
+**Production Features**
 - `load_artifacts/` - Working with images and PDFs
 - `mcp/` - Model Context Protocol integration
 - `server/` - REST API deployment
 - `a2a/` - Agent-to-Agent communication
 - `web/` - Web UI with streaming
 - `research_paper/` - Complex multi-agent workflow
-- `sequential_code/` - Code generation pipeline
 
 ## Performance
 
