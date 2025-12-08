@@ -278,6 +278,21 @@ name = "browser_test"
 path = "browser_test/main.rs"
 required-features = ["browser"]
 
+[[example]]
+name = "browser_agent"
+path = "browser_agent/main.rs"
+required-features = ["browser"]
+
+[[example]]
+name = "browser_openai"
+path = "browser_openai/main.rs"
+required-features = ["browser", "openai"]
+
+[[example]]
+name = "browser_interactive"
+path = "browser_interactive/main.rs"
+required-features = ["browser"]
+
 [features]
 default = []
 openai = ["adk-model/openai"]
