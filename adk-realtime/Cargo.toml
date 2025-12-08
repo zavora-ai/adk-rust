@@ -8,38 +8,38 @@ authors.workspace = true
 description = "Real-time bidirectional audio/video streaming for Rust Agent Development Kit (ADK-Rust) agents"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-realtime"
-keywords = ["adk", "ai", "agents", "realtime", "voice"]
+keywords = ["adk", "ai", "agents", "realtime", "voice","audio","adk-rust"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 
 [dependencies]
 # Core ADK dependencies
-adk-core = { path = "../adk-core", version = "0.1.3" }
+adk-core = { path = "../adk-core", version = "0.1.4" }
 
 # Async runtime
-tokio = { version = "1.0", features = ["rt-multi-thread", "sync", "macros"] }
-async-trait = "0.1"
-futures = "0.3"
-async-stream = "0.3"
+tokio = { workspace = true }
+async-trait.workspace = true
+futures.workspace = true
+async-stream.workspace = true
 
 # Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde.workspace = true
+serde_json.workspace = true
 
 # WebSocket
 tokio-tungstenite = { version = "0.24", features = ["native-tls"], optional = true }
 
 # Error handling
-thiserror = "1.0"
+thiserror.workspace = true
 
 # Logging
-tracing = "0.1"
+tracing.workspace = true
 
 # Base64 for audio encoding
 base64 = "0.22"
 
 # UUID for session IDs
-uuid = { version = "1.0", features = ["v4"] }
+uuid.workspace = true
 
 # Random number generation
 getrandom = "0.2"
@@ -48,7 +48,7 @@ getrandom = "0.2"
 async-openai = { version = "0.27", optional = true }
 
 [dev-dependencies]
-tokio = { version = "1.0", features = ["full"] }
+tokio.workspace = true
 dotenvy = "0.15"
 
 [features]

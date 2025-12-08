@@ -36,10 +36,7 @@ impl BrowserSession {
     /// Note: This does not start the browser immediately.
     /// Call `start()` to initialize the WebDriver connection.
     pub fn new(config: BrowserConfig) -> Self {
-        Self {
-            driver: RwLock::new(None),
-            config,
-        }
+        Self { driver: RwLock::new(None), config }
     }
 
     /// Create a browser session with default configuration.
@@ -117,10 +114,7 @@ impl BrowserSession {
             .as_ref()
             .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
 
-        driver
-            .goto(url)
-            .await
-            .map_err(|e| AdkError::Tool(format!("Navigation failed: {}", e)))?;
+        driver.goto(url).await.map_err(|e| AdkError::Tool(format!("Navigation failed: {}", e)))?;
 
         Ok(())
     }
@@ -146,10 +140,7 @@ impl BrowserSession {
             .as_ref()
             .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
 
-        driver
-            .title()
-            .await
-            .map_err(|e| AdkError::Tool(format!("Failed to get title: {}", e)))
+        driver.title().await.map_err(|e| AdkError::Tool(format!("Failed to get title: {}", e)))
     }
 
     /// Find an element by CSS selector.
@@ -331,10 +322,7 @@ impl BrowserSession {
             .first()
             .await
             .map_err(|e| {
-                AdkError::Tool(format!(
-                    "Timeout waiting for clickable '{}': {}",
-                    selector, e
-                ))
+                AdkError::Tool(format!("Timeout waiting for clickable '{}': {}", selector, e))
             })
     }
 
@@ -358,10 +346,7 @@ impl BrowserSession {
             .as_ref()
             .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
 
-        driver
-            .back()
-            .await
-            .map_err(|e| AdkError::Tool(format!("Back navigation failed: {}", e)))
+        driver.back().await.map_err(|e| AdkError::Tool(format!("Back navigation failed: {}", e)))
     }
 
     /// Go forward in history.
@@ -384,10 +369,7 @@ impl BrowserSession {
             .as_ref()
             .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
 
-        driver
-            .refresh()
-            .await
-            .map_err(|e| AdkError::Tool(format!("Refresh failed: {}", e)))
+        driver.refresh().await.map_err(|e| AdkError::Tool(format!("Refresh failed: {}", e)))
     }
 
     // =========================================================================
@@ -408,13 +390,15 @@ impl BrowserSession {
 
         Ok(cookies
             .into_iter()
-            .map(|c| serde_json::json!({
-                "name": c.name,
-                "value": c.value,
-                "domain": c.domain,
-                "path": c.path,
-                "secure": c.secure,
-            }))
+            .map(|c| {
+                serde_json::json!({
+                    "name": c.name,
+                    "value": c.value,
+                    "domain": c.domain,
+                    "path": c.path,
+                    "secure": c.secure,
+                })
+            })
             .collect())
     }
 
@@ -519,10 +503,7 @@ impl BrowserSession {
             .await
             .map_err(|e| AdkError::Tool(format!("Failed to get current window: {}", e)))?;
 
-        Ok((
-            windows.into_iter().map(|w| w.to_string()).collect(),
-            current.to_string(),
-        ))
+        Ok((windows.into_iter().map(|w| w.to_string()).collect(), current.to_string()))
     }
 
     /// Open a new tab.
@@ -711,10 +692,7 @@ impl BrowserSession {
 
         let result = self.execute_script(&script).await?;
         if result.as_bool() != Some(true) {
-            return Err(AdkError::Tool(format!(
-                "Element not found: {}",
-                selector
-            )));
+            return Err(AdkError::Tool(format!("Element not found: {}", selector)));
         }
         Ok(())
     }
@@ -722,10 +700,7 @@ impl BrowserSession {
     /// Focus an element.
     pub async fn focus_element(&self, selector: &str) -> Result<()> {
         let element = self.find_element(selector).await?;
-        element
-            .focus()
-            .await
-            .map_err(|e| AdkError::Tool(format!("Focus failed: {}", e)))
+        element.focus().await.map_err(|e| AdkError::Tool(format!("Focus failed: {}", e)))
     }
 
     /// Get element state.
@@ -737,12 +712,7 @@ impl BrowserSession {
         let is_selected = element.is_selected().await.unwrap_or(false);
         let is_clickable = element.is_clickable().await.unwrap_or(false);
 
-        Ok(ElementState {
-            is_displayed,
-            is_enabled,
-            is_selected,
-            is_clickable,
-        })
+        Ok(ElementState { is_displayed, is_enabled, is_selected, is_clickable })
     }
 
     /// Press a key.
@@ -805,11 +775,8 @@ impl BrowserSession {
             .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
 
         let mut params = PrintParameters::default();
-        params.orientation = if landscape {
-            PrintOrientation::Landscape
-        } else {
-            PrintOrientation::Portrait
-        };
+        params.orientation =
+            if landscape { PrintOrientation::Landscape } else { PrintOrientation::Portrait };
         params.scale = scale;
 
         driver
@@ -824,8 +791,9 @@ impl BrowserSession {
             BrowserType::Chrome => {
                 let mut caps = DesiredCapabilities::chrome();
                 if self.config.headless {
-                    caps.add_arg("--headless=new")
-                        .map_err(|e| AdkError::Tool(format!("Failed to add headless arg: {}", e)))?;
+                    caps.add_arg("--headless=new").map_err(|e| {
+                        AdkError::Tool(format!("Failed to add headless arg: {}", e))
+                    })?;
                 }
                 caps.add_arg("--no-sandbox")
                     .map_err(|e| AdkError::Tool(format!("Failed to add no-sandbox: {}", e)))?;
@@ -838,8 +806,9 @@ impl BrowserSession {
                 }
 
                 for arg in &self.config.browser_args {
-                    caps.add_arg(arg)
-                        .map_err(|e| AdkError::Tool(format!("Failed to add arg '{}': {}", arg, e)))?;
+                    caps.add_arg(arg).map_err(|e| {
+                        AdkError::Tool(format!("Failed to add arg '{}': {}", arg, e))
+                    })?;
                 }
 
                 caps.into()

@@ -51,10 +51,7 @@ pub type RouterFn = Arc<dyn Fn(&State) -> String + Send + Sync>;
 #[derive(Clone)]
 pub enum Edge {
     /// Direct edge: always go from source to target
-    Direct {
-        source: String,
-        target: EdgeTarget,
-    },
+    Direct { source: String, target: EdgeTarget },
 
     /// Conditional edge: route based on state
     Conditional {
@@ -66,22 +63,16 @@ pub enum Edge {
     },
 
     /// Entry edge: from START to first node(s)
-    Entry {
-        targets: Vec<String>,
-    },
+    Entry { targets: Vec<String> },
 }
 
 impl std::fmt::Debug for Edge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Direct { source, target } => f
-                .debug_struct("Direct")
-                .field("source", source)
-                .field("target", target)
-                .finish(),
-            Self::Conditional {
-                source, targets, ..
-            } => f
+            Self::Direct { source, target } => {
+                f.debug_struct("Direct").field("source", source).field("target", target).finish()
+            }
+            Self::Conditional { source, targets, .. } => f
                 .debug_struct("Conditional")
                 .field("source", source)
                 .field("targets", targets)
@@ -103,13 +94,7 @@ impl Router {
     /// ```
     pub fn by_field(field: &str) -> impl Fn(&State) -> String + Send + Sync + Clone {
         let field = field.to_string();
-        move |state: &State| {
-            state
-                .get(&field)
-                .and_then(|v| v.as_str())
-                .unwrap_or(END)
-                .to_string()
-        }
+        move |state: &State| state.get(&field).and_then(|v| v.as_str()).unwrap_or(END).to_string()
     }
 
     /// Route based on whether the last message has tool calls
@@ -160,10 +145,7 @@ impl Router {
         let if_false = if_false.to_string();
 
         move |state: &State| {
-            let is_true = state
-                .get(&field)
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let is_true = state.get(&field).and_then(|v| v.as_bool()).unwrap_or(false);
 
             if is_true {
                 if_true.clone()
@@ -190,10 +172,7 @@ impl Router {
         let done_target = done_target.to_string();
 
         move |state: &State| {
-            let count = state
-                .get(&counter_field)
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as usize;
+            let count = state.get(&counter_field).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
             if count < max {
                 continue_target.clone()
@@ -219,10 +198,7 @@ impl Router {
         let success_target = success_target.to_string();
 
         move |state: &State| {
-            let has_error = state
-                .get(&error_field)
-                .map(|v| !v.is_null())
-                .unwrap_or(false);
+            let has_error = state.get(&error_field).map(|v| !v.is_null()).unwrap_or(false);
 
             if has_error {
                 error_target.clone()
@@ -283,10 +259,7 @@ mod tests {
 
         // Messages without tool calls
         let mut state = State::new();
-        state.insert(
-            "messages".to_string(),
-            json!([{"role": "assistant", "content": "Hello"}]),
-        );
+        state.insert("messages".to_string(), json!([{"role": "assistant", "content": "Hello"}]));
         assert_eq!(router(&state), END);
 
         // Messages with tool calls

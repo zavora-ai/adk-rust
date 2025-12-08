@@ -63,16 +63,15 @@ fn simulate_agent_response(
 ) -> (String, Option<Vec<serde_json::Value>>) {
     // Look at the conversation history to decide next action
     let last_message = messages.last();
-    let has_tool_result = last_message
-        .and_then(|m| m.get("role"))
-        .and_then(|r| r.as_str())
-        == Some("tool");
+    let has_tool_result =
+        last_message.and_then(|m| m.get("role")).and_then(|r| r.as_str()) == Some("tool");
 
     // Simulate agent reasoning based on iteration
     match iteration {
         0 => {
             // First iteration: decide to use tools
-            let thought = "I need to check the weather and do a calculation to answer the user's question.";
+            let thought =
+                "I need to check the weather and do a calculation to answer the user's question.";
             let tool_calls = vec![
                 json!({
                     "name": "get_weather",
@@ -111,11 +110,8 @@ async fn main() -> anyhow::Result<()> {
     let graph = StateGraph::with_channels(&["messages", "tool_calls", "iteration"])
         // Agent node: decides what to do next
         .add_node_fn("agent", |ctx| async move {
-            let messages = ctx
-                .get("messages")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
+            let messages =
+                ctx.get("messages").and_then(|v| v.as_array()).cloned().unwrap_or_default();
             let iteration = ctx.get("iteration").and_then(|v| v.as_i64()).unwrap_or(0);
 
             println!("[agent] Iteration {}: Reasoning...", iteration);
@@ -159,16 +155,10 @@ async fn main() -> anyhow::Result<()> {
         })
         // Tools node: executes tool calls
         .add_node_fn("tools", |ctx| async move {
-            let messages = ctx
-                .get("messages")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            let tool_calls = ctx
-                .get("tool_calls")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
+            let messages =
+                ctx.get("messages").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let tool_calls =
+                ctx.get("tool_calls").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 
             println!("[tools] Executing {} tool(s)...", tool_calls.len());
 
@@ -199,10 +189,8 @@ async fn main() -> anyhow::Result<()> {
         .add_conditional_edges(
             "agent",
             |state| {
-                let has_tools = state
-                    .get("has_tool_calls")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let has_tools =
+                    state.get("has_tool_calls").and_then(|v| v.as_bool()).unwrap_or(false);
                 if has_tools {
                     "tools".to_string()
                 } else {
@@ -229,17 +217,12 @@ async fn main() -> anyhow::Result<()> {
     println!("User: What's the weather in San Francisco and what's 2+2?\n");
     println!("{}", "=".repeat(60));
 
-    let result = graph
-        .invoke(input, ExecutionConfig::new("react-thread"))
-        .await?;
+    let result = graph.invoke(input, ExecutionConfig::new("react-thread")).await?;
 
     println!("{}", "=".repeat(60));
 
     // Extract final response
-    let messages = result
-        .get("messages")
-        .and_then(|v| v.as_array())
-        .unwrap();
+    let messages = result.get("messages").and_then(|v| v.as_array()).unwrap();
     let iterations = result.get("iteration").and_then(|v| v.as_i64()).unwrap_or(0);
 
     println!("\nCompleted in {} iterations", iterations);

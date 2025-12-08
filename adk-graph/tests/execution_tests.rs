@@ -23,10 +23,7 @@ async fn test_simple_execution() {
     let mut input = State::new();
     input.insert("value".to_string(), json!(21));
 
-    let result = graph
-        .invoke(input, ExecutionConfig::new("test-thread"))
-        .await
-        .unwrap();
+    let result = graph.invoke(input, ExecutionConfig::new("test-thread")).await.unwrap();
 
     assert_eq!(result.get("value"), Some(&json!(42)));
 }
@@ -57,10 +54,7 @@ async fn test_sequential_execution() {
     input.insert("value".to_string(), json!(5));
 
     // (5 + 1) * 2 + 3 = 15
-    let result = graph
-        .invoke(input, ExecutionConfig::new("test-thread"))
-        .await
-        .unwrap();
+    let result = graph.invoke(input, ExecutionConfig::new("test-thread")).await.unwrap();
 
     assert_eq!(result.get("value"), Some(&json!(15)));
 }
@@ -84,13 +78,7 @@ async fn test_conditional_routing() {
         .add_edge(START, "classify")
         .add_conditional_edges(
             "classify",
-            |state| {
-                state
-                    .get("route")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("low")
-                    .to_string()
-            },
+            |state| state.get("route").and_then(|v| v.as_str()).unwrap_or("low").to_string(),
             [("high", "high_handler"), ("low", "low_handler")],
         )
         .add_edge("high_handler", END)
@@ -102,10 +90,7 @@ async fn test_conditional_routing() {
     let mut input_high = State::new();
     input_high.insert("value".to_string(), json!(50));
 
-    let result_high = graph
-        .invoke(input_high, ExecutionConfig::new("test-high"))
-        .await
-        .unwrap();
+    let result_high = graph.invoke(input_high, ExecutionConfig::new("test-high")).await.unwrap();
 
     assert_eq!(result_high.get("result"), Some(&json!("HIGH: 50")));
 
@@ -113,10 +98,7 @@ async fn test_conditional_routing() {
     let mut input_low = State::new();
     input_low.insert("value".to_string(), json!(5));
 
-    let result_low = graph
-        .invoke(input_low, ExecutionConfig::new("test-low"))
-        .await
-        .unwrap();
+    let result_low = graph.invoke(input_low, ExecutionConfig::new("test-low")).await.unwrap();
 
     assert_eq!(result_low.get("result"), Some(&json!("LOW: 5")));
 }
@@ -145,10 +127,7 @@ async fn test_cycle_with_limit() {
         .unwrap();
 
     let input = State::new();
-    let result = graph
-        .invoke(input, ExecutionConfig::new("test-cycle"))
-        .await
-        .unwrap();
+    let result = graph.invoke(input, ExecutionConfig::new("test-cycle")).await.unwrap();
 
     assert_eq!(result.get("count"), Some(&json!(5)));
 }
@@ -167,9 +146,7 @@ async fn test_recursion_limit() {
         .with_recursion_limit(5);
 
     let input = State::new();
-    let result = graph
-        .invoke(input, ExecutionConfig::new("test-limit"))
-        .await;
+    let result = graph.invoke(input, ExecutionConfig::new("test-limit")).await;
 
     assert!(matches!(result, Err(GraphError::RecursionLimitExceeded(_))));
 }
@@ -192,10 +169,7 @@ async fn test_with_checkpointer() {
     let mut input = State::new();
     input.insert("value".to_string(), json!(5));
 
-    let result = graph
-        .invoke(input, ExecutionConfig::new("checkpoint-test"))
-        .await
-        .unwrap();
+    let result = graph.invoke(input, ExecutionConfig::new("checkpoint-test")).await.unwrap();
 
     assert_eq!(result.get("value"), Some(&json!(15)));
 }
@@ -218,10 +192,7 @@ async fn test_multiple_outputs() {
     let mut input = State::new();
     input.insert("input".to_string(), json!("hello world"));
 
-    let result = graph
-        .invoke(input, ExecutionConfig::new("test-multi"))
-        .await
-        .unwrap();
+    let result = graph.invoke(input, ExecutionConfig::new("test-multi")).await.unwrap();
 
     assert_eq!(result.get("length"), Some(&json!(11)));
     assert_eq!(result.get("uppercase"), Some(&json!("HELLO WORLD")));
@@ -240,10 +211,7 @@ async fn test_empty_input_state() {
         .unwrap();
 
     let input = State::new();
-    let result = graph
-        .invoke(input, ExecutionConfig::new("test-empty"))
-        .await
-        .unwrap();
+    let result = graph.invoke(input, ExecutionConfig::new("test-empty")).await.unwrap();
 
     assert_eq!(result.get("result"), Some(&json!("generated")));
 }

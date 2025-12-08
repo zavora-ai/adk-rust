@@ -13,10 +13,10 @@ categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 
 [dependencies]
-adk-core = { path = "../adk-core", version = "0.1.0" }
-adk-model = { path = "../adk-model", version = "0.1.0" }
-adk-tool = { path = "../adk-tool", version = "0.1.0" }
-adk-telemetry = { path = "../adk-telemetry", version = "0.1.0" }
+adk-core = { path = "../adk-core", version = "0.1.4" }
+adk-model = { path = "../adk-model", version = "0.1.4" }
+adk-tool = { path = "../adk-tool", version = "0.1.4" }
+adk-telemetry = { path = "../adk-telemetry", version = "0.1.4" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }

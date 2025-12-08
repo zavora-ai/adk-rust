@@ -31,16 +31,10 @@ impl std::fmt::Display for Interrupt {
 
 /// Helper to create a dynamic interrupt from within a node
 pub fn interrupt(message: &str) -> Interrupt {
-    Interrupt::Dynamic {
-        message: message.to_string(),
-        data: None,
-    }
+    Interrupt::Dynamic { message: message.to_string(), data: None }
 }
 
 /// Helper to create a dynamic interrupt with data
 pub fn interrupt_with_data(message: &str, data: Value) -> Interrupt {
-    Interrupt::Dynamic {
-        message: message.to_string(),
-        data: Some(data),
-    }
+    Interrupt::Dynamic { message: message.to_string(), data: Some(data) }
 }

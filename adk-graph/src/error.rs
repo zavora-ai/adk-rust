@@ -91,12 +91,6 @@ impl InterruptedExecution {
         state: crate::state::State,
         step: usize,
     ) -> Self {
-        Self {
-            thread_id,
-            checkpoint_id,
-            interrupt,
-            state,
-            step,
-        }
+        Self { thread_id, checkpoint_id, interrupt, state, step }
     }
 }

@@ -22,11 +22,7 @@ pub struct StateGraph {
 impl StateGraph {
     /// Create a new graph with the given state schema
     pub fn new(schema: StateSchema) -> Self {
-        Self {
-            schema,
-            nodes: HashMap::new(),
-            edges: vec![],
-        }
+        Self { schema, nodes: HashMap::new(), edges: vec![] }
     }
 
     /// Create with a simple schema (just channel names, all overwrite)
@@ -69,17 +65,12 @@ impl StateGraph {
                 }
                 None => {
                     if let EdgeTarget::Node(node) = target {
-                        self.edges.push(Edge::Entry {
-                            targets: vec![node],
-                        });
+                        self.edges.push(Edge::Entry { targets: vec![node] });
                     }
                 }
             }
         } else {
-            self.edges.push(Edge::Direct {
-                source: source.to_string(),
-                target,
-            });
+            self.edges.push(Edge::Direct { source: source.to_string(), target });
         }
 
         self
@@ -91,10 +82,8 @@ impl StateGraph {
         F: Fn(&State) -> String + Send + Sync + 'static,
         I: IntoIterator<Item = (&'static str, &'static str)>,
     {
-        let targets_map: HashMap<String, EdgeTarget> = targets
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), EdgeTarget::from(v)))
-            .collect();
+        let targets_map: HashMap<String, EdgeTarget> =
+            targets.into_iter().map(|(k, v)| (k.to_string(), EdgeTarget::from(v))).collect();
 
         self.edges.push(Edge::Conditional {
             source: source.to_string(),
@@ -106,14 +95,17 @@ impl StateGraph {
     }
 
     /// Add a conditional edge with an Arc router (for pre-built routers)
-    pub fn add_conditional_edges_arc<I>(mut self, source: &str, router: RouterFn, targets: I) -> Self
+    pub fn add_conditional_edges_arc<I>(
+        mut self,
+        source: &str,
+        router: RouterFn,
+        targets: I,
+    ) -> Self
     where
         I: IntoIterator<Item = (&'static str, &'static str)>,
     {
-        let targets_map: HashMap<String, EdgeTarget> = targets
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), EdgeTarget::from(v)))
-            .collect();
+        let targets_map: HashMap<String, EdgeTarget> =
+            targets.into_iter().map(|(k, v)| (k.to_string(), EdgeTarget::from(v))).collect();
 
         self.edges.push(Edge::Conditional {
             source: source.to_string(),
@@ -160,9 +152,7 @@ impl StateGraph {
                         }
                     }
                 }
-                Edge::Conditional {
-                    source, targets, ..
-                } => {
+                Edge::Conditional { source, targets, .. } => {
                     if !self.nodes.contains_key(source) {
                         return Err(GraphError::NodeNotFound(source.clone()));
                     }
@@ -246,19 +236,14 @@ impl CompiledGraph {
 
         for edge in &self.edges {
             match edge {
-                Edge::Direct {
-                    source,
-                    target: EdgeTarget::Node(n),
-                } if executed.contains(source) => {
+                Edge::Direct { source, target: EdgeTarget::Node(n) }
+                    if executed.contains(source) =>
+                {
                     if !next.contains(n) {
                         next.push(n.clone());
                     }
                 }
-                Edge::Conditional {
-                    source,
-                    router,
-                    targets,
-                } if executed.contains(source) => {
+                Edge::Conditional { source, router, targets } if executed.contains(source) => {
                     let route = router(state);
                     if let Some(EdgeTarget::Node(n)) = targets.get(&route) {
                         if !next.contains(n) {
@@ -283,11 +268,7 @@ impl CompiledGraph {
                         return true;
                     }
                 }
-                Edge::Conditional {
-                    source,
-                    router,
-                    targets,
-                } if executed.contains(source) => {
+                Edge::Conditional { source, router, targets } if executed.contains(source) => {
                     let route = router(state);
                     if route == END {
                         return true;
@@ -343,9 +324,7 @@ mod tests {
 
     #[test]
     fn test_graph_missing_node() {
-        let graph = StateGraph::with_channels(&["input"])
-            .add_edge(START, "nonexistent")
-            .compile();
+        let graph = StateGraph::with_channels(&["input"]).add_edge(START, "nonexistent").compile();
 
         assert!(matches!(graph, Err(GraphError::EdgeTargetNotFound(_))));
     }
@@ -359,13 +338,7 @@ mod tests {
             .add_edge(START, "router")
             .add_conditional_edges(
                 "router",
-                |state| {
-                    state
-                        .get("next")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(END)
-                        .to_string()
-                },
+                |state| state.get("next").and_then(|v| v.as_str()).unwrap_or(END).to_string(),
                 [("path_a", "path_a"), ("path_b", "path_b"), (END, END)],
             )
             .compile()

@@ -1,0 +1,33 @@
+[package]
+name = "adk-eval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Agent evaluation framework for ADK-Rust"
+repository = "https://github.com/zavora-ai/adk-rust"
+documentation = "https://docs.rs/adk-eval"
+readme = "README.md"
+keywords = ["ai", "agent", "evaluation", "testing", "llm", "adk-rust"]
+categories = ["development-tools::testing"]
+
+[dependencies]
+adk-core = { path = "../adk-core", version = "0.1.4" }
+adk-runner = { path = "../adk-runner", version = "0.1.4" }
+adk-session = { path = "../adk-session", version = "0.1.4" }
+adk-model = { path = "../adk-model", version = "0.1.4" }
+
+tokio.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+futures.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.0"

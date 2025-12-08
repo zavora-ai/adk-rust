@@ -75,15 +75,9 @@ impl Tool for TypeTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| adk_core::AdkError::Tool("Missing 'text' parameter".to_string()))?;
 
-        let clear_first = args
-            .get("clear_first")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+        let clear_first = args.get("clear_first").and_then(|v| v.as_bool()).unwrap_or(true);
 
-        let press_enter = args
-            .get("press_enter")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let press_enter = args.get("press_enter").and_then(|v| v.as_bool()).unwrap_or(false);
 
         // Wait for element
         let element = self.browser.wait_for_element(selector, 10).await?;
@@ -111,12 +105,8 @@ impl Tool for TypeTool {
         }
 
         // Get the current value
-        let field_value = element
-            .attr("value")
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| text.to_string());
+        let field_value =
+            element.attr("value").await.ok().flatten().unwrap_or_else(|| text.to_string());
 
         Ok(json!({
             "success": true,
@@ -289,10 +279,7 @@ impl Tool for SelectTool {
                     "selected_index": idx
                 }));
             } else {
-                return Err(adk_core::AdkError::Tool(format!(
-                    "Option at index {} not found",
-                    idx
-                )));
+                return Err(adk_core::AdkError::Tool(format!("Option at index {} not found", idx)));
             }
         } else {
             return Err(adk_core::AdkError::Tool(

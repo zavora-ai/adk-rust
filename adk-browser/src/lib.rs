@@ -172,28 +172,62 @@ pub use toolset::{minimal_browser_tools, readonly_browser_tools, BrowserToolset}
 
 // Re-export individual tools for selective use
 pub use tools::{
+    // Cookies
+    AddCookieTool,
+    // JavaScript
+    AlertTool,
     // Navigation
-    BackTool, ForwardTool, NavigateTool, RefreshTool,
+    BackTool,
     // Interaction
-    ClearTool, ClickTool, DoubleClickTool, SelectTool, TypeTool,
+    ClearTool,
+    ClickTool,
+    // Windows/Tabs
+    CloseWindowTool,
+    DeleteAllCookiesTool,
+    DeleteCookieTool,
+    DoubleClickTool,
+    // Advanced Actions
+    DragAndDropTool,
+    ElementStateTool,
+    EvaluateJsTool,
     // Extraction
-    ExtractAttributeTool, ExtractLinksTool, ExtractTextTool, PageInfoTool, PageSourceTool,
+    ExtractAttributeTool,
+    ExtractLinksTool,
+    ExtractTextTool,
+    FileUploadTool,
+    FocusTool,
+    ForwardTool,
+    GetCookieTool,
+    GetCookiesTool,
+    HoverTool,
+    ListWindowsTool,
+    MaximizeWindowTool,
+    MinimizeWindowTool,
+    NavigateTool,
+    NewTabTool,
+    NewWindowTool,
+    PageInfoTool,
+    PageSourceTool,
+    PressKeyTool,
+    PrintToPdfTool,
+    RefreshTool,
+    RightClickTool,
     // Screenshots
     ScreenshotTool,
-    // Waiting
-    WaitForElementTool, WaitForPageLoadTool, WaitForTextTool, WaitTool,
-    // JavaScript
-    AlertTool, EvaluateJsTool, HoverTool, ScrollTool,
-    // Cookies
-    AddCookieTool, DeleteAllCookiesTool, DeleteCookieTool, GetCookieTool, GetCookiesTool,
-    // Windows/Tabs
-    CloseWindowTool, ListWindowsTool, MaximizeWindowTool, MinimizeWindowTool, NewTabTool,
-    NewWindowTool, SetWindowSizeTool, SwitchWindowTool,
+    ScrollTool,
+    SelectTool,
+    SetWindowSizeTool,
     // Frames
-    SwitchToDefaultContentTool, SwitchToFrameTool, SwitchToParentFrameTool,
-    // Advanced Actions
-    DragAndDropTool, ElementStateTool, FileUploadTool, FocusTool, PressKeyTool, PrintToPdfTool,
-    RightClickTool,
+    SwitchToDefaultContentTool,
+    SwitchToFrameTool,
+    SwitchToParentFrameTool,
+    SwitchWindowTool,
+    TypeTool,
+    // Waiting
+    WaitForElementTool,
+    WaitForPageLoadTool,
+    WaitForTextTool,
+    WaitTool,
 };
 
 /// Prelude module for convenient imports.

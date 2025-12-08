@@ -67,15 +67,9 @@ impl Tool for WaitForElementTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| adk_core::AdkError::Tool("Missing 'selector' parameter".to_string()))?;
 
-        let timeout = args
-            .get("timeout")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(30);
+        let timeout = args.get("timeout").and_then(|v| v.as_u64()).unwrap_or(30);
 
-        let visible = args
-            .get("visible")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let visible = args.get("visible").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let element = if visible {
             self.browser.wait_for_clickable(selector, timeout).await?
@@ -184,10 +178,7 @@ impl Tool for WaitForPageLoadTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let timeout = args
-            .get("timeout")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(30);
+        let timeout = args.get("timeout").and_then(|v| v.as_u64()).unwrap_or(30);
 
         let script = "return document.readyState";
         let start = std::time::Instant::now();
@@ -264,15 +255,10 @@ impl Tool for WaitForTextTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| adk_core::AdkError::Tool("Missing 'text' parameter".to_string()))?;
 
-        let timeout = args
-            .get("timeout")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(30);
+        let timeout = args.get("timeout").and_then(|v| v.as_u64()).unwrap_or(30);
 
-        let script = format!(
-            "return document.body.innerText.includes('{}')",
-            text.replace('\'', "\\'")
-        );
+        let script =
+            format!("return document.body.innerText.includes('{}')", text.replace('\'', "\\'"));
 
         let start = std::time::Instant::now();
 

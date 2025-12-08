@@ -40,21 +40,22 @@ fn test_graph_missing_node() {
 
 #[test]
 fn test_graph_with_multiple_nodes() {
-    let graph = StateGraph::with_channels(&["value"])
-        .add_node_fn("step1", |_ctx| async move {
-            Ok(NodeOutput::new().with_update("value", json!(1)))
-        })
-        .add_node_fn("step2", |_ctx| async move {
-            Ok(NodeOutput::new().with_update("value", json!(2)))
-        })
-        .add_node_fn("step3", |_ctx| async move {
-            Ok(NodeOutput::new().with_update("value", json!(3)))
-        })
-        .add_edge(START, "step1")
-        .add_edge("step1", "step2")
-        .add_edge("step2", "step3")
-        .add_edge("step3", END)
-        .compile();
+    let graph =
+        StateGraph::with_channels(&["value"])
+            .add_node_fn("step1", |_ctx| async move {
+                Ok(NodeOutput::new().with_update("value", json!(1)))
+            })
+            .add_node_fn("step2", |_ctx| async move {
+                Ok(NodeOutput::new().with_update("value", json!(2)))
+            })
+            .add_node_fn("step3", |_ctx| async move {
+                Ok(NodeOutput::new().with_update("value", json!(3)))
+            })
+            .add_edge(START, "step1")
+            .add_edge("step1", "step2")
+            .add_edge("step2", "step3")
+            .add_edge("step3", END)
+            .compile();
 
     assert!(graph.is_ok());
 }
@@ -72,13 +73,7 @@ fn test_graph_with_conditional_edges() {
         .add_edge(START, "router")
         .add_conditional_edges(
             "router",
-            |state| {
-                state
-                    .get("action")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("a")
-                    .to_string()
-            },
+            |state| state.get("action").and_then(|v| v.as_str()).unwrap_or("a").to_string(),
             [("a", "action_a"), ("b", "action_b")],
         )
         .add_edge("action_a", END)
@@ -102,11 +97,7 @@ fn test_graph_with_cycle() {
         .add_conditional_edges(
             "increment",
             |state| {
-                if state
-                    .get("done")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
+                if state.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
                     "finish".to_string()
                 } else {
                     "increment".to_string()

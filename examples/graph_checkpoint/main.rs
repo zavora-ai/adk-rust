@@ -55,15 +55,18 @@ async fn main() -> anyhow::Result<()> {
             println!("[process] Processing {} items...", items.len());
 
             // Simulate processing
-            let processed: Vec<_> = items.iter().map(|item| {
-                let mut processed = item.clone();
-                if let Some(obj) = processed.as_object_mut() {
-                    let value = obj.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
-                    obj.insert("processed_value".to_string(), json!(value * 2));
-                    obj.insert("status".to_string(), json!("processed"));
-                }
-                processed
-            }).collect();
+            let processed: Vec<_> = items
+                .iter()
+                .map(|item| {
+                    let mut processed = item.clone();
+                    if let Some(obj) = processed.as_object_mut() {
+                        let value = obj.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
+                        obj.insert("processed_value".to_string(), json!(value * 2));
+                        obj.insert("status".to_string(), json!("processed"));
+                    }
+                    processed
+                })
+                .collect();
 
             println!("[process] Processed {} items (values doubled)", processed.len());
 
@@ -73,22 +76,29 @@ async fn main() -> anyhow::Result<()> {
         })
         // Step 3: Validate results
         .add_node_fn("validate", |ctx| async move {
-            let processed = ctx.get("processed").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let processed =
+                ctx.get("processed").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 
             println!("[validate] Validating {} processed items...", processed.len());
 
             // Simulate validation
             let mut valid_count = 0;
-            let validated: Vec<_> = processed.iter().map(|item| {
-                let mut validated = item.clone();
-                if let Some(obj) = validated.as_object_mut() {
-                    let value = obj.get("processed_value").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let is_valid = value > 0 && value < 1000;
-                    obj.insert("valid".to_string(), json!(is_valid));
-                    if is_valid { valid_count += 1; }
-                }
-                validated
-            }).collect();
+            let validated: Vec<_> = processed
+                .iter()
+                .map(|item| {
+                    let mut validated = item.clone();
+                    if let Some(obj) = validated.as_object_mut() {
+                        let value =
+                            obj.get("processed_value").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let is_valid = value > 0 && value < 1000;
+                        obj.insert("valid".to_string(), json!(is_valid));
+                        if is_valid {
+                            valid_count += 1;
+                        }
+                    }
+                    validated
+                })
+                .collect();
 
             println!("[validate] {} of {} items passed validation", valid_count, validated.len());
 
@@ -98,15 +108,18 @@ async fn main() -> anyhow::Result<()> {
         })
         // Step 4: Generate report
         .add_node_fn("report", |ctx| async move {
-            let validated = ctx.get("validated").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let validated =
+                ctx.get("validated").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 
             println!("[report] Generating final report...");
 
-            let valid_items: Vec<_> = validated.iter()
+            let valid_items: Vec<_> = validated
+                .iter()
                 .filter(|item| item.get("valid").and_then(|v| v.as_bool()).unwrap_or(false))
                 .collect();
 
-            let total_value: i64 = valid_items.iter()
+            let total_value: i64 = valid_items
+                .iter()
                 .filter_map(|item| item.get("processed_value").and_then(|v| v.as_i64()))
                 .sum();
 
@@ -117,7 +130,11 @@ async fn main() -> anyhow::Result<()> {
                 "status": "complete"
             });
 
-            println!("[report] Report: {} valid items, total value: {}", valid_items.len(), total_value);
+            println!(
+                "[report] Report: {} valid items, total value: {}",
+                valid_items.len(),
+                total_value
+            );
 
             Ok(NodeOutput::new()
                 .with_update("result", report)
@@ -152,8 +169,10 @@ async fn main() -> anyhow::Result<()> {
 
     for (i, cp) in checkpoints.iter().enumerate() {
         let step_name = cp.state.get("step").and_then(|v| v.as_str()).unwrap_or("initial");
-        let items_count = cp.state.get("items").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
-        let processed_count = cp.state.get("processed").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+        let items_count =
+            cp.state.get("items").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+        let processed_count =
+            cp.state.get("processed").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
 
         println!(
             "  {}. Step {} - {} | items: {}, processed: {} | ID: {}...{}",
@@ -163,7 +182,7 @@ async fn main() -> anyhow::Result<()> {
             items_count,
             processed_count,
             &cp.checkpoint_id[..8],
-            &cp.checkpoint_id[cp.checkpoint_id.len()-4..]
+            &cp.checkpoint_id[cp.checkpoint_id.len() - 4..]
         );
     }
 
@@ -179,7 +198,10 @@ async fn main() -> anyhow::Result<()> {
 
         if let Some(loaded) = checkpointer.load_by_id(&checkpoint.checkpoint_id).await? {
             println!("Checkpoint state at step {}:", loaded.step);
-            println!("  - Items: {:?}", loaded.state.get("items").and_then(|v| v.as_array()).map(|a| a.len()));
+            println!(
+                "  - Items: {:?}",
+                loaded.state.get("items").and_then(|v| v.as_array()).map(|a| a.len())
+            );
             println!("  - Processed: {:?}", loaded.state.get("processed"));
             println!("  - Step: {:?}", loaded.state.get("step"));
         }
@@ -242,7 +264,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Check saved state
     if let Some(state) = failure_graph.get_state(recovery_thread).await? {
-        println!("\nSaved state: counter = {}", state.get("counter").and_then(|v| v.as_i64()).unwrap_or(0));
+        println!(
+            "\nSaved state: counter = {}",
+            state.get("counter").and_then(|v| v.as_i64()).unwrap_or(0)
+        );
     }
 
     // "Fix the bug" and resume
@@ -252,8 +277,12 @@ async fn main() -> anyhow::Result<()> {
     failure_graph.update_state(recovery_thread, [("status".to_string(), json!("running"))]).await?;
 
     // Resume
-    let final_result = failure_graph.invoke(State::new(), ExecutionConfig::new(recovery_thread)).await?;
-    println!("Final counter: {}", final_result.get("counter").and_then(|v| v.as_i64()).unwrap_or(0));
+    let final_result =
+        failure_graph.invoke(State::new(), ExecutionConfig::new(recovery_thread)).await?;
+    println!(
+        "Final counter: {}",
+        final_result.get("counter").and_then(|v| v.as_i64()).unwrap_or(0)
+    );
 
     // ========== Part 5: Multiple threads ==========
     println!("\n{}", "=".repeat(60));
@@ -279,11 +308,7 @@ async fn main() -> anyhow::Result<()> {
         .with_checkpointer_arc(multi_checkpointer.clone());
 
     // Process multiple users (threads)
-    let users = vec![
-        ("user-alice", 500),
-        ("user-bob", 300),
-        ("user-charlie", 1000),
-    ];
+    let users = vec![("user-alice", 500), ("user-bob", 300), ("user-charlie", 1000)];
 
     for (user_id, initial_balance) in &users {
         let mut input = State::new();

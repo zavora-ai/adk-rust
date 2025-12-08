@@ -10,8 +10,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Browser Session Integration Test ===\n");
 
     // Check WebDriver
-    let webdriver_url = std::env::var("WEBDRIVER_URL")
-        .unwrap_or_else(|_| "http://localhost:4444".to_string());
+    let webdriver_url =
+        std::env::var("WEBDRIVER_URL").unwrap_or_else(|_| "http://localhost:4444".to_string());
 
     let available = reqwest::Client::new()
         .get(&format!("{}/status", webdriver_url))
@@ -29,10 +29,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("WebDriver available at {}\n", webdriver_url);
 
     // Setup browser
-    let config = BrowserConfig::new()
-        .webdriver_url(&webdriver_url)
-        .headless(true)
-        .viewport(1280, 720);
+    let config =
+        BrowserConfig::new().webdriver_url(&webdriver_url).headless(true).viewport(1280, 720);
 
     let browser = Arc::new(BrowserSession::new(config));
     browser.start().await?;
@@ -57,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let title = browser.title().await?;
     let url = browser.current_url().await?;
     println!("  Title: {}", title);
-    
+
     println!("  URL: {}\n", url);
 
     // =========================================================================

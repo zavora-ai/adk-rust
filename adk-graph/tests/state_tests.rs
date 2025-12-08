@@ -22,16 +22,9 @@ fn test_append_reducer() {
     let mut state = schema.initialize_state();
 
     schema.apply_update(&mut state, "messages", json!({"role": "user", "content": "hi"}));
-    assert_eq!(
-        state.get("messages"),
-        Some(&json!([{"role": "user", "content": "hi"}]))
-    );
+    assert_eq!(state.get("messages"), Some(&json!([{"role": "user", "content": "hi"}])));
 
-    schema.apply_update(
-        &mut state,
-        "messages",
-        json!([{"role": "assistant", "content": "hello"}]),
-    );
+    schema.apply_update(&mut state, "messages", json!([{"role": "assistant", "content": "hello"}]));
     assert_eq!(
         state.get("messages"),
         Some(&json!([
@@ -114,9 +107,8 @@ fn test_channel_builders() {
     assert_eq!(counter.name, "count");
     assert_eq!(counter.default, Some(json!(0)));
 
-    let custom = Channel::new("custom")
-        .with_reducer(Reducer::Append)
-        .with_default(json!(["initial"]));
+    let custom =
+        Channel::new("custom").with_reducer(Reducer::Append).with_default(json!(["initial"]));
     assert_eq!(custom.default, Some(json!(["initial"])));
 }
 

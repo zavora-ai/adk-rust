@@ -61,16 +61,10 @@ impl Tool for ClickTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| adk_core::AdkError::Tool("Missing 'selector' parameter".to_string()))?;
 
-        let wait_timeout = args
-            .get("wait_timeout")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(10);
+        let wait_timeout = args.get("wait_timeout").and_then(|v| v.as_u64()).unwrap_or(10);
 
         // Wait for element to be clickable, then click
-        let element = self
-            .browser
-            .wait_for_clickable(selector, wait_timeout)
-            .await?;
+        let element = self.browser.wait_for_clickable(selector, wait_timeout).await?;
 
         element
             .click()
@@ -78,10 +72,7 @@ impl Tool for ClickTool {
             .map_err(|e| adk_core::AdkError::Tool(format!("Click failed: {}", e)))?;
 
         // Get element info for response
-        let tag_name = element
-            .tag_name()
-            .await
-            .unwrap_or_else(|_| "unknown".to_string());
+        let tag_name = element.tag_name().await.unwrap_or_else(|_| "unknown".to_string());
 
         let text = element.text().await.unwrap_or_default();
         let element_info = if text.is_empty() {
@@ -147,10 +138,7 @@ impl Tool for DoubleClickTool {
             ))
             .await?;
 
-        let tag_name = element
-            .tag_name()
-            .await
-            .unwrap_or_else(|_| "unknown".to_string());
+        let tag_name = element.tag_name().await.unwrap_or_else(|_| "unknown".to_string());
 
         Ok(json!({
             "success": true,

@@ -1,6 +1,6 @@
 # adk-graph
 
-Graph-based workflow orchestration for ADK-Rust agents, inspired by LangGraph.
+Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) agents, inspired by LangGraph.
 
 ## Overview
 

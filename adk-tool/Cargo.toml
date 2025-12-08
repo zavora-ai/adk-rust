@@ -8,13 +8,13 @@ authors.workspace = true
 description = "Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP, Google Search)"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-tool"
-keywords = ["ai", "agent", "adk", "tools", "mcp"]
+keywords = ["ai", "agent", "adk", "tools", "mcp","functiontool","adk-rust"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 
 [dependencies]
-adk-core = { path = "../adk-core", version = "0.1.0" }
-adk-telemetry = { path = "../adk-telemetry", version = "0.1.0" }
+adk-core = { path = "../adk-core", version = "0.1.4" }
+adk-telemetry = { path = "../adk-telemetry", version = "0.1.4" }
 async-trait.workspace = true
 tokio.workspace = true
 serde.workspace = true

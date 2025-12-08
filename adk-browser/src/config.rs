@@ -127,10 +127,8 @@ mod tests {
 
     #[test]
     fn test_builder() {
-        let config = BrowserConfig::new()
-            .browser(BrowserType::Firefox)
-            .headless(false)
-            .viewport(1280, 720);
+        let config =
+            BrowserConfig::new().browser(BrowserType::Firefox).headless(false).viewport(1280, 720);
 
         assert_eq!(config.browser, BrowserType::Firefox);
         assert!(!config.headless);

@@ -40,11 +40,7 @@ async fn main() -> anyhow::Result<()> {
 
             // Simple analysis: calculate reading time and find first sentence
             let reading_time_mins = (word_count as f64 / 200.0).ceil() as i64;
-            let first_sentence = text
-                .split('.')
-                .next()
-                .unwrap_or(text)
-                .trim();
+            let first_sentence = text.split('.').next().unwrap_or(text).trim();
 
             Ok(NodeOutput::new()
                 .with_update("reading_time", json!(reading_time_mins))
@@ -55,10 +51,7 @@ async fn main() -> anyhow::Result<()> {
             let word_count = ctx.get("word_count").and_then(|v| v.as_i64()).unwrap_or(0);
             let char_count = ctx.get("char_count").and_then(|v| v.as_i64()).unwrap_or(0);
             let reading_time = ctx.get("reading_time").and_then(|v| v.as_i64()).unwrap_or(0);
-            let first_sentence = ctx
-                .get("first_sentence")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let first_sentence = ctx.get("first_sentence").and_then(|v| v.as_str()).unwrap_or("");
 
             println!("[format] Creating summary...");
 
@@ -68,10 +61,7 @@ async fn main() -> anyhow::Result<()> {
                  - Characters: {}\n\
                  - Estimated reading time: {} minute(s)\n\
                  - Preview: \"{}...\"",
-                word_count,
-                char_count,
-                reading_time,
-                first_sentence
+                word_count, char_count, reading_time, first_sentence
             );
 
             Ok(NodeOutput::new().with_update("summary", json!(summary)))
@@ -92,9 +82,7 @@ async fn main() -> anyhow::Result<()> {
     let mut input = State::new();
     input.insert("text".to_string(), json!(sample_text));
 
-    let result = graph
-        .invoke(input, ExecutionConfig::new("analysis-thread"))
-        .await?;
+    let result = graph.invoke(input, ExecutionConfig::new("analysis-thread")).await?;
 
     println!("\n{}", result.get("summary").and_then(|v| v.as_str()).unwrap_or("No summary"));
 

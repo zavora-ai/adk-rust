@@ -143,12 +143,7 @@ impl Tool for ScrollTool {
                 "down" => format!("window.scrollBy(0, {})", amount),
                 "top" => "window.scrollTo(0, 0)".to_string(),
                 "bottom" => "window.scrollTo(0, document.body.scrollHeight)".to_string(),
-                _ => {
-                    return Err(adk_core::AdkError::Tool(format!(
-                        "Invalid direction: {}",
-                        dir
-                    )))
-                }
+                _ => return Err(adk_core::AdkError::Tool(format!("Invalid direction: {}", dir))),
             };
 
             self.browser.execute_script(&script).await?;
@@ -159,9 +154,7 @@ impl Tool for ScrollTool {
             }));
         }
 
-        Err(adk_core::AdkError::Tool(
-            "Must specify either 'direction' or 'selector'".to_string(),
-        ))
+        Err(adk_core::AdkError::Tool("Must specify either 'direction' or 'selector'".to_string()))
     }
 }
 
@@ -231,10 +224,7 @@ impl Tool for HoverTool {
                 "hovered": selector
             }))
         } else {
-            Err(adk_core::AdkError::Tool(format!(
-                "Element not found: {}",
-                selector
-            )))
+            Err(adk_core::AdkError::Tool(format!("Element not found: {}", selector)))
         }
     }
 }
@@ -305,12 +295,7 @@ impl Tool for AlertTool {
                 return 'ok';
                 "#
             }
-            _ => {
-                return Err(adk_core::AdkError::Tool(format!(
-                    "Invalid action: {}",
-                    action
-                )))
-            }
+            _ => return Err(adk_core::AdkError::Tool(format!("Invalid action: {}", action))),
         };
 
         self.browser.execute_script(script).await?;

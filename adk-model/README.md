@@ -1,6 +1,6 @@
 # adk-model
 
-LLM model integrations for ADK (Gemini, OpenAI, Anthropic).
+LLM model integrations for Rust Agent Development Kit (ADK-Rust) with model Gemini, OpenAI, Anthropic.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-model.svg)](https://crates.io/crates/adk-model)
 [![Documentation](https://docs.rs/adk-model/badge.svg)](https://docs.rs/adk-model)

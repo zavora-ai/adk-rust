@@ -8,14 +8,14 @@ authors.workspace = true
 description = "Agent execution runtime for Rust Agent Development Kit (ADK-Rust) agents"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-runner"
-keywords = ["ai", "agent", "adk", "runtime", "executor"]
+keywords = ["ai", "agent", "adk", "runtime", "executor","runner","adk-rust"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 
 [dependencies]
-adk-core = { path = "../adk-core", version = "0.1.0" }
-adk-artifact = { path = "../adk-artifact", version = "0.1.0" }
-adk-session = { path = "../adk-session", version = "0.1.0" }
+adk-core = { path = "../adk-core", version = "0.1.4" }
+adk-artifact = { path = "../adk-artifact", version = "0.1.4" }
+adk-session = { path = "../adk-session", version = "0.1.4" }
 async-trait = "0.1"
 tokio = { version = "1.42", features = ["full"] }
 futures = "0.3"

@@ -106,10 +106,7 @@ fn test_on_error_router() {
 #[test]
 fn test_custom_router() {
     let router = Router::custom(|state| {
-        let score = state
-            .get("score")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
+        let score = state.get("score").and_then(|v| v.as_i64()).unwrap_or(0);
 
         match score {
             0..=49 => "low".to_string(),
@@ -133,13 +130,7 @@ fn test_custom_router() {
 #[test]
 fn test_edge_target_equality() {
     assert_eq!(EdgeTarget::End, EdgeTarget::End);
-    assert_eq!(
-        EdgeTarget::Node("a".to_string()),
-        EdgeTarget::Node("a".to_string())
-    );
-    assert_ne!(
-        EdgeTarget::Node("a".to_string()),
-        EdgeTarget::Node("b".to_string())
-    );
+    assert_eq!(EdgeTarget::Node("a".to_string()), EdgeTarget::Node("a".to_string()));
+    assert_ne!(EdgeTarget::Node("a".to_string()), EdgeTarget::Node("b".to_string()));
     assert_ne!(EdgeTarget::Node("end".to_string()), EdgeTarget::End);
 }

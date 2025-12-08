@@ -62,17 +62,9 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Input: a=5, b=3\n");
 
-    let result = agent
-        .invoke(input, ExecutionConfig::new("calc-thread"))
-        .await?;
+    let result = agent.invoke(input, ExecutionConfig::new("calc-thread")).await?;
 
-    println!(
-        "\nFinal result: {}",
-        result
-            .get("result")
-            .and_then(|v| v.as_str())
-            .unwrap_or("none")
-    );
+    println!("\nFinal result: {}", result.get("result").and_then(|v| v.as_str()).unwrap_or("none"));
 
     println!("\n=== Complete ===");
     Ok(())

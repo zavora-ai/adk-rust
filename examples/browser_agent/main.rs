@@ -30,9 +30,7 @@ struct SimpleState {
 
 impl SimpleState {
     fn new() -> Self {
-        Self {
-            data: std::sync::Mutex::new(HashMap::new()),
-        }
+        Self { data: std::sync::Mutex::new(HashMap::new()) }
     }
 }
 
@@ -53,11 +51,21 @@ struct SimpleSession {
 }
 
 impl Session for SimpleSession {
-    fn id(&self) -> &str { "browser-agent-session" }
-    fn app_name(&self) -> &str { "browser_agent" }
-    fn user_id(&self) -> &str { "user" }
-    fn state(&self) -> &dyn State { &self.state }
-    fn conversation_history(&self) -> Vec<Content> { Vec::new() }
+    fn id(&self) -> &str {
+        "browser-agent-session"
+    }
+    fn app_name(&self) -> &str {
+        "browser_agent"
+    }
+    fn user_id(&self) -> &str {
+        "user"
+    }
+    fn state(&self) -> &dyn State {
+        &self.state
+    }
+    fn conversation_history(&self) -> Vec<Content> {
+        Vec::new()
+    }
 }
 
 struct AgentContext {
@@ -69,35 +77,62 @@ struct AgentContext {
 
 #[async_trait]
 impl adk_core::ReadonlyContext for AgentContext {
-    fn invocation_id(&self) -> &str { "inv-1" }
-    fn agent_name(&self) -> &str { self.agent.name() }
-    fn user_id(&self) -> &str { "user" }
-    fn app_name(&self) -> &str { "browser_agent" }
-    fn session_id(&self) -> &str { "browser-agent-session" }
-    fn branch(&self) -> &str { "" }
-    fn user_content(&self) -> &Content { &self.content }
+    fn invocation_id(&self) -> &str {
+        "inv-1"
+    }
+    fn agent_name(&self) -> &str {
+        self.agent.name()
+    }
+    fn user_id(&self) -> &str {
+        "user"
+    }
+    fn app_name(&self) -> &str {
+        "browser_agent"
+    }
+    fn session_id(&self) -> &str {
+        "browser-agent-session"
+    }
+    fn branch(&self) -> &str {
+        ""
+    }
+    fn user_content(&self) -> &Content {
+        &self.content
+    }
 }
 
 #[async_trait]
 impl adk_core::CallbackContext for AgentContext {
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
 }
 
 #[async_trait]
 impl InvocationContext for AgentContext {
-    fn agent(&self) -> Arc<dyn Agent> { self.agent.clone() }
-    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> { None }
-    fn session(&self) -> &dyn Session { &self.session }
-    fn run_config(&self) -> &RunConfig { &self.config }
+    fn agent(&self) -> Arc<dyn Agent> {
+        self.agent.clone()
+    }
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
+        None
+    }
+    fn session(&self) -> &dyn Session {
+        &self.session
+    }
+    fn run_config(&self) -> &RunConfig {
+        &self.config
+    }
     fn end_invocation(&self) {}
-    fn ended(&self) -> bool { false }
+    fn ended(&self) -> bool {
+        false
+    }
 }
 
-async fn run_agent(agent: Arc<dyn Agent>, task: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let content = Content {
-        role: "user".to_string(),
-        parts: vec![Part::Text { text: task.to_string() }],
-    };
+async fn run_agent(
+    agent: Arc<dyn Agent>,
+    task: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let content =
+        Content { role: "user".to_string(), parts: vec![Part::Text { text: task.to_string() }] };
 
     let ctx = Arc::new(AgentContext {
         agent: agent.clone(),
@@ -145,8 +180,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Check WebDriver
-    let webdriver_url = std::env::var("WEBDRIVER_URL")
-        .unwrap_or_else(|_| "http://localhost:4444".to_string());
+    let webdriver_url =
+        std::env::var("WEBDRIVER_URL").unwrap_or_else(|_| "http://localhost:4444".to_string());
 
     let available = reqwest::Client::new()
         .get(&format!("{}/status", webdriver_url))
@@ -164,10 +199,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("WebDriver: {}", webdriver_url);
 
     // Setup browser
-    let config = BrowserConfig::new()
-        .webdriver_url(&webdriver_url)
-        .headless(true)
-        .viewport(1920, 1080);
+    let config =
+        BrowserConfig::new().webdriver_url(&webdriver_url).headless(true).viewport(1920, 1080);
 
     let browser = Arc::new(BrowserSession::new(config));
     browser.start().await?;
@@ -221,8 +254,9 @@ Always use the tools available to you. Don't make assumptions about web content 
 
     let response = run_agent(
         agent.clone(),
-        "Navigate to https://example.com and tell me the page title and main heading text."
-    ).await?;
+        "Navigate to https://example.com and tell me the page title and main heading text.",
+    )
+    .await?;
 
     println!("Response:\n{}\n", response);
 
@@ -234,8 +268,9 @@ Always use the tools available to you. Don't make assumptions about web content 
 
     let response = run_agent(
         agent.clone(),
-        "What links are available on example.com? Navigate there and extract all links."
-    ).await?;
+        "What links are available on example.com? Navigate there and extract all links.",
+    )
+    .await?;
 
     println!("Response:\n{}\n", response);
 

@@ -272,9 +272,7 @@ impl Tool for PressKeyTool {
             .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
             .unwrap_or_default();
 
-        self.browser
-            .press_key(key, selector, &modifiers)
-            .await?;
+        self.browser.press_key(key, selector, &modifiers).await?;
 
         Ok(json!({
             "success": true,
@@ -382,10 +380,7 @@ impl Tool for PrintToPdfTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let landscape = args
-            .get("landscape")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let landscape = args.get("landscape").and_then(|v| v.as_bool()).unwrap_or(false);
         let scale = args.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
 
         let pdf_base64 = self.browser.print_to_pdf(landscape, scale).await?;

@@ -8,12 +8,12 @@ authors.workspace = true
 description = "Session management and state persistence for Rust Agent Development Kit (ADK-Rust) agents"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-session"
-keywords = ["ai", "agent", "adk", "session", "state"]
+keywords = ["ai", "agent", "adk", "session", "state","persistence","adk-rust"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 
 [dependencies]
-adk-core = { path = "../adk-core", version = "0.1.0" }
+adk-core = { path = "../adk-core", version = "0.1.4" }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

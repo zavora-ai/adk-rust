@@ -98,7 +98,9 @@ pub mod prelude {
     pub use crate::error::{GraphError, InterruptedExecution, Result};
     pub use crate::graph::{CompiledGraph, StateGraph};
     pub use crate::interrupt::{interrupt, interrupt_with_data, Interrupt};
-    pub use crate::node::{AgentNode, ExecutionConfig, FunctionNode, Node, NodeContext, NodeOutput};
+    pub use crate::node::{
+        AgentNode, ExecutionConfig, FunctionNode, Node, NodeContext, NodeOutput,
+    };
     pub use crate::state::{Channel, Checkpoint, Reducer, State, StateSchema, StateSchemaBuilder};
     pub use crate::stream::{StreamEvent, StreamMode};
 

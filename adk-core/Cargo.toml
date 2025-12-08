@@ -8,7 +8,7 @@ authors.workspace = true
 description = "Core traits and types for Rust Agent Development Kit (ADK-Rust) agents, tools, sessions, and events"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-core"
-keywords = ["ai", "agent", "adk", "gemini", "llm"]
+keywords = ["ai", "agent", "adk", "gemini", "llm","adk-core","adk-rust"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 

@@ -34,13 +34,7 @@ pub struct PregelExecutor<'a> {
 impl<'a> PregelExecutor<'a> {
     /// Create a new executor
     pub fn new(graph: &'a CompiledGraph, config: ExecutionConfig) -> Self {
-        Self {
-            graph,
-            config,
-            state: State::new(),
-            step: 0,
-            pending_nodes: vec![],
-        }
+        Self { graph, config, state: State::new(), step: 0, pending_nodes: vec![] }
     }
 
     /// Run the graph to completion
@@ -228,11 +222,7 @@ impl<'a> PregelExecutor<'a> {
         let futures: Vec<_> = nodes
             .into_iter()
             .map(|(name, node)| {
-                let ctx = NodeContext::new(
-                    self.state.clone(),
-                    self.config.clone(),
-                    self.step,
-                );
+                let ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
                 let step = self.step;
                 async move {
                     let start = Instant::now();
@@ -243,10 +233,8 @@ impl<'a> PregelExecutor<'a> {
             })
             .collect();
 
-        let outputs: Vec<_> = stream::iter(futures)
-            .buffer_unordered(self.pending_nodes.len())
-            .collect()
-            .await;
+        let outputs: Vec<_> =
+            stream::iter(futures).buffer_unordered(self.pending_nodes.len()).collect().await;
 
         // Collect all updates and check for errors/interrupts
         let mut all_updates = Vec::new();
@@ -356,12 +344,8 @@ impl CompiledGraph {
                 for (key, value) in updates {
                     self.schema.apply_update(&mut state, &key, value);
                 }
-                let new_checkpoint = Checkpoint::new(
-                    thread_id,
-                    state,
-                    checkpoint.step,
-                    checkpoint.pending_nodes,
-                );
+                let new_checkpoint =
+                    Checkpoint::new(thread_id, state, checkpoint.step, checkpoint.pending_nodes);
                 cp.save(&new_checkpoint).await?;
             }
         }
@@ -372,8 +356,8 @@ impl CompiledGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::edge::{END, START};
     use crate::graph::StateGraph;
-    use crate::edge::{START, END};
     use crate::node::NodeOutput;
     use serde_json::json;
 
@@ -388,10 +372,7 @@ mod tests {
             .compile()
             .unwrap();
 
-        let result = graph
-            .invoke(State::new(), ExecutionConfig::new("test"))
-            .await
-            .unwrap();
+        let result = graph.invoke(State::new(), ExecutionConfig::new("test")).await.unwrap();
 
         assert_eq!(result.get("value"), Some(&json!(42)));
     }
@@ -412,10 +393,7 @@ mod tests {
             .compile()
             .unwrap();
 
-        let result = graph
-            .invoke(State::new(), ExecutionConfig::new("test"))
-            .await
-            .unwrap();
+        let result = graph.invoke(State::new(), ExecutionConfig::new("test")).await.unwrap();
 
         assert_eq!(result.get("value"), Some(&json!(11)));
     }
@@ -436,12 +414,7 @@ mod tests {
             .add_edge(START, "router")
             .add_conditional_edges(
                 "router",
-                |state| {
-                    state.get("route")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(END)
-                        .to_string()
-                },
+                |state| state.get("route").and_then(|v| v.as_str()).unwrap_or(END).to_string(),
                 [("a", "path_a"), ("b", "path_b"), (END, END)],
             )
             .add_edge("path_a", END)
@@ -474,17 +447,18 @@ mod tests {
                 "increment",
                 |state| {
                     let count = state.get("count").and_then(|v| v.as_i64()).unwrap_or(0);
-                    if count < 5 { "increment".to_string() } else { END.to_string() }
+                    if count < 5 {
+                        "increment".to_string()
+                    } else {
+                        END.to_string()
+                    }
                 },
                 [("increment", "increment"), (END, END)],
             )
             .compile()
             .unwrap();
 
-        let result = graph
-            .invoke(State::new(), ExecutionConfig::new("test"))
-            .await
-            .unwrap();
+        let result = graph.invoke(State::new(), ExecutionConfig::new("test")).await.unwrap();
 
         assert_eq!(result.get("count"), Some(&json!(5)));
     }
@@ -502,9 +476,7 @@ mod tests {
             .unwrap()
             .with_recursion_limit(10);
 
-        let result = graph
-            .invoke(State::new(), ExecutionConfig::new("test"))
-            .await;
+        let result = graph.invoke(State::new(), ExecutionConfig::new("test")).await;
 
         // The recursion limit check happens when step >= limit, so it will exceed at step 10
         assert!(

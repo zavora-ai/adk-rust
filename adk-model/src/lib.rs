@@ -91,4 +91,4 @@ pub use anthropic::AnthropicClient;
 pub use gemini::GeminiModel;
 pub use mock::MockLlm;
 #[cfg(feature = "openai")]
-pub use openai::{AzureOpenAIClient, OpenAIClient};
+pub use openai::{AzureConfig, AzureOpenAIClient, OpenAIClient, OpenAIConfig};

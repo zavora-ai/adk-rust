@@ -51,9 +51,7 @@ struct MockState {
 
 impl MockState {
     fn new() -> Self {
-        Self {
-            data: std::sync::Mutex::new(HashMap::new()),
-        }
+        Self { data: std::sync::Mutex::new(HashMap::new()) }
     }
 }
 
@@ -77,9 +75,7 @@ struct MockSession {
 
 impl MockSession {
     fn new() -> Self {
-        Self {
-            state: MockState::new(),
-        }
+        Self { state: MockState::new() }
     }
 }
 
@@ -198,8 +194,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -------------------------------------------------------------------------
     println!("1. Checking WebDriver availability...\n");
 
-    let webdriver_url = std::env::var("WEBDRIVER_URL")
-        .unwrap_or_else(|_| "http://localhost:4444".to_string());
+    let webdriver_url =
+        std::env::var("WEBDRIVER_URL").unwrap_or_else(|_| "http://localhost:4444".to_string());
 
     // Quick check if WebDriver is running
     let webdriver_available = reqwest::Client::new()
@@ -288,12 +284,8 @@ If an action fails, explain what went wrong."#,
     println!("\n5. Tool parameter schemas:\n");
 
     // Show a few tool schemas
-    let demo_tools = vec![
-        "browser_navigate",
-        "browser_click",
-        "browser_type",
-        "browser_extract_text",
-    ];
+    let demo_tools =
+        vec!["browser_navigate", "browser_click", "browser_type", "browser_extract_text"];
 
     let all_tools = BrowserToolset::new(browser.clone()).all_tools();
     for name in demo_tools {
@@ -303,10 +295,8 @@ If an action fails, explain what went wrong."#,
                 let props = schema.get("properties").and_then(|p| p.as_object());
                 if let Some(props) = props {
                     for (prop_name, prop_value) in props {
-                        let desc = prop_value
-                            .get("description")
-                            .and_then(|d| d.as_str())
-                            .unwrap_or("");
+                        let desc =
+                            prop_value.get("description").and_then(|d| d.as_str()).unwrap_or("");
                         println!("     - {}: {}", prop_name, desc);
                     }
                 }

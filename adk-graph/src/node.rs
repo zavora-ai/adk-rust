@@ -85,9 +85,7 @@ impl NodeContext {
 
     /// Get a value from state as a specific type
     pub fn get_as<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
-        self.state
-            .get(key)
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        self.state.get(key).and_then(|v| serde_json::from_value(v.clone()).ok())
     }
 }
 
@@ -158,9 +156,7 @@ pub type BoxedNode = Box<dyn Node>;
 
 /// Type alias for async function signature
 pub type AsyncNodeFn = Box<
-    dyn Fn(NodeContext) -> Pin<Box<dyn Future<Output = Result<NodeOutput>> + Send>>
-        + Send
-        + Sync,
+    dyn Fn(NodeContext) -> Pin<Box<dyn Future<Output = Result<NodeOutput>> + Send>> + Send + Sync,
 >;
 
 /// Function node - wraps an async function as a node
@@ -176,10 +172,7 @@ impl FunctionNode {
         F: Fn(NodeContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<NodeOutput>> + Send + 'static,
     {
-        Self {
-            name: name.to_string(),
-            func: Box::new(move |ctx| Box::pin(func(ctx))),
-        }
+        Self { name: name.to_string(), func: Box::new(move |ctx| Box::pin(func(ctx))) }
     }
 }
 
@@ -190,11 +183,8 @@ impl Node for FunctionNode {
     }
 
     async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput> {
-        let ctx_owned = NodeContext {
-            state: ctx.state.clone(),
-            config: ctx.config.clone(),
-            step: ctx.step,
-        };
+        let ctx_owned =
+            NodeContext { state: ctx.state.clone(), config: ctx.config.clone(), step: ctx.step };
         (self.func)(ctx_owned).await
     }
 }
@@ -207,9 +197,7 @@ pub struct PassthroughNode {
 impl PassthroughNode {
     /// Create a new passthrough node
     pub fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-        }
+        Self { name: name.to_string() }
     }
 }
 
@@ -228,7 +216,8 @@ impl Node for PassthroughNode {
 pub type AgentInputMapper = Box<dyn Fn(&State) -> adk_core::Content + Send + Sync>;
 
 /// Type alias for agent node output mapper
-pub type AgentOutputMapper = Box<dyn Fn(&[adk_core::Event]) -> HashMap<String, Value> + Send + Sync>;
+pub type AgentOutputMapper =
+    Box<dyn Fn(&[adk_core::Event]) -> HashMap<String, Value> + Send + Sync>;
 
 /// Wrapper to use an existing ADK Agent as a graph node
 pub struct AgentNode {
@@ -303,12 +292,7 @@ fn default_output_mapper(events: &[adk_core::Event]) -> HashMap<String, Value> {
     let mut messages = Vec::new();
     for event in events {
         if let Some(content) = event.content() {
-            let text = content
-                .parts
-                .iter()
-                .filter_map(|p| p.text())
-                .collect::<Vec<_>>()
-                .join("");
+            let text = content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
 
             if !text.is_empty() {
                 messages.push(serde_json::json!({
@@ -333,8 +317,6 @@ impl Node for AgentNode {
     }
 
     async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput> {
-        
-
         // Map state to input content
         let _content = (self.input_mapper)(&ctx.state);
 
@@ -364,8 +346,7 @@ mod tests {
     #[tokio::test]
     async fn test_function_node() {
         let node = FunctionNode::new("test", |_ctx| async {
-            Ok(NodeOutput::new()
-                .with_update("result", serde_json::json!("success")))
+            Ok(NodeOutput::new().with_update("result", serde_json::json!("success")))
         });
 
         assert_eq!(node.name(), "test");
@@ -373,10 +354,7 @@ mod tests {
         let ctx = NodeContext::new(State::new(), ExecutionConfig::default(), 0);
         let output = node.execute(&ctx).await.unwrap();
 
-        assert_eq!(
-            output.updates.get("result"),
-            Some(&serde_json::json!("success"))
-        );
+        assert_eq!(output.updates.get("result"), Some(&serde_json::json!("success")));
     }
 
     #[tokio::test]
@@ -391,9 +369,7 @@ mod tests {
 
     #[test]
     fn test_node_output_builder() {
-        let output = NodeOutput::new()
-            .with_update("a", 1)
-            .with_update("b", "hello");
+        let output = NodeOutput::new().with_update("a", 1).with_update("b", "hello");
 
         assert_eq!(output.updates.get("a"), Some(&serde_json::json!(1)));
         assert_eq!(output.updates.get("b"), Some(&serde_json::json!("hello")));

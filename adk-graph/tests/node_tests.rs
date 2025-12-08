@@ -1,15 +1,16 @@
 //! Node tests
 
 use adk_graph::error::GraphError;
-use adk_graph::node::{ExecutionConfig, FunctionNode, Node, NodeContext, NodeOutput, PassthroughNode};
+use adk_graph::node::{
+    ExecutionConfig, FunctionNode, Node, NodeContext, NodeOutput, PassthroughNode,
+};
 use adk_graph::state::State;
 use serde_json::json;
 
 #[test]
 fn test_node_output_builder() {
-    let output = NodeOutput::new()
-        .with_update("key1", json!("value1"))
-        .with_update("key2", json!(42));
+    let output =
+        NodeOutput::new().with_update("key1", json!("value1")).with_update("key2", json!(42));
 
     assert_eq!(output.updates.get("key1"), Some(&json!("value1")));
     assert_eq!(output.updates.get("key2"), Some(&json!(42)));

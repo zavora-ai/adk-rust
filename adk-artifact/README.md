@@ -1,6 +1,6 @@
 # adk-artifact
 
-Binary artifact storage for ADK agents.
+Binary artifact storage for Rust Agent Development Kit (ADK-Rust) agents.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-artifact.svg)](https://crates.io/crates/adk-artifact)
 [![Documentation](https://docs.rs/adk-artifact/badge.svg)](https://docs.rs/adk-artifact)

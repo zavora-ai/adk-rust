@@ -56,29 +56,17 @@ pub struct Channel {
 impl Channel {
     /// Create a new channel with overwrite semantics
     pub fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            reducer: Reducer::Overwrite,
-            default: None,
-        }
+        Self { name: name.to_string(), reducer: Reducer::Overwrite, default: None }
     }
 
     /// Create a list channel with append semantics
     pub fn list(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            reducer: Reducer::Append,
-            default: Some(json!([])),
-        }
+        Self { name: name.to_string(), reducer: Reducer::Append, default: Some(json!([])) }
     }
 
     /// Create a counter channel with sum semantics
     pub fn counter(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            reducer: Reducer::Sum,
-            default: Some(json!(0)),
-        }
+        Self { name: name.to_string(), reducer: Reducer::Sum, default: Some(json!(0)) }
     }
 
     /// Set the reducer
@@ -116,19 +104,14 @@ impl StateSchema {
     pub fn simple(channels: &[&str]) -> Self {
         let mut schema = Self::new();
         for name in channels {
-            schema
-                .channels
-                .insert((*name).to_string(), Channel::new(name));
+            schema.channels.insert((*name).to_string(), Channel::new(name));
         }
         schema
     }
 
     /// Get the reducer for a channel
     pub fn get_reducer(&self, channel: &str) -> &Reducer {
-        self.channels
-            .get(channel)
-            .map(|c| &c.reducer)
-            .unwrap_or(&Reducer::Overwrite)
+        self.channels.get(channel).map(|c| &c.reducer).unwrap_or(&Reducer::Overwrite)
     }
 
     /// Get the default value for a channel
@@ -187,48 +170,37 @@ pub struct StateSchemaBuilder {
 impl StateSchemaBuilder {
     /// Add a channel with overwrite semantics
     pub fn channel(mut self, name: &str) -> Self {
-        self.channels
-            .insert(name.to_string(), Channel::new(name));
+        self.channels.insert(name.to_string(), Channel::new(name));
         self
     }
 
     /// Add a channel with append semantics (for lists)
     pub fn list_channel(mut self, name: &str) -> Self {
-        self.channels
-            .insert(name.to_string(), Channel::list(name));
+        self.channels.insert(name.to_string(), Channel::list(name));
         self
     }
 
     /// Add a counter channel with sum semantics
     pub fn counter_channel(mut self, name: &str) -> Self {
-        self.channels
-            .insert(name.to_string(), Channel::counter(name));
+        self.channels.insert(name.to_string(), Channel::counter(name));
         self
     }
 
     /// Add a channel with custom reducer
     pub fn channel_with_reducer(mut self, name: &str, reducer: Reducer) -> Self {
-        self.channels.insert(
-            name.to_string(),
-            Channel::new(name).with_reducer(reducer),
-        );
+        self.channels.insert(name.to_string(), Channel::new(name).with_reducer(reducer));
         self
     }
 
     /// Add a channel with default value
     pub fn channel_with_default(mut self, name: &str, default: Value) -> Self {
-        self.channels.insert(
-            name.to_string(),
-            Channel::new(name).with_default(default),
-        );
+        self.channels.insert(name.to_string(), Channel::new(name).with_default(default));
         self
     }
 
     /// Build the schema
     pub fn build(self) -> StateSchema {
-        StateSchema {
-            channels: self.channels,
-        }
+        StateSchema { channels: self.channels }
     }
 }
 
@@ -294,10 +266,7 @@ mod tests {
         let mut state = schema.initialize_state();
 
         schema.apply_update(&mut state, "messages", json!({"role": "user", "content": "hi"}));
-        assert_eq!(
-            state.get("messages"),
-            Some(&json!([{"role": "user", "content": "hi"}]))
-        );
+        assert_eq!(state.get("messages"), Some(&json!([{"role": "user", "content": "hi"}])));
 
         schema.apply_update(
             &mut state,

@@ -151,17 +151,9 @@ async fn main() -> anyhow::Result<()> {
     let mut input = State::new();
     input.insert("task".to_string(), json!("Read configuration file"));
 
-    let result = graph
-        .invoke(input, ExecutionConfig::new("low-risk-thread"))
-        .await?;
+    let result = graph.invoke(input, ExecutionConfig::new("low-risk-thread")).await?;
 
-    println!(
-        "\nFinal result: {}",
-        result
-            .get("result")
-            .and_then(|v| v.as_str())
-            .unwrap_or("none")
-    );
+    println!("\nFinal result: {}", result.get("result").and_then(|v| v.as_str()).unwrap_or("none"));
 
     // ========== Test 2: High Risk Task (requires approval) ==========
     println!("\n{}", "=".repeat(60));
@@ -169,15 +161,10 @@ async fn main() -> anyhow::Result<()> {
     println!("{}", "=".repeat(60));
 
     let mut input = State::new();
-    input.insert(
-        "task".to_string(),
-        json!("delete all records from production database"),
-    );
+    input.insert("task".to_string(), json!("delete all records from production database"));
 
     let thread_id = "high-risk-thread";
-    let result = graph
-        .invoke(input, ExecutionConfig::new(thread_id))
-        .await;
+    let result = graph.invoke(input, ExecutionConfig::new(thread_id)).await;
 
     // Expect an interrupt
     match result {
@@ -188,19 +175,11 @@ async fn main() -> anyhow::Result<()> {
             println!("State at pause:");
             println!(
                 "  - Plan: {}",
-                interrupted
-                    .state
-                    .get("plan")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?")
+                interrupted.state.get("plan").and_then(|v| v.as_str()).unwrap_or("?")
             );
             println!(
                 "  - Risk: {}",
-                interrupted
-                    .state
-                    .get("risk_level")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?")
+                interrupted.state.get("risk_level").and_then(|v| v.as_str()).unwrap_or("?")
             );
 
             // Simulate human review and approval
@@ -208,29 +187,19 @@ async fn main() -> anyhow::Result<()> {
             println!("[HUMAN] Approving execution.");
 
             // Update state with approval
-            graph
-                .update_state(thread_id, [("approved".to_string(), json!(true))])
-                .await?;
+            graph.update_state(thread_id, [("approved".to_string(), json!(true))]).await?;
 
             // Resume execution
             println!("\n*** RESUMING EXECUTION ***\n");
-            let final_result = graph
-                .invoke(State::new(), ExecutionConfig::new(thread_id))
-                .await?;
+            let final_result = graph.invoke(State::new(), ExecutionConfig::new(thread_id)).await?;
 
             println!(
                 "\nFinal result: {}",
-                final_result
-                    .get("result")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("none")
+                final_result.get("result").and_then(|v| v.as_str()).unwrap_or("none")
             );
         }
         Ok(state) => {
-            println!(
-                "Completed without interrupt: {:?}",
-                state.get("result")
-            );
+            println!("Completed without interrupt: {:?}", state.get("result"));
         }
         Err(e) => {
             println!("Error: {}", e);
@@ -250,10 +219,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(NodeOutput::new().with_update("prepared", json!(format!("Ready: {}", data))))
         })
         .add_node_fn("execute", |ctx| async move {
-            let prepared = ctx
-                .get("prepared")
-                .and_then(|v| v.as_str())
-                .unwrap_or("none");
+            let prepared = ctx.get("prepared").and_then(|v| v.as_str()).unwrap_or("none");
             println!("[execute] Executing: {}", prepared);
             Ok(NodeOutput::new().with_update("result", json!(format!("Done: {}", prepared))))
         })
@@ -266,23 +232,19 @@ async fn main() -> anyhow::Result<()> {
     let mut input = State::new();
     input.insert("data".to_string(), json!("important document"));
 
-    let result = graph_with_interrupt
-        .invoke(input, ExecutionConfig::new("interrupt-thread"))
-        .await;
+    let result = graph_with_interrupt.invoke(input, ExecutionConfig::new("interrupt-thread")).await;
 
     match result {
         Err(GraphError::Interrupted(interrupted)) => {
             println!("\n*** PAUSED BEFORE EXECUTE NODE ***");
             println!("Interrupt type: {}", interrupted.interrupt);
-            println!(
-                "State preserved: prepared = {:?}",
-                interrupted.state.get("prepared")
-            );
+            println!("State preserved: prepared = {:?}", interrupted.state.get("prepared"));
             println!("Thread ID: {}", interrupted.thread_id);
             if !interrupted.checkpoint_id.is_empty() {
-                println!("Checkpoint ID: {}...{}",
+                println!(
+                    "Checkpoint ID: {}...{}",
                     &interrupted.checkpoint_id[..8],
-                    &interrupted.checkpoint_id[interrupted.checkpoint_id.len()-4..]
+                    &interrupted.checkpoint_id[interrupted.checkpoint_id.len() - 4..]
                 );
             }
             println!("\n(In a real app, you would update state and resume from this checkpoint)");

@@ -192,10 +192,7 @@ impl Tool for ExtractLinksTool {
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let container = args.get("selector").and_then(|v| v.as_str());
-        let include_text = args
-            .get("include_text")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+        let include_text = args.get("include_text").and_then(|v| v.as_bool()).unwrap_or(true);
 
         let link_selector = if let Some(sel) = container {
             format!("{} a[href]", sel)
@@ -208,11 +205,7 @@ impl Tool for ExtractLinksTool {
 
         for element in elements {
             let href = element.attr("href").await.ok().flatten();
-            let text = if include_text {
-                element.text().await.ok()
-            } else {
-                None
-            };
+            let text = if include_text { element.text().await.ok() } else { None };
 
             if let Some(href) = href {
                 links.push(json!({
@@ -304,18 +297,12 @@ impl Tool for PageSourceTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let max_length = args
-            .get("max_length")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(50000) as usize;
+        let max_length = args.get("max_length").and_then(|v| v.as_u64()).unwrap_or(50000) as usize;
 
         let source = self.browser.page_source().await?;
         let truncated = source.len() > max_length;
-        let html = if truncated {
-            source.chars().take(max_length).collect::<String>()
-        } else {
-            source
-        };
+        let html =
+            if truncated { source.chars().take(max_length).collect::<String>() } else { source };
 
         Ok(json!({
             "success": true,

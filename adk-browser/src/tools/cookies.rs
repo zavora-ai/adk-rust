@@ -162,9 +162,7 @@ impl Tool for AddCookieTool {
         let secure = args.get("secure").and_then(|v| v.as_bool());
         let expiry = args.get("expiry").and_then(|v| v.as_i64());
 
-        self.browser
-            .add_cookie(name, value, domain, path, secure, expiry)
-            .await?;
+        self.browser.add_cookie(name, value, domain, path, secure, expiry).await?;
 
         Ok(json!({
             "success": true,

@@ -20,18 +20,11 @@ use std::sync::Arc;
 
 /// Helper to call LLM and collect the full response
 async fn call_llm(client: &Arc<OpenAIClient>, prompt: &str) -> Result<String, GraphError> {
-    let request = LlmRequest::new(
-        client.name(),
-        vec![Content::new("user").with_text(prompt)],
-    );
+    let request = LlmRequest::new(client.name(), vec![Content::new("user").with_text(prompt)]);
 
-    let mut stream = client
-        .generate_content(request, false)
-        .await
-        .map_err(|e| GraphError::NodeExecutionFailed {
-            node: "llm".to_string(),
-            message: e.to_string(),
-        })?;
+    let mut stream = client.generate_content(request, false).await.map_err(|e| {
+        GraphError::NodeExecutionFailed { node: "llm".to_string(), message: e.to_string() }
+    })?;
 
     let mut result = String::new();
     while let Some(response_result) = stream.next().await {
@@ -191,17 +184,9 @@ async fn main() -> anyhow::Result<()> {
         let mut input = State::new();
         input.insert("question".to_string(), json!(question));
 
-        let result = graph
-            .invoke(input, ExecutionConfig::new(&format!("qa-{}", i)))
-            .await?;
+        let result = graph.invoke(input, ExecutionConfig::new(&format!("qa-{}", i))).await?;
 
-        println!(
-            "\nA: {}\n",
-            result
-                .get("answer")
-                .and_then(|v| v.as_str())
-                .unwrap_or("No answer")
-        );
+        println!("\nA: {}\n", result.get("answer").and_then(|v| v.as_str()).unwrap_or("No answer"));
     }
 
     println!("\n=== Complete ===");

@@ -1,6 +1,6 @@
 # adk-cli
 
-Command-line launcher for ADK agents.
+Command-line launcher for Rust Agent Development Kit (ADK-Rust) agents.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-cli.svg)](https://crates.io/crates/adk-cli)
 [![Documentation](https://docs.rs/adk-cli/badge.svg)](https://docs.rs/adk-cli)

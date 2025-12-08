@@ -686,7 +686,7 @@ pub mod prelude {
 
     // Graph workflows
     #[cfg(feature = "graph")]
-    pub use crate::graph::{GraphAgent, StateGraph, NodeOutput, Router, END, START};
+    pub use crate::graph::{GraphAgent, NodeOutput, Router, StateGraph, END, START};
 
     // Common re-exports
     pub use crate::anyhow::Result as AnyhowResult;

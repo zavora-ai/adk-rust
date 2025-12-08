@@ -1,6 +1,6 @@
 //! Checkpointing for persistent graph state
 
-use crate::error::Result;
+use crate::error::{GraphError, Result};
 use crate::state::Checkpoint;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -43,9 +43,7 @@ impl MemoryCheckpointer {
 impl Checkpointer for MemoryCheckpointer {
     async fn save(&self, checkpoint: &Checkpoint) -> Result<String> {
         let mut store = self.checkpoints.write().await;
-        let thread_checkpoints = store
-            .entry(checkpoint.thread_id.clone())
-            .or_insert_with(Vec::new);
+        let thread_checkpoints = store.entry(checkpoint.thread_id.clone()).or_insert_with(Vec::new);
 
         let checkpoint_id = checkpoint.checkpoint_id.clone();
         thread_checkpoints.push(checkpoint.clone());
@@ -55,10 +53,7 @@ impl Checkpointer for MemoryCheckpointer {
 
     async fn load(&self, thread_id: &str) -> Result<Option<Checkpoint>> {
         let store = self.checkpoints.read().await;
-        Ok(store
-            .get(thread_id)
-            .and_then(|checkpoints| checkpoints.last())
-            .cloned())
+        Ok(store.get(thread_id).and_then(|checkpoints| checkpoints.last()).cloned())
     }
 
     async fn load_by_id(&self, checkpoint_id: &str) -> Result<Option<Checkpoint>> {

@@ -62,14 +62,10 @@ impl Tool for ScreenshotTool {
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let selector = args.get("selector").and_then(|v| v.as_str());
-        let save_to_artifacts = args
-            .get("save_to_artifacts")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let artifact_name = args
-            .get("artifact_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("screenshot.png");
+        let save_to_artifacts =
+            args.get("save_to_artifacts").and_then(|v| v.as_bool()).unwrap_or(false);
+        let artifact_name =
+            args.get("artifact_name").and_then(|v| v.as_str()).unwrap_or("screenshot.png");
 
         // Take screenshot
         let base64_image = if let Some(sel) = selector {
@@ -83,9 +79,10 @@ impl Tool for ScreenshotTool {
         if save_to_artifacts {
             if let Some(artifacts) = ctx.artifacts() {
                 use base64::Engine;
-                let image_data = base64::engine::general_purpose::STANDARD
-                    .decode(&base64_image)
-                    .map_err(|e| adk_core::AdkError::Tool(format!("Failed to decode base64: {}", e)))?;
+                let image_data =
+                    base64::engine::general_purpose::STANDARD.decode(&base64_image).map_err(
+                        |e| adk_core::AdkError::Tool(format!("Failed to decode base64: {}", e)),
+                    )?;
 
                 let part = adk_core::Part::InlineData {
                     mime_type: "image/png".to_string(),

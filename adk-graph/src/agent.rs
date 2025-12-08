@@ -18,11 +18,20 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 /// Type alias for callbacks
-pub type BeforeAgentCallback =
-    Arc<dyn Fn(Arc<dyn InvocationContext>) -> Pin<Box<dyn Future<Output = adk_core::Result<()>> + Send>> + Send + Sync>;
+pub type BeforeAgentCallback = Arc<
+    dyn Fn(Arc<dyn InvocationContext>) -> Pin<Box<dyn Future<Output = adk_core::Result<()>> + Send>>
+        + Send
+        + Sync,
+>;
 
-pub type AfterAgentCallback =
-    Arc<dyn Fn(Arc<dyn InvocationContext>, &Event) -> Pin<Box<dyn Future<Output = adk_core::Result<()>> + Send>> + Send + Sync>;
+pub type AfterAgentCallback = Arc<
+    dyn Fn(
+            Arc<dyn InvocationContext>,
+            &Event,
+        ) -> Pin<Box<dyn Future<Output = adk_core::Result<()>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Type alias for input mapper function
 pub type InputMapper = Arc<dyn Fn(&dyn InvocationContext) -> State + Send + Sync>;
@@ -159,19 +168,11 @@ fn default_input_mapper(ctx: &dyn InvocationContext) -> State {
 
     // Get user content
     let content = ctx.user_content();
-    let text: String = content
-        .parts
-        .iter()
-        .filter_map(|p| p.text())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text: String = content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("\n");
 
     if !text.is_empty() {
         state.insert("input".to_string(), json!(text));
-        state.insert(
-            "messages".to_string(),
-            json!([{"role": "user", "content": text}]),
-        );
+        state.insert("messages".to_string(), json!([{"role": "user", "content": text}]));
     }
 
     // Add session ID
@@ -285,11 +286,8 @@ impl GraphAgentBuilder {
 
     /// Add a direct edge
     pub fn edge(mut self, source: &str, target: &str) -> Self {
-        let target = if target == END {
-            EdgeTarget::End
-        } else {
-            EdgeTarget::Node(target.to_string())
-        };
+        let target =
+            if target == END { EdgeTarget::End } else { EdgeTarget::Node(target.to_string()) };
 
         if source == START {
             let entry_idx = self.edges.iter().position(|e| matches!(e, Edge::Entry { .. }));
@@ -305,17 +303,12 @@ impl GraphAgentBuilder {
                 }
                 None => {
                     if let EdgeTarget::Node(node) = target {
-                        self.edges.push(Edge::Entry {
-                            targets: vec![node],
-                        });
+                        self.edges.push(Edge::Entry { targets: vec![node] });
                     }
                 }
             }
         } else {
-            self.edges.push(Edge::Direct {
-                source: source.to_string(),
-                target,
-            });
+            self.edges.push(Edge::Direct { source: source.to_string(), target });
         }
 
         self
@@ -330,11 +323,8 @@ impl GraphAgentBuilder {
         let targets_map: HashMap<String, EdgeTarget> = targets
             .into_iter()
             .map(|(k, v)| {
-                let target = if v == END {
-                    EdgeTarget::End
-                } else {
-                    EdgeTarget::Node(v.to_string())
-                };
+                let target =
+                    if v == END { EdgeTarget::End } else { EdgeTarget::Node(v.to_string()) };
                 (k.to_string(), target)
             })
             .collect();
@@ -415,9 +405,7 @@ impl GraphAgentBuilder {
         // Note: Full callback implementation requires more complex lifetime handling.
         // For now, this is a placeholder that accepts the callback but doesn't store it.
         // TODO: Implement proper after_agent_callback with event cloning
-        self.after_callback = Some(Arc::new(move |_ctx, _event| {
-            Box::pin(async move { Ok(()) })
-        }));
+        self.after_callback = Some(Arc::new(move |_ctx, _event| Box::pin(async move { Ok(()) })));
         self
     }
 
@@ -467,9 +455,7 @@ mod tests {
         let agent = GraphAgent::builder("test")
             .description("Test agent")
             .channels(&["value"])
-            .node_fn("set", |_ctx| async {
-                Ok(NodeOutput::new().with_update("value", json!(42)))
-            })
+            .node_fn("set", |_ctx| async { Ok(NodeOutput::new().with_update("value", json!(42))) })
             .edge(START, "set")
             .edge("set", END)
             .build()
@@ -479,10 +465,7 @@ mod tests {
         assert_eq!(agent.description(), "Test agent");
 
         // Test direct invocation
-        let result = agent
-            .invoke(State::new(), ExecutionConfig::new("test"))
-            .await
-            .unwrap();
+        let result = agent.invoke(State::new(), ExecutionConfig::new("test")).await.unwrap();
 
         assert_eq!(result.get("value"), Some(&json!(42)));
     }

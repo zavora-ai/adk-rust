@@ -8,13 +8,13 @@ authors.workspace = true
 description = "LLM model integrations for ADK (Gemini, etc.)"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-model"
-keywords = ["ai", "agent", "adk", "gemini", "llm"]
+keywords = ["ai", "agent", "adk", "gemini", "llm","model","adk-rust"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 
 [dependencies]
-adk-core = { path = "../adk-core", version = "0.1.0" }
-adk-telemetry = { path = "../adk-telemetry", version = "0.1.0" }
+adk-core = { path = "../adk-core", version = "0.1.4" }
+adk-telemetry = { path = "../adk-telemetry", version = "0.1.4" }
 async-trait.workspace = true
 tokio.workspace = true
 futures.workspace = true

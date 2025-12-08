@@ -70,18 +70,9 @@ async fn test_memory_checkpointer_list() {
 
     // Save checkpoints for different threads
     let state = State::new();
-    checkpointer
-        .save(&Checkpoint::new("thread-1", state.clone(), 0, vec![]))
-        .await
-        .unwrap();
-    checkpointer
-        .save(&Checkpoint::new("thread-1", state.clone(), 1, vec![]))
-        .await
-        .unwrap();
-    checkpointer
-        .save(&Checkpoint::new("thread-2", state.clone(), 0, vec![]))
-        .await
-        .unwrap();
+    checkpointer.save(&Checkpoint::new("thread-1", state.clone(), 0, vec![])).await.unwrap();
+    checkpointer.save(&Checkpoint::new("thread-1", state.clone(), 1, vec![])).await.unwrap();
+    checkpointer.save(&Checkpoint::new("thread-2", state.clone(), 0, vec![])).await.unwrap();
 
     let thread1_checkpoints = checkpointer.list("thread-1").await.unwrap();
     assert_eq!(thread1_checkpoints.len(), 2);
