@@ -13,6 +13,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 
 - [LlmAgent](agents/llm-agent.md) - The core agent type using Large Language Models for reasoning
 - [Realtime Agents](agents/realtime-agents.md) - Voice-enabled agents with OpenAI Realtime API and Gemini Live API
+- [Graph Agents](agents/graph-agents.md) - LangGraph-style workflow orchestration with state management
 - [Workflow Agents](agents/workflow-agents.md) - Deterministic agents: Sequential, Parallel, and Loop
 - [Multi-Agent Systems](agents/multi-agent.md) - Building agent hierarchies with sub-agents
 
@@ -20,6 +21,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 
 - [Function Tools](tools/function-tools.md) - Create custom tools with async Rust functions
 - [Built-in Tools](tools/built-in-tools.md) - Pre-built tools like GoogleSearchTool
+- [Browser Tools](tools/browser-tools.md) - 46 WebDriver tools for web automation
 - [MCP Tools](tools/mcp-tools.md) - Model Context Protocol integration
 
 ### Sessions & State
@@ -51,16 +53,21 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [Server](deployment/server.md) - REST API and web UI integration
 - [A2A Protocol](deployment/a2a.md) - Agent-to-Agent communication
 
+### Evaluation
+
+- [Agent Evaluation](evaluation/evaluation.md) - Testing and validating agent behavior with trajectory, semantic, and rubric-based scoring
+
 ## Roadmap
 
 Features planned but not yet implemented in ADK-Rust:
 
 - [VertexAI Session](../roadmap/vertex-ai-session.md) - Cloud-based session persistence
 - [GCS Artifacts](../roadmap/gcs-artifacts.md) - Google Cloud Storage for artifacts
-- [Agent Tool](../roadmap/agent-tool.md) - Using agents as tools
-- [Evaluation Framework](../roadmap/evaluation.md) - Testing and evaluating agent performance
 
 Recently implemented:
+- [Agent Evaluation](evaluation/evaluation.md) - ✅ Testing and validating agent behavior
+- [Graph Agents](agents/graph-agents.md) - ✅ LangGraph-style workflow orchestration
+- [Browser Tools](tools/browser-tools.md) - ✅ 46 WebDriver tools for web automation
 - [Realtime Agents](agents/realtime-agents.md) - ✅ Voice agents with OpenAI Realtime API and Gemini Live API
 - [Long Running Tools](../roadmap/long-running-tools.md) - ✅ Async tool execution with progress tracking
 - [MCP Tools](../roadmap/mcp-tools.md) - ✅ Model Context Protocol integration

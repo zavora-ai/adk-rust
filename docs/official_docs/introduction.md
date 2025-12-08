@@ -2,7 +2,7 @@
 
 Agent Development Kit (ADK) is a flexible and modular framework for developing and deploying AI agents. While optimized for Gemini and the Google ecosystem, ADK is model-agnostic, deployment-agnostic, and built for compatibility with other frameworks. ADK was designed to make agent development feel more like software development, making it easier for developers to create, deploy, and orchestrate agentic architectures that range from simple tasks to complex workflows.
 
-> **Note:** ADK-Rust v0.1.0 requires Rust 1.75 or higher
+> **Note:** ADK-Rust v0.1.4 requires Rust 1.75 or higher
 
 ## Installation
 
@@ -70,6 +70,8 @@ ADK-Rust is built around several key primitives that work together to create pow
 The fundamental worker unit designed for specific tasks. ADK-Rust provides several agent types:
 
 - **LlmAgent**: Uses a Large Language Model for reasoning and decision-making. This is the primary agent type for most use cases.
+- **RealtimeAgent**: Voice-enabled agents using OpenAI Realtime API or Gemini Live API for bidirectional audio streaming.
+- **GraphAgent**: LangGraph-style workflow orchestration with state management, checkpointing, and human-in-the-loop support.
 - **CustomAgent**: Allows you to implement custom logic with full control over agent behavior.
 - **Workflow Agents**: Deterministic agents that follow predefined execution paths:
   - `SequentialAgent`: Executes sub-agents in order
@@ -82,6 +84,7 @@ Tools give agents abilities beyond conversation, letting them interact with exte
 
 - **FunctionTool**: Wrap any async Rust function as a tool
 - **GoogleSearchTool**: Built-in web search capability
+- **BrowserToolset**: 46 WebDriver tools for web automation (navigation, forms, screenshots, etc.)
 - **ExitLoopTool**: Control loop termination in LoopAgent
 - **McpToolset**: Integration with Model Context Protocol servers
 
