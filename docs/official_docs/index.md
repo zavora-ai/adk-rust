@@ -57,6 +57,10 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 
 - [Agent Evaluation](evaluation/evaluation.md) - Testing and validating agent behavior with trajectory, semantic, and rubric-based scoring
 
+## Development
+
+- [Development Guidelines](development/development-guidelines.md) - Contributing guide, code style, testing practices, and common development tasks
+
 ## Roadmap
 
 Features planned but not yet implemented in ADK-Rust:

@@ -8,6 +8,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Reduce memory pressure during linking
+  CARGO_HOME: /home/runner/.cargo
+  CARGO_INCREMENTAL: 0
+  # Fail fast on cache corruption to allow retry
+  CACHE_ON_FAILURE: false
 
 jobs:
   test:
@@ -16,7 +21,14 @@ jobs:
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
-    - run: cargo test --all-features
+      with:
+        # Separate cache key to avoid corruption issues
+        key: test-${{ runner.os }}
+    # Limit parallel jobs to reduce memory pressure during linking
+    # GitHub Actions runners have limited RAM (7GB), and linking
+    # multiple test binaries in parallel can cause OOM/Bus errors
+    - name: Run tests
+      run: cargo test --all-features -j 2
 
   clippy:
     runs-on: ubuntu-latest
@@ -26,6 +38,8 @@ jobs:
       with:
         components: clippy
     - uses: Swatinem/rust-cache@v2
+      with:
+        key: clippy-${{ runner.os }}
     - run: cargo clippy --all-targets --all-features -- -D warnings
 
   fmt:
