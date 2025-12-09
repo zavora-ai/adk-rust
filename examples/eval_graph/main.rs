@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 /// Represents a recorded node execution for evaluation
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct NodeExecution {
     node_name: String,
     input_state: State,

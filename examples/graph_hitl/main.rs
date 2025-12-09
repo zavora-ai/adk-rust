@@ -74,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
     let planner_node = AgentNode::new(planner_agent)
         .with_input_mapper(|state| {
             let task = state.get("task").and_then(|v| v.as_str()).unwrap_or("");
-            adk_core::Content::new("user").with_text(&format!("Create a plan for: {}", task))
+            adk_core::Content::new("user").with_text(format!("Create a plan for: {}", task))
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
@@ -106,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let plan = state.get("plan").and_then(|v| v.as_str()).unwrap_or("");
             adk_core::Content::new("user")
-                .with_text(&format!("Execute this approved plan:\n{}", plan))
+                .with_text(format!("Execute this approved plan:\n{}", plan))
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();

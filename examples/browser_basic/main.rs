@@ -199,7 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Quick check if WebDriver is running
     let webdriver_available = reqwest::Client::new()
-        .get(&format!("{}/status", webdriver_url))
+        .get(format!("{}/status", webdriver_url))
         .timeout(std::time::Duration::from_secs(2))
         .send()
         .await

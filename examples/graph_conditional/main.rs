@@ -93,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
     let classifier_node = AgentNode::new(classifier_agent)
         .with_input_mapper(|state| {
             let text = state.get("message").and_then(|v| v.as_str()).unwrap_or("");
-            adk_core::Content::new("user").with_text(&format!("Classify this: {}", text))
+            adk_core::Content::new("user").with_text(format!("Classify this: {}", text))
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
@@ -125,7 +125,7 @@ async fn main() -> anyhow::Result<()> {
     let positive_node = AgentNode::new(positive_agent)
         .with_input_mapper(|state| {
             let msg = state.get("message").and_then(|v| v.as_str()).unwrap_or("");
-            adk_core::Content::new("user").with_text(&format!("Customer feedback: {}", msg))
+            adk_core::Content::new("user").with_text(format!("Customer feedback: {}", msg))
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
@@ -145,7 +145,7 @@ async fn main() -> anyhow::Result<()> {
     let negative_node = AgentNode::new(negative_agent)
         .with_input_mapper(|state| {
             let msg = state.get("message").and_then(|v| v.as_str()).unwrap_or("");
-            adk_core::Content::new("user").with_text(&format!("Customer complaint: {}", msg))
+            adk_core::Content::new("user").with_text(format!("Customer complaint: {}", msg))
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
@@ -165,7 +165,7 @@ async fn main() -> anyhow::Result<()> {
     let neutral_node = AgentNode::new(neutral_agent)
         .with_input_mapper(|state| {
             let msg = state.get("message").and_then(|v| v.as_str()).unwrap_or("");
-            adk_core::Content::new("user").with_text(&format!("Customer inquiry: {}", msg))
+            adk_core::Content::new("user").with_text(format!("Customer inquiry: {}", msg))
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();

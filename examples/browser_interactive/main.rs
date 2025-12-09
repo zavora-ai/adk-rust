@@ -185,7 +185,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("WEBDRIVER_URL").unwrap_or_else(|_| "http://localhost:4444".to_string());
 
     let available = reqwest::Client::new()
-        .get(&format!("{}/status", webdriver_url))
+        .get(format!("{}/status", webdriver_url))
         .timeout(std::time::Duration::from_secs(2))
         .send()
         .await

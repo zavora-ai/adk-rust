@@ -76,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
     let extractor_node = AgentNode::new(extractor_agent)
         .with_input_mapper(|state| {
             let text = state.get("text").and_then(|v| v.as_str()).unwrap_or("");
-            adk_core::Content::new("user").with_text(&format!("Extract key points: {}", text))
+            adk_core::Content::new("user").with_text(format!("Extract key points: {}", text))
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
@@ -96,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
     let analyzer_node = AgentNode::new(analyzer_agent)
         .with_input_mapper(|state| {
             let points = state.get("key_points").and_then(|v| v.as_str()).unwrap_or("");
-            adk_core::Content::new("user").with_text(&format!("Analyze these points:\n{}", points))
+            adk_core::Content::new("user").with_text(format!("Analyze these points:\n{}", points))
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
@@ -116,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
     let summarizer_node = AgentNode::new(summarizer_agent)
         .with_input_mapper(|state| {
             let analysis = state.get("analysis").and_then(|v| v.as_str()).unwrap_or("");
-            adk_core::Content::new("user").with_text(&format!("Summarize:\n{}", analysis))
+            adk_core::Content::new("user").with_text(format!("Summarize:\n{}", analysis))
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
@@ -186,9 +186,9 @@ async fn main() -> anyhow::Result<()> {
 
     for (i, cp) in checkpoints.iter().enumerate() {
         let step_name = cp.state.get("step").and_then(|v| v.as_str()).unwrap_or("initial");
-        let has_points = cp.state.get("key_points").is_some();
-        let has_analysis = cp.state.get("analysis").is_some();
-        let has_summary = cp.state.get("summary").is_some();
+        let has_points = cp.state.contains_key("key_points");
+        let has_analysis = cp.state.contains_key("analysis");
+        let has_summary = cp.state.contains_key("summary");
 
         println!(
             "  {}. Step {} - {} | points:{} analysis:{} summary:{} | ID: {}...{}",
@@ -215,8 +215,8 @@ async fn main() -> anyhow::Result<()> {
         if let Some(loaded) = checkpointer.load_by_id(&checkpoint.checkpoint_id).await? {
             println!("Checkpoint state at step {}:", loaded.step);
             println!("  - Step: {:?}", loaded.state.get("step").and_then(|v| v.as_str()));
-            println!("  - Has key_points: {}", loaded.state.get("key_points").is_some());
-            println!("  - Has analysis: {}", loaded.state.get("analysis").is_some());
+            println!("  - Has key_points: {}", loaded.state.contains_key("key_points"));
+            println!("  - Has analysis: {}", loaded.state.contains_key("analysis"));
         }
     }
 

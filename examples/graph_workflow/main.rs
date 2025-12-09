@@ -80,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
     let extractor_node = AgentNode::new(extractor_agent)
         .with_input_mapper(|state| {
             let text = state.get("text").and_then(|v| v.as_str()).unwrap_or("");
-            adk_core::Content::new("user").with_text(&format!("Extract entities from: {}", text))
+            adk_core::Content::new("user").with_text(format!("Extract entities from: {}", text))
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
@@ -101,7 +101,7 @@ async fn main() -> anyhow::Result<()> {
             let text = state.get("text").and_then(|v| v.as_str()).unwrap_or("");
             let entities = state.get("entities").and_then(|v| v.as_str()).unwrap_or("");
             adk_core::Content::new("user")
-                .with_text(&format!("Analyze this text:\n{}\n\nEntities found: {}", text, entities))
+                .with_text(format!("Analyze this text:\n{}\n\nEntities found: {}", text, entities))
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
@@ -121,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let analysis = state.get("analysis").and_then(|v| v.as_str()).unwrap_or("");
             adk_core::Content::new("user")
-                .with_text(&format!("Format this analysis as an executive summary:\n{}", analysis))
+                .with_text(format!("Format this analysis as an executive summary:\n{}", analysis))
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
