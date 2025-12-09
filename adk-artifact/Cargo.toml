@@ -8,7 +8,7 @@ authors.workspace = true
 description = "Binary artifact storage for Rust Agent Development Kit (ADK-Rust) agents"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-artifact"
-keywords = ["ai", "agent", "adk", "artifact", "storage","adk-rust"]
+keywords = ["ai", "agent", "adk", "artifact", "storage"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 

@@ -9,7 +9,7 @@ description = "Rust Agent Development Kit - Build AI agents in Rust with modular
 homepage = "https://github.com/zavora-ai/adk-rust"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-rust"
-keywords = ["ai", "agent", "gemini", "llm", "adk", "rust ai","adk-rust", "agent framework","ai agents"]
+keywords = ["ai", "agent", "gemini", "llm", "adk"]
 categories = ["api-bindings", "asynchronous", "web-programming"]
 readme = "README.md"
 

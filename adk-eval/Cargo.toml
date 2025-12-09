@@ -9,7 +9,7 @@ description = "Agent evaluation framework for ADK-Rust"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-eval"
 readme = "README.md"
-keywords = ["ai", "agent", "evaluation", "testing", "llm", "adk-rust"]
+keywords = ["ai", "agent", "evaluation", "testing", "llm"]
 categories = ["development-tools::testing"]
 
 [dependencies]

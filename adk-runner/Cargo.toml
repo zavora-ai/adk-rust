@@ -8,7 +8,7 @@ authors.workspace = true
 description = "Agent execution runtime for Rust Agent Development Kit (ADK-Rust) agents"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-runner"
-keywords = ["ai", "agent", "adk", "runtime", "executor","runner","adk-rust"]
+keywords = ["ai", "agent", "adk", "runtime", "executor"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 

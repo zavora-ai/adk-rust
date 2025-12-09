@@ -9,7 +9,7 @@ description = "Graph-based workflow orchestration for ADK-Rust agents"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-graph"
 readme = "README.md"
-keywords = ["ai", "agents", "workflow", "graph", "langgraph", "adk-rust"]
+keywords = ["ai", "agents", "workflow", "graph", "langgraph"]
 categories = ["science", "asynchronous"]
 
 [dependencies]

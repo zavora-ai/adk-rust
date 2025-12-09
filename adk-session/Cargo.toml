@@ -8,7 +8,7 @@ authors.workspace = true
 description = "Session management and state persistence for Rust Agent Development Kit (ADK-Rust) agents"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-session"
-keywords = ["ai", "agent", "adk", "session", "state","persistence","adk-rust"]
+keywords = ["ai", "agent", "adk", "session", "state"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 

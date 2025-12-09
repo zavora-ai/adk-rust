@@ -8,7 +8,7 @@ authors.workspace = true
 description = "LLM model integrations for ADK (Gemini, etc.)"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-model"
-keywords = ["ai", "agent", "adk", "gemini", "llm","model","adk-rust"]
+keywords = ["ai", "agent", "adk", "gemini", "llm"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 

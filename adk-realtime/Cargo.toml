@@ -8,7 +8,7 @@ authors.workspace = true
 description = "Real-time bidirectional audio/video streaming for Rust Agent Development Kit (ADK-Rust) agents"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-realtime"
-keywords = ["adk", "ai", "agents", "realtime", "voice","audio","adk-rust"]
+keywords = ["adk", "ai", "realtime", "voice", "audio"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 

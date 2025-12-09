@@ -8,7 +8,7 @@ authors.workspace = true
 description = "Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP, Google Search)"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-tool"
-keywords = ["ai", "agent", "adk", "tools", "mcp","functiontool","adk-rust"]
+keywords = ["ai", "agent", "adk", "tools", "mcp"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 

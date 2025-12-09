@@ -8,7 +8,7 @@ authors.workspace = true
 description = "Semantic memory and search for Rust Agent Development Kit (ADK-Rust) agents"
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-memory"
-keywords = ["ai", "agent", "adk", "memory", "semantic","search","adk-rust"]
+keywords = ["ai", "agent", "adk", "memory", "semantic"]
 categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 

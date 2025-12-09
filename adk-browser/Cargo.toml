@@ -9,7 +9,7 @@ description = "Browser automation tools for Rust Agent Development Kit (ADK-Rust
 repository = "https://github.com/zavora-ai/adk-rust"
 documentation = "https://docs.rs/adk-browser"
 readme = "README.md"
-keywords = ["adk", "browser", "automation", "webdriver", "ai-agent", "adk-rust"]
+keywords = ["adk", "browser", "automation", "webdriver", "selenium"]
 categories = ["web-programming", "development-tools"]
 
 [dependencies]
