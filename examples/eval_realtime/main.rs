@@ -222,9 +222,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let trajectory_scorer = ToolTrajectoryScorer::new();
 
-    let expected_tools = [("Weather Query", vec!["get_weather"]),
+    let expected_tools = [
+        ("Weather Query", vec!["get_weather"]),
         ("Multi-turn Reminder", vec!["create_reminder"]),
-        ("High Latency", vec![])];
+        ("High Latency", vec![]),
+    ];
 
     for ((name, conv), (_, expected)) in conversations.iter().zip(expected_tools.iter()) {
         let actual = conv.get_tool_trajectory();
