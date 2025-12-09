@@ -7,9 +7,9 @@
 //! This crate provides LLM implementations for ADK agents. Currently supports:
 //!
 //! - [`GeminiModel`] - Google's Gemini models (2.0 Flash, Pro, etc.)
-//! - [`OpenAIClient`] - OpenAI models (GPT-4o, GPT-4o-mini, etc.)
-//! - [`AzureOpenAIClient`] - Azure OpenAI Service
-//! - [`AnthropicClient`] - Anthropic Claude models (Claude 4, Claude 3.5, etc.)
+//! - `OpenAIClient` - OpenAI models (GPT-4o, GPT-4o-mini, etc.) - requires `openai` feature
+//! - `AzureOpenAIClient` - Azure OpenAI Service - requires `openai` feature
+//! - `AnthropicClient` - Anthropic Claude models (Claude 4, Claude 3.5, etc.) - requires `anthropic` feature
 //! - [`MockLlm`] - Mock LLM for testing
 //!
 //! ## Quick Start

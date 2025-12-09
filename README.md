@@ -228,39 +228,78 @@ cargo run --example realtime_handoff --features realtime-openai
 Build complex, stateful workflows using the `adk-graph` crate (LangGraph-style):
 
 ```rust
-use adk_graph::prelude::*;
+use adk_graph::{prelude::*, node::AgentNode};
+use adk_agent::LlmAgentBuilder;
+use adk_model::GeminiModel;
 
-let react_agent = GraphAgent::builder("react")
-    .description("ReAct agent with tool use")
-    .node(AgentNode::new(llm_agent))
-    .node_fn("tools", |ctx| async move {
-        let results = execute_tools(&ctx.state).await?;
-        Ok(NodeOutput::new().with_update("messages", results))
+// Create LLM agents for different tasks
+let translator = Arc::new(LlmAgentBuilder::new("translator")
+    .model(Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?))
+    .instruction("Translate the input text to French.")
+    .build()?);
+
+let summarizer = Arc::new(LlmAgentBuilder::new("summarizer")
+    .model(model.clone())
+    .instruction("Summarize the input text in one sentence.")
+    .build()?);
+
+// Create AgentNodes with custom input/output mappers
+let translator_node = AgentNode::new(translator)
+    .with_input_mapper(|state| {
+        let text = state.get("input").and_then(|v| v.as_str()).unwrap_or("");
+        adk_core::Content::new("user").with_text(text)
     })
-    .edge(START, "reasoner")
-    .conditional_edge("reasoner", |state| {
-        if has_tool_calls(state) { "tools" } else { END }
-    }, [("tools", "tools"), (END, END)])
-    .edge("tools", "reasoner")  // Cycle back for iterative reasoning
-    .checkpointer(SqliteCheckpointer::new("state.db").await?)
-    .interrupt_after(&["plan"])  // Human-in-the-loop approval
+    .with_output_mapper(|events| {
+        let mut updates = HashMap::new();
+        for event in events {
+            if let Some(content) = event.content() {
+                let text: String = content.parts.iter()
+                    .filter_map(|p| p.text())
+                    .collect::<Vec<_>>()
+                    .join("");
+                updates.insert("translation".to_string(), json!(text));
+            }
+        }
+        updates
+    });
+
+// Build graph with parallel execution
+let agent = GraphAgent::builder("text_processor")
+    .description("Translates and summarizes text in parallel")
+    .channels(&["input", "translation", "summary"])
+    .node(translator_node)
+    .node(summarizer_node)  // Similar setup
+    .edge(START, "translator")
+    .edge(START, "summarizer")  // Parallel execution
+    .edge("translator", "combine")
+    .edge("summarizer", "combine")
+    .edge("combine", END)
     .build()?;
+
+// Execute
+let mut input = State::new();
+input.insert("input".to_string(), json!("AI is transforming how we work."));
+let result = agent.invoke(input, ExecutionConfig::new("thread-1")).await?;
 ```
 
 **Features**:
-- Cyclic graphs for ReAct and iterative reasoning patterns
-- Conditional routing based on state
-- State management with reducers (overwrite, append, sum, custom)
-- Checkpointing (memory, SQLite) for fault tolerance
-- Human-in-the-loop interrupts for approval workflows
-- Streaming execution with multiple modes
+- **AgentNode**: Wrap LLM agents as graph nodes with custom input/output mappers
+- **Parallel & Sequential**: Execute agents concurrently or in sequence
+- **Cyclic Graphs**: ReAct pattern with tool loops and iteration limiting
+- **Conditional Routing**: Dynamic routing via `Router::by_field` or custom functions
+- **Checkpointing**: Memory and SQLite backends for fault tolerance
+- **Human-in-the-Loop**: Dynamic interrupts based on state, resume from checkpoint
+- **Streaming**: Multiple modes (values, updates, messages, debug)
 
 **Run graph examples**:
 ```bash
-cargo run --example graph_workflow
-cargo run --example graph_react
-cargo run --example graph_supervisor
-cargo run --example graph_hitl  # Human-in-the-loop
+cargo run --example graph_agent       # Parallel LLM agents with callbacks
+cargo run --example graph_workflow    # Sequential multi-agent pipeline
+cargo run --example graph_conditional # LLM-based routing
+cargo run --example graph_react       # ReAct pattern with tools
+cargo run --example graph_supervisor  # Multi-agent supervisor
+cargo run --example graph_hitl        # Human-in-the-loop approval
+cargo run --example graph_checkpoint  # State persistence
 ```
 
 ### Browser Automation
@@ -478,11 +517,13 @@ See [examples/](examples/) directory for complete, runnable examples:
 - `realtime_handoff/` - Multi-agent handoffs
 
 **Graph Workflows**
-- `graph_workflow/` - Basic graph workflow
-- `graph_react/` - ReAct pattern with tool loop
+- `graph_agent/` - GraphAgent with parallel LLM agents and callbacks
+- `graph_workflow/` - Sequential multi-agent pipeline
+- `graph_conditional/` - LLM-based classification and routing
+- `graph_react/` - ReAct pattern with tools and cycles
 - `graph_supervisor/` - Multi-agent supervisor routing
-- `graph_hitl/` - Human-in-the-loop approval
-- `graph_checkpoint/` - State persistence with checkpointing
+- `graph_hitl/` - Human-in-the-loop with risk-based interrupts
+- `graph_checkpoint/` - State persistence and time travel debugging
 
 **Browser Automation**
 - `browser_basic/` - Basic browser session and tools

@@ -1,91 +1,184 @@
-//! Simple Graph Workflow Example
+//! Graph Workflow with AgentNode
 //!
-//! This example demonstrates a basic graph workflow using function nodes
-//! to process data through a pipeline. No LLM required.
+//! This example demonstrates using AgentNode to wrap LlmAgent instances
+//! as graph nodes, creating a multi-agent pipeline.
 //!
-//! Graph: START -> extract -> analyze -> format -> END
+//! Graph: START -> extractor -> analyzer -> formatter -> END
+//!
+//! Run with: cargo run --example graph_workflow
+//!
+//! Requires: GOOGLE_API_KEY or GEMINI_API_KEY environment variable
 
+use adk_agent::LlmAgentBuilder;
 use adk_graph::{
     edge::{END, START},
     graph::StateGraph,
-    node::{ExecutionConfig, NodeOutput},
+    node::{AgentNode, ExecutionConfig},
     state::State,
 };
+use adk_model::GeminiModel;
 use serde_json::json;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("=== Simple Graph Workflow Example ===\n");
+    println!("=== Graph Workflow with AgentNode ===\n");
 
-    // Build a text analysis pipeline
-    let graph = StateGraph::with_channels(&["text", "word_count", "char_count", "summary"])
-        // Step 1: Extract basic metrics
-        .add_node_fn("extract", |ctx| async move {
-            let text = ctx.get("text").and_then(|v| v.as_str()).unwrap_or("");
-            println!("[extract] Processing text: \"{}\"", &text[..text.len().min(50)]);
+    // Load API key
+    let _ = dotenvy::dotenv();
+    let api_key = match std::env::var("GOOGLE_API_KEY").or_else(|_| std::env::var("GEMINI_API_KEY"))
+    {
+        Ok(key) => key,
+        Err(_) => {
+            println!("GOOGLE_API_KEY or GEMINI_API_KEY not set");
+            println!("\nTo run this example:");
+            println!("  export GOOGLE_API_KEY=your_api_key");
+            println!("  cargo run --example graph_workflow");
+            return Ok(());
+        }
+    };
 
-            let word_count = text.split_whitespace().count();
-            let char_count = text.chars().count();
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
 
-            Ok(NodeOutput::new()
-                .with_update("word_count", json!(word_count))
-                .with_update("char_count", json!(char_count)))
+    // Create specialized LlmAgent instances
+    let extractor_agent = Arc::new(
+        LlmAgentBuilder::new("extractor")
+            .description("Extracts key entities from text")
+            .model(model.clone())
+            .instruction(
+                "You are an entity extraction specialist. Extract key entities \
+                (people, places, organizations, concepts) from the input text. \
+                Return them as a structured list.",
+            )
+            .build()?,
+    );
+
+    let analyzer_agent = Arc::new(
+        LlmAgentBuilder::new("analyzer")
+            .description("Analyzes sentiment and themes")
+            .model(model.clone())
+            .instruction(
+                "You are a text analysis specialist. Analyze the sentiment \
+                (positive/negative/neutral) and identify main themes from the input. \
+                Provide insights about the content.",
+            )
+            .build()?,
+    );
+
+    let formatter_agent = Arc::new(
+        LlmAgentBuilder::new("formatter")
+            .description("Formats final summary")
+            .model(model.clone())
+            .instruction(
+                "You are a report formatting specialist. Take the analysis provided \
+                and create a professional executive summary with clear sections.",
+            )
+            .build()?,
+    );
+
+    // Wrap agents as graph nodes with custom input/output mappers
+    let extractor_node = AgentNode::new(extractor_agent)
+        .with_input_mapper(|state| {
+            let text = state.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            adk_core::Content::new("user").with_text(&format!("Extract entities from: {}", text))
         })
-        // Step 2: Analyze the text
-        .add_node_fn("analyze", |ctx| async move {
-            let text = ctx.get("text").and_then(|v| v.as_str()).unwrap_or("");
-            let word_count = ctx.get("word_count").and_then(|v| v.as_i64()).unwrap_or(0);
+        .with_output_mapper(|events| {
+            let mut updates = std::collections::HashMap::new();
+            for event in events {
+                if let Some(content) = event.content() {
+                    let text: String =
+                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    if !text.is_empty() {
+                        updates.insert("entities".to_string(), json!(text));
+                    }
+                }
+            }
+            updates
+        });
 
-            println!("[analyze] Analyzing {} words...", word_count);
-
-            // Simple analysis: calculate reading time and find first sentence
-            let reading_time_mins = (word_count as f64 / 200.0).ceil() as i64;
-            let first_sentence = text.split('.').next().unwrap_or(text).trim();
-
-            Ok(NodeOutput::new()
-                .with_update("reading_time", json!(reading_time_mins))
-                .with_update("first_sentence", json!(first_sentence)))
+    let analyzer_node = AgentNode::new(analyzer_agent)
+        .with_input_mapper(|state| {
+            let text = state.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            let entities = state.get("entities").and_then(|v| v.as_str()).unwrap_or("");
+            adk_core::Content::new("user")
+                .with_text(&format!("Analyze this text:\n{}\n\nEntities found: {}", text, entities))
         })
-        // Step 3: Format the output
-        .add_node_fn("format", |ctx| async move {
-            let word_count = ctx.get("word_count").and_then(|v| v.as_i64()).unwrap_or(0);
-            let char_count = ctx.get("char_count").and_then(|v| v.as_i64()).unwrap_or(0);
-            let reading_time = ctx.get("reading_time").and_then(|v| v.as_i64()).unwrap_or(0);
-            let first_sentence = ctx.get("first_sentence").and_then(|v| v.as_str()).unwrap_or("");
+        .with_output_mapper(|events| {
+            let mut updates = std::collections::HashMap::new();
+            for event in events {
+                if let Some(content) = event.content() {
+                    let text: String =
+                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    if !text.is_empty() {
+                        updates.insert("analysis".to_string(), json!(text));
+                    }
+                }
+            }
+            updates
+        });
 
-            println!("[format] Creating summary...");
-
-            let summary = format!(
-                "Text Analysis Summary:\n\
-                 - Words: {}\n\
-                 - Characters: {}\n\
-                 - Estimated reading time: {} minute(s)\n\
-                 - Preview: \"{}...\"",
-                word_count, char_count, reading_time, first_sentence
-            );
-
-            Ok(NodeOutput::new().with_update("summary", json!(summary)))
+    let formatter_node = AgentNode::new(formatter_agent)
+        .with_input_mapper(|state| {
+            let analysis = state.get("analysis").and_then(|v| v.as_str()).unwrap_or("");
+            adk_core::Content::new("user")
+                .with_text(&format!("Format this analysis as an executive summary:\n{}", analysis))
         })
-        // Define the flow: START -> extract -> analyze -> format -> END
-        .add_edge(START, "extract")
-        .add_edge("extract", "analyze")
-        .add_edge("analyze", "format")
-        .add_edge("format", END)
+        .with_output_mapper(|events| {
+            let mut updates = std::collections::HashMap::new();
+            for event in events {
+                if let Some(content) = event.content() {
+                    let text: String =
+                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    if !text.is_empty() {
+                        updates.insert("summary".to_string(), json!(text));
+                    }
+                }
+            }
+            updates
+        });
+
+    // Build the graph with AgentNodes
+    let graph = StateGraph::with_channels(&["text", "entities", "analysis", "summary"])
+        .add_node(extractor_node)
+        .add_node(analyzer_node)
+        .add_node(formatter_node)
+        .add_edge(START, "extractor")
+        .add_edge("extractor", "analyzer")
+        .add_edge("analyzer", "formatter")
+        .add_edge("formatter", END)
         .compile()?;
 
     // Test with sample text
-    let sample_text = "The Rust programming language is blazingly fast and memory-efficient. \
-        With no runtime or garbage collector, it can power performance-critical services. \
-        Rust's rich type system and ownership model guarantee memory-safety and thread-safety. \
-        This enables you to eliminate many classes of bugs at compile-time.";
+    let sample_text = "OpenAI announced GPT-4 Turbo at their DevDay conference in San Francisco. \
+        CEO Sam Altman presented the new model, highlighting its improved context window of 128K tokens \
+        and reduced pricing. Microsoft, a major investor in OpenAI, has already integrated the model \
+        into Azure. The AI community responded enthusiastically, with many developers praising the \
+        cost reductions and new features like JSON mode and improved function calling.";
 
     let mut input = State::new();
     input.insert("text".to_string(), json!(sample_text));
 
-    let result = graph.invoke(input, ExecutionConfig::new("analysis-thread")).await?;
+    println!("Input text:\n\"{}\"\n", sample_text);
+    println!("{}\n", "=".repeat(60));
 
-    println!("\n{}", result.get("summary").and_then(|v| v.as_str()).unwrap_or("No summary"));
+    println!("[Running extractor agent...]");
+    println!("[Running analyzer agent...]");
+    println!("[Running formatter agent...]");
+
+    let result = graph.invoke(input, ExecutionConfig::new("workflow-thread")).await?;
+
+    println!("\n{}", "=".repeat(60));
+    println!("\nEntities:\n{}", result.get("entities").and_then(|v| v.as_str()).unwrap_or("None"));
+    println!("\nAnalysis:\n{}", result.get("analysis").and_then(|v| v.as_str()).unwrap_or("None"));
+    println!(
+        "\nFinal Summary:\n{}",
+        result.get("summary").and_then(|v| v.as_str()).unwrap_or("None")
+    );
 
     println!("\n=== Complete ===");
+    println!("\nThis example demonstrated:");
+    println!("  - Using AgentNode to wrap LlmAgent as graph nodes");
+    println!("  - Custom input/output mappers for state transformation");
+    println!("  - Multi-agent pipeline with sequential execution");
     Ok(())
 }

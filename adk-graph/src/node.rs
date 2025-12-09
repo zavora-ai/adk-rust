@@ -317,25 +317,188 @@ impl Node for AgentNode {
     }
 
     async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput> {
-        // Map state to input content
-        let _content = (self.input_mapper)(&ctx.state);
+        use futures::StreamExt;
 
-        // Create a minimal invocation context
-        // Note: In full implementation, this would use adk-runner's InvocationContext
-        // For now, we'll use a simplified approach
+        // Map state to input content
+        let content = (self.input_mapper)(&ctx.state);
+
+        // Create a graph invocation context with the agent
+        let invocation_ctx = Arc::new(GraphInvocationContext::new(
+            ctx.config.thread_id.clone(),
+            content,
+            self.agent.clone(),
+        ));
 
         // Run the agent and collect events
-        // This is a simplified version - full implementation would integrate with adk-runner
-        let events: Vec<adk_core::Event> = Vec::new();
+        let stream = self.agent.run(invocation_ctx).await.map_err(|e| {
+            crate::error::GraphError::NodeExecutionFailed {
+                node: self.name.clone(),
+                message: e.to_string(),
+            }
+        })?;
 
-        // TODO: Actually run the agent with proper context
-        // let stream = self.agent.run(invocation_ctx).await?;
-        // let events: Vec<_> = stream.collect().await;
+        let events: Vec<adk_core::Event> = stream.filter_map(|r| async { r.ok() }).collect().await;
 
         // Map events to state updates
         let updates = (self.output_mapper)(&events);
 
         Ok(NodeOutput::new().with_updates(updates))
+    }
+}
+
+/// Full InvocationContext implementation for running agents within graph nodes
+struct GraphInvocationContext {
+    invocation_id: String,
+    user_content: adk_core::Content,
+    agent: Arc<dyn adk_core::Agent>,
+    session: GraphSession,
+    run_config: adk_core::RunConfig,
+    ended: std::sync::atomic::AtomicBool,
+}
+
+impl GraphInvocationContext {
+    fn new(
+        session_id: String,
+        user_content: adk_core::Content,
+        agent: Arc<dyn adk_core::Agent>,
+    ) -> Self {
+        let invocation_id = uuid::Uuid::new_v4().to_string();
+        Self {
+            invocation_id,
+            user_content,
+            agent,
+            session: GraphSession::new(session_id),
+            run_config: adk_core::RunConfig::default(),
+            ended: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+// Implement ReadonlyContext (required by CallbackContext)
+impl adk_core::ReadonlyContext for GraphInvocationContext {
+    fn invocation_id(&self) -> &str {
+        &self.invocation_id
+    }
+
+    fn agent_name(&self) -> &str {
+        self.agent.name()
+    }
+
+    fn user_id(&self) -> &str {
+        "graph_user"
+    }
+
+    fn app_name(&self) -> &str {
+        "graph_app"
+    }
+
+    fn session_id(&self) -> &str {
+        &self.session.id
+    }
+
+    fn branch(&self) -> &str {
+        "main"
+    }
+
+    fn user_content(&self) -> &adk_core::Content {
+        &self.user_content
+    }
+}
+
+// Implement CallbackContext (required by InvocationContext)
+#[async_trait]
+impl adk_core::CallbackContext for GraphInvocationContext {
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
+}
+
+// Implement InvocationContext
+#[async_trait]
+impl adk_core::InvocationContext for GraphInvocationContext {
+    fn agent(&self) -> Arc<dyn adk_core::Agent> {
+        self.agent.clone()
+    }
+
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
+        None
+    }
+
+    fn session(&self) -> &dyn adk_core::Session {
+        &self.session
+    }
+
+    fn run_config(&self) -> &adk_core::RunConfig {
+        &self.run_config
+    }
+
+    fn end_invocation(&self) {
+        self.ended.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn ended(&self) -> bool {
+        self.ended.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// Minimal Session implementation for graph execution
+struct GraphSession {
+    id: String,
+    state: GraphState,
+}
+
+impl GraphSession {
+    fn new(id: String) -> Self {
+        Self { id, state: GraphState::new() }
+    }
+}
+
+impl adk_core::Session for GraphSession {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn app_name(&self) -> &str {
+        "graph_app"
+    }
+
+    fn user_id(&self) -> &str {
+        "graph_user"
+    }
+
+    fn state(&self) -> &dyn adk_core::State {
+        &self.state
+    }
+
+    fn conversation_history(&self) -> Vec<adk_core::Content> {
+        vec![]
+    }
+}
+
+/// Minimal State implementation for graph execution
+struct GraphState {
+    data: std::sync::RwLock<std::collections::HashMap<String, serde_json::Value>>,
+}
+
+impl GraphState {
+    fn new() -> Self {
+        Self { data: std::sync::RwLock::new(std::collections::HashMap::new()) }
+    }
+}
+
+impl adk_core::State for GraphState {
+    fn get(&self, key: &str) -> Option<serde_json::Value> {
+        self.data.read().ok()?.get(key).cloned()
+    }
+
+    fn set(&mut self, key: String, value: serde_json::Value) {
+        if let Ok(mut data) = self.data.write() {
+            data.insert(key, value);
+        }
+    }
+
+    fn all(&self) -> std::collections::HashMap<String, serde_json::Value> {
+        self.data.read().ok().map(|d| d.clone()).unwrap_or_default()
     }
 }
 

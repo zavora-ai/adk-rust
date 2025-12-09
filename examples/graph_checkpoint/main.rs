@@ -1,163 +1,180 @@
-//! Checkpointing and Persistence Example
+//! Checkpointing and Persistence with LLM Processing
 //!
-//! This example demonstrates state persistence with checkpointing, enabling:
+//! This example demonstrates state persistence with checkpointing using AgentNode
+//! for LLM-based processing, enabling:
 //! - State recovery after failures
 //! - Time travel (viewing/restoring past states)
 //! - Long-running workflows that survive restarts
 //!
-//! Key concepts demonstrated:
-//! - MemoryCheckpointer for development
-//! - Saving checkpoints after each step
-//! - Loading and listing checkpoints
-//! - Resuming from specific checkpoints
-//! - Time travel debugging
+//! Run with: cargo run --example graph_checkpoint
+//!
+//! Requires: GOOGLE_API_KEY or GEMINI_API_KEY environment variable
 
+use adk_agent::LlmAgentBuilder;
 use adk_graph::{
     checkpoint::{Checkpointer, MemoryCheckpointer},
     edge::{END, START},
     graph::StateGraph,
-    node::{ExecutionConfig, NodeOutput},
+    node::{AgentNode, ExecutionConfig},
     state::State,
 };
+use adk_model::GeminiModel;
 use serde_json::json;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("=== Checkpointing and Persistence Example ===\n");
+    println!("=== Checkpointing with LLM Processing ===\n");
+
+    // Load API key
+    let _ = dotenvy::dotenv();
+    let api_key = match std::env::var("GOOGLE_API_KEY").or_else(|_| std::env::var("GEMINI_API_KEY"))
+    {
+        Ok(key) => key,
+        Err(_) => {
+            println!("GOOGLE_API_KEY or GEMINI_API_KEY not set");
+            println!("\nTo run this example:");
+            println!("  export GOOGLE_API_KEY=your_api_key");
+            println!("  cargo run --example graph_checkpoint");
+            return Ok(());
+        }
+    };
+
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
 
     // Create a checkpointer to persist state
     let checkpointer = Arc::new(MemoryCheckpointer::new());
 
-    // Build a multi-step workflow
-    let graph = StateGraph::with_channels(&["items", "processed", "validated", "result"])
-        // Step 1: Fetch items
-        .add_node_fn("fetch", |_ctx| async move {
-            println!("[fetch] Fetching items from data source...");
+    // Create LLM agents for each processing step
+    let extractor_agent = Arc::new(
+        LlmAgentBuilder::new("extractor")
+            .description("Extracts key points from text")
+            .model(model.clone())
+            .instruction("Extract the 3 most important points from the input text. Be concise.")
+            .build()?,
+    );
 
-            // Simulate fetching data
-            let items = vec![
-                json!({"id": 1, "name": "Item A", "value": 100}),
-                json!({"id": 2, "name": "Item B", "value": 200}),
-                json!({"id": 3, "name": "Item C", "value": 300}),
-            ];
+    let analyzer_agent = Arc::new(
+        LlmAgentBuilder::new("analyzer")
+            .description("Analyzes extracted points")
+            .model(model.clone())
+            .instruction(
+                "Analyze the extracted points and identify themes and sentiment. Be brief.",
+            )
+            .build()?,
+    );
 
-            println!("[fetch] Retrieved {} items", items.len());
+    let summarizer_agent = Arc::new(
+        LlmAgentBuilder::new("summarizer")
+            .description("Creates final summary")
+            .model(model.clone())
+            .instruction("Create a one-paragraph executive summary from the analysis.")
+            .build()?,
+    );
 
-            Ok(NodeOutput::new()
-                .with_update("items", json!(items))
-                .with_update("step", json!("fetch_complete")))
+    // Create AgentNodes
+    let extractor_node = AgentNode::new(extractor_agent)
+        .with_input_mapper(|state| {
+            let text = state.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            adk_core::Content::new("user").with_text(&format!("Extract key points: {}", text))
         })
-        // Step 2: Process items
-        .add_node_fn("process", |ctx| async move {
-            let items = ctx.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-
-            println!("[process] Processing {} items...", items.len());
-
-            // Simulate processing
-            let processed: Vec<_> = items
-                .iter()
-                .map(|item| {
-                    let mut processed = item.clone();
-                    if let Some(obj) = processed.as_object_mut() {
-                        let value = obj.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
-                        obj.insert("processed_value".to_string(), json!(value * 2));
-                        obj.insert("status".to_string(), json!("processed"));
+        .with_output_mapper(|events| {
+            let mut updates = std::collections::HashMap::new();
+            for event in events {
+                if let Some(content) = event.content() {
+                    let text: String =
+                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    if !text.is_empty() {
+                        updates.insert("key_points".to_string(), json!(text));
+                        updates.insert("step".to_string(), json!("extraction_complete"));
                     }
-                    processed
-                })
-                .collect();
+                }
+            }
+            updates
+        });
 
-            println!("[process] Processed {} items (values doubled)", processed.len());
-
-            Ok(NodeOutput::new()
-                .with_update("processed", json!(processed))
-                .with_update("step", json!("process_complete")))
+    let analyzer_node = AgentNode::new(analyzer_agent)
+        .with_input_mapper(|state| {
+            let points = state.get("key_points").and_then(|v| v.as_str()).unwrap_or("");
+            adk_core::Content::new("user").with_text(&format!("Analyze these points:\n{}", points))
         })
-        // Step 3: Validate results
-        .add_node_fn("validate", |ctx| async move {
-            let processed =
-                ctx.get("processed").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-
-            println!("[validate] Validating {} processed items...", processed.len());
-
-            // Simulate validation
-            let mut valid_count = 0;
-            let validated: Vec<_> = processed
-                .iter()
-                .map(|item| {
-                    let mut validated = item.clone();
-                    if let Some(obj) = validated.as_object_mut() {
-                        let value =
-                            obj.get("processed_value").and_then(|v| v.as_i64()).unwrap_or(0);
-                        let is_valid = value > 0 && value < 1000;
-                        obj.insert("valid".to_string(), json!(is_valid));
-                        if is_valid {
-                            valid_count += 1;
-                        }
+        .with_output_mapper(|events| {
+            let mut updates = std::collections::HashMap::new();
+            for event in events {
+                if let Some(content) = event.content() {
+                    let text: String =
+                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    if !text.is_empty() {
+                        updates.insert("analysis".to_string(), json!(text));
+                        updates.insert("step".to_string(), json!("analysis_complete"));
                     }
-                    validated
-                })
-                .collect();
+                }
+            }
+            updates
+        });
 
-            println!("[validate] {} of {} items passed validation", valid_count, validated.len());
-
-            Ok(NodeOutput::new()
-                .with_update("validated", json!(validated))
-                .with_update("step", json!("validate_complete")))
+    let summarizer_node = AgentNode::new(summarizer_agent)
+        .with_input_mapper(|state| {
+            let analysis = state.get("analysis").and_then(|v| v.as_str()).unwrap_or("");
+            adk_core::Content::new("user").with_text(&format!("Summarize:\n{}", analysis))
         })
-        // Step 4: Generate report
-        .add_node_fn("report", |ctx| async move {
-            let validated =
-                ctx.get("validated").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        .with_output_mapper(|events| {
+            let mut updates = std::collections::HashMap::new();
+            for event in events {
+                if let Some(content) = event.content() {
+                    let text: String =
+                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    if !text.is_empty() {
+                        updates.insert("summary".to_string(), json!(text));
+                        updates.insert("step".to_string(), json!("complete"));
+                    }
+                }
+            }
+            updates
+        });
 
-            println!("[report] Generating final report...");
-
-            let valid_items: Vec<_> = validated
-                .iter()
-                .filter(|item| item.get("valid").and_then(|v| v.as_bool()).unwrap_or(false))
-                .collect();
-
-            let total_value: i64 = valid_items
-                .iter()
-                .filter_map(|item| item.get("processed_value").and_then(|v| v.as_i64()))
-                .sum();
-
-            let report = json!({
-                "total_items": validated.len(),
-                "valid_items": valid_items.len(),
-                "total_processed_value": total_value,
-                "status": "complete"
-            });
-
-            println!(
-                "[report] Report: {} valid items, total value: {}",
-                valid_items.len(),
-                total_value
-            );
-
-            Ok(NodeOutput::new()
-                .with_update("result", report)
-                .with_update("step", json!("complete")))
-        })
-        // Define edges
-        .add_edge(START, "fetch")
-        .add_edge("fetch", "process")
-        .add_edge("process", "validate")
-        .add_edge("validate", "report")
-        .add_edge("report", END)
+    // Build a multi-step workflow with checkpointing
+    let graph = StateGraph::with_channels(&["text", "key_points", "analysis", "summary", "step"])
+        .add_node(extractor_node)
+        .add_node(analyzer_node)
+        .add_node(summarizer_node)
+        .add_edge(START, "extractor")
+        .add_edge("extractor", "analyzer")
+        .add_edge("analyzer", "summarizer")
+        .add_edge("summarizer", END)
         .compile()?
         .with_checkpointer_arc(checkpointer.clone());
 
     // ========== Part 1: Run workflow with checkpointing ==========
     println!("{}", "=".repeat(60));
-    println!("PART 1: Running workflow with automatic checkpointing");
+    println!("PART 1: Running LLM workflow with checkpointing");
     println!("{}", "=".repeat(60));
 
-    let thread_id = "data-pipeline-001";
-    let result = graph.invoke(State::new(), ExecutionConfig::new(thread_id)).await?;
+    let sample_text = "Artificial intelligence is transforming healthcare through \
+        improved diagnostics, personalized treatment plans, and drug discovery. \
+        Machine learning models can now detect diseases from medical images with \
+        accuracy matching expert radiologists. However, concerns about data privacy \
+        and algorithmic bias remain significant challenges.";
 
-    println!("\nFinal result: {:?}", result.get("result"));
+    let thread_id = "analysis-pipeline-001";
+    let mut input = State::new();
+    input.insert("text".to_string(), json!(sample_text));
+
+    println!("\nInput text: \"{}...\"\n", &sample_text[..80]);
+
+    println!("[extractor] Running...");
+    println!("[analyzer] Running...");
+    println!("[summarizer] Running...");
+
+    let result = graph.invoke(input, ExecutionConfig::new(thread_id)).await?;
+
+    println!("\n--- Results ---");
+    println!(
+        "\nKey Points:\n{}",
+        result.get("key_points").and_then(|v| v.as_str()).unwrap_or("N/A")
+    );
+    println!("\nAnalysis:\n{}", result.get("analysis").and_then(|v| v.as_str()).unwrap_or("N/A"));
+    println!("\nSummary:\n{}", result.get("summary").and_then(|v| v.as_str()).unwrap_or("N/A"));
 
     // ========== Part 2: View checkpoint history ==========
     println!("\n{}", "=".repeat(60));
@@ -169,18 +186,18 @@ async fn main() -> anyhow::Result<()> {
 
     for (i, cp) in checkpoints.iter().enumerate() {
         let step_name = cp.state.get("step").and_then(|v| v.as_str()).unwrap_or("initial");
-        let items_count =
-            cp.state.get("items").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
-        let processed_count =
-            cp.state.get("processed").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+        let has_points = cp.state.get("key_points").is_some();
+        let has_analysis = cp.state.get("analysis").is_some();
+        let has_summary = cp.state.get("summary").is_some();
 
         println!(
-            "  {}. Step {} - {} | items: {}, processed: {} | ID: {}...{}",
+            "  {}. Step {} - {} | points:{} analysis:{} summary:{} | ID: {}...{}",
             i + 1,
             cp.step,
             step_name,
-            items_count,
-            processed_count,
+            if has_points { "✓" } else { "✗" },
+            if has_analysis { "✓" } else { "✗" },
+            if has_summary { "✓" } else { "✗" },
             &cp.checkpoint_id[..8],
             &cp.checkpoint_id[cp.checkpoint_id.len() - 4..]
         );
@@ -192,144 +209,51 @@ async fn main() -> anyhow::Result<()> {
     println!("{}", "=".repeat(60));
 
     if checkpoints.len() >= 2 {
-        // Load the second checkpoint (after fetch)
         let checkpoint = &checkpoints[1];
-        println!("\nLoading checkpoint: {}", checkpoint.checkpoint_id);
+        println!("\nLoading checkpoint after extraction: {}", &checkpoint.checkpoint_id[..16]);
 
         if let Some(loaded) = checkpointer.load_by_id(&checkpoint.checkpoint_id).await? {
             println!("Checkpoint state at step {}:", loaded.step);
-            println!(
-                "  - Items: {:?}",
-                loaded.state.get("items").and_then(|v| v.as_array()).map(|a| a.len())
-            );
-            println!("  - Processed: {:?}", loaded.state.get("processed"));
-            println!("  - Step: {:?}", loaded.state.get("step"));
+            println!("  - Step: {:?}", loaded.state.get("step").and_then(|v| v.as_str()));
+            println!("  - Has key_points: {}", loaded.state.get("key_points").is_some());
+            println!("  - Has analysis: {}", loaded.state.get("analysis").is_some());
         }
     }
 
-    // ========== Part 4: Resume from checkpoint (simulated failure recovery) ==========
+    // ========== Part 4: Multiple independent threads ==========
     println!("\n{}", "=".repeat(60));
-    println!("PART 4: Simulating failure recovery");
+    println!("PART 4: Multiple independent analysis threads");
     println!("{}", "=".repeat(60));
 
-    // Create a new workflow that might "fail"
-    let failure_checkpointer = Arc::new(MemoryCheckpointer::new());
+    let texts = [
+        ("thread-climate", "Climate change is causing rising sea levels and extreme weather events globally."),
+        ("thread-economy", "The global economy is recovering from pandemic disruptions with supply chain improvements."),
+    ];
 
-    let failure_graph = StateGraph::with_channels(&["counter", "status"])
-        .add_node_fn("increment", |ctx| async move {
-            let counter = ctx.get("counter").and_then(|v| v.as_i64()).unwrap_or(0);
-            let new_counter = counter + 1;
-
-            println!("[increment] Counter: {} -> {}", counter, new_counter);
-
-            // Simulate failure at counter = 3
-            if new_counter == 3 {
-                println!("[increment] SIMULATED FAILURE at counter 3!");
-                return Ok(NodeOutput::new()
-                    .with_update("counter", json!(new_counter))
-                    .with_update("status", json!("failed")));
-            }
-
-            Ok(NodeOutput::new()
-                .with_update("counter", json!(new_counter))
-                .with_update("status", json!("running")))
-        })
-        .add_edge(START, "increment")
-        .add_conditional_edges(
-            "increment",
-            |state| {
-                let counter = state.get("counter").and_then(|v| v.as_i64()).unwrap_or(0);
-                let status = state.get("status").and_then(|v| v.as_str()).unwrap_or("");
-
-                if status == "failed" {
-                    END.to_string()
-                } else if counter < 5 {
-                    "increment".to_string()
-                } else {
-                    END.to_string()
-                }
-            },
-            [("increment", "increment"), (END, END)],
-        )
-        .compile()?
-        .with_checkpointer_arc(failure_checkpointer.clone())
-        .with_recursion_limit(10);
-
-    let recovery_thread = "recovery-test";
-
-    // First run - will "fail" at counter 3
-    println!("\nFirst run (will fail at 3):");
-    let result = failure_graph.invoke(State::new(), ExecutionConfig::new(recovery_thread)).await?;
-    println!("Stopped at counter: {}", result.get("counter").and_then(|v| v.as_i64()).unwrap_or(0));
-
-    // Check saved state
-    if let Some(state) = failure_graph.get_state(recovery_thread).await? {
-        println!(
-            "\nSaved state: counter = {}",
-            state.get("counter").and_then(|v| v.as_i64()).unwrap_or(0)
-        );
-    }
-
-    // "Fix the bug" and resume
-    println!("\nResuming from checkpoint (bug fixed):");
-
-    // Update status to allow continuation
-    failure_graph.update_state(recovery_thread, [("status".to_string(), json!("running"))]).await?;
-
-    // Resume
-    let final_result =
-        failure_graph.invoke(State::new(), ExecutionConfig::new(recovery_thread)).await?;
-    println!(
-        "Final counter: {}",
-        final_result.get("counter").and_then(|v| v.as_i64()).unwrap_or(0)
-    );
-
-    // ========== Part 5: Multiple threads ==========
-    println!("\n{}", "=".repeat(60));
-    println!("PART 5: Multiple concurrent threads");
-    println!("{}", "=".repeat(60));
-
-    let multi_checkpointer = Arc::new(MemoryCheckpointer::new());
-
-    let multi_graph = StateGraph::with_channels(&["user_id", "balance"])
-        .add_node_fn("process_user", |ctx| async move {
-            let user_id = ctx.get("user_id").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let balance = ctx.get("balance").and_then(|v| v.as_i64()).unwrap_or(0);
-
-            println!("[process_user] Processing user {} with balance {}", user_id, balance);
-
-            Ok(NodeOutput::new()
-                .with_update("balance", json!(balance + 100))
-                .with_update("processed", json!(true)))
-        })
-        .add_edge(START, "process_user")
-        .add_edge("process_user", END)
-        .compile()?
-        .with_checkpointer_arc(multi_checkpointer.clone());
-
-    // Process multiple users (threads)
-    let users = vec![("user-alice", 500), ("user-bob", 300), ("user-charlie", 1000)];
-
-    for (user_id, initial_balance) in &users {
+    for (thread, text) in &texts {
         let mut input = State::new();
-        input.insert("user_id".to_string(), json!(user_id));
-        input.insert("balance".to_string(), json!(initial_balance));
+        input.insert("text".to_string(), json!(text));
 
-        let result = multi_graph.invoke(input, ExecutionConfig::new(user_id)).await?;
+        let result = graph.invoke(input, ExecutionConfig::new(thread)).await?;
         println!(
-            "  {} final balance: {}",
-            user_id,
-            result.get("balance").and_then(|v| v.as_i64()).unwrap_or(0)
+            "\n{}: {}",
+            thread,
+            result.get("summary").and_then(|v| v.as_str()).unwrap_or("N/A")
         );
     }
 
-    // Show each thread's checkpoint
+    // Show checkpoints per thread
     println!("\nCheckpoints by thread:");
-    for (user_id, _) in &users {
-        let checkpoints = multi_checkpointer.list(user_id).await?;
-        println!("  {}: {} checkpoint(s)", user_id, checkpoints.len());
+    for (thread, _) in &texts {
+        let cps = checkpointer.list(thread).await?;
+        println!("  {}: {} checkpoint(s)", thread, cps.len());
     }
 
     println!("\n=== Complete ===");
+    println!("\nThis example demonstrated:");
+    println!("  - AgentNode with LLM agents in checkpointed workflow");
+    println!("  - Automatic state persistence after each step");
+    println!("  - Checkpoint history and time travel debugging");
+    println!("  - Multiple independent execution threads");
     Ok(())
 }

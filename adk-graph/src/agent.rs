@@ -27,7 +27,7 @@ pub type BeforeAgentCallback = Arc<
 pub type AfterAgentCallback = Arc<
     dyn Fn(
             Arc<dyn InvocationContext>,
-            &Event,
+            Event,
         ) -> Pin<Box<dyn Future<Output = adk_core::Result<()>> + Send>>
         + Send
         + Sync,
@@ -133,7 +133,7 @@ impl Agent for GraphAgent {
                     for event in events {
                         // Call after callback for each event
                         if let Some(callback) = &after_callback {
-                            if let Err(e) = callback(ctx_clone.clone(), &event).await {
+                            if let Err(e) = callback(ctx_clone.clone(), event.clone()).await {
                                 yield Err(e);
                                 return;
                             }
@@ -397,15 +397,17 @@ impl GraphAgentBuilder {
     }
 
     /// Set after agent callback
-    pub fn after_agent_callback<F, Fut>(mut self, _callback: F) -> Self
+    ///
+    /// Note: The callback receives a cloned Event to avoid lifetime issues.
+    pub fn after_agent_callback<F, Fut>(mut self, callback: F) -> Self
     where
-        F: Fn(Arc<dyn InvocationContext>, &Event) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<dyn InvocationContext>, Event) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = adk_core::Result<()>> + Send + 'static,
     {
-        // Note: Full callback implementation requires more complex lifetime handling.
-        // For now, this is a placeholder that accepts the callback but doesn't store it.
-        // TODO: Implement proper after_agent_callback with event cloning
-        self.after_callback = Some(Arc::new(move |_ctx, _event| Box::pin(async move { Ok(()) })));
+        self.after_callback = Some(Arc::new(move |ctx, event| {
+            let event_clone = event.clone();
+            Box::pin(callback(ctx, event_clone))
+        }));
         self
     }
 

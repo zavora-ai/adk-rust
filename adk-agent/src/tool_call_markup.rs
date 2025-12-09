@@ -34,7 +34,7 @@ pub fn normalize_content(content: &mut Content) {
     content.parts = normalized;
 }
 
-/// Normalize Option<Content> by converting tool call markup.
+/// Normalize `Option<Content>` by converting tool call markup.
 pub fn normalize_option_content(content: &mut Option<Content>) {
     if let Some(ref mut content) = content {
         normalize_content(content);

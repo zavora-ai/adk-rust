@@ -1,318 +1,318 @@
-//! Multi-Agent Supervisor Pattern
+//! Multi-Agent Supervisor Pattern with AgentNode
 //!
 //! This example demonstrates a supervisor agent that dynamically routes tasks
-//! to specialized worker agents based on the task requirements.
+//! to specialized worker agents (all using real LLMs via AgentNode).
 //!
 //! Graph:
-//!   START -> supervisor -> [research | writer | coder | done] -> supervisor (cycle)
+//!   START -> supervisor -> [researcher | writer | coder | done: finalize] -> supervisor (cycle)
 //!
-//! Key concepts demonstrated:
-//! - Multi-agent coordination
-//! - Dynamic routing based on LLM decisions
-//! - Agent specialization
-//! - Cyclic workflows with termination conditions
+//! Run with: cargo run --example graph_supervisor
+//!
+//! Requires: GOOGLE_API_KEY or GEMINI_API_KEY environment variable
 
+use adk_agent::LlmAgentBuilder;
 use adk_graph::{
     edge::{END, START},
     graph::StateGraph,
-    node::{ExecutionConfig, NodeOutput},
+    node::{AgentNode, ExecutionConfig, NodeOutput},
     state::State,
 };
+use adk_model::GeminiModel;
 use serde_json::json;
-
-/// Simulate supervisor deciding which agent to call next
-fn supervisor_decide(task: &str, history: &[serde_json::Value]) -> (String, String) {
-    // Analyze what's been done
-    let completed_agents: Vec<&str> =
-        history.iter().filter_map(|h| h.get("agent").and_then(|a| a.as_str())).collect();
-
-    let task_lower = task.to_lowercase();
-
-    // Decision logic based on task and history
-    if completed_agents.is_empty() {
-        // First step: analyze the task
-        if task_lower.contains("research")
-            || task_lower.contains("find")
-            || task_lower.contains("learn")
-        {
-            ("research".to_string(), "Starting with research to gather information.".to_string())
-        } else if task_lower.contains("write")
-            || task_lower.contains("article")
-            || task_lower.contains("blog")
-        {
-            ("research".to_string(), "Need to research before writing.".to_string())
-        } else if task_lower.contains("code")
-            || task_lower.contains("implement")
-            || task_lower.contains("build")
-        {
-            ("coder".to_string(), "This is a coding task, delegating to coder.".to_string())
-        } else {
-            ("research".to_string(), "Starting with research to understand the task.".to_string())
-        }
-    } else if completed_agents.contains(&"research") && !completed_agents.contains(&"writer") {
-        if task_lower.contains("write") || task_lower.contains("article") {
-            ("writer".to_string(), "Research complete, now writing content.".to_string())
-        } else if task_lower.contains("code") {
-            ("coder".to_string(), "Research complete, now implementing code.".to_string())
-        } else {
-            ("done".to_string(), "Research complete, task finished.".to_string())
-        }
-    } else if completed_agents.contains(&"writer") && !completed_agents.contains(&"coder") {
-        if task_lower.contains("code") {
-            ("coder".to_string(), "Writing complete, adding code examples.".to_string())
-        } else {
-            ("done".to_string(), "Writing complete, task finished.".to_string())
-        }
-    } else if completed_agents.contains(&"coder") {
-        ("done".to_string(), "All work complete!".to_string())
-    } else {
-        ("done".to_string(), "Task complete.".to_string())
-    }
-}
-
-/// Simulate research agent
-fn research_agent(topic: &str) -> serde_json::Value {
-    json!({
-        "agent": "research",
-        "findings": format!(
-            "Research on '{}': Found 5 key insights about the topic. \
-             The main points are: 1) Historical context, 2) Current state, \
-             3) Best practices, 4) Common pitfalls, 5) Future trends.",
-            topic
-        ),
-        "sources": ["Wikipedia", "Technical docs", "Academic papers"]
-    })
-}
-
-/// Simulate writer agent
-fn writer_agent(topic: &str, research: &str) -> serde_json::Value {
-    json!({
-        "agent": "writer",
-        "content": format!(
-            "# Article: {}\n\n\
-             Based on our research, here's a comprehensive overview...\n\n\
-             ## Key Findings\n{}\n\n\
-             ## Conclusion\n\
-             In summary, {} represents an important topic that deserves attention.",
-            topic,
-            research,
-            topic
-        ),
-        "word_count": 250
-    })
-}
-
-/// Simulate coder agent
-fn coder_agent(topic: &str) -> serde_json::Value {
-    json!({
-        "agent": "coder",
-        "code": format!(
-            "// Implementation for: {}\n\
-             fn main() {{\n    \
-                 println!(\"Hello, {}!\");\n    \
-                 // TODO: Add more implementation\n\
-             }}",
-            topic, topic
-        ),
-        "language": "Rust",
-        "tests_passing": true
-    })
-}
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     println!("=== Multi-Agent Supervisor Pattern ===\n");
 
-    // Build the supervisor graph
-    let graph =
-        StateGraph::with_channels(&["task", "next_agent", "history", "final_result", "reasoning"])
-            // Supervisor: decides which agent to call
-            .add_node_fn("supervisor", |ctx| async move {
-                let task = ctx.get("task").and_then(|v| v.as_str()).unwrap_or("");
-                let history =
-                    ctx.get("history").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    // Load API key
+    let _ = dotenvy::dotenv();
+    let api_key = match std::env::var("GOOGLE_API_KEY").or_else(|_| std::env::var("GEMINI_API_KEY"))
+    {
+        Ok(key) => key,
+        Err(_) => {
+            println!("GOOGLE_API_KEY or GEMINI_API_KEY not set");
+            println!("\nTo run this example:");
+            println!("  export GOOGLE_API_KEY=your_api_key");
+            println!("  cargo run --example graph_supervisor");
+            return Ok(());
+        }
+    };
 
-                println!("[supervisor] Analyzing task: \"{}\"", task);
-                println!("[supervisor] Completed steps: {}", history.len());
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
 
-                let (next_agent, reasoning) = supervisor_decide(task, &history);
-
-                println!("[supervisor] Decision: {} ", next_agent);
-                println!("[supervisor] Reasoning: {}", reasoning);
-
-                Ok(NodeOutput::new()
-                    .with_update("next_agent", json!(next_agent))
-                    .with_update("reasoning", json!(reasoning)))
-            })
-            // Research agent
-            .add_node_fn("research", |ctx| async move {
-                let task = ctx.get("task").and_then(|v| v.as_str()).unwrap_or("");
-                let mut history =
-                    ctx.get("history").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-
-                println!("\n[research] Conducting research on: {}", task);
-
-                let result = research_agent(task);
-                println!(
-                    "[research] Found {} sources",
-                    result.get("sources").and_then(|s| s.as_array()).map(|a| a.len()).unwrap_or(0)
-                );
-
-                history.push(result);
-
-                Ok(NodeOutput::new().with_update("history", json!(history)))
-            })
-            // Writer agent
-            .add_node_fn("writer", |ctx| async move {
-                let task = ctx.get("task").and_then(|v| v.as_str()).unwrap_or("");
-                let mut history =
-                    ctx.get("history").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-
-                // Get research findings
-                let research_findings = history
-                    .iter()
-                    .find(|h| h.get("agent").and_then(|a| a.as_str()) == Some("research"))
-                    .and_then(|h| h.get("findings"))
-                    .and_then(|f| f.as_str())
-                    .unwrap_or("No research available");
-
-                println!("\n[writer] Writing content based on research...");
-
-                let result = writer_agent(task, research_findings);
-                println!(
-                    "[writer] Produced {} words",
-                    result.get("word_count").and_then(|w| w.as_i64()).unwrap_or(0)
-                );
-
-                history.push(result);
-
-                Ok(NodeOutput::new().with_update("history", json!(history)))
-            })
-            // Coder agent
-            .add_node_fn("coder", |ctx| async move {
-                let task = ctx.get("task").and_then(|v| v.as_str()).unwrap_or("");
-                let mut history =
-                    ctx.get("history").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-
-                println!("\n[coder] Implementing code for: {}", task);
-
-                let result = coder_agent(task);
-                println!(
-                    "[coder] Language: {}, Tests passing: {}",
-                    result.get("language").and_then(|l| l.as_str()).unwrap_or("?"),
-                    result.get("tests_passing").and_then(|t| t.as_bool()).unwrap_or(false)
-                );
-
-                history.push(result);
-
-                Ok(NodeOutput::new().with_update("history", json!(history)))
-            })
-            // Finalize: compile results
-            .add_node_fn("finalize", |ctx| async move {
-                let history =
-                    ctx.get("history").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-
-                println!("\n[finalize] Compiling final results...");
-
-                let agents_used: Vec<&str> = history
-                    .iter()
-                    .filter_map(|h| h.get("agent").and_then(|a| a.as_str()))
-                    .collect();
-
-                let summary = format!(
-                    "Task completed using {} agent(s): {}",
-                    agents_used.len(),
-                    agents_used.join(" -> ")
-                );
-
-                println!("[finalize] {}", summary);
-
-                Ok(NodeOutput::new().with_update(
-                    "final_result",
-                    json!({
-                        "summary": summary,
-                        "agents_used": agents_used,
-                        "total_steps": history.len(),
-                        "deliverables": history
-                    }),
-                ))
-            })
-            // Graph structure
-            .add_edge(START, "supervisor")
-            // Conditional routing from supervisor
-            .add_conditional_edges(
-                "supervisor",
-                |state| {
-                    state.get("next_agent").and_then(|v| v.as_str()).unwrap_or("done").to_string()
-                },
-                [
-                    ("research", "research"),
-                    ("writer", "writer"),
-                    ("coder", "coder"),
-                    ("done", "finalize"),
-                ],
+    // Create the supervisor agent
+    let supervisor_agent = Arc::new(
+        LlmAgentBuilder::new("supervisor")
+            .description("Routes tasks to specialized agents")
+            .model(model.clone())
+            .instruction(
+                "You are a task supervisor. Based on the task and work completed so far, \
+                decide which specialist should work next.\n\n\
+                Available specialists:\n\
+                - researcher: For gathering information and research\n\
+                - writer: For writing content, documentation, articles\n\
+                - coder: For writing code and technical implementation\n\n\
+                Respond with ONLY one word: 'researcher', 'writer', 'coder', or 'done' \
+                (if all work is complete).\n\n\
+                Consider what has already been done and what still needs to be done.",
             )
-            // All agents report back to supervisor
-            .add_edge("research", "supervisor")
-            .add_edge("writer", "supervisor")
-            .add_edge("coder", "supervisor")
-            .add_edge("finalize", END)
-            .compile()?
-            .with_recursion_limit(20);
-
-    // ========== Test 1: Research + Write task ==========
-    println!("{}", "=".repeat(60));
-    println!("TASK 1: \"Research and write an article about Rust async\"");
-    println!("{}", "=".repeat(60));
-
-    let mut input = State::new();
-    input.insert("task".to_string(), json!("Research and write an article about Rust async"));
-    input.insert("history".to_string(), json!([]));
-
-    let result = graph.invoke(input, ExecutionConfig::new("task-1")).await?;
-
-    let final_result = result.get("final_result").unwrap();
-    println!("\n{}", "=".repeat(60));
-    println!("FINAL RESULT:");
-    println!("  Summary: {}", final_result.get("summary").and_then(|s| s.as_str()).unwrap_or("?"));
-    println!(
-        "  Total steps: {}",
-        final_result.get("total_steps").and_then(|t| t.as_i64()).unwrap_or(0)
+            .build()?,
     );
 
-    // ========== Test 2: Coding task ==========
-    println!("\n{}", "=".repeat(60));
-    println!("TASK 2: \"Implement a simple web server\"");
-    println!("{}", "=".repeat(60));
+    // Create specialized worker agents
+    let researcher_agent = Arc::new(
+        LlmAgentBuilder::new("researcher")
+            .description("Research specialist")
+            .model(model.clone())
+            .instruction(
+                "You are a research specialist. Gather key information about the topic. \
+                Provide findings as bullet points with sources mentioned.",
+            )
+            .build()?,
+    );
 
-    let mut input = State::new();
-    input.insert("task".to_string(), json!("Implement a simple web server"));
-    input.insert("history".to_string(), json!([]));
+    let writer_agent = Arc::new(
+        LlmAgentBuilder::new("writer")
+            .description("Content writer")
+            .model(model.clone())
+            .instruction(
+                "You are a content writer. Based on the research provided, write clear, \
+                engaging content. Structure it with headings and paragraphs.",
+            )
+            .build()?,
+    );
 
-    let result = graph.invoke(input, ExecutionConfig::new("task-2")).await?;
+    let coder_agent = Arc::new(
+        LlmAgentBuilder::new("coder")
+            .description("Code specialist")
+            .model(model.clone())
+            .instruction(
+                "You are a coding specialist. Write clean, well-documented code examples \
+                related to the topic. Include comments explaining the code.",
+            )
+            .build()?,
+    );
 
-    let final_result = result.get("final_result").unwrap();
-    println!("\n{}", "=".repeat(60));
-    println!("FINAL RESULT:");
-    println!("  Summary: {}", final_result.get("summary").and_then(|s| s.as_str()).unwrap_or("?"));
+    // Create AgentNodes with appropriate mappers
+    let supervisor_node = AgentNode::new(supervisor_agent)
+        .with_input_mapper(|state| {
+            let task = state.get("task").and_then(|v| v.as_str()).unwrap_or("");
+            let history =
+                state.get("history").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 
-    // ========== Test 3: Full pipeline ==========
-    println!("\n{}", "=".repeat(60));
-    println!("TASK 3: \"Research, write documentation, and code a CLI tool\"");
-    println!("{}", "=".repeat(60));
+            let history_str: Vec<String> = history
+                .iter()
+                .filter_map(|h| {
+                    let agent = h.get("agent").and_then(|a| a.as_str())?;
+                    Some(format!("- {} completed their work", agent))
+                })
+                .collect();
 
-    let mut input = State::new();
-    input.insert("task".to_string(), json!("Research, write documentation, and code a CLI tool"));
-    input.insert("history".to_string(), json!([]));
+            let prompt = format!(
+                "Task: {}\n\nWork completed:\n{}\n\nWho should work next?",
+                task,
+                if history_str.is_empty() {
+                    "None yet".to_string()
+                } else {
+                    history_str.join("\n")
+                }
+            );
 
-    let result = graph.invoke(input, ExecutionConfig::new("task-3")).await?;
+            adk_core::Content::new("user").with_text(&prompt)
+        })
+        .with_output_mapper(|events| {
+            let mut updates = std::collections::HashMap::new();
+            for event in events {
+                if let Some(content) = event.content() {
+                    let text: String = content
+                        .parts
+                        .iter()
+                        .filter_map(|p| p.text())
+                        .collect::<Vec<_>>()
+                        .join("")
+                        .to_lowercase();
 
-    let final_result = result.get("final_result").unwrap();
-    println!("\n{}", "=".repeat(60));
-    println!("FINAL RESULT:");
-    println!("  Summary: {}", final_result.get("summary").and_then(|s| s.as_str()).unwrap_or("?"));
-    println!("  Agents: {:?}", final_result.get("agents_used"));
+                    let next = if text.contains("researcher") {
+                        "researcher"
+                    } else if text.contains("writer") {
+                        "writer"
+                    } else if text.contains("coder") {
+                        "coder"
+                    } else {
+                        "done"
+                    };
+
+                    updates.insert("next_agent".to_string(), json!(next));
+                    updates.insert("supervisor_reasoning".to_string(), json!(text.trim()));
+                }
+            }
+            updates
+        });
+
+    let researcher_node = AgentNode::new(researcher_agent)
+        .with_input_mapper(|state| {
+            let task = state.get("task").and_then(|v| v.as_str()).unwrap_or("");
+            adk_core::Content::new("user").with_text(&format!("Research this topic: {}", task))
+        })
+        .with_output_mapper(|events| {
+            let mut updates = std::collections::HashMap::new();
+            for event in events {
+                if let Some(content) = event.content() {
+                    let text: String =
+                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    if !text.is_empty() {
+                        updates.insert("research_output".to_string(), json!(text));
+                    }
+                }
+            }
+            updates
+        });
+
+    let writer_node = AgentNode::new(writer_agent)
+        .with_input_mapper(|state| {
+            let task = state.get("task").and_then(|v| v.as_str()).unwrap_or("");
+            let research = state.get("research_output").and_then(|v| v.as_str()).unwrap_or("");
+            adk_core::Content::new("user")
+                .with_text(&format!("Write content about: {}\n\nResearch:\n{}", task, research))
+        })
+        .with_output_mapper(|events| {
+            let mut updates = std::collections::HashMap::new();
+            for event in events {
+                if let Some(content) = event.content() {
+                    let text: String =
+                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    if !text.is_empty() {
+                        updates.insert("written_content".to_string(), json!(text));
+                    }
+                }
+            }
+            updates
+        });
+
+    let coder_node = AgentNode::new(coder_agent)
+        .with_input_mapper(|state| {
+            let task = state.get("task").and_then(|v| v.as_str()).unwrap_or("");
+            adk_core::Content::new("user").with_text(&format!("Write code for: {}", task))
+        })
+        .with_output_mapper(|events| {
+            let mut updates = std::collections::HashMap::new();
+            for event in events {
+                if let Some(content) = event.content() {
+                    let text: String =
+                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    if !text.is_empty() {
+                        updates.insert("code_output".to_string(), json!(text));
+                    }
+                }
+            }
+            updates
+        });
+
+    // Build the supervisor graph
+    let graph = StateGraph::with_channels(&[
+        "task",
+        "next_agent",
+        "history",
+        "supervisor_reasoning",
+        "research_output",
+        "written_content",
+        "code_output",
+        "final_result",
+    ])
+    .add_node(supervisor_node)
+    .add_node(researcher_node)
+    .add_node(writer_node)
+    .add_node(coder_node)
+    // History tracking nodes
+    .add_node_fn("track_researcher", |ctx| async move {
+        let mut history =
+            ctx.get("history").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        history.push(json!({"agent": "researcher"}));
+        println!("[researcher] Research completed");
+        Ok(NodeOutput::new().with_update("history", json!(history)))
+    })
+    .add_node_fn("track_writer", |ctx| async move {
+        let mut history =
+            ctx.get("history").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        history.push(json!({"agent": "writer"}));
+        println!("[writer] Writing completed");
+        Ok(NodeOutput::new().with_update("history", json!(history)))
+    })
+    .add_node_fn("track_coder", |ctx| async move {
+        let mut history =
+            ctx.get("history").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        history.push(json!({"agent": "coder"}));
+        println!("[coder] Coding completed");
+        Ok(NodeOutput::new().with_update("history", json!(history)))
+    })
+    // Finalize node
+    .add_node_fn("finalize", |ctx| async move {
+        let history = ctx.get("history").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let research = ctx.get("research_output").and_then(|v| v.as_str()).unwrap_or("");
+        let content = ctx.get("written_content").and_then(|v| v.as_str()).unwrap_or("");
+        let code = ctx.get("code_output").and_then(|v| v.as_str()).unwrap_or("");
+
+        println!("\n[finalize] Compiling results from {} agents", history.len());
+
+        let result = format!(
+            "=== FINAL DELIVERABLE ===\n\n\
+                Agents involved: {}\n\n\
+                --- RESEARCH ---\n{}\n\n\
+                --- CONTENT ---\n{}\n\n\
+                --- CODE ---\n{}",
+            history.len(),
+            if research.is_empty() { "N/A" } else { research },
+            if content.is_empty() { "N/A" } else { content },
+            if code.is_empty() { "N/A" } else { code }
+        );
+
+        Ok(NodeOutput::new().with_update("final_result", json!(result)))
+    })
+    // Graph edges
+    .add_edge(START, "supervisor")
+    .add_conditional_edges(
+        "supervisor",
+        |state| state.get("next_agent").and_then(|v| v.as_str()).unwrap_or("done").to_string(),
+        [
+            ("researcher", "researcher"),
+            ("writer", "writer"),
+            ("coder", "coder"),
+            ("done", "finalize"),
+        ],
+    )
+    .add_edge("researcher", "track_researcher")
+    .add_edge("track_researcher", "supervisor")
+    .add_edge("writer", "track_writer")
+    .add_edge("track_writer", "supervisor")
+    .add_edge("coder", "track_coder")
+    .add_edge("track_coder", "supervisor")
+    .add_edge("finalize", END)
+    .compile()?
+    .with_recursion_limit(20);
+
+    // Test tasks
+    let tasks = ["Create a brief guide about Rust error handling with examples"];
+
+    for task in &tasks {
+        println!("{}", "=".repeat(70));
+        println!("TASK: \"{}\"\n", task);
+
+        let mut input = State::new();
+        input.insert("task".to_string(), json!(task));
+        input.insert("history".to_string(), json!([]));
+
+        let result = graph.invoke(input, ExecutionConfig::new("supervisor-thread")).await?;
+
+        println!("\n{}", "=".repeat(70));
+        println!("{}", result.get("final_result").and_then(|v| v.as_str()).unwrap_or("No result"));
+    }
 
     println!("\n=== Complete ===");
+    println!("\nThis example demonstrated:");
+    println!("  - Supervisor pattern with AgentNode wrapping multiple LlmAgents");
+    println!("  - Dynamic routing based on LLM decisions");
+    println!("  - Cyclic workflow with work tracking");
+    println!("  - Multi-agent coordination");
     Ok(())
 }

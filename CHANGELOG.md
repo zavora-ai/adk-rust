@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2025-12-09
+
+### Added
+- **adk-graph crate**: LangGraph-style workflow orchestration
+  - `StateGraph` for building complex agent workflows with state channels
+  - `AgentNode` for wrapping LLM agents as graph nodes with input/output mappers
+  - Conditional routing with `Router::by_field` and custom predicates
+  - Human-in-the-loop (HITL) interrupts with `Interrupt::dynamic`
+  - State checkpointing with `MemoryCheckpointer` for persistence and replay
+  - Full `GraphInvocationContext` implementation for proper agent execution
+- **adk-browser crate**: Browser automation with 46 WebDriver tools
+  - `BrowserSession` wrapping thirtyfour WebDriver
+  - Navigation, element interaction, screenshots, cookies, frames
+  - Window/tab management, drag-and-drop, file uploads
+  - PDF printing, JavaScript execution
+- **adk-eval crate**: Agent evaluation framework
+  - `TrajectoryEvaluator` for comparing tool call sequences
+  - `SemanticEvaluator` for response similarity scoring
+  - `RubricEvaluator` for LLM-based rubric assessment
+  - Full `EvalInvocationContext` implementation for agent execution during evaluation
+- 7 new graph examples:
+  - `graph_agent` - Basic AgentNode usage
+  - `graph_workflow` - Multi-agent pipeline (extractor → analyzer → formatter)
+  - `graph_conditional` - Dynamic routing based on LLM decisions
+  - `graph_react` - ReAct pattern with cyclic tool usage
+  - `graph_supervisor` - Supervisor pattern with worker agents
+  - `graph_hitl` - Human-in-the-loop interrupts
+  - `graph_checkpoint` - State persistence and replay
+- `eval_agent` example demonstrating evaluation framework
+- Official documentation for graph agents, browser tools, and evaluation
+
+### Fixed
+- **AgentNode execution**: Now properly executes wrapped agents instead of returning empty events
+- **after_agent_callback**: Now correctly stores and invokes the callback
+- Clippy warning in adk-browser for field assignment style
+- Documentation warnings for unresolved links in adk-model
+
+### Changed
+- All graph examples now use real LLM integration via `AgentNode` (no mock/placeholder code)
+- Updated all crate versions to 0.1.4 with standardized workspace inheritance
+- Improved documentation with complete AgentNode usage examples
+
 ## [0.1.3] - 2025-12-08
 
 ### Added
@@ -133,7 +175,8 @@ Initial release - Published to crates.io.
 - Tokio async runtime
 - Google API key for Gemini
 
-[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/zavora-ai/adk-rust/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/zavora-ai/adk-rust/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/zavora-ai/adk-rust/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/zavora-ai/adk-rust/compare/v0.1.0...v0.1.1

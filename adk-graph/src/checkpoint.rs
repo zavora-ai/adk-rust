@@ -1,6 +1,8 @@
 //! Checkpointing for persistent graph state
 
-use crate::error::{GraphError, Result};
+#[cfg(feature = "sqlite")]
+use crate::error::GraphError;
+use crate::error::Result;
 use crate::state::Checkpoint;
 use async_trait::async_trait;
 use std::collections::HashMap;

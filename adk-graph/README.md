@@ -9,6 +9,7 @@ Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) age
 ## Features
 
 - **Graph-Based Workflows**: Define agent workflows as directed graphs with nodes and edges
+- **AgentNode**: Wrap LLM agents as graph nodes with custom input/output mappers
 - **Cyclic Support**: Native support for loops and iterative reasoning (ReAct pattern)
 - **Conditional Routing**: Dynamic edge routing based on state
 - **State Management**: Typed state with reducers (overwrite, append, sum, custom)
@@ -40,230 +41,398 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 adk-graph = { version = "0.1", features = ["sqlite"] }
+adk-agent = "0.1"
+adk-model = "0.1"
+adk-core = "0.1"
 ```
 
-### Basic Graph
+### Basic Graph with AgentNode
 
 ```rust
-use adk_graph::prelude::*;
+use adk_graph::{
+    edge::{END, START},
+    node::{AgentNode, ExecutionConfig},
+    agent::GraphAgent,
+    state::State,
+};
+use adk_agent::LlmAgentBuilder;
+use adk_model::GeminiModel;
+use serde_json::json;
+use std::sync::Arc;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Define a simple linear graph
-    let agent = GraphAgent::builder("processor")
-        .description("Process data through multiple steps")
-        .node_fn("fetch", |ctx| async move {
-            // Fetch data
-            Ok(NodeOutput::new().with_update("data", json!({"items": [1, 2, 3]})))
+async fn main() -> anyhow::Result<()> {
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
+
+    // Create LLM agents
+    let translator = Arc::new(
+        LlmAgentBuilder::new("translator")
+            .model(model.clone())
+            .instruction("Translate the input text to French. Only output the translation.")
+            .build()?
+    );
+
+    let summarizer = Arc::new(
+        LlmAgentBuilder::new("summarizer")
+            .model(model.clone())
+            .instruction("Summarize the input text in one sentence.")
+            .build()?
+    );
+
+    // Create AgentNodes with input/output mappers
+    let translator_node = AgentNode::new(translator)
+        .with_input_mapper(|state| {
+            let text = state.get("input").and_then(|v| v.as_str()).unwrap_or("");
+            adk_core::Content::new("user").with_text(text)
         })
-        .node_fn("transform", |ctx| async move {
-            // Transform the data
-            let data = ctx.state.get("data").unwrap();
-            let transformed = transform(data);
-            Ok(NodeOutput::new().with_update("result", transformed))
+        .with_output_mapper(|events| {
+            let mut updates = std::collections::HashMap::new();
+            for event in events {
+                if let Some(content) = event.content() {
+                    let text: String = content.parts.iter()
+                        .filter_map(|p| p.text())
+                        .collect::<Vec<_>>()
+                        .join("");
+                    if !text.is_empty() {
+                        updates.insert("translation".to_string(), json!(text));
+                    }
+                }
+            }
+            updates
+        });
+
+    let summarizer_node = AgentNode::new(summarizer)
+        .with_input_mapper(|state| {
+            let text = state.get("input").and_then(|v| v.as_str()).unwrap_or("");
+            adk_core::Content::new("user").with_text(text)
         })
-        .edge(START, "fetch")
-        .edge("fetch", "transform")
-        .edge("transform", END)
+        .with_output_mapper(|events| {
+            let mut updates = std::collections::HashMap::new();
+            for event in events {
+                if let Some(content) = event.content() {
+                    let text: String = content.parts.iter()
+                        .filter_map(|p| p.text())
+                        .collect::<Vec<_>>()
+                        .join("");
+                    if !text.is_empty() {
+                        updates.insert("summary".to_string(), json!(text));
+                    }
+                }
+            }
+            updates
+        });
+
+    // Build graph with parallel execution
+    let agent = GraphAgent::builder("text_processor")
+        .description("Translates and summarizes text in parallel")
+        .channels(&["input", "translation", "summary"])
+        .node(translator_node)
+        .node(summarizer_node)
+        .edge(START, "translator")
+        .edge(START, "summarizer")  // Both start in parallel
+        .edge("translator", END)
+        .edge("summarizer", END)
         .build()?;
 
     // Execute
-    let result = agent.invoke(State::new(), ExecutionConfig::new("thread_1")).await?;
-    println!("Result: {:?}", result.get("result"));
+    let mut input = State::new();
+    input.insert("input".to_string(), json!("AI is transforming how we work and live."));
+
+    let result = agent.invoke(input, ExecutionConfig::new("thread-1")).await?;
+
+    println!("Translation: {}", result.get("translation").and_then(|v| v.as_str()).unwrap_or(""));
+    println!("Summary: {}", result.get("summary").and_then(|v| v.as_str()).unwrap_or(""));
 
     Ok(())
 }
 ```
 
-### ReAct Agent with Tool Loop
+### Conditional Routing with LLM Classification
 
 ```rust
-use adk_graph::prelude::*;
-use adk_agent::LlmAgent;
+use adk_graph::{edge::Router, node::NodeOutput};
 
-// Create the reasoning agent
-let llm = Arc::new(LlmAgent::builder("reasoner")
-    .model(model)
-    .instruction("Reason step by step. Use tools when needed.")
-    .tool(search_tool)
-    .tool(calculator_tool)
-    .build()?);
+// Create a classifier agent
+let classifier = Arc::new(
+    LlmAgentBuilder::new("classifier")
+        .model(model.clone())
+        .instruction("Classify the sentiment as 'positive', 'negative', or 'neutral'. Reply with one word only.")
+        .build()?
+);
 
-// Build graph with cycle
-let react_agent = GraphAgent::builder("react")
-    .description("ReAct agent with tool use")
-    .node(AgentNode::new(llm))
-    .node_fn("tools", |ctx| async move {
-        let tool_calls = extract_tool_calls(&ctx.state)?;
-        let results = execute_tools(tool_calls).await?;
-        Ok(NodeOutput::new().with_update("messages", results))
+let classifier_node = AgentNode::new(classifier)
+    .with_input_mapper(|state| {
+        let msg = state.get("message").and_then(|v| v.as_str()).unwrap_or("");
+        adk_core::Content::new("user").with_text(&format!("Classify: {}", msg))
     })
-    .edge(START, "reasoner")
-    .conditional_edge(
-        "reasoner",
-        |state| {
-            if has_tool_calls(state) { "tools" } else { END }
-        },
-        [("tools", "tools"), (END, END)],
-    )
-    .edge("tools", "reasoner")  // Cycle back
-    .recursion_limit(25)
-    .build()?;
-```
+    .with_output_mapper(|events| {
+        let mut updates = std::collections::HashMap::new();
+        for event in events {
+            if let Some(content) = event.content() {
+                let text: String = content.parts.iter()
+                    .filter_map(|p| p.text())
+                    .collect::<Vec<_>>()
+                    .join("")
+                    .to_lowercase();
 
-### Multi-Agent Supervisor
+                let sentiment = if text.contains("positive") { "positive" }
+                    else if text.contains("negative") { "negative" }
+                    else { "neutral" };
 
-```rust
-let supervisor = GraphAgent::builder("supervisor")
-    .description("Routes tasks to specialist agents")
-    // Supervisor decides routing
-    .node(AgentNode::new(supervisor_llm))
-    // Specialist agents
-    .node(AgentNode::new(research_agent))
-    .node(AgentNode::new(writer_agent))
-    .node(AgentNode::new(reviewer_agent))
-    // Routing logic
-    .edge(START, "supervisor")
-    .conditional_edge(
-        "supervisor",
-        Router::by_field("next_agent"),
+                updates.insert("sentiment".to_string(), json!(sentiment));
+            }
+        }
+        updates
+    });
+
+// Build conditional routing graph
+let graph = StateGraph::with_channels(&["message", "sentiment", "response"])
+    .add_node(classifier_node)
+    .add_node(positive_handler_node)
+    .add_node(negative_handler_node)
+    .add_node(neutral_handler_node)
+    .add_edge(START, "classifier")
+    .add_conditional_edges(
+        "classifier",
+        Router::by_field("sentiment"),  // Route based on "sentiment" field
         [
-            ("research", "research_agent"),
-            ("writer", "writer_agent"),
-            ("reviewer", "reviewer_agent"),
-            ("done", END),
+            ("positive", "positive_handler"),
+            ("negative", "negative_handler"),
+            ("neutral", "neutral_handler"),
         ],
     )
-    // All agents report back
-    .edge("research_agent", "supervisor")
-    .edge("writer_agent", "supervisor")
-    .edge("reviewer_agent", "supervisor")
-    .build()?;
+    .add_edge("positive_handler", END)
+    .add_edge("negative_handler", END)
+    .add_edge("neutral_handler", END)
+    .compile()?;
 ```
 
-### Human-in-the-Loop Approval
+### Human-in-the-Loop with Risk Assessment
 
 ```rust
-let approval_workflow = GraphAgent::builder("approval_flow")
-    .node_fn("plan", |ctx| async move {
-        let action = plan_action(&ctx.state).await?;
-        Ok(NodeOutput::new().with_update("pending_action", action))
-    })
-    .node_fn("execute", |ctx| async move {
-        let action = ctx.state.get("pending_action").unwrap();
-        let result = execute_action(action).await?;
-        Ok(NodeOutput::new().with_update("result", result))
-    })
-    .edge(START, "plan")
-    .edge("plan", "execute")
-    .edge("execute", END)
-    // Enable checkpointing and interrupt
-    .checkpointer(SqliteCheckpointer::new("state.db").await?)
-    .interrupt_after(&["plan"])  // Pause for human approval
-    .build()?;
+use adk_graph::{checkpoint::MemoryCheckpointer, error::GraphError};
 
-// First run - pauses after planning
-let config = ExecutionConfig::new("approval_thread");
-match approval_workflow.invoke(input, config.clone()).await {
+let checkpointer = Arc::new(MemoryCheckpointer::new());
+
+// Planner agent assesses risk
+let planner_node = AgentNode::new(planner_agent)
+    .with_output_mapper(|events| {
+        let mut updates = std::collections::HashMap::new();
+        for event in events {
+            if let Some(content) = event.content() {
+                let text: String = content.parts.iter()
+                    .filter_map(|p| p.text())
+                    .collect::<Vec<_>>()
+                    .join("");
+
+                // Extract risk level from LLM response
+                let risk = if text.to_lowercase().contains("risk: high") { "high" }
+                    else if text.to_lowercase().contains("risk: medium") { "medium" }
+                    else { "low" };
+
+                updates.insert("plan".to_string(), json!(text));
+                updates.insert("risk_level".to_string(), json!(risk));
+            }
+        }
+        updates
+    });
+
+let graph = StateGraph::with_channels(&["task", "plan", "risk_level", "approved", "result"])
+    .add_node(planner_node)
+    .add_node(executor_node)
+    .add_node_fn("review", |ctx| async move {
+        let risk = ctx.get("risk_level").and_then(|v| v.as_str()).unwrap_or("low");
+        let approved = ctx.get("approved").and_then(|v| v.as_bool());
+
+        if approved == Some(true) {
+            return Ok(NodeOutput::new());  // Continue
+        }
+
+        if risk == "high" || risk == "medium" {
+            // Interrupt for human approval
+            return Ok(NodeOutput::interrupt_with_data(
+                "Human approval required",
+                json!({"risk_level": risk, "action": "Set 'approved' to true to continue"})
+            ));
+        }
+
+        // Auto-approve low risk
+        Ok(NodeOutput::new().with_update("approved", json!(true)))
+    })
+    .add_edge(START, "planner")
+    .add_edge("planner", "review")
+    .add_edge("review", "executor")
+    .add_edge("executor", END)
+    .compile()?
+    .with_checkpointer_arc(checkpointer.clone());
+
+// Execute - may pause for approval
+let result = graph.invoke(input, ExecutionConfig::new("task-001")).await;
+
+match result {
     Err(GraphError::Interrupted(interrupt)) => {
-        println!("Pending: {:?}", interrupt.state.get("pending_action"));
+        println!("Paused: {}", interrupt.interrupt);
 
-        // Human approves...
-        let result = interrupt.resume(Some(json!({"approved": true}))).await?;
+        // Human reviews and approves...
+        graph.update_state("task-001", [("approved".to_string(), json!(true))]).await?;
+
+        // Resume
+        let final_result = graph.invoke(State::new(), ExecutionConfig::new("task-001")).await?;
     }
     Ok(result) => println!("Completed: {:?}", result),
-    Err(e) => return Err(e.into()),
+    Err(e) => println!("Error: {}", e),
 }
 ```
 
-### Streaming Execution
+### ReAct Agent with Tools
 
 ```rust
-let stream = agent.stream(input, config, StreamMode::Updates);
+use adk_core::Part;
+use adk_tool::FunctionTool;
 
-while let Some(event) = stream.next().await {
-    match event? {
-        StreamEvent::NodeStart(name) => println!("Starting: {}", name),
-        StreamEvent::Updates { node, updates } => {
-            println!("{} updated: {:?}", node, updates);
+// Create agent with tools
+let reasoner = Arc::new(
+    LlmAgentBuilder::new("reasoner")
+        .model(model)
+        .instruction("Use tools to answer questions. Provide final answer when done.")
+        .tool(Arc::new(FunctionTool::new("search", "Search for info", |_ctx, args| async move {
+            Ok(json!({"result": "Search results..."}))
+        })))
+        .tool(Arc::new(FunctionTool::new("calculator", "Calculate", |_ctx, args| async move {
+            Ok(json!({"result": "42"}))
+        })))
+        .build()?
+);
+
+let reasoner_node = AgentNode::new(reasoner)
+    .with_output_mapper(|events| {
+        let mut updates = std::collections::HashMap::new();
+        let mut has_tool_calls = false;
+
+        for event in events {
+            if let Some(content) = event.content() {
+                for part in &content.parts {
+                    if let Part::FunctionCall { name, .. } = part {
+                        has_tool_calls = true;
+                    }
+                }
+            }
         }
-        StreamEvent::NodeEnd(name) => println!("Completed: {}", name),
-        StreamEvent::Done(state) => println!("Final: {:?}", state),
-        _ => {}
-    }
-}
+
+        updates.insert("has_tool_calls".to_string(), json!(has_tool_calls));
+        updates
+    });
+
+// Build ReAct graph with cycle
+let graph = StateGraph::with_channels(&["input", "has_tool_calls", "iteration"])
+    .add_node(reasoner_node)
+    .add_node_fn("counter", |ctx| async move {
+        let i = ctx.get("iteration").and_then(|v| v.as_i64()).unwrap_or(0);
+        Ok(NodeOutput::new().with_update("iteration", json!(i + 1)))
+    })
+    .add_edge(START, "counter")
+    .add_edge("counter", "reasoner")
+    .add_conditional_edges(
+        "reasoner",
+        |state| {
+            let has_tools = state.get("has_tool_calls").and_then(|v| v.as_bool()).unwrap_or(false);
+            let iteration = state.get("iteration").and_then(|v| v.as_i64()).unwrap_or(0);
+
+            if iteration >= 5 { return END.to_string(); }  // Safety limit
+            if has_tools { "counter".to_string() } else { END.to_string() }
+        },
+        [("counter", "counter"), (END, END)],
+    )
+    .compile()?
+    .with_recursion_limit(10);
+```
+
+## Node Types
+
+### AgentNode
+
+Wraps any ADK `Agent` (typically `LlmAgent`) as a graph node:
+
+```rust
+let node = AgentNode::new(llm_agent)
+    .with_input_mapper(|state| {
+        // Transform graph state to agent input Content
+        adk_core::Content::new("user").with_text(state.get("input").unwrap().as_str().unwrap())
+    })
+    .with_output_mapper(|events| {
+        // Transform agent events to state updates
+        let mut updates = HashMap::new();
+        // ... extract data from events
+        updates
+    });
+```
+
+### FunctionNode
+
+Simple async functions for data processing:
+
+```rust
+.node_fn("process", |ctx| async move {
+    let data = ctx.get("data").unwrap();
+    let result = transform(data);
+    Ok(NodeOutput::new().with_update("result", result))
+})
 ```
 
 ## State Management
 
-### Reducers
-
-Control how state updates are merged:
+### Channels and Reducers
 
 ```rust
 let schema = StateSchema::builder()
-    .channel("current_step")                    // Overwrite (default)
-    .list_channel("messages")                   // Append to list
-    .channel_with_reducer("count", Reducer::Sum) // Sum values
-    .channel_with_reducer("data", Reducer::Custom(Arc::new(|old, new| {
-        // Custom merge logic
-        merge_json(old, new)
-    })))
+    .channel("current")                           // Overwrite (default)
+    .list_channel("messages")                     // Append to list
+    .channel_with_reducer("count", Reducer::Sum)  // Sum values
     .build();
-
-let agent = GraphAgent::builder("stateful")
-    .state_schema(schema)
-    // ...
-    .build()?;
 ```
 
 ## Checkpointing
 
-Enable persistent state for fault tolerance and human-in-the-loop:
-
 ```rust
-// In-memory (development)
+// Memory (development)
 let checkpointer = MemoryCheckpointer::new();
 
 // SQLite (production)
-let checkpointer = SqliteCheckpointer::new("checkpoints.db").await?;
+let checkpointer = SqliteCheckpointer::new("state.db").await?;
 
-let agent = GraphAgent::builder("durable")
-    .checkpointer(checkpointer)
-    // ...
-    .build()?;
-
-// Resume from checkpoint
-let state = agent.get_state(&config).await?;
+// View checkpoint history
+let checkpoints = checkpointer.list("thread-id").await?;
+for cp in checkpoints {
+    println!("Step {}: {:?}", cp.step, cp.state);
+}
 ```
 
-## ADK Integration
+## Examples
 
-GraphAgent implements the ADK `Agent` trait, so it works seamlessly with:
+All examples use real LLM integration with AgentNode:
 
-- **Runner**: Use with `adk-runner` for execution
-- **Callbacks**: Full support for before/after callbacks
-- **Sessions**: Works with `adk-session` for conversation history
-- **Streaming**: Returns ADK `EventStream`
+```bash
+# Parallel LLM agents with callbacks
+cargo run --example graph_agent
 
-```rust
-use adk_runner::Runner;
+# Sequential multi-agent pipeline
+cargo run --example graph_workflow
 
-let graph_agent = GraphAgent::builder("workflow")
-    .before_agent_callback(|ctx| async {
-        println!("Starting graph execution");
-        Ok(())
-    })
-    .after_agent_callback(|ctx, event| async {
-        println!("Graph completed");
-        Ok(())
-    })
-    // ... graph definition
-    .build()?;
+# LLM-based sentiment classification and routing
+cargo run --example graph_conditional
 
-// Use with standard ADK runner
-let runner = Runner::new(Arc::new(graph_agent));
-let events = runner.run(session, content).await?;
+# ReAct pattern with tools
+cargo run --example graph_react
+
+# Multi-agent supervisor
+cargo run --example graph_supervisor
+
+# Human-in-the-loop with risk assessment
+cargo run --example graph_hitl
+
+# Checkpointing and time travel
+cargo run --example graph_checkpoint
 ```
 
 ## Comparison with LangGraph
@@ -273,11 +442,11 @@ let events = runner.run(session, content).await?;
 | State Management | TypedDict + Reducers | StateSchema + Reducers |
 | Execution Model | Pregel super-steps | Pregel super-steps |
 | Checkpointing | Memory, SQLite, Postgres | Memory, SQLite |
-| Human-in-Loop | interrupt_before/after | interrupt_before/after |
+| Human-in-Loop | interrupt_before/after | interrupt_before/after + dynamic |
 | Streaming | 5 modes | 5 modes |
 | Cycles | Native support | Native support |
 | Type Safety | Python typing | Rust type system |
-| Integration | LangChain | ADK ecosystem |
+| LLM Integration | LangChain | AgentNode + ADK agents |
 
 ## Feature Flags
 

@@ -10,6 +10,8 @@ use crate::schema::{EvalCase, TestFile, ToolUse, Turn};
 use crate::scoring::{ResponseScorer, ToolTrajectoryScorer};
 
 use adk_core::{Agent, Content, Event, Llm};
+use async_trait::async_trait;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -231,21 +233,20 @@ impl Evaluator {
     }
 
     /// Run agent and collect events
-    async fn run_agent(&self, agent: Arc<dyn Agent>, _input: Content) -> Result<Vec<Event>> {
-        // Create a minimal invocation context
-        // In a full implementation, this would use adk-runner
-        // For now, we'll use a simplified approach
+    async fn run_agent(&self, agent: Arc<dyn Agent>, input: Content) -> Result<Vec<Event>> {
+        // Create a minimal invocation context for evaluation
+        let invocation_id = uuid::Uuid::new_v4().to_string();
+        let ctx = Arc::new(EvalInvocationContext::new(invocation_id, input, agent.clone()));
 
-        // Note: Full implementation would:
-        // 1. Create a session with session_input
-        // 2. Create InvocationContext with the input content
-        // 3. Call agent.run() or agent.run_stream()
-        // 4. Collect all events
+        // Run the agent and collect all events
+        let stream = agent.run(ctx).await.map_err(|e| {
+            crate::error::EvalError::ExecutionError(format!("Agent run failed: {}", e))
+        })?;
 
-        // Placeholder - returns empty for now
-        // Real implementation needs adk-runner integration
-        let _name = agent.name();
-        Ok(Vec::new())
+        // Collect all events from the stream
+        let events: Vec<Event> = stream.filter_map(|r| async { r.ok() }).collect().await;
+
+        Ok(events)
     }
 
     /// Extract response text and tool calls from events
@@ -604,6 +605,159 @@ impl Evaluator {
 impl Default for Evaluator {
     fn default() -> Self {
         Self::new(EvaluationConfig::default())
+    }
+}
+
+// ============================================================================
+// EvalInvocationContext - Minimal context for running agents during evaluation
+// ============================================================================
+
+/// Minimal InvocationContext implementation for evaluation
+struct EvalInvocationContext {
+    invocation_id: String,
+    user_content: Content,
+    agent: Arc<dyn Agent>,
+    session: EvalSession,
+    run_config: adk_core::RunConfig,
+    ended: std::sync::atomic::AtomicBool,
+}
+
+impl EvalInvocationContext {
+    fn new(invocation_id: String, user_content: Content, agent: Arc<dyn Agent>) -> Self {
+        let session_id = format!("eval-session-{}", uuid::Uuid::new_v4());
+        Self {
+            invocation_id,
+            user_content,
+            agent,
+            session: EvalSession::new(session_id),
+            run_config: adk_core::RunConfig::default(),
+            ended: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+impl adk_core::ReadonlyContext for EvalInvocationContext {
+    fn invocation_id(&self) -> &str {
+        &self.invocation_id
+    }
+
+    fn agent_name(&self) -> &str {
+        self.agent.name()
+    }
+
+    fn user_id(&self) -> &str {
+        "eval_user"
+    }
+
+    fn app_name(&self) -> &str {
+        "eval_app"
+    }
+
+    fn session_id(&self) -> &str {
+        &self.session.id
+    }
+
+    fn branch(&self) -> &str {
+        "main"
+    }
+
+    fn user_content(&self) -> &Content {
+        &self.user_content
+    }
+}
+
+#[async_trait]
+impl adk_core::CallbackContext for EvalInvocationContext {
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
+}
+
+#[async_trait]
+impl adk_core::InvocationContext for EvalInvocationContext {
+    fn agent(&self) -> Arc<dyn Agent> {
+        self.agent.clone()
+    }
+
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
+        None
+    }
+
+    fn session(&self) -> &dyn adk_core::Session {
+        &self.session
+    }
+
+    fn run_config(&self) -> &adk_core::RunConfig {
+        &self.run_config
+    }
+
+    fn end_invocation(&self) {
+        self.ended.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn ended(&self) -> bool {
+        self.ended.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// Minimal Session implementation for evaluation
+struct EvalSession {
+    id: String,
+    state: EvalState,
+}
+
+impl EvalSession {
+    fn new(id: String) -> Self {
+        Self { id, state: EvalState::new() }
+    }
+}
+
+impl adk_core::Session for EvalSession {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn app_name(&self) -> &str {
+        "eval_app"
+    }
+
+    fn user_id(&self) -> &str {
+        "eval_user"
+    }
+
+    fn state(&self) -> &dyn adk_core::State {
+        &self.state
+    }
+
+    fn conversation_history(&self) -> Vec<Content> {
+        vec![]
+    }
+}
+
+/// Minimal State implementation for evaluation
+struct EvalState {
+    data: std::sync::RwLock<HashMap<String, serde_json::Value>>,
+}
+
+impl EvalState {
+    fn new() -> Self {
+        Self { data: std::sync::RwLock::new(HashMap::new()) }
+    }
+}
+
+impl adk_core::State for EvalState {
+    fn get(&self, key: &str) -> Option<serde_json::Value> {
+        self.data.read().ok()?.get(key).cloned()
+    }
+
+    fn set(&mut self, key: String, value: serde_json::Value) {
+        if let Ok(mut data) = self.data.write() {
+            data.insert(key, value);
+        }
+    }
+
+    fn all(&self) -> HashMap<String, serde_json::Value> {
+        self.data.read().ok().map(|d| d.clone()).unwrap_or_default()
     }
 }
 

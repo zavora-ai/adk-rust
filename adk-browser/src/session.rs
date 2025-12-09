@@ -774,10 +774,15 @@ impl BrowserSession {
             .as_ref()
             .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
 
-        let mut params = PrintParameters::default();
-        params.orientation =
-            if landscape { PrintOrientation::Landscape } else { PrintOrientation::Portrait };
-        params.scale = scale;
+        let params = PrintParameters {
+            orientation: if landscape {
+                PrintOrientation::Landscape
+            } else {
+                PrintOrientation::Portrait
+            },
+            scale,
+            ..Default::default()
+        };
 
         driver
             .print_page_base64(params)
