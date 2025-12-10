@@ -6,7 +6,7 @@ Thank you for your interest in contributing to ADK-Rust! This document provides 
 
 ```bash
 # Clone and build
-git clone https://github.com/anthropics/adk-rust.git
+git clone https://github.com/zavora-ai/adk-rust.git
 cd adk-rust
 cargo build
 
@@ -78,8 +78,8 @@ test: add or update tests
 
 ## Getting Help
 
-- **Issues**: [GitHub Issues](https://github.com/anthropics/adk-rust/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/anthropics/adk-rust/discussions)
+- **Issues**: [GitHub Issues](https://github.com/zavora-ai/adk-rust/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/zavora-ai/adk-rust/discussions)
 
 ## License
 

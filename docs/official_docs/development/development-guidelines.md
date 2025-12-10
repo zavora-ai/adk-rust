@@ -26,7 +26,7 @@ This document provides comprehensive guidelines for developers contributing to A
 
 ```bash
 # Clone the repository
-git clone https://github.com/anthropics/adk-rust.git
+git clone https://github.com/zavora-ai/adk-rust.git
 cd adk-rust
 
 # Build the project
@@ -649,4 +649,4 @@ pub use my_agent::MyAgent;
 
 ---
 
-**Questions?** Open an issue on [GitHub](https://github.com/anthropics/adk-rust/issues).
+**Questions?** Open an issue on [GitHub](https://github.com/zavora-ai/adk-rust/issues).
