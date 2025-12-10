@@ -8,13 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Reduce memory pressure during linking
   CARGO_HOME: /home/runner/.cargo
   CARGO_INCREMENTAL: 0
-  # Fail fast on cache corruption to allow retry
   CACHE_ON_FAILURE: false
-  # Use single-threaded linker to reduce memory usage
-  RUSTFLAGS: "-C link-arg=-Wl,--no-keep-memory"
 
 jobs:
   test:
@@ -22,15 +18,20 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
+    # Install mold linker - much more memory efficient than ld
+    - name: Install mold linker
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y mold
     - uses: Swatinem/rust-cache@v2
       with:
-        # Separate cache key to avoid corruption issues
         key: test-${{ runner.os }}
-    # Use -j 1 to serialize test compilation and linking
-    # GitHub Actions runners have limited RAM (7GB), and linking
-    # multiple test binaries in parallel causes OOM/Bus errors
+    # Use mold linker and reduce debug info to prevent OOM
+    # GitHub Actions runners have limited RAM (7GB)
     - name: Run tests
-      run: cargo test --all-features -j 1
+      env:
+        RUSTFLAGS: "-C link-arg=-fuse-ld=mold -C debuginfo=1"
+      run: cargo test --all-features -j 2
 
   clippy:
     runs-on: ubuntu-latest
