@@ -623,20 +623,28 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 
 ## Roadmap
 
-**Implemented**:
+**Implemented** (v0.1.6):
 - Core framework and agent types
-- Multi-provider LLM support (Gemini, OpenAI, Anthropic)
+- Multi-provider LLM support (Gemini, OpenAI, Anthropic, DeepSeek)
 - Tool system with MCP support
 - Agent Tool - Use agents as callable tools
 - Session and artifact management
-- Memory system
+- Memory system with vector embeddings
 - REST and A2A servers
 - CLI with interactive mode
 - Realtime voice agents (OpenAI Realtime API, Gemini Live API)
 - Graph-based workflows (LangGraph-style) with checkpointing and human-in-the-loop
 - Browser automation (46 WebDriver tools)
 - Agent evaluation framework with trajectory validation and LLM-judged scoring
+- **Dynamic UI generation** (adk-ui) with 28 components, 10 templates, React client
 
 **Planned** (see [docs/roadmap/](docs/roadmap/)):
-- [VertexAI Sessions](docs/roadmap/vertex-ai-session.md) - Cloud-based session persistence
-- [GCS Artifacts](docs/roadmap/gcs-artifacts.md) - Google Cloud Storage backend
+
+| Priority | Feature | Target | Status |
+|----------|---------|--------|--------|
+| 🔴 P0 | [Guardrails](docs/roadmap/guardrails.md) | Q1 2025 | Planned |
+| 🔴 P0 | [ADK Studio](docs/roadmap/adk-studio.md) | Q1-Q2 2025 | Planned |
+| 🟡 P1 | [Cloud Integrations](docs/roadmap/cloud-integrations.md) | Q2-Q3 2025 | Planned |
+| 🟡 P1 | [Graph Visualization](docs/roadmap/graph-agent-design.md) | Q2 2025 | Planned |
+| 🟢 P2 | [Enterprise Features](docs/roadmap/enterprise.md) | Q4 2025 | Planned |
+| 🟢 P2 | [VertexAI Sessions](docs/roadmap/vertex-ai-session.md) | Q2 2025 | Planned |
