@@ -1,0 +1,26 @@
+{
+  "id": "00000000-0000-0000-0000-000000000001",
+  "version": "1.0",
+  "name": "Simple Chatbot",
+  "description": "A basic chatbot with a single LLM agent",
+  "settings": {
+    "default_model": "gemini-2.0-flash"
+  },
+  "agents": {
+    "assistant": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a helpful assistant. Answer questions clearly and concisely.",
+      "tools": [],
+      "position": { "x": 300, "y": 200 }
+    }
+  },
+  "tools": {},
+  "workflow": {
+    "type": "single",
+    "edges": [
+      { "from": "START", "to": "assistant" },
+      { "from": "assistant", "to": "END" }
+    ]
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "id": "00000000-0000-0000-0000-000000000002",
+  "version": "1.0",
+  "name": "Research Pipeline",
+  "description": "Multi-agent pipeline: Research → Write → Review",
+  "settings": {
+    "default_model": "gemini-2.0-flash"
+  },
+  "agents": {
+    "researcher": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "Research the given topic thoroughly. Gather key facts, statistics, and insights.",
+      "tools": ["google_search"],
+      "position": { "x": 200, "y": 200 }
+    },
+    "writer": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "Write a comprehensive article based on the research provided. Use clear headings and structure.",
+      "tools": [],
+      "position": { "x": 400, "y": 200 }
+    },
+    "reviewer": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "Review the article for accuracy, clarity, and completeness. Suggest improvements.",
+      "tools": [],
+      "position": { "x": 600, "y": 200 }
+    }
+  },
+  "tools": {
+    "google_search": {
+      "type": "builtin",
+      "description": "Search the web for information"
+    }
+  },
+  "workflow": {
+    "type": "sequential",
+    "edges": [
+      { "from": "START", "to": "researcher" },
+      { "from": "researcher", "to": "writer" },
+      { "from": "writer", "to": "reviewer" },
+      { "from": "reviewer", "to": "END" }
+    ]
+  }
+}

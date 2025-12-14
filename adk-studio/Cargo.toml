@@ -1,0 +1,57 @@
+[package]
+name = "adk-studio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Visual development environment for ADK-Rust agents"
+keywords = ["ai", "agents", "studio", "visual", "low-code"]
+categories = ["development-tools", "gui"]
+
+[[bin]]
+name = "adk-studio"
+path = "src/main.rs"
+
+[dependencies]
+# ADK crates
+adk-core = { path = "../adk-core", version = "0.1" }
+adk-agent = { path = "../adk-agent", version = "0.1" }
+adk-model = { path = "../adk-model", version = "0.1", features = ["gemini"] }
+adk-tool = { path = "../adk-tool", version = "0.1" }
+adk-runner = { path = "../adk-runner", version = "0.1" }
+adk-session = { path = "../adk-session", version = "0.1" }
+adk-graph = { path = "../adk-graph", version = "0.1" }
+
+# Async
+tokio.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Web server
+axum = { version = "0.7", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+
+# Utilities
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Code generation
+handlebars = "6"
+
+# Schema validation
+jsonschema = "0.26"
+
+# Platform directories
+dirs = "5"

@@ -19,6 +19,7 @@ members = [
     "adk-ui",
     "adk-telemetry",
     "adk-guardrail",
+    "adk-studio",
     "adk-rust",
 
     # Development packages (not published)
