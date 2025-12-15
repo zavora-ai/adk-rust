@@ -58,15 +58,39 @@ export function Canvas() {
   const handleBuild = useCallback(async () => {
     if (!currentProject) return;
     setBuilding(true);
-    setBuildOutput(null);
-    try {
-      const result = await api.projects.build(currentProject.id);
-      setBuildOutput({ success: result.success, output: result.output, path: result.binary_path });
-    } catch (e) {
-      setBuildOutput({ success: false, output: (e as Error).message, path: null });
-    } finally {
+    setBuildOutput({ success: false, output: '', path: null });
+    
+    const eventSource = new EventSource(`/api/projects/${currentProject.id}/build-stream`);
+    let output = '';
+    
+    eventSource.addEventListener('status', (e) => {
+      output += e.data + '\n';
+      setBuildOutput({ success: false, output, path: null });
+    });
+    
+    eventSource.addEventListener('output', (e) => {
+      output += e.data + '\n';
+      setBuildOutput({ success: false, output, path: null });
+    });
+    
+    eventSource.addEventListener('done', (e) => {
+      setBuildOutput({ success: true, output, path: e.data });
       setBuilding(false);
-    }
+      eventSource.close();
+    });
+    
+    eventSource.addEventListener('error', (e) => {
+      const data = (e as MessageEvent).data || 'Build failed';
+      output += '\nError: ' + data;
+      setBuildOutput({ success: false, output, path: null });
+      setBuilding(false);
+      eventSource.close();
+    });
+    
+    eventSource.onerror = () => {
+      setBuilding(false);
+      eventSource.close();
+    };
   }, [currentProject]);
 
   const removeSubAgent = useCallback((parentId: string, subId: string) => {
