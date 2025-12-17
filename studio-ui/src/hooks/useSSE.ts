@@ -10,6 +10,7 @@ export interface TraceEvent {
   timestamp: number;
   data: string;
   agent?: string;
+  screenshot?: string; // base64 image for browser screenshots
 }
 
 export function useSSE(projectId: string | null, binaryPath?: string | null) {
@@ -24,8 +25,8 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
   const agentRef = useRef('');
   const sessionRef = useRef<string | null>(null);
 
-  const addEvent = (type: TraceEvent['type'], data: string, agent?: string) => {
-    setEvents(prev => [...prev, { type, timestamp: Date.now(), data, agent: agent || agentRef.current }]);
+  const addEvent = (type: TraceEvent['type'], data: string, agent?: string, screenshot?: string) => {
+    setEvents(prev => [...prev, { type, timestamp: Date.now(), data, agent: agent || agentRef.current, screenshot }]);
   };
 
   const send = useCallback(
@@ -123,10 +124,19 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
       es.addEventListener('tool_result', (e) => {
         try {
           const data = JSON.parse(e.data);
-          const resultStr = typeof data.result === 'string' ? data.result : JSON.stringify(data.result).slice(0, 200);
+          const result = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+          
+          // Check for screenshot (base64 image)
+          let screenshot: string | undefined;
+          if (result?.base64_image) {
+            screenshot = result.base64_image;
+          }
+          
+          const resultStr = screenshot ? '📸 Screenshot captured' : 
+            (typeof data.result === 'string' ? data.result : JSON.stringify(data.result).slice(0, 200));
           textRef.current += `✓ ${data.name}: ${resultStr}\n`;
           setStreamingText(textRef.current);
-          addEvent('tool_result', `${data.name} → ${resultStr}`);
+          addEvent('tool_result', `${data.name} → ${resultStr}`, undefined, screenshot);
         } catch {}
       });
 

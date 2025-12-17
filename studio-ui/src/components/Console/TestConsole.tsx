@@ -205,18 +205,29 @@ export function TestConsole({ onFlowPhase, onActiveAgent, binaryPath }: Props) {
             <div className="text-gray-500">No events yet. Send a message to see the trace.</div>
           )}
           {events.map((e, i) => (
-            <div key={i} className="flex gap-2 py-1 border-b border-gray-800">
-              <span className="text-gray-500 w-24 flex-shrink-0">{formatTime(e.timestamp)}</span>
-              <span>{eventIcon(e.type)}</span>
-              <span className={`${eventColor(e.type)} flex-1`}>
-                {e.agent && <span className="text-yellow-400 mr-2">[{e.agent}]</span>}
-                {e.type === 'user' ? `Input: ${e.data}` : 
-                 e.type === 'agent_start' ? `Started ${e.data}` :
-                 e.type === 'agent_end' ? `Completed in ${e.data}` :
-                 e.type === 'model' ? `Response: ${e.data}` :
-                 e.type === 'done' ? `Done (${e.data})` :
-                 e.data}
-              </span>
+            <div key={i} className="py-1 border-b border-gray-800">
+              <div className="flex gap-2">
+                <span className="text-gray-500 w-24 flex-shrink-0">{formatTime(e.timestamp)}</span>
+                <span>{eventIcon(e.type)}</span>
+                <span className={`${eventColor(e.type)} flex-1`}>
+                  {e.agent && <span className="text-yellow-400 mr-2">[{e.agent}]</span>}
+                  {e.type === 'user' ? `Input: ${e.data}` : 
+                   e.type === 'agent_start' ? `Started ${e.data}` :
+                   e.type === 'agent_end' ? `Completed in ${e.data}` :
+                   e.type === 'model' ? `Response: ${e.data}` :
+                   e.type === 'done' ? `Done (${e.data})` :
+                   e.data}
+                </span>
+              </div>
+              {e.screenshot && (
+                <div className="ml-28 mt-2 mb-2">
+                  <img 
+                    src={`data:image/png;base64,${e.screenshot}`} 
+                    alt="Browser screenshot" 
+                    className="max-w-full max-h-64 rounded border border-gray-600"
+                  />
+                </div>
+              )}
             </div>
           ))}
           <div ref={eventsEndRef} />

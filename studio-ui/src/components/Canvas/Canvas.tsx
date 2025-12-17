@@ -333,6 +333,28 @@ export function Canvas() {
     setNodes(newNodes);
   }, [currentProject, setNodes, selectedSubAgent, removeSubAgent, activeAgent, selectNode, selectTool]);
 
+  // Handle Delete key for selected tool
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedToolId && selectedNodeId) {
+        // Don't delete if focus is in an input/textarea
+        const active = document.activeElement;
+        if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA') return;
+        
+        // Extract tool type from selectedToolId (e.g., "agent_1_function_1" -> "function_1")
+        const parts = selectedToolId.split('_');
+        const toolType = parts.slice(-2).join('_'); // e.g., "function_1" or "mcp_1"
+        
+        removeToolFromAgent(selectedNodeId, toolType);
+        selectTool(null);
+        e.preventDefault();
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedToolId, selectedNodeId, removeToolFromAgent, selectTool]);
+
   // Update edges based on flow phase and active agent
   useEffect(() => {
     if (!currentProject) return;
