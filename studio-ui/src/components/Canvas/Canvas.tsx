@@ -604,8 +604,8 @@ export function Canvas() {
             <button onClick={handleCompile} className="w-full px-3 py-2 bg-blue-700 hover:bg-blue-600 rounded text-sm">
               📄 View Code
             </button>
-            <button onClick={handleBuild} disabled={building} className="w-full px-3 py-2 bg-green-700 hover:bg-green-600 disabled:bg-gray-600 rounded text-sm">
-              {building ? '⏳ Building...' : '🔨 Build'}
+            <button onClick={handleBuild} disabled={building} className={`w-full px-3 py-2 rounded text-sm ${building ? 'bg-gray-600' : builtBinaryPath ? 'bg-green-700 hover:bg-green-600' : 'bg-orange-600 hover:bg-orange-500 animate-pulse'}`}>
+              {building ? '⏳ Building...' : builtBinaryPath ? '🔨 Build' : '🔨 Build Required'}
             </button>
             <button onClick={() => setShowConsole(!showConsole)} className="w-full px-3 py-2 bg-gray-700 rounded text-sm">
               {showConsole ? 'Hide Console' : 'Show Console'}
@@ -820,8 +820,34 @@ export function Canvas() {
               
               {actualToolType === 'mcp' && (() => {
                 const mcpConfig = currentConfig as McpToolConfig;
+                const mcpTemplates = [
+                  { name: 'Time', icon: '🕐', command: 'uvx', args: ['mcp-server-time'], desc: 'Get current time, convert timezones' },
+                  { name: 'Fetch', icon: '🌐', command: 'uvx', args: ['mcp-server-fetch'], desc: 'Fetch URLs and extract content' },
+                  { name: 'Filesystem', icon: '📁', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'], desc: 'Read/write files' },
+                  { name: 'GitHub', icon: '🐙', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], desc: 'GitHub API (needs GITHUB_TOKEN)' },
+                  { name: 'Postgres', icon: '🐘', command: 'npx', args: ['-y', '@modelcontextprotocol/server-postgres', 'postgresql://localhost/db'], desc: 'Query PostgreSQL' },
+                  { name: 'SQLite', icon: '💾', command: 'uvx', args: ['mcp-server-sqlite', '--db-path', '/tmp/data.db'], desc: 'Query SQLite database' },
+                  { name: 'Brave Search', icon: '🔍', command: 'npx', args: ['-y', '@modelcontextprotocol/server-brave-search'], desc: 'Web search (needs BRAVE_API_KEY)' },
+                  { name: 'Memory', icon: '🧠', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'], desc: 'Persistent key-value memory' },
+                ];
                 return (
                   <div className="space-y-3">
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">Quick Templates</label>
+                      <div className="grid grid-cols-2 gap-1 mb-3">
+                        {mcpTemplates.map((t) => (
+                          <button
+                            key={t.name}
+                            className="flex items-center gap-1 px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs text-left"
+                            title={t.desc}
+                            onClick={() => updateToolConfig(selectedToolId, { ...mcpConfig, server_command: t.command, server_args: t.args })}
+                          >
+                            <span>{t.icon}</span>
+                            <span className="truncate">{t.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                     <div>
                       <label className="block text-sm text-gray-400 mb-1">Server Command</label>
                       <input
@@ -848,9 +874,6 @@ export function Canvas() {
                         value={(mcpConfig.tool_filter || []).join('\n')}
                         onChange={(e) => updateToolConfig(selectedToolId, { ...mcpConfig, tool_filter: e.target.value.split('\n').filter(Boolean) })}
                       />
-                    </div>
-                    <div className="text-xs text-gray-500 mt-2">
-                      Example: <code>uvx mcp-server-time</code>
                     </div>
                   </div>
                 );
