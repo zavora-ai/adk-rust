@@ -33,7 +33,7 @@ pub struct GeneratedFile {
 fn generate_main_rs(project: &ProjectSchema) -> String {
     let mut code = String::new();
     
-    code.push_str("#![allow(unused_imports)]\n\n");
+    code.push_str("#![allow(unused_imports, unused_variables)]\n\n");
     
     // Check if any agent uses MCP (handles mcp, mcp_1, mcp_2, etc.)
     let uses_mcp = project.agents.values().any(|a| a.tools.iter().any(|t| t == "mcp" || t.starts_with("mcp_")));
@@ -533,6 +533,8 @@ fn generate_container_node(id: &str, agent: &AgentSchema, project: &ProjectSchem
     code.push_str("                    }\n");
     code.push_str("                }\n");
     code.push_str("            }\n");
+    code.push_str("            // Filter out tool call artifacts\n");
+    code.push_str("            let full_text = full_text.replace(\"exit_loop\", \"\");\n");
     code.push_str("            if !full_text.is_empty() {\n");
     code.push_str("                updates.insert(\"response\".to_string(), json!(full_text));\n");
     code.push_str("            }\n");

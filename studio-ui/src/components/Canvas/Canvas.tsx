@@ -450,15 +450,15 @@ export function Canvas() {
       addAgent(sub1, {
         type: 'llm',
         model: 'gemini-2.0-flash',
-        instruction: isLoop ? 'Refine the content. When satisfied, call exit_loop.' : 'You are agent 1.',
-        tools: isLoop ? ['exit_loop'] : [],
+        instruction: isLoop ? 'Process and refine the content.' : 'You are agent 1.',
+        tools: [],
         sub_agents: [],
         position: { x: 0, y: 0 },
       });
       addAgent(sub2, {
         type: 'llm',
         model: 'gemini-2.0-flash',
-        instruction: isLoop ? 'Review and improve. Call exit_loop when done.' : 'You are agent 2.',
+        instruction: isLoop ? 'Answer user. Review and improve only if necessary. Call exit_loop when done.' : 'You are agent 2.',
         tools: isLoop ? ['exit_loop'] : [],
         sub_agents: [],
         position: { x: 0, y: 0 },
