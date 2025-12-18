@@ -10,7 +10,7 @@ interface MenuBarProps {
 export function MenuBar({ onExportCode, onNewProject }: MenuBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const { currentProject, addAgent } = useStore();
+  const { currentProject, addAgent, removeAgent, addEdge, removeEdge } = useStore();
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -25,10 +25,19 @@ export function MenuBar({ onExportCode, onNewProject }: MenuBarProps) {
   const applyTemplate = (template: Template) => {
     if (!currentProject) return;
     
+    // Clear existing edges
+    (currentProject.workflow?.edges || []).forEach(e => removeEdge(e.from, e.to));
+    
+    // Clear existing agents
+    Object.keys(currentProject.agents).forEach(id => removeAgent(id));
+    
     // Add all agents from template
     Object.entries(template.agents).forEach(([id, agent]) => {
       addAgent(id, agent);
     });
+    
+    // Add edges from template
+    template.edges.forEach(e => addEdge(e.from, e.to));
     
     setOpenMenu(null);
   };
