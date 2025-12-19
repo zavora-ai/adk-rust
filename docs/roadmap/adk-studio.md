@@ -28,26 +28,29 @@ A React-based web application for visual agent development:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  ADK Studio                                    [Save] [Run] │
+│  🔧 ADK Studio    File ▾   Templates ▾   Help ▾    [Build] │
 ├─────────────────────────────────────────────────────────────┤
 │ ┌─────────┐ ┌───────────────────────────────────────────┐   │
 │ │ Agents  │ │                                           │   │
 │ │ ───────┐│ │    ┌─────────┐      ┌─────────┐          │   │
 │ │ 📦 LLM ││ │    │Research │─────▶│ Writer  │          │   │
-│ │ 📦 Tool││ │    │  Agent  │      │  Agent  │          │   │
-│ │ 📦 Work││ │    └─────────┘      └────┬────┘          │   │
-│ ├─────────┤ │                          │               │   │
-│ │ Tools   │ │                          ▼               │   │
-│ │ ───────┐│ │                    ┌─────────┐          │   │
-│ │ 🔧 Goog││ │                    │ Reviewer│          │   │
-│ │ 🔧 Web ││ │                    │  Agent  │          │   │
-│ │ 🔧 Code││ │                    └─────────┘          │   │
-│ └─────────┘ └───────────────────────────────────────────┘   │
-│ ┌───────────────────────────────────────────────────────┐   │
-│ │ Properties: Research Agent                             │   │
-│ │ Model: gemini-2.5-flash  Instruction: [............]  │   │
-│ │ Tools: [Google Search] [Web Browse]                    │   │
-│ └───────────────────────────────────────────────────────┘   │
+│ │ 📦 Seq ││ │    │  Agent  │      │  Agent  │          │   │
+│ │ 📦 Loop││ │    └─────────┘      └────┬────┘          │   │
+│ │ 📦 Par ││ │                          │               │   │
+│ │ 📦 Rout││ │                          ▼               │   │
+│ ├─────────┤ │                    ┌─────────┐          │   │
+│ │ Tools   │ │                    │ Reviewer│          │   │
+│ │ ───────┐│ │                    │  Agent  │          │   │
+│ │ 🔧 Func││ │                    └─────────┘          │   │
+│ │ 🔧 MCP ││ │                                          │   │
+│ │ 🔧 Brow││ └───────────────────────────────────────────┘   │
+│ │ 🔧 Srch││ ┌───────────────────────────────────────────┐   │
+│ └─────────┘ │ 💬 Test Console                    [Trace]│   │
+│ ┌─────────┐ │ > Hello                                   │   │
+│ │Properties│ │ 🤖 Hi! How can I help?                   │   │
+│ │ Model   │ └───────────────────────────────────────────┘   │
+│ │ Instruct│                                                 │
+│ └─────────┘                                                 │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -55,54 +58,120 @@ A React-based web application for visual agent development:
 
 ### 1. Visual Agent Builder
 
-| Feature | Description |
-|---------|-------------|
-| Agent Palette | Drag LLM, Tool, Workflow agents onto canvas |
-| Property Editor | Configure model, instructions, tools |
-| Connection Editor | Draw edges between agents |
-| Validation | Real-time validation of agent configs |
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Agent Palette | ✅ Done | Drag LLM, Sequential, Loop, Parallel, Router agents |
+| Property Editor | ✅ Done | Configure model, instructions, tools |
+| Connection Editor | ✅ Done | Draw edges between agents |
+| Validation | ✅ Done | Real-time validation of agent configs |
+| Sub-agent Management | ✅ Done | Add/remove sub-agents in containers |
 
 ### 2. Workflow Editor
 
-| Feature | Description |
-|---------|-------------|
-| Graph Canvas | Visual node-edge editor |
-| Node Types | Agent, Condition, Loop, Parallel, Start, End |
-| Edge Types | Sequential, Conditional, Parallel |
-| State Inspector | View state at each node |
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Graph Canvas | ✅ Done | Visual node-edge editor with React Flow |
+| Node Types | ✅ Done | LLM, Sequential, Loop, Parallel, Router, Start, End |
+| Edge Types | ✅ Done | Sequential, Conditional (router) |
+| State Inspector | 🔲 Pending | View state at each node |
+| Auto-Layout | 🔲 Pending | Automatic graph layout algorithms |
 
 ### 3. Live Testing
 
-| Feature | Description |
-|---------|-------------|
-| Chat Interface | Test agents in real-time |
-| Event Stream | View all events as they happen |
-| State Timeline | Scrub through execution history |
-| Breakpoints | Pause at specific nodes |
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Chat Interface | ✅ Done | Test agents in real-time |
+| Event Stream | ✅ Done | View all events as they happen |
+| Active Agent Highlight | ✅ Done | Visual indicator of running agent |
+| Iteration Counter | ✅ Done | Show loop iteration progress |
+| State Timeline | 🔲 Pending | Scrub through execution history |
+| Breakpoints | 🔲 Pending | Pause at specific nodes |
 
 ### 4. Code Export
 
-```rust
-// Generated from ADK Studio workflow
-let research_agent = LlmAgentBuilder::new("research")
-    .model(gemini_model.clone())
-    .instruction("Research the topic thoroughly")
-    .tools(vec![google_search, web_browse])
-    .build()?;
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Rust Code Generation | ✅ Done | Complete main.rs with all agents |
+| Cargo.toml Generation | ✅ Done | Correct dependencies |
+| Build & Run | ✅ Done | Compile and execute from UI |
+| Code Editor View | ✅ Done | Monaco editor with syntax highlighting |
 
-let writer_agent = LlmAgentBuilder::new("writer")
-    .model(gemini_model.clone())
-    .instruction("Write a comprehensive article")
-    .build()?;
+### 5. Templates & Menu
 
-let workflow = GraphAgent::builder("content_pipeline")
-    .node(AgentNode::new(research_agent))
-    .node(AgentNode::new(writer_agent))
-    .edge(START, "research")
-    .edge("research", "writer")
-    .edge("writer", END)
-    .build()?;
-```
+| Feature | Status | Description |
+|---------|--------|-------------|
+| MenuBar | ✅ Done | File, Templates, Help menus |
+| Template Gallery | ✅ Done | 7 ready-to-run templates |
+| New Project | ✅ Done | Create from menu |
+| Export Code | ✅ Done | View generated code |
+
+## UI/UX Requirements
+
+### Layout & Canvas
+
+| Requirement | Status | Description |
+|-------------|--------|-------------|
+| Auto-Layout | 🔲 Pending | Dagre/ELK layout for automatic node positioning |
+| Fit to View | 🔲 Pending | Button to zoom/pan to show all nodes |
+| Mini-Map | 🔲 Pending | Overview for large graphs |
+| Zoom Controls | ✅ Done | React Flow built-in controls |
+| Pan & Zoom | ✅ Done | Mouse/trackpad navigation |
+| Grid Snap | 🔲 Pending | Snap nodes to grid |
+| Node Alignment | 🔲 Pending | Align selected nodes |
+
+### Interaction
+
+| Requirement | Status | Description |
+|-------------|--------|-------------|
+| Drag & Drop Agents | ✅ Done | From palette to canvas |
+| Drag & Drop Tools | ✅ Done | From palette onto agents |
+| Click to Select | ✅ Done | Select agent to edit properties |
+| Multi-Select | 🔲 Pending | Shift+click or box select |
+| Copy/Paste | 🔲 Pending | Duplicate agents |
+| Undo/Redo | 🔲 Pending | History stack |
+| Keyboard Shortcuts | 🔲 Pending | Delete, copy, paste, etc. |
+| Context Menu | 🔲 Pending | Right-click options |
+
+### Visual Feedback
+
+| Requirement | Status | Description |
+|-------------|--------|-------------|
+| Active Agent Glow | ✅ Done | Green highlight during execution |
+| Selected Agent Ring | ✅ Done | Blue ring on selected |
+| Edge Animation | 🔲 Pending | Animated flow during execution |
+| Error Indicators | 🔲 Pending | Red highlight on invalid config |
+| Loading States | ✅ Done | Build progress indicator |
+| Tool Badges | ✅ Done | Show tools on agent nodes |
+
+### Responsive Design
+
+| Requirement | Status | Description |
+|-------------|--------|-------------|
+| Resizable Panels | 🔲 Pending | Drag to resize palette/properties/console |
+| Collapsible Panels | 🔲 Pending | Hide/show panels |
+| Mobile Support | 🔲 Pending | Touch-friendly on tablets |
+| Dark Theme | ✅ Done | Default dark theme |
+| Light Theme | 🔲 Pending | Optional light theme |
+
+### Accessibility
+
+| Requirement | Status | Description |
+|-------------|--------|-------------|
+| Keyboard Navigation | 🔲 Pending | Tab through elements |
+| Screen Reader | 🔲 Pending | ARIA labels |
+| High Contrast | 🔲 Pending | Accessible color scheme |
+| Focus Indicators | 🔲 Pending | Visible focus states |
+
+## Tool Support
+
+| Tool | Status | Description |
+|------|--------|-------------|
+| Function Tool | ✅ Done | Custom code with parameters |
+| MCP Tool | ✅ Done | Model Context Protocol servers |
+| Browser Tool | ✅ Done | Web browsing capabilities |
+| Google Search | ✅ Done | Grounding with search |
+| Exit Loop | ✅ Done | Break out of loop agents |
+| Load Artifact | ✅ Done | Load saved artifacts |
 
 ## Architecture
 
@@ -116,15 +185,16 @@ let workflow = GraphAgent::builder("content_pipeline")
 │         └────────────────┼────────────────┘                │
 │                          │                                 │
 │                    React + TypeScript                       │
+│                    React Flow + Zustand                     │
 └──────────────────────────┼─────────────────────────────────┘
-                           │ WebSocket / REST
+                           │ SSE / REST
 ┌──────────────────────────┼─────────────────────────────────┐
 │                          │                                 │
 │  ┌───────────────────────▼────────────────────────────┐   │
 │  │                 ADK Studio Server                   │   │
 │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐           │   │
-│  │  │ Project  │ │  Agent   │ │  Runner  │           │   │
-│  │  │ Manager  │ │ Compiler │ │  Engine  │           │   │
+│  │  │ Project  │ │  Code    │ │  Build   │           │   │
+│  │  │ Storage  │ │ Generator│ │  Runner  │           │   │
 │  │  └──────────┘ └──────────┘ └──────────┘           │   │
 │  └────────────────────────────────────────────────────┘   │
 │                                                            │
@@ -132,52 +202,93 @@ let workflow = GraphAgent::builder("content_pipeline")
 └────────────────────────────────────────────────────────────┘
 ```
 
-## Implementation Plan
+## Implementation Progress
 
-### Weeks 1-2: Backend Foundation
-- [ ] `adk-studio` crate structure
-- [ ] Project/workflow JSON schema
-- [ ] Agent compilation from JSON
-- [ ] REST API endpoints
-- [ ] WebSocket for live updates
+### ✅ Phase 1: Backend Foundation (Complete)
+- [x] `adk-studio` crate structure
+- [x] Project/workflow JSON schema
+- [x] Agent compilation from JSON (codegen)
+- [x] REST API endpoints
+- [x] SSE for live streaming
 
-### Weeks 3-4: Frontend Canvas
-- [ ] React app with React Flow
-- [ ] Agent palette component
-- [ ] Drag-and-drop to canvas
-- [ ] Node property editor
-- [ ] Edge connections
+### ✅ Phase 2: Frontend Canvas (Complete)
+- [x] React app with React Flow
+- [x] Agent palette component
+- [x] Drag-and-drop to canvas
+- [x] Node property editor
+- [x] Edge connections
+- [x] Tool palette with drag onto agents
 
-### Weeks 5-6: Workflow Editor
-- [ ] Graph node types
-- [ ] Condition editor (code/visual)
-- [ ] Loop configuration
-- [ ] Parallel execution groups
-- [ ] State channel definition
+### ✅ Phase 3: Agent Types (Complete)
+- [x] LLM Agent
+- [x] Sequential Agent (with sub-agents)
+- [x] Loop Agent (with max_iterations, exit_loop)
+- [x] Parallel Agent
+- [x] Router Agent (with routes)
 
-### Weeks 7-8: Testing & Export
-- [ ] Chat testing interface
-- [ ] Event stream viewer
-- [ ] Execution timeline
-- [ ] Rust code export
-- [ ] Template gallery
+### ✅ Phase 4: Testing & Export (Complete)
+- [x] Chat testing interface
+- [x] Event stream viewer (trace tab)
+- [x] Rust code export
+- [x] Build from UI
+- [x] Template gallery (7 templates)
+- [x] MenuBar (File, Templates, Help)
+
+### 🔲 Phase 5: UI Polish (Pending)
+- [ ] Auto-layout (Dagre/ELK)
+- [ ] Fit to view
+- [ ] Mini-map
+- [ ] Resizable panels
+- [ ] Undo/Redo
+- [ ] Copy/Paste
+- [ ] Keyboard shortcuts
+- [ ] Edge animation during execution
+
+### 🔲 Phase 6: Debugging (Pending)
+- [ ] State inspector
+- [ ] Execution timeline with scrubbing
+- [ ] Breakpoints
+- [ ] Step-through execution
+
+### 🔲 Phase 7: Advanced (Future)
+- [ ] Project import
+- [ ] Version history
+- [ ] Collaboration features
+- [ ] Deploy to cloud
 
 ## Tech Stack
 
 | Component | Technology |
 |-----------|------------|
-| Frontend | React, TypeScript, React Flow, Tailwind |
-| Backend | Rust, Axum, adk-server |
-| State | Zustand or Redux |
-| Canvas | React Flow or Rete.js |
-| Code Gen | Handlebars templates |
+| Frontend | React 18, TypeScript, React Flow, Tailwind |
+| Backend | Rust, Axum, adk-studio |
+| State | Zustand |
+| Canvas | React Flow |
+| Code Editor | Monaco Editor |
+| Code Gen | Rust string templates |
 
 ## Success Metrics
 
-- [ ] Create agent in <2 minutes without code
-- [ ] Export generates compilable Rust code
-- [ ] <500ms latency for live testing
-- [ ] Import/export project files
+| Metric | Status |
+|--------|--------|
+| Create agent in <2 minutes without code | ✅ Achieved |
+| Export generates compilable Rust code | ✅ Achieved |
+| <500ms latency for live testing | ✅ Achieved |
+| Import/export project files | 🔲 Export only |
+
+## Test Coverage
+
+- 26 integration tests covering all agent types
+- Codegen demo example for all templates
+
+## Templates Included
+
+1. 💬 Simple Chat Agent - Basic conversational agent
+2. 🔍 Research Pipeline - Sequential: Researcher → Summarizer
+3. ✨ Content Refiner - Loop agent with iterative improvement
+4. ⚡ Parallel Analyzer - Concurrent sentiment + entity extraction
+5. 🔀 Support Router - Route to tech/billing/general agents
+6. 🌐 Web Browser Agent - LLM with browser tools
 
 ## Related
 
