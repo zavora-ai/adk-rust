@@ -13,6 +13,7 @@ interface Props {
   onClose: () => void;
   onSelectTool: (toolId: string) => void;
   onRemoveTool: (toolType: string) => void;
+  onAddTool?: (agentId: string, toolType: string) => void;
 }
 
 export function PropertiesPanel({ nodeId, agent, agents, toolConfigs, onUpdate, onRename, onAddSubAgent, onClose, onSelectTool, onRemoveTool }: Props) {
@@ -28,6 +29,27 @@ export function PropertiesPanel({ nodeId, agent, agents, toolConfigs, onUpdate, 
       setNewName(nodeId);
     }
     setEditingName(false);
+  };
+
+  const handleRemoveToolFromSubAgent = (agentId: string, toolType: string) => {
+    const subAgent = agents[agentId];
+    if (subAgent) {
+      onUpdate(agentId, { tools: subAgent.tools.filter(t => t !== toolType) });
+    }
+  };
+
+  const handleAddToolToSubAgent = (agentId: string, toolType: string) => {
+    const subAgent = agents[agentId];
+    if (subAgent) {
+      let toolId = toolType;
+      if (toolType === 'function' || toolType === 'mcp') {
+        const existing = subAgent.tools.filter(t => t.startsWith(toolType));
+        toolId = `${toolType}_${existing.length + 1}`;
+      } else if (subAgent.tools.includes(toolType)) {
+        return;
+      }
+      onUpdate(agentId, { tools: [...subAgent.tools, toolId] });
+    }
   };
 
   return (
@@ -51,7 +73,7 @@ export function PropertiesPanel({ nodeId, agent, agents, toolConfigs, onUpdate, 
       </div>
 
       {isContainer ? (
-        <ContainerProperties nodeId={nodeId} agent={agent} agents={agents} onUpdate={onUpdate} onAddSubAgent={onAddSubAgent} />
+        <ContainerProperties nodeId={nodeId} agent={agent} agents={agents} onUpdate={onUpdate} onAddSubAgent={onAddSubAgent} onSelectTool={onSelectTool} onRemoveTool={handleRemoveToolFromSubAgent} onAddTool={handleAddToolToSubAgent} />
       ) : agent.type === 'router' ? (
         <RouterProperties nodeId={nodeId} agent={agent} onUpdate={onUpdate} />
       ) : (
@@ -61,7 +83,9 @@ export function PropertiesPanel({ nodeId, agent, agents, toolConfigs, onUpdate, 
   );
 }
 
-function ContainerProperties({ nodeId, agent, agents, onUpdate, onAddSubAgent }: { nodeId: string; agent: AgentSchema; agents: Record<string, AgentSchema>; onUpdate: Props['onUpdate']; onAddSubAgent: () => void }) {
+function ContainerProperties({ nodeId, agent, agents, onUpdate, onAddSubAgent, onSelectTool, onRemoveTool, onAddTool }: { nodeId: string; agent: AgentSchema; agents: Record<string, AgentSchema>; onUpdate: Props['onUpdate']; onAddSubAgent: () => void; onSelectTool: (id: string) => void; onRemoveTool: (agentId: string, toolType: string) => void; onAddTool: (agentId: string, toolType: string) => void }) {
+  const [selectedSubAgent, setSelectedSubAgent] = React.useState<string | null>(null);
+  
   return (
     <div>
       {agent.type === 'loop' && (
@@ -88,21 +112,52 @@ function ContainerProperties({ nodeId, agent, agents, onUpdate, onAddSubAgent }:
       {(agent.sub_agents || []).map((subId, idx) => {
         const subAgent = agents[subId];
         if (!subAgent) return null;
+        const isExpanded = selectedSubAgent === subId;
         return (
-          <div key={subId} className="mb-4 p-2 bg-gray-800 rounded">
-            <div className="text-sm font-medium mb-2">{agent.type === 'parallel' ? '∥' : `${idx + 1}.`} {subId}</div>
-            <label className="block text-xs text-gray-400 mb-1">Model</label>
-            <input
-              className="w-full px-2 py-1 bg-studio-bg border border-gray-600 rounded text-xs mb-2"
-              value={subAgent.model || ''}
-              onChange={(e) => onUpdate(subId, { model: e.target.value })}
-            />
-            <label className="block text-xs text-gray-400 mb-1">Instruction</label>
-            <textarea
-              className="w-full px-2 py-1 bg-studio-bg border border-gray-600 rounded text-xs h-20"
-              value={subAgent.instruction}
-              onChange={(e) => onUpdate(subId, { instruction: e.target.value })}
-            />
+          <div key={subId} className="mb-2 bg-gray-800 rounded overflow-hidden">
+            <div 
+              className="p-2 cursor-pointer hover:bg-gray-700 flex items-center justify-between"
+              onClick={() => setSelectedSubAgent(isExpanded ? null : subId)}
+            >
+              <span className="text-sm font-medium">{agent.type === 'parallel' ? '∥' : `${idx + 1}.`} {subId}</span>
+              <span className="text-gray-500 text-xs">{isExpanded ? '▼' : '▶'}</span>
+            </div>
+            {isExpanded && (
+              <div className="p-2 pt-0 border-t border-gray-700">
+                <label className="block text-xs text-gray-400 mb-1">Model</label>
+                <input
+                  className="w-full px-2 py-1 bg-studio-bg border border-gray-600 rounded text-xs mb-2"
+                  value={subAgent.model || ''}
+                  onChange={(e) => onUpdate(subId, { model: e.target.value })}
+                />
+                <label className="block text-xs text-gray-400 mb-1">Instruction</label>
+                <textarea
+                  className="w-full px-2 py-1 bg-studio-bg border border-gray-600 rounded text-xs h-16 mb-2"
+                  value={subAgent.instruction}
+                  onChange={(e) => onUpdate(subId, { instruction: e.target.value })}
+                />
+                <label className="block text-xs text-gray-400 mb-1">Tools</label>
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {(subAgent.tools || []).map(t => {
+                    const baseType = t.startsWith('function') ? 'function' : t.startsWith('mcp') ? 'mcp' : t;
+                    const tool = TOOL_TYPES.find(tt => tt.type === baseType);
+                    const toolId = `${subId}_${t}`;
+                    return (
+                      <span key={t} className="text-xs px-2 py-0.5 bg-gray-700 rounded flex items-center gap-1 cursor-pointer hover:bg-gray-600" onClick={() => onSelectTool(toolId)}>
+                        {tool?.icon} {t} <button onClick={(e) => { e.stopPropagation(); onRemoveTool(subId, t); }} className="text-red-400 hover:text-red-300">×</button>
+                      </span>
+                    );
+                  })}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {TOOL_TYPES.filter(t => !subAgent.tools?.includes(t.type) || t.type === 'function' || t.type === 'mcp').map(t => (
+                    <button key={t.type} onClick={() => onAddTool(subId, t.type)} className="text-xs px-2 py-0.5 bg-blue-800 hover:bg-blue-700 rounded">
+                      + {t.icon}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         );
       })}
