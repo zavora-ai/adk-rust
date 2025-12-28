@@ -28,13 +28,12 @@ async fn call_llm(client: &Arc<OpenAIClient>, prompt: &str) -> Result<String, Gr
 
     let mut result = String::new();
     while let Some(response_result) = stream.next().await {
-        if let Ok(response) = response_result {
-            if let Some(content) = response.content {
-                for part in content.parts {
-                    if let Some(text) = part.text() {
-                        result.push_str(text);
-                    }
-                }
+        let Ok(response) = response_result else { continue };
+        let Some(content) = response.content else { continue };
+
+        for part in content.parts {
+            if let Some(text) = part.text() {
+                result.push_str(text);
             }
         }
     }
