@@ -204,33 +204,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         std::io::stdout().flush().ok();
                     }
                     ServerEvent::FunctionCallDone { call_id, name, arguments, .. } => {
-                        if name == "transfer_to_agent" {
-                            if let Ok(args) = serde_json::from_str::<serde_json::Value>(&arguments)
-                            {
-                                let agent_name = args
-                                    .get("agent_name")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("unknown");
-                                let reason = args
-                                    .get("reason")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("No reason provided");
+                        if name == "transfer_to_agent"
+                            && let Ok(args) = serde_json::from_str::<serde_json::Value>(&arguments)
+                        {
+                            let agent_name = args
+                                .get("agent_name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            let reason = args
+                                .get("reason")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("No reason provided");
 
-                                handoff_detected = Some(agent_name.to_string());
-                                println!("\n\n🔄 [Handoff to: {} - {}]", agent_name, reason);
+                            handoff_detected = Some(agent_name.to_string());
+                            println!("\n\n🔄 [Handoff to: {} - {}]", agent_name, reason);
 
-                                // Send tool response to acknowledge the transfer
-                                let response = ToolResponse::new(
-                                    &call_id,
-                                    json!({
-                                        "status": "transferred",
-                                        "agent": agent_name,
-                                        "message": format!("Successfully transferred to {}", agent_name)
-                                    }),
-                                );
-                                session.send_tool_response(response).await?;
-                                awaiting_tool_response = true;
-                            }
+                            // Send tool response to acknowledge the transfer
+                            let response = ToolResponse::new(
+                                &call_id,
+                                json!({
+                                    "status": "transferred",
+                                    "agent": agent_name,
+                                    "message": format!("Successfully transferred to {}", agent_name)
+                                }),
+                            );
+                            session.send_tool_response(response).await?;
+                            awaiting_tool_response = true;
                         }
                     }
                     ServerEvent::ResponseDone { .. } => {

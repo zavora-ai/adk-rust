@@ -10,41 +10,8 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_HOME: /home/runner/.cargo
   CARGO_INCREMENTAL: 0
-  CACHE_ON_FAILURE: false
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-    # Install mold linker - much more memory efficient than ld
-    - name: Install mold linker
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y mold
-    - uses: Swatinem/rust-cache@v2
-      with:
-        key: test-${{ runner.os }}
-    # Use mold linker and reduce debug info to prevent OOM
-    # GitHub Actions runners have limited RAM (7GB)
-    - name: Run tests
-      env:
-        RUSTFLAGS: "-C link-arg=-fuse-ld=mold -C debuginfo=1"
-      run: cargo test --all-features -j 2
-
-  clippy:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        components: clippy
-    - uses: Swatinem/rust-cache@v2
-      with:
-        key: clippy-${{ runner.os }}
-    - run: cargo clippy --all-targets --all-features -- -D warnings
-
   fmt:
     runs-on: ubuntu-latest
     steps:
@@ -53,3 +20,59 @@ jobs:
       with:
         components: rustfmt
     - run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Free disk space
+      run: |
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /usr/share/dotnet
+        df -h
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+    - name: Install mold linker
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y mold
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: ci-${{ runner.os }}
+        cache-on-failure: true
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+    - name: Run clippy
+      env:
+        RUSTFLAGS: "-C link-arg=-fuse-ld=mold -C debuginfo=0"
+      run: cargo clippy --all-targets --all-features -- -D warnings
+    - name: Cleanup
+      if: always()
+      run: |
+        rm -rf target/debug/deps/*.rlib target/debug/build 2>/dev/null || true
+
+  test:
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Free disk space
+      run: |
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /usr/share/dotnet
+        df -h
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Install mold linker
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y mold
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: ci-${{ runner.os }}
+        cache-on-failure: true
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+    - name: Run tests
+      env:
+        RUSTFLAGS: "-C link-arg=-fuse-ld=mold -C debuginfo=0"
+      run: cargo test --all-features -j 2
+

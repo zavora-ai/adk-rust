@@ -4,17 +4,16 @@ use crate::schema::{AgentSchema, AgentType, ProjectSchema, ToolConfig};
 use anyhow::Result;
 
 pub fn generate_rust_project(project: &ProjectSchema) -> Result<GeneratedProject> {
-    let mut files = Vec::new();
-
-    files.push(GeneratedFile {
-        path: "src/main.rs".to_string(),
-        content: generate_main_rs(project),
-    });
-
-    files.push(GeneratedFile {
-        path: "Cargo.toml".to_string(),
-        content: generate_cargo_toml(project),
-    });
+    let files = vec![
+        GeneratedFile {
+            path: "src/main.rs".to_string(),
+            content: generate_main_rs(project),
+        },
+        GeneratedFile {
+            path: "Cargo.toml".to_string(),
+            content: generate_cargo_toml(project),
+        },
+    ];
 
     Ok(GeneratedProject { files })
 }
@@ -185,7 +184,7 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
                     })
                     .collect();
 
-                code.push_str(&format!("        .add_conditional_edges(\n"));
+                code.push_str("        .add_conditional_edges(\n");
                 code.push_str(&format!("            \"{}\",\n", edge.from));
                 code.push_str("            Router::by_field(\"classification\"),\n");
                 code.push_str(&format!("            [{}],\n", conditions.join(", ")));
@@ -418,7 +417,7 @@ fn generate_llm_node(
     // Add MCP tools if present (only for configured MCP tools)
     for (idx, mcp_tool) in mcp_tools.iter().enumerate() {
         let tool_id = format!("{}_{}", id, mcp_tool);
-        if project.tool_configs.get(&tool_id).is_some() {
+        if project.tool_configs.contains_key(&tool_id) {
             let var_suffix = if idx == 0 { "mcp".to_string() } else { format!("mcp_{}", idx + 1) };
             code.push_str(&format!("    for tool in {}_{}_tools {{\n", id, var_suffix));
             code.push_str(&format!("        {}_builder = {}_builder.tool(tool);\n", id, id));
@@ -450,7 +449,7 @@ fn generate_llm_node(
                     id, id
                 )),
                 "browser" => {
-                    code.push_str(&format!("    for tool in browser_toolset.tools(Arc::new(MinimalContext::new())).await? {{\n"));
+                    code.push_str("    for tool in browser_toolset.tools(Arc::new(MinimalContext::new())).await? {\n");
                     code.push_str(&format!(
                         "        {}_builder = {}_builder.tool(tool);\n",
                         id, id
@@ -582,7 +581,7 @@ fn generate_container_node(id: &str, agent: &AgentSchema, project: &ProjectSchem
                 } else if tool_type.starts_with("mcp") {
                     // Only generate tool loop if config exists (MCP setup was generated above)
                     let tool_id = format!("{}_{}", sub_id, tool_type);
-                    if project.tool_configs.get(&tool_id).is_some() {
+                    if project.tool_configs.contains_key(&tool_id) {
                         let var_suffix = tool_type.replace("mcp_", "mcp");
                         code.push_str(&format!(
                             "    for tool in {}_{}_tools {{\n",
@@ -702,7 +701,7 @@ fn generate_function_tool(config: &crate::schema::FunctionToolConfig) -> String 
         code.push_str(&extract);
     }
 
-    code.push_str("\n");
+    code.push('\n');
 
     // Insert user's code or generate placeholder
     if config.code.is_empty() {
@@ -713,15 +712,15 @@ fn generate_function_tool(config: &crate::schema::FunctionToolConfig) -> String 
             .map(|p| format!("        \"{}\": {}", p.name, p.name))
             .collect::<Vec<_>>()
             .join(",\n");
-        code.push_str(&format!("    // TODO: Add function implementation\n"));
-        code.push_str(&format!("    Ok(json!({{\n"));
+        code.push_str("    // TODO: Add function implementation\n");
+        code.push_str("    Ok(json!({\n");
         code.push_str(&format!("        \"function\": \"{}\",\n", fn_name));
         if !param_json.is_empty() {
             code.push_str(&param_json);
             code.push_str(",\n");
         }
-        code.push_str(&format!("        \"status\": \"not_implemented\"\n"));
-        code.push_str(&format!("    }}))\n"));
+        code.push_str("        \"status\": \"not_implemented\"\n");
+        code.push_str("    }))\n");
     } else {
         // Use user's actual code
         code.push_str("    // User-defined implementation\n");
@@ -738,9 +737,7 @@ fn generate_function_schema(config: &crate::schema::FunctionToolConfig) -> Strin
     let mut code = String::new();
     let struct_name = to_pascal_case(&config.name);
 
-    code.push_str(&format!(
-        "#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]\n"
-    ));
+    code.push_str("#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]\n");
     code.push_str(&format!("struct {}Args {{\n", struct_name));
 
     for param in &config.parameters {

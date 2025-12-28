@@ -181,12 +181,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     print!("Assistant: ");
     while let Some(event) = stream.next().await {
-        if let Ok(e) = event {
-            if let Some(content) = e.llm_response.content {
-                for part in content.parts {
-                    if let adk_core::Part::Text { text } = part {
-                        print!("{}", text);
-                    }
+        if let Ok(e) = event
+            && let Some(content) = e.llm_response.content
+        {
+            for part in content.parts {
+                if let adk_core::Part::Text { text } = part {
+                    print!("{}", text);
                 }
             }
         }
@@ -203,12 +203,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     print!("Assistant: ");
     while let Some(event) = stream.next().await {
-        if let Ok(e) = event {
-            if let Some(content) = e.llm_response.content {
-                for part in content.parts {
-                    if let adk_core::Part::Text { text } = part {
-                        print!("{}", text);
-                    }
+        if let Ok(e) = event
+            && let Some(content) = e.llm_response.content
+        {
+            for part in content.parts {
+                if let adk_core::Part::Text { text } = part {
+                    print!("{}", text);
                 }
             }
         }
@@ -225,12 +225,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     print!("Assistant: ");
     while let Some(event) = stream.next().await {
-        if let Ok(e) = event {
-            if let Some(content) = e.llm_response.content {
-                for part in content.parts {
-                    if let adk_core::Part::Text { text } = part {
-                        print!("{}", text);
-                    }
+        if let Ok(e) = event
+            && let Some(content) = e.llm_response.content
+        {
+            for part in content.parts {
+                if let adk_core::Part::Text { text } = part {
+                    print!("{}", text);
                 }
             }
         }

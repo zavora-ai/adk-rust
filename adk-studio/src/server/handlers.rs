@@ -248,7 +248,7 @@ pub async fn build_project_stream(
         if success {
             let binary = shared_target.join("debug").join(&project_name);
             yield Ok(Event::default().event("output").data(format!("\n✓ Build completed in {:.1}s", elapsed.as_secs_f32())));
-            yield Ok(Event::default().event("done").data(binary.to_string_lossy().to_string()));
+            yield Ok(Event::default().event("done").data(binary.to_string_lossy()));
         } else {
             yield Ok(Event::default().event("output").data(format!("\n✗ Build failed after {:.1}s", elapsed.as_secs_f32())));
             yield Ok(Event::default().event("error").data("Build failed"));

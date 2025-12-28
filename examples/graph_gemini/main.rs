@@ -32,12 +32,12 @@ async fn call_gemini(model: &Arc<GeminiModel>, prompt: &str) -> Result<String, G
 
     let mut result = String::new();
     while let Some(response_result) = stream.next().await {
-        if let Ok(response) = response_result {
-            if let Some(content) = response.content {
-                for part in content.parts {
-                    if let Some(text) = part.text() {
-                        result.push_str(text);
-                    }
+        if let Ok(response) = response_result
+            && let Some(content) = response.content
+        {
+            for part in content.parts {
+                if let Some(text) = part.text() {
+                    result.push_str(text);
                 }
             }
         }

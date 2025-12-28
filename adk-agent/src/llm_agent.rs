@@ -104,8 +104,8 @@ impl LlmAgentBuilder {
             after_model_callbacks: Vec::new(),
             before_tool_callbacks: Vec::new(),
             after_tool_callbacks: Vec::new(),
-            input_guardrails: GuardrailSet::default(),
-            output_guardrails: GuardrailSet::default(),
+            input_guardrails: GuardrailSet::new(),
+            output_guardrails: GuardrailSet::new(),
         }
     }
 

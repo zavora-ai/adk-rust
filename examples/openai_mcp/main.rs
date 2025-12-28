@@ -171,12 +171,12 @@ async fn main() -> anyhow::Result<()> {
 
     println!("\nAgent response:");
     while let Some(result) = stream.next().await {
-        if let Ok(event) = result {
-            if let Some(content) = event.llm_response.content {
-                for part in content.parts {
-                    if let Part::Text { text } = part {
-                        print!("{}", text);
-                    }
+        if let Ok(event) = result
+            && let Some(content) = event.llm_response.content
+        {
+            for part in content.parts {
+                if let Part::Text { text } = part {
+                    print!("{}", text);
                 }
             }
         }
