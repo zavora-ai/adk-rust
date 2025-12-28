@@ -213,7 +213,10 @@ async fn handle_message_send(
             }
         },
         None => {
-            return Json(JsonRpcResponse::error(id, JsonRpcError::invalid_params("Missing params")));
+            return Json(JsonRpcResponse::error(
+                id,
+                JsonRpcError::invalid_params("Missing params"),
+            ));
         }
     };
 
@@ -287,7 +290,10 @@ async fn handle_tasks_get(
             }
         },
         None => {
-            return Json(JsonRpcResponse::error(id, JsonRpcError::invalid_params("Missing params")));
+            return Json(JsonRpcResponse::error(
+                id,
+                JsonRpcError::invalid_params("Missing params"),
+            ));
         }
     };
 
@@ -314,7 +320,10 @@ async fn handle_tasks_cancel(
             }
         },
         None => {
-            return Json(JsonRpcResponse::error(id, JsonRpcError::invalid_params("Missing params")));
+            return Json(JsonRpcResponse::error(
+                id,
+                JsonRpcError::invalid_params("Missing params"),
+            ));
         }
     };
 
