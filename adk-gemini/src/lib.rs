@@ -1,4 +1,4 @@
-//! # gemini-rust
+//! # adk-gemini
 //!
 //! A Rust client library for Google's Gemini 2.0 API.
 //!
@@ -22,7 +22,7 @@
 //! For most use cases, import from the prelude:
 //!
 //! ```rust
-//! use gemini_rust::prelude::*;
+//! use adk_gemini::prelude::*;
 //! ```
 //!
 //! For more specialized types, import them directly from the crate root or their

@@ -4,7 +4,7 @@
 //! in the Gemini Rust SDK. Import everything with:
 //!
 //! ```rust
-//! use gemini_rust::prelude::*;
+//! use adk_gemini::prelude::*;
 //! ```
 //!
 //! This prelude includes only the essential types that most users will need.

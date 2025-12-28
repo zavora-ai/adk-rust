@@ -210,7 +210,7 @@ impl GeminiClient {
     ///
     /// Basic HTTP operations:
     /// ```no_run
-    /// # use gemini_rust::client::*;
+    /// # use adk_gemini::client::*;
     /// # use reqwest::Response;
     /// # use url::Url;
     /// # use serde_json::Value;
@@ -245,7 +245,7 @@ impl GeminiClient {
     ///
     /// Request returning a stream:
     /// ```no_run
-    /// # use gemini_rust::client::*;
+    /// # use adk_gemini::client::*;
     /// # use reqwest::Response;
     /// # use url::Url;
     /// # use serde_json::Value;
@@ -704,7 +704,7 @@ impl GeminiClient {
 /// ## Basic usage
 ///
 /// ```no_run
-/// use gemini_rust::{GeminiBuilder, Model};
+/// use adk_gemini::{GeminiBuilder, Model};
 ///
 /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let gemini = GeminiBuilder::new("YOUR_API_KEY")
@@ -717,7 +717,7 @@ impl GeminiClient {
 /// ## With proxy configuration
 ///
 /// ```no_run
-/// use gemini_rust::{GeminiBuilder, Model};
+/// use adk_gemini::{GeminiBuilder, Model};
 /// use reqwest::{ClientBuilder, Proxy};
 ///
 /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {

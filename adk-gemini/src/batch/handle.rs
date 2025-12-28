@@ -45,7 +45,7 @@
 //!
 //! ## Example usage:
 //! ```rust,no_run
-//! use gemini_rust::{Gemini, Message};
+//! use adk_gemini::{Gemini, Message};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
