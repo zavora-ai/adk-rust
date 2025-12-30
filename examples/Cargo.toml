@@ -399,12 +399,23 @@ name = "ollama_supervisor"
 path = "ollama_supervisor/main.rs"
 required-features = ["ollama"]
 
+[[example]]
+name = "groq_basic"
+path = "groq_basic/main.rs"
+required-features = ["groq"]
+
+[[example]]
+name = "groq_tools"
+path = "groq_tools/main.rs"
+required-features = ["groq"]
+
 [features]
 default = []
 openai = ["adk-model/openai"]
 anthropic = ["adk-model/anthropic"]
 deepseek = ["adk-model/deepseek"]
 ollama = ["adk-model/ollama"]
+groq = ["adk-model/groq"]
 realtime-openai = ["adk-realtime/openai"]
 realtime-gemini = ["adk-realtime/gemini"]
 browser = ["dep:adk-browser", "dep:reqwest"]

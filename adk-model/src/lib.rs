@@ -12,6 +12,7 @@
 //! - `AnthropicClient` - Anthropic Claude models (Claude 4, Claude 3.5, etc.) - requires `anthropic` feature
 //! - `DeepSeekClient` - DeepSeek models (deepseek-chat, deepseek-reasoner) - requires `deepseek` feature
 //! - `OllamaModel` - Local LLMs via Ollama (LLaMA, Mistral, Qwen, etc.) - requires `ollama` feature
+//! - `GroqClient` - Groq ultra-fast inference (LLaMA, Mixtral, Gemma) - requires `groq` feature
 //! - [`MockLlm`] - Mock LLM for testing
 //!
 //! ## Quick Start
@@ -112,6 +113,8 @@ pub mod anthropic;
 pub mod deepseek;
 #[cfg(feature = "gemini")]
 pub mod gemini;
+#[cfg(feature = "groq")]
+pub mod groq;
 pub mod mock;
 #[cfg(feature = "ollama")]
 pub mod ollama;
@@ -124,6 +127,8 @@ pub use anthropic::AnthropicClient;
 pub use deepseek::{DeepSeekClient, DeepSeekConfig};
 #[cfg(feature = "gemini")]
 pub use gemini::GeminiModel;
+#[cfg(feature = "groq")]
+pub use groq::{GroqClient, GroqConfig};
 pub use mock::MockLlm;
 #[cfg(feature = "ollama")]
 pub use ollama::{OllamaConfig, OllamaModel};

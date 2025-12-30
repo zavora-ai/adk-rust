@@ -38,5 +38,6 @@ openai = ["dep:async-openai"]
 anthropic = ["dep:claudius"]
 deepseek = ["dep:reqwest"]
 ollama = ["dep:ollama-rs", "dep:schemars"]
-all-providers = ["gemini", "openai", "anthropic", "deepseek", "ollama"]
+groq = ["dep:reqwest"]
+all-providers = ["gemini", "openai", "anthropic", "deepseek", "ollama", "groq"]
 
