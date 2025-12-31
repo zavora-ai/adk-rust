@@ -422,6 +422,21 @@ name = "auth_sso"
 path = "auth_sso/main.rs"
 required-features = ["sso"]
 
+[[example]]
+name = "auth_jwt"
+path = "auth_jwt/main.rs"
+required-features = ["sso"]
+
+[[example]]
+name = "auth_oidc"
+path = "auth_oidc/main.rs"
+required-features = ["sso"]
+
+[[example]]
+name = "auth_google"
+path = "auth_google/main.rs"
+required-features = ["sso"]
+
 [features]
 default = []
 openai = ["adk-model/openai"]
