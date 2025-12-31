@@ -95,6 +95,11 @@ impl AccessControl {
     pub fn role_names(&self) -> Vec<&str> {
         self.roles.keys().map(|s| s.as_str()).collect()
     }
+
+    /// Get a role by name.
+    pub fn get_role(&self, name: &str) -> Option<&Role> {
+        self.roles.get(name)
+    }
 }
 
 /// Builder for AccessControl.

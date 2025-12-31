@@ -417,6 +417,11 @@ path = "auth_basic/main.rs"
 name = "auth_audit"
 path = "auth_audit/main.rs"
 
+[[example]]
+name = "auth_sso"
+path = "auth_sso/main.rs"
+required-features = ["sso"]
+
 [features]
 default = []
 openai = ["adk-model/openai"]
@@ -428,6 +433,7 @@ realtime-openai = ["adk-realtime/openai"]
 realtime-gemini = ["adk-realtime/gemini"]
 browser = ["dep:adk-browser", "dep:reqwest"]
 guardrails = ["adk-agent/guardrails", "dep:adk-guardrail"]
+sso = ["adk-auth/sso"]
 
 [dependencies]
 adk-core.workspace = true

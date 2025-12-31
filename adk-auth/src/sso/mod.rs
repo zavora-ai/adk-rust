@@ -14,25 +14,25 @@
 //! # Quick Start
 //!
 //! ```rust,ignore
-//! use adk_auth::sso::{JwtValidator, TokenClaims};
+//! use adk_auth::sso::{GoogleProvider, TokenValidator};
 //!
-//! let validator = JwtValidator::builder()
-//!     .issuer("https://accounts.google.com")
-//!     .audience("your-client-id")
-//!     .build()?;
-//!
-//! let claims = validator.validate(token).await?;
+//! let provider = GoogleProvider::new("your-client-id");
+//! let claims = provider.validate(token).await?;
 //! println!("User: {}", claims.sub);
 //! ```
 
 mod claims;
 mod error;
 mod jwks;
+mod mapper;
+mod sso_access;
 mod validator;
 
-pub use claims::TokenClaims;
+pub use claims::{Audience, TokenClaims};
 pub use error::TokenError;
 pub use jwks::JwksCache;
+pub use mapper::{ClaimsMapper, ClaimsMapperBuilder, UserIdClaim};
+pub use sso_access::{SsoAccessControl, SsoAccessControlBuilder, SsoError};
 pub use validator::{JwtValidator, JwtValidatorBuilder, TokenValidator};
 
 // Re-export providers when available
