@@ -47,11 +47,13 @@ jobs:
     - name: Run clippy
       env:
         RUSTFLAGS: "-C link-arg=-fuse-ld=mold -C debuginfo=0"
-      run: cargo clippy -p adk-mistralrs --all-targets -- -D warnings
+      working-directory: adk-mistralrs
+      run: cargo clippy --all-targets -- -D warnings
     
     - name: Run tests
       env:
         RUSTFLAGS: "-C link-arg=-fuse-ld=mold -C debuginfo=0"
+      working-directory: adk-mistralrs
       run: |
-        cargo test -p adk-mistralrs --lib --tests
-        cargo test -p adk-mistralrs --doc
+        cargo test --lib --tests
+        cargo test --doc
