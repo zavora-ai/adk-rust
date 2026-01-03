@@ -165,12 +165,10 @@ async fn run_interactive(multi_model: MistralRsMultiModel) -> anyhow::Result<()>
                             Ok(()) => println!("Default model set to: {}", name),
                             Err(e) => println!("Error: {}", e),
                         }
+                    } else if let Some(default) = multi_model.default_model().await {
+                        println!("Current default: {}", default);
                     } else {
-                        if let Some(default) = multi_model.default_model().await {
-                            println!("Current default: {}", default);
-                        } else {
-                            println!("No default model set");
-                        }
+                        println!("No default model set");
                     }
                 }
                 "/compare" => {
@@ -243,12 +241,12 @@ async fn compare_models(multi_model: &MistralRsMultiModel, message: &str) -> any
         match multi_model.generate_with_model(Some(&model_name), request, false).await {
             Ok(mut stream) => {
                 while let Some(response) = stream.next().await {
-                    if let Ok(resp) = response {
-                        if let Some(content) = resp.content {
-                            for part in content.parts {
-                                if let Some(text) = part.text() {
-                                    println!("{}", text);
-                                }
+                    if let Ok(resp) = response
+                        && let Some(content) = resp.content
+                    {
+                        for part in content.parts {
+                            if let Some(text) = part.text() {
+                                println!("{}", text);
                             }
                         }
                     }

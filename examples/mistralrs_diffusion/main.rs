@@ -194,8 +194,8 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 // Handle special commands
-                if line.starts_with("/size ") {
-                    let parts: Vec<&str> = line[6..].split('x').collect();
+                if let Some(stripped) = line.strip_prefix("/size ") {
+                    let parts: Vec<&str> = stripped.split('x').collect();
                     if parts.len() == 2 {
                         if let (Ok(w), Ok(h)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
                             println!("Image size set to {}x{}", w, h);
