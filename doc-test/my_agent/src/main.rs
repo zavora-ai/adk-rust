@@ -64,7 +64,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .output_key("agent_response")              // Store responses in state
         .build()?;
 
-    Launcher::new(Arc::new(agent)).run().await?;
+    Launcher::new(Arc::new(agent))
+        .with_streaming_mode(adk_rust::StreamingMode::None)
+        .run().await?;
 
     Ok(())
 }
