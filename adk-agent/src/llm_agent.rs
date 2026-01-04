@@ -831,6 +831,16 @@ impl Agent for LlmAgent {
 
                             // Find and execute tool
                             let (tool_result, tool_actions) = if let Some(tool) = tools.iter().find(|t| t.name() == name) {
+                                // Create a span for tool execution (captured by trace exporter)
+                                let tool_span = tracing::info_span!(
+                                    "execute_tool",
+                                    tool.name = %name,
+                                    "gcp.vertex.agent.event_id" = %format!("{}_{}", invocation_id, name),
+                                    "gcp.vertex.agent.invocation_id" = %invocation_id,
+                                    "gcp.vertex.agent.session_id" = %ctx.session_id()
+                                );
+                                let _guard = tool_span.enter();
+                                
                                 tracing::info!(tool.name = %name, tool.args = %args, "tool_call");
 
                                 // ✅ Use AgentToolContext that preserves parent context
