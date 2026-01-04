@@ -489,11 +489,9 @@ impl Agent for LlmAgent {
 
             // ===== LOAD SESSION HISTORY =====
             // Load previous conversation turns from the session
+            // NOTE: Session history already includes the current user message (added by Runner before agent runs)
             let session_history = ctx.session().conversation_history();
             conversation_history.extend(session_history);
-
-            // Add user content (current turn)
-            conversation_history.push(ctx.user_content().clone());
 
             // ===== APPLY INCLUDE_CONTENTS FILTERING =====
             // Control what conversation history the agent sees
