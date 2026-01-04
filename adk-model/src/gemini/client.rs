@@ -284,8 +284,10 @@ impl Llm for GeminiModel {
                         Ok(resp) => {
                             match Self::convert_response(&resp) {
                                 Ok(mut llm_resp) => {
-                                    llm_resp.partial = true;
-                                    llm_resp.turn_complete = false;
+                                    // Check if this is the final chunk (has finish_reason)
+                                    let is_final = llm_resp.finish_reason.is_some();
+                                    llm_resp.partial = !is_final;
+                                    llm_resp.turn_complete = is_final;
                                     yield Ok(llm_resp);
                                 }
                                 Err(e) => {

@@ -69,6 +69,26 @@ impl Event {
         }
     }
 
+    /// Create an event with a specific ID.
+    /// Use this for streaming events where all chunks should share the same event ID.
+    pub fn with_id(id: impl Into<String>, invocation_id: impl Into<String>) -> Self {
+        let invocation_id = invocation_id.into();
+        Self {
+            id: id.into(),
+            timestamp: Utc::now(),
+            invocation_id: invocation_id.clone(),
+            invocation_id_camel: invocation_id,
+            branch: String::new(),
+            author: String::new(),
+            llm_response: LlmResponse::default(),
+            actions: EventActions::default(),
+            long_running_tool_ids: Vec::new(),
+            llm_request: None,
+            gcp_llm_request: None,
+            gcp_llm_response: None,
+        }
+    }
+
     /// Convenience method to access content directly.
     pub fn content(&self) -> Option<&Content> {
         self.llm_response.content.as_ref()

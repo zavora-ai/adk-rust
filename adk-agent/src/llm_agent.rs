@@ -718,12 +718,19 @@ impl Agent for LlmAgent {
                             }
                         }
 
-                        // Yield the (possibly modified) partial event
-                        let mut partial_event = Event::new(&invocation_id);
+                        // Yield event with current chunk content (delta) and stable event ID
+                        // UI will accumulate content by event ID for display
+                        let mut partial_event = Event::with_id(&llm_event_id, &invocation_id);
                         partial_event.author = agent_name.clone();
                         partial_event.llm_request = Some(request_json.clone());
                         partial_event.gcp_llm_request = Some(request_json.clone());
                         partial_event.gcp_llm_response = Some(serde_json::to_string(&chunk).unwrap_or_default());
+                        // Copy streaming flags so UI knows when to finalize
+                        partial_event.llm_response.partial = chunk.partial;
+                        partial_event.llm_response.turn_complete = chunk.turn_complete;
+                        partial_event.llm_response.finish_reason = chunk.finish_reason;
+                        partial_event.llm_response.usage_metadata = chunk.usage_metadata.clone();
+                        // Send current chunk content only (delta), not accumulated
                         partial_event.llm_response.content = chunk.content.clone();
 
                         // Populate long_running_tool_ids for function calls from long-running tools
@@ -731,10 +738,8 @@ impl Agent for LlmAgent {
                             let long_running_ids: Vec<String> = content.parts.iter()
                                 .filter_map(|p| {
                                     if let Part::FunctionCall { name, .. } = p {
-                                        // Check if this tool is long-running
                                         if let Some(tool) = tools.iter().find(|t| t.name() == name) {
                                             if tool.is_long_running() {
-                                                // Use tool name as ID (we don't have explicit call IDs)
                                                 return Some(name.clone());
                                             }
                                         }
@@ -747,13 +752,11 @@ impl Agent for LlmAgent {
 
                         yield Ok(partial_event);
 
-                        // Accumulate content for history
+                        // Accumulate content for conversation history (server-side only)
                         if let Some(chunk_content) = chunk.content {
                             if let Some(ref mut acc) = accumulated_content {
-                                // Merge parts from this chunk into accumulated content
                                 acc.parts.extend(chunk_content.parts);
                             } else {
-                                // First chunk - initialize accumulator
                                 accumulated_content = Some(chunk_content);
                             }
                         }
