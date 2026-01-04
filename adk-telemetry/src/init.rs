@@ -121,35 +121,6 @@ pub fn shutdown_telemetry() {
     opentelemetry::global::shutdown_tracer_provider();
 }
 
-/// Initialize telemetry with in-memory storage for UI
-pub fn init_with_storage(
-    service_name: &str,
-    storage: std::sync::Arc<crate::memory::SharedTraceStorage>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    INIT.call_once(|| {
-        let filter = EnvFilter::try_from_default_env()
-            .or_else(|_| EnvFilter::try_new("info"))
-            .expect("Failed to create env filter");
-
-        let memory_layer = crate::memory::InMemoryTraceLayer::new(storage);
-
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_target(true)
-                    .with_thread_ids(true)
-                    .with_line_number(true),
-            )
-            .with(memory_layer)
-            .init();
-
-        tracing::info!(service.name = service_name, "Telemetry initialized with in-memory storage");
-    });
-
-    Ok(())
-}
-
 /// Initialize telemetry with ADK-Go style span exporter
 /// This creates a shared span exporter that can be used by both telemetry and debug API
 /// Returns the exporter so it can be passed to the debug controller

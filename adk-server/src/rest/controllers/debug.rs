@@ -44,6 +44,7 @@ fn convert_to_span_data(attributes: &HashMap<String, String>) -> serde_json::Val
         "name": attributes.get("span_name").map_or("unknown", |v| v.as_str()),
         "start_time": attributes.get("start_time").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0),
         "end_time": attributes.get("end_time").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0),
+        "parent_id": null,
         "attributes": attributes,
         "invoc_id": attributes.get("gcp.vertex.agent.invocation_id").map_or("", |v| v.as_str())
     })

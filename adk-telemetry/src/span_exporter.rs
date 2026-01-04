@@ -158,22 +158,24 @@ where
             .map(|f| f.0.clone())
             .unwrap_or_default();
         
-        // Add span metadata and actual timing
+        // Add span metadata and actual timing with unique IDs
         let now_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos() as u64;
+        
+        // Use event_id as both trace_id and span_id to ensure uniqueness
+        let event_id = attributes.get("gcp.vertex.agent.event_id")
+            .cloned()
+            .unwrap_or_else(|| format!("{:016x}", id.into_u64()));
             
         attributes.insert("span_name".to_string(), span_name.to_string());
-        attributes.insert("trace_id".to_string(), format!("{:016x}", id.into_u64()));
-        attributes.insert("span_id".to_string(), format!("{:016x}", id.into_u64()));
+        attributes.insert("trace_id".to_string(), event_id.clone());
+        attributes.insert("span_id".to_string(), event_id);
         attributes.insert("start_time".to_string(), (now_nanos - duration_nanos).to_string());
         attributes.insert("end_time".to_string(), now_nanos.to_string());
         
-        // Add parent span ID if exists
-        if let Some(parent) = span.parent() {
-            attributes.insert("parent_span_id".to_string(), format!("{:016x}", parent.id().into_u64()));
-        }
+        // Don't set parent_span_id to keep all spans at same level like ADK-Go
         
         // Export the span
         self.exporter.export_span(span_name, attributes);

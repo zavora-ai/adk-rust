@@ -27,15 +27,8 @@
 //! ```
 
 pub mod init;
-pub mod memory;
 pub mod spans;
 pub mod span_exporter;
-
-#[cfg(test)]
-mod test_serialization;
-
-#[cfg(test)]
-mod test_inmemory;
 
 #[cfg(test)]
 mod test_adk_go_style;
