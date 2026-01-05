@@ -685,8 +685,8 @@ pub mod prelude {
     // Agents
     #[cfg(feature = "agents")]
     pub use crate::agent::{
-        ConditionalAgent, CustomAgent, CustomAgentBuilder, LlmAgent, LlmAgentBuilder, LoopAgent,
-        ParallelAgent, SequentialAgent,
+        ConditionalAgent, CustomAgent, CustomAgentBuilder, LlmAgent, LlmAgentBuilder,
+        LlmConditionalAgent, LlmConditionalAgentBuilder, LoopAgent, ParallelAgent, SequentialAgent,
     };
 
     // Models

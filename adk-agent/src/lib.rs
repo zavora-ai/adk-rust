@@ -68,4 +68,4 @@ pub use custom_agent::{CustomAgent, CustomAgentBuilder};
 pub use guardrails::GuardrailSet;
 pub use llm_agent::{LlmAgent, LlmAgentBuilder};
 pub use tool_call_markup::{normalize_content, normalize_option_content};
-pub use workflow::{ConditionalAgent, LoopAgent, ParallelAgent, SequentialAgent};
+pub use workflow::{ConditionalAgent, LlmConditionalAgent, LlmConditionalAgentBuilder, LoopAgent, ParallelAgent, SequentialAgent};

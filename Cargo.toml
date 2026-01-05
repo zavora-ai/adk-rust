@@ -26,7 +26,7 @@ members = [
     "adk-doc-audit",
 
     # Development packages (not published)
-    "examples", "doc-test/quickstart_test", "doc-test/llm_agent_test",
+    "examples", "doc-test/quickstart_test", "doc-test/llm_agent_test", "doc-test/workflow_test", "doc-test/multi_agent_test",
 ]
 exclude = [
     # Git-only packages with GPU dependencies (build explicitly with: cargo build -p adk-mistralrs)

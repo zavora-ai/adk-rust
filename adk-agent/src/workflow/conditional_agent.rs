@@ -1,3 +1,31 @@
+//! Rule-based conditional routing agent.
+//!
+//! `ConditionalAgent` provides **synchronous, rule-based** conditional routing.
+//! The condition function is evaluated synchronously and must return a boolean.
+//!
+//! # When to Use
+//!
+//! Use `ConditionalAgent` for **deterministic** routing decisions:
+//! - A/B testing based on session state or flags
+//! - Environment-based routing (e.g., production vs staging)
+//! - Feature flag checks
+//!
+//! # For Intelligent Routing
+//!
+//! If you need **LLM-based intelligent routing** where the model classifies
+//! user intent and routes accordingly, use [`LlmConditionalAgent`] instead:
+//!
+//! ```rust,ignore
+//! // LLM decides which agent to route to
+//! let router = LlmConditionalAgent::new("router", model)
+//!     .instruction("Classify as 'technical' or 'general'")
+//!     .route("technical", tech_agent)
+//!     .route("general", general_agent)
+//!     .build()?;
+//! ```
+//!
+//! See [`crate::workflow::LlmConditionalAgent`] for details.
+
 use adk_core::{
     AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result,
 };
@@ -6,7 +34,21 @@ use std::sync::Arc;
 
 type ConditionFn = Box<dyn Fn(&dyn InvocationContext) -> bool + Send + Sync>;
 
-/// Conditional agent runs different sub-agents based on a condition
+/// Rule-based conditional routing agent.
+///
+/// Executes one of two sub-agents based on a synchronous condition function.
+/// For LLM-based intelligent routing, use [`LlmConditionalAgent`] instead.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Route based on session state flag
+/// let router = ConditionalAgent::new(
+///     "premium_router",
+///     |ctx| ctx.session().state().get("is_premium").map(|v| v.as_bool()).flatten().unwrap_or(false),
+///     Arc::new(premium_agent),
+/// ).with_else(Arc::new(basic_agent));
+/// ```
 pub struct ConditionalAgent {
     name: String,
     description: String,

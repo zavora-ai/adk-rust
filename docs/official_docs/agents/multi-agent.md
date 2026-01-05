@@ -1,127 +1,493 @@
 # Multi-Agent Systems
 
-Multi-agent systems allow you to build sophisticated applications by composing multiple agents into hierarchies. This enables modularity, specialization, and structured control flows.
+Build sophisticated applications by composing specialized agents into teams.
 
-## Overview
+## What You'll Build
 
-In ADK-Rust, a multi-agent system is created by configuring agents with sub-agents, forming a parent-child hierarchy. The parent agent can coordinate execution, delegate tasks, and manage communication between specialized sub-agents.
+In this guide, you'll create a **Customer Service System** where a coordinator routes queries to specialists:
 
-Key benefits of multi-agent systems:
-- **Modularity**: Break complex tasks into smaller, focused agents
-- **Specialization**: Each agent can be optimized for specific tasks
-- **Reusability**: Sub-agents can be shared across different parent agents
-- **Maintainability**: Easier to understand and modify individual agents
+```
+                        ┌─────────────────────┐
+       User Query       │                     │
+      ────────────────▶ │    COORDINATOR      │
+                        │  "Route to expert"  │
+                        └──────────┬──────────┘
+                                   │
+                   ┌───────────────┴───────────────┐
+                   │                               │
+                   ▼                               ▼
+        ┌──────────────────┐            ┌──────────────────┐
+        │  BILLING AGENT   │            │  SUPPORT AGENT   │
+        │                  │            │                  │
+        │  💰 Payments     │            │  🔧 Tech Issues  │
+        │  📄 Invoices     │            │  🐛 Bug Reports  │
+        │  💳 Subscriptions│            │  ❓ How-To       │
+        └──────────────────┘            └──────────────────┘
+```
 
-## Sub-Agents Configuration
+**Key Concepts:**
+- **Coordinator** - Receives all requests, decides who handles them
+- **Specialists** - Focused agents that excel at specific domains
+- **Transfer** - Seamless handoff from coordinator to specialist
 
-You can add sub-agents to an `LlmAgent` using the `sub_agent()` builder method:
+---
 
-```rust,ignore
+## Quick Start
+
+### 1. Create Your Project
+
+```bash
+cargo new multi_agent_demo
+cd multi_agent_demo
+```
+
+Add dependencies to `Cargo.toml`:
+
+```toml
+[dependencies]
+adk-rust = { version = "0.1", features = ["agents", "models", "cli"] }
+tokio = { version = "1", features = ["full"] }
+dotenvy = "0.15"
+```
+
+Create `.env` with your API key:
+
+```bash
+echo 'GOOGLE_API_KEY=your-api-key' > .env
+```
+
+### 2. Customer Service Example
+
+Here's a complete working example:
+
+```rust,no_run
 use adk_rust::prelude::*;
+use adk_rust::Launcher;
 use std::sync::Arc;
 
-// Create specialized sub-agents
-let greeter = LlmAgentBuilder::new("greeter")
-    .description("Handles greetings and welcomes users")
-    .instruction("Greet users warmly and professionally.")
-    .model(model.clone())
-    .build()?;
+#[tokio::main]
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
 
-let task_executor = LlmAgentBuilder::new("task_executor")
-    .description("Executes specific tasks requested by users")
-    .instruction("Execute the requested task efficiently.")
-    .model(model.clone())
-    .build()?;
+    // Specialist: Billing Agent
+    let billing_agent = LlmAgentBuilder::new("billing_agent")
+        .description("Handles billing questions: payments, invoices, subscriptions, refunds")
+        .instruction("You are a billing specialist. Help customers with:\n\
+                     - Invoice questions and payment history\n\
+                     - Subscription plans and upgrades\n\
+                     - Refund requests\n\
+                     - Payment method updates\n\
+                     Be professional and provide clear information about billing matters.")
+        .model(model.clone())
+        .build()?;
 
-// Create parent agent with sub-agents
-let coordinator = LlmAgentBuilder::new("coordinator")
-    .description("Coordinates between greeting and task execution")
-    .instruction("Route user requests to the appropriate sub-agent.")
+    // Specialist: Technical Support Agent
+    let support_agent = LlmAgentBuilder::new("support_agent")
+        .description("Handles technical support: bugs, errors, troubleshooting, how-to questions")
+        .instruction("You are a technical support specialist. Help customers with:\n\
+                     - Troubleshooting errors and bugs\n\
+                     - How-to questions about using the product\n\
+                     - Configuration and setup issues\n\
+                     - Performance problems\n\
+                     Be patient and provide step-by-step guidance.")
+        .model(model.clone())
+        .build()?;
+
+    // Coordinator: Routes to appropriate specialist
+    let coordinator = LlmAgentBuilder::new("coordinator")
+        .description("Main customer service coordinator")
+        .instruction("You are a customer service coordinator. Analyze each customer request:\n\n\
+                     - For BILLING questions (payments, invoices, subscriptions, refunds):\n\
+                       Transfer to billing_agent\n\n\
+                     - For TECHNICAL questions (errors, bugs, how-to, troubleshooting):\n\
+                       Transfer to support_agent\n\n\
+                     - For GENERAL greetings or unclear requests:\n\
+                       Respond yourself and ask clarifying questions\n\n\
+                     When transferring, briefly acknowledge the customer and explain the handoff.")
+        .model(model.clone())
+        .sub_agent(Arc::new(billing_agent))
+        .sub_agent(Arc::new(support_agent))
+        .build()?;
+
+    println!("🏢 Customer Service Center");
+    println!("   Coordinator → Billing Agent | Support Agent");
+    println!();
+
+    Launcher::new(Arc::new(coordinator)).run().await?;
+    Ok(())
+}
+```
+
+**Example Interaction:**
+
+```
+You: I have a question about my last invoice
+
+[Agent: coordinator]
+Assistant: I'll connect you with our billing specialist to help with your invoice question.
+
+[Agent: billing_agent]
+Assistant: Hello! I can help you with your invoice. What specific question do you have about your last invoice?
+
+You: Why was I charged twice?
+
+[Agent: billing_agent]
+Assistant: I understand your concern about the duplicate charge. Let me help you investigate this...
+```
+
+## How Multi-Agent Transfer Works
+
+### The Big Picture
+
+When you add sub-agents to a parent agent, the LLM gains the ability to **delegate** tasks:
+
+```
+                    ┌─────────────────────┐
+    User Message    │                     │
+   ─────────────────▶    COORDINATOR      │
+                    │                     │
+                    └──────────┬──────────┘
+                               │
+           "This is a billing question..."
+                               │
+              ┌────────────────┴────────────────┐
+              │                                 │
+              ▼                                 ▼
+   ┌──────────────────┐              ┌──────────────────┐
+   │  billing_agent   │              │  support_agent   │
+   │  💰 Payments     │              │  🔧 Tech Issues  │
+   │  📄 Invoices     │              │  🐛 Bug Reports  │
+   └──────────────────┘              └──────────────────┘
+```
+
+### Step-by-Step Transfer Flow
+
+Here's exactly what happens when a user asks a billing question:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ STEP 1: User sends message                                           │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   User: "Why was I charged twice on my invoice?"                     │
+│                                                                      │
+│                              ↓                                       │
+│                                                                      │
+│   ┌──────────────────────────────────────┐                          │
+│   │         COORDINATOR AGENT            │                          │
+│   │  Receives message first              │                          │
+│   └──────────────────────────────────────┘                          │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+                              ↓
+┌──────────────────────────────────────────────────────────────────────┐
+│ STEP 2: LLM analyzes and decides to transfer                         │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   🧠 LLM thinks: "This is about an invoice charge..."                │
+│                  "Invoice = billing topic..."                        │
+│                  "I should transfer to billing_agent"                │
+│                                                                      │
+│   📞 LLM calls: transfer_to_agent(agent_name="billing_agent")        │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+                              ↓
+┌──────────────────────────────────────────────────────────────────────┐
+│ STEP 3: Runner detects transfer and invokes target                   │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   ┌─────────┐     transfer event      ┌─────────────────┐           │
+│   │ Runner  │ ─────────────────────▶  │  billing_agent  │           │
+│   └─────────┘   (same user message)   └─────────────────┘           │
+│                                                                      │
+│   • Runner finds "billing_agent" in agent tree                       │
+│   • Creates new context with SAME user message                       │
+│   • Invokes billing_agent immediately                                │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+                              ↓
+┌──────────────────────────────────────────────────────────────────────┐
+│ STEP 4: Target agent responds                                        │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   ┌─────────────────────────────────────────┐                       │
+│   │           billing_agent responds        │                       │
+│   │                                         │                       │
+│   │  "I can help with your duplicate        │                       │
+│   │   charge. Let me investigate..."        │                       │
+│   └─────────────────────────────────────────┘                       │
+│                                                                      │
+│   ✅ User sees seamless response - no interruption!                  │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### What Makes It Work
+
+| Component | Role |
+|-----------|------|
+| `.sub_agent()` | Registers specialists under parent |
+| `transfer_to_agent` tool | Auto-injected when sub-agents exist |
+| Agent descriptions | Help LLM decide which agent handles what |
+| Runner | Detects transfer events and invokes target agent |
+| Shared session | State and history preserved across transfers |
+
+### Before vs After Adding Sub-Agents
+
+**Without sub-agents** - One agent does everything:
+```
+User ──▶ coordinator ──▶ Response (handles billing AND support)
+```
+
+**With sub-agents** - Specialists handle their domain:
+```
+User ──▶ coordinator ──▶ billing_agent ──▶ Response (billing expert)
+                    ──▶ support_agent ──▶ Response (tech expert)
+```
+
+---
+
+## Hierarchical Multi-Agent Systems
+
+For complex scenarios, you can create **multi-level hierarchies**. Each agent can have its own sub-agents, forming a tree:
+
+### Visual: 3-Level Content Team
+
+```
+                    ┌─────────────────────┐
+                    │  PROJECT MANAGER    │  ← Level 1: Top-level coordinator
+                    │  "Manage projects"  │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │  CONTENT CREATOR    │  ← Level 2: Mid-level coordinator  
+                    │  "Coordinate R&W"   │
+                    └──────────┬──────────┘
+                               │
+              ┌────────────────┴────────────────┐
+              │                                 │
+              ▼                                 ▼
+   ┌──────────────────┐              ┌──────────────────┐
+   │   RESEARCHER     │              │     WRITER       │  ← Level 3: Specialists
+   │                  │              │                  │
+   │  📚 Gather facts │              │  ✍️ Write content │
+   │  🔍 Analyze data │              │  📝 Polish text  │
+   │  📊 Find sources │              │  🎨 Style & tone │
+   └──────────────────┘              └──────────────────┘
+```
+
+### How Requests Flow Down
+
+```
+User: "Create a blog post about electric vehicles"
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│  PROJECT MANAGER: "This is a content task"                  │
+│  → transfers to content_creator                             │
+└─────────────────────────────────────────────────────────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│  CONTENT CREATOR: "Need research first, then writing"       │
+│  → transfers to researcher                                  │
+└─────────────────────────────────────────────────────────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│  RESEARCHER: "Here's what I found about EVs..."             │
+│  → provides research summary                                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Complete Example Code
+
+```rust,no_run
+use adk_rust::prelude::*;
+use adk_rust::Launcher;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
+
+    // Level 3: Leaf specialists
+    let researcher = LlmAgentBuilder::new("researcher")
+        .description("Researches topics and gathers comprehensive information")
+        .instruction("You are a research specialist. When asked to research a topic:\n\
+                     - Gather key facts and data\n\
+                     - Identify main themes and subtopics\n\
+                     - Note important sources or references\n\
+                     Provide thorough, well-organized research summaries.")
+        .model(model.clone())
+        .build()?;
+
+    let writer = LlmAgentBuilder::new("writer")
+        .description("Writes polished content based on research")
+        .instruction("You are a content writer. When asked to write:\n\
+                     - Create engaging, clear content\n\
+                     - Use appropriate tone for the audience\n\
+                     - Structure content logically\n\
+                     - Polish for grammar and style\n\
+                     Produce professional, publication-ready content.")
+        .model(model.clone())
+        .build()?;
+
+    // Level 2: Content coordinator
+    let content_creator = LlmAgentBuilder::new("content_creator")
+        .description("Coordinates content creation by delegating research and writing")
+        .instruction("You are a content creation lead. For content requests:\n\n\
+                     - If RESEARCH is needed: Transfer to researcher\n\
+                     - If WRITING is needed: Transfer to writer\n\
+                     - For PLANNING or overview: Handle yourself\n\n\
+                     Coordinate between research and writing phases.")
+        .model(model.clone())
+        .sub_agent(Arc::new(researcher))
+        .sub_agent(Arc::new(writer))
+        .build()?;
+
+    // Level 1: Top-level manager
+    let project_manager = LlmAgentBuilder::new("project_manager")
+        .description("Manages projects and coordinates with content team")
+        .instruction("You are a project manager. For incoming requests:\n\n\
+                     - For CONTENT creation tasks: Transfer to content_creator\n\
+                     - For PROJECT STATUS or general questions: Handle yourself\n\n\
+                     Keep track of overall project goals and deadlines.")
+        .model(model.clone())
+        .sub_agent(Arc::new(content_creator))
+        .build()?;
+
+    println!("📊 Hierarchical Multi-Agent System");
+    println!();
+    println!("   project_manager");
+    println!("       └── content_creator");
+    println!("               ├── researcher");
+    println!("               └── writer");
+    println!();
+
+    Launcher::new(Arc::new(project_manager)).run().await?;
+    Ok(())
+}
+```
+
+**Agent Hierarchy:**
+```
+project_manager
+└── content_creator
+    ├── researcher
+    └── writer
+```
+
+**Example prompts:**
+- "Create a blog post about AI in healthcare" → PM → Content Creator → Writer
+- "Research electric vehicles" → PM → Content Creator → Researcher
+
+## Sub-Agent Configuration
+
+Add sub-agents to any `LlmAgent` using the `sub_agent()` builder method:
+
+```rust,no_run
+let parent = LlmAgentBuilder::new("parent")
+    .description("Coordinates specialized tasks")
+    .instruction("Route requests to appropriate specialists.")
     .model(model.clone())
-    .sub_agent(Arc::new(greeter))
-    .sub_agent(Arc::new(task_executor))
+    .sub_agent(Arc::new(specialist_a))
+    .sub_agent(Arc::new(specialist_b))
     .build()?;
 ```
 
-### Agent Hierarchy
-
-The sub-agent relationship creates a tree structure:
+**Key Points:**
 - Each agent can have multiple sub-agents
-- Sub-agents can themselves have their own sub-agents
-- This enables multi-level hierarchies for complex applications
+- Sub-agents can have their own sub-agents (multi-level hierarchies)
+- Agent names must be unique within the hierarchy
+- Descriptions help the LLM decide which agent to transfer to
 
-## Agent Transfer Behavior
+## Writing Effective Transfer Instructions
 
-When an `LlmAgent` has sub-agents configured, it gains the ability to transfer execution to those sub-agents. The LLM can dynamically decide which sub-agent should handle a particular request.
+For successful agent transfers, provide clear instructions and descriptions:
 
-### How Transfer Works
+### Parent Agent Instructions
 
-The transfer mechanism is **automatic** and seamless. When you configure sub-agents using `.sub_agent()`, the framework handles the entire transfer flow:
-
-1. **Automatic Tool Injection**: The framework injects a `transfer_to_agent` tool into the parent agent's available tools
-2. **LLM Analysis**: The parent agent's LLM analyzes the user request and sub-agent descriptions
-3. **Tool Call**: The LLM calls `transfer_to_agent(agent_name="target_agent")`
-4. **Framework Detection**: The Runner detects the transfer action in the event stream
-5. **Immediate Continuation**: The target agent is invoked automatically with the same user input
-6. **Seamless Response**: The target agent responds immediately - no second user prompt needed
-
-This creates a **seamless handoff** where the user experiences uninterrupted service as different specialists handle their request.
-
-### Transfer Scope
-
-By default, an agent can transfer to:
-- Its direct sub-agents
-- Its parent agent
-- Its sibling agents (other sub-agents of the same parent)
-
-You can control transfer behavior using builder methods:
-
-```rust,ignore
-let restricted_agent = LlmAgentBuilder::new("restricted")
-    .description("An agent with restricted transfer capabilities")
-    .model(model.clone())
-    .disallow_transfer_to_parent(true)  // Cannot transfer back to parent
-    .disallow_transfer_to_peers(true)   // Cannot transfer to siblings
-    .build()?;
-```
-
-### Writing Effective Transfer Instructions
-
-For agent transfer to work well, provide clear instructions and descriptions:
-
-```rust,ignore
-// Parent agent with clear delegation instructions
+```rust,no_run
 let coordinator = LlmAgentBuilder::new("coordinator")
-    .description("Main coordinator for customer service")
-    .instruction(
-        "You are a customer service coordinator. \
-         Analyze each request and delegate appropriately:\n\
-         - For billing questions, transfer to the billing_agent\n\
-         - For technical issues, transfer to the support_agent\n\
-         - For general inquiries, handle them yourself"
-    )
+    .description("Main customer service coordinator")
+    .instruction("You are a customer service coordinator. Analyze each request:\n\n\
+                 - For BILLING questions (payments, invoices, subscriptions):\n\
+                   Transfer to billing_agent\n\n\
+                 - For TECHNICAL questions (errors, bugs, troubleshooting):\n\
+                   Transfer to support_agent\n\n\
+                 - For GENERAL greetings or unclear requests:\n\
+                   Respond yourself and ask clarifying questions")
     .model(model.clone())
     .sub_agent(Arc::new(billing_agent))
     .sub_agent(Arc::new(support_agent))
     .build()?;
+```
 
-// Sub-agents with descriptive names and descriptions
+### Sub-Agent Descriptions
+
+```rust,no_run
 let billing_agent = LlmAgentBuilder::new("billing_agent")
-    .description("Handles all billing, payment, and invoice questions")
-    .instruction("Answer billing questions accurately using available tools.")
+    .description("Handles billing questions: payments, invoices, subscriptions, refunds")
+    .instruction("You are a billing specialist. Help with payment and subscription issues.")
     .model(model.clone())
     .build()?;
 
 let support_agent = LlmAgentBuilder::new("support_agent")
-    .description("Provides technical support and troubleshooting assistance")
-    .instruction("Help users resolve technical issues step by step.")
+    .description("Handles technical support: bugs, errors, troubleshooting, how-to questions")
+    .instruction("You are a technical support specialist. Provide step-by-step guidance.")
     .model(model.clone())
     .build()?;
 ```
 
-## Global Instruction
+**Best Practices:**
+- Use **descriptive agent names** that clearly indicate their purpose
+- Write **detailed descriptions** - the LLM uses these to decide transfers
+- Include **specific keywords** in descriptions that match likely user requests
+- Give **clear delegation rules** in parent agent instructions
+- Use **consistent terminology** across agent descriptions
 
-The `global_instruction` provides tree-wide configuration that applies to all agents in the hierarchy. This is useful for setting consistent personality, tone, or context across your entire agent system.
+## Testing Your Multi-Agent System
+
+### Running Examples
+
+```bash
+# Run the customer service example
+cargo run --bin customer_service
+
+# Run the hierarchical example  
+cargo run --bin hierarchical
+```
+
+### Example Test Prompts
+
+**Customer Service:**
+- "I have a question about my last invoice" → Should route to `billing_agent`
+- "The app keeps crashing" → Should route to `support_agent`
+- "How do I upgrade my plan?" → Should route to `billing_agent`
+- "Hello, I need help" → Should stay with `coordinator` for clarification
+
+**Hierarchical:**
+- "Create a blog post about AI in healthcare" → PM → Content Creator → Writer
+- "Research the history of electric vehicles" → PM → Content Creator → Researcher
+- "What's the status of our current projects?" → Should stay with `project_manager`
+
+### Debugging Transfer Issues
+
+If transfers aren't working as expected:
+
+1. **Check agent names** - Must match exactly in transfer calls
+2. **Review descriptions** - Make them more specific and keyword-rich
+3. **Clarify instructions** - Be explicit about when to transfer
+4. **Test edge cases** - Try ambiguous requests to see routing behavior
+5. **Look for transfer indicators** - `[Agent: name]` shows which agent is responding
+
+## Global Instruction
 
 ### Basic Usage
 

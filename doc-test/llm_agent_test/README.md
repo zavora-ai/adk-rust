@@ -1,65 +1,61 @@
-# LLM Agent Test Examples
+# LlmAgent Test
 
-This project demonstrates various LLM agent configurations and features from the ADK-Rust framework.
+Test examples for the [LlmAgent](../../docs/official_docs/agents/llm-agent.md) documentation.
 
 ## Prerequisites
 
-Set your Google API key:
+Set your API key:
 ```bash
-export GOOGLE_API_KEY="your-api-key-here"
+echo 'GOOGLE_API_KEY=your-key' > .env
 ```
 
-Or create a `.env` file with:
-```
-GOOGLE_API_KEY="your-api-key-here"
-```
+## Examples
 
-## Available Examples
-
-| Binary | Feature | Command | Status |
-|--------|---------|---------|--------|
-| `basic_agent` | Quick Start | `cargo run --bin basic_agent` | ✅ Working |
-| `shaped_behavior` | Instruction personalities | `AGENT_TYPE=formal cargo run --bin shaped_behavior` | ✅ Working |
-| `instruction_templating` | `{var}` syntax with session state | `cargo run --bin instruction_templating` | ✅ Working |
-| `multi_tools` | Weather + calculator | `cargo run --bin multi_tools` | ✅ Working |
-| `structured_output` | JSON schema output | `cargo run --bin structured_output` | ✅ Working |
-| `complete_example` | Full production agent | `cargo run --bin complete_example` | ✅ Working |
-
-All binaries compile successfully! ✅
-
-## Shaped Behavior Personalities
-
-For `shaped_behavior`, you can try different agent personalities:
-
+### Basic Agent
+Minimal agent with instruction:
 ```bash
-AGENT_TYPE=formal cargo run --bin shaped_behavior
+cargo run --bin basic_agent
+```
+
+### Shaped Behavior
+Different instruction personalities:
+```bash
+cargo run --bin shaped_behavior -- formal
+cargo run --bin shaped_behavior -- tutor
+cargo run --bin shaped_behavior -- storyteller
+
+# Or via environment variable
 AGENT_TYPE=tutor cargo run --bin shaped_behavior
-AGENT_TYPE=storyteller cargo run --bin shaped_behavior
 ```
 
-Each personality demonstrates how instructions shape agent behavior and response style.
-
-## Running Examples
-
-**Important**: Run all commands from the `llm_agent_test` directory:
+### Instruction Templating
+Template variables from session state:
 ```bash
-cd doc-test/llm_agent_test
+cargo run --bin instruction_templating
 ```
 
-1. **Basic Agent**: Simple LLM agent setup
-2. **Shaped Behavior**: Shows how instructions create different personalities
-3. **Instruction Templating**: Template variables (`{user_name}`, `{user_role}`) replaced with session state values
-4. **Multi Tools**: Agent with multiple tools (weather, calculator)
-5. **Structured Output**: JSON schema-validated responses
-6. **Complete Example**: Production-ready agent with all features
+### Multi Tools
+Agent with weather and calculator tools:
+```bash
+cargo run --bin multi_tools
+# Try: "What's 15% of 250?" or "Weather in Tokyo"
+```
 
-## Example Outputs
+### Structured Output
+JSON schema for entity extraction:
+```bash
+cargo run --bin structured_output
+# Try: "John met Sarah in Paris on December 25th"
+```
 
-**Basic Agent**: Simple Q&A responses  
-**Shaped Behavior**: Different personalities for the same question  
-**Instruction Templating**: Personalized responses using template variables  
-**Multi Tools**: Uses calculator and weather tools automatically  
-**Structured Output**: Returns structured JSON data  
-**Complete Example**: Full-featured agent with multiple capabilities  
+### Complete Example
+Full production agent with tools:
+```bash
+cargo run --bin complete_example
+```
 
-Try asking each agent the same question to see how their personalities and capabilities differ!
+## Build All
+
+```bash
+cargo build
+```

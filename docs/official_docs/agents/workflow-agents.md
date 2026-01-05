@@ -1,413 +1,632 @@
 # Workflow Agents
 
-Workflow agents provide deterministic execution patterns for orchestrating multiple agents. Unlike LlmAgent which uses AI reasoning to decide actions, workflow agents follow predefined execution paths, making them ideal for structured pipelines and predictable multi-step processes.
+Workflow agents orchestrate multiple agents in predictable patterns—sequential pipelines, parallel execution, or iterative loops. Unlike LlmAgent which uses AI reasoning, workflow agents follow deterministic execution paths.
 
-## Overview
+## Quick Start
 
-ADK-Rust provides three workflow agent types:
+Create a new project:
 
-| Agent | Execution Pattern | Use Case |
-|-------|------------------|----------|
-| `SequentialAgent` | Runs sub-agents one after another | Multi-step pipelines, data transformation chains |
-| `ParallelAgent` | Runs sub-agents concurrently | Independent analyses, fan-out processing |
-| `LoopAgent` | Runs sub-agents repeatedly | Iterative refinement, retry logic |
+```bash
+cargo new workflow_demo
+cd workflow_demo
+```
 
-All workflow agents implement the `Agent` trait and can be nested within each other or used as sub-agents of an LlmAgent.
+Add dependencies to `Cargo.toml`:
+
+```toml
+[dependencies]
+adk-rust = "{{version}}"
+tokio = { version = "1.40", features = ["full"] }
+dotenvy = "0.15"
+```
+
+Create `.env`:
+
+```bash
+echo 'GOOGLE_API_KEY=your-api-key' > .env
+```
+
+---
 
 ## SequentialAgent
 
-`SequentialAgent` executes sub-agents in order, passing context between them. Each agent sees the accumulated conversation history from previous agents.
+`SequentialAgent` runs sub-agents one after another. Each agent sees the accumulated conversation history from previous agents.
 
-### Basic Usage
+### When to Use
 
-```rust,ignore
+- Multi-step pipelines where output feeds into next step
+- Research → Analysis → Summary workflows
+- Data transformation chains
+
+### Complete Example
+
+Replace `src/main.rs`:
+
+```rust,no_run
 use adk_rust::prelude::*;
+use adk_rust::Launcher;
 use std::sync::Arc;
 
-// Create sub-agents for the pipeline
-let analyzer = LlmAgentBuilder::new("analyzer")
-    .description("Analyzes the input")
-    .instruction("Analyze the given topic and identify key points.")
-    .model(model.clone())
-    .build()?;
+#[tokio::main]
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
 
-let expander = LlmAgentBuilder::new("expander")
-    .description("Expands on analysis")
-    .instruction("Take the analysis and expand on each key point with details.")
-    .model(model.clone())
-    .build()?;
+    // Step 1: Research agent gathers information
+    let researcher = LlmAgentBuilder::new("researcher")
+        .instruction("Research the given topic. List 3-5 key facts or points. \
+                     Be factual and concise.")
+        .model(model.clone())
+        .output_key("research")  // Saves output to state
+        .build()?;
 
-let summarizer = LlmAgentBuilder::new("summarizer")
-    .description("Summarizes content")
-    .instruction("Create a concise summary of the expanded analysis.")
-    .model(model.clone())
-    .build()?;
+    // Step 2: Analyzer agent identifies patterns
+    let analyzer = LlmAgentBuilder::new("analyzer")
+        .instruction("Based on the research above, identify 2-3 key insights \
+                     or patterns. What's the bigger picture?")
+        .model(model.clone())
+        .output_key("analysis")
+        .build()?;
 
-// Create sequential pipeline
-let pipeline = SequentialAgent::new(
-    "analysis_pipeline",
-    vec![Arc::new(analyzer), Arc::new(expander), Arc::new(summarizer)],
-);
+    // Step 3: Summarizer creates final output
+    let summarizer = LlmAgentBuilder::new("summarizer")
+        .instruction("Create a brief executive summary combining the research \
+                     and analysis. Keep it under 100 words.")
+        .model(model.clone())
+        .build()?;
+
+    // Create the sequential pipeline
+    let pipeline = SequentialAgent::new(
+        "research_pipeline",
+        vec![Arc::new(researcher), Arc::new(analyzer), Arc::new(summarizer)],
+    ).with_description("Research → Analyze → Summarize");
+
+    println!("📋 Sequential Pipeline: Research → Analyze → Summarize");
+    println!();
+
+    Launcher::new(Arc::new(pipeline)).run().await?;
+    Ok(())
+}
 ```
 
-### Configuration Options
+Run it:
 
-```rust,ignore
-// Add a description
-let pipeline = SequentialAgent::new("pipeline", sub_agents)
-    .with_description("A three-step analysis pipeline");
+```bash
+cargo run
+```
 
-// Add callbacks for monitoring
-let pipeline = SequentialAgent::new("pipeline", sub_agents)
-    .before_callback(Arc::new(|ctx| {
-        println!("Starting pipeline execution");
-        Box::pin(async move { Ok(None) })
-    }))
-    .after_callback(Arc::new(|ctx, events| {
-        println!("Pipeline completed");
-        Box::pin(async move { Ok(None) })
-    }));
+### Example Interaction
+
+```
+You: Tell me about Rust programming language
+
+🔄 [researcher] Researching...
+Here are key facts about Rust:
+1. Systems programming language created at Mozilla in 2010
+2. Memory safety without garbage collection via ownership system
+3. Zero-cost abstractions and minimal runtime
+4. Voted "most loved language" on Stack Overflow for 7 years
+5. Used by Firefox, Discord, Dropbox, and Linux kernel
+
+🔄 [analyzer] Analyzing...
+Key insights:
+1. Rust solves the memory safety vs performance tradeoff
+2. Strong developer satisfaction drives rapid adoption
+3. Trust from major tech companies validates production-readiness
+
+🔄 [summarizer] Summarizing...
+Rust is a systems language that achieves memory safety without garbage 
+collection through its ownership model. Created at Mozilla in 2010, it's 
+been rated the most loved language for 7 consecutive years. Major companies 
+like Discord and Linux kernel adopt it for its zero-cost abstractions 
+and performance guarantees.
 ```
 
 ### How It Works
 
-1. The first sub-agent receives the initial user message
-2. Each subsequent agent sees all previous messages and responses
-3. The pipeline completes when the last agent finishes
-4. All events from all agents are streamed in order
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│  Researcher │ →  │   Analyzer  │ →  │  Summarizer │
+│   (step 1)  │    │   (step 2)  │    │   (step 3)  │
+└─────────────┘    └─────────────┘    └─────────────┘
+       ↓                  ↓                  ↓
+ "Key facts..."    "Insights..."    "Executive summary"
+```
+
+1. User message goes to first agent (Researcher)
+2. Researcher's response is added to history
+3. Analyzer sees: user message + researcher response
+4. Summarizer sees: user message + researcher + analyzer responses
+5. Pipeline completes when last agent finishes
+
+---
 
 ## ParallelAgent
 
-`ParallelAgent` executes all sub-agents concurrently, collecting their results as they complete. This is useful when you need multiple independent perspectives or analyses.
+`ParallelAgent` runs all sub-agents concurrently. Each agent receives the same input and works independently.
 
-### Basic Usage
+### When to Use
 
-```rust,ignore
+- Multiple perspectives on the same topic
+- Fan-out processing (same input, different analyses)
+- Speed-critical multi-task scenarios
+
+### Complete Example
+
+```rust,no_run
 use adk_rust::prelude::*;
+use adk_rust::Launcher;
 use std::sync::Arc;
 
-// Create agents for parallel analysis
-let technical = LlmAgentBuilder::new("technical_analyst")
-    .description("Provides technical analysis")
-    .instruction("Analyze the topic from a technical perspective.")
-    .model(model.clone())
-    .build()?;
+#[tokio::main]
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
 
-let business = LlmAgentBuilder::new("business_analyst")
-    .description("Provides business analysis")
-    .instruction("Analyze the topic from a business perspective.")
-    .model(model.clone())
-    .build()?;
+    // Three analysts with DISTINCT personas (important for parallel execution)
+    let technical = LlmAgentBuilder::new("technical_analyst")
+        .instruction("You are a senior software architect. \
+                     FOCUS ONLY ON: code quality, system architecture, scalability, \
+                     security vulnerabilities, and tech stack choices. \
+                     Start your response with '🔧 TECHNICAL:' and give 2-3 bullet points.")
+        .model(model.clone())
+        .build()?;
 
-let user_exp = LlmAgentBuilder::new("ux_analyst")
-    .description("Provides UX analysis")
-    .instruction("Analyze the topic from a user experience perspective.")
-    .model(model.clone())
-    .build()?;
+    let business = LlmAgentBuilder::new("business_analyst")
+        .instruction("You are a business strategist and MBA graduate. \
+                     FOCUS ONLY ON: market opportunity, revenue model, competition, \
+                     cost structure, and go-to-market strategy. \
+                     Start your response with '💼 BUSINESS:' and give 2-3 bullet points.")
+        .model(model.clone())
+        .build()?;
 
-// Create parallel agent
-let parallel = ParallelAgent::new(
-    "multi_perspective_analysis",
-    vec![Arc::new(technical), Arc::new(business), Arc::new(user_exp)],
-);
+    let user_exp = LlmAgentBuilder::new("ux_analyst")
+        .instruction("You are a UX researcher and designer. \
+                     FOCUS ONLY ON: user journey, accessibility, pain points, \
+                     visual design, and user satisfaction metrics. \
+                     Start your response with '🎨 UX:' and give 2-3 bullet points.")
+        .model(model.clone())
+        .build()?;
+
+    // Create parallel agent
+    let multi_analyst = ParallelAgent::new(
+        "multi_perspective",
+        vec![Arc::new(technical), Arc::new(business), Arc::new(user_exp)],
+    ).with_description("Technical + Business + UX analysis in parallel");
+
+    println!("⚡ Parallel Analysis: Technical | Business | UX");
+    println!("   (All three run simultaneously!)");
+    println!();
+
+    Launcher::new(Arc::new(multi_analyst)).run().await?;
+    Ok(())
+}
 ```
 
-### Configuration Options
+> **💡 Tip**: Make parallel agent instructions highly distinct with unique personas, focus areas, and response prefixes. This ensures each agent produces unique output.
 
-```rust,ignore
-// Add a description
-let parallel = ParallelAgent::new("analysis", sub_agents)
-    .with_description("Concurrent multi-perspective analysis");
+### Example Interaction
 
-// Add callbacks
-let parallel = ParallelAgent::new("analysis", sub_agents)
-    .before_callback(Arc::new(|ctx| {
-        println!("Starting parallel execution");
-        Box::pin(async move { Ok(None) })
-    }));
+```
+You: Evaluate a mobile banking app
+
+🔧 TECHNICAL:
+• Requires robust API security: OAuth 2.0, certificate pinning, encrypted storage
+• Offline mode with sync requires complex state management and conflict resolution
+• Biometric auth integration varies significantly across iOS/Android platforms
+
+💼 BUSINESS:
+• Highly competitive market - need unique differentiator (neobanks, traditional banks)
+• Revenue model: interchange fees, premium tiers, or lending products cross-sell
+• Regulatory compliance costs significant: PCI-DSS, regional banking laws, KYC/AML
+
+🎨 UX:
+• Critical: fast task completion - check balance must be < 3 seconds
+• Accessibility essential: screen reader support, high contrast mode, large touch targets
+• Trust indicators important: security badges, familiar banking patterns
 ```
 
 ### How It Works
 
-1. All sub-agents start executing simultaneously
-2. Each agent receives the same initial context
-3. Results are streamed as each agent completes (order may vary)
-4. The parallel agent completes when all sub-agents finish
+```
+                    ┌─────────────────┐
+                    │  User Message   │
+                    └────────┬────────┘
+         ┌───────────────────┼───────────────────┐
+         ↓                   ↓                   ↓
+  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+  │  Technical  │    │  Business   │    │     UX      │
+  │   Analyst   │    │   Analyst   │    │   Analyst   │
+  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘
+         ↓                   ↓                   ↓
+    (response 1)       (response 2)       (response 3)
+```
 
-### Use Cases
+All agents start simultaneously and results stream as they complete.
 
-- **Multi-perspective analysis**: Get technical, business, and user perspectives simultaneously
-- **Fan-out processing**: Process the same input through multiple specialized agents
-- **Redundancy**: Run the same task on multiple agents and compare results
+---
 
 ## LoopAgent
 
-`LoopAgent` executes sub-agents repeatedly until a termination condition is met. This is ideal for iterative refinement, retry logic, or processes that need multiple passes.
+`LoopAgent` runs sub-agents repeatedly until an exit condition is met or max iterations reached.
 
-### Basic Usage
+### When to Use
 
-```rust,ignore
+- Iterative refinement (draft → critique → improve → repeat)
+- Retry logic with improvement
+- Quality gates that require multiple passes
+
+### ExitLoopTool
+
+To exit a loop early, give an agent the `ExitLoopTool`. When called, it signals the loop to stop.
+
+### Complete Example
+
+```rust,no_run
 use adk_rust::prelude::*;
+use adk_rust::Launcher;
 use std::sync::Arc;
 
-// Create an agent that can exit the loop
-let refiner = LlmAgentBuilder::new("refiner")
-    .description("Iteratively refines content")
-    .instruction(
-        "Review and improve the content. \
-         If the content is good enough, call the exit_loop tool. \
-         Otherwise, provide an improved version."
-    )
-    .model(model.clone())
-    .tool(Arc::new(ExitLoopTool::new()))
-    .build()?;
+#[tokio::main]
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
 
-// Create loop agent with max iterations
-let loop_agent = LoopAgent::new(
-    "iterative_refiner",
-    vec![Arc::new(refiner)],
-).with_max_iterations(5);
+    // Critic agent evaluates content
+    let critic = LlmAgentBuilder::new("critic")
+        .instruction("Review the content for quality. Score it 1-10 and list \
+                     specific improvements needed. Be constructive but critical.")
+        .model(model.clone())
+        .build()?;
+
+    // Refiner agent improves based on critique
+    let refiner = LlmAgentBuilder::new("refiner")
+        .instruction("Apply the critique to improve the content. \
+                     If the score is 8 or higher, call exit_loop to finish. \
+                     Otherwise, provide an improved version.")
+        .model(model.clone())
+        .tool(Arc::new(ExitLoopTool::new()))  // Can exit the loop
+        .build()?;
+
+    // Create inner sequential: critic → refiner
+    let critique_refine = SequentialAgent::new(
+        "critique_refine_step",
+        vec![Arc::new(critic), Arc::new(refiner)],
+    );
+
+    // Wrap in loop with max 3 iterations
+    let iterative_improver = LoopAgent::new(
+        "iterative_improver",
+        vec![Arc::new(critique_refine)],
+    ).with_max_iterations(3)
+     .with_description("Critique-refine loop (max 3 passes)");
+
+    println!("🔄 Iterative Improvement Loop");
+    println!("   critic → refiner → repeat (max 3x or until quality >= 8)");
+    println!();
+
+    Launcher::new(Arc::new(iterative_improver)).run().await?;
+    Ok(())
+}
 ```
 
-### Configuration Options
+### Example Interaction
 
-```rust,ignore
-// Set maximum iterations (required for safety)
-let loop_agent = LoopAgent::new("refiner", sub_agents)
-    .with_max_iterations(10);
+```
+You: Write a tagline for a coffee shop
 
-// Add a description
-let loop_agent = LoopAgent::new("refiner", sub_agents)
-    .with_description("Iteratively refines content until quality threshold")
-    .with_max_iterations(5);
+🔄 Iteration 1
+[critic] Score: 5/10. "Good coffee here" is too generic. Needs:
+- Unique value proposition
+- Emotional connection
+- Memorable phrasing
 
-// Add callbacks
-let loop_agent = LoopAgent::new("refiner", sub_agents)
-    .with_max_iterations(5)
-    .before_callback(Arc::new(|ctx| {
-        println!("Starting loop iteration");
-        Box::pin(async move { Ok(None) })
-    }));
+[refiner] Improved: "Where every cup tells a story"
+
+🔄 Iteration 2
+[critic] Score: 7/10. Better! But could be stronger:
+- More action-oriented
+- Hint at the experience
+
+[refiner] Improved: "Brew your perfect moment"
+
+🔄 Iteration 3
+[critic] Score: 8/10. Strong, action-oriented, experiential.
+Minor: could be more distinctive.
+
+[refiner] Score is 8+, quality threshold met!
+[exit_loop called]
+
+Final: "Brew your perfect moment"
 ```
 
 ### How It Works
 
-1. Sub-agents execute in sequence (like SequentialAgent)
-2. After all sub-agents complete, the loop repeats
-3. The loop terminates when:
-   - An agent calls `exit_loop` tool (sets `escalate = true`)
-   - Maximum iterations are reached
-4. All events from all iterations are streamed
-
-## ExitLoopTool
-
-The `ExitLoopTool` is a built-in tool that allows agents to signal loop termination. When called, it sets the `escalate` flag on the event actions, causing the LoopAgent to exit.
-
-### Usage
-
-```rust,ignore
-use adk_rust::prelude::*;
-use std::sync::Arc;
-
-// Add ExitLoopTool to an agent
-let agent = LlmAgentBuilder::new("refiner")
-    .instruction(
-        "Improve the content. When satisfied with the quality, \
-         call the exit_loop tool to finish."
-    )
-    .model(model.clone())
-    .tool(Arc::new(ExitLoopTool::new()))
-    .build()?;
+```
+     ┌──────────────────────────────────────────┐
+     │              LoopAgent                    │
+     │  ┌────────────────────────────────────┐  │
+     │  │        SequentialAgent              │  │
+     │  │  ┌──────────┐    ┌──────────────┐  │  │
+  →  │  │  │  Critic  │ →  │   Refiner    │  │  │  →
+     │  │  │ (review) │    │ (improve or  │  │  │
+     │  │  └──────────┘    │  exit_loop)  │  │  │
+     │  │                  └──────────────┘  │  │
+     │  └────────────────────────────────────┘  │
+     │         ↑_____________↓                  │
+     │         repeat until exit                │
+     └──────────────────────────────────────────┘
 ```
 
-### Tool Details
+---
 
-| Property | Value |
-|----------|-------|
-| Name | `exit_loop` |
-| Description | "Exits the loop. Call this function only when you are instructed to do so." |
-| Parameters | None |
-| Returns | Empty object `{}` |
+## ConditionalAgent (Rule-Based)
 
-The tool works by setting `actions.escalate = true` on the event, which signals to the LoopAgent that it should stop iterating.
+`ConditionalAgent` branches execution based on a **synchronous, rule-based** condition. Use this for deterministic routing like A/B testing or environment-based routing.
+
+```rust,ignore
+ConditionalAgent::new("router", |ctx| ctx.session().state().get("premium")..., premium_agent)
+    .with_else(basic_agent)
+```
+
+> **Note:** For LLM-based intelligent routing, use `LlmConditionalAgent` instead.
+
+---
+
+## LlmConditionalAgent (LLM-Based)
+
+`LlmConditionalAgent` uses an **LLM to classify** user input and route to the appropriate sub-agent. This is ideal for intelligent routing where the routing decision requires understanding the content.
+
+### When to Use
+
+- **Intent classification** - Route based on what the user is asking
+- **Multi-way routing** - More than 2 destinations
+- **Context-aware routing** - Needs understanding, not just keywords
+
+### Complete Example
+
+```rust,no_run
+use adk_rust::prelude::*;
+use adk_rust::Launcher;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
+
+    // Create specialist agents
+    let tech_agent: Arc<dyn Agent> = Arc::new(
+        LlmAgentBuilder::new("tech_expert")
+            .instruction("You are a senior software engineer. Be precise and technical.")
+            .model(model.clone())
+            .build()?
+    );
+
+    let general_agent: Arc<dyn Agent> = Arc::new(
+        LlmAgentBuilder::new("general_helper")
+            .instruction("You are a friendly assistant. Explain simply, use analogies.")
+            .model(model.clone())
+            .build()?
+    );
+
+    let creative_agent: Arc<dyn Agent> = Arc::new(
+        LlmAgentBuilder::new("creative_writer")
+            .instruction("You are a creative writer. Be imaginative and expressive.")
+            .model(model.clone())
+            .build()?
+    );
+
+    // LLM classifies the query and routes accordingly
+    let router = LlmConditionalAgent::new("smart_router", model.clone())
+        .instruction("Classify the user's question as exactly ONE of: \
+                     'technical' (coding, debugging, architecture), \
+                     'general' (facts, knowledge, how-to), \
+                     'creative' (writing, stories, brainstorming). \
+                     Respond with ONLY the category name.")
+        .route("technical", tech_agent)
+        .route("general", general_agent.clone())
+        .route("creative", creative_agent)
+        .default_route(general_agent)
+        .build()?;
+
+    println!("🧠 LLM-Powered Intelligent Router");
+    Launcher::new(Arc::new(router)).run().await?;
+    Ok(())
+}
+```
+
+### Example Interaction
+
+```
+You: How do I fix a borrow error in Rust?
+[Routing to: technical]
+[Agent: tech_expert]
+A borrow error occurs when Rust's ownership rules are violated...
+
+You: What's the capital of France?
+[Routing to: general]
+[Agent: general_helper]
+The capital of France is Paris! It's a beautiful city...
+
+You: Write me a haiku about the moon
+[Routing to: creative]
+[Agent: creative_writer]
+Silver orb above,
+Shadows dance on silent waves—
+Night whispers secrets.
+```
+
+### How It Works
+
+```
+┌─────────────────┐
+│  User Message   │
+└────────┬────────┘
+         ↓
+┌─────────────────┐
+│   LLM Classifies│  "technical" / "general" / "creative"
+│   (smart_router)│
+└────────┬────────┘
+         ↓
+    ┌────┴────┬──────────┐
+    ↓         ↓          ↓
+┌───────┐ ┌───────┐ ┌─────────┐
+│ tech  │ │general│ │creative │
+│expert │ │helper │ │ writer  │
+└───────┘ └───────┘ └─────────┘
+```
+
+
+---
 
 ## Combining Workflow Agents
 
-Workflow agents can be nested to create complex execution patterns.
+Workflow agents can be nested for complex patterns.
 
-### Sequential with Parallel
+### Sequential + Parallel + Loop
 
-```rust,ignore
-// First, analyze from multiple perspectives in parallel
+```rust,no_run
+use adk_rust::prelude::*;
+use std::sync::Arc;
+
+// 1. Parallel analysis from multiple perspectives
 let parallel_analysis = ParallelAgent::new(
-    "parallel_analysis",
-    vec![Arc::new(technical), Arc::new(business)],
+    "multi_analysis",
+    vec![Arc::new(tech_analyst), Arc::new(biz_analyst)],
 );
 
-// Then, synthesize the results
+// 2. Synthesize the parallel results
 let synthesizer = LlmAgentBuilder::new("synthesizer")
-    .instruction("Combine the analyses into a unified recommendation.")
+    .instruction("Combine all analyses into a unified recommendation.")
     .model(model.clone())
     .build()?;
 
-// Create a sequential pipeline: parallel analysis -> synthesis
-let pipeline = SequentialAgent::new(
-    "analyze_and_synthesize",
-    vec![Arc::new(parallel_analysis), Arc::new(synthesizer)],
-);
-```
-
-### Loop with Sequential
-
-```rust,ignore
-// Create a critique-refine loop
-let critic = LlmAgentBuilder::new("critic")
-    .instruction("Critique the content and suggest improvements.")
-    .model(model.clone())
-    .build()?;
-
-let refiner = LlmAgentBuilder::new("refiner")
-    .instruction(
-        "Apply the critique to improve the content. \
-         Call exit_loop when no more improvements needed."
-    )
-    .model(model.clone())
-    .tool(Arc::new(ExitLoopTool::new()))
-    .build()?;
-
-// Sequential critique-refine steps inside a loop
-let critique_refine = SequentialAgent::new(
-    "critique_refine_step",
+// 3. Quality loop: critique and refine
+let quality_loop = LoopAgent::new(
+    "quality_check",
     vec![Arc::new(critic), Arc::new(refiner)],
+).with_max_iterations(2);
+
+// Final pipeline: parallel → synthesize → quality loop
+let full_pipeline = SequentialAgent::new(
+    "full_analysis_pipeline",
+    vec![
+        Arc::new(parallel_analysis),
+        Arc::new(synthesizer),
+        Arc::new(quality_loop),
+    ],
 );
-
-let iterative_improvement = LoopAgent::new(
-    "iterative_improvement",
-    vec![Arc::new(critique_refine)],
-).with_max_iterations(3);
 ```
 
-## Best Practices
+---
 
-### Setting Max Iterations
+## Tracing Workflow Execution
 
-Always set `max_iterations` on LoopAgent to prevent infinite loops:
+To see what's happening inside a workflow, enable tracing:
 
-```rust,ignore
-// Good: Always set a reasonable limit
-let loop_agent = LoopAgent::new("refiner", agents)
-    .with_max_iterations(5);
+```rust,no_run
+use adk_rust::prelude::*;
+use adk_rust::runner::{Runner, RunnerConfig};
+use adk_rust::futures::StreamExt;
+use std::sync::Arc;
 
-// The agent can still exit early via ExitLoopTool
+// Create pipeline as before...
+
+// Use Runner instead of Launcher for detailed control
+let session_service = Arc::new(InMemorySessionService::new());
+let runner = Runner::new(RunnerConfig {
+    app_name: "workflow_trace".to_string(),
+    agent: Arc::new(pipeline),
+    session_service: session_service.clone(),
+    artifact_service: None,
+    memory_service: None,
+    run_config: None,
+})?;
+
+let session = session_service.create(CreateRequest {
+    app_name: "workflow_trace".to_string(),
+    user_id: "user".to_string(),
+    session_id: None,
+    state: Default::default(),
+}).await?;
+
+let mut stream = runner.run(
+    "user".to_string(),
+    session.id().to_string(), 
+    Content::new("user").with_text("Analyze Rust"),
+).await?;
+
+// Process each event to see workflow execution
+while let Some(event) = stream.next().await {
+    let event = event?;
+    
+    // Show which agent is responding
+    println!("📍 Agent: {}", event.author);
+    
+    // Show the response content
+    if let Some(content) = event.content() {
+        for part in &content.parts {
+            if let Part::Text { text } = part {
+                println!("   {}", text);
+            }
+        }
+    }
+    println!();
+}
 ```
 
-### Clear Exit Conditions
-
-When using LoopAgent, make the exit condition clear in the agent's instruction:
-
-```rust,ignore
-let refiner = LlmAgentBuilder::new("refiner")
-    .instruction(
-        "Review the content for quality. \
-         If the content meets these criteria: \
-         1. Clear and concise \
-         2. Well-structured \
-         3. No grammatical errors \
-         Then call exit_loop. Otherwise, improve it."
-    )
-    .tool(Arc::new(ExitLoopTool::new()))
-    .build()?;
-```
-
-### State Management
-
-Use session state to pass data between agents in a workflow:
-
-```rust,ignore
-// First agent stores result in state
-let analyzer = LlmAgentBuilder::new("analyzer")
-    .instruction("Analyze the input. Store key findings in 'analysis' state key.")
-    .output_key("analysis")  // Automatically stores output in state
-    .model(model.clone())
-    .build()?;
-
-// Second agent reads from state via instruction templating
-let reporter = LlmAgentBuilder::new("reporter")
-    .instruction("Based on the analysis: {analysis}, create a report.")
-    .model(model.clone())
-    .build()?;
-```
+---
 
 ## API Reference
 
 ### SequentialAgent
 
 ```rust,ignore
-impl SequentialAgent {
-    /// Create a new sequential agent with sub-agents
-    pub fn new(name: impl Into<String>, sub_agents: Vec<Arc<dyn Agent>>) -> Self;
-    
-    /// Add a description
-    pub fn with_description(self, desc: impl Into<String>) -> Self;
-    
-    /// Add a before-agent callback
-    pub fn before_callback(self, callback: BeforeAgentCallback) -> Self;
-    
-    /// Add an after-agent callback
-    pub fn after_callback(self, callback: AfterAgentCallback) -> Self;
-}
+SequentialAgent::new("name", vec![agent1, agent2, agent3])
+    .with_description("Optional description")
+    .before_callback(callback)  // Called before execution
+    .after_callback(callback)   // Called after execution
 ```
 
 ### ParallelAgent
 
 ```rust,ignore
-impl ParallelAgent {
-    /// Create a new parallel agent with sub-agents
-    pub fn new(name: impl Into<String>, sub_agents: Vec<Arc<dyn Agent>>) -> Self;
-    
-    /// Add a description
-    pub fn with_description(self, desc: impl Into<String>) -> Self;
-    
-    /// Add a before-agent callback
-    pub fn before_callback(self, callback: BeforeAgentCallback) -> Self;
-    
-    /// Add an after-agent callback
-    pub fn after_callback(self, callback: AfterAgentCallback) -> Self;
-}
+ParallelAgent::new("name", vec![agent1, agent2, agent3])
+    .with_description("Optional description")
+    .before_callback(callback)
+    .after_callback(callback)
 ```
 
 ### LoopAgent
 
 ```rust,ignore
-impl LoopAgent {
-    /// Create a new loop agent with sub-agents
-    pub fn new(name: impl Into<String>, sub_agents: Vec<Arc<dyn Agent>>) -> Self;
-    
-    /// Add a description
-    pub fn with_description(self, desc: impl Into<String>) -> Self;
-    
-    /// Set maximum iterations (recommended)
-    pub fn with_max_iterations(self, max: u32) -> Self;
-    
-    /// Add a before-agent callback
-    pub fn before_callback(self, callback: BeforeAgentCallback) -> Self;
-    
-    /// Add an after-agent callback
-    pub fn after_callback(self, callback: AfterAgentCallback) -> Self;
-}
+LoopAgent::new("name", vec![agent1, agent2])
+    .with_max_iterations(5)     // Safety limit (recommended)
+    .with_description("Optional description")
+    .before_callback(callback)
+    .after_callback(callback)
+```
+
+### ConditionalAgent
+
+```rust,ignore
+ConditionalAgent::new("name", |ctx| condition_fn, if_agent)
+    .with_else(else_agent)      // Optional else branch
+    .with_description("Optional description")
 ```
 
 ### ExitLoopTool
 
 ```rust,ignore
-impl ExitLoopTool {
-    /// Create a new exit loop tool
-    pub fn new() -> Self;
-}
+// Add to an agent to let it exit a LoopAgent
+.tool(Arc::new(ExitLoopTool::new()))
 ```
 
-## Related
+---
 
-- [LlmAgent](./llm-agent.md) - AI-powered agents that can use workflow agents as sub-agents
-- [Multi-Agent Systems](./multi-agent.md) - Building agent hierarchies
-- [Callbacks](../callbacks/callbacks.md) - Monitoring and customizing agent execution
+**Previous**: [LlmAgent](./llm-agent.md) | **Next**: [Multi-Agent Systems →](./multi-agent.md)
