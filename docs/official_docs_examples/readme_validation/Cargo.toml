@@ -1,0 +1,67 @@
+[package]
+name = "readme_validation"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "gemini_basic"
+path = "src/gemini_basic.rs"
+
+[[bin]]
+name = "openai_basic"
+path = "src/openai_basic.rs"
+
+[[bin]]
+name = "anthropic_basic"
+path = "src/anthropic_basic.rs"
+
+[[bin]]
+name = "deepseek_basic"
+path = "src/deepseek_basic.rs"
+
+[[bin]]
+name = "groq_basic"
+path = "src/groq_basic.rs"
+
+[[bin]]
+name = "ollama_basic"
+path = "src/ollama_basic.rs"
+
+[[bin]]
+name = "realtime_snippet"
+path = "src/realtime_snippet.rs"
+
+[[bin]]
+name = "graph_snippet"
+path = "src/graph_snippet.rs"
+
+[[bin]]
+name = "browser_snippet"
+path = "src/browser_snippet.rs"
+
+[[bin]]
+name = "eval_snippet"
+path = "src/eval_snippet.rs"
+
+[[bin]]
+name = "ui_snippet"
+path = "src/ui_snippet.rs"
+
+[[bin]]
+name = "mistralrs_snippet"
+path = "src/mistralrs_snippet.rs"
+
+[dependencies]
+adk-rust = { path = "../../../adk-rust", features = ["openai", "anthropic", "deepseek", "groq", "ollama", "graph", "ui"] }
+adk-realtime = { path = "../../../adk-realtime", features = ["openai"] }
+adk-eval = { path = "../../../adk-eval" }
+adk-browser = { path = "../../../adk-browser" }
+adk-agent = { path = "../../../adk-agent" }
+adk-model = { path = "../../../adk-model" }
+adk-graph = { path = "../../../adk-graph" }
+adk-core = { path = "../../../adk-core" }
+adk-ui = { path = "../../../adk-ui" }
+tokio = { version = "1", features = ["full"] }
+dotenvy = "0.15"
+serde_json = "1"
+anyhow = "1"

@@ -60,6 +60,12 @@ let filter = ContentFilter::blocked_keywords(vec!["forbidden".into()]);
 
 ### Agent Integration
 
+Requires `guardrails` feature on `adk-agent`:
+
+```toml
+adk-agent = { version = "{{version}}", features = ["guardrails"] }
+```
+
 ```rust
 use adk_agent::LlmAgentBuilder;
 use adk_guardrail::{GuardrailSet, ContentFilter, PiiRedactor};

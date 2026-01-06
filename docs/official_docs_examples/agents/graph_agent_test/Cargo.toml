@@ -1,0 +1,43 @@
+[package]
+name = "graph_agent_test"
+version = "0.1.0"
+edition = "2024"
+default-features = false
+
+[workspace]
+
+[[bin]]
+name = "parallel_processing"
+path = "src/parallel_processing.rs"
+
+[[bin]]
+name = "conditional_routing"
+path = "src/conditional_routing.rs"
+
+[[bin]]
+name = "react_pattern"
+path = "src/react_pattern.rs"
+
+[[bin]]
+name = "supervisor_routing"
+path = "src/supervisor_routing.rs"
+
+[[bin]]
+name = "human_in_loop"
+path = "src/human_in_loop.rs"
+
+[[bin]]
+name = "checkpointing"
+path = "src/checkpointing.rs"
+
+[dependencies]
+adk-graph = { path = "../../../adk-graph", features = ["sqlite"] }
+adk-agent = { path = "../../../adk-agent" }
+adk-model = { path = "../../../adk-model" }
+adk-core = { path = "../../../adk-core" }
+adk-tool = { path = "../../../adk-tool" }
+tokio = { version = "1", features = ["full"] }
+dotenvy = "0.15"
+serde_json = "1.0"
+anyhow = "1.0"
+futures = "0.3"

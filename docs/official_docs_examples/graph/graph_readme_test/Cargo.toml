@@ -1,0 +1,17 @@
+[package]
+name = "graph_readme_test"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "basic"
+path = "src/basic.rs"
+
+[dependencies]
+adk-graph = { path = "../../../../adk-graph" }
+adk-agent = { path = "../../../../adk-agent" }
+adk-model = { path = "../../../../adk-model" }
+adk-core = { path = "../../../../adk-core" }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }

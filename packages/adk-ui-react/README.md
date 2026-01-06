@@ -76,9 +76,12 @@ This package is designed to work with [ADK-Rust](https://adk-rust.com), the Agen
 use adk_ui::UiToolset;
 
 // Add UI rendering tools to your agent
-let agent = LlmAgentBuilder::new("assistant")
-    .tools(UiToolset::all_tools())
-    .build()?;
+let tools = UiToolset::all_tools();
+let mut builder = LlmAgentBuilder::new("assistant");
+for tool in tools {
+    builder = builder.tool(tool);
+}
+let agent = builder.build()?;
 ```
 
 Your agent can then call `render_form`, `render_table`, `render_chart`, and other tools to generate UI that this package renders.

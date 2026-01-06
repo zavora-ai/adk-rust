@@ -1,0 +1,30 @@
+[package]
+name = "realtime_agent_test"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[[bin]]
+name = "basic_realtime"
+path = "src/basic_realtime.rs"
+
+[[bin]]
+name = "realtime_with_tools"
+path = "src/realtime_with_tools.rs"
+
+[[bin]]
+name = "realtime_vad"
+path = "src/realtime_vad.rs"
+
+[[bin]]
+name = "realtime_handoff"
+path = "src/realtime_handoff.rs"
+
+[dependencies]
+adk-realtime = { path = "../../../adk-realtime", features = ["openai"] }
+adk-core = { path = "../../../adk-core" }
+tokio = { version = "1", features = ["full"] }
+dotenvy = "0.15"
+serde_json = "1.0"
+anyhow = "1.0"

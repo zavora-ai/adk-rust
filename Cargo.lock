@@ -13,6 +13,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "a2a_test"
+version = "0.1.0"
+dependencies = [
+ "adk-cli",
+ "adk-core",
+ "adk-rust",
+ "adk-server",
+ "adk-session",
+ "axum 0.8.7",
+ "dotenvy",
+ "serde_json",
+ "tokio",
+ "uuid 1.19.0",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -464,6 +480,8 @@ dependencies = [
  "handlebars",
  "jsonschema 0.26.2",
  "lazy_static",
+ "mime_guess",
+ "rust-embed",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
@@ -715,6 +733,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "artifacts_test"
+version = "0.1.0"
+dependencies = [
+ "adk-artifact",
+ "adk-cli",
+ "adk-core",
+ "adk-rust",
+ "anyhow",
+ "dotenvy",
+ "tokio",
+]
+
+[[package]]
 name = "as-any"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -801,6 +832,13 @@ name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
+
+[[package]]
+name = "auth_test"
+version = "0.1.0"
+dependencies = [
+ "adk-auth",
+]
 
 [[package]]
 name = "autocfg"
@@ -1261,6 +1299,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 
 [[package]]
+name = "callbacks_test"
+version = "0.1.0"
+dependencies = [
+ "adk-agent",
+ "adk-cli",
+ "adk-core",
+ "adk-rust",
+ "anyhow",
+ "async-trait",
+ "dotenvy",
+ "futures",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "candle-core"
 version = "0.9.2-alpha.2"
 source = "git+https://github.com/huggingface/candle.git?rev=8839457#8839457c70316c7e2dd31aca66b264d7b9d21e91"
@@ -1431,6 +1485,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cli_test"
+version = "0.1.0"
+dependencies = [
+ "adk-agent",
+ "adk-artifact",
+ "adk-cli",
+ "adk-core",
+ "adk-model",
+ "tokio",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1547,6 +1613,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b49ba7ef1ad6107f8824dbe97de947cbaac53c44e7f9756a1fba0d37c1eec505"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "core_test"
+version = "0.1.0"
+dependencies = [
+ "adk-core",
+ "serde_json",
 ]
 
 [[package]]
@@ -2224,6 +2298,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "eval_readme_test"
+version = "0.1.0"
+dependencies = [
+ "adk-core",
+ "adk-eval",
+ "tokio",
+]
+
+[[package]]
+name = "eval_test"
+version = "0.1.0"
+dependencies = [
+ "adk-eval",
+ "serde_json",
+]
+
+[[package]]
 name = "event-listener"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2232,6 +2323,17 @@ dependencies = [
  "concurrent-queue",
  "parking",
  "pin-project-lite",
+]
+
+[[package]]
+name = "events_test"
+version = "0.1.0"
+dependencies = [
+ "adk-core",
+ "adk-session",
+ "anyhow",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -2763,6 +2865,38 @@ name = "glob"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
+
+[[package]]
+name = "graph_readme_test"
+version = "0.1.0"
+dependencies = [
+ "adk-agent",
+ "adk-core",
+ "adk-graph",
+ "adk-model",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "guardrail_readme_test"
+version = "0.1.0"
+dependencies = [
+ "adk-agent",
+ "adk-core",
+ "adk-guardrail",
+ "tokio",
+]
+
+[[package]]
+name = "guardrails_test"
+version = "0.1.0"
+dependencies = [
+ "adk-core",
+ "adk-guardrail",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "h2"
@@ -3556,6 +3690,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "launcher_test"
+version = "0.1.0"
+dependencies = [
+ "adk-core",
+ "adk-rust",
+ "dotenvy",
+ "tokio",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3842,6 +3986,16 @@ checksum = "744133e4a0e0a658e1374cf3bf8e415c4052a15a111acd372764c55b4177d490"
 dependencies = [
  "libc",
  "stable_deref_trait",
+]
+
+[[package]]
+name = "memory_test"
+version = "0.1.0"
+dependencies = [
+ "adk-core",
+ "adk-memory",
+ "chrono",
+ "tokio",
 ]
 
 [[package]]
@@ -5371,12 +5525,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "readme_validation"
+version = "0.1.0"
+dependencies = [
+ "adk-agent",
+ "adk-browser",
+ "adk-core",
+ "adk-eval",
+ "adk-graph",
+ "adk-model",
+ "adk-realtime",
+ "adk-rust",
+ "adk-ui",
+ "anyhow",
+ "dotenvy",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "realfft"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f821338fddb99d089116342c46e9f1fbf3828dba077674613e734e01d6ea8677"
 dependencies = [
  "rustfft",
+]
+
+[[package]]
+name = "realtime_readme_test"
+version = "0.1.0"
+dependencies = [
+ "adk-core",
+ "adk-realtime",
+ "tokio",
 ]
 
 [[package]]
@@ -5690,6 +5872,20 @@ dependencies = [
  "num-integer",
  "num-traits",
  "realfft",
+]
+
+[[package]]
+name = "runner_test"
+version = "0.1.0"
+dependencies = [
+ "adk-agent",
+ "adk-artifact",
+ "adk-core",
+ "adk-model",
+ "adk-runner",
+ "adk-session",
+ "futures",
+ "tokio",
 ]
 
 [[package]]
@@ -6317,6 +6513,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sessions_test"
+version = "0.1.0"
+dependencies = [
+ "adk-core",
+ "adk-session",
+ "anyhow",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6856,6 +7063,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "studio_test"
+version = "0.1.0"
+dependencies = [
+ "adk-studio",
+ "axum 0.7.9",
+ "tokio",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7092,6 +7308,16 @@ checksum = "a75fb188eb626b924683e3b95e3a48e63551fcfb51949de2f06a9d91dbee93c9"
 dependencies = [
  "core-foundation-sys",
  "libc",
+]
+
+[[package]]
+name = "telemetry_test"
+version = "0.1.0"
+dependencies = [
+ "adk-telemetry",
+ "anyhow",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -7562,6 +7788,16 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "tool_readme_test"
+version = "0.1.0"
+dependencies = [
+ "adk-core",
+ "adk-tool",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

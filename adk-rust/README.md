@@ -22,7 +22,7 @@ cargo new my_agent && cd my_agent
 [dependencies]
 adk-rust = "{{version}}"
 tokio = { version = "1.40", features = ["full"] }
-dotenv = "0.15"
+dotenvy = "0.15"
 ```
 
 **3. Set your API key:**
@@ -39,8 +39,8 @@ use adk_rust::Launcher;
 use std::sync::Arc;
 
 #[tokio::main]
-async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    dotenv::dotenv().ok();
+async fn main() -> AnyhowResult<()> {
+    dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
     let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
 
@@ -79,8 +79,9 @@ let pipeline = SequentialAgent::new("pipeline", vec![agent1, agent2, agent3]);
 // Parallel execution
 let parallel = ParallelAgent::new("analysis", vec![analyst1, analyst2]);
 
-// Loop until condition
-let loop_agent = LoopAgent::new("refiner", agent, 5);
+// Loop until condition (max 5 iterations)
+let loop_agent = LoopAgent::new("refiner", vec![agent])
+    .with_max_iterations(5);
 ```
 
 ## Multi-Agent Systems
@@ -150,15 +151,21 @@ Give agents web browsing capabilities with 46 tools:
 
 ```rust
 use adk_browser::{BrowserSession, BrowserToolset, BrowserConfig};
+use std::sync::Arc;
 
-let session = BrowserSession::new(BrowserConfig::new("http://localhost:4444")).await?;
+let config = BrowserConfig::new().webdriver_url("http://localhost:4444");
+let session = Arc::new(BrowserSession::new(config));
 let toolset = BrowserToolset::new(session);
 let tools = toolset.all_tools();  // 46 browser tools
 
-let agent = LlmAgentBuilder::new("web_agent")
-    .model(model)
-    .tools(tools)
-    .build()?;
+let mut builder = LlmAgentBuilder::new("web_agent")
+    .model(model);
+
+for tool in tools {
+    builder = builder.tool(tool);
+}
+
+let agent = builder.build()?;
 ```
 
 Tools include navigation, extraction, forms, screenshots, JavaScript execution, and more.

@@ -11,10 +11,12 @@ use std::sync::Arc;
 /// use adk_ui::UiToolset;
 /// use adk_agent::LlmAgentBuilder;
 ///
-/// let ui_tools = UiToolset::new().tools(&ctx).await?;
-/// let agent = LlmAgentBuilder::new("assistant")
-///     .tools(ui_tools)
-///     .build()?;
+/// let tools = UiToolset::all_tools();
+/// let mut builder = LlmAgentBuilder::new("assistant");
+/// for tool in tools {
+///     builder = builder.tool(tool);
+/// }
+/// let agent = builder.build()?;
 /// ```
 pub struct UiToolset {
     include_form: bool,

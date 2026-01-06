@@ -1,0 +1,26 @@
+[package]
+name = "workflow_test"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+adk-rust = { path = "../../../adk-rust", default-features = false, features = ["agents", "models", "tools", "runner", "cli"] }
+tokio = { version = "1.40", features = ["full"] }
+dotenvy = "0.15"
+serde_json = "1.0"
+
+[[bin]]
+name = "sequential_pipeline"
+path = "src/sequential_pipeline.rs"
+
+[[bin]]
+name = "parallel_analysis"
+path = "src/parallel_analysis.rs"
+
+[[bin]]
+name = "loop_refiner"
+path = "src/loop_refiner.rs"
+
+[[bin]]
+name = "conditional_router"
+path = "src/conditional_router.rs"

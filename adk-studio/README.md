@@ -35,17 +35,17 @@ cargo build --release -p adk-studio
 
 ```bash
 # Start ADK Studio server
-adk-studio --port 6000
+adk-studio
 
 # Open in browser
-open http://localhost:6000
+open http://localhost:3000
 ```
 
 ### With Custom Host
 
 ```bash
 # Bind to all interfaces (for remote access)
-adk-studio --host 0.0.0.0 --port 6000
+adk-studio --host 0.0.0.0 --port 8080
 ```
 
 ## Features

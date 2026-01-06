@@ -1,0 +1,17 @@
+[package]
+name = "multi_agent_test"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+adk-rust = { path = "../../../adk-rust", features = ["agents", "models", "tools", "runner", "cli"] }
+tokio = { version = "1", features = ["full"] }
+dotenvy = "0.15"
+
+[[bin]]
+name = "customer_service"
+path = "src/customer_service.rs"
+
+[[bin]]
+name = "hierarchical"
+path = "src/hierarchical.rs"

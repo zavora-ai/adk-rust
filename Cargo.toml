@@ -26,8 +26,28 @@ members = [
     "adk-doc-audit",
 
     # Development packages (not published)
-    "examples", "doc-test/quickstart_test", "doc-test/agents/llm_agent_test",
-    "doc-test/tools/mcp_test",
+    "examples", "docs/official_docs_examples/quickstart_test", "docs/official_docs_examples/agents/llm_agent_test",
+    "docs/official_docs_examples/tools/mcp_test",
+    "docs/official_docs_examples/sessions/sessions_test",
+    "docs/official_docs_examples/callbacks/callbacks_test",
+    "docs/official_docs_examples/artifacts/artifacts_test",
+    "docs/official_docs_examples/events/events_test",
+    "docs/official_docs_examples/observability/telemetry_test",
+    "docs/official_docs_examples/deployment/launcher_test",
+    "docs/official_docs_examples/deployment/a2a_test",
+    "docs/official_docs_examples/evaluation/eval_test",
+    "docs/official_docs_examples/security/auth_test",
+    "docs/official_docs_examples/security/guardrails_test",
+    "docs/official_docs_examples/security/memory_test",
+    "docs/official_docs_examples/studio/studio_test",
+    "docs/official_docs_examples/core/core_test",
+    "docs/official_docs_examples/core/runner_test",
+    "docs/official_docs_examples/cli/cli_test",
+    "docs/official_docs_examples/eval/eval_readme_test",
+    "docs/official_docs_examples/graph/graph_readme_test",
+    "docs/official_docs_examples/guardrail/guardrail_readme_test",
+    "docs/official_docs_examples/realtime/realtime_readme_test",
+    "docs/official_docs_examples/readme_validation",
 ]
 exclude = [
     # Git-only packages with GPU dependencies (build explicitly with: cargo build -p adk-mistralrs)

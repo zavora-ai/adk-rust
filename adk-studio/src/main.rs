@@ -1,5 +1,5 @@
-use adk_studio::{AppState, FileStorage, api_routes};
-use axum::Router;
+use adk_studio::{AppState, FileStorage, api_routes, embedded};
+use axum::{Router, routing::get, extract::Path as AxumPath};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use tower_http::{
@@ -7,6 +7,16 @@ use tower_http::{
     services::{ServeDir, ServeFile},
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+/// Handler for serving embedded static files
+async fn serve_static(AxumPath(path): AxumPath<String>) -> axum::response::Response {
+    embedded::serve_embedded(path)
+}
+
+/// Handler for serving index.html at root
+async fn serve_root() -> axum::response::Response {
+    embedded::serve_index()
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -55,11 +65,19 @@ async fn main() -> anyhow::Result<()> {
 
     let mut app = Router::new().nest("/api", api_routes()).layer(cors).with_state(state);
 
-    // Serve static files if directory provided
+    // Serve static files - external directory takes priority, otherwise use embedded
     if let Some(dir) = static_dir {
         let index = dir.join("index.html");
         app = app.fallback_service(ServeDir::new(&dir).fallback(ServeFile::new(index)));
         tracing::info!("📂 Serving static files from: {}", dir.display());
+    } else {
+        // Serve embedded static files (default)
+        // Use a nested router for static files to avoid route conflicts
+        let static_router = Router::new()
+            .route("/", get(serve_root))
+            .route("/*path", get(serve_static));
+        app = app.merge(static_router);
+        tracing::info!("📦 Serving embedded static files");
     }
 
     let addr = SocketAddr::from((host, port));

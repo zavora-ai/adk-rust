@@ -32,17 +32,25 @@ adk-rust = { version = "{{version}}", features = ["sessions"] }
 ## Quick Start
 
 ```rust
-use adk_session::InMemorySessionService;
-use adk_core::Session;
+use adk_session::{InMemorySessionService, SessionService, CreateRequest, KEY_PREFIX_USER};
+use serde_json::json;
+use std::collections::HashMap;
 
 // Create session service
 let service = InMemorySessionService::new();
 
-// Create a new session
-let session = service.create_session("app_name", "user_123").await?;
+// Create a new session with initial state
+let mut initial_state = HashMap::new();
+initial_state.insert(format!("{}name", KEY_PREFIX_USER), json!("Alice"));
 
-// Access state
-session.state().set("user:name", "Alice".into());
+let session = service.create(CreateRequest {
+    app_name: "my_app".to_string(),
+    user_id: "user_123".to_string(),
+    session_id: None,  // Auto-generate
+    state: initial_state,
+}).await?;
+
+// Read state (immutable)
 let name = session.state().get("user:name");
 ```
 
@@ -57,11 +65,13 @@ ADK uses prefixes to organize state:
 | `temp:` | Temporary data | Current turn only |
 
 ```rust
-// User state persists
-session.state().set("user:theme", "dark".into());
+// State is set at session creation or via CreateRequest
+let mut state = HashMap::new();
+state.insert("user:theme".to_string(), json!("dark"));
+state.insert("temp:current_step".to_string(), json!("2"));
 
-// Temp state cleared each turn
-session.state().set("temp:current_step", "2".into());
+// Read state
+let theme = session.state().get("user:theme");
 ```
 
 ## Features

@@ -1,0 +1,9 @@
+product,region,q1_sales,q2_sales,q3_sales,q4_sales
+Laptop,North,150,180,200,250
+Laptop,South,120,140,160,190
+Phone,North,300,350,400,450
+Phone,South,280,320,380,420
+Tablet,North,80,90,100,120
+Tablet,South,70,85,95,110
+Monitor,North,50,60,70,80
+Monitor,South,45,55,65,75

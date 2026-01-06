@@ -47,12 +47,19 @@ pub trait ReadonlyState: Send + Sync {
 
 ADK-Rust uses three key prefixes to control state scoping:
 
+| Prefix | Constant | Scope |
+|--------|----------|-------|
+| `app:` | `KEY_PREFIX_APP` | Shared across all users and sessions |
+| `user:` | `KEY_PREFIX_USER` | Shared across all sessions for a user |
+| `temp:` | `KEY_PREFIX_TEMP` | Cleared after each invocation |
+| (none) | - | Session-scoped (default) |
+
 ### `app:` - Application State
 
 State shared across all users and sessions of an application.
 
 ```rust
-use adk_rust::session::KEY_PREFIX_APP;
+use adk_session::KEY_PREFIX_APP;
 
 // KEY_PREFIX_APP = "app:"
 let key = format!("{}settings", KEY_PREFIX_APP);  // "app:settings"
@@ -68,7 +75,7 @@ Use cases:
 State shared across all sessions for a specific user.
 
 ```rust
-use adk_rust::session::KEY_PREFIX_USER;
+use adk_session::KEY_PREFIX_USER;
 
 // KEY_PREFIX_USER = "user:"
 let key = format!("{}preferences", KEY_PREFIX_USER);  // "user:preferences"
@@ -84,7 +91,7 @@ Use cases:
 State that is cleared after each invocation. Not persisted.
 
 ```rust
-use adk_rust::session::KEY_PREFIX_TEMP;
+use adk_session::KEY_PREFIX_TEMP;
 
 // KEY_PREFIX_TEMP = "temp:"
 let key = format!("{}current_step", KEY_PREFIX_TEMP);  // "temp:current_step"
@@ -113,38 +120,42 @@ Use cases:
 State can be initialized when creating a session:
 
 ```rust
-use adk_rust::prelude::*;
-use adk_rust::session::{CreateRequest, KEY_PREFIX_APP, KEY_PREFIX_USER};
+use adk_session::{InMemorySessionService, SessionService, CreateRequest, KEY_PREFIX_APP, KEY_PREFIX_USER};
 use serde_json::json;
 use std::collections::HashMap;
 
-let mut initial_state = HashMap::new();
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let mut initial_state = HashMap::new();
 
-// App-scoped state
-initial_state.insert(
-    format!("{}version", KEY_PREFIX_APP),
-    json!("1.0.0")
-);
+    // App-scoped state
+    initial_state.insert(
+        format!("{}version", KEY_PREFIX_APP),
+        json!("1.0.0")
+    );
 
-// User-scoped state
-initial_state.insert(
-    format!("{}name", KEY_PREFIX_USER),
-    json!("Alice")
-);
+    // User-scoped state
+    initial_state.insert(
+        format!("{}name", KEY_PREFIX_USER),
+        json!("Alice")
+    );
 
-// Session-scoped state
-initial_state.insert(
-    "topic".to_string(),
-    json!("Getting started")
-);
+    // Session-scoped state
+    initial_state.insert(
+        "topic".to_string(),
+        json!("Getting started")
+    );
 
-let service = InMemorySessionService::new();
-let session = service.create(CreateRequest {
-    app_name: "my_app".to_string(),
-    user_id: "user_123".to_string(),
-    session_id: None,
-    state: initial_state,
-}).await?;
+    let service = InMemorySessionService::new();
+    let session = service.create(CreateRequest {
+        app_name: "my_app".to_string(),
+        user_id: "user_123".to_string(),
+        session_id: None,
+        state: initial_state,
+    }).await?;
+    
+    Ok(())
+}
 ```
 
 ## Reading State
@@ -152,8 +163,6 @@ let session = service.create(CreateRequest {
 Access state through the session's `state()` method:
 
 ```rust
-use serde_json::json;
-
 let state = session.state();
 
 // Get a specific key
@@ -178,7 +187,7 @@ for (key, value) in all_state {
 State is typically updated through event actions. When an event is appended to a session, its `state_delta` is applied:
 
 ```rust
-use adk_rust::session::{Event, EventActions};
+use adk_session::{Event, EventActions};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -222,16 +231,18 @@ The session service handles state scoping automatically:
 4. Apply `user:` deltas to user state
 5. Apply remaining deltas to session state
 
-## Example: Multi-Scope State
+## Complete Example
 
 ```rust
-use adk_rust::prelude::*;
-use adk_rust::session::{CreateRequest, GetRequest, KEY_PREFIX_APP, KEY_PREFIX_USER, KEY_PREFIX_TEMP};
+use adk_session::{
+    InMemorySessionService, SessionService, CreateRequest, GetRequest,
+    KEY_PREFIX_APP, KEY_PREFIX_USER,
+};
 use serde_json::json;
 use std::collections::HashMap;
 
 #[tokio::main]
-async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     let service = InMemorySessionService::new();
     
     // Create first session with initial state
@@ -341,7 +352,6 @@ When the agent runs, `{user:name}`, `{topic}`, and `{user:language}` are replace
 - [Sessions](sessions.md) - Session management overview
 - [Events](../events/events.md) - Event structure and state_delta
 - [LlmAgent](../agents/llm-agent.md) - Instruction templating
-
 
 ---
 

@@ -1,0 +1,36 @@
+[package]
+name = "providers_test"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[[bin]]
+name = "gemini_example"
+path = "src/gemini_example.rs"
+
+[[bin]]
+name = "openai_example"
+path = "src/openai_example.rs"
+
+[[bin]]
+name = "anthropic_example"
+path = "src/anthropic_example.rs"
+
+[[bin]]
+name = "deepseek_example"
+path = "src/deepseek_example.rs"
+
+[[bin]]
+name = "groq_example"
+path = "src/groq_example.rs"
+
+[[bin]]
+name = "ollama_example"
+path = "src/ollama_example.rs"
+
+[dependencies]
+adk-rust = { path = "../../../../adk-rust", features = ["cli", "openai", "anthropic", "deepseek", "groq", "ollama"] }
+tokio = { version = "1", features = ["full"] }
+dotenvy = "0.15"
+anyhow = "1.0"

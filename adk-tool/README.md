@@ -11,6 +11,7 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 `adk-tool` provides the tool infrastructure for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)):
 
 - **FunctionTool** - Create tools from async Rust functions
+- **AgentTool** - Use agents as callable tools for composition
 - **GoogleSearchTool** - Web search via Gemini's grounding
 - **McpToolset** - Model Context Protocol integration
 - **BasicToolset** - Group multiple tools together
@@ -37,9 +38,11 @@ adk-rust = { version = "{{version}}", features = ["tools"] }
 
 ```rust
 use adk_tool::FunctionTool;
+use adk_core::{ToolContext, Result};
 use serde_json::{json, Value};
+use std::sync::Arc;
 
-async fn get_weather(ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+async fn get_weather(_ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
     let city = args["city"].as_str().unwrap_or("Unknown");
     Ok(json!({
         "city": city,
@@ -53,6 +56,24 @@ let tool = FunctionTool::new(
     "Get current weather for a city",
     get_weather,
 );
+```
+
+### With Parameter Schema (Recommended)
+
+Always add a schema so the LLM knows what parameters to pass:
+
+```rust
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(JsonSchema, Serialize, Deserialize)]
+struct WeatherParams {
+    /// The city to get weather for
+    city: String,
+}
+
+let tool = FunctionTool::new("get_weather", "Get weather", get_weather)
+    .with_parameters_schema::<WeatherParams>();
 ```
 
 ### MCP Tools

@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 
-Production-ready Rust implementation of Google's Agent Development Kit (ADK). Build high-performance, memory-safe AI agent systems with streaming responses, workflow orchestration, and extensible tool integration.
+A comprehensive and production-ready Rust framework for building AI agents. Create powerful and high-performance AI agent systems with a flexible, modular architecture. Model-agnostic. Type-safe. Blazingly fast.
 
 ## Overview
 
@@ -33,7 +33,7 @@ A new visual development environment for building AI agents with drag-and-drop, 
 ```bash
 # Install and run
 cargo install adk-studio
-adk-studio --port 6000
+adk-studio
 ```
 
 **Features**:
@@ -90,7 +90,7 @@ use adk_rust::prelude::*;
 use adk_rust::Launcher;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
     let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
@@ -113,7 +113,7 @@ use adk_rust::prelude::*;
 use adk_rust::Launcher;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("OPENAI_API_KEY")?;
     let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-4o"))?;
@@ -135,7 +135,7 @@ use adk_rust::prelude::*;
 use adk_rust::Launcher;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
     let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-20250514"))?;
@@ -157,7 +157,7 @@ use adk_rust::prelude::*;
 use adk_rust::Launcher;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("DEEPSEEK_API_KEY")?;
 
@@ -184,7 +184,7 @@ use adk_rust::prelude::*;
 use adk_rust::Launcher;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GROQ_API_KEY")?;
     let model = GroqClient::new(GroqConfig::llama70b(api_key))?;
@@ -206,7 +206,7 @@ use adk_rust::prelude::*;
 use adk_rust::Launcher;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
     // Requires: ollama serve && ollama pull llama3.2
     let model = OllamaModel::new(OllamaConfig::new("llama3.2"))?;
@@ -336,7 +336,8 @@ ADK-Rust follows a clean layered architecture from application interface down to
 |-------|---------|--------------|
 | `adk-core` | Foundational traits and types | `Agent` trait, `Content`, `Part`, error types, streaming primitives |
 | `adk-agent` | Agent implementations | `LlmAgent`, `SequentialAgent`, `ParallelAgent`, `LoopAgent`, builder patterns |
-| `adk-model` | LLM integrations | Gemini, OpenAI, Anthropic, Ollama clients, streaming, function calling |
+| `adk-model` | LLM integrations | Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama clients, streaming, function calling |
+| `adk-gemini` | Gemini client | Google Gemini API client with streaming and multimodal support |
 | `adk-mistralrs` | Native local inference | mistral.rs integration, ISQ quantization, LoRA adapters (git-only) |
 | `adk-tool` | Tool system and extensibility | `FunctionTool`, Google Search, MCP protocol, schema validation |
 | `adk-session` | Session and state management | SQLite/in-memory backends, conversation history, state persistence |
@@ -349,7 +350,11 @@ ADK-Rust follows a clean layered architecture from application interface down to
 | `adk-graph` | Graph-based workflows | LangGraph-style orchestration, state management, checkpointing, human-in-the-loop |
 | `adk-browser` | Browser automation | 46 WebDriver tools, navigation, forms, screenshots, PDF generation |
 | `adk-eval` | Agent evaluation | Test definitions, trajectory validation, LLM-judged scoring, rubrics |
-| `adk-auth` | Access control | Role-based permissions, audit logging, tool protection |
+| `adk-guardrail` | Input/output validation | PII redaction, content filtering, JSON schema validation |
+| `adk-auth` | Access control | Role-based permissions, SSO/OAuth, audit logging |
+| `adk-telemetry` | Observability | Structured logging, OpenTelemetry tracing, span helpers |
+| `adk-ui` | Dynamic UI generation | 28 components, 10 templates, React client, streaming updates |
+| `adk-studio` | Visual development | Drag-and-drop agent builder, code generation, live testing |
 
 ## Key Features
 
@@ -501,19 +506,23 @@ Give agents web browsing capabilities using the `adk-browser` crate:
 use adk_browser::{BrowserSession, BrowserToolset, BrowserConfig};
 
 // Create browser session
-let config = BrowserConfig::new("http://localhost:4444");
-let session = BrowserSession::new(config).await?;
+let config = BrowserConfig::new().webdriver_url("http://localhost:4444");
+let session = Arc::new(BrowserSession::new(config));
 
 // Get all 46 browser tools
 let toolset = BrowserToolset::new(session);
 let tools = toolset.all_tools();
 
 // Add to agent
-let agent = LlmAgentBuilder::new("web_agent")
+let mut builder = LlmAgentBuilder::new("web_agent")
     .model(model)
-    .instruction("Browse the web and extract information.")
-    .tools(tools)
-    .build()?;
+    .instruction("Browse the web and extract information.");
+
+for tool in tools {
+    builder = builder.tool(tool);
+}
+
+let agent = builder.build()?;
 ```
 
 **46 Browser Tools**:
@@ -584,12 +593,12 @@ ADK supports multiple LLM providers with a unified API:
 
 | Provider | Model Examples | Feature Flag |
 |----------|---------------|--------------|
-| Gemini | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` | (default) |
-| OpenAI | `gpt-4.1`, `gpt-4.1-mini`, `o3-mini`, `gpt-4o` | `openai` |
-| Anthropic | `claude-sonnet-4`, `claude-opus-4`, `claude-haiku-4` | `anthropic` |
+| Gemini | `gemini-3-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro` | (default) |
+| OpenAI | `gpt-5.2`, `gpt-5`, `gpt-4o`, `gpt-4o-mini` | `openai` |
+| Anthropic | `claude-opus-4-20250514`, `claude-sonnet-4-20250514` | `anthropic` |
 | DeepSeek | `deepseek-chat`, `deepseek-reasoner` | `deepseek` |
 | Groq | `llama-3.3-70b-versatile`, `mixtral-8x7b-32768` | `groq` |
-| Ollama | `llama3.2`, `mistral`, `phi3` | `ollama` |
+| Ollama | `llama3.2`, `qwen2.5`, `mistral` | `ollama` |
 | mistral.rs | Phi-3, Mistral, Llama, Gemma, LLaVa, FLUX | git dependency |
 
 All providers support streaming, function calling, and multimodal inputs (where available).
@@ -664,10 +673,16 @@ The `adk-ui` crate enables agents to render rich user interfaces:
 ```rust
 use adk_ui::{UiToolset, UI_AGENT_PROMPT};
 
-let agent = LlmAgentBuilder::new("ui_assistant")
-    .instruction(UI_AGENT_PROMPT)  // Tested prompt for reliable UI generation
-    .tools(UiToolset::all_tools()) // 10 render tools
-    .build()?;
+let tools = UiToolset::all_tools(); // 10 render tools
+
+let mut builder = LlmAgentBuilder::new("ui_assistant")
+    .instruction(UI_AGENT_PROMPT);  // Tested prompt for reliable UI generation
+
+for tool in tools {
+    builder = builder.tool(tool);
+}
+
+let agent = builder.build()?;
 ```
 
 **React Client**: `npm install @zavora-ai/adk-ui-react`

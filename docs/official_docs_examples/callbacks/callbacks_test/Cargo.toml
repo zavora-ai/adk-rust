@@ -1,0 +1,26 @@
+[package]
+name = "callbacks_test"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.0"
+publish = false
+
+[dependencies]
+adk-rust = { path = "../../../../adk-rust" }
+adk-core = { path = "../../../../adk-core" }
+adk-agent = { path = "../../../../adk-agent" }
+adk-cli = { path = "../../../../adk-cli" }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1.0"
+anyhow = "1.0"
+dotenvy = "0.15"
+async-trait = "0.1"
+futures = "0.3"
+
+[[bin]]
+name = "logging"
+path = "src/logging.rs"
+
+[[bin]]
+name = "guardrails"
+path = "src/guardrails.rs"

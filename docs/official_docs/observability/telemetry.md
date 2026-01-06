@@ -318,9 +318,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .instruction("You are a helpful support agent.")
         .build()?;
     
-    // Agent execution automatically creates spans and logs
-    let runner = Runner::new(Arc::new(agent));
-    let result = runner.run("Hello!").await?;
+    // Use Launcher for simple execution
+    Launcher::new(Arc::new(agent)).run().await?;
     
     Ok(())
 }

@@ -12,12 +12,12 @@ A session represents a single conversation between a user and an agent. Each ses
 - Maintains state data (key-value pairs)
 - Tracks the last update time
 
-## The Session Trait
+## Session Trait
 
 The `Session` trait defines the interface for session objects:
 
 ```rust
-use adk_rust::prelude::*;
+use adk_session::{Events, State};
 use chrono::{DateTime, Utc};
 
 pub trait Session: Send + Sync {
@@ -46,9 +46,9 @@ pub trait Session: Send + Sync {
 The `SessionService` trait defines operations for managing sessions:
 
 ```rust
-use adk_rust::session::{
-    SessionService, CreateRequest, GetRequest, ListRequest, DeleteRequest, Event
-};
+use adk_session::{CreateRequest, GetRequest, ListRequest, DeleteRequest, Event, Session};
+use adk_core::Result;
+use async_trait::async_trait;
 
 #[async_trait]
 pub trait SessionService: Send + Sync {
@@ -73,10 +73,8 @@ pub trait SessionService: Send + Sync {
 
 ### CreateRequest
 
-Used to create a new session:
-
 ```rust
-use adk_rust::session::CreateRequest;
+use adk_session::CreateRequest;
 use std::collections::HashMap;
 
 let request = CreateRequest {
@@ -89,10 +87,8 @@ let request = CreateRequest {
 
 ### GetRequest
 
-Used to retrieve an existing session:
-
 ```rust
-use adk_rust::session::GetRequest;
+use adk_session::GetRequest;
 
 let request = GetRequest {
     app_name: "my_app".to_string(),
@@ -105,10 +101,8 @@ let request = GetRequest {
 
 ### ListRequest
 
-Used to list all sessions for a user:
-
 ```rust
-use adk_rust::session::ListRequest;
+use adk_session::ListRequest;
 
 let request = ListRequest {
     app_name: "my_app".to_string(),
@@ -118,10 +112,8 @@ let request = ListRequest {
 
 ### DeleteRequest
 
-Used to delete a session:
-
 ```rust
-use adk_rust::session::DeleteRequest;
+use adk_session::DeleteRequest;
 
 let request = DeleteRequest {
     app_name: "my_app".to_string(),
@@ -139,12 +131,11 @@ ADK-Rust provides two session service implementations:
 Stores sessions in memory. Ideal for development, testing, and single-instance deployments.
 
 ```rust
-use adk_rust::prelude::*;
-use adk_rust::session::CreateRequest;
+use adk_session::{InMemorySessionService, SessionService, CreateRequest};
 use std::collections::HashMap;
 
 #[tokio::main]
-async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     // Create the service
     let session_service = InMemorySessionService::new();
     
@@ -169,11 +160,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 Stores sessions in a SQLite database. Suitable for production deployments requiring persistence.
 
 ```rust
-use adk_rust::session::{DatabaseSessionService, CreateRequest};
+use adk_session::{DatabaseSessionService, SessionService, CreateRequest};
 use std::collections::HashMap;
 
 #[tokio::main]
-async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     // Connect to database
     let session_service = DatabaseSessionService::new("sqlite:sessions.db").await?;
     
@@ -196,7 +187,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
 > **Note**: The `DatabaseSessionService` requires the `database` feature flag:
 > ```toml
-> adk-rust = { version = "{{version}}", features = ["database"] }
+> adk-session = { version = "0.1", features = ["database"] }
 > ```
 
 ## Session Lifecycle
@@ -206,8 +197,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 Sessions are created with a `CreateRequest`. If no `session_id` is provided, a UUID is generated automatically.
 
 ```rust
-use adk_rust::prelude::*;
-use adk_rust::session::CreateRequest;
+use adk_session::{InMemorySessionService, SessionService, CreateRequest};
 use std::collections::HashMap;
 
 let service = InMemorySessionService::new();
@@ -234,7 +224,7 @@ let session = service.create(CreateRequest {
 Retrieve a session by its identifiers:
 
 ```rust
-use adk_rust::session::GetRequest;
+use adk_session::GetRequest;
 
 let session = service.get(GetRequest {
     app_name: "my_app".to_string(),
@@ -253,7 +243,7 @@ println!("Events: {}", session.events().len());
 Events are appended to sessions as the conversation progresses. This is typically handled by the Runner, but can be done manually:
 
 ```rust
-use adk_rust::session::Event;
+use adk_session::Event;
 
 let event = Event::new("invocation_123");
 service.append_event(session.id(), event).await?;
@@ -264,7 +254,7 @@ service.append_event(session.id(), event).await?;
 List all sessions for a user:
 
 ```rust
-use adk_rust::session::ListRequest;
+use adk_session::ListRequest;
 
 let sessions = service.list(ListRequest {
     app_name: "my_app".to_string(),
@@ -284,7 +274,7 @@ for session in sessions {
 Delete a session when it's no longer needed:
 
 ```rust
-use adk_rust::session::DeleteRequest;
+use adk_session::DeleteRequest;
 
 service.delete(DeleteRequest {
     app_name: "my_app".to_string(),
@@ -293,7 +283,7 @@ service.delete(DeleteRequest {
 }).await?;
 ```
 
-## Using Sessions with Agents
+## Using Sessions with Runner
 
 Sessions are typically managed by the `Runner` when executing agents. The Runner:
 
@@ -304,24 +294,43 @@ Sessions are typically managed by the `Runner` when executing agents. The Runner
 
 ```rust
 use adk_rust::prelude::*;
+use adk_runner::{Runner, RunnerConfig};
+use adk_session::InMemorySessionService;
 use std::sync::Arc;
 
-let api_key = std::env::var("GOOGLE_API_KEY")?;
-let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
 
-let agent = LlmAgentBuilder::new("assistant")
-    .model(Arc::new(model))
-    .build()?;
+    let agent = LlmAgentBuilder::new("assistant")
+        .model(model)
+        .instruction("You are a helpful assistant.")
+        .build()?;
 
-let session_service = Arc::new(InMemorySessionService::new());
+    let session_service = Arc::new(InMemorySessionService::new());
 
-let runner = Runner::new(
-    Arc::new(agent),
-    RunnerConfig::default()
-        .with_session_service(session_service)
-);
+    // Create runner with session service
+    let runner = Runner::new(RunnerConfig {
+        app_name: "my_app".to_string(),
+        agent: Arc::new(agent),
+        session_service,
+        artifact_service: None,
+        memory_service: None,
+        run_config: None,
+    })?;
 
-// The runner manages sessions automatically
+    // Run with user and session IDs
+    let user_content = Content::new("user").with_text("Hello!");
+    let stream = runner.run(
+        "user_123".to_string(),
+        "session_abc".to_string(),
+        user_content,
+    ).await?;
+
+    Ok(())
+}
 ```
 
 ## Events
@@ -359,12 +368,81 @@ for event in events.all() {
 }
 ```
 
+## Complete Example
+
+```rust
+use adk_session::{
+    InMemorySessionService, SessionService, 
+    CreateRequest, GetRequest, ListRequest, DeleteRequest,
+    Event, KEY_PREFIX_USER,
+};
+use serde_json::json;
+use std::collections::HashMap;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let service = InMemorySessionService::new();
+    
+    // Create session with initial state
+    let mut initial_state = HashMap::new();
+    initial_state.insert(format!("{}name", KEY_PREFIX_USER), json!("Alice"));
+    initial_state.insert("topic".to_string(), json!("Getting started"));
+    
+    let session = service.create(CreateRequest {
+        app_name: "demo".to_string(),
+        user_id: "alice".to_string(),
+        session_id: None,
+        state: initial_state,
+    }).await?;
+    
+    println!("Created session: {}", session.id());
+    
+    // Check state
+    let state = session.state();
+    println!("User name: {:?}", state.get("user:name"));
+    println!("Topic: {:?}", state.get("topic"));
+    
+    // Append an event
+    let event = Event::new("inv_001");
+    service.append_event(session.id(), event).await?;
+    
+    // Retrieve session with events
+    let session = service.get(GetRequest {
+        app_name: "demo".to_string(),
+        user_id: "alice".to_string(),
+        session_id: session.id().to_string(),
+        num_recent_events: None,
+        after: None,
+    }).await?;
+    
+    println!("Events: {}", session.events().len());
+    
+    // List all sessions
+    let sessions = service.list(ListRequest {
+        app_name: "demo".to_string(),
+        user_id: "alice".to_string(),
+    }).await?;
+    
+    println!("Total sessions: {}", sessions.len());
+    
+    // Delete session
+    service.delete(DeleteRequest {
+        app_name: "demo".to_string(),
+        user_id: "alice".to_string(),
+        session_id: session.id().to_string(),
+    }).await?;
+    
+    println!("Session deleted");
+    
+    Ok(())
+}
+```
+
 ## Related
 
 - [State Management](state.md) - Managing session state with prefixes
 - [Events](../events/events.md) - Event structure and actions
 - [Runner](../deployment/launcher.md) - Agent execution with sessions
-
 
 ---
 

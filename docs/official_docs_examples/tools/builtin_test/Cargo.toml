@@ -1,0 +1,25 @@
+[package]
+name = "builtin_test"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-rust = { path = "../../../../adk-rust" }
+adk-tool = { path = "../../../../adk-tool" }
+adk-core = { path = "../../../../adk-core" }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1.0"
+dotenvy = "0.15"
+anyhow = "1.0"
+
+[[bin]]
+name = "google_search"
+path = "src/google_search.rs"
+
+[[bin]]
+name = "exit_loop"
+path = "src/exit_loop.rs"

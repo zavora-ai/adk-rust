@@ -24,11 +24,16 @@ use adk_ui::{UiToolset, UI_AGENT_PROMPT};
 use adk_agent::LlmAgentBuilder;
 
 // Add all 10 UI tools to an agent with the tested system prompt
-let agent = LlmAgentBuilder::new("assistant")
+let tools = UiToolset::all_tools();
+let mut builder = LlmAgentBuilder::new("assistant")
     .model(model)
-    .instruction(UI_AGENT_PROMPT)  // Tested prompt for reliable tool usage
-    .tools(UiToolset::all_tools())
-    .build()?;
+    .instruction(UI_AGENT_PROMPT);  // Tested prompt for reliable tool usage
+
+for tool in tools {
+    builder = builder.tool(tool);
+}
+
+let agent = builder.build()?;
 ```
 
 ## Modules

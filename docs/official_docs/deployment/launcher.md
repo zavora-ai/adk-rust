@@ -213,7 +213,7 @@ async fn main() -> Result<()> {
         .description("An agent that provides weather information")
         .instruction("You are a weather assistant. Use the get_weather tool to provide weather information.")
         .model(model)
-        .tools(vec![Arc::new(weather_tool)])
+        .tool(Arc::new(weather_tool))
         .build()?;
     
     // Run with Launcher (supports both console and server modes via CLI)

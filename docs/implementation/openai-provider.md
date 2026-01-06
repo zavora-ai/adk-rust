@@ -483,12 +483,11 @@ let weather_tool = FunctionTool::new(
     },
 );
 
-let agent = LlmAgent::builder()
-    .name("weather_assistant")
+let agent = LlmAgentBuilder::new("weather_assistant")
     .model(Arc::new(model))
     .instruction("You help users check weather.")
-    .tools(vec![Arc::new(weather_tool)])
-    .build();
+    .tool(Arc::new(weather_tool))
+    .build()?;
 ```
 
 ---

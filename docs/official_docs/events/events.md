@@ -430,9 +430,9 @@ After a tool executes, the result is returned in a function response:
 ```rust
 if let Some(content) = &event.llm_response.content {
     for part in &content.parts {
-        if let Part::FunctionResponse { name, response } = part {
-            println!("Tool result from: {}", name);
-            println!("Response: {}", response);
+        if let Part::FunctionResponse { function_response, .. } = part {
+            println!("Tool result from: {}", function_response.name);
+            println!("Response: {}", function_response.response);
 
             // Process the tool result
             // The LLM will use this to continue the conversation

@@ -11,9 +11,9 @@ Semantic memory and search for Rust Agent Development Kit (ADK-Rust) agents.
 `adk-memory` provides long-term memory capabilities for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)):
 
 - **InMemoryMemoryService** - Simple in-memory memory storage
+- **MemoryService** - Trait for custom storage backends
 - **Semantic Search** - Query memories by content similarity
-- **Memory Entries** - Structured memory with metadata
-- **Automatic Injection** - Memory context added to agent prompts
+- **Memory Entries** - Structured memory with content and metadata
 
 ## Installation
 
@@ -32,60 +32,73 @@ adk-rust = { version = "{{version}}", features = ["memory"] }
 ## Quick Start
 
 ```rust
-use adk_memory::InMemoryMemoryService;
-use adk_core::MemoryEntry;
+use adk_memory::{InMemoryMemoryService, MemoryService, MemoryEntry, SearchRequest};
+use adk_core::Content;
+use chrono::Utc;
 
 // Create memory service
 let service = InMemoryMemoryService::new();
 
-// Add a memory
-service.add_memory(
-    "app_name",
-    "user_123",
+// Add memories from a session
+let entries = vec![
     MemoryEntry {
-        content: "User prefers dark mode".to_string(),
-        metadata: Default::default(),
+        content: Content::new("user").with_text("User prefers dark mode"),
+        author: "system".to_string(),
         timestamp: Utc::now(),
     },
+];
+
+service.add_session(
+    "my_app",
+    "user_123",
+    "session_456",
+    entries,
 ).await?;
 
 // Search memories
-let results = service.search_memory(
-    "app_name",
-    "user_123",
-    "what theme does the user like?",
-    5, // top_k
-).await?;
+let response = service.search(SearchRequest {
+    query: "what theme does the user like?".to_string(),
+    user_id: "user_123".to_string(),
+    app_name: "my_app".to_string(),
+}).await?;
+
+for memory in response.memories {
+    println!("Found: {:?}", memory.content);
+}
 ```
-
-## Memory in Agents
-
-Memory is automatically searched when configured:
-
-```rust
-let agent = LlmAgentBuilder::new("assistant")
-    .model(Arc::new(model))
-    .include_memory(5) // Include top 5 relevant memories
-    .build()?;
-```
-
-The runner automatically injects relevant memories into the agent's context.
 
 ## Memory Entry Structure
 
 ```rust
 pub struct MemoryEntry {
-    pub content: String,
-    pub metadata: HashMap<String, String>,
-    pub timestamp: DateTime<Utc>,
+    pub content: Content,           // Message content with parts
+    pub author: String,             // Who created this memory
+    pub timestamp: DateTime<Utc>,   // When it was created
+}
+```
+
+## MemoryService Trait
+
+```rust
+#[async_trait]
+pub trait MemoryService: Send + Sync {
+    async fn add_session(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        entries: Vec<MemoryEntry>,
+    ) -> Result<()>;
+    
+    async fn search(&self, req: SearchRequest) -> Result<SearchResponse>;
 }
 ```
 
 ## Features
 
 - Per-user memory isolation
-- Metadata filtering
-- Timestamp-based ordering
+- Simple keyword-based search
+- Timestamp tracking
 - Pluggable storage backends
 
 ## Related Crates

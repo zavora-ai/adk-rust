@@ -1231,9 +1231,8 @@ let graph_agent = GraphAgent::builder("workflow")
     // ... graph definition
     .build()?;
 
-// Use with standard ADK runner
-let runner = Runner::new(Arc::new(graph_agent));
-let events = runner.run(session, content).await?;
+// GraphAgent implements Agent trait - use with Launcher or Runner
+// See adk-runner README for Runner configuration
 ```
 
 ## Examples

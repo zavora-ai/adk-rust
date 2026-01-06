@@ -44,8 +44,8 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create browser session
-    let config = BrowserConfig::new("http://localhost:4444");
-    let session = BrowserSession::new(config).await?;
+    let config = BrowserConfig::new().webdriver_url("http://localhost:4444");
+    let session = Arc::new(BrowserSession::new(config));
 
     // Create toolset with all 46 tools
     let toolset = BrowserToolset::new(session);
@@ -206,15 +206,18 @@ Tools that target elements accept CSS selectors:
 ```rust
 use adk_browser::{BrowserSession, BrowserToolset, BrowserConfig};
 use adk_agent::LlmAgentBuilder;
+use std::sync::Arc;
 
-let session = BrowserSession::new(BrowserConfig::new("http://localhost:4444")).await?;
+let config = BrowserConfig::new().webdriver_url("http://localhost:4444");
+let session = Arc::new(BrowserSession::new(config));
 
 let toolset = BrowserToolset::new(session)
     .with_navigation(true)
     .with_extraction(true)
     .with_screenshots(true);
 
-let agent = LlmAgentBuilder::new("researcher")
+let tools = toolset.selected_tools();
+let mut builder = LlmAgentBuilder::new("researcher")
     .model(model)
     .instruction(r#"
         You are a web research assistant. When asked about a topic:
@@ -222,20 +225,25 @@ let agent = LlmAgentBuilder::new("researcher")
         2. Extract key information using browser_extract_text
         3. Take screenshots of important content
         4. Summarize your findings
-    "#)
-    .tools(toolset.selected_tools())
-    .build()?;
+    "#);
+
+for tool in tools {
+    builder = builder.tool(tool);
+}
+
+let agent = builder.build()?;
 ```
 
 ## Configuration
 
 ```rust
-let config = BrowserConfig::new("http://localhost:4444")
-    .with_headless(true)          // Run headless (if supported)
-    .with_timeout(Duration::from_secs(30))
-    .with_implicit_wait(Duration::from_secs(10));
+let config = BrowserConfig::new()
+    .webdriver_url("http://localhost:4444")
+    .headless(true)
+    .page_load_timeout(30)
+    .implicit_wait(10);
 
-let session = BrowserSession::new(config).await?;
+let session = Arc::new(BrowserSession::new(config));
 ```
 
 ## WebDriver Options
