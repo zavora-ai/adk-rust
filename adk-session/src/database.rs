@@ -160,11 +160,14 @@ impl SessionService for DatabaseSessionService {
         let mut new_app_state = app_state.clone();
         new_app_state.extend(app_delta);
 
+        let app_state_json = serde_json::to_string(&new_app_state)
+            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {}", e)))?;
+
         sqlx::query(
             "INSERT OR REPLACE INTO app_states (app_name, state, updated_at) VALUES (?, ?, ?)",
         )
         .bind(&req.app_name)
-        .bind(serde_json::to_string(&new_app_state).unwrap())
+        .bind(&app_state_json)
         .bind(now.to_rfc3339())
         .execute(&mut *tx)
         .await
@@ -187,10 +190,13 @@ impl SessionService for DatabaseSessionService {
         let mut new_user_state = user_state.clone();
         new_user_state.extend(user_delta);
 
+        let user_state_json = serde_json::to_string(&new_user_state)
+            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {}", e)))?;
+
         sqlx::query("INSERT OR REPLACE INTO user_states (app_name, user_id, state, updated_at) VALUES (?, ?, ?, ?)")
             .bind(&req.app_name)
             .bind(&req.user_id)
-            .bind(serde_json::to_string(&new_user_state).unwrap())
+            .bind(&user_state_json)
             .bind(now.to_rfc3339())
             .execute(&mut *tx)
             .await
@@ -198,12 +204,14 @@ impl SessionService for DatabaseSessionService {
 
         // Create session
         let merged_state = Self::merge_states(&new_app_state, &new_user_state, &session_state);
+        let merged_state_json = serde_json::to_string(&merged_state)
+            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {}", e)))?;
 
         sqlx::query("INSERT INTO sessions (app_name, user_id, session_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
             .bind(&req.app_name)
             .bind(&req.user_id)
             .bind(&session_id)
-            .bind(serde_json::to_string(&merged_state).unwrap())
+            .bind(&merged_state_json)
             .bind(now.to_rfc3339())
             .bind(now.to_rfc3339())
             .execute(&mut *tx)
@@ -233,11 +241,14 @@ impl SessionService for DatabaseSessionService {
             .await
             .map_err(|_| adk_core::AdkError::Session("session not found".into()))?;
 
-        let state: HashMap<String, Value> = serde_json::from_str(row.get("state")).unwrap();
+        let state: HashMap<String, Value> = serde_json::from_str(row.get("state"))
+            .map_err(|e| adk_core::AdkError::Session(format!("deserialize failed: {}", e)))?;
         let updated_at: String = row.get("updated_at");
-        let updated_at = DateTime::parse_from_rfc3339(&updated_at).unwrap().with_timezone(&Utc);
+        let updated_at = DateTime::parse_from_rfc3339(&updated_at)
+            .map_err(|e| adk_core::AdkError::Session(format!("parse date failed: {}", e)))?
+            .with_timezone(&Utc);
 
-        let mut events: Vec<Event> = sqlx::query("SELECT * FROM events WHERE app_name = ? AND user_id = ? AND session_id = ? ORDER BY timestamp")
+        let events: Vec<Event> = sqlx::query("SELECT * FROM events WHERE app_name = ? AND user_id = ? AND session_id = ? ORDER BY timestamp")
             .bind(&req.app_name)
             .bind(&req.user_id)
             .bind(&req.session_id)
@@ -245,14 +256,15 @@ impl SessionService for DatabaseSessionService {
             .await
             .map_err(|e| adk_core::AdkError::Session(format!("query failed: {}", e)))?
             .into_iter()
-            .map(|row| {
-                let llm_response = serde_json::from_str(row.get("llm_response")).unwrap();
-                let actions = serde_json::from_str(row.get("actions")).unwrap();
-                let long_running_tool_ids = serde_json::from_str(row.get("long_running_tool_ids")).unwrap();
+            .filter_map(|row| {
+                let llm_response = serde_json::from_str(row.get("llm_response")).ok()?;
+                let actions = serde_json::from_str(row.get("actions")).ok()?;
+                let long_running_tool_ids = serde_json::from_str(row.get("long_running_tool_ids")).ok()?;
                 let timestamp: String = row.get("timestamp");
-                Event {
+                let timestamp = DateTime::parse_from_rfc3339(&timestamp).ok()?.with_timezone(&Utc);
+                Some(Event {
                     id: row.get("id"),
-                    timestamp: DateTime::parse_from_rfc3339(&timestamp).unwrap().with_timezone(&Utc),
+                    timestamp,
                     invocation_id: row.get("invocation_id"),
                     invocation_id_camel: row.get("invocation_id"),
                     branch: row.get("branch"),
@@ -263,9 +275,11 @@ impl SessionService for DatabaseSessionService {
                     long_running_tool_ids,
                     gcp_llm_request: None,
                     gcp_llm_response: None,
-                }
+                })
             })
             .collect();
+
+        let mut events = events;
 
         if let Some(num) = req.num_recent_events {
             let start = events.len().saturating_sub(num);
@@ -297,9 +311,12 @@ impl SessionService for DatabaseSessionService {
 
         let mut sessions = Vec::new();
         for row in rows {
-            let state: HashMap<String, Value> = serde_json::from_str(row.get("state")).unwrap();
+            let state: HashMap<String, Value> = serde_json::from_str(row.get("state"))
+                .unwrap_or_default();
             let updated_at: String = row.get("updated_at");
-            let updated_at = DateTime::parse_from_rfc3339(&updated_at).unwrap().with_timezone(&Utc);
+            let updated_at = DateTime::parse_from_rfc3339(&updated_at)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
 
             sessions.push(Box::new(DatabaseSession {
                 app_name: req.app_name.clone(),
@@ -329,6 +346,13 @@ impl SessionService for DatabaseSessionService {
     async fn append_event(&self, session_id: &str, mut event: Event) -> Result<()> {
         event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
 
+        let llm_response_json = serde_json::to_string(&event.llm_response)
+            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {}", e)))?;
+        let actions_json = serde_json::to_string(&event.actions)
+            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {}", e)))?;
+        let tool_ids_json = serde_json::to_string(&event.long_running_tool_ids)
+            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {}", e)))?;
+
         sqlx::query("INSERT INTO events (id, app_name, user_id, session_id, invocation_id, branch, author, timestamp, llm_response, actions, long_running_tool_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(&event.id)
             .bind("") // app_name - need to fetch from session
@@ -338,9 +362,9 @@ impl SessionService for DatabaseSessionService {
             .bind(&event.branch)
             .bind(&event.author)
             .bind(event.timestamp.to_rfc3339())
-            .bind(serde_json::to_string(&event.llm_response).unwrap())
-            .bind(serde_json::to_string(&event.actions).unwrap())
-            .bind(serde_json::to_string(&event.long_running_tool_ids).unwrap())
+            .bind(&llm_response_json)
+            .bind(&actions_json)
+            .bind(&tool_ids_json)
             .execute(&self.pool)
             .await
             .map_err(|e| adk_core::AdkError::Session(format!("insert failed: {}", e)))?;
