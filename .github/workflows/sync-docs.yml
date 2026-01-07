@@ -35,7 +35,9 @@ jobs:
       - name: Sync docs to website
         run: |
           rm -rf website/frontend/docs/*
+          rm -rf website/backend/docs/adk-rust/*
           cp -r adk-rust/docs/official_docs/* website/frontend/docs/
+          cp -r adk-rust/docs/official_docs/* website/backend/docs/adk-rust/
           
       - name: Commit and push
         run: |
