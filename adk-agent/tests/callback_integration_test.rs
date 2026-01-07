@@ -169,7 +169,8 @@ impl InvocationContext for MockContext {
         &self.session
     }
     fn run_config(&self) -> &RunConfig {
-        unimplemented!()
+        static RUN_CONFIG: std::sync::OnceLock<RunConfig> = std::sync::OnceLock::new();
+        RUN_CONFIG.get_or_init(RunConfig::default)
     }
     fn end_invocation(&self) {}
     fn ended(&self) -> bool {
