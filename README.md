@@ -3,6 +3,7 @@
 [![CI](https://github.com/zavora-ai/adk-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/zavora-ai/adk-rust/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/adk-rust.svg)](https://crates.io/crates/adk-rust)
 [![docs.rs](https://docs.rs/adk-rust/badge.svg)](https://docs.rs/adk-rust)
+[![Wiki](https://img.shields.io/badge/docs-Wiki-blue)](https://github.com/zavora-ai/adk-rust/wiki)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 
@@ -808,7 +809,7 @@ cargo build --release
 
 ## Documentation
 
-- **Website**: [adk-rust.com](https://adk-rust.com) - Official documentation and guides
+- **Wiki**: [GitHub Wiki](https://github.com/zavora-ai/adk-rust/wiki) - Comprehensive guides and tutorials
 - **API Reference**: [docs.rs/adk-rust](https://docs.rs/adk-rust) - Full API documentation
 - **Examples**: [examples/README.md](examples/README.md) - 80+ working examples with detailed explanations
 
