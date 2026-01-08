@@ -39,6 +39,14 @@ jobs:
           cp -r adk-rust/docs/official_docs/* website/frontend/docs/
           cp -r adk-rust/docs/official_docs/* website/backend/docs/adk-rust/
           
+          # Copy images to public folder for serving
+          mkdir -p website/frontend/public/docs-images
+          find website/frontend/docs -type d -name "images" | while read dir; do
+            parent=$(dirname "$dir" | sed 's|website/frontend/docs/||')
+            mkdir -p "website/frontend/public/docs-images/$parent"
+            cp -r "$dir"/* "website/frontend/public/docs-images/$parent/" 2>/dev/null || true
+          done
+          
       - name: Commit and push
         run: |
           cd website
