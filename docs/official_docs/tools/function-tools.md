@@ -342,7 +342,7 @@ This adds a note to prevent the LLM from calling the tool repeatedly.
 ## Run Examples
 
 ```bash
-cd doc-test/tools/function_tools_test
+cd official_docs_examples/tools/function_tools_test
 
 # Basic tool with closure
 cargo run --bin basic

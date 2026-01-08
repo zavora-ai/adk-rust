@@ -445,7 +445,7 @@ All 28 component types support optional `id` fields for streaming updates:
 A reference React implementation is provided:
 
 ```bash
-cd doc-test/tools/ui_test
+cd official_docs_examples/tools/ui_test
 
 # Start the UI server
 cargo run --bin ui_server
@@ -490,7 +490,7 @@ Three examples demonstrate UI tools:
 | `ui_server` | HTTP server with SSE | `cargo run --bin ui_server` |
 | `ui_react_client` | React frontend | `cd ui_react_client && npm run dev` |
 
-Run from `doc-test/tools/ui_test/`.
+Run from `official_docs_examples/tools/ui_test/`.
 
 ## Sample Prompts
 

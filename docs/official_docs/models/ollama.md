@@ -281,8 +281,8 @@ ollama list
 ## Running Examples
 
 ```bash
-# From the doc-test folder
-cd doc-test/models/providers_test
+# From the official_docs_examples folder
+cd official_docs_examples/models/providers_test
 cargo run --bin ollama_example
 ```
 

@@ -80,4 +80,4 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 
 ## Validation Status
 
-All code samples in this documentation are validated through working examples in the `doc-test/` packages. Each documentation page has corresponding examples that compile and execute successfully.
+All code samples in this documentation are validated through working examples in the `official_docs_examples/` packages. Each documentation page has corresponding examples that compile and execute successfully.
