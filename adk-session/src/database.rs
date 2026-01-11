@@ -311,8 +311,8 @@ impl SessionService for DatabaseSessionService {
 
         let mut sessions = Vec::new();
         for row in rows {
-            let state: HashMap<String, Value> = serde_json::from_str(row.get("state"))
-                .unwrap_or_default();
+            let state: HashMap<String, Value> =
+                serde_json::from_str(row.get("state")).unwrap_or_default();
             let updated_at: String = row.get("updated_at");
             let updated_at = DateTime::parse_from_rfc3339(&updated_at)
                 .map(|dt| dt.with_timezone(&Utc))

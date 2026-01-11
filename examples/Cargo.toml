@@ -482,9 +482,8 @@ name = "mistralrs_diffusion"
 path = "mistralrs_diffusion/main.rs"
 required-features = ["mistralrs"]
 
-[[example]]
-name = "ralph_autonomous_agent"
-path = "ralph_autonomous_agent/main.rs"
+# Note: ralph is now a separate crate at examples/ralph/
+# Run with: cargo run -p ralph
 
 [features]
 default = []
