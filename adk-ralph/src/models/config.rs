@@ -96,8 +96,8 @@ fn default_temperature() -> f32 {
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {
-            provider: "anthropic".to_string(),
-            model_name: "claude-sonnet-4-20250514".to_string(),
+            provider: "gemini".to_string(),
+            model_name: "gemini-2.5-flash".to_string(),
             thinking_enabled: false,
             max_tokens: default_max_tokens(),
             temperature: default_temperature(),

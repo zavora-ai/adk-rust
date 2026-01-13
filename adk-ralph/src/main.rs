@@ -226,8 +226,11 @@ async fn resume_pipeline(config: RalphConfig, phase: PipelinePhase, prompt: &str
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load .env file if present
-    dotenvy::dotenv().ok();
+    // Load .env file - try multiple locations
+    let loaded = dotenvy::dotenv().is_ok();
+    if !loaded {
+        let _ = dotenvy::from_filename("adk-ralph/.env");
+    }
 
     // Parse command line arguments
     let cli = Cli::parse();
