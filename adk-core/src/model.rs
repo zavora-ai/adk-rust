@@ -64,6 +64,25 @@ impl LlmRequest {
     pub fn new(model: impl Into<String>, contents: Vec<Content>) -> Self {
         Self { model: model.into(), contents, config: None, tools: HashMap::new() }
     }
+
+    /// Set the response schema for structured output.
+    pub fn with_response_schema(mut self, schema: serde_json::Value) -> Self {
+        let config = self.config.get_or_insert(GenerateContentConfig {
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_output_tokens: None,
+            response_schema: None,
+        });
+        config.response_schema = Some(schema);
+        self
+    }
+
+    /// Set the generation config.
+    pub fn with_config(mut self, config: GenerateContentConfig) -> Self {
+        self.config = Some(config);
+        self
+    }
 }
 
 impl LlmResponse {
@@ -90,6 +109,41 @@ mod tests {
         let req = LlmRequest::new("test-model", vec![]);
         assert_eq!(req.model, "test-model");
         assert!(req.contents.is_empty());
+    }
+
+    #[test]
+    fn test_llm_request_with_response_schema() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" }
+            }
+        });
+        let req = LlmRequest::new("test-model", vec![])
+            .with_response_schema(schema.clone());
+        
+        assert!(req.config.is_some());
+        let config = req.config.unwrap();
+        assert!(config.response_schema.is_some());
+        assert_eq!(config.response_schema.unwrap(), schema);
+    }
+
+    #[test]
+    fn test_llm_request_with_config() {
+        let config = GenerateContentConfig {
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            top_k: Some(40),
+            max_output_tokens: Some(1024),
+            response_schema: None,
+        };
+        let req = LlmRequest::new("test-model", vec![])
+            .with_config(config);
+        
+        assert!(req.config.is_some());
+        let config = req.config.unwrap();
+        assert_eq!(config.temperature, Some(0.7));
+        assert_eq!(config.max_output_tokens, Some(1024));
     }
 
     #[test]

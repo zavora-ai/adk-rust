@@ -1,0 +1,57 @@
+[package]
+name = "adk-ralph"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Ralph - Multi-Agent Autonomous Development System for ADK-Rust"
+keywords = ["adk", "agent", "autonomous", "development", "llm"]
+categories = ["development-tools", "asynchronous"]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "ralph"
+path = "src/main.rs"
+
+[dependencies]
+# ADK dependencies
+adk-core = { workspace = true }
+adk-agent = { workspace = true }
+adk-model = { workspace = true, features = ["openai", "anthropic", "gemini"] }
+adk-tool = { workspace = true }
+adk-runner = { workspace = true }
+adk-session = { workspace = true }
+adk-telemetry = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+async-stream = { workspace = true }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Utilities
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+opentelemetry = { workspace = true }
+
+# CLI and display
+clap = { version = "4", features = ["derive"] }
+colored = "2"
+dotenvy = "0.15"
+
+[dev-dependencies]
+tempfile = "3"
+proptest = "1.4"
+dotenvy = "0.15"

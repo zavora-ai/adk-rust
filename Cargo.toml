@@ -24,6 +24,7 @@ members = [
     "adk-rust",
     "adk-gemini",
     "adk-doc-audit",
+    "adk-ralph",
 
     # Development packages (not published)
     "examples",

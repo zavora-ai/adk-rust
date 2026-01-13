@@ -1,0 +1,286 @@
+{
+  "project": "bookstore-api",
+  "language": "python",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Foundation",
+      "sprints": [
+        {
+          "id": "sprint-1",
+          "name": "Project Setup",
+          "tasks": [
+            {
+              "id": "TASK-001",
+              "title": "Initialize Python project",
+              "description": "Create requirements.txt with FastAPI, SQLAlchemy, Pydantic, Alembic, python-jose, passlib, pytest dependencies",
+              "priority": 1,
+              "status": "pending",
+              "dependencies": [],
+              "user_story_id": "US-001",
+              "estimated_complexity": "low"
+            },
+            {
+              "id": "TASK-002",
+              "title": "Set up database configuration",
+              "description": "Create database.py with SQLAlchemy engine, session factory, and base model",
+              "priority": 1,
+              "status": "pending",
+              "dependencies": ["TASK-001"],
+              "user_story_id": "US-001",
+              "estimated_complexity": "low"
+            },
+            {
+              "id": "TASK-003",
+              "title": "Create Book model and schema",
+              "description": "Define Book SQLAlchemy model and Pydantic schemas for create/update/response",
+              "priority": 1,
+              "status": "pending",
+              "dependencies": ["TASK-002"],
+              "user_story_id": "US-001",
+              "estimated_complexity": "medium"
+            },
+            {
+              "id": "TASK-004",
+              "title": "Create User model and schema",
+              "description": "Define User SQLAlchemy model with role enum, Pydantic schemas",
+              "priority": 1,
+              "status": "pending",
+              "dependencies": ["TASK-002"],
+              "user_story_id": "US-003",
+              "estimated_complexity": "medium"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "Authentication",
+      "sprints": [
+        {
+          "id": "sprint-2",
+          "name": "Auth Implementation",
+          "tasks": [
+            {
+              "id": "TASK-005",
+              "title": "Implement password hashing",
+              "description": "Create password.py with hash and verify functions using passlib bcrypt",
+              "priority": 1,
+              "status": "pending",
+              "dependencies": ["TASK-004"],
+              "user_story_id": "US-003",
+              "estimated_complexity": "low"
+            },
+            {
+              "id": "TASK-006",
+              "title": "Implement JWT utilities",
+              "description": "Create jwt.py with token creation and validation using python-jose",
+              "priority": 1,
+              "status": "pending",
+              "dependencies": ["TASK-004"],
+              "user_story_id": "US-004",
+              "estimated_complexity": "medium"
+            },
+            {
+              "id": "TASK-007",
+              "title": "Create auth dependencies",
+              "description": "Create FastAPI dependencies for getting current user and checking roles",
+              "priority": 1,
+              "status": "pending",
+              "dependencies": ["TASK-006"],
+              "user_story_id": "US-005",
+              "estimated_complexity": "medium"
+            },
+            {
+              "id": "TASK-008",
+              "title": "Implement auth routes",
+              "description": "Create /auth/register, /auth/login, /auth/refresh endpoints",
+              "priority": 1,
+              "status": "pending",
+              "dependencies": ["TASK-005", "TASK-007"],
+              "user_story_id": "US-003",
+              "estimated_complexity": "medium"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "Core Features",
+      "sprints": [
+        {
+          "id": "sprint-3",
+          "name": "Book Management",
+          "tasks": [
+            {
+              "id": "TASK-009",
+              "title": "Implement book service",
+              "description": "Create book_service.py with CRUD operations and search logic",
+              "priority": 1,
+              "status": "pending",
+              "dependencies": ["TASK-003"],
+              "user_story_id": "US-001",
+              "estimated_complexity": "medium"
+            },
+            {
+              "id": "TASK-010",
+              "title": "Implement book routes",
+              "description": "Create /books endpoints with pagination, filtering, and role-based access",
+              "priority": 1,
+              "status": "pending",
+              "dependencies": ["TASK-007", "TASK-009"],
+              "user_story_id": "US-001",
+              "estimated_complexity": "medium"
+            },
+            {
+              "id": "TASK-011",
+              "title": "Implement book search",
+              "description": "Add search by title/author, filter by category, price range, availability",
+              "priority": 1,
+              "status": "pending",
+              "dependencies": ["TASK-010"],
+              "user_story_id": "US-002",
+              "estimated_complexity": "medium"
+            }
+          ]
+        },
+        {
+          "id": "sprint-4",
+          "name": "Cart and Orders",
+          "tasks": [
+            {
+              "id": "TASK-012",
+              "title": "Create Cart and Order models",
+              "description": "Define CartItem, Order, OrderItem SQLAlchemy models and Pydantic schemas",
+              "priority": 1,
+              "status": "pending",
+              "dependencies": ["TASK-003", "TASK-004"],
+              "user_story_id": "US-006",
+              "estimated_complexity": "medium"
+            },
+            {
+              "id": "TASK-013",
+              "title": "Implement cart service and routes",
+              "description": "Create cart_service.py and /cart endpoints",
+              "priority": 2,
+              "status": "pending",
+              "dependencies": ["TASK-012"],
+              "user_story_id": "US-006",
+              "estimated_complexity": "medium"
+            },
+            {
+              "id": "TASK-014",
+              "title": "Implement order service",
+              "description": "Create order_service.py with order creation, stock validation, cart clearing",
+              "priority": 1,
+              "status": "pending",
+              "dependencies": ["TASK-012", "TASK-013"],
+              "user_story_id": "US-007",
+              "estimated_complexity": "high"
+            },
+            {
+              "id": "TASK-015",
+              "title": "Implement order routes",
+              "description": "Create /orders endpoints for listing and creating orders",
+              "priority": 1,
+              "status": "pending",
+              "dependencies": ["TASK-014"],
+              "user_story_id": "US-007",
+              "estimated_complexity": "medium"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "name": "Polish",
+      "sprints": [
+        {
+          "id": "sprint-5",
+          "name": "Additional Features",
+          "tasks": [
+            {
+              "id": "TASK-016",
+              "title": "Implement bulk import",
+              "description": "Add POST /books/import endpoint for CSV file upload",
+              "priority": 3,
+              "status": "pending",
+              "dependencies": ["TASK-010"],
+              "user_story_id": "US-008",
+              "estimated_complexity": "medium"
+            },
+            {
+              "id": "TASK-017",
+              "title": "Set up Alembic migrations",
+              "description": "Initialize Alembic, create initial migration for all models",
+              "priority": 2,
+              "status": "pending",
+              "dependencies": ["TASK-012"],
+              "user_story_id": "US-001",
+              "estimated_complexity": "medium"
+            },
+            {
+              "id": "TASK-018",
+              "title": "Add OpenAPI documentation",
+              "description": "Configure FastAPI OpenAPI with descriptions, examples, tags",
+              "priority": 2,
+              "status": "pending",
+              "dependencies": ["TASK-015"],
+              "user_story_id": "US-001",
+              "estimated_complexity": "low"
+            }
+          ]
+        },
+        {
+          "id": "sprint-6",
+          "name": "Testing",
+          "tasks": [
+            {
+              "id": "TASK-019",
+              "title": "Set up test fixtures",
+              "description": "Create conftest.py with test database, client, and factory fixtures",
+              "priority": 2,
+              "status": "pending",
+              "dependencies": ["TASK-017"],
+              "user_story_id": "US-001",
+              "estimated_complexity": "medium"
+            },
+            {
+              "id": "TASK-020",
+              "title": "Write auth tests",
+              "description": "Test registration, login, token refresh, role-based access",
+              "priority": 2,
+              "status": "pending",
+              "dependencies": ["TASK-019"],
+              "user_story_id": "US-003",
+              "estimated_complexity": "medium"
+            },
+            {
+              "id": "TASK-021",
+              "title": "Write book tests",
+              "description": "Test CRUD operations, search, filtering, pagination",
+              "priority": 2,
+              "status": "pending",
+              "dependencies": ["TASK-019"],
+              "user_story_id": "US-001",
+              "estimated_complexity": "medium"
+            },
+            {
+              "id": "TASK-022",
+              "title": "Write order tests",
+              "description": "Test cart operations, order creation, stock validation",
+              "priority": 2,
+              "status": "pending",
+              "dependencies": ["TASK-019"],
+              "user_story_id": "US-007",
+              "estimated_complexity": "medium"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

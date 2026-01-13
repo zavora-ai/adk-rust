@@ -12,6 +12,9 @@ use tracing::Instrument;
 
 use crate::guardrails::GuardrailSet;
 
+/// Default maximum number of LLM round-trips (iterations) before the agent stops.
+pub const DEFAULT_MAX_ITERATIONS: u32 = 100;
+
 pub struct LlmAgent {
     name: String,
     description: String,
@@ -31,6 +34,8 @@ pub struct LlmAgent {
     tools: Vec<Arc<dyn Tool>>,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
+    /// Maximum number of LLM round-trips before stopping
+    max_iterations: u32,
     before_callbacks: Arc<Vec<BeforeAgentCallback>>,
     after_callbacks: Arc<Vec<AfterAgentCallback>>,
     before_model_callbacks: Arc<Vec<BeforeModelCallback>>,
@@ -72,6 +77,7 @@ pub struct LlmAgentBuilder {
     tools: Vec<Arc<dyn Tool>>,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
+    max_iterations: u32,
     before_callbacks: Vec<BeforeAgentCallback>,
     after_callbacks: Vec<AfterAgentCallback>,
     before_model_callbacks: Vec<BeforeModelCallback>,
@@ -100,6 +106,7 @@ impl LlmAgentBuilder {
             tools: Vec::new(),
             sub_agents: Vec::new(),
             output_key: None,
+            max_iterations: DEFAULT_MAX_ITERATIONS,
             before_callbacks: Vec::new(),
             after_callbacks: Vec::new(),
             before_model_callbacks: Vec::new(),
@@ -168,6 +175,13 @@ impl LlmAgentBuilder {
 
     pub fn output_key(mut self, key: impl Into<String>) -> Self {
         self.output_key = Some(key.into());
+        self
+    }
+
+    /// Set the maximum number of LLM round-trips (iterations) before the agent stops.
+    /// Default is 100.
+    pub fn max_iterations(mut self, max: u32) -> Self {
+        self.max_iterations = max;
         self
     }
 
@@ -257,6 +271,7 @@ impl LlmAgentBuilder {
             tools: self.tools,
             sub_agents: self.sub_agents,
             output_key: self.output_key,
+            max_iterations: self.max_iterations,
             before_callbacks: Arc::new(self.before_callbacks),
             after_callbacks: Arc::new(self.after_callbacks),
             before_model_callbacks: Arc::new(self.before_model_callbacks),
@@ -389,6 +404,7 @@ impl Agent for LlmAgent {
         let output_key = self.output_key.clone();
         let output_schema = self.output_schema.clone();
         let include_contents = self.include_contents;
+        let max_iterations = self.max_iterations;
         // Clone Arc references (cheap)
         let before_agent_callbacks = self.before_callbacks.clone();
         let after_agent_callbacks = self.after_callbacks.clone();
@@ -576,7 +592,6 @@ impl Agent for LlmAgent {
 
 
             // Multi-turn loop with max iterations
-            let max_iterations = 10;
             let mut iteration = 0;
 
             loop {

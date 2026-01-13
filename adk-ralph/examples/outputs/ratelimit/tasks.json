@@ -1,0 +1,25 @@
+{
+  "project": "Create a Go library for",
+  "language": "rust",
+  "phases": [],
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Core Functionality",
+      "description": "As a user, I want create a go library for rate limiting called ratelimit., so that I can accomplish my goals.",
+      "priority": 1,
+      "status": "completed",
+      "dependencies": [],
+      "user_story_id": "US-001",
+      "estimated_complexity": "low",
+      "files_created": [],
+      "files_modified": [],
+      "commit_hash": null,
+      "attempts": 0,
+      "notes": ""
+    }
+  ],
+  "version": "1.0",
+  "created_at": "2026-01-11T15:07:47.509445+00:00",
+  "updated_at": "2026-01-11T15:07:47.593742+00:00"
+}

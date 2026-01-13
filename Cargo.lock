@@ -348,6 +348,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-ralph"
+version = "0.2.0"
+dependencies = [
+ "adk-agent",
+ "adk-core",
+ "adk-model",
+ "adk-runner",
+ "adk-session",
+ "adk-telemetry",
+ "adk-tool",
+ "async-stream",
+ "async-trait",
+ "chrono",
+ "clap",
+ "colored 2.2.0",
+ "dotenvy",
+ "futures",
+ "opentelemetry",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid 1.19.0",
+]
+
+[[package]]
 name = "adk-realtime"
 version = "0.2.0"
 dependencies = [
@@ -1517,6 +1547,16 @@ name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
+
+[[package]]
+name = "colored"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
+dependencies = [
+ "lazy_static",
+ "windows-sys 0.59.0",
+]
 
 [[package]]
 name = "colored"
@@ -5355,7 +5395,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "colored",
+ "colored 3.0.0",
  "dotenvy",
  "serde",
  "serde_json",

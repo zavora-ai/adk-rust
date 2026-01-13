@@ -229,11 +229,18 @@ impl Llm for GeminiModel {
 
         // Add generation config
         if let Some(config) = req.config {
+            let has_schema = config.response_schema.is_some();
             let gen_config = adk_gemini::GenerationConfig {
                 temperature: config.temperature,
                 top_p: config.top_p,
                 top_k: config.top_k,
                 max_output_tokens: config.max_output_tokens,
+                response_schema: config.response_schema,
+                response_mime_type: if has_schema {
+                    Some("application/json".to_string())
+                } else {
+                    None
+                },
                 ..Default::default()
             };
             builder = builder.with_generation_config(gen_config);
