@@ -12,6 +12,7 @@
 
 use crate::agents::{ArchitectAgent, CompletionStatus, PrdAgent, RalphLoopAgent};
 use crate::models::{DesignDocument, PrdDocument, RalphConfig, TaskList};
+use crate::output::RalphOutput;
 use crate::telemetry::{
     architect_design_span, log_completion, log_error, prd_generation_span, start_timing,
 };
@@ -99,6 +100,8 @@ pub struct RalphOrchestrator {
     project_path: PathBuf,
     /// Current state
     state: OrchestratorState,
+    /// Output handler for human-readable progress
+    output: RalphOutput,
 }
 
 impl std::fmt::Debug for RalphOrchestrator {
@@ -117,6 +120,7 @@ impl RalphOrchestrator {
         config.validate()?;
 
         let project_path = PathBuf::from(&config.project_path);
+        let output = RalphOutput::new(config.debug_level);
 
         // Create project directory if it doesn't exist
         if !project_path.exists() {
@@ -134,6 +138,7 @@ impl RalphOrchestrator {
             config,
             project_path,
             state: OrchestratorState::default(),
+            output,
         })
     }
 
@@ -198,6 +203,7 @@ impl RalphOrchestrator {
         // Check if PRD already exists
         let prd_path = self.project_path.join(&self.config.prd_path);
         if prd_path.exists() {
+            self.output.status("Found existing PRD, loading...");
             info!("PRD file already exists, loading it");
             let prd = PrdDocument::load_markdown(&prd_path)
                 .map_err(RalphError::Prd)?;
@@ -207,6 +213,7 @@ impl RalphOrchestrator {
         }
 
         // Use PRD Agent to generate requirements
+        self.output.status("Generating requirements with PRD Agent...");
         info!("Using PRD Agent to generate requirements");
         
         let prd_agent = PrdAgent::builder()
@@ -218,6 +225,7 @@ impl RalphOrchestrator {
 
         let prd = prd_agent.generate(prompt).await?;
 
+        self.output.status(&format!("Saved PRD to {}", self.config.prd_path));
         info!(
             prd_path = %prd_path.display(),
             user_stories = prd.user_stories.len(),
@@ -259,6 +267,7 @@ impl RalphOrchestrator {
         let tasks_path = self.project_path.join(&self.config.tasks_path);
 
         if design_path.exists() && tasks_path.exists() {
+            self.output.status("Found existing design and tasks, loading...");
             info!("Design and tasks files already exist, loading them");
             let design = DesignDocument::load_markdown(&design_path)
                 .map_err(RalphError::Design)?;
@@ -273,6 +282,7 @@ impl RalphOrchestrator {
         }
 
         // Create and run the Architect Agent
+        self.output.status("Generating system design with Architect Agent...");
         let architect = ArchitectAgent::builder()
             .model_config(self.config.agents.architect_model.clone())
             .prd_path(&self.config.prd_path)
@@ -284,6 +294,10 @@ impl RalphOrchestrator {
 
         let (design, tasks) = architect.generate().await?;
 
+        self.output.status(&format!(
+            "Saved design to {}, tasks to {}",
+            self.config.design_path, self.config.tasks_path
+        ));
         info!(
             design_path = %design_path.display(),
             tasks_path = %tasks_path.display(),
@@ -383,16 +397,39 @@ impl RalphOrchestrator {
         let _timing = start_timing("full_pipeline");
 
         // Phase 1: Requirements
-        info!("Phase 1: Requirements Generation");
+        self.output.phase("Phase 1: Requirements Generation");
+        self.output.status("Analyzing project description...");
+        
         let prd = self.run_requirements_phase(prompt).await?;
+        
+        // Show user stories summary
+        self.output.phase_complete(&format!(
+            "Generated {} user stories:",
+            prd.user_stories.len()
+        ));
+        for story in &prd.user_stories {
+            self.output.list_item(&format!("{}: {}", story.id, story.title));
+        }
         info!(
             user_stories = prd.user_stories.len(),
             "Requirements phase complete"
         );
 
         // Phase 2: Design
-        info!("Phase 2: Design & Task Breakdown");
+        self.output.phase("Phase 2: Design & Task Breakdown");
+        self.output.status("Creating system architecture...");
+        
         let (design, tasks) = self.run_design_phase().await?;
+        
+        // Show tasks summary
+        self.output.phase_complete(&format!(
+            "Created {} components, {} tasks:",
+            design.components.len(),
+            tasks.get_stats().total
+        ));
+        for task in &tasks.tasks {
+            self.output.list_item(&format!("{}: {}", task.id, task.title));
+        }
         info!(
             components = design.components.len(),
             tasks = tasks.get_stats().total,
@@ -400,8 +437,11 @@ impl RalphOrchestrator {
         );
 
         // Phase 3: Implementation
-        info!("Phase 3: Implementation");
+        self.output.phase("Phase 3: Implementation");
+        self.output.status("Starting task implementation loop...");
+        
         let status = self.run_implementation_phase().await?;
+        
         info!(status = %status, "Implementation phase complete");
 
         Ok(status)

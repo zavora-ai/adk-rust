@@ -251,6 +251,8 @@ impl RalphLoopAgentBuilder {
     /// Set the Ralph configuration.
     pub fn config(mut self, config: RalphConfig) -> Self {
         self.model_config = config.agents.ralph_model.clone();
+        // Update project_path from config
+        self.project_path = PathBuf::from(&config.project_path);
         self.config = config;
         self
     }
@@ -521,6 +523,7 @@ impl RalphLoopAgent {
         // Track iterations and tool calls
         let mut iteration_count = 0u32;
         let mut tool_call_count = 0u32;
+        let mut _current_task: Option<String> = None;
 
         // Process events with level-appropriate output
         while let Some(event_result) = event_stream.next().await {
@@ -529,11 +532,71 @@ impl RalphLoopAgent {
                     // Process content parts
                     if let Some(ref content) = event.llm_response.content {
                         for part in &content.parts {
-                            // Track tool calls
-                            if matches!(part, Part::FunctionCall { .. }) {
+                            // Track tool calls and detect task changes
+                            if let Part::FunctionCall { name, args, .. } = part {
                                 tool_call_count += 1;
+                                
+                                // Detect task operations to show progress
+                                if name == "tasks" {
+                                    if let Some(op) = args.get("operation").and_then(|v| v.as_str()) {
+                                        match op {
+                                            "get_next" => {
+                                                output.status("Getting next task...");
+                                            }
+                                            "update_status" => {
+                                                if let Some(task_id) = args.get("task_id").and_then(|v| v.as_str()) {
+                                                    if let Some(status) = args.get("status").and_then(|v| v.as_str()) {
+                                                        if status == "in_progress" {
+                                                            _current_task = Some(task_id.to_string());
+                                                            output.task_start(task_id, "Starting implementation");
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            "complete" => {
+                                                if let Some(task_id) = args.get("task_id").and_then(|v| v.as_str()) {
+                                                    output.task_complete(task_id, true);
+                                                    _current_task = None;
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                
+                                // Show file operations at normal level
+                                if name == "file" {
+                                    if let Some(op) = args.get("operation").and_then(|v| v.as_str()) {
+                                        if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+                                            match op {
+                                                "write" => output.status(&format!("Writing {}", path)),
+                                                "read" => output.status(&format!("Reading {}", path)),
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                // Show test runs
+                                if name == "test" {
+                                    if let Some(op) = args.get("operation").and_then(|v| v.as_str()) {
+                                        if op == "run" {
+                                            output.status("Running tests...");
+                                        }
+                                    }
+                                }
+                                
+                                // Show git operations
+                                if name == "git" {
+                                    if let Some(op) = args.get("operation").and_then(|v| v.as_str()) {
+                                        if op == "commit" {
+                                            output.status("Committing changes...");
+                                        }
+                                    }
+                                }
                             }
-                            // Output based on debug level
+                            
+                            // Output based on debug level (verbose shows all tool details)
                             process_event_part(&output, part);
                         }
                     }

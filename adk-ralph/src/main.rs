@@ -30,6 +30,10 @@ struct Cli {
     #[arg(short = 'd', long, value_enum, global = true)]
     debug: Option<CliDebugLevel>,
 
+    /// Project output directory (overrides RALPH_PROJECT_PATH)
+    #[arg(short = 'p', long, global = true)]
+    project_path: Option<String>,
+
     /// Project description (when no subcommand is used)
     #[arg(trailing_var_arg = true)]
     prompt: Vec<String>,
@@ -81,13 +85,21 @@ enum Commands {
     Config,
 }
 
-/// Initialize telemetry based on configuration.
-fn init_telemetry(config: &TelemetryConfig) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    if !config.enabled {
-        // If telemetry is disabled, just set up basic logging
-        use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+/// Initialize telemetry based on configuration and debug level.
+fn init_telemetry(config: &TelemetryConfig, debug_level: DebugLevel) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+    
+    // Determine log level based on debug level
+    let log_level = match debug_level {
+        DebugLevel::Minimal | DebugLevel::Normal => "error", // Suppress INFO logs for clean output
+        DebugLevel::Verbose => "warn",
+        DebugLevel::Debug => &config.log_level, // Use configured level for debug mode
+    };
+    
+    // For minimal/normal, we want clean output without tracing logs
+    if matches!(debug_level, DebugLevel::Minimal | DebugLevel::Normal) {
         let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+            .unwrap_or_else(|_| EnvFilter::new(log_level));
         tracing_subscriber::registry()
             .with(fmt::layer().with_target(false))
             .with(filter)
@@ -95,7 +107,18 @@ fn init_telemetry(config: &TelemetryConfig) -> std::result::Result<(), Box<dyn s
         return Ok(());
     }
 
-    // Use adk-telemetry for full telemetry support
+    if !config.enabled {
+        // If telemetry is disabled, just set up basic logging
+        let filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(log_level));
+        tracing_subscriber::registry()
+            .with(fmt::layer().with_target(false))
+            .with(filter)
+            .init();
+        return Ok(());
+    }
+
+    // Use adk-telemetry for full telemetry support (verbose/debug modes)
     if let Some(ref endpoint) = config.otlp_endpoint {
         // Initialize with OTLP export for distributed tracing and metrics
         adk_telemetry::init_with_otlp(&config.service_name, endpoint)?;
@@ -255,10 +278,15 @@ async fn resume_pipeline(config: RalphConfig, phase: PipelinePhase, prompt: &str
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load .env file - try multiple locations
-    let loaded = dotenvy::dotenv().is_ok();
-    if !loaded {
-        let _ = dotenvy::from_filename("adk-ralph/.env");
+    // Load .env file from current directory
+    match dotenvy::dotenv() {
+        Ok(path) => {
+            // .env loaded successfully
+            eprintln!("Loaded config from: {}", path.display());
+        }
+        Err(_) => {
+            // No .env file found - that's okay, will use env vars or defaults
+        }
     }
 
     // Parse command line arguments
@@ -268,25 +296,39 @@ async fn main() -> Result<()> {
     let mut config = match RalphConfig::from_env() {
         Ok(c) => c,
         Err(e) => {
+            let cwd = std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| ".".to_string());
+            
             eprintln!("{}: {}", "Configuration Error".red().bold(), e);
             eprintln!();
-            eprintln!("Please set the required environment variables:");
-            eprintln!("  RALPH_MODEL_PROVIDER  - LLM provider (anthropic, openai, gemini)");
-            eprintln!("  RALPH_MODEL_NAME      - Model name");
-            eprintln!("  ANTHROPIC_API_KEY     - API key (for Anthropic)");
-            eprintln!("  OPENAI_API_KEY        - API key (for OpenAI)");
-            eprintln!("  GEMINI_API_KEY        - API key (for Gemini)");
+            eprintln!("Create a {} file at:", ".env".cyan());
+            eprintln!("  {}", format!("{}/.env", cwd).yellow());
+            eprintln!();
+            eprintln!("With contents:");
+            eprintln!("  # Required: API key for your provider");
+            eprintln!("  GEMINI_API_KEY=your-api-key");
+            eprintln!("  # or ANTHROPIC_API_KEY=your-api-key");
+            eprintln!("  # or OPENAI_API_KEY=your-api-key");
+            eprintln!();
+            eprintln!("  # Optional: customize project output location");
+            eprintln!("  RALPH_PROJECT_PATH=/path/to/project");
+            eprintln!();
+            eprintln!("See {} for all options.", "adk-ralph/.env.example".cyan());
             std::process::exit(1);
         }
     };
 
-    // Override debug level from CLI if provided
+    // Override from CLI if provided
     if let Some(debug_level) = cli.debug {
         config.debug_level = debug_level.into();
     }
+    if let Some(ref path) = cli.project_path {
+        config.project_path = path.clone();
+    }
 
     // Initialize telemetry
-    if let Err(e) = init_telemetry(&config.telemetry) {
+    if let Err(e) = init_telemetry(&config.telemetry, config.debug_level) {
         eprintln!("{}: {}", "Telemetry Warning".yellow(), e);
         eprintln!("Continuing without full telemetry support...");
     }

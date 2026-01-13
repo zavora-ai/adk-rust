@@ -51,6 +51,27 @@ impl RalphOutput {
         }
     }
 
+    /// Print a status message within a phase (shown at Normal and above).
+    pub fn status(&self, message: &str) {
+        if self.level.is_normal() {
+            println!("  {} {}", "•".bright_black(), message);
+        }
+    }
+
+    /// Print a phase completion message (shown at Normal and above).
+    pub fn phase_complete(&self, message: &str) {
+        if self.level.is_normal() {
+            println!("  {} {}", "✓".bright_green(), message.green());
+        }
+    }
+
+    /// Print a list item (shown at Normal and above).
+    pub fn list_item(&self, message: &str) {
+        if self.level.is_normal() {
+            println!("    {} {}", "─".bright_black(), message);
+        }
+    }
+
     /// Print a task start message (shown at Normal and above).
     pub fn task_start(&self, task_id: &str, title: &str) {
         if self.level.is_normal() {
