@@ -3,6 +3,7 @@
 //! This module provides configuration structures for:
 //! - Per-agent model settings (PRD, Architect, Ralph Loop)
 //! - Telemetry configuration
+//! - Debug/output verbosity levels
 //! - Overall system configuration
 //!
 //! ## Validation
@@ -14,6 +15,7 @@
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::Path;
+use std::str::FromStr;
 
 /// Supported model providers.
 pub const SUPPORTED_PROVIDERS: &[&str] = &["openai", "anthropic", "gemini", "ollama"];
@@ -26,6 +28,78 @@ pub const MAX_TOKENS_LIMIT: usize = 1_000_000;
 
 /// Maximum allowed value for max_task_retries.
 pub const MAX_RETRIES_LIMIT: usize = 100;
+
+/// Debug/output verbosity level for Ralph execution.
+///
+/// Controls how much information is displayed during execution:
+/// - `Minimal`: Only errors and final status
+/// - `Normal`: Human-readable progress without technical details (default)
+/// - `Verbose`: Detailed progress with tool calls and responses
+/// - `Debug`: Full debug output including all internal state
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DebugLevel {
+    /// Only errors and final completion status
+    Minimal,
+    /// Human-readable progress updates (default)
+    #[default]
+    Normal,
+    /// Detailed output with tool calls
+    Verbose,
+    /// Full debug output with all internal state
+    Debug,
+}
+
+impl DebugLevel {
+    /// Check if this level shows minimal output only.
+    pub fn is_minimal(&self) -> bool {
+        matches!(self, DebugLevel::Minimal)
+    }
+
+    /// Check if this level shows normal or higher output.
+    pub fn is_normal(&self) -> bool {
+        !matches!(self, DebugLevel::Minimal)
+    }
+
+    /// Check if this level shows verbose or higher output.
+    pub fn is_verbose(&self) -> bool {
+        matches!(self, DebugLevel::Verbose | DebugLevel::Debug)
+    }
+
+    /// Check if this level shows debug output.
+    pub fn is_debug(&self) -> bool {
+        matches!(self, DebugLevel::Debug)
+    }
+}
+
+impl std::fmt::Display for DebugLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DebugLevel::Minimal => write!(f, "minimal"),
+            DebugLevel::Normal => write!(f, "normal"),
+            DebugLevel::Verbose => write!(f, "verbose"),
+            DebugLevel::Debug => write!(f, "debug"),
+        }
+    }
+}
+
+impl FromStr for DebugLevel {
+    type Err = ValidationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "minimal" | "min" | "quiet" | "q" => Ok(DebugLevel::Minimal),
+            "normal" | "default" | "n" => Ok(DebugLevel::Normal),
+            "verbose" | "v" => Ok(DebugLevel::Verbose),
+            "debug" | "d" | "trace" => Ok(DebugLevel::Debug),
+            _ => Err(ValidationError::new(
+                "debug_level",
+                format!("Invalid debug level '{}'", s),
+            )
+            .with_suggestion("Valid levels: minimal, normal, verbose, debug")),
+        }
+    }
+}
 
 /// Validation error with context and suggestions.
 #[derive(Debug, Clone)]
@@ -446,6 +520,9 @@ pub struct RalphConfig {
     pub agents: AgentModelConfig,
     /// Telemetry configuration
     pub telemetry: TelemetryConfig,
+    /// Debug/output verbosity level
+    #[serde(default)]
+    pub debug_level: DebugLevel,
     /// Maximum number of iterations before terminating
     #[serde(default = "default_max_iterations")]
     pub max_iterations: usize,
@@ -509,6 +586,7 @@ impl Default for RalphConfig {
         Self {
             agents: AgentModelConfig::default(),
             telemetry: TelemetryConfig::default(),
+            debug_level: DebugLevel::default(),
             max_iterations: default_max_iterations(),
             prd_path: default_prd_path(),
             design_path: default_design_path(),
@@ -594,6 +672,11 @@ impl RalphConfig {
                 )
                 .with_suggestion("Use a positive integer like 3 or 5")
             })?;
+        }
+
+        // Load debug level
+        if let Ok(level) = env::var("RALPH_DEBUG_LEVEL") {
+            config.debug_level = level.parse()?;
         }
 
         config.validate()?;
@@ -807,6 +890,12 @@ impl RalphConfigBuilder {
         self
     }
 
+    /// Set the debug/output verbosity level.
+    pub fn debug_level(mut self, level: DebugLevel) -> Self {
+        self.config.debug_level = level;
+        self
+    }
+
     /// Build the configuration, validating it first.
     pub fn build(self) -> Result<RalphConfig, ValidationError> {
         self.config.validate()?;
@@ -1004,5 +1093,86 @@ mod tests {
         let err = ValidationError::new("field", "message")
             .with_suggestion("try this");
         assert_eq!(err.to_string(), "field: message. try this");
+    }
+
+    #[test]
+    fn test_debug_level_parsing() {
+        // Valid levels
+        assert_eq!("minimal".parse::<DebugLevel>().unwrap(), DebugLevel::Minimal);
+        assert_eq!("min".parse::<DebugLevel>().unwrap(), DebugLevel::Minimal);
+        assert_eq!("quiet".parse::<DebugLevel>().unwrap(), DebugLevel::Minimal);
+        assert_eq!("q".parse::<DebugLevel>().unwrap(), DebugLevel::Minimal);
+        
+        assert_eq!("normal".parse::<DebugLevel>().unwrap(), DebugLevel::Normal);
+        assert_eq!("default".parse::<DebugLevel>().unwrap(), DebugLevel::Normal);
+        assert_eq!("n".parse::<DebugLevel>().unwrap(), DebugLevel::Normal);
+        
+        assert_eq!("verbose".parse::<DebugLevel>().unwrap(), DebugLevel::Verbose);
+        assert_eq!("v".parse::<DebugLevel>().unwrap(), DebugLevel::Verbose);
+        
+        assert_eq!("debug".parse::<DebugLevel>().unwrap(), DebugLevel::Debug);
+        assert_eq!("d".parse::<DebugLevel>().unwrap(), DebugLevel::Debug);
+        assert_eq!("trace".parse::<DebugLevel>().unwrap(), DebugLevel::Debug);
+        
+        // Case insensitive
+        assert_eq!("MINIMAL".parse::<DebugLevel>().unwrap(), DebugLevel::Minimal);
+        assert_eq!("Verbose".parse::<DebugLevel>().unwrap(), DebugLevel::Verbose);
+        
+        // Invalid
+        assert!("invalid".parse::<DebugLevel>().is_err());
+    }
+
+    #[test]
+    fn test_debug_level_display() {
+        assert_eq!(DebugLevel::Minimal.to_string(), "minimal");
+        assert_eq!(DebugLevel::Normal.to_string(), "normal");
+        assert_eq!(DebugLevel::Verbose.to_string(), "verbose");
+        assert_eq!(DebugLevel::Debug.to_string(), "debug");
+    }
+
+    #[test]
+    fn test_debug_level_checks() {
+        // Minimal
+        assert!(DebugLevel::Minimal.is_minimal());
+        assert!(!DebugLevel::Minimal.is_normal());
+        assert!(!DebugLevel::Minimal.is_verbose());
+        assert!(!DebugLevel::Minimal.is_debug());
+        
+        // Normal
+        assert!(!DebugLevel::Normal.is_minimal());
+        assert!(DebugLevel::Normal.is_normal());
+        assert!(!DebugLevel::Normal.is_verbose());
+        assert!(!DebugLevel::Normal.is_debug());
+        
+        // Verbose
+        assert!(!DebugLevel::Verbose.is_minimal());
+        assert!(DebugLevel::Verbose.is_normal());
+        assert!(DebugLevel::Verbose.is_verbose());
+        assert!(!DebugLevel::Verbose.is_debug());
+        
+        // Debug
+        assert!(!DebugLevel::Debug.is_minimal());
+        assert!(DebugLevel::Debug.is_normal());
+        assert!(DebugLevel::Debug.is_verbose());
+        assert!(DebugLevel::Debug.is_debug());
+    }
+
+    #[test]
+    fn test_debug_level_default() {
+        assert_eq!(DebugLevel::default(), DebugLevel::Normal);
+    }
+
+    #[test]
+    fn test_ralph_config_debug_level() {
+        // Default is Normal
+        let config = RalphConfig::default();
+        assert_eq!(config.debug_level, DebugLevel::Normal);
+        
+        // Builder can set it
+        let config = RalphConfig::builder()
+            .debug_level(DebugLevel::Verbose)
+            .build()
+            .unwrap();
+        assert_eq!(config.debug_level, DebugLevel::Verbose);
     }
 }

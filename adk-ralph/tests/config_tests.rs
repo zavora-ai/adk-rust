@@ -8,7 +8,7 @@ use adk_ralph::{
 #[test]
 fn test_model_config_defaults() {
     let config = ModelConfig::default();
-    assert_eq!(config.provider, "anthropic");
+    assert_eq!(config.provider, "gemini");
     assert!(!config.thinking_enabled);
     assert_eq!(config.max_tokens, 4096);
 }

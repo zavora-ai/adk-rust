@@ -19,6 +19,7 @@
 //! - Test-before-commit workflow via TestTool
 //! - Progress recording via ProgressTool
 //! - Completion detection via ExitLoopTool
+//! - Configurable debug output levels
 //!
 //! ## Requirements Validated
 //!
@@ -27,6 +28,7 @@
 //! - 7.4: WHEN starting each iteration, THE Ralph_Loop_Agent SHALL read `progress.json`
 
 use crate::models::{DesignDocument, ModelConfig, RalphConfig};
+use crate::output::{process_event_part, RalphOutput};
 use crate::tools::{FileTool, GitTool, ProgressTool, TaskTool, TestTool};
 use crate::{RalphError, Result};
 use adk_agent::{LlmAgentBuilder, LoopAgent};
@@ -447,20 +449,24 @@ impl RalphLoopAgent {
     /// 2. Runs until completion or max iterations
     /// 3. Returns a CompletionStatus based on task state
     ///
-    /// Outputs verbose narration of what the LLM is doing.
+    /// Output verbosity is controlled by the `debug_level` config setting.
     pub async fn run(&self) -> Result<CompletionStatus> {
         use adk_core::{Content, Part};
         use adk_runner::{Runner, RunnerConfig};
         use adk_session::{CreateRequest, InMemorySessionService, SessionService};
-        use colored::Colorize;
         use futures::StreamExt;
 
-        println!("\n{}", "═".repeat(70).bright_cyan());
-        println!("{}", "  🤖 RALPH LOOP AGENT STARTING".bright_green().bold());
-        println!("{}", "═".repeat(70).bright_cyan());
-        println!("  Project: {}", self.project_path.display());
-        println!("  Max iterations: {}", self.config.max_iterations);
-        println!("{}\n", "═".repeat(70).bright_cyan());
+        // Create output handler based on debug level
+        let output = RalphOutput::new(self.config.debug_level);
+
+        // Show startup info based on debug level
+        if output.level().is_normal() {
+            output.phase("Ralph Loop Agent");
+            if output.level().is_verbose() {
+                output.debug("config", &format!("project: {}", self.project_path.display()));
+                output.debug("config", &format!("max_iterations: {}", self.config.max_iterations));
+            }
+        }
 
         // Create session service and session
         let session_service = Arc::new(InMemorySessionService::new());
@@ -501,7 +507,7 @@ impl RalphLoopAgent {
             }],
         };
 
-        println!("{}", "📨 Sending initial prompt to LLM...".bright_yellow());
+        output.debug("runner", "Sending initial prompt to LLM");
 
         // Run the agent
         let mut event_stream = runner
@@ -516,78 +522,30 @@ impl RalphLoopAgent {
         let mut iteration_count = 0u32;
         let mut tool_call_count = 0u32;
 
-        // Process events with verbose output
+        // Process events with level-appropriate output
         while let Some(event_result) = event_stream.next().await {
             match event_result {
                 Ok(event) => {
-                    // Check for tool calls (function calls)
+                    // Process content parts
                     if let Some(ref content) = event.llm_response.content {
                         for part in &content.parts {
-                            match part {
-                                Part::FunctionCall { name, args, .. } => {
-                                    tool_call_count += 1;
-                                    println!(
-                                        "\n{} {} {}",
-                                        "🔧".bright_blue(),
-                                        format!("[Tool #{}]", tool_call_count).bright_blue(),
-                                        name.bright_white().bold()
-                                    );
-                                    
-                                    // Pretty print the args
-                                    if let Ok(pretty) = serde_json::to_string_pretty(args) {
-                                        for line in pretty.lines() {
-                                            println!("   {}", line.bright_black());
-                                        }
-                                    }
-                                }
-                                Part::FunctionResponse { function_response, .. } => {
-                                    println!(
-                                        "{} {} {}",
-                                        "   ←".green(),
-                                        function_response.name.green(),
-                                        "response:".bright_black()
-                                    );
-                                    
-                                    // Truncate long responses
-                                    let resp_str = serde_json::to_string(&function_response.response).unwrap_or_default();
-                                    let display = if resp_str.len() > 200 {
-                                        format!("{}...", &resp_str[..200])
-                                    } else {
-                                        resp_str
-                                    };
-                                    println!("   {}", display.bright_black());
-                                }
-                                Part::Text { text } => {
-                                    if !text.trim().is_empty() {
-                                        println!(
-                                            "\n{} {}",
-                                            "💭 LLM:".bright_magenta(),
-                                            text.trim()
-                                        );
-                                    }
-                                }
-                                _ => {}
+                            // Track tool calls
+                            if matches!(part, Part::FunctionCall { .. }) {
+                                tool_call_count += 1;
                             }
+                            // Output based on debug level
+                            process_event_part(&output, part);
                         }
                     }
 
                     // Count iterations (each escalate = one iteration complete)
                     if event.actions.escalate {
                         iteration_count += 1;
-                        println!(
-                            "\n{} {}",
-                            "🔄".bright_cyan(),
-                            format!(
-                                "Iteration {} complete (exit_loop called)",
-                                iteration_count
-                            )
-                            .bright_cyan()
-                        );
-                        println!("{}", "─".repeat(50).bright_black());
+                        output.iteration(iteration_count, self.config.max_iterations);
                     }
                 }
                 Err(e) => {
-                    println!("{} {}", "❌ Error:".bright_red(), e);
+                    output.error(&e.to_string());
                     tracing::error!(error = %e, "Agent error");
                     return Err(RalphError::Agent {
                         agent: "ralph-loop".to_string(),
@@ -602,30 +560,25 @@ impl RalphLoopAgent {
         let task_list = crate::models::TaskList::load(&tasks_path).map_err(RalphError::Task)?;
         let stats = task_list.get_stats();
 
-        // Print final summary
-        println!("\n{}", "═".repeat(70).bright_cyan());
-        println!("{}", "  📊 EXECUTION SUMMARY".bright_green().bold());
-        println!("{}", "═".repeat(70).bright_cyan());
-        println!("  Iterations: {}", iteration_count);
-        println!("  Tool calls: {}", tool_call_count);
-        println!(
-            "  Tasks: {}/{} completed",
-            stats.completed, stats.total
-        );
-        if stats.blocked > 0 {
-            println!("  Blocked: {}", stats.blocked);
+        // Output summary
+        let success = task_list.is_complete();
+        output.summary(iteration_count, stats.completed, stats.total, success);
+
+        // Debug: show detailed stats
+        if output.level().is_debug() {
+            output.debug("stats", &format!("tool_calls: {}", tool_call_count));
+            output.debug("stats", &format!("blocked: {}", stats.blocked));
+            output.debug("stats", &format!("pending: {}", stats.pending));
+            output.debug("stats", &format!("in_progress: {}", stats.in_progress));
         }
-        println!("{}\n", "═".repeat(70).bright_cyan());
 
         if task_list.is_complete() {
-            println!("{}", "✅ All tasks completed!".bright_green().bold());
             Ok(CompletionStatus::Complete {
                 iterations: iteration_count,
                 tasks_completed: stats.completed,
                 message: self.config.completion_promise.clone(),
             })
         } else if stats.blocked > 0 && stats.pending == 0 && stats.in_progress == 0 {
-            println!("{}", "🚫 All remaining tasks are blocked".bright_red());
             Ok(CompletionStatus::AllTasksBlocked {
                 iterations: iteration_count,
                 tasks_completed: stats.completed,
@@ -633,14 +586,6 @@ impl RalphLoopAgent {
                 reason: "All remaining tasks are blocked".to_string(),
             })
         } else {
-            println!(
-                "{}",
-                format!(
-                    "⚠️  Max iterations reached. {} tasks remaining.",
-                    stats.pending + stats.in_progress
-                )
-                .bright_yellow()
-            );
             Ok(CompletionStatus::MaxIterationsReached {
                 iterations: iteration_count,
                 tasks_completed: stats.completed,
@@ -733,7 +678,7 @@ mod tests {
         assert!(instruction.contains("file"));
         assert!(instruction.contains("git"));
         assert!(instruction.contains("exit_loop"));
-        assert!(instruction.contains("ONE task per iteration"));
+        assert!(instruction.contains("one at a time"));
         assert!(instruction.contains("Test before commit"));
     }
 

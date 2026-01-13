@@ -12,8 +12,8 @@
 //! RALPH_MODEL_PROVIDER=anthropic ralph "Build a REST API"
 //! ```
 
-use adk_ralph::{PipelinePhase, RalphConfig, RalphOrchestrator, Result, TelemetryConfig};
-use clap::{Parser, Subcommand};
+use adk_ralph::{DebugLevel, PipelinePhase, RalphConfig, RalphOrchestrator, RalphOutput, Result, TelemetryConfig};
+use clap::{Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use tracing::info;
 
@@ -26,9 +26,37 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
+    /// Output verbosity level
+    #[arg(short = 'd', long, value_enum, global = true)]
+    debug: Option<CliDebugLevel>,
+
     /// Project description (when no subcommand is used)
     #[arg(trailing_var_arg = true)]
     prompt: Vec<String>,
+}
+
+/// CLI debug level (maps to DebugLevel)
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliDebugLevel {
+    /// Only errors and final status
+    Minimal,
+    /// Human-readable progress (default)
+    Normal,
+    /// Detailed output with tool calls
+    Verbose,
+    /// Full debug output
+    Debug,
+}
+
+impl From<CliDebugLevel> for DebugLevel {
+    fn from(cli: CliDebugLevel) -> Self {
+        match cli {
+            CliDebugLevel::Minimal => DebugLevel::Minimal,
+            CliDebugLevel::Normal => DebugLevel::Normal,
+            CliDebugLevel::Verbose => DebugLevel::Verbose,
+            CliDebugLevel::Debug => DebugLevel::Debug,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -79,7 +107,7 @@ fn init_telemetry(config: &TelemetryConfig) -> std::result::Result<(), Box<dyn s
     Ok(())
 }
 
-fn print_banner() {
+fn _print_banner() {
     println!(
         "{}",
         r#"
@@ -127,6 +155,7 @@ fn print_config(config: &RalphConfig) {
         config.agents.ralph_model.model_name
     );
     println!("  Max Iterations:  {}", config.max_iterations);
+    println!("  Debug Level:     {}", config.debug_level.to_string().cyan());
     println!("  Project Path:    {}", config.project_path);
     println!();
 }
@@ -236,7 +265,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Load configuration
-    let config = match RalphConfig::from_env() {
+    let mut config = match RalphConfig::from_env() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("{}: {}", "Configuration Error".red().bold(), e);
@@ -251,14 +280,22 @@ async fn main() -> Result<()> {
         }
     };
 
+    // Override debug level from CLI if provided
+    if let Some(debug_level) = cli.debug {
+        config.debug_level = debug_level.into();
+    }
+
     // Initialize telemetry
     if let Err(e) = init_telemetry(&config.telemetry) {
         eprintln!("{}: {}", "Telemetry Warning".yellow(), e);
         eprintln!("Continuing without full telemetry support...");
     }
 
-    // Print banner
-    print_banner();
+    // Create output handler for banner (respects debug level)
+    let output = RalphOutput::new(config.debug_level);
+
+    // Print banner (only at normal and above)
+    output.banner();
 
     // Handle commands
     match cli.command {

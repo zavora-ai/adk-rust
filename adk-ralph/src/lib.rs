@@ -47,6 +47,7 @@ pub mod agents;
 pub mod error;
 pub mod models;
 pub mod orchestrator;
+pub mod output;
 pub mod telemetry;
 pub mod tools;
 
@@ -55,6 +56,7 @@ pub use error::{RalphError, Result};
 pub use models::{
     // Config types
     AgentModelConfig,
+    DebugLevel,
     ModelConfig,
     RalphConfig,
     RalphConfigBuilder,
@@ -95,3 +97,6 @@ pub use agents::{ArchitectAgent, CompletionStatus, PrdAgent, PrdAgentBuilder, Ra
 
 // Re-export orchestrator
 pub use orchestrator::{OrchestratorBuilder, OrchestratorState, PipelinePhase, RalphOrchestrator};
+
+// Re-export output
+pub use output::{RalphOutput, process_event_part};

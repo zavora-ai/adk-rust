@@ -15,7 +15,7 @@ pub mod tasks;
 
 // Re-export public API
 pub use config::{
-    AgentModelConfig, ModelConfig, RalphConfig, RalphConfigBuilder, TelemetryConfig,
+    AgentModelConfig, DebugLevel, ModelConfig, RalphConfig, RalphConfigBuilder, TelemetryConfig,
     ValidationError, MAX_ITERATIONS_LIMIT, MAX_RETRIES_LIMIT, MAX_TOKENS_LIMIT,
     SUPPORTED_PROVIDERS,
 };
