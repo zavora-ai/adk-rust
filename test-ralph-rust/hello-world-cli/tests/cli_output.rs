@@ -1,21 +1,7 @@
 #![allow(unused_imports)]
 
-use clap::Parser;
-
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    // No arguments yet, but clap is initialized
-}
-
-fn main() {
-    let _args = Args::parse();
-    println!("Hello, world!");
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::process::Command;
 
     #[test]

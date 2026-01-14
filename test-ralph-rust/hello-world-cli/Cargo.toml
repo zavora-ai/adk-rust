@@ -5,3 +5,7 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }
+
+[[test]]
+name = "cli_output"
+path = "tests/cli_output.rs"
