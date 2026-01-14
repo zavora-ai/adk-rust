@@ -11,6 +11,7 @@
 //! - 2.1: WHEN the PRD is approved, THE Architect_Agent SHALL read the `prd.md` file
 
 use crate::agents::{ArchitectAgent, CompletionStatus, PrdAgent, RalphLoopAgent};
+use crate::environment::{ensure_git_repo, validate_environment, EnvironmentStatus, Language};
 use crate::models::{DesignDocument, PrdDocument, RalphConfig, TaskList};
 use crate::output::RalphOutput;
 use crate::telemetry::{
@@ -57,6 +58,8 @@ pub struct OrchestratorState {
     pub tasks: Option<TaskList>,
     /// Final completion status (populated after implementation phase)
     pub completion_status: Option<CompletionStatus>,
+    /// Environment validation status
+    pub environment: Option<EnvironmentStatus>,
 }
 
 impl Default for OrchestratorState {
@@ -67,6 +70,7 @@ impl Default for OrchestratorState {
             design: None,
             tasks: None,
             completion_status: None,
+            environment: None,
         }
     }
 }
@@ -102,6 +106,8 @@ pub struct RalphOrchestrator {
     state: OrchestratorState,
     /// Output handler for human-readable progress
     output: RalphOutput,
+    /// Whether to run in interactive mode (prompt for missing tools)
+    interactive: bool,
 }
 
 impl std::fmt::Debug for RalphOrchestrator {
@@ -139,7 +145,13 @@ impl RalphOrchestrator {
             project_path,
             state: OrchestratorState::default(),
             output,
+            interactive: true, // Default to interactive mode
         })
+    }
+
+    /// Set interactive mode (prompts for missing tools).
+    pub fn set_interactive(&mut self, interactive: bool) {
+        self.interactive = interactive;
     }
 
     /// Create a new orchestrator builder.
@@ -332,12 +344,23 @@ impl RalphOrchestrator {
             ));
         }
 
+        // Check if we should skip tests due to missing tools
+        let skip_tests = self.state.environment
+            .as_ref()
+            .map(|e| e.skip_validation)
+            .unwrap_or(false);
+
         // Create and run the Ralph Loop Agent
-        let ralph_loop = RalphLoopAgent::builder()
+        let mut builder = RalphLoopAgent::builder()
             .config(self.config.clone())
-            .project_path(&self.project_path)
-            .build()
-            .await?;
+            .project_path(&self.project_path);
+        
+        // Add skip_tests instruction if needed
+        if skip_tests {
+            builder = builder.skip_tests(true);
+        }
+        
+        let ralph_loop = builder.build().await?;
 
         let status = ralph_loop.run().await?;
 
@@ -390,11 +413,23 @@ impl RalphOrchestrator {
     /// Run the full pipeline from prompt to completion.
     ///
     /// This is the main entry point for the orchestrator.
-    /// It sequences: PRD Agent → Architect Agent → Ralph Loop Agent
+    /// It sequences: Environment Check → PRD Agent → Architect Agent → Ralph Loop Agent
     #[instrument(skip(self, prompt), fields(prompt_len = prompt.len()))]
     pub async fn run(&mut self, prompt: &str) -> Result<CompletionStatus> {
         info!(prompt = prompt, "Starting Ralph pipeline");
         let _timing = start_timing("full_pipeline");
+
+        // Phase 0: Environment Validation
+        if let Some(language) = Language::detect(prompt) {
+            let env_status = validate_environment(language, &self.output, self.interactive);
+            
+            // Initialize git repo
+            ensure_git_repo(&self.project_path, &self.output);
+            
+            self.state.environment = Some(env_status);
+        } else {
+            self.output.warn("Could not detect language from prompt - skipping environment check");
+        }
 
         // Phase 1: Requirements
         self.output.phase("Phase 1: Requirements Generation");

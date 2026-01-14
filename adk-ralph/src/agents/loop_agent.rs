@@ -203,6 +203,7 @@ pub struct RalphLoopAgentBuilder {
     project_path: PathBuf,
     additional_tools: Vec<Arc<dyn Tool>>,
     custom_instruction: Option<String>,
+    skip_tests: bool,
 }
 
 impl std::fmt::Debug for RalphLoopAgentBuilder {
@@ -226,6 +227,7 @@ impl Default for RalphLoopAgentBuilder {
             project_path: PathBuf::from("."),
             additional_tools: Vec::new(),
             custom_instruction: None,
+            skip_tests: false,
         }
     }
 }
@@ -281,6 +283,12 @@ impl RalphLoopAgentBuilder {
         self
     }
 
+    /// Set whether to skip tests (due to missing tools).
+    pub fn skip_tests(mut self, skip: bool) -> Self {
+        self.skip_tests = skip;
+        self
+    }
+
     /// Build the RalphLoopAgent.
     ///
     /// If no model is provided, this will create one based on the model_config.
@@ -310,6 +318,16 @@ impl RalphLoopAgentBuilder {
         let instruction = self.custom_instruction.unwrap_or_else(|| {
             let mut inst = RALPH_LOOP_INSTRUCTION.to_string();
             
+            // Add skip tests instruction if needed
+            if self.skip_tests {
+                inst.push_str("\n\n## IMPORTANT: Tests Skipped\n\n");
+                inst.push_str("Some required tools are not installed. You MUST:\n");
+                inst.push_str("- SKIP running tests (the test tool will not work)\n");
+                inst.push_str("- SKIP the 'Verify Implementation' step\n");
+                inst.push_str("- Commit code directly after writing it\n");
+                inst.push_str("- Record in progress that tests were skipped due to missing tools\n");
+            }
+            
             // Try to add design context
             let design_path = self.project_path.join(&self.config.design_path);
             if let Ok(design) = DesignDocument::load_markdown(&design_path) {
@@ -322,6 +340,12 @@ impl RalphLoopAgentBuilder {
                     inst.push_str(&format!("\nOverview: {}\n", design.overview));
                 }
             }
+            
+            // Add file path rules
+            inst.push_str("\n\n## Critical Rule: File Paths\n\n");
+            inst.push_str("All file paths are relative to the project root. Do NOT create subdirectories with the project name.\n");
+            inst.push_str("- CORRECT: `Cargo.toml`, `src/main.rs`, `src/lib.rs`\n");
+            inst.push_str("- WRONG: `my_project/Cargo.toml`, `hello_world/src/main.rs`\n");
             
             // Add completion promise
             inst.push_str(&format!(
@@ -524,6 +548,17 @@ impl RalphLoopAgent {
         let mut iteration_count = 0u32;
         let mut tool_call_count = 0u32;
         let mut _current_task: Option<String> = None;
+        
+        // Load task stats for progress bar
+        let tasks_path = self.project_path.join(&self.config.tasks_path);
+        let initial_tasks = crate::models::TaskList::load(&tasks_path).ok();
+        let total_tasks = initial_tasks.as_ref().map(|t| t.get_stats().total).unwrap_or(0);
+        let mut completed_tasks = initial_tasks.as_ref().map(|t| t.get_stats().completed).unwrap_or(0);
+        
+        // Show initial progress bar
+        if total_tasks > 0 {
+            output.progress_bar(completed_tasks, total_tasks);
+        }
 
         // Process events with level-appropriate output
         while let Some(event_result) = event_stream.next().await {
@@ -548,14 +583,19 @@ impl RalphLoopAgent {
                                                     if let Some(status) = args.get("status").and_then(|v| v.as_str()) {
                                                         if status == "in_progress" {
                                                             _current_task = Some(task_id.to_string());
+                                                            output.clear_line();
                                                             output.task_start(task_id, "Starting implementation");
+                                                            output.progress_bar_with_task(completed_tasks, total_tasks, task_id);
                                                         }
                                                     }
                                                 }
                                             }
                                             "complete" => {
                                                 if let Some(task_id) = args.get("task_id").and_then(|v| v.as_str()) {
+                                                    completed_tasks += 1;
+                                                    output.clear_line();
                                                     output.task_complete(task_id, true);
+                                                    output.progress_bar(completed_tasks, total_tasks);
                                                     _current_task = None;
                                                 }
                                             }

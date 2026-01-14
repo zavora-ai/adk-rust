@@ -18,38 +18,27 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Instruction prompt for the PRD Agent.
-const PRD_INSTRUCTION: &str = r#"You are an expert Product Manager creating a Product Requirements Document (PRD).
+const PRD_INSTRUCTION: &str = r#"You are a Product Manager creating a Product Requirements Document (PRD).
 
-Given a project description, generate a comprehensive PRD as structured JSON.
+Given a project description, generate a PRD as structured JSON.
 
-## CRITICAL: Be Comprehensive
+## Scope Matching
 
-Do NOT just implement what the user literally asked for. Think like a product manager:
-- What features do similar products have? (e.g., for a calculator, look at macOS Calculator, Windows Calculator)
-- What would users expect even if not explicitly mentioned?
-- What edge cases need handling?
-- What makes a product feel complete vs. half-baked?
-
-For example, if asked for a "calculator", users expect:
-- Basic operations (+, -, *, /)
-- Scientific functions (sqrt, square, power, percentage, modulo)
-- Decimal and negative number support
-- Keyboard input support
-- Error handling (division by zero, overflow, invalid input)
-- Clear/reset functionality
-- Exit command
+Match the complexity of your output to the user's request:
+- If they ask for something simple, keep it simple
+- If they ask for something complex, be thorough
+- Don't add features the user didn't ask for unless essential (like basic error handling)
 
 ## Guidelines
 
-- Generate **8-15 user stories** for a complete product
+- Generate only the user stories needed to fulfill the request
+- Include essential features: error handling, --help, --version for CLIs
 - Use EARS patterns for acceptance criteria:
-  - WHEN/THE for event-driven requirements
-  - IF/THEN for conditional requirements  
-  - WHILE for state-driven requirements
-- Priority 1 = core MVP features, Priority 5 = future enhancements
+  - WHEN <trigger>, THE <system> SHALL <response>
+  - IF <condition>, THEN THE <system> SHALL <response>
+- Priority 1 = must have, Priority 2 = should have, Priority 3+ = nice to have
 - Be specific and testable in acceptance criteria
-- **Include features users would expect** even if not explicitly requested
-- Think about edge cases and error scenarios
+- Don't over-engineer: a "hello world" needs 2-3 stories, not 10
 "#;
 
 

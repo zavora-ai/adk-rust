@@ -44,6 +44,7 @@
 //! ```
 
 pub mod agents;
+pub mod environment;
 pub mod error;
 pub mod models;
 pub mod orchestrator;
@@ -100,3 +101,9 @@ pub use orchestrator::{OrchestratorBuilder, OrchestratorState, PipelinePhase, Ra
 
 // Re-export output
 pub use output::{RalphOutput, process_event_part};
+
+// Re-export environment
+pub use environment::{
+    EnvironmentStatus, Language, ToolRequirement,
+    ensure_git_repo, validate_environment,
+};

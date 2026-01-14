@@ -102,6 +102,95 @@ impl RalphOutput {
         }
     }
 
+    /// Print a progress bar for task completion (shown at Normal and above).
+    ///
+    /// Displays: `[████████░░░░░░░░░░░░] 40% (4/10 tasks)`
+    pub fn progress_bar(&self, completed: usize, total: usize) {
+        if !self.level.is_normal() || total == 0 {
+            return;
+        }
+
+        let percentage = (completed * 100) / total;
+        let bar_width = 30;
+        let filled = (completed * bar_width) / total;
+        let empty = bar_width - filled;
+
+        let bar = format!(
+            "{}{}",
+            "█".repeat(filled).bright_green(),
+            "░".repeat(empty).bright_black()
+        );
+
+        // Use carriage return to update in place
+        print!(
+            "\r  [{}] {}% ({}/{} tasks)  ",
+            bar,
+            percentage,
+            completed,
+            total
+        );
+        
+        // Flush to ensure it displays
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+
+        // Print newline when complete
+        if completed == total {
+            println!();
+        }
+    }
+
+    /// Print a progress bar with a task name (shown at Normal and above).
+    pub fn progress_bar_with_task(&self, completed: usize, total: usize, current_task: &str) {
+        if !self.level.is_normal() || total == 0 {
+            return;
+        }
+
+        let percentage = (completed * 100) / total;
+        let bar_width = 20;
+        let filled = (completed * bar_width) / total;
+        let empty = bar_width - filled;
+
+        let bar = format!(
+            "{}{}",
+            "█".repeat(filled).bright_green(),
+            "░".repeat(empty).bright_black()
+        );
+
+        // Truncate task name if too long
+        let task_display = if current_task.len() > 30 {
+            format!("{}...", &current_task[..27])
+        } else {
+            current_task.to_string()
+        };
+
+        // Use carriage return to update in place
+        print!(
+            "\r  [{}] {}% │ {}  ",
+            bar,
+            percentage,
+            task_display.cyan()
+        );
+        
+        // Flush to ensure it displays
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+
+        // Print newline when complete
+        if completed == total {
+            println!();
+        }
+    }
+
+    /// Clear the current line (for progress bar updates).
+    pub fn clear_line(&self) {
+        if self.level.is_normal() {
+            print!("\r{}\r", " ".repeat(80));
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+        }
+    }
+
     /// Print a tool call (shown at Verbose and above).
     pub fn tool_call(&self, name: &str, args: &serde_json::Value) {
         if self.level.is_verbose() {
