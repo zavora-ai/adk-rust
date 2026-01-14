@@ -50,4 +50,21 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains(env!("CARGO_PKG_VERSION")));
     }
+
+    #[test]
+    fn test_invalid_arg_handling() {
+        let output = Command::new("cargo")
+            .arg("run")
+            .arg("--quiet")
+            .arg("--")
+            .arg("--foo")
+            .current_dir("hello-world-cli")
+            .output()
+            .expect("Failed to execute command");
+
+        assert!(!output.status.success()); // Should exit with a non-zero status
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("unexpected argument '--foo'"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("Hello, world!")); // Should not print "Hello, world!"
+    }
 }
