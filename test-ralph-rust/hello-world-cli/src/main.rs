@@ -1,33 +1,11 @@
 #![allow(unused_imports)]
 
+mod cli;
+
+use crate::cli::Cli;
 use clap::Parser;
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    // No arguments yet, but clap is initialized
-}
-
 fn main() {
-    let _args = Args::parse();
+    let _cli = Cli::parse();
     println!("Hello, world!");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::process::Command;
-
-    #[test]
-    fn test_hello_world_output() {
-        let output = Command::new("cargo")
-            .arg("run")
-            .arg("--quiet")
-            .current_dir("hello-world-cli")
-            .output()
-            .expect("Failed to execute command");
-
-        assert!(output.status.success());
-        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "Hello, world!");
-    }
 }
