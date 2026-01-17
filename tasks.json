@@ -8,7 +8,7 @@
       "title": "Project Setup and Initial Structure",
       "description": "Initialize a new Rust project, create the necessary directory structure, and add the 'clap' dependency to Cargo.toml.",
       "priority": 1,
-      "status": "in_progress",
+      "status": "completed",
       "dependencies": [],
       "user_story_id": null,
       "estimated_complexity": "low",
@@ -20,7 +20,7 @@
         "src/error.rs"
       ],
       "files_modified": [],
-      "commit_hash": null,
+      "commit_hash": "88f3724",
       "attempts": 0,
       "notes": "Rust project initialized successfully.\nsrc/ directory created.\nCargo.toml configured with project name and 'clap' dependency.\nInitial placeholder files (main.rs, cli.rs, calculator.rs, error.rs) created."
     },
@@ -29,7 +29,7 @@
       "title": "Implement CLI Argument Parsing with 'clap'",
       "description": "Define the main 'calc' command, subcommands (add, subtract, multiply, divide), and flags (--help, --version) using the 'clap' crate in `src/cli.rs`. Set up basic parsing in `src/main.rs` to display parsed arguments.",
       "priority": 1,
-      "status": "pending",
+      "status": "in_progress",
       "dependencies": [
         "TASK-001"
       ],
@@ -255,5 +255,5 @@
   ],
   "version": "1.0",
   "created_at": "2026-01-17T12:36:23.129034+00:00",
-  "updated_at": "2026-01-17T12:36:25.825603+00:00"
+  "updated_at": "2026-01-17T12:36:49.593543+00:00"
 }
