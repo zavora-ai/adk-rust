@@ -12,7 +12,7 @@
 //! RALPH_MODEL_PROVIDER=anthropic ralph "Build a REST API"
 //! ```
 
-use adk_ralph::{DebugLevel, PipelinePhase, RalphConfig, RalphOrchestrator, RalphOutput, Result, TelemetryConfig};
+use adk_ralph::{DebugLevel, InteractiveRepl, PipelinePhase, RalphConfig, RalphOrchestrator, RalphOutput, Result, TelemetryConfig};
 use clap::{Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use tracing::info;
@@ -83,6 +83,16 @@ enum Commands {
     Status,
     /// Validate configuration
     Config,
+    /// Start interactive chat mode
+    Chat {
+        /// Resume previous session
+        #[arg(long)]
+        resume: bool,
+        
+        /// Auto-approve all changes without confirmation
+        #[arg(long)]
+        auto_approve: bool,
+    },
 }
 
 /// Initialize telemetry based on configuration and debug level.
@@ -276,6 +286,43 @@ async fn resume_pipeline(config: RalphConfig, phase: PipelinePhase, prompt: &str
     Ok(())
 }
 
+/// Run the interactive chat mode.
+///
+/// This starts a REPL session where users can interact with Ralph
+/// through natural conversation.
+///
+/// ## Arguments
+///
+/// * `config` - Ralph configuration
+/// * `resume` - Whether to resume a previous session
+/// * `auto_approve` - Whether to auto-approve changes without confirmation
+///
+/// ## Requirements Validated
+///
+/// - 1.1: WHEN the user runs `ralph chat`, THE System SHALL start an interactive REPL session
+/// - 4.2: WHEN the user runs `ralph chat --resume`, THE System SHALL restore the previous session
+/// - 6.3: WHERE the user runs with `--auto-approve`, THE System SHALL skip confirmations
+async fn run_interactive_chat(config: RalphConfig, resume: bool, auto_approve: bool) -> Result<()> {
+    use std::path::PathBuf;
+    
+    // Determine project path from config
+    let project_path = PathBuf::from(&config.project_path);
+    
+    // Build the interactive REPL
+    let mut repl = InteractiveRepl::builder()
+        .config(config)
+        .project_path(&project_path)
+        .resume(resume)
+        .auto_approve(auto_approve)
+        .build()
+        .await?;
+    
+    // Run the REPL loop
+    repl.run().await?;
+    
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Load .env file from current directory
@@ -383,6 +430,10 @@ async fn main() -> Result<()> {
             println!("{}", "Configuration is valid!".green());
         }
 
+        Some(Commands::Chat { resume, auto_approve }) => {
+            run_interactive_chat(config, resume, auto_approve).await?;
+        }
+
         None => {
             // No subcommand - use prompt directly
             let prompt_str = cli.prompt.join(" ");
@@ -396,8 +447,13 @@ async fn main() -> Result<()> {
                 eprintln!("Commands:");
                 eprintln!("  ralph run <prompt>     Run the full pipeline");
                 eprintln!("  ralph resume [--phase] Resume from a specific phase");
+                eprintln!("  ralph chat             Start interactive chat mode");
                 eprintln!("  ralph status           Show current status");
                 eprintln!("  ralph config           Validate configuration");
+                eprintln!();
+                eprintln!("Chat Options:");
+                eprintln!("  ralph chat --resume       Resume previous session");
+                eprintln!("  ralph chat --auto-approve Skip change confirmations");
                 std::process::exit(1);
             }
 

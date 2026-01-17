@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 use clap::Parser;
 
 #[derive(Parser, Debug)]

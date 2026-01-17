@@ -203,7 +203,6 @@ pub struct RalphLoopAgentBuilder {
     project_path: PathBuf,
     additional_tools: Vec<Arc<dyn Tool>>,
     custom_instruction: Option<String>,
-    skip_tests: bool,
 }
 
 impl std::fmt::Debug for RalphLoopAgentBuilder {
@@ -227,7 +226,6 @@ impl Default for RalphLoopAgentBuilder {
             project_path: PathBuf::from("."),
             additional_tools: Vec::new(),
             custom_instruction: None,
-            skip_tests: false,
         }
     }
 }
@@ -283,12 +281,6 @@ impl RalphLoopAgentBuilder {
         self
     }
 
-    /// Set whether to skip tests (due to missing tools).
-    pub fn skip_tests(mut self, skip: bool) -> Self {
-        self.skip_tests = skip;
-        self
-    }
-
     /// Build the RalphLoopAgent.
     ///
     /// If no model is provided, this will create one based on the model_config.
@@ -318,16 +310,6 @@ impl RalphLoopAgentBuilder {
         let instruction = self.custom_instruction.unwrap_or_else(|| {
             let mut inst = RALPH_LOOP_INSTRUCTION.to_string();
             
-            // Add skip tests instruction if needed
-            if self.skip_tests {
-                inst.push_str("\n\n## IMPORTANT: Tests Skipped\n\n");
-                inst.push_str("Some required tools are not installed. You MUST:\n");
-                inst.push_str("- SKIP running tests (the test tool will not work)\n");
-                inst.push_str("- SKIP the 'Verify Implementation' step\n");
-                inst.push_str("- Commit code directly after writing it\n");
-                inst.push_str("- Record in progress that tests were skipped due to missing tools\n");
-            }
-            
             // Try to add design context
             let design_path = self.project_path.join(&self.config.design_path);
             if let Ok(design) = DesignDocument::load_markdown(&design_path) {
@@ -340,12 +322,6 @@ impl RalphLoopAgentBuilder {
                     inst.push_str(&format!("\nOverview: {}\n", design.overview));
                 }
             }
-            
-            // Add file path rules
-            inst.push_str("\n\n## Critical Rule: File Paths\n\n");
-            inst.push_str("All file paths are relative to the project root. Do NOT create subdirectories with the project name.\n");
-            inst.push_str("- CORRECT: `Cargo.toml`, `src/main.rs`, `src/lib.rs`\n");
-            inst.push_str("- WRONG: `my_project/Cargo.toml`, `hello_world/src/main.rs`\n");
             
             // Add completion promise
             inst.push_str(&format!(

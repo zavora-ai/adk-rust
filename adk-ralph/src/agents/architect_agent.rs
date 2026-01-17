@@ -34,20 +34,69 @@ Generate a JSON response with:
 - technology_stack: Testing framework, build tool, key dependencies
 - architecture_diagram: Mermaid flowchart showing components and data flow
 - components: Array of components with name, purpose, file path, key functions, dependencies
-- file_structure: Project directory structure
+- file_structure: Project structure specification with directories and files arrays
 - design_decisions: Key architectural decisions with rationale
 
 ### Tasks Section
 - tasks: Array of implementation tasks
 
-Guidelines for tasks:
-- Create required tasks required to meet acceptance criteria
+## Project Structure Specification
+
+Create a complete project structure specification in file_structure:
+- directories: Array of directories to create (if any), relative to project root
+- files: Array of files to create, relative to project root
+
+CRITICAL RULES:
+1. The project root directory already exists - do NOT include it in paths
+2. Use paths relative to project root (e.g., "main.go" not "./main.go")
+3. Do NOT create wrapper directories named after the project
+4. Follow standard conventions for the target language
+5. Keep structure minimal - only create necessary directories
+
+### Examples by Language
+
+Go CLI:
+```json
+{
+  "directories": [],
+  "files": ["main.go", "go.mod"]
+}
+```
+
+Rust binary:
+```json
+{
+  "directories": ["src"],
+  "files": ["Cargo.toml", "src/main.rs"]
+}
+```
+
+Python script:
+```json
+{
+  "directories": [],
+  "files": ["main.py", "requirements.txt"]
+}
+```
+
+TypeScript/Node.js:
+```json
+{
+  "directories": ["src"],
+  "files": ["package.json", "tsconfig.json", "src/index.ts"]
+}
+```
+
+## Guidelines for Tasks
+
+- Create required tasks to meet acceptance criteria
 - Priority: 1=critical (do first), 5=nice-to-have
 - Complexity: "low", "medium", or "high"
 - First task should set up project structure (no dependencies)
 - Each task should be completable in one coding session
 - Link tasks to user stories from PRD
 - Order logically: setup → core features → enhancements → tests
+- In files_to_create and files_to_modify, use paths relative to project root
 "#;
 
 
@@ -226,8 +275,21 @@ impl ArchitectAgentBuilder {
                             }
                         },
                         "file_structure": {
-                            "type": "string",
-                            "description": "Project directory structure as text"
+                            "type": "object",
+                            "description": "Project structure specification with directories and files to create",
+                            "properties": {
+                                "directories": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "description": "Directories to create (relative to project root, e.g., 'src', 'tests')"
+                                },
+                                "files": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "description": "Files to create (relative to project root, e.g., 'main.go', 'src/lib.rs')"
+                                }
+                            },
+                            "required": ["files"]
                         },
                         "design_decisions": {
                             "type": "array",
@@ -593,18 +655,166 @@ fn json_to_design_document(json: &serde_json::Value) -> Result<crate::models::De
         })
         .unwrap_or_default();
 
+    // Parse file_structure - handle both new object format and legacy string format
+    let file_structure = parse_file_structure(&json["file_structure"], &project);
+
     Ok(DesignDocument {
         project,
         overview,
         component_diagram,
         components,
-        file_structure: None, // Could parse from file_structure string if needed
+        file_structure,
         technology_stack: Some(technology_stack),
         design_decisions,
         version: "1.0".to_string(),
         created_at: Some(chrono::Utc::now().to_rfc3339()),
         updated_at: None,
     })
+}
+
+/// Parse file_structure from JSON - handles both new object format and legacy string format.
+fn parse_file_structure(json: &serde_json::Value, project_name: &str) -> Option<crate::models::FileStructure> {
+    use crate::models::FileStructure;
+
+    // Handle new structured format: { "directories": [...], "files": [...] }
+    if json.is_object() {
+        let directories: Vec<String> = json["directories"]
+            .as_array()
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        let files: Vec<String> = json["files"]
+            .as_array()
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        if files.is_empty() && directories.is_empty() {
+            return None;
+        }
+
+        // Build a FileStructure tree from the flat lists
+        let mut root = FileStructure::directory(project_name, "Project root");
+
+        // Add directories
+        for dir in &directories {
+            // Strip any leading ./ or project name prefix
+            let clean_path = clean_path(dir, project_name);
+            if !clean_path.is_empty() {
+                add_path_to_structure(&mut root, &clean_path, true);
+            }
+        }
+
+        // Add files
+        for file in &files {
+            // Strip any leading ./ or project name prefix
+            let clean_path = clean_path(file, project_name);
+            if !clean_path.is_empty() {
+                add_path_to_structure(&mut root, &clean_path, false);
+            }
+        }
+
+        return Some(root);
+    }
+
+    // Handle legacy string format (best-effort parsing)
+    if let Some(text) = json.as_str() {
+        if text.is_empty() {
+            return None;
+        }
+
+        tracing::warn!("Legacy string file_structure format detected - consider updating to structured format");
+
+        // Simple parsing: treat each non-empty line as a file path
+        let mut root = FileStructure::directory(project_name, "Project root");
+        for line in text.lines() {
+            let trimmed = line.trim().trim_start_matches("- ").trim_start_matches("* ");
+            if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                let clean_path = clean_path(trimmed, project_name);
+                if !clean_path.is_empty() {
+                    let is_dir = clean_path.ends_with('/');
+                    let path = clean_path.trim_end_matches('/');
+                    add_path_to_structure(&mut root, path, is_dir);
+                }
+            }
+        }
+
+        return Some(root);
+    }
+
+    None
+}
+
+/// Clean a path by removing leading ./ and project name prefix.
+fn clean_path(path: &str, project_name: &str) -> String {
+    let mut clean = path.trim();
+
+    // Remove leading ./
+    if let Some(stripped) = clean.strip_prefix("./") {
+        clean = stripped;
+    }
+
+    // Remove leading project name prefix (e.g., "hello-go/main.go" -> "main.go")
+    let project_prefix = format!("{}/", project_name);
+    if let Some(stripped) = clean.strip_prefix(&project_prefix) {
+        tracing::warn!(
+            "Stripped redundant project name prefix from path: {} -> {}",
+            path,
+            stripped
+        );
+        clean = stripped;
+    }
+
+    // Also check for common variations
+    let project_lower = project_name.to_lowercase().replace(' ', "-");
+    let project_prefix_lower = format!("{}/", project_lower);
+    if let Some(stripped) = clean.strip_prefix(&project_prefix_lower) {
+        tracing::warn!(
+            "Stripped redundant project name prefix from path: {} -> {}",
+            path,
+            stripped
+        );
+        clean = stripped;
+    }
+
+    clean.to_string()
+}
+
+/// Add a path to the FileStructure tree, creating intermediate directories as needed.
+fn add_path_to_structure(root: &mut crate::models::FileStructure, path: &str, is_directory: bool) {
+    use crate::models::FileStructure;
+
+    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.is_empty() {
+        return;
+    }
+
+    let mut current = root;
+
+    for (i, part) in parts.iter().enumerate() {
+        let is_last = i == parts.len() - 1;
+        let should_be_dir = !is_last || is_directory;
+
+        // Find or create the child
+        let existing_idx = current.children.iter().position(|c| c.name == *part);
+
+        if let Some(idx) = existing_idx {
+            if !is_last {
+                current = &mut current.children[idx];
+            }
+        } else {
+            let new_node = if should_be_dir {
+                FileStructure::directory(*part, "")
+            } else {
+                FileStructure::file(*part, "")
+            };
+            current.children.push(new_node);
+
+            if !is_last {
+                let last_idx = current.children.len() - 1;
+                current = &mut current.children[last_idx];
+            }
+        }
+    }
 }
 
 /// Convert JSON to TaskList

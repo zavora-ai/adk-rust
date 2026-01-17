@@ -1,1 +1,0 @@
-cargo new hello_world_cli

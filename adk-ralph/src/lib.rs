@@ -44,8 +44,8 @@
 //! ```
 
 pub mod agents;
-pub mod environment;
 pub mod error;
+pub mod interactive;
 pub mod models;
 pub mod orchestrator;
 pub mod output;
@@ -91,7 +91,13 @@ pub use models::{
 };
 
 // Re-export tools
-pub use tools::{FileTool, GitTool, ProgressTool, TaskTool, TestTool};
+pub use tools::{
+    // Core tools
+    FileTool, GitTool, ProgressTool, TaskTool, TestTool,
+    // Interactive mode tools
+    AddFeatureMode, AddFeatureTool, GetTimeTool, Language, RunPipelineTool, RunProjectTool,
+    SearchResult, WebSearchTool,
+};
 
 // Re-export agents
 pub use agents::{ArchitectAgent, CompletionStatus, PrdAgent, PrdAgentBuilder, RalphLoopAgent, RalphLoopAgentBuilder};
@@ -99,11 +105,8 @@ pub use agents::{ArchitectAgent, CompletionStatus, PrdAgent, PrdAgentBuilder, Ra
 // Re-export orchestrator
 pub use orchestrator::{OrchestratorBuilder, OrchestratorState, PipelinePhase, RalphOrchestrator};
 
+// Re-export interactive mode
+pub use interactive::{InteractiveRepl, InteractiveReplBuilder, Message, OrchestratorAgent, OrchestratorAgentBuilder, ProjectContext, Session, REQUIRED_TOOLS};
+
 // Re-export output
 pub use output::{RalphOutput, process_event_part};
-
-// Re-export environment
-pub use environment::{
-    EnvironmentStatus, Language, ToolRequirement,
-    ensure_git_repo, validate_environment,
-};

@@ -1,57 +1,73 @@
-# System Design: Hello World CLI in Rust
+# System Design: Rust Hello World CLI
 
 ## Architecture Overview
 
-The Hello World CLI is a minimal Command Line Interface application developed in Rust. Its primary function is to print "Hello, World!" to the console. The application leverages the `clap` crate for robust argument parsing, enabling it to display help messages, version information, and gracefully handle invalid command-line arguments. It is designed to be a simple, compiled binary demonstrating fundamental Rust CLI development.
+A minimalist command-line interface (CLI) application developed in Rust. Its primary function is to print 'Hello, World!' to the console, alongside essential CLI features such as displaying help and version information, and handling invalid arguments gracefully.
 
 ## Component Diagram
 
 ```mermaid
 graph TD
-    User --> CLI_App
-    CLI_App -- Arguments --> Argument_Parser[Argument Parser (clap)]
-    Argument_Parser -- Parsed Arguments --> Action_Dispatcher
-
-    Action_Dispatcher -- No Arguments --> Print_Hello_World[Print 'Hello, World!']
-    Action_Dispatcher -- --help or -h --> Print_Help_Message[Print Help Message]
-    Action_Dispatcher -- --version or -V --> Print_Version_Info[Print Version Information]
-    Action_Dispatcher -- Invalid Arguments --> Print_Error_Message[Print Error Message]
-
-    Print_Hello_World --> STDOUT[Standard Output]
-    Print_Help_Message --> STDOUT
-    Print_Version_Info --> STDOUT
-    Print_Error_Message --> STDERR[Standard Error]
-
-    Print_Hello_World -- Exit Code 0 --> System_Exit[System Exit]
-    Print_Help_Message -- Exit Code 0 --> System_Exit
-    Print_Version_Info -- Exit Code 0 --> System_Exit
-    Print_Error_Message -- Exit Code 1 --> System_Exit
+A[User] --> B(CLI Application);
+B -- Command Line Args --> C{Argument Parser (clap)};
+C -- No Args --> D[Message Handler: Print 'Hello, World!'];
+C -- --help / -h --> E[Message Handler: Print Help];
+C -- --version / -V --> F[Message Handler: Print Version];
+C -- Invalid Arg --> G[Message Handler: Print Error & Exit Non-Zero];
+D --> H[Console Output];
+E --> H;
+F --> H;
+G --> H;
+C --> I[Exit Status Code];
+I -- Success (0) --> D,E,F;
+I -- Failure (Non-zero) --> G;
 ```
 
 ## Components
 
-### CliApp
+### main
 
-**Purpose**: The main application component responsible for parsing command-line arguments, dispatching actions based on these arguments, and printing output to standard output or standard error. It encapsulates the core logic for 'Hello, World!', help, version, and error handling.
+**Purpose**: Application entry point. Initializes the CLI, parses arguments, and dispatches actions based on the parsed input.
 
 **Interface**:
-- main()
-- parse_args()
-- handle_command()
-- print_hello_world()
-- print_help()
-- print_version()
+- main
+
+**Dependencies**: cli, message_handler
+
+**File**: `src/main.rs`
+
+### cli
+
+**Purpose**: Defines the command-line interface structure using the 'clap' crate. Responsible for parsing command-line arguments and providing a structured representation of the user's intent.
+
+**Interface**:
+- Cli::parse
+- Cli::run
 
 **Dependencies**: clap
 
-**File**: `src/main.rs`
+**File**: `src/cli.rs`
+
+### message_handler
+
+**Purpose**: Manages all output messages for the application, including the 'Hello, World!' message, help text, version information, and error messages.
+
+**Interface**:
+- print_hello_world
+- print_help
+- print_version
+- print_error
+
+**File**: `src/message_handler.rs`
 
 ## File Structure
 
 ```
-Hello World CLI in Rust/
+Rust Hello World CLI/
 ├── src/
-│   └── main.rs
+│   ├── main.rs
+│   ├── cli.rs
+│   └── message_handler.rs
 └── Cargo.toml
 ```
 
@@ -59,12 +75,12 @@ Hello World CLI in Rust/
 
 - **Language**: Rust
 - **Testing**: cargo test
-- **Build Tool**: cargo
+- **Build Tool**: Cargo
 - **Dependencies**: clap
 
 ## Design Decisions
 
-- Use `clap` crate for argument parsing.: `clap` is the de facto standard for building powerful and user-friendly command-line interfaces in Rust. It provides robust parsing, automatic help/version generation, and excellent error handling, significantly reducing boilerplate code and improving maintainability compared to manual argument parsing.
-- Single `main.rs` file for all application logic.: Given the minimal scope of this 'Hello World' project, keeping all logic within a single `src/main.rs` file simplifies the project structure and reduces overhead. For larger projects, a more modular approach with multiple files would be adopted.
-- Output 'Hello, World!' to stdout and errors to stderr.: Following standard Unix philosophy, successful application output should go to stdout, while diagnostic and error messages should go to stderr. This allows users to easily redirect output and errors separately.
+- Utilize the `clap` crate for command-line argument parsing.: `clap` is the de-facto standard for building robust and ergonomic CLIs in Rust. It offers powerful features for defining CLI structures, automatic generation of help and version messages, and comprehensive error handling, significantly reducing boilerplate and improving user experience.
+- Modularize the application into distinct components (main, cli, message_handler).: Even for a minimalist application, separating concerns into logical modules enhances code organization, readability, and maintainability. This structure facilitates testing and makes future extensions easier by isolating functionality.
+- Standard library for error handling and output.: For this simple CLI, Rust's standard `Result` type and `println!`/`eprintln!` macros are sufficient for handling errors and displaying output. External crates like `anyhow` or `thiserror` are not necessary given the project's scope.
 

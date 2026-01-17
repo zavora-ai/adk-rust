@@ -4,6 +4,7 @@ mod cli;
 mod message_handler;
 
 use crate::cli::Cli;
+use crate::message_handler::print_error;
 use crate::message_handler::print_hello_world;
 use clap::Parser;
 use std::process::exit;
@@ -15,7 +16,7 @@ fn main() {
             print_hello_world();
         }
         Err(e) => {
-            eprintln!("{}", e);
+            print_error(&e.to_string());
             exit(1);
         }
     }

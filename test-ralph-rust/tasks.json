@@ -1,30 +1,30 @@
 {
-  "project": "Hello World CLI in Rust",
+  "project": "Rust Hello World CLI",
   "language": "Rust",
   "phases": [],
   "tasks": [
     {
       "id": "TASK-001",
-      "title": "Project Initialization and Structure Setup",
-      "description": "Initialize a new Rust binary project using `cargo new` and verify the basic project structure including `Cargo.toml` and `src/main.rs`.",
+      "title": "Project Setup and Cargo Initialization",
+      "description": "Initialize a new Rust project using Cargo, configure `Cargo.toml` with project metadata, and add the `clap` dependency for argument parsing.",
       "priority": 1,
       "status": "completed",
       "dependencies": [],
-      "user_story_id": "",
+      "user_story_id": null,
       "estimated_complexity": "low",
       "files_created": [
         "Cargo.toml",
         "src/main.rs"
       ],
       "files_modified": [],
-      "commit_hash": "2e6e463",
+      "commit_hash": null,
       "attempts": 0,
-      "notes": "A new Rust project directory is created.\nA `Cargo.toml` file exists at the project root.\nA `src` directory exists containing `main.rs`."
+      "notes": "A new Rust project directory is created.\n`Cargo.toml` is correctly configured.\n`clap` is added as a dependency."
     },
     {
       "id": "TASK-002",
-      "title": "Implement 'Hello, World!' Default Output",
-      "description": "Modify `src/main.rs` to print \"Hello, World!\" followed by a newline to standard output and exit with a zero status code when executed without any command-line arguments.",
+      "title": "Implement Core 'Hello, World!' Functionality",
+      "description": "Develop the basic functionality to print 'Hello, World!' to standard output when the CLI is executed without any arguments, and ensure a zero exit status.",
       "priority": 1,
       "status": "completed",
       "dependencies": [
@@ -36,98 +36,59 @@
       "files_modified": [
         "src/main.rs"
       ],
-      "commit_hash": "598113c",
+      "commit_hash": null,
       "attempts": 0,
-      "notes": "Running the CLI without arguments prints \"Hello, World!\" to stdout.\nThe CLI exits with a zero status code after printing."
+      "notes": "WHEN the user executes `hello-world` without arguments, THEN 'Hello, World!' is printed.\nTHEN the system exits with a zero status code."
     },
     {
       "id": "TASK-003",
-      "title": "Integrate `clap` for Argument Parsing",
-      "description": "Add the `clap` crate as a dependency in `Cargo.toml`. Initialize `clap` in `src/main.rs` to set up the basic CLI application structure, allowing for command-line argument parsing.",
+      "title": "Define CLI Structure with Clap",
+      "description": "Create `src/cli.rs` to define the CLI application's structure using `clap` traits and attributes. This includes defining the main application and its version.",
       "priority": 1,
       "status": "completed",
       "dependencies": [
         "TASK-001"
       ],
-      "user_story_id": "",
+      "user_story_id": null,
       "estimated_complexity": "medium",
-      "files_created": [],
+      "files_created": [
+        "src/cli.rs"
+      ],
       "files_modified": [
-        "Cargo.toml",
         "src/main.rs"
       ],
-      "commit_hash": "9601b60",
+      "commit_hash": null,
       "attempts": 0,
-      "notes": "The `clap` dependency is successfully added to `Cargo.toml`.\nThe application can be compiled with `clap` integrated.\nBasic argument parsing setup is present in `main.rs`."
+      "notes": "`src/cli.rs` is created and contains a `clap` `Struct` or `Enum` defining the CLI.\nThe application version is configured in `clap`."
     },
     {
       "id": "TASK-004",
-      "title": "Implement Help Message Display",
-      "description": "Configure `clap` in `src/main.rs` to automatically generate and display a comprehensive help message when the `--help` or `-h` arguments are provided. Ensure the CLI exits with a zero status code.",
+      "title": "Implement Help and Version Display",
+      "description": "Integrate `clap`'s automatic help and version generation into `main.rs`. Ensure that `--help`, `-h`, `--version`, and `-V` flags correctly display the respective information and exit with a zero status.",
       "priority": 1,
       "status": "completed",
       "dependencies": [
         "TASK-003"
       ],
-      "user_story_id": "US-002",
+      "user_story_id": "US-002, US-003",
       "estimated_complexity": "low",
       "files_created": [],
       "files_modified": [
-        "src/main.rs"
+        "src/main.rs",
+        "src/cli.rs"
       ],
-      "commit_hash": "9601b60",
+      "commit_hash": null,
       "attempts": 0,
-      "notes": "Executing with `--help` displays usage instructions and available options to stdout.\nExecuting with `-h` displays usage instructions and available options to stdout.\nThe CLI exits with a zero status code after displaying help."
+      "notes": "WHEN `hello-world --help` or `hello-world -h` is executed, THEN a help message is displayed.\nWHEN `hello-world --version` or `hello-world -V` is executed, THEN the application version is displayed.\nAll help/version commands exit with a zero status code."
     },
     {
       "id": "TASK-005",
-      "title": "Implement Version Information Display",
-      "description": "Configure `clap` in `src/main.rs` to display the application's version number (read from `Cargo.toml`) when the `--version` or `-V` arguments are provided. Ensure the CLI exits with a zero status code.",
-      "priority": 1,
-      "status": "completed",
-      "dependencies": [
-        "TASK-003"
-      ],
-      "user_story_id": "US-003",
-      "estimated_complexity": "low",
-      "files_created": [],
-      "files_modified": [
-        "src/main.rs"
-      ],
-      "commit_hash": "9601b60",
-      "attempts": 0,
-      "notes": "Executing with `--version` displays the application's version to stdout.\nExecuting with `-V` displays the application's version to stdout.\nThe CLI exits with a zero status code after displaying the version."
-    },
-    {
-      "id": "TASK-006",
-      "title": "Refine Default Behavior with Argument Presence",
-      "description": "Adjust the argument parsing logic in `src/main.rs` to ensure that 'Hello, World!' is printed only when *no* specific arguments like `--help`, `-h`, `--version`, or `-V` are present. This consolidates `clap`'s default behavior with US-001.",
-      "priority": 1,
-      "status": "completed",
-      "dependencies": [
-        "TASK-002",
-        "TASK-004",
-        "TASK-005"
-      ],
-      "user_story_id": "US-001",
-      "estimated_complexity": "low",
-      "files_created": [],
-      "files_modified": [
-        "src/main.rs"
-      ],
-      "commit_hash": "58c593c",
-      "attempts": 0,
-      "notes": "Running without arguments prints 'Hello, World!' and exits with code 0.\nRunning with `--help` prints help and exits with code 0 (not 'Hello, World!').\nRunning with `--version` prints version and exits with code 0 (not 'Hello, World!')."
-    },
-    {
-      "id": "TASK-007",
       "title": "Implement Invalid Argument Handling",
-      "description": "Utilize `clap`'s error handling capabilities in `src/main.rs` to detect and report unrecognized command-line arguments. The CLI should print a clear error message to standard error and exit with a non-zero status code (e.g., 1).",
+      "description": "Configure `clap` to automatically handle unknown or invalid arguments. Ensure that an appropriate error message is printed to standard error and the application exits with a non-zero status code when an invalid argument is provided.",
       "priority": 2,
       "status": "completed",
       "dependencies": [
-        "TASK-003",
-        "TASK-006"
+        "TASK-003"
       ],
       "user_story_id": "US-004",
       "estimated_complexity": "low",
@@ -135,34 +96,56 @@
       "files_modified": [
         "src/main.rs"
       ],
-      "commit_hash": "58c593c",
+      "commit_hash": null,
       "attempts": 0,
-      "notes": "Executing with an unrecognized argument prints an error message to stderr.\nThe error message clearly indicates invalid input.\nThe CLI exits with a non-zero status code (e.g., 1) when an invalid argument is provided."
+      "notes": "WHEN `hello-world --foo` (or any unknown argument) is executed, THEN an error message is printed to stderr.\nTHEN the system exits with a non-zero status code."
     },
     {
-      "id": "TASK-008",
-      "title": "Add Integration Tests for CLI Functionality",
-      "description": "Write integration tests within `src/main.rs` (or a dedicated `tests/` directory if preferred for expansion) to verify the behavior of all implemented user stories: default 'Hello, World!', help message, version information, and invalid argument handling. Use `assert_cmd` or similar crate if advanced CLI testing is needed, otherwise `std::process::Command` with output capturing.",
-      "priority": 1,
+      "id": "TASK-006",
+      "title": "Create Message Handler Component and Refactor Output",
+      "description": "Create a new module `src/message_handler.rs` to encapsulate all message printing logic. Refactor `main.rs` to use functions from this module for printing 'Hello, World!', help, version, and error messages, improving modularity.",
+      "priority": 3,
       "status": "in_progress",
       "dependencies": [
         "TASK-002",
         "TASK-004",
-        "TASK-005",
-        "TASK-007"
+        "TASK-005"
       ],
-      "user_story_id": "US-001, US-002, US-003, US-004",
+      "user_story_id": null,
       "estimated_complexity": "medium",
-      "files_created": [],
+      "files_created": [
+        "src/message_handler.rs"
+      ],
       "files_modified": [
         "src/main.rs"
       ],
       "commit_hash": null,
       "attempts": 0,
-      "notes": "Tests exist for default 'Hello, World!' output and exit code.\nTests exist for `--help` and `-h` output and exit code.\nTests exist for `--version` and `-V` output and exit code.\nTests exist for invalid argument error messages and non-zero exit code."
+      "notes": "`src/message_handler.rs` is created with dedicated functions for different message types.\n`main.rs` is updated to call functions from `message_handler` for all output.\nApplication behavior remains unchanged."
+    },
+    {
+      "id": "TASK-007",
+      "title": "Write Unit and Integration Tests",
+      "description": "Develop comprehensive unit and integration tests to verify the core 'Hello, World!' functionality, correct help/version output, and robust error handling for invalid arguments. Use `cargo test` for execution.",
+      "priority": 4,
+      "status": "pending",
+      "dependencies": [
+        "TASK-006"
+      ],
+      "user_story_id": null,
+      "estimated_complexity": "high",
+      "files_created": [],
+      "files_modified": [
+        "src/main.rs",
+        "src/cli.rs",
+        "src/message_handler.rs"
+      ],
+      "commit_hash": null,
+      "attempts": 0,
+      "notes": "Tests exist for default 'Hello, World!' output.\nTests verify correct output for `--help` and `--version`.\nTests confirm error messages and non-zero exit for invalid arguments.\nAll tests pass successfully."
     }
   ],
   "version": "1.0",
-  "created_at": "2026-01-14T04:41:06.253217+00:00",
-  "updated_at": "2026-01-14T04:42:54.646412+00:00"
+  "created_at": "2026-01-14T04:47:38.291881+00:00",
+  "updated_at": "2026-01-14T04:56:58.831287+00:00"
 }

@@ -132,8 +132,21 @@ impl Tool for FileTool {
 
                 let full_path = self.project_path.join(&args.path);
 
+                // Log the actual file creation path for debugging
+                tracing::info!(
+                    path = %args.path,
+                    full_path = %full_path.display(),
+                    "Creating file"
+                );
+
                 // Create parent directories if needed
                 if let Some(parent) = full_path.parent() {
+                    if !parent.exists() {
+                        tracing::debug!(
+                            directory = %parent.display(),
+                            "Creating parent directories"
+                        );
+                    }
                     std::fs::create_dir_all(parent).map_err(|e| {
                         adk_core::AdkError::Tool(format!("Failed to create directories: {}", e))
                     })?;
@@ -143,10 +156,17 @@ impl Tool for FileTool {
                     adk_core::AdkError::Tool(format!("Failed to write file: {}", e))
                 })?;
 
+                tracing::info!(
+                    path = %args.path,
+                    bytes = content.len(),
+                    "File created successfully"
+                );
+
                 Ok(json!({
                     "success": true,
                     "operation": "write",
                     "path": args.path,
+                    "full_path": full_path.display().to_string(),
                     "bytes_written": content.len()
                 }))
             }
