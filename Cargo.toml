@@ -7,5 +7,9 @@ edition = "2021"
 clap = { version = "4.0", features = ["derive"] }
 
 [dev-dependencies]
-assert_cmd = "2.0"
-predicates = "2.0"
+assert_cmd = "2.1"
+predicates = "3.1"
+
+[[test]]
+name = "cli_tests"
+path = "tests/cli_tests.rs"
