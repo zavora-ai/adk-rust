@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-01-21
+
+### ⭐ Highlights
+- **Ralph Autonomous Agent**: New example showcasing spec-driven development with loop agents
+- **Local Model Support**: New examples for Ollama and OpenAI-compatible local APIs
+- **Improved Error Handling**: Replaced `unwrap()` calls with proper error handling across crates
+
+### Added
+- **adk-core**: `LlmRequest::with_response_schema()` and `with_config()` builder methods for structured output
+- **adk-agent**: `LlmAgentBuilder::max_iterations()` to configure maximum LLM round-trips (default: 100)
+- **adk-server**: `TaskStore` for in-memory A2A task persistence and retrieval
+- **adk-tool**: `AgentTool` now forwards `state_delta` and `artifact_delta` to parent context
+- **examples/ralph**: Autonomous agent example with loop workflow, PRD management, and file/git/test tools
+- **examples/ollama_structured**: Structured JSON output with local Ollama models
+- **examples/openai_local**: OpenAI client with local models via `OpenAIConfig::compatible()`
+
+### Fixed
+- **adk-session**: Replaced all `unwrap()` calls with proper error handling in `DatabaseSessionService`
+- **adk-model**: Fixed rustdoc bare URL warning in `AzureConfig` documentation
+- **adk-server**: A2A `tasks/get` endpoint now returns stored tasks instead of empty response
+
+### Changed
+- **adk-agent**: Default max iterations increased from 10 to 100 for `LlmAgent`
+
 ## [0.2.0] - 2026-01-06
 
 ### ⭐ Highlights
@@ -409,7 +433,8 @@ Initial release - Published to crates.io.
 - Tokio async runtime
 - Google API key for Gemini
 
-[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/zavora-ai/adk-rust/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/zavora-ai/adk-rust/compare/v0.1.9...v0.2.0
 [0.1.9]: https://github.com/zavora-ai/adk-rust/compare/v0.1.7...v0.1.9
 [0.1.7]: https://github.com/zavora-ai/adk-rust/compare/v0.1.6...v0.1.7
