@@ -70,7 +70,7 @@ impl OpenAIConfig {
 pub struct AzureConfig {
     /// Azure OpenAI API key.
     pub api_key: String,
-    /// Azure resource endpoint (e.g., "https://my-resource.openai.azure.com").
+    /// Azure resource endpoint (e.g., `https://my-resource.openai.azure.com`).
     pub api_base: String,
     /// API version (e.g., "2024-02-15-preview").
     pub api_version: String,
