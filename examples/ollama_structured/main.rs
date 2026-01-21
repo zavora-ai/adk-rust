@@ -12,14 +12,15 @@
 use adk_agent::LlmAgentBuilder;
 use adk_cli::Launcher;
 use adk_core::Agent;
-use adk_model::ollama::{OllamaModel, OllamaConfig};
+use adk_model::ollama::{OllamaConfig, OllamaModel};
 use serde_json::json;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Default Ollama endpoint - can be overridden with OLLAMA_HOST env var
-    let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let host =
+        std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
     let model_name = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
 
     let config = OllamaConfig::with_host(&host, &model_name);

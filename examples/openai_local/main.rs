@@ -20,14 +20,12 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Local server endpoint - Ollama exposes OpenAI-compatible API at /v1
-    let base_url = std::env::var("LOCAL_API_URL")
-        .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
-    let model_name = std::env::var("LOCAL_MODEL")
-        .unwrap_or_else(|_| "llama3.2".to_string());
-    
+    let base_url =
+        std::env::var("LOCAL_API_URL").unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
+    let model_name = std::env::var("LOCAL_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
+
     // API key can be anything for local models (Ollama ignores it)
-    let api_key = std::env::var("LOCAL_API_KEY")
-        .unwrap_or_else(|_| "not-needed".to_string());
+    let api_key = std::env::var("LOCAL_API_KEY").unwrap_or_else(|_| "not-needed".to_string());
 
     // Use OpenAI client with compatible API endpoint
     let config = OpenAIConfig::compatible(&api_key, &base_url, &model_name);

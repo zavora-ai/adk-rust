@@ -119,9 +119,8 @@ mod tests {
                 "name": { "type": "string" }
             }
         });
-        let req = LlmRequest::new("test-model", vec![])
-            .with_response_schema(schema.clone());
-        
+        let req = LlmRequest::new("test-model", vec![]).with_response_schema(schema.clone());
+
         assert!(req.config.is_some());
         let config = req.config.unwrap();
         assert!(config.response_schema.is_some());
@@ -137,9 +136,8 @@ mod tests {
             max_output_tokens: Some(1024),
             response_schema: None,
         };
-        let req = LlmRequest::new("test-model", vec![])
-            .with_config(config);
-        
+        let req = LlmRequest::new("test-model", vec![]).with_config(config);
+
         assert!(req.config.is_some());
         let config = req.config.unwrap();
         assert_eq!(config.temperature, Some(0.7));
