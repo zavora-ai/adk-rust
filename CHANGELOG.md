@@ -8,11 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.1] - 2026-01-21
 
 ### ⭐ Highlights
+- **OpenAI Structured Output**: `output_schema` now works with OpenAI/Azure via `response_format` API
 - **Ralph Autonomous Agent**: New example showcasing spec-driven development with loop agents
 - **Local Model Support**: New examples for Ollama and OpenAI-compatible local APIs
 - **Improved Error Handling**: Replaced `unwrap()` calls with proper error handling across crates
 
 ### Added
+- **adk-model**: OpenAI/Azure clients now wire `output_schema` to `response_format` with `json_schema` type
+  - Auto-injects `additionalProperties: false` at root level for strict mode compliance
+  - Uses sanitized model name for schema name
 - **adk-core**: `LlmRequest::with_response_schema()` and `with_config()` builder methods for structured output
 - **adk-agent**: `LlmAgentBuilder::max_iterations()` to configure maximum LLM round-trips (default: 100)
 - **adk-server**: `TaskStore` for in-memory A2A task persistence and retrieval
@@ -20,8 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **examples/ralph**: Autonomous agent example with loop workflow, PRD management, and file/git/test tools
 - **examples/ollama_structured**: Structured JSON output with local Ollama models
 - **examples/openai_local**: OpenAI client with local models via `OpenAIConfig::compatible()`
+- **examples/openai_structured_basic**: Basic structured output example with OpenAI
+- **examples/openai_structured_strict**: Strict schema example with nested objects
 
 ### Fixed
+- **adk-model**: `output_schema` was ignored by OpenAI client - now properly sent as `response_format`
 - **adk-session**: Replaced all `unwrap()` calls with proper error handling in `DatabaseSessionService`
 - **adk-model**: Fixed rustdoc bare URL warning in `AzureConfig` documentation
 - **adk-server**: A2A `tasks/get` endpoint now returns stored tasks instead of empty response

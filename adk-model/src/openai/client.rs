@@ -6,7 +6,7 @@ use adk_core::{AdkError, Llm, LlmRequest};
 use async_openai::{
     Client,
     config::{AzureConfig as AsyncAzureConfig, OpenAIConfig as AsyncOpenAIConfig},
-    types::CreateChatCompletionRequestArgs,
+    types::{CreateChatCompletionRequestArgs, ResponseFormat, ResponseFormatJsonSchema},
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -85,6 +85,22 @@ impl Llm for OpenAIClient {
                     request_builder.max_tokens(max_tokens as u32);
                 }
                 // Note: top_k is not supported by OpenAI API
+
+                // Add response_format for structured output (JSON schema)
+                // OpenAI requires additionalProperties: false for strict mode
+                if let Some(schema) = &config.response_schema {
+                    let mut schema_with_strict = schema.clone();
+                    if let Some(obj) = schema_with_strict.as_object_mut() {
+                        obj.insert("additionalProperties".to_string(), serde_json::json!(false));
+                    }
+                    let json_schema = ResponseFormatJsonSchema {
+                        name: request.model.replace(['-', '.', '/'], "_"),
+                        description: None,
+                        schema: Some(schema_with_strict),
+                        strict: Some(true),
+                    };
+                    request_builder.response_format(ResponseFormat::JsonSchema { json_schema });
+                }
             }
 
             let openai_request = request_builder.build()
@@ -284,6 +300,22 @@ impl Llm for AzureOpenAIClient {
                 }
                 if let Some(max_tokens) = config.max_output_tokens {
                     request_builder.max_tokens(max_tokens as u32);
+                }
+
+                // Add response_format for structured output (JSON schema)
+                // OpenAI requires additionalProperties: false for strict mode
+                if let Some(schema) = &config.response_schema {
+                    let mut schema_with_strict = schema.clone();
+                    if let Some(obj) = schema_with_strict.as_object_mut() {
+                        obj.insert("additionalProperties".to_string(), serde_json::json!(false));
+                    }
+                    let json_schema = ResponseFormatJsonSchema {
+                        name: deployment_id.replace(['-', '.', '/'], "_"),
+                        description: None,
+                        schema: Some(schema_with_strict),
+                        strict: Some(true),
+                    };
+                    request_builder.response_format(ResponseFormat::JsonSchema { json_schema });
                 }
             }
 

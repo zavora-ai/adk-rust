@@ -12,10 +12,26 @@
 
 use adk_agent::LlmAgentBuilder;
 use adk_cli::Launcher;
-use adk_core::Agent;
+use adk_core::{Agent, Result, ToolContext};
 use adk_model::openai::{OpenAIClient, OpenAIConfig};
-use serde_json::json;
+use adk_tool::FunctionTool;
+use serde_json::{json, Value};
 use std::sync::Arc;
+
+/// Get weather for Tokyo - returns mock weather data
+async fn get_tokyo_weather(_ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+    Ok(json!({
+        "location": "Tokyo, Japan",
+        "temperature": 72,
+        "conditions": "Partly cloudy with light breeze",
+        "humidity": 65,
+        "forecast": [
+            "Tomorrow: Sunny, 75°F",
+            "Day 2: Cloudy, 68°F",
+            "Day 3: Rain expected, 62°F"
+        ]
+    }))
+}
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -31,26 +47,32 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let config = OpenAIConfig::compatible(&api_key, &base_url, &model_name);
     let model = OpenAIClient::new(config)?;
 
-    // Create an agent with structured output schema
+    // Create the weather tool
+    let weather_tool = FunctionTool::new(
+        "get_tokyo_weather",
+        "Get current weather information for Tokyo, Japan. Returns temperature, conditions, humidity, and 3-day forecast.",
+        get_tokyo_weather,
+    );
+
+    // Create an agent with the weather tool and structured JSON output
     let agent = LlmAgentBuilder::new("weather_agent")
-        .description("A weather reporter that outputs structured JSON data")
+        .description("A weather assistant that can get Tokyo weather")
         .model(Arc::new(model))
         .instruction(
-            "You are a weather reporter. Provide weather information for the requested location. \
-             Always respond with valid JSON in the following format:\n\
-             {\"location\": \"city name\", \"temperature\": number, \"conditions\": \"description\", \"forecast\": [\"day1\", \"day2\", \"day3\"]}\n\
-             Use fictional but realistic weather data. Only output JSON, no other text.",
+            "You are a weather assistant. When asked about weather in Tokyo, \
+             use the get_tokyo_weather tool to fetch the data. ",
         )
+        .tool(Arc::new(weather_tool))
         .output_schema(json!({
             "type": "object",
             "properties": {
-                "location": { "type": "string", "description": "The city and state/country" },
-                "temperature": { "type": "number", "description": "Temperature in Fahrenheit" },
-                "conditions": { "type": "string", "description": "Short description of conditions" },
+                "location": { "type": "string" },
+                "temperature": { "type": "number" },
+                "conditions": { "type": "string" },
+                "humidity": { "type": "number" },
                 "forecast": {
                     "type": "array",
-                    "items": { "type": "string" },
-                    "description": "3-day forecast summary"
+                    "items": { "type": "string" }
                 }
             },
             "required": ["location", "temperature", "conditions"]
@@ -59,7 +81,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     println!("OpenAI-Compatible Local Model Agent created: {}", agent.name());
     println!("Using model: {} at {}", model_name, base_url);
-    println!("This agent will respond with JSON weather data.");
+    println!("This agent has a tool to get Tokyo weather.");
     println!("Try asking: 'What is the weather in Tokyo?'\n");
 
     Launcher::new(Arc::new(agent)).run().await?;

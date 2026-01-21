@@ -118,6 +118,16 @@ path = "openai_structured/main.rs"
 required-features = ["openai"]
 
 [[example]]
+name = "openai_structured_basic"
+path = "openai_structured_basic/main.rs"
+required-features = ["openai"]
+
+[[example]]
+name = "openai_structured_strict"
+path = "openai_structured_strict/main.rs"
+required-features = ["openai"]
+
+[[example]]
 name = "openai_local"
 path = "openai_local/main.rs"
 required-features = ["openai"]
