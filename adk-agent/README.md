@@ -22,14 +22,14 @@ Agent implementations for ADK-Rust (LLM, Custom, Workflow agents).
 
 ```toml
 [dependencies]
-adk-agent = "0.1"
+adk-agent = "0.2"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.1", features = ["agents"] }
+adk-rust = { version = "0.2", features = ["agents"] }
 ```
 
 ## Quick Start
