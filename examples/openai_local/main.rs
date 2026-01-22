@@ -15,7 +15,7 @@ use adk_cli::Launcher;
 use adk_core::{Agent, Result, ToolContext};
 use adk_model::openai::{OpenAIClient, OpenAIConfig};
 use adk_tool::FunctionTool;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 /// Get weather for Tokyo - returns mock weather data

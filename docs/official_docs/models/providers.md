@@ -10,7 +10,7 @@ ADK-Rust supports multiple cloud LLM providers through the `adk-model` crate. Al
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │   • Gemini (Google)    ⭐ Default    - Multimodal, large context    │
-│   • OpenAI (GPT-4o)    🔥 Popular    - Best ecosystem               │
+│   • OpenAI (GPT-5)    🔥 Popular    - Best ecosystem               │
 │   • Anthropic (Claude) 🧠 Smart      - Best reasoning               │
 │   • DeepSeek           💭 Thinking   - Chain-of-thought, cheap      │
 │   • Groq               ⚡ Ultra-Fast  - Fastest inference           │
@@ -41,14 +41,14 @@ Add the providers you need to your `Cargo.toml`:
 ```toml
 [dependencies]
 # Pick one or more providers:
-adk-model = { version = "0.2", features = ["gemini"] }        # Google Gemini (default)
-adk-model = { version = "0.2", features = ["openai"] }        # OpenAI GPT-4o
-adk-model = { version = "0.2", features = ["anthropic"] }     # Anthropic Claude
-adk-model = { version = "0.2", features = ["deepseek"] }      # DeepSeek
-adk-model = { version = "0.2", features = ["groq"] }          # Groq (ultra-fast)
+adk-model = { version = "0.2.1", features = ["gemini"] }        # Google Gemini (default)
+adk-model = { version = "0.2.1", features = ["openai"] }        # OpenAI GPT-4o
+adk-model = { version = "0.2.1", features = ["anthropic"] }     # Anthropic Claude
+adk-model = { version = "0.2.1", features = ["deepseek"] }      # DeepSeek
+adk-model = { version = "0.2.1", features = ["groq"] }          # Groq (ultra-fast)
 
 # Or all cloud providers at once:
-adk-model = { version = "0.2", features = ["all-providers"] }
+adk-model = { version = "0.2.1", features = ["all-providers"] }
 ```
 
 ## Step 2: Set Your API Key
@@ -127,6 +127,7 @@ It has green eyes and distinctive striped markings typical of tabby cats.
 > - 🔧 Excellent tool/function calling
 > - 📖 Best documentation & ecosystem
 > - 🎯 Consistent, predictable outputs
+> - 📋 **Structured output** with JSON schema enforcement
 
 ### Complete Working Example
 
@@ -152,6 +153,72 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+### Structured Output (JSON Schema)
+
+OpenAI supports guaranteed JSON output via `output_schema`. ADK-Rust automatically wires this to OpenAI's `response_format` API:
+
+```rust
+use adk_rust::prelude::*;
+use serde_json::json;
+use std::sync::Arc;
+
+let model = OpenAIClient::new(OpenAIConfig::new(&api_key, "gpt-4o"))?;
+
+let agent = LlmAgentBuilder::new("data_extractor")
+    .model(Arc::new(model))
+    .instruction("Extract person information from the text.")
+    .output_schema(json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "age": { "type": "number" },
+            "email": { "type": "string" }
+        },
+        "required": ["name", "age"]
+    }))
+    .build()?;
+
+// Response is guaranteed to be valid JSON matching the schema
+```
+
+For strict mode with nested objects, include `additionalProperties: false` at each level:
+
+```rust
+.output_schema(json!({
+    "type": "object",
+    "properties": {
+        "title": { "type": "string" },
+        "metadata": {
+            "type": "object",
+            "properties": {
+                "author": { "type": "string" },
+                "tags": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["author"],
+            "additionalProperties": false  // Required for nested objects
+        }
+    },
+    "required": ["title", "metadata"],
+    "additionalProperties": false  // Auto-injected at root level
+}))
+```
+
+### OpenAI-Compatible Local APIs
+
+Use `OpenAIConfig::compatible()` to connect to local servers (Ollama, vLLM, LM Studio):
+
+```rust
+// Ollama exposes OpenAI-compatible API at /v1
+let config = OpenAIConfig::compatible(
+    "not-needed",                      // API key (ignored by Ollama)
+    "http://localhost:11434/v1",       // Base URL
+    "llama3.2"                         // Model name
+);
+let model = OpenAIClient::new(config)?;
+```
+
+> **Note**: Structured output (`output_schema`) requires backend support. Native OpenAI fully supports it; local servers may have limited support.
 
 ### Available Models
 

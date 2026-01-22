@@ -45,7 +45,7 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.2", features = ["agents", "models", "cli"] }
+adk-rust = { version = "0.2.1", features = ["agents", "models", "cli"] }
 tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 ```
@@ -697,6 +697,33 @@ let agent_b = LlmAgentBuilder::new("agent_b")
 ```
 
 The `output_key` configuration automatically saves an agent's final response to the session state, making it available to subsequent agents.
+
+### AgentTool State and Artifact Forwarding
+
+When using `AgentTool` to wrap agents as tools, state changes and artifacts from sub-agents are automatically forwarded to the parent context:
+
+```rust
+use adk_tool::AgentTool;
+
+// Create a sub-agent that modifies state
+let data_processor = LlmAgentBuilder::new("data_processor")
+    .instruction("Process the data and save results.")
+    .output_key("processed_data")
+    .model(model.clone())
+    .build()?;
+
+// Wrap as a tool - state_delta and artifact_delta are forwarded
+let processor_tool = AgentTool::new(Arc::new(data_processor));
+
+// Parent agent can use the tool and see state changes
+let coordinator = LlmAgentBuilder::new("coordinator")
+    .instruction("Use the data_processor tool, then access {processed_data}.")
+    .model(model.clone())
+    .tool(Arc::new(processor_tool))
+    .build()?;
+```
+
+This enables seamless data flow between parent and child agents when using the AgentTool pattern.
 
 ## Running Multi-Agent Systems
 

@@ -15,11 +15,10 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let api_key = std::env::var("OPENAI_API_KEY")
-        .expect("OPENAI_API_KEY environment variable required");
-    
-    let model_name = std::env::var("OPENAI_MODEL")
-        .unwrap_or_else(|_| "gpt-4o-mini".to_string());
+    let api_key =
+        std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable required");
+
+    let model_name = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
 
     let config = OpenAIConfig::new(&api_key, &model_name);
     let model = OpenAIClient::new(config)?;

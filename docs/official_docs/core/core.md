@@ -603,6 +603,52 @@ pub struct LlmRequest {
 }
 ```
 
+**LlmRequest Builder Methods:**
+
+`LlmRequest` provides builder methods for convenient construction:
+
+```rust
+use adk_core::{LlmRequest, Content, GenerateContentConfig};
+use serde_json::json;
+
+// Basic request
+let request = LlmRequest::new(vec![
+    Content::new("user").with_text("Hello!")
+]);
+
+// With system instruction
+let request = LlmRequest::new(contents)
+    .with_system_instruction("You are a helpful assistant.");
+
+// With response schema for structured output
+let request = LlmRequest::new(contents)
+    .with_response_schema(json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "age": { "type": "number" }
+        },
+        "required": ["name", "age"]
+    }));
+
+// With full config
+let config = GenerateContentConfig {
+    temperature: Some(0.7),
+    max_output_tokens: Some(1024),
+    response_schema: Some(schema),
+    ..Default::default()
+};
+let request = LlmRequest::new(contents).with_config(config);
+```
+
+| Method | Description |
+|--------|-------------|
+| `new(contents)` | Create request with conversation history |
+| `with_system_instruction(text)` | Set the system prompt |
+| `with_response_schema(schema)` | Set JSON schema for structured output |
+| `with_config(config)` | Set full generation config |
+| `with_tools(tools)` | Add tool declarations |
+
 **LlmResponse:**
 
 ```rust

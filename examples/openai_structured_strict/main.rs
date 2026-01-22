@@ -16,11 +16,10 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let api_key = std::env::var("OPENAI_API_KEY")
-        .expect("OPENAI_API_KEY environment variable required");
-    
-    let model_name = std::env::var("OPENAI_MODEL")
-        .unwrap_or_else(|_| "gpt-4o-mini".to_string());
+    let api_key =
+        std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable required");
+
+    let model_name = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
 
     let config = OpenAIConfig::new(&api_key, &model_name);
     let model = OpenAIClient::new(config)?;
@@ -32,20 +31,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .instruction(
             "Extract the idea specification from the user's description. \
              Determine priority based on urgency keywords (urgent/asap = high, \
-             soon/next = medium, eventually/someday = low)."
+             soon/next = medium, eventually/someday = low).",
         )
         .output_schema(json!({
             "type": "object",
             "properties": {
-                "title": { 
+                "title": {
                     "type": "string",
                     "description": "Short title for the idea"
                 },
-                "description": { 
+                "description": {
                     "type": "string",
                     "description": "Detailed description of the idea"
                 },
-                "priority": { 
+                "priority": {
                     "type": "string",
                     "enum": ["low", "medium", "high"],
                     "description": "Priority level based on urgency"
@@ -53,11 +52,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "metadata": {
                     "type": "object",
                     "properties": {
-                        "category": { 
+                        "category": {
                             "type": "string",
                             "description": "Category of the idea (feature, bugfix, improvement)"
                         },
-                        "estimated_effort": { 
+                        "estimated_effort": {
                             "type": "string",
                             "enum": ["small", "medium", "large"],
                             "description": "Estimated implementation effort"

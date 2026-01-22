@@ -15,7 +15,7 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.2.0"
+adk-rust = "0.2.1"
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 serde_json = "1.0"
@@ -296,7 +296,7 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.2.0", features = ["tools"] }
+adk-rust = { version = "0.2.1", features = ["tools"] }
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 serde_json = "1.0"
@@ -513,7 +513,26 @@ Intercept agent behavior:
 | `output_schema(json)` | JSON schema for structured output |
 | `output_key(key)` | Saves response to state |
 | `include_contents(mode)` | History visibility |
+| `max_iterations(n)` | Maximum LLM round-trips (default: 100) |
 | `build()` | Creates the agent |
+
+### Iteration Control
+
+The `max_iterations()` method limits how many LLM round-trips an agent can make before stopping. This is useful for:
+- Preventing runaway tool-calling loops
+- Controlling costs in production
+- Setting reasonable bounds for complex tasks
+
+```rust
+let agent = LlmAgentBuilder::new("bounded_agent")
+    .model(Arc::new(model))
+    .instruction("You are a helpful assistant.")
+    .tool(Arc::new(my_tool))
+    .max_iterations(10)  // Stop after 10 LLM calls
+    .build()?;
+```
+
+The default is 100 iterations, which is sufficient for most use cases. Lower values (5-20) are recommended for simple Q&A agents, while higher values may be needed for complex multi-step reasoning tasks.
 
 ---
 
