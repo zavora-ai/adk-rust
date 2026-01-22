@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 
-> **🎉 v0.2.0 Released!** First stable release with multi-provider LLM support and visual agent builder. [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
+> **🎉 v0.2.1 Released!** OpenAI structured output fix, iteration control, and new examples. [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 
 A comprehensive and production-ready Rust framework for building AI agents. Create powerful and high-performance AI agent systems with a flexible, modular architecture. Model-agnostic. Type-safe. Blazingly fast.
 
