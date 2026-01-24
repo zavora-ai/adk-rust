@@ -78,6 +78,7 @@ docs/CRATES_IO_PUBLICATION_PLAN.md
 # Note: vendor/ IS tracked for gemini-rust patch
 CLAUDE.md
 packages/adk-ui-react/node_modules/
+adk-studio/ui/node_modules/
 docs/ADK-STUDIO-PLAN.md
 docs/ADK-STUDIO-PROGRESS.md
 docs/ADK-STUDIO-FUNCTION-TOOLS.md
