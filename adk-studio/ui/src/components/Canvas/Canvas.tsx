@@ -2,7 +2,7 @@ import { useCallback, useState, useRef, useMemo, DragEvent } from 'react';
 import { ReactFlow, Background, Controls, MiniMap, Node, Edge, Connection } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useStore } from '../../store';
-import { TestConsole } from '../Console/TestConsole';
+import { TestConsole, BuildStatus } from '../Console/TestConsole';
 import { MenuBar } from '../MenuBar';
 import { nodeTypes } from '../Nodes';
 import { edgeTypes } from '../Edges';
@@ -66,6 +66,20 @@ export function Canvas() {
     clearCompiledCode,
     invalidateBuild,
   } = useBuild(currentProject?.id);
+
+  // v2.0: Derive build status for console summary (Requirement 13.2)
+  const buildStatus: BuildStatus = building 
+    ? 'building' 
+    : buildOutput?.success 
+      ? 'success' 
+      : buildOutput && !buildOutput.success 
+        ? 'error' 
+        : builtBinaryPath 
+          ? 'success' 
+          : 'none';
+  
+  // v2.0: Console collapse state
+  const [consoleCollapsed, setConsoleCollapsed] = useState(false);
 
   // Execution state (local for now, will be moved to useExecution in later tasks)
   const [flowPhase, setFlowPhase] = useState<FlowPhase>('idle');
@@ -474,7 +488,7 @@ export function Canvas() {
 
       {/* Console Area */}
       {showConsole && hasAgents && builtBinaryPath && (
-        <div className="h-64">
+        <div className={consoleCollapsed ? '' : 'h-64'}>
           <TestConsole 
             onFlowPhase={handleFlowPhase} 
             onActiveAgent={handleActiveAgent} 
@@ -482,6 +496,9 @@ export function Canvas() {
             onThought={handleThought} 
             binaryPath={builtBinaryPath}
             onSnapshotsChange={handleSnapshotsChange}
+            buildStatus={buildStatus}
+            isCollapsed={consoleCollapsed}
+            onCollapseChange={setConsoleCollapsed}
           />
         </div>
       )}

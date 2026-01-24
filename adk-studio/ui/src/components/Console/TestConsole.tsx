@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../store';
 import { useSSE, TraceEvent } from '../../hooks/useSSE';
 import type { StateSnapshot } from '../../types/execution';
+import { ConsoleFilters, EventFilter } from './ConsoleFilters';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -12,6 +13,12 @@ interface Message {
 
 type FlowPhase = 'idle' | 'input' | 'output';
 type Tab = 'chat' | 'events';
+
+/** Build status for summary line */
+export type BuildStatus = 'none' | 'building' | 'success' | 'error';
+
+/** Run status for summary line */
+export type RunStatus = 'idle' | 'running' | 'success' | 'error';
 
 interface Props {
   onFlowPhase?: (phase: FlowPhase) => void;
@@ -26,18 +33,55 @@ interface Props {
     scrubTo: (index: number) => void,
     stateKeys?: Map<string, string[]>
   ) => void;
+  /** v2.0: Build status for summary line */
+  buildStatus?: BuildStatus;
+  /** v2.0: Whether the console is collapsed */
+  isCollapsed?: boolean;
+  /** v2.0: Callback when collapse state changes */
+  onCollapseChange?: (collapsed: boolean) => void;
 }
 
-export function TestConsole({ onFlowPhase, onActiveAgent, onIteration, onThought, binaryPath, onSnapshotsChange }: Props) {
+export function TestConsole({ 
+  onFlowPhase, 
+  onActiveAgent, 
+  onIteration, 
+  onThought, 
+  binaryPath, 
+  onSnapshotsChange,
+  buildStatus = 'none',
+  isCollapsed: controlledCollapsed,
+  onCollapseChange,
+}: Props) {
   const { currentProject } = useStore();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [activeTab, setActiveTab] = useState<Tab>('chat');
-  const { send, cancel, isStreaming, streamingText, currentAgent, toolCalls, events, sessionId, newSession, iteration, snapshots, currentSnapshotIndex, scrubTo, stateKeys } = useSSE(currentProject?.id ?? null, binaryPath);
+  const { send, cancel, isStreaming, streamingText, currentAgent, toolCalls, events, clearEvents, sessionId, newSession, iteration, snapshots, currentSnapshotIndex, scrubTo, stateKeys } = useSSE(currentProject?.id ?? null, binaryPath);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const eventsEndRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
   const lastAgentRef = useRef<string | null>(null);
+  
+  // v2.0: Collapse state (controlled or uncontrolled)
+  const [internalCollapsed, setInternalCollapsed] = useState(false);
+  const collapsed = controlledCollapsed !== undefined ? controlledCollapsed : internalCollapsed;
+  const setCollapsed = useCallback((value: boolean) => {
+    if (onCollapseChange) {
+      onCollapseChange(value);
+    } else {
+      setInternalCollapsed(value);
+    }
+  }, [onCollapseChange]);
+  
+  // v2.0: Event filtering
+  const [eventFilter, setEventFilter] = useState<EventFilter>('all');
+  
+  // v2.0: Auto-scroll preference
+  const [autoScroll, setAutoScroll] = useState(true);
+  
+  // v2.0: Run status tracking
+  const [runStatus, setRunStatus] = useState<RunStatus>('idle');
+  const [lastError, setLastError] = useState<string | null>(null);
 
   // v2.0: Pass snapshots and state keys to parent for Timeline and Data Flow Overlays
   useEffect(() => {
@@ -55,13 +99,18 @@ export function TestConsole({ onFlowPhase, onActiveAgent, onIteration, onThought
     }
   }, [currentAgent, onActiveAgent]);
 
+  // v2.0: Auto-scroll to latest output during execution (Requirement 13.7)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingText]);
+    if (autoScroll) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, streamingText, autoScroll]);
 
   useEffect(() => {
-    eventsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [events]);
+    if (autoScroll) {
+      eventsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [events, autoScroll]);
 
   useEffect(() => {
     // Use currentAgent or fallback to lastAgentRef for timing issues
@@ -83,6 +132,13 @@ export function TestConsole({ onFlowPhase, onActiveAgent, onIteration, onThought
     }
   }, [streamingText, isStreaming, onFlowPhase, onActiveAgent]);
 
+  // v2.0: Track run status based on streaming state and events
+  useEffect(() => {
+    if (isStreaming) {
+      setRunStatus('running');
+    }
+  }, [isStreaming]);
+
   const sendMessage = () => {
     if (!input.trim() || !currentProject || isStreaming || sendingRef.current) return;
     sendingRef.current = true;
@@ -91,6 +147,8 @@ export function TestConsole({ onFlowPhase, onActiveAgent, onIteration, onThought
     setMessages((m) => [...m, { role: 'user', content: userMsg }]);
     onFlowPhase?.('input');
     lastAgentRef.current = null;
+    setRunStatus('running');
+    setLastError(null);
     
     send(
       userMsg,
@@ -100,11 +158,14 @@ export function TestConsole({ onFlowPhase, onActiveAgent, onIteration, onThought
         }
         onFlowPhase?.('idle');
         sendingRef.current = false;
+        setRunStatus('success');
       },
       (error) => {
         setMessages((m) => [...m, { role: 'assistant', content: `Error: ${error}` }]);
         onFlowPhase?.('idle');
         sendingRef.current = false;
+        setRunStatus('error');
+        setLastError(error);
       }
     );
   };
@@ -112,11 +173,22 @@ export function TestConsole({ onFlowPhase, onActiveAgent, onIteration, onThought
   const handleNewSession = () => {
     setMessages([]);
     newSession();
+    setRunStatus('idle');
+    setLastError(null);
   };
 
   const handleCancel = () => {
     cancel();
     onFlowPhase?.('idle');
+    setRunStatus('idle');
+  };
+
+  // v2.0: Clear history (Requirement 13.6)
+  const handleClearHistory = () => {
+    setMessages([]);
+    clearEvents();
+    setRunStatus('idle');
+    setLastError(null);
   };
 
   const isThinking = isStreaming && !streamingText;
@@ -154,6 +226,89 @@ export function TestConsole({ onFlowPhase, onActiveAgent, onIteration, onThought
 
   // Helper for inline styles
   const getEventColor = (type: TraceEvent['type']) => eventColor(type);
+
+  // v2.0: Filter events based on selected filter (Requirement 13.3)
+  const filteredEvents = events.filter(e => {
+    switch (eventFilter) {
+      case 'model':
+        return e.type === 'model' || e.type === 'agent_start' || e.type === 'agent_end';
+      case 'tool':
+        return e.type === 'tool_call' || e.type === 'tool_result';
+      case 'session':
+        return e.type === 'user' || e.type === 'done' || e.type === 'error';
+      case 'all':
+      default:
+        return true;
+    }
+  });
+
+  // v2.0: Build status icon and text for summary line
+  const getBuildStatusDisplay = () => {
+    switch (buildStatus) {
+      case 'building':
+        return { icon: '🔨', text: 'Building...', color: 'var(--accent-warning)' };
+      case 'success':
+        return { icon: '✅', text: 'Built', color: 'var(--accent-success)' };
+      case 'error':
+        return { icon: '❌', text: 'Build failed', color: 'var(--accent-error)' };
+      default:
+        return { icon: '⚪', text: 'Not built', color: 'var(--text-muted)' };
+    }
+  };
+
+  // v2.0: Run status icon and text for summary line
+  const getRunStatusDisplay = () => {
+    switch (runStatus) {
+      case 'running':
+        return { icon: '⏳', text: 'Running...', color: 'var(--accent-warning)' };
+      case 'success':
+        return { icon: '✅', text: 'Success', color: 'var(--accent-success)' };
+      case 'error':
+        return { icon: '❌', text: 'Error', color: 'var(--accent-error)' };
+      default:
+        return { icon: '⚪', text: 'Idle', color: 'var(--text-muted)' };
+    }
+  };
+
+  const buildStatusDisplay = getBuildStatusDisplay();
+  const runStatusDisplay = getRunStatusDisplay();
+
+  // v2.0: Collapsed summary view (Requirements 13.1, 13.2, 13.8)
+  if (collapsed) {
+    return (
+      <div 
+        className="flex items-center justify-between px-3 py-2 border-t cursor-pointer hover:bg-opacity-50"
+        style={{ 
+          backgroundColor: 'var(--surface-panel)', 
+          borderColor: 'var(--border-default)',
+          color: 'var(--text-primary)'
+        }}
+        onClick={() => setCollapsed(false)}
+      >
+        <div className="flex items-center gap-4 text-xs">
+          <span className="font-medium">Console</span>
+          <span style={{ color: buildStatusDisplay.color }}>
+            {buildStatusDisplay.icon} {buildStatusDisplay.text}
+          </span>
+          <span style={{ color: runStatusDisplay.color }}>
+            {runStatusDisplay.icon} {runStatusDisplay.text}
+          </span>
+          {lastError && (
+            <span style={{ color: 'var(--accent-error)' }} title={lastError}>
+              Last error: {lastError.slice(0, 30)}{lastError.length > 30 ? '...' : ''}
+            </span>
+          )}
+        </div>
+        <button 
+          className="text-xs px-2 py-1 rounded"
+          style={{ color: 'var(--text-secondary)' }}
+          onClick={(e) => { e.stopPropagation(); setCollapsed(false); }}
+        >
+          ▲ Expand
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div 
@@ -194,8 +349,24 @@ export function TestConsole({ onFlowPhase, onActiveAgent, onIteration, onThought
               Session: {sessionId.slice(0, 8)}...
             </span>
           )}
+          {/* v2.0: Summary status in header */}
+          <span className="ml-2 text-xs" style={{ color: buildStatusDisplay.color }}>
+            {buildStatusDisplay.icon}
+          </span>
+          <span className="text-xs" style={{ color: runStatusDisplay.color }}>
+            {runStatusDisplay.icon}
+          </span>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {/* v2.0: Clear history button (Requirement 13.6) */}
+          <button 
+            onClick={handleClearHistory} 
+            className="text-xs flex items-center gap-1"
+            style={{ color: 'var(--text-muted)' }}
+            title="Clear history"
+          >
+            🗑️ Clear
+          </button>
           <button 
             onClick={handleNewSession} 
             className="text-xs flex items-center gap-1"
@@ -207,6 +378,15 @@ export function TestConsole({ onFlowPhase, onActiveAgent, onIteration, onThought
           {isStreaming && (
             <button onClick={handleCancel} className="text-xs" style={{ color: 'var(--accent-error)' }}>Stop</button>
           )}
+          {/* v2.0: Collapse button (Requirement 13.1) */}
+          <button 
+            onClick={() => setCollapsed(true)} 
+            className="text-xs px-2 py-1 rounded"
+            style={{ color: 'var(--text-secondary)' }}
+            title="Collapse console"
+          >
+            ▼
+          </button>
         </div>
       </div>
 
@@ -252,38 +432,51 @@ export function TestConsole({ onFlowPhase, onActiveAgent, onIteration, onThought
       )}
 
       {activeTab === 'events' && (
-        <div className="flex-1 overflow-y-auto p-2 font-mono text-xs">
-          {events.length === 0 && (
-            <div style={{ color: 'var(--text-muted)' }}>No events yet. Send a message to see the trace.</div>
-          )}
-          {events.map((e, i) => (
-            <div key={i} className="py-1 border-b" style={{ borderColor: 'var(--border-default)' }}>
-              <div className="flex gap-2">
-                <span className="w-24 flex-shrink-0" style={{ color: 'var(--text-muted)' }}>{formatTime(e.timestamp)}</span>
-                <span>{eventIcon(e.type)}</span>
-                <span className="flex-1" style={{ color: getEventColor(e.type) }}>
-                  {e.agent && <span style={{ color: 'var(--accent-warning)' }} className="mr-2">[{e.agent}]</span>}
-                  {e.type === 'user' ? `Input: ${e.data}` : 
-                   e.type === 'agent_start' ? `Started ${e.data}` :
-                   e.type === 'agent_end' ? `Completed in ${e.data}` :
-                   e.type === 'model' ? `Response: ${e.data}` :
-                   e.type === 'done' ? `Done (${e.data})` :
-                   e.data}
-                </span>
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* v2.0: Event filters (Requirement 13.3) */}
+          <ConsoleFilters 
+            currentFilter={eventFilter} 
+            onFilterChange={setEventFilter}
+            autoScroll={autoScroll}
+            onAutoScrollChange={setAutoScroll}
+          />
+          <div className="flex-1 overflow-y-auto p-2 font-mono text-xs">
+            {filteredEvents.length === 0 && (
+              <div style={{ color: 'var(--text-muted)' }}>
+                {events.length === 0 
+                  ? 'No events yet. Send a message to see the trace.'
+                  : 'No events match the current filter.'}
               </div>
-              {e.screenshot && (
-                <div className="ml-28 mt-2 mb-2">
-                  <img 
-                    src={`data:image/png;base64,${e.screenshot}`} 
-                    alt="Browser screenshot" 
-                    className="max-w-full max-h-64 rounded border"
-                    style={{ borderColor: 'var(--border-default)' }}
-                  />
+            )}
+            {filteredEvents.map((e, i) => (
+              <div key={i} className="py-1 border-b" style={{ borderColor: 'var(--border-default)' }}>
+                <div className="flex gap-2">
+                  <span className="w-24 flex-shrink-0" style={{ color: 'var(--text-muted)' }}>{formatTime(e.timestamp)}</span>
+                  <span>{eventIcon(e.type)}</span>
+                  <span className="flex-1" style={{ color: getEventColor(e.type) }}>
+                    {e.agent && <span style={{ color: 'var(--accent-warning)' }} className="mr-2">[{e.agent}]</span>}
+                    {e.type === 'user' ? `Input: ${e.data}` : 
+                     e.type === 'agent_start' ? `Started ${e.data}` :
+                     e.type === 'agent_end' ? `Completed in ${e.data}` :
+                     e.type === 'model' ? `Response: ${e.data}` :
+                     e.type === 'done' ? `Done (${e.data})` :
+                     e.data}
+                  </span>
                 </div>
-              )}
-            </div>
-          ))}
-          <div ref={eventsEndRef} />
+                {e.screenshot && (
+                  <div className="ml-28 mt-2 mb-2">
+                    <img 
+                      src={`data:image/png;base64,${e.screenshot}`} 
+                      alt="Browser screenshot" 
+                      className="max-w-full max-h-64 rounded border"
+                      style={{ borderColor: 'var(--border-default)' }}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+            <div ref={eventsEndRef} />
+          </div>
         </div>
       )}
 
