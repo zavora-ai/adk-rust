@@ -20,6 +20,7 @@ members = [
     "adk-telemetry",
     "adk-guardrail",
     "adk-auth",
+    "adk-plugin",
     "adk-studio",
     "adk-rust",
     "adk-gemini",
@@ -120,6 +121,7 @@ adk-ui = { path = "adk-ui", version = "0.2.2" }
 adk-telemetry = { path = "adk-telemetry", version = "0.2.2" }
 adk-guardrail = { path = "adk-guardrail", version = "0.2.2" }
 adk-auth = { path = "adk-auth", version = "0.2.2" }
+adk-plugin = { path = "adk-plugin", version = "0.2.2" }
 adk-studio = { path = "adk-studio", version = "0.2.2" }
 adk-gemini = { path = "adk-gemini", version = "0.2.2" }
 adk-doc-audit = { path = "adk-doc-audit", version = "0.2.2" }

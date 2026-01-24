@@ -16,73 +16,20 @@
 // - https://remote.mcpservers.org/sequentialthinking/mcp - Structured thinking
 
 use adk_agent::LlmAgentBuilder;
-use adk_core::{
-    Agent, Content, InvocationContext, Part, ReadonlyContext, RunConfig, Session, State, Toolset,
-};
+use adk_core::{Content, ReadonlyContext, Toolset};
 use adk_model::GeminiModel;
 use adk_tool::{McpHttpClientBuilder, McpTaskConfig};
-use async_trait::async_trait;
-use futures::StreamExt;
-use serde_json::Value;
-use std::collections::HashMap;
-use std::env;
+use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
 
-// Mock session for the example
-struct MockSession;
-impl Session for MockSession {
-    fn id(&self) -> &str {
-        "mcp-http-session"
-    }
-    fn app_name(&self) -> &str {
-        "mcp-http-example"
-    }
-    fn user_id(&self) -> &str {
-        "user"
-    }
-    fn state(&self) -> &dyn State {
-        &MockState
-    }
-    fn conversation_history(&self) -> Vec<Content> {
-        Vec::new()
-    }
-}
+/// Minimal context for tool discovery (no unimplemented! methods)
+struct SimpleContext;
 
-struct MockState;
-impl State for MockState {
-    fn get(&self, _key: &str) -> Option<Value> {
-        None
-    }
-    fn set(&mut self, _key: String, _value: Value) {}
-    fn all(&self) -> HashMap<String, Value> {
-        HashMap::new()
-    }
-}
-
-struct MockContext {
-    session: MockSession,
-    user_content: Content,
-}
-
-impl MockContext {
-    fn new(text: &str) -> Self {
-        Self {
-            session: MockSession,
-            user_content: Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text {
-                    text: text.to_string(),
-                }],
-            },
-        }
-    }
-}
-
-#[async_trait]
-impl ReadonlyContext for MockContext {
+#[async_trait::async_trait]
+impl ReadonlyContext for SimpleContext {
     fn invocation_id(&self) -> &str {
-        "mcp-http-inv"
+        "init"
     }
     fn agent_name(&self) -> &str {
         "mcp-http-agent"
@@ -91,61 +38,33 @@ impl ReadonlyContext for MockContext {
         "user"
     }
     fn app_name(&self) -> &str {
-        "mcp-http-example"
+        "mcp_http_example"
     }
     fn session_id(&self) -> &str {
-        "mcp-http-session"
+        "init"
     }
     fn branch(&self) -> &str {
         "main"
     }
     fn user_content(&self) -> &Content {
-        &self.user_content
-    }
-}
-
-#[async_trait]
-impl adk_core::CallbackContext for MockContext {
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
-        None
-    }
-}
-
-#[async_trait]
-impl InvocationContext for MockContext {
-    fn agent(&self) -> Arc<dyn Agent> {
-        unimplemented!()
-    }
-    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
-        None
-    }
-    fn session(&self) -> &dyn Session {
-        &self.session
-    }
-    fn run_config(&self) -> &RunConfig {
-        unimplemented!()
-    }
-    fn end_invocation(&self) {}
-    fn ended(&self) -> bool {
-        false
+        static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
+        CONTENT.get_or_init(|| Content::new("user").with_text("init"))
     }
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
+    // Load environment variables from .env file
+    dotenvy::dotenv().ok();
+
     println!("MCP HTTP Transport Example");
     println!("==========================\n");
 
     // Check for API key
-    let api_key = match env::var("GEMINI_API_KEY") {
-        Ok(key) => key,
-        Err(_) => {
-            println!("❌ GEMINI_API_KEY not set");
-            println!("\nTo run this example:");
-            println!("  GEMINI_API_KEY=your_key cargo run --example mcp_http --features http-transport");
-            return Ok(());
-        }
-    };
+    let api_key = std::env::var("GOOGLE_API_KEY").expect(
+        "GOOGLE_API_KEY must be set. Run with:\n  \
+         GOOGLE_API_KEY=your_key cargo run --example mcp_http --features http-transport",
+    );
 
     // Remote MCP server endpoints
     let fetch_server = "https://remote.mcpservers.org/fetch/mcp";
@@ -196,8 +115,10 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Create a simple context for tool discovery
+    let ctx = Arc::new(SimpleContext) as Arc<dyn ReadonlyContext>;
+
     // Collect tools from connected servers
-    let ctx = Arc::new(MockContext::new("init")) as Arc<dyn ReadonlyContext>;
     let mut all_tools = Vec::new();
 
     if let Some(ref toolset) = fetch_toolset {
@@ -205,7 +126,13 @@ async fn main() -> anyhow::Result<()> {
             Ok(tools) => {
                 println!("Fetch server tools:");
                 for tool in &tools {
-                    println!("  - {}: {}", tool.name(), tool.description());
+                    let desc = tool.description();
+                    let short_desc = if desc.len() > 60 {
+                        format!("{}...", &desc[..60])
+                    } else {
+                        desc.to_string()
+                    };
+                    println!("  - {}: {}", tool.name(), short_desc);
                 }
                 all_tools.extend(tools);
             }
@@ -218,7 +145,13 @@ async fn main() -> anyhow::Result<()> {
             Ok(tools) => {
                 println!("\nSequential Thinking server tools:");
                 for tool in &tools {
-                    println!("  - {}: {}", tool.name(), tool.description());
+                    let desc = tool.description();
+                    let short_desc = if desc.len() > 60 {
+                        format!("{}...", &desc[..60])
+                    } else {
+                        desc.to_string()
+                    };
+                    println!("  - {}: {}", tool.name(), short_desc);
                 }
                 all_tools.extend(tools);
             }
@@ -233,19 +166,22 @@ async fn main() -> anyhow::Result<()> {
 
     println!("\n✅ Total tools available: {}\n", all_tools.len());
 
-    // Create model and agent
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-1.5-flash")?);
+    // Create model
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
 
+    // Build agent with MCP tools
     let mut agent_builder = LlmAgentBuilder::new("mcp-http-agent")
         .description("Agent with remote MCP tools for web fetching and structured thinking")
         .model(model)
         .instruction(
             "You are a helpful assistant with access to remote MCP tools:\n\n\
-             1. **Fetch tools** - Retrieve and process web content:\n\
-                - Use 'fetch' to get content from URLs (converts HTML to markdown)\n\n\
-             2. **Sequential Thinking tools** - Structured problem-solving:\n\
-                - Use for complex reasoning tasks that benefit from step-by-step thinking\n\n\
-             When asked to fetch web content, use the fetch tool.\n\
+             1. **fetch** - Retrieve and process web content from URLs\n\
+                - Converts HTML to markdown for easier reading\n\
+                - Use this when asked to fetch or read web pages\n\n\
+             2. **sequentialthinking** - Structured problem-solving\n\
+                - Use for complex reasoning that benefits from step-by-step thinking\n\
+                - Good for planning, analysis, and multi-step problems\n\n\
+             When asked to fetch web content, use the fetch tool with the URL.\n\
              When asked to solve complex problems, use sequential thinking.",
         );
 
@@ -255,33 +191,17 @@ async fn main() -> anyhow::Result<()> {
 
     let agent = agent_builder.build()?;
 
-    println!("✅ Agent created with remote MCP tools\n");
+    println!("✅ Agent created with remote MCP tools");
+    println!("\nStarting interactive console...");
+    println!("Try: 'Fetch the content from https://example.com'\n");
 
-    // Run a demo query
-    let demo_query = "Fetch the content from https://example.com and summarize what you find.";
-    println!("Demo query: {}\n", demo_query);
-
-    let ctx = Arc::new(MockContext::new(demo_query));
-    let mut stream: std::pin::Pin<
-        Box<dyn futures::Stream<Item = adk_core::Result<adk_core::Event>> + Send>,
-    > = agent.run(ctx).await?;
-
-    println!("Agent response:");
-    println!("--------------");
-    while let Some(result) = stream.next().await {
-        if let Ok(event) = result
-            && let Some(content) = event.llm_response.content
-        {
-            for part in content.parts {
-                if let Part::Text { text } = part {
-                    print!("{}", text);
-                }
-            }
-        }
-    }
-    println!("\n");
-
-    println!("✅ Example complete!");
+    // Run interactive console
+    adk_cli::console::run_console(
+        Arc::new(agent),
+        "mcp_http_example".to_string(),
+        "user".to_string(),
+    )
+    .await?;
 
     Ok(())
 }

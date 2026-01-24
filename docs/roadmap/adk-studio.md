@@ -2,11 +2,163 @@
 
 *Priority: 🔴 P0 | Target: Q1-Q2 2026 | Effort: 8 weeks*
 
-> **📋 Status**: ~90% complete | **Last Updated**: 2025-12-28
+> **📋 Status**: ~90% complete | **Last Updated**: 2026-01-24
 
 ## Overview
 
 Build a visual, low-code development environment for ADK-Rust agents, matching AutoGen Studio capabilities.
+
+## Flowgram-Informed Improvements (Spec, Design, Task Plan)
+
+### Why Flowgram Matters (Observed)
+
+Based on the Flowgram README in `/tmp/flowgram.ai`, the appeal comes from:
+- Clean, light UI with generous spacing and quick visual parsing.
+- Comprehensive workflow tooling: free/fixed layout canvas, node forms, variable scope, material library.
+- Demo-first onboarding: runnable templates and clear quick start. 
+
+ADK Studio should adopt the clarity and completeness while staying Rust-first and agent-centric.
+
+### Current ADK Studio Snapshot (As Implemented)
+
+**UI + UX**
+- Dark theme defaults (Tailwind tokens in `adk-studio/ui/tailwind.config.js`).
+- ReactFlow canvas with grid background, controls, MiniMap, animated edges.
+- Left palette (Agents + Tools), right properties/tool config panels.
+- Bottom console for build/run + SSE event stream.
+
+**Key Capabilities (from current code + README)**
+- Agent palette: LLM, Sequential, Parallel, Loop, Router.
+- Tool palette: Function, MCP, Browser, Google Search, Load Artifact, Exit Loop.
+- Codegen + build + run pipeline with SSE build output.
+- Templates via Menu Bar with auto-layout.
+- Execution visualization hooks: active node glow, iteration counter, thought bubble wiring.
+
+**Gaps vs Flowgram-Style Expectations**
+- No light theme; dark-only reduces readability for dense graphs.
+- No free-layout mode; layout is graph-first with auto-layout.
+- Forms are functional but not schema-driven; validation is minimal.
+- No variable/state inspector or data-flow overlays.
+- No timeline/snapshot debugging view.
+
+### Product Spec (Studio vNext)
+
+**Goals**
+- Make ADK Studio the fastest path from “idea” to “running agent system” in Rust.
+- Improve “readability at a glance” for complex multi-agent graphs (light theme + data flow clarity).
+- Preserve ADK identity: agent + tool composition, production build output, and local-first workflows.
+
+**Non-Goals**
+- Not a generic workflow framework; studio remains ADK-specific.
+- Not a cloud-hosted SaaS (local-first remains the default).
+
+**Primary Users**
+- Rust engineers prototyping agent systems
+- Teams evaluating ADK for production
+- Educators and demo builders
+
+**Key User Journeys**
+1. Open Studio → pick “Agent System Template” → run → edit nodes.
+2. Build a graph, inspect data flow, export Rust code.
+3. Debug an execution with trace + state snapshots.
+
+**Feature Pillars**
+1. **Visual Workflow Clarity**
+   - Free-layout canvas for creative exploration.
+   - Fixed-layout / structured canvas for production flows.
+   - Lightweight “data flow” overlays: show which state keys move across edges.
+2. **Configuration Experience**
+   - Schema-driven node forms (tools, models, memory, auth).
+   - Inline validation and “fix suggestions” for invalid configs.
+3. **Runtime Feedback**
+   - Timeline view with state snapshots at each node.
+   - Console + event stream with filtered views (model/tool/session).
+4. **Template-First Onboarding**
+   - 8–12 curated templates (agent teams, eval loop, tool-heavy, realtime).
+   - One-click run, editable in canvas.
+5. **Production Path**
+   - “Export” always generates minimal, readable Rust.
+   - Build/Run stays local; surface warnings when missing env vars.
+
+**Acceptance Criteria**
+- New user can create, run, and export a working agent system in < 10 minutes.
+- Visual graph can be understood at a glance in light theme (no heavy contrast).
+- Studio exports compile without manual edits for templates.
+
+**Scope Notes (Based on Current Codebase)**
+- Light theme needs new Tailwind tokens + CSS variables; ReactFlow grid and MiniMap colors must adapt.
+- Free-layout can be a new layout mode alongside Dagre layout (`useLayout.ts`, `layout/modes.ts`).
+- Forms can be upgraded incrementally: start with schema-driven validation for tools and output schemas.
+- State inspector and data overlays can build on SSE events and execution state in `useExecution`.
+
+### Design Direction (Light Theme, ADK Identity)
+
+**Design Principles**
+- **Engineering-first**: clean, precise, minimal decoration.
+- **Readable at scale**: 20+ nodes should remain legible.
+- **ADK distinct**: structured, technical aesthetic (not “playful SaaS”).
+
+**Visual Language**
+- Light theme default, dark theme optional.
+- Subtle depth: soft shadows, light borders, layered panels.
+- Accent color unique to ADK (suggested: deep teal + amber for state warnings).
+
+**Core UI Elements**
+- **Canvas**: off-white background with faint grid; nodes with clear headers.
+- **Nodes**: tighter type scale; icons for agent types; tool badges as chips.
+- **Edges**: clean lines; optional data overlays for state keys.
+- **Side Panels**: forms on right; palette on left; console bottom.
+- **Theme Tokens (draft)**
+  - Background: `#F7F8FA`
+  - Surface: `#FFFFFF`
+  - Border: `#E3E6EA`
+  - Text: `#1C232B`
+  - Accent: `#0F8A8A` (primary), `#F59F00` (warning)
+
+**Differentiators vs Flowgram**
+- Emphasize agent thinking loops and tool calls.
+- Native Rust code export and run pipeline.
+- Tight integration with ADK runtime, sessions, telemetry.
+
+**Design Upgrade Targets (Grounded in Current UI)**
+- Replace dark defaults in `index.css` and Tailwind tokens with theme variables.
+- Improve node readability: stronger headers, subtle cards, clearer tool chips.
+- Make console collapsible with summary status line (build/run/last error).
+- Add a “data lane” on edges for state key labels (toggle).
+
+### Task Plan (6–8 Weeks)
+
+**Phase 1 — Discovery & Design (Week 1–2)**
+- Audit current Studio UI for friction points (canvas, forms, console).
+- Map Flowgram features to ADK equivalents: free/fixed layouts, variable scope, form engine.
+- Produce light theme style guide + component tokens.
+- Define “Data Flow Overlay” spec.
+
+**Phase 2 — Foundation UI (Week 3–4)**
+- Implement light theme tokens + theme switch.
+- Refine canvas readability: grid, spacing, node density.
+- Upgrade node form UX (grouped sections, validation messages).
+
+**Phase 3 — Workflow Clarity (Week 5–6)**
+- Add data-flow overlays (state keys on edges).
+- Add variable/state inspector panel.
+- Add timeline view for execution snapshots.
+
+**Phase 4 — Templates & Onboarding (Week 7–8)**
+- Curate 8–12 templates with “Run” CTA.
+- Build “first-run” walkthrough.
+- Add code export polish (commented sections, minimal dependencies).
+
+**Validation**
+- Record 3 user sessions using light theme.
+- Measure: time-to-first-run, number of validation errors, export success rate.
+
+### Deliverables
+- Light theme in Studio (optional dark mode).
+- Data flow overlays + state inspector.
+- Timeline debugging view.
+- Template gallery v2.
+- Updated Studio onboarding and export flow.
 
 ## Problem Statement
 

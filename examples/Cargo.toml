@@ -50,6 +50,11 @@ path = "mcp_http/main.rs"
 required-features = ["http-transport"]
 
 [[example]]
+name = "mcp_oauth"
+path = "mcp_oauth/main.rs"
+required-features = ["http-transport"]
+
+[[example]]
 name = "a2a"
 path = "a2a/main.rs"
 

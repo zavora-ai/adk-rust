@@ -5,6 +5,101 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-01-24
+
+### ⭐ Highlights
+- **rmcp 0.14 Upgrade**: Updated MCP integration to latest rmcp SDK with breaking API changes handled internally
+- **HTTP Transport for Remote MCP**: New `McpHttpClientBuilder` for connecting to remote MCP servers via streamable HTTP
+- **MCP Authentication**: Bearer token, API key, and OAuth2 support for authenticated MCP servers
+- **Task Support (SEP-1686)**: Long-running MCP operations with async task lifecycle
+- **MCP Auto-Reconnect**: Automatic connection recovery for resilient long-running agents
+- **Plugin System**: Extensible callback architecture for agent lifecycle hooks (adk-go parity)
+
+### Added
+- **adk-tool**: `ConnectionRefresher` for automatic MCP reconnection
+  - `ConnectionFactory` trait for creating new connections
+  - `RefreshConfig` for retry settings (max_attempts, retry_delay_ms)
+  - `RetryResult<T>` to indicate if reconnection occurred
+  - `should_refresh_connection()` to detect refreshable errors
+  - `SimpleClient` wrapper for servers without reconnect support
+  - Handles: connection closed, EOF, broken pipe, session not found, transport errors
+- **adk-plugin**: New plugin system crate (adk-go feature parity)
+  - `Plugin` and `PluginConfig` for bundling related callbacks
+  - `PluginBuilder` for fluent plugin construction
+  - `PluginManager` for coordinating callback execution across plugins
+  - Run lifecycle callbacks: `on_user_message`, `on_event`, `before_run`, `after_run`
+  - Agent callbacks: `before_agent`, `after_agent`
+  - Model callbacks: `before_model`, `after_model`, `on_model_error`
+  - Tool callbacks: `before_tool`, `after_tool`, `on_tool_error`
+  - Helper functions: `log_user_messages()`, `log_events()`, `collect_metrics()`
+- **adk-tool**: `McpHttpClientBuilder` for remote MCP server connections
+  - Streamable HTTP transport (SEP-1686 compliant)
+  - `with_auth()` for authentication configuration
+  - `timeout()` for request timeout configuration
+  - `header()` for custom headers
+- **adk-tool**: `McpAuth` enum for MCP authentication
+  - `McpAuth::bearer(token)` - Bearer token authentication
+  - `McpAuth::api_key(header, key)` - API key in custom header
+  - `McpAuth::oauth2(config)` - OAuth2 client credentials flow
+- **adk-tool**: `OAuth2Config` for OAuth2 authentication
+  - Client credentials flow support
+  - Token caching and refresh
+  - Custom scopes configuration
+- **adk-tool**: `McpTaskConfig` for long-running operations
+  - `McpTaskConfig::enabled()` - Enable task mode
+  - `poll_interval()` - Configure polling frequency
+  - `timeout()` - Set maximum wait time
+  - `max_poll_attempts()` - Limit polling attempts
+- **adk-tool**: New feature flag `http-transport` for remote MCP servers
+- **examples/mcp_http**: Remote MCP server example (Fetch, Sequential Thinking)
+- **examples/mcp_oauth**: GitHub Copilot MCP authentication example
+
+### Changed
+- **adk-tool**: Upgraded rmcp from 0.9 to 0.14
+  - Internal: `CallToolRequestParam` → `CallToolRequestParams` (renamed)
+  - Internal: Added required `meta: None` field to tool calls
+  - Internal: HTTP transport uses `from_config()` instead of builder pattern
+- **adk-tool**: Bearer auth now passes raw token (rmcp adds "Bearer " prefix automatically)
+
+### Fixed
+- **Security**: Updated lodash to fix prototype pollution vulnerability (CVE-2020-8203)
+- **Security**: Updated vite/esbuild to fix server.fs.deny bypass (CVE-2025-0291)
+- **Security**: Updated rsa crate to fix Marvin Attack vulnerability (RUSTSEC-2023-0071)
+
+### Migration Guide
+
+**No changes required for existing code!** The rmcp 0.14 breaking changes were handled internally in `adk-tool`. Your existing MCP code using `McpToolset::new(client)` continues to work unchanged.
+
+**New features available:**
+
+```rust
+// HTTP transport for remote MCP servers (requires http-transport feature)
+use adk_tool::McpHttpClientBuilder;
+
+let toolset = McpHttpClientBuilder::new("https://remote.mcpservers.org/fetch/mcp")
+    .timeout(Duration::from_secs(30))
+    .connect()
+    .await?;
+
+// Authentication for protected servers
+use adk_tool::{McpHttpClientBuilder, McpAuth};
+
+let toolset = McpHttpClientBuilder::new("https://api.githubcopilot.com/mcp/")
+    .with_auth(McpAuth::bearer(std::env::var("GITHUB_TOKEN")?))
+    .connect()
+    .await?;
+
+// Task support for long-running operations
+use adk_tool::{McpToolset, McpTaskConfig};
+
+let toolset = McpToolset::new(client)
+    .with_task_support(
+        McpTaskConfig::enabled()
+            .poll_interval(Duration::from_secs(2))
+            .timeout(Duration::from_secs(300))
+    );
+```
+
 ## [0.2.1] - 2026-01-21
 
 ### ⭐ Highlights
@@ -440,7 +535,8 @@ Initial release - Published to crates.io.
 - Tokio async runtime
 - Google API key for Gemini
 
-[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/zavora-ai/adk-rust/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/zavora-ai/adk-rust/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/zavora-ai/adk-rust/compare/v0.1.9...v0.2.0
 [0.1.9]: https://github.com/zavora-ai/adk-rust/compare/v0.1.7...v0.1.9

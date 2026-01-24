@@ -140,16 +140,19 @@ impl InvocationContext for MockContext {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Load environment variables from .env file
+    dotenvy::dotenv().ok();
+
     println!("MCP Integration Example (rmcp 0.14)");
     println!("====================================\n");
 
     // Check for API key
-    let api_key = match env::var("GEMINI_API_KEY") {
+    let api_key = match env::var("GOOGLE_API_KEY") {
         Ok(key) => key,
         Err(_) => {
-            println!("❌ GEMINI_API_KEY not set");
+            println!("❌ GOOGLE_API_KEY not set");
             println!("\nTo run this example:");
-            println!("  GEMINI_API_KEY=your_key cargo run --example mcp");
+            println!("  GOOGLE_API_KEY=your_key cargo run --example mcp");
             println!("\nShowing MCP usage patterns instead...\n");
             print_usage_patterns();
             return Ok(());

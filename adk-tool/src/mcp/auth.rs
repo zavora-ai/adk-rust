@@ -8,9 +8,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Authentication configuration for MCP connections
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum McpAuth {
     /// No authentication required
+    #[default]
     None,
     /// Static bearer token
     Bearer(String),
@@ -18,12 +19,6 @@ pub enum McpAuth {
     ApiKey { header: String, key: String },
     /// OAuth2 with automatic token refresh
     OAuth2(Arc<OAuth2Config>),
-}
-
-impl Default for McpAuth {
-    fn default() -> Self {
-        McpAuth::None
-    }
 }
 
 impl std::fmt::Debug for McpAuth {

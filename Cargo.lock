@@ -348,6 +348,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-plugin"
+version = "0.2.2"
+dependencies = [
+ "adk-core",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "adk-realtime"
 version = "0.2.2"
 dependencies = [
