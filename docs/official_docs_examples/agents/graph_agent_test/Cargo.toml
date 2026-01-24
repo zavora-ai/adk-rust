@@ -31,11 +31,11 @@ name = "checkpointing"
 path = "src/checkpointing.rs"
 
 [dependencies]
-adk-graph = { path = "../../../adk-graph", features = ["sqlite"] }
-adk-agent = { path = "../../../adk-agent" }
-adk-model = { path = "../../../adk-model" }
-adk-core = { path = "../../../adk-core" }
-adk-tool = { path = "../../../adk-tool" }
+adk-graph = { path = "../../../../adk-graph", features = ["sqlite"] }
+adk-agent = { path = "../../../../adk-agent" }
+adk-model = { path = "../../../../adk-model" }
+adk-core = { path = "../../../../adk-core" }
+adk-tool = { path = "../../../../adk-tool" }
 tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 serde_json = "1.0"
