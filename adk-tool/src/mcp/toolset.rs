@@ -288,6 +288,7 @@ where
                         }
                     }
                 },
+                task: None, // Task support added in MCP spec 2025-11
             })
             .await
             .map_err(|e| {
