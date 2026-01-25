@@ -326,7 +326,7 @@ export function Canvas() {
     }, 0);
   }, [createAgent, currentProject, undoRedo]);
   
-  // Wrapped removeAgent that records for undo
+  // Wrapped removeAgent that records for undo and applies layout
   const removeAgentWithUndo = useCallback((nodeId: string) => {
     if (nodeId === 'START' || nodeId === 'END') return;
     
@@ -338,7 +338,19 @@ export function Canvas() {
     
     // Then remove
     removeAgent(nodeId);
-  }, [removeAgent, undoRedo, currentProject]);
+    
+    // Apply layout after deletion to maintain current layout direction
+    invalidateBuild('onAgentDelete');
+    setTimeout(() => applyLayout(), 100);
+  }, [removeAgent, undoRedo, currentProject, invalidateBuild, applyLayout]);
+  
+  // Wrapped removeActionNode that also applies layout after deletion
+  // This ensures the layout direction is maintained after structure changes
+  const removeActionNodeWithLayout = useCallback((nodeId: string) => {
+    removeActionNode(nodeId);
+    invalidateBuild('onAgentDelete'); // Action nodes use same trigger as agents
+    setTimeout(() => applyLayout(), 100);
+  }, [removeActionNode, invalidateBuild, applyLayout]);
   
   // Clear undo history when project changes
   const prevProjectIdRef = useRef<string | null>(null);
@@ -380,7 +392,7 @@ export function Canvas() {
     selectedToolId,
     selectedActionNodeId,
     onDeleteNode: removeAgentWithUndo,
-    onDeleteActionNode: removeActionNode,
+    onDeleteActionNode: removeActionNodeWithLayout,
     onDeleteTool: removeToolFromAgent,
     onDuplicateNode: duplicateAgent,
     onSelectNode: selectNode,
@@ -594,20 +606,31 @@ export function Canvas() {
     if (eds.length > 0) invalidateBuild('onEdgeDelete'); // Trigger autobuild when edges are deleted
   }, [removeProjectEdge, invalidateBuild]);
   const onNodesDelete = useCallback((nds: Node[]) => {
+    // Track if we need to apply layout (only if action nodes are deleted without agents)
+    let hasActionNodeDeletion = false;
+    let hasAgentDeletion = false;
+    
     nds.forEach(n => {
       if (n.id === 'START' || n.id === 'END') return;
       
       // Check if it's an action node (type starts with 'action_')
       if (n.type?.startsWith('action_')) {
         removeActionNode(n.id);
+        hasActionNodeDeletion = true;
       } else {
+        // removeAgentWithUndo already calls applyLayout
         removeAgentWithUndo(n.id);
+        hasAgentDeletion = true;
       }
     });
-    if (nds.some(n => n.id !== 'START' && n.id !== 'END')) {
-      invalidateBuild('onAgentDelete'); // Node deletion uses agent delete trigger
+    
+    // Only apply layout for action node deletions if no agent was deleted
+    // (agent deletion already triggers applyLayout via removeAgentWithUndo)
+    if (hasActionNodeDeletion && !hasAgentDeletion) {
+      invalidateBuild('onAgentDelete');
+      setTimeout(() => applyLayout(), 100);
     }
-  }, [removeAgentWithUndo, removeActionNode, invalidateBuild]);
+  }, [removeAgentWithUndo, removeActionNode, invalidateBuild, applyLayout]);
   const onEdgeDoubleClick = useCallback((_: React.MouseEvent, e: Edge) => {
     removeProjectEdge(e.source, e.target);
     invalidateBuild('onEdgeDelete'); // Trigger autobuild when edge is deleted
