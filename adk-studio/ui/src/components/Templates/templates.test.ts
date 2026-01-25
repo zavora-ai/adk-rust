@@ -14,7 +14,6 @@ import {
   getTemplatesByCategory, 
   getCategories,
   CATEGORY_LABELS,
-  type Template,
   type TemplateCategory 
 } from './templates';
 

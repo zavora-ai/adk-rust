@@ -6,9 +6,10 @@ interface Props {
   output: string;
   path: string | null;
   onClose: () => void;
+  isAutobuild?: boolean;
 }
 
-export function BuildModal({ building, success, output, path, onClose }: Props) {
+export function BuildModal({ building, success, output, path, onClose, isAutobuild = false }: Props) {
   const preRef = useRef<HTMLPreElement>(null);
   
   useEffect(() => {
@@ -27,7 +28,11 @@ export function BuildModal({ building, success, output, path, onClose }: Props) 
           style={{ borderColor: 'var(--border-default)' }}
         >
           <h2 className={`text-lg font-semibold ${building ? 'text-blue-500' : success ? 'text-green-500' : 'text-red-500'}`}>
-            {building ? '⏳ Building...' : success ? '✓ Build Successful' : '✗ Build Failed'}
+            {building 
+              ? (isAutobuild ? '⚡ Auto Building...' : '⏳ Building...') 
+              : success 
+                ? '✓ Build Successful' 
+                : '✗ Build Failed'}
           </h2>
           <button 
             onClick={onClose} 

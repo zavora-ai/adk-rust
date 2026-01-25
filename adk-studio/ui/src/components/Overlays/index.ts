@@ -9,3 +9,4 @@ export { CodeEditorModal } from './CodeEditorModal';
 export { StatusIndicator } from './StatusIndicator';
 export type { NodeStatus } from './StatusIndicator';
 export { WalkthroughModal } from './WalkthroughModal';
+export { SettingsModal } from './SettingsModal';

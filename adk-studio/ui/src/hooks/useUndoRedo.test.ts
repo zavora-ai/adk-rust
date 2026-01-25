@@ -208,8 +208,6 @@ describe('Undo/Redo Round-Trip', () => {
           // Reset store at start of each property iteration
           resetStore();
           
-          const store = useUndoRedoStore.getState();
-          
           // Record all actions
           actions.forEach((action) => {
             if (action.type === 'add_node') {

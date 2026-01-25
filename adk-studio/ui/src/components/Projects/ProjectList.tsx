@@ -1,10 +1,14 @@
 import { useState } from 'react';
 import { useStore } from '../../store';
+import { SettingsModal } from '../Overlays/SettingsModal';
+import type { ProjectSettings } from '../../types/project';
 
 export function ProjectList() {
   const { projects, loadingProjects, createProject, openProject, deleteProject } = useStore();
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
+  const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null);
+  const [settingsProject, setSettingsProject] = useState<{ name: string; description: string; settings: ProjectSettings } | null>(null);
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
@@ -12,6 +16,36 @@ export function ProjectList() {
     setNewName('');
     setShowCreate(false);
     openProject(project.id);
+  };
+
+  const handleOpenSettings = async (e: React.MouseEvent, projectId: string) => {
+    e.stopPropagation();
+    // Fetch full project to get settings
+    const { api } = await import('../../api/client');
+    const project = await api.projects.get(projectId);
+    setSettingsProjectId(projectId);
+    setSettingsProject({
+      name: project.name,
+      description: project.description,
+      settings: project.settings,
+    });
+  };
+
+  const handleSaveSettings = async (settings: ProjectSettings, name: string, description: string) => {
+    if (!settingsProjectId) return;
+    const { api } = await import('../../api/client');
+    const project = await api.projects.get(settingsProjectId);
+    await api.projects.update(settingsProjectId, {
+      ...project,
+      name,
+      description,
+      settings,
+    });
+    // Refresh project list
+    const { fetchProjects } = useStore.getState();
+    await fetchProjects();
+    setSettingsProjectId(null);
+    setSettingsProject(null);
   };
 
   return (
@@ -58,16 +92,37 @@ export function ProjectList() {
             >
               <div className="flex items-start justify-between">
                 <span className="font-medium text-theme-primary">📁 {p.name}</span>
-                <button
-                  onClick={(e) => { e.stopPropagation(); if (confirm('Delete?')) deleteProject(p.id); }}
-                  className="opacity-0 group-hover:opacity-100 text-theme-muted hover:text-red-500 transition-opacity"
-                >✕</button>
+                <div className="flex gap-1">
+                  <button
+                    onClick={(e) => handleOpenSettings(e, p.id)}
+                    className="opacity-0 group-hover:opacity-100 text-theme-muted hover:text-theme-primary transition-opacity"
+                    title="Project Settings"
+                  >⚙️</button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); if (confirm('Delete?')) deleteProject(p.id); }}
+                    className="opacity-0 group-hover:opacity-100 text-theme-muted hover:text-red-500 transition-opacity"
+                  >✕</button>
+                </div>
               </div>
               {p.description && <p className="text-sm text-theme-secondary mt-2">{p.description}</p>}
               <p className="text-xs text-theme-muted mt-2">{new Date(p.updated_at).toLocaleDateString()}</p>
             </div>
           ))}
         </div>
+      )}
+
+      {/* Settings Modal */}
+      {settingsProject && (
+        <SettingsModal
+          settings={settingsProject.settings}
+          projectName={settingsProject.name}
+          projectDescription={settingsProject.description}
+          onSave={handleSaveSettings}
+          onClose={() => {
+            setSettingsProjectId(null);
+            setSettingsProject(null);
+          }}
+        />
       )}
     </div>
   );

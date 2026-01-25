@@ -1,15 +1,268 @@
 //! Rust code generation from project schemas - Always uses adk-graph
+//!
+//! This module provides code generation for ADK Studio projects, converting
+//! visual workflow definitions into compilable Rust code using adk-graph.
+//!
+//! ## Features
+//!
+//! - Workflow validation before code generation (Requirements 12.4, 12.5)
+//! - Explanatory comments in generated code (Requirement 12.2)
+//! - Environment variable warnings (Requirement 12.10)
+//! - Support for all agent types: LLM, Sequential, Loop, Parallel, Router
+
+mod validation;
+
+pub use validation::{ValidationError, ValidationErrorCode, ValidationResult, validate_project, get_required_env_vars, check_env_vars, EnvVarRequirement, EnvVarWarning};
 
 use crate::schema::{AgentSchema, AgentType, ProjectSchema, ToolConfig};
-use anyhow::Result;
+use anyhow::{Result, bail};
 
+/// Generate a Rust project from a project schema
+///
+/// This function validates the project before generating code. If validation
+/// fails, it returns an error with details about what needs to be fixed.
+///
+/// # Arguments
+///
+/// * `project` - The project schema to generate code from
+///
+/// # Returns
+///
+/// * `Ok(GeneratedProject)` - The generated project files
+/// * `Err` - If validation fails or code generation encounters an error
+///
+/// # Requirements
+///
+/// - 12.1: Generate valid, compilable ADK-Rust code
+/// - 12.4: Validate workflow before code generation
+/// - 12.5: Display specific error messages if validation fails
 pub fn generate_rust_project(project: &ProjectSchema) -> Result<GeneratedProject> {
+    // Validate the project before generating code (Requirements 12.4, 12.5)
+    let validation = validate_project(project);
+    if !validation.is_valid() {
+        let error_messages: Vec<String> = validation.errors.iter().map(|e| e.to_string()).collect();
+        bail!("Workflow validation failed:\n{}", error_messages.join("\n"));
+    }
+
     let files = vec![
         GeneratedFile { path: "src/main.rs".to_string(), content: generate_main_rs(project) },
         GeneratedFile { path: "Cargo.toml".to_string(), content: generate_cargo_toml(project) },
     ];
 
     Ok(GeneratedProject { files })
+}
+
+/// Generate a Rust project with validation result
+///
+/// This function returns both the generated project and the validation result,
+/// allowing callers to access warnings even when generation succeeds.
+pub fn generate_rust_project_with_validation(project: &ProjectSchema) -> Result<(GeneratedProject, ValidationResult, Vec<EnvVarWarning>)> {
+    let validation = validate_project(project);
+    if !validation.is_valid() {
+        let error_messages: Vec<String> = validation.errors.iter().map(|e| e.to_string()).collect();
+        bail!("Workflow validation failed:\n{}", error_messages.join("\n"));
+    }
+
+    // Check for missing environment variables (Requirement 12.10)
+    let env_warnings = check_env_vars(project);
+
+    let files = vec![
+        GeneratedFile { path: "src/main.rs".to_string(), content: generate_main_rs(project) },
+        GeneratedFile { path: "Cargo.toml".to_string(), content: generate_cargo_toml(project) },
+    ];
+
+    Ok((GeneratedProject { files }, validation, env_warnings))
+}
+
+/// Generate a header comment explaining the workflow structure
+///
+/// This creates a comprehensive comment block at the top of the generated code
+/// that explains:
+/// - Project name and description
+/// - Workflow type and structure
+/// - Agent roles and their connections
+/// - Tools used by each agent
+///
+/// Requirement: 12.2 - Include comments explaining the workflow structure
+fn generate_workflow_header_comment(project: &ProjectSchema) -> String {
+    let mut comment = String::new();
+    
+    // Project header
+    comment.push_str("//! ");
+    comment.push_str(&project.name);
+    comment.push_str("\n//!\n");
+    
+    if !project.description.is_empty() {
+        comment.push_str("//! ");
+        comment.push_str(&project.description);
+        comment.push_str("\n//!\n");
+    }
+    
+    // Workflow structure overview
+    comment.push_str("//! ## Workflow Structure\n//!\n");
+    
+    // Determine workflow type
+    let workflow_type = determine_workflow_type(project);
+    comment.push_str("//! **Type:** ");
+    comment.push_str(&workflow_type);
+    comment.push_str("\n//!\n");
+    
+    // Agent summary
+    comment.push_str("//! ## Agents\n//!\n");
+    
+    // Find top-level agents (not sub-agents)
+    let all_sub_agents: std::collections::HashSet<_> =
+        project.agents.values().flat_map(|a| a.sub_agents.iter().cloned()).collect();
+    
+    for (agent_id, agent) in &project.agents {
+        let is_sub_agent = all_sub_agents.contains(agent_id);
+        let prefix = if is_sub_agent { "  - " } else { "- " };
+        
+        comment.push_str("//! ");
+        comment.push_str(prefix);
+        comment.push_str("**");
+        comment.push_str(agent_id);
+        comment.push_str("** (");
+        comment.push_str(&format!("{:?}", agent.agent_type).to_lowercase());
+        comment.push_str(")");
+        
+        // Add brief instruction summary if available
+        if !agent.instruction.is_empty() {
+            let brief = truncate_instruction(&agent.instruction, 60);
+            comment.push_str(": ");
+            comment.push_str(&brief);
+        }
+        comment.push_str("\n");
+        
+        // List tools if any
+        if !agent.tools.is_empty() {
+            comment.push_str("//!   Tools: ");
+            comment.push_str(&agent.tools.join(", "));
+            comment.push_str("\n");
+        }
+        
+        // List sub-agents if any
+        if !agent.sub_agents.is_empty() {
+            comment.push_str("//!   Sub-agents: ");
+            comment.push_str(&agent.sub_agents.join(" → "));
+            comment.push_str("\n");
+        }
+    }
+    
+    // Execution flow
+    comment.push_str("//!\n//! ## Execution Flow\n//!\n");
+    comment.push_str("//! ```text\n");
+    comment.push_str(&generate_flow_diagram(project));
+    comment.push_str("//! ```\n//!\n");
+    
+    // Generated timestamp
+    comment.push_str("//! Generated by ADK Studio v2.0\n//!\n");
+    
+    // Environment variables section (Requirement 12.10)
+    let env_vars = get_required_env_vars(project);
+    if !env_vars.is_empty() {
+        comment.push_str("//! ## Required Environment Variables\n//!\n");
+        for env_var in &env_vars {
+            if env_var.required {
+                comment.push_str("//! - **");
+            } else {
+                comment.push_str("//! - ");
+            }
+            comment.push_str(&env_var.name);
+            if env_var.required {
+                comment.push_str("** (required)");
+            } else {
+                comment.push_str(" (optional)");
+            }
+            comment.push_str(": ");
+            comment.push_str(&env_var.description);
+            if !env_var.alternatives.is_empty() {
+                comment.push_str(" [alt: ");
+                comment.push_str(&env_var.alternatives.join(", "));
+                comment.push_str("]");
+            }
+            comment.push_str("\n");
+        }
+        comment.push_str("//!\n");
+    }
+    
+    comment
+}
+
+/// Determine the workflow type based on agents and edges
+fn determine_workflow_type(project: &ProjectSchema) -> String {
+    let has_router = project.agents.values().any(|a| a.agent_type == AgentType::Router);
+    let has_loop = project.agents.values().any(|a| a.agent_type == AgentType::Loop);
+    let has_parallel = project.agents.values().any(|a| a.agent_type == AgentType::Parallel);
+    let has_sequential = project.agents.values().any(|a| a.agent_type == AgentType::Sequential);
+    
+    // Find top-level agents
+    let all_sub_agents: std::collections::HashSet<_> =
+        project.agents.values().flat_map(|a| a.sub_agents.iter().cloned()).collect();
+    let top_level_count = project.agents.keys().filter(|id| !all_sub_agents.contains(*id)).count();
+    
+    if has_router {
+        "Router-based workflow with conditional branching".to_string()
+    } else if has_loop {
+        "Iterative loop workflow with refinement".to_string()
+    } else if has_parallel {
+        "Parallel execution workflow".to_string()
+    } else if has_sequential || top_level_count > 1 {
+        "Sequential pipeline workflow".to_string()
+    } else {
+        "Single agent workflow".to_string()
+    }
+}
+
+/// Truncate instruction to a brief summary
+fn truncate_instruction(instruction: &str, max_len: usize) -> String {
+    let clean = instruction.replace('\n', " ").trim().to_string();
+    if clean.len() <= max_len {
+        clean
+    } else {
+        format!("{}...", &clean[..max_len.saturating_sub(3)])
+    }
+}
+
+/// Generate a simple ASCII flow diagram
+fn generate_flow_diagram(project: &ProjectSchema) -> String {
+    let mut diagram = String::new();
+    
+    // Build a simple linear representation of the flow
+    let mut current = "START";
+    let mut visited = std::collections::HashSet::new();
+    
+    diagram.push_str("//! START");
+    
+    while current != "END" && !visited.contains(current) {
+        visited.insert(current);
+        
+        // Find next node(s)
+        let next_edges: Vec<_> = project.workflow.edges.iter()
+            .filter(|e| e.from == current)
+            .collect();
+        
+        if next_edges.is_empty() {
+            break;
+        }
+        
+        if next_edges.len() == 1 {
+            let next = &next_edges[0].to;
+            diagram.push_str(" → ");
+            diagram.push_str(next);
+            current = next;
+        } else {
+            // Multiple branches (router)
+            diagram.push_str(" → [");
+            let targets: Vec<_> = next_edges.iter().map(|e| e.to.as_str()).collect();
+            diagram.push_str(&targets.join(" | "));
+            diagram.push_str("]");
+            break; // Stop at branching point
+        }
+    }
+    
+    diagram.push_str("\n");
+    diagram
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -25,6 +278,9 @@ pub struct GeneratedFile {
 
 fn generate_main_rs(project: &ProjectSchema) -> String {
     let mut code = String::new();
+
+    // Generate file header with workflow documentation (Requirement 12.2)
+    code.push_str(&generate_workflow_header_comment(project));
 
     code.push_str("#![allow(unused_imports, unused_variables)]\n\n");
 
@@ -799,11 +1055,11 @@ adk-graph = {{ path = "{}/adk-graph" }}"#,
             adk_root, adk_root, adk_root, adk_root, adk_root
         )
     } else {
-        r#"adk-agent = "0.2.0"
-adk-core = "0.2.0"
-adk-model = "0.2.0"
-adk-tool = "0.2.0"
-adk-graph = "0.2.0""#
+        r#"adk-agent = "0.2.2"
+adk-core = "0.2.2"
+adk-model = "0.2.2"
+adk-tool = "0.2.2"
+adk-graph = "0.2.2""#
             .to_string()
     };
 
@@ -814,7 +1070,7 @@ adk-graph = "0.2.0""#
         r#"[package]
 name = "{}"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 {}
@@ -858,7 +1114,7 @@ uuid = {{ version = "1", features = ["v4"] }}
         if use_path_deps {
             deps.push_str(&format!("adk-browser = {{ path = \"{}/adk-browser\" }}\n", adk_root));
         } else {
-            deps.push_str("adk-browser = \"0.1\"\n");
+            deps.push_str("adk-browser = \"0.2.2\"\n");
         }
         // async-trait needed for MinimalContext if not already added by MCP
         if !uses_mcp {

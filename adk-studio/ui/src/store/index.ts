@@ -29,6 +29,8 @@ interface StudioState {
   saveProject: () => Promise<void>;
   closeProject: () => void;
   deleteProject: (id: string) => Promise<void>;
+  updateProjectMeta: (name: string, description: string) => void;
+  updateProjectSettings: (settings: Partial<import('../types/project').ProjectSettings>) => void;
   
   // Canvas actions
   selectNode: (id: string | null) => void;
@@ -125,6 +127,37 @@ export const useStore = create<StudioState>((set, get) => ({
   deleteProject: async (id) => {
     await api.projects.delete(id);
     set((s) => ({ projects: s.projects.filter((p) => p.id !== id) }));
+  },
+
+  updateProjectMeta: (name, description) => {
+    set((s) => {
+      if (!s.currentProject) return s;
+      return {
+        currentProject: { ...s.currentProject, name, description },
+        projects: s.projects.map(p => 
+          p.id === s.currentProject?.id 
+            ? { ...p, name, description } 
+            : p
+        ),
+      };
+    });
+    setTimeout(() => get().saveProject(), 0);
+  },
+
+  updateProjectSettings: (settings) => {
+    set((s) => {
+      if (!s.currentProject) return s;
+      const newSettings = { ...s.currentProject.settings, ...settings };
+      // Also update local layout state if layout settings changed
+      const updates: Partial<StudioState> = {
+        currentProject: { ...s.currentProject, settings: newSettings },
+      };
+      if (settings.layoutMode !== undefined) updates.layoutMode = settings.layoutMode;
+      if (settings.layoutDirection !== undefined) updates.layoutDirection = settings.layoutDirection;
+      if (settings.showDataFlowOverlay !== undefined) updates.showDataFlowOverlay = settings.showDataFlowOverlay;
+      return updates;
+    });
+    setTimeout(() => get().saveProject(), 0);
   },
 
   selectNode: (id) => set({ selectedNodeId: id }),

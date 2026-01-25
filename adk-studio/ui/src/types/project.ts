@@ -19,6 +19,28 @@ export interface ProjectSettings {
   layoutMode?: 'free' | 'fixed';
   layoutDirection?: 'TB' | 'LR' | 'BT' | 'RL';
   showDataFlowOverlay?: boolean;
+  // Code generation settings
+  adkVersion?: string;
+  rustEdition?: '2021' | '2024';
+  // Default provider/model
+  defaultProvider?: string;
+  // Build settings
+  autobuildEnabled?: boolean;
+  autobuildTriggers?: AutobuildTriggers;
+  // UI preferences
+  showMinimap?: boolean;
+  showTimeline?: boolean;
+  consolePosition?: 'bottom' | 'right';
+}
+
+export interface AutobuildTriggers {
+  onAgentAdd?: boolean;
+  onAgentDelete?: boolean;
+  onAgentUpdate?: boolean;
+  onToolAdd?: boolean;
+  onToolUpdate?: boolean;
+  onEdgeAdd?: boolean;
+  onEdgeDelete?: boolean;
 }
 
 export interface AgentSchema {

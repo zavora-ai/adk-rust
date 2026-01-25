@@ -7,7 +7,7 @@ import { MenuBar } from '../MenuBar';
 import { nodeTypes } from '../Nodes';
 import { edgeTypes } from '../Edges';
 import { AgentPalette, ToolPalette, PropertiesPanel, ToolConfigPanel, StateInspector } from '../Panels';
-import { CodeModal, BuildModal, CodeEditorModal, NewProjectModal } from '../Overlays';
+import { CodeModal, BuildModal, CodeEditorModal, NewProjectModal, SettingsModal } from '../Overlays';
 import { TimelineView } from '../Timeline';
 import { CanvasToolbar } from './CanvasToolbar';
 import { api } from '../../api/client';
@@ -50,6 +50,9 @@ export function Canvas() {
     // v2.0: Data flow overlay state
     showDataFlowOverlay,
     setShowDataFlowOverlay,
+    // Settings
+    updateProjectMeta,
+    updateProjectSettings,
   } = useStore();
 
   // Canvas UI state
@@ -61,12 +64,15 @@ export function Canvas() {
     buildOutput, 
     builtBinaryPath, 
     compiledCode, 
+    autobuildEnabled,
+    isAutobuild,
     build: handleBuild, 
     compile: handleCompile, 
     clearBuildOutput, 
     clearCompiledCode,
     invalidateBuild,
-  } = useBuild(currentProject?.id);
+    toggleAutobuild,
+  } = useBuild(currentProject?.id, currentProject?.settings?.autobuildTriggers);
 
   // v2.0: Derive build status for console summary (Requirement 13.2)
   const buildStatus: BuildStatus = building 
@@ -116,6 +122,7 @@ export function Canvas() {
   // Modal state
   const [showCodeEditor, setShowCodeEditor] = useState(false);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   
   // Timeline state (v2.0)
   const [timelineCollapsed, setTimelineCollapsed] = useState(false);
@@ -328,14 +335,14 @@ export function Canvas() {
   // Agent update with save and build invalidation
   const updateAgent = useCallback((id: string, updates: Partial<AgentSchema>) => {
     storeUpdateAgent(id, updates);
-    invalidateBuild();
+    invalidateBuild('onAgentUpdate');
     debouncedSave();
   }, [storeUpdateAgent, invalidateBuild, debouncedSave]);
 
   // Tool config update with save and build invalidation
   const updateToolConfig = useCallback((toolId: string, config: ToolConfig) => {
     storeUpdateToolConfig(toolId, config);
-    invalidateBuild();
+    invalidateBuild('onToolUpdate');
     debouncedSave();
   }, [storeUpdateToolConfig, invalidateBuild, debouncedSave]);
 
@@ -375,21 +382,37 @@ export function Canvas() {
     const toolData = e.dataTransfer.getData('text/plain');
     if (toolData.startsWith('tool:') && selectedNodeId && currentProject?.agents[selectedNodeId]) {
       addToolToAgent(selectedNodeId, toolData.slice(5));
+      invalidateBuild('onToolAdd'); // Trigger autobuild when tool is added
       return;
     }
     const type = e.dataTransfer.getData('application/reactflow');
     if (type) {
       createAgentWithUndo(type);
+      invalidateBuild('onAgentAdd'); // Trigger autobuild when agent is added
       // Apply layout after adding node (only in fixed mode or always for initial setup)
       setTimeout(() => applyLayout(), 100);
     }
-  }, [createAgentWithUndo, selectedNodeId, currentProject, addToolToAgent, applyLayout]);
+  }, [createAgentWithUndo, selectedNodeId, currentProject, addToolToAgent, applyLayout, invalidateBuild]);
 
   // Connection handlers
-  const onConnect = useCallback((p: Connection) => p.source && p.target && addProjectEdge(p.source, p.target), [addProjectEdge]);
-  const onEdgesDelete = useCallback((eds: Edge[]) => eds.forEach(e => removeProjectEdge(e.source, e.target)), [removeProjectEdge]);
-  const onNodesDelete = useCallback((nds: Node[]) => nds.forEach(n => n.id !== 'START' && n.id !== 'END' && removeAgentWithUndo(n.id)), [removeAgentWithUndo]);
-  const onEdgeDoubleClick = useCallback((_: React.MouseEvent, e: Edge) => removeProjectEdge(e.source, e.target), [removeProjectEdge]);
+  const onConnect = useCallback((p: Connection) => {
+    if (p.source && p.target) {
+      addProjectEdge(p.source, p.target);
+      invalidateBuild('onEdgeAdd'); // Trigger autobuild when edge is added
+    }
+  }, [addProjectEdge, invalidateBuild]);
+  const onEdgesDelete = useCallback((eds: Edge[]) => {
+    eds.forEach(e => removeProjectEdge(e.source, e.target));
+    if (eds.length > 0) invalidateBuild('onEdgeDelete'); // Trigger autobuild when edges are deleted
+  }, [removeProjectEdge, invalidateBuild]);
+  const onNodesDelete = useCallback((nds: Node[]) => {
+    nds.forEach(n => n.id !== 'START' && n.id !== 'END' && removeAgentWithUndo(n.id));
+    if (nds.some(n => n.id !== 'START' && n.id !== 'END')) invalidateBuild('onAgentDelete'); // Trigger autobuild when nodes are deleted
+  }, [removeAgentWithUndo, invalidateBuild]);
+  const onEdgeDoubleClick = useCallback((_: React.MouseEvent, e: Edge) => {
+    removeProjectEdge(e.source, e.target);
+    invalidateBuild('onEdgeDelete'); // Trigger autobuild when edge is deleted
+  }, [removeProjectEdge, invalidateBuild]);
   const onNodeClick = useCallback((_: React.MouseEvent, n: Node) => selectNode(n.id !== 'START' && n.id !== 'END' ? n.id : null), [selectNode]);
   const onPaneClick = useCallback(() => selectNode(null), [selectNode]);
 
@@ -461,20 +484,43 @@ export function Canvas() {
             >
               📄 View Code
             </button>
-            <button 
-              onClick={handleBuild} 
-              disabled={building} 
-              className={`w-full px-2 py-1.5 rounded text-xs text-white font-medium ${
-                building 
-                  ? 'opacity-50 cursor-not-allowed' 
+            <div className="flex gap-1">
+              <button 
+                onClick={handleBuild} 
+                disabled={building && !isAutobuild} 
+                className={`flex-1 px-2 py-1.5 rounded text-xs text-white font-medium ${
+                  building 
+                    ? 'cursor-pointer' 
+                    : builtBinaryPath 
+                      ? 'bg-green-600 hover:bg-green-700' 
+                      : 'bg-orange-500 hover:bg-orange-600 animate-pulse'
+                }`}
+                style={building ? { backgroundColor: '#3B82F6' } : undefined}
+                title={building && isAutobuild ? 'Click to view build progress' : undefined}
+              >
+                {building 
+                  ? (isAutobuild ? '⚡ Auto Building...' : '⏳ Building...') 
                   : builtBinaryPath 
-                    ? 'bg-green-600 hover:bg-green-700' 
-                    : 'bg-orange-500 hover:bg-orange-600 animate-pulse'
-              }`}
-              style={building ? { backgroundColor: 'var(--text-muted)' } : undefined}
-            >
-              {building ? '⏳ Building...' : builtBinaryPath ? '🔨 Build' : '🔨 Build Required'}
-            </button>
+                    ? '🔨 Build' 
+                    : '🔨 Build Required'}
+              </button>
+              <button
+                onClick={toggleAutobuild}
+                className={`px-2 py-1.5 rounded text-xs font-medium transition-colors ${
+                  autobuildEnabled 
+                    ? 'bg-green-600 hover:bg-green-700 text-white' 
+                    : ''
+                }`}
+                style={!autobuildEnabled ? { 
+                  backgroundColor: 'var(--bg-secondary)', 
+                  color: 'var(--text-muted)', 
+                  border: '1px solid var(--border-default)' 
+                } : undefined}
+                title={autobuildEnabled ? 'Autobuild ON - builds automatically on changes' : 'Autobuild OFF - click to enable'}
+              >
+                ⚡
+              </button>
+            </div>
             <button 
               onClick={toggleConsole} 
               className="w-full px-2 py-1.5 rounded text-xs font-medium"
@@ -491,6 +537,13 @@ export function Canvas() {
                 {showStateInspector ? '🔍 Hide Inspector' : '🔍 Show Inspector'}
               </button>
             )}
+            <button 
+              onClick={() => setShowSettingsModal(true)} 
+              className="w-full px-2 py-1.5 rounded text-xs font-medium"
+              style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-default)' }}
+            >
+              ⚙️ Settings
+            </button>
             <button 
               onClick={closeProject} 
               className="w-full px-2 py-1.5 rounded text-xs font-medium"
@@ -658,7 +711,8 @@ export function Canvas() {
           success={buildOutput.success} 
           output={buildOutput.output} 
           path={buildOutput.path} 
-          onClose={clearBuildOutput} 
+          onClose={clearBuildOutput}
+          isAutobuild={isAutobuild}
         />
       )}
       {showCodeEditor && fnConfig && (
@@ -684,6 +738,19 @@ export function Canvas() {
             } 
           }} 
           onClose={() => setShowNewProjectModal(false)} 
+        />
+      )}
+      {showSettingsModal && currentProject && (
+        <SettingsModal
+          settings={currentProject.settings}
+          projectName={currentProject.name}
+          projectDescription={currentProject.description}
+          onSave={(settings, name, description) => {
+            updateProjectMeta(name, description);
+            updateProjectSettings(settings);
+            setShowSettingsModal(false);
+          }}
+          onClose={() => setShowSettingsModal(false)}
         />
       )}
     </div>

@@ -1,6 +1,7 @@
 import React from 'react';
 import type { AgentSchema, ToolConfig } from '../../types/project';
 import { TOOL_TYPES } from './ToolPalette';
+import { ModelSelector } from './ModelSelector';
 
 interface Props {
   nodeId: string;
@@ -149,12 +150,13 @@ function ContainerProperties({ nodeId, agent, agents, onUpdate, onAddSubAgent, o
             {isExpanded && (
               <div className="p-2 pt-0" style={{ borderTop: '1px solid var(--border-default)' }}>
                 <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Model</label>
-                <input
-                  className="w-full px-2 py-1 border rounded text-xs mb-2"
-                  style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-default)', color: 'var(--text-primary)' }}
-                  value={subAgent.model || ''}
-                  onChange={(e) => onUpdate(subId, { model: e.target.value })}
-                />
+                <div className="mb-2">
+                  <ModelSelector
+                    value={subAgent.model || ''}
+                    onChange={(model) => onUpdate(subId, { model })}
+                    compact
+                  />
+                </div>
                 <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Instruction</label>
                 <textarea
                   className="w-full px-2 py-1 border rounded text-xs h-16 mb-2"
@@ -212,12 +214,12 @@ function RouterProperties({ nodeId, agent, onUpdate }: { nodeId: string; agent: 
   return (
     <div>
       <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary)' }}>Model</label>
-      <input
-        className="w-full px-2 py-1 border rounded text-sm mb-3"
-        style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-default)', color: 'var(--text-primary)' }}
-        value={agent.model || ''}
-        onChange={(e) => onUpdate(nodeId, { model: e.target.value })}
-      />
+      <div className="mb-3">
+        <ModelSelector
+          value={agent.model || ''}
+          onChange={(model) => onUpdate(nodeId, { model })}
+        />
+      </div>
       <label className="block text-sm mb-1" style={{ color: 'var(--text-secondary)' }}>Routing Instruction</label>
       <textarea
         className="w-full px-2 py-1 border rounded text-sm h-20 mb-3"
@@ -273,12 +275,9 @@ function LlmProperties({ nodeId, agent, toolConfigs, onUpdate, onSelectTool, onR
       {/* Basic Settings */}
       <Section title="Basic">
         <Field label="Model">
-          <input
-            className="w-full px-2 py-1 border rounded text-sm"
-            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-default)', color: 'var(--text-primary)' }}
+          <ModelSelector
             value={agent.model || ''}
-            onChange={(e) => onUpdate(nodeId, { model: e.target.value })}
-            placeholder="gemini-2.0-flash"
+            onChange={(model) => onUpdate(nodeId, { model })}
           />
         </Field>
         <Field label="Instruction">
