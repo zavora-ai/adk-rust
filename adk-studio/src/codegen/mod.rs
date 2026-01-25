@@ -1029,6 +1029,10 @@ fn generate_cargo_toml(project: &ProjectSchema) -> String {
         name = format!("project_{}", name);
     }
 
+    // Get ADK version and Rust edition from project settings (with defaults)
+    let adk_version = project.settings.adk_version.as_deref().unwrap_or("0.2.2");
+    let rust_edition = project.settings.rust_edition.as_deref().unwrap_or("2024");
+
     // Check if any function tool code uses specific crates
     let code_uses = |pattern: &str| -> bool {
         project.tool_configs.values().any(|tc| {
@@ -1055,12 +1059,14 @@ adk-graph = {{ path = "{}/adk-graph" }}"#,
             adk_root, adk_root, adk_root, adk_root, adk_root
         )
     } else {
-        r#"adk-agent = "0.2.2"
-adk-core = "0.2.2"
-adk-model = "0.2.2"
-adk-tool = "0.2.2"
-adk-graph = "0.2.2""#
-            .to_string()
+        format!(
+            r#"adk-agent = "{}"
+adk-core = "{}"
+adk-model = "{}"
+adk-tool = "{}"
+adk-graph = "{}""#,
+            adk_version, adk_version, adk_version, adk_version, adk_version
+        )
     };
 
     // No patch section needed - adk-gemini is a workspace member
@@ -1070,7 +1076,7 @@ adk-graph = "0.2.2""#
         r#"[package]
 name = "{}"
 version = "0.1.0"
-edition = "2024"
+edition = "{}"
 
 [dependencies]
 {}
@@ -1083,7 +1089,7 @@ schemars = "0.8"
 tracing-subscriber = {{ version = "0.3", features = ["json", "env-filter"] }}
 uuid = {{ version = "1", features = ["v4"] }}
 "#,
-        name, adk_deps
+        name, rust_edition, adk_deps
     );
 
     if needs_reqwest {
@@ -1114,7 +1120,7 @@ uuid = {{ version = "1", features = ["v4"] }}
         if use_path_deps {
             deps.push_str(&format!("adk-browser = {{ path = \"{}/adk-browser\" }}\n", adk_root));
         } else {
-            deps.push_str("adk-browser = \"0.2.2\"\n");
+            deps.push_str(&format!("adk-browser = \"{}\"\n", adk_version));
         }
         // async-trait needed for MinimalContext if not already added by MCP
         if !uses_mcp {

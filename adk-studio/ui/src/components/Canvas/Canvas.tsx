@@ -55,10 +55,15 @@ export function Canvas() {
     updateProjectSettings,
   } = useStore();
 
-  // Canvas UI state
-  const { showConsole, toggleConsole, showMinimap, toggleMinimap } = useCanvasState();
+  // Callback to persist UI settings changes to project
+  const handleUISettingChange = useCallback((key: string, value: boolean) => {
+    updateProjectSettings({ [key]: value });
+  }, [updateProjectSettings]);
+
+  // Canvas UI state - pass project settings to initialize from saved preferences
+  const { showConsole, toggleConsole, showMinimap, toggleMinimap, showTimeline, toggleTimeline } = useCanvasState(currentProject?.settings, handleUISettingChange);
   
-  // Build state
+  // Build state - pass project settings for autobuild configuration
   const { 
     building, 
     buildOutput, 
@@ -72,7 +77,11 @@ export function Canvas() {
     clearCompiledCode,
     invalidateBuild,
     toggleAutobuild,
-  } = useBuild(currentProject?.id, currentProject?.settings?.autobuildTriggers);
+  } = useBuild(
+    currentProject?.id, 
+    currentProject?.settings?.autobuildTriggers,
+    currentProject?.settings?.autobuildEnabled
+  );
 
   // v2.0: Derive build status for console summary (Requirement 13.2)
   const buildStatus: BuildStatus = building 
@@ -650,7 +659,7 @@ export function Canvas() {
       </div>
 
       {/* Timeline View - shows execution history */}
-      {showConsole && hasAgents && builtBinaryPath && snapshots.length > 0 && (
+      {showConsole && showTimeline && hasAgents && builtBinaryPath && snapshots.length > 0 && (
         <TimelineView
           snapshots={snapshots}
           currentIndex={currentSnapshotIndex}

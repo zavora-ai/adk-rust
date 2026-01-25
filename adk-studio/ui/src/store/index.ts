@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Project, ProjectMeta, AgentSchema, ToolConfig, Edge } from '../types/project';
 import type { LayoutDirection, LayoutMode } from '../types/layout';
 import { api } from '../api/client';
+import { loadGlobalSettings } from '../types/settings';
 
 interface StudioState {
   // Project list
@@ -93,10 +94,11 @@ export const useStore = create<StudioState>((set, get) => ({
 
   openProject: async (id) => {
     const project = await api.projects.get(id);
-    // Restore layout settings from project if available
-    const layoutMode = project.settings?.layoutMode || 'free';
-    const layoutDirection = project.settings?.layoutDirection || 'TB';
-    const showDataFlowOverlay = project.settings?.showDataFlowOverlay || false;
+    const globalSettings = loadGlobalSettings();
+    // Restore layout settings from project if available, otherwise use global defaults
+    const layoutMode = project.settings?.layoutMode || globalSettings.layoutMode;
+    const layoutDirection = project.settings?.layoutDirection || globalSettings.layoutDirection;
+    const showDataFlowOverlay = project.settings?.showDataFlowOverlay ?? globalSettings.showDataFlowOverlay;
     set({ 
       currentProject: project, 
       selectedNodeId: null,

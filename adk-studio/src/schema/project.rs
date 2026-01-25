@@ -49,15 +49,75 @@ impl ProjectSchema {
 
 /// Project-level settings
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectSettings {
     #[serde(default = "default_model")]
     pub default_model: String,
     #[serde(default)]
     pub env_vars: HashMap<String, String>,
+    // Layout settings (v2.0)
+    #[serde(default)]
+    pub layout_mode: Option<String>,
+    #[serde(default)]
+    pub layout_direction: Option<String>,
+    #[serde(default)]
+    pub show_data_flow_overlay: Option<bool>,
+    // Code generation settings
+    #[serde(default = "default_adk_version")]
+    pub adk_version: Option<String>,
+    #[serde(default = "default_rust_edition")]
+    pub rust_edition: Option<String>,
+    // Default provider
+    #[serde(default)]
+    pub default_provider: Option<String>,
+    // Build settings
+    #[serde(default)]
+    pub autobuild_enabled: Option<bool>,
+    #[serde(default)]
+    pub autobuild_triggers: Option<AutobuildTriggers>,
+    // UI preferences
+    #[serde(default)]
+    pub show_minimap: Option<bool>,
+    #[serde(default)]
+    pub show_timeline: Option<bool>,
+    #[serde(default)]
+    pub console_position: Option<String>,
+}
+
+/// Autobuild trigger configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AutobuildTriggers {
+    #[serde(default = "default_true")]
+    pub on_agent_add: Option<bool>,
+    #[serde(default = "default_true")]
+    pub on_agent_delete: Option<bool>,
+    #[serde(default = "default_true")]
+    pub on_agent_update: Option<bool>,
+    #[serde(default = "default_true")]
+    pub on_tool_add: Option<bool>,
+    #[serde(default = "default_true")]
+    pub on_tool_update: Option<bool>,
+    #[serde(default = "default_true")]
+    pub on_edge_add: Option<bool>,
+    #[serde(default = "default_true")]
+    pub on_edge_delete: Option<bool>,
 }
 
 fn default_model() -> String {
     "gemini-2.0-flash".to_string()
+}
+
+fn default_adk_version() -> Option<String> {
+    Some("0.2.2".to_string())
+}
+
+fn default_rust_edition() -> Option<String> {
+    Some("2024".to_string())
+}
+
+fn default_true() -> Option<bool> {
+    Some(true)
 }
 
 /// Project metadata for listing

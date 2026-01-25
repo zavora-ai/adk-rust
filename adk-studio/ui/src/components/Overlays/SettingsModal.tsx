@@ -12,7 +12,7 @@ interface Props {
 
 type SettingsTab = 'general' | 'codegen' | 'ui' | 'env';
 
-const ADK_VERSIONS = ['0.2.2', '0.2.1', '0.2.0', '0.1.0'];
+const ADK_VERSIONS = ['0.2.2', '0.2.1', '0.2.0', '0.1.9', '0.1.0'];
 const RUST_EDITIONS = ['2024', '2021'] as const;
 
 export function SettingsModal({ settings, projectName, projectDescription, onSave, onClose }: Props) {

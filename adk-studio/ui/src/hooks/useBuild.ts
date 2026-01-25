@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { api, GeneratedProject } from '../api/client';
 import type { AutobuildTriggers } from '../types/project';
+import { loadGlobalSettings } from '../types/settings';
 
 export interface BuildOutput {
   success: boolean;
@@ -18,16 +19,11 @@ export type AutobuildTriggerType =
   | 'onEdgeAdd' 
   | 'onEdgeDelete';
 
-// Default autobuild triggers (all enabled by default)
-export const DEFAULT_AUTOBUILD_TRIGGERS: AutobuildTriggers = {
-  onAgentAdd: true,
-  onAgentDelete: true,
-  onAgentUpdate: true,
-  onToolAdd: true,
-  onToolUpdate: true,
-  onEdgeAdd: true,
-  onEdgeDelete: true,
-};
+// Get default autobuild triggers from global settings
+function getDefaultAutobuildTriggers(): AutobuildTriggers {
+  const globalSettings = loadGlobalSettings();
+  return globalSettings.autobuildTriggers;
+}
 
 // Persist autobuild preference in localStorage
 const AUTOBUILD_KEY = 'adk-studio-autobuild';
@@ -35,7 +31,11 @@ const AUTOBUILD_KEY = 'adk-studio-autobuild';
 function getStoredAutobuild(): boolean {
   try {
     const stored = localStorage.getItem(AUTOBUILD_KEY);
-    return stored === null ? true : stored === 'true'; // Default to true
+    if (stored !== null) {
+      return stored === 'true';
+    }
+    // Fall back to global settings default
+    return loadGlobalSettings().autobuildEnabled;
   } catch {
     return true;
   }
@@ -55,18 +55,33 @@ function setStoredAutobuild(value: boolean): void {
  * 
  * @param projectId - The current project ID
  * @param autobuildTriggers - Optional trigger configuration from project settings
+ * @param projectAutobuildEnabled - Optional project-level autobuild enabled setting (overrides global)
  */
-export function useBuild(projectId: string | undefined, autobuildTriggers?: AutobuildTriggers) {
+export function useBuild(
+  projectId: string | undefined, 
+  autobuildTriggers?: AutobuildTriggers,
+  projectAutobuildEnabled?: boolean
+) {
   const [building, setBuilding] = useState(false);
   const [buildOutput, setBuildOutput] = useState<BuildOutput | null>(null);
   const [builtBinaryPath, setBuiltBinaryPath] = useState<string | null>(null);
   const [compiledCode, setCompiledCode] = useState<GeneratedProject | null>(null);
   
-  // Autobuild state
-  const [autobuildEnabled, setAutobuildEnabled] = useState(getStoredAutobuild);
+  // Autobuild state - use project setting if defined, otherwise use stored/global
+  const [autobuildEnabled, setAutobuildEnabled] = useState(() => {
+    if (projectAutobuildEnabled !== undefined) return projectAutobuildEnabled;
+    return getStoredAutobuild();
+  });
   const [isAutobuild, setIsAutobuild] = useState(false);
   const autobuildTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  // Sync autobuild state with project settings when they change
+  useEffect(() => {
+    if (projectAutobuildEnabled !== undefined) {
+      setAutobuildEnabled(projectAutobuildEnabled);
+    }
+  }, [projectAutobuildEnabled]);
 
   // Compile project to view generated code
   const compile = useCallback(async () => {
@@ -147,7 +162,7 @@ export function useBuild(projectId: string | undefined, autobuildTriggers?: Auto
     
     // If a trigger type is specified, check if it's enabled in settings
     if (triggerType) {
-      const triggers = autobuildTriggers || DEFAULT_AUTOBUILD_TRIGGERS;
+      const triggers = autobuildTriggers || getDefaultAutobuildTriggers();
       if (!triggers[triggerType]) {
         // This trigger type is disabled, skip autobuild
         return;

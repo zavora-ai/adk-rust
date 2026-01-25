@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../../store';
 import { SettingsModal } from '../Overlays/SettingsModal';
+import { GlobalSettingsModal } from '../Overlays/GlobalSettingsModal';
 import type { ProjectSettings } from '../../types/project';
 
 export function ProjectList() {
@@ -9,6 +10,7 @@ export function ProjectList() {
   const [newName, setNewName] = useState('');
   const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null);
   const [settingsProject, setSettingsProject] = useState<{ name: string; description: string; settings: ProjectSettings } | null>(null);
+  const [showGlobalSettings, setShowGlobalSettings] = useState(false);
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
@@ -52,12 +54,21 @@ export function ProjectList() {
     <div className="p-8 max-w-4xl mx-auto">
       <div className="flex justify-between items-center mb-8">
         <h2 className="text-2xl font-bold text-theme-primary">Projects</h2>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="px-4 py-2 bg-studio-highlight text-white rounded hover:opacity-90 font-medium"
-        >
-          + New Project
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowGlobalSettings(true)}
+            className="px-4 py-2 bg-theme-secondary text-theme-primary border border-theme-default rounded hover:border-studio-accent font-medium"
+            title="Global Settings"
+          >
+            🌐 Settings
+          </button>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="px-4 py-2 bg-studio-highlight text-white rounded hover:opacity-90 font-medium"
+          >
+            + New Project
+          </button>
+        </div>
       </div>
 
       {showCreate && (
@@ -122,6 +133,13 @@ export function ProjectList() {
             setSettingsProjectId(null);
             setSettingsProject(null);
           }}
+        />
+      )}
+
+      {/* Global Settings Modal */}
+      {showGlobalSettings && (
+        <GlobalSettingsModal
+          onClose={() => setShowGlobalSettings(false)}
         />
       )}
     </div>

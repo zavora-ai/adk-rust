@@ -10,3 +10,4 @@ export { StatusIndicator } from './StatusIndicator';
 export type { NodeStatus } from './StatusIndicator';
 export { WalkthroughModal } from './WalkthroughModal';
 export { SettingsModal } from './SettingsModal';
+export { GlobalSettingsModal } from './GlobalSettingsModal';
