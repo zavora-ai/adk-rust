@@ -1,14 +1,14 @@
 use crate::a2ui::{
     encode_jsonl, stable_child_id, stable_id, stable_indexed_id, A2uiMessage, A2uiSchemaVersion,
     A2uiValidator, CreateSurface, CreateSurfaceMessage, UpdateComponents, UpdateComponentsMessage,
-    UpdateDataModel, UpdateDataModelMessage,
+    UpdateDataModel, UpdateDataModelMessage, text, column, row, image, divider,
 };
 use crate::catalog_registry::CatalogRegistry;
 use adk_core::{Result, Tool, ToolContext};
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::sync::Arc;
 
 fn default_surface_id() -> String {
@@ -131,22 +131,12 @@ impl Tool for RenderPageTool {
         let mut root_children: Vec<String> = Vec::new();
 
         let title_id = stable_child_id(&page_id, "title");
-        components.push(json!({
-            "id": title_id,
-            "component": "Text",
-            "text": params.title,
-            "variant": "h1"
-        }));
+        components.push(text(&title_id, &params.title, Some("h1")));
         root_children.push(title_id);
 
         if let Some(description) = params.description {
             let desc_id = stable_child_id(&page_id, "description");
-            components.push(json!({
-                "id": desc_id,
-                "component": "Text",
-                "text": description,
-                "variant": "body"
-            }));
+            components.push(text(&desc_id, &description, None));
             root_children.push(desc_id);
         }
 
@@ -155,32 +145,18 @@ impl Tool for RenderPageTool {
             let mut section_children: Vec<String> = Vec::new();
 
             let heading_id = stable_child_id(&section_id, "heading");
-            components.push(json!({
-                "id": heading_id,
-                "component": "Text",
-                "text": section.heading,
-                "variant": "h2"
-            }));
+            components.push(text(&heading_id, &section.heading, Some("h2")));
             section_children.push(heading_id);
 
             if let Some(body) = &section.body {
                 let body_id = stable_child_id(&section_id, "body");
-                components.push(json!({
-                    "id": body_id,
-                    "component": "Text",
-                    "text": body,
-                    "variant": "body"
-                }));
+                components.push(text(&body_id, body, None));
                 section_children.push(body_id);
             }
 
             if let Some(image_url) = &section.image_url {
                 let image_id = stable_child_id(&section_id, "image");
-                components.push(json!({
-                    "id": image_id,
-                    "component": "Image",
-                    "url": image_url
-                }));
+                components.push(image(&image_id, image_url));
                 section_children.push(image_id);
             }
 
@@ -189,19 +165,11 @@ impl Tool for RenderPageTool {
                 let mut bullet_ids = Vec::new();
                 for (idx, bullet) in section.bullets.iter().enumerate() {
                     let bullet_id = stable_indexed_id(&list_id, "item", idx);
-                    components.push(json!({
-                        "id": bullet_id,
-                        "component": "Text",
-                        "text": bullet,
-                        "variant": "body"
-                    }));
+                    components.push(text(&bullet_id, bullet, None));
                     bullet_ids.push(bullet_id);
                 }
-                components.push(json!({
-                    "id": list_id,
-                    "component": "Column",
-                    "children": bullet_ids
-                }));
+                let bullet_ids_str: Vec<&str> = bullet_ids.iter().map(|s| s.as_str()).collect();
+                components.push(column(&list_id, bullet_ids_str));
                 section_children.push(list_id);
             }
 
@@ -211,70 +179,51 @@ impl Tool for RenderPageTool {
                 for (idx, action) in section.actions.iter().enumerate() {
                     let button_id = stable_indexed_id(&actions_id, "button", idx);
                     let label_id = stable_child_id(&button_id, "label");
-                    components.push(json!({
-                        "id": label_id,
-                        "component": "Text",
-                        "text": action.label,
-                        "variant": "body"
-                    }));
-
-                    let mut event = Map::new();
-                    event.insert("name".to_string(), Value::String(action.action.clone()));
-                    if let Some(context) = &action.context {
-                        event.insert("context".to_string(), context.clone());
-                    }
-                    let mut action_obj = Map::new();
-                    action_obj.insert("event".to_string(), Value::Object(event));
-
-                    let mut button = Map::new();
-                    button.insert("id".to_string(), Value::String(button_id.clone()));
-                    button.insert("component".to_string(), Value::String("Button".to_string()));
-                    button.insert("child".to_string(), Value::String(label_id));
+                    components.push(text(&label_id, &action.label, None));
+                    
+                    // Build button with action
+                    let mut button_comp = json!({
+                        "id": button_id,
+                        "component": {
+                            "Button": {
+                                "child": label_id,
+                                "action": {
+                                    "event": {
+                                        "name": action.action
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    
                     if let Some(variant) = &action.variant {
-                        button.insert("variant".to_string(), Value::String(variant.clone()));
+                        button_comp["component"]["Button"]["variant"] = json!(variant);
                     }
-                    button.insert("action".to_string(), Value::Object(action_obj));
-
-                    components.push(Value::Object(button));
+                    if let Some(context) = &action.context {
+                        button_comp["component"]["Button"]["action"]["event"]["context"] = context.clone();
+                    }
+                    
+                    components.push(button_comp);
                     action_ids.push(button_id);
                 }
-                components.push(json!({
-                    "id": actions_id,
-                    "component": "Row",
-                    "children": action_ids,
-                    "justify": "start",
-                    "align": "center"
-                }));
+                let action_ids_str: Vec<&str> = action_ids.iter().map(|s| s.as_str()).collect();
+                components.push(row(&actions_id, action_ids_str));
                 section_children.push(actions_id);
             }
 
-            components.push(json!({
-                "id": section_id,
-                "component": "Column",
-                "children": section_children,
-                "justify": "start",
-                "align": "stretch"
-            }));
+            let section_children_str: Vec<&str> = section_children.iter().map(|s| s.as_str()).collect();
+            components.push(column(&section_id, section_children_str));
             root_children.push(section_id);
 
             if index + 1 < params.sections.len() {
                 let divider_id = stable_indexed_id(&page_id, "divider", index);
-                components.push(json!({
-                    "id": divider_id,
-                    "component": "Divider",
-                    "axis": "horizontal"
-                }));
+                components.push(divider(&divider_id, "horizontal"));
                 root_children.push(divider_id);
             }
         }
 
-        components.push(json!({
-            "id": "root",
-            "component": "Column",
-            "children": root_children,
-            "justify": "start",
-            "align": "stretch"
-        }));
+        let root_children_str: Vec<&str> = root_children.iter().map(|s| s.as_str()).collect();
+        components.push(column("root", root_children_str));
 
         let mut messages: Vec<A2uiMessage> = Vec::new();
         messages.push(A2uiMessage::CreateSurface(CreateSurfaceMessage {

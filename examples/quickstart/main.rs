@@ -6,6 +6,9 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load environment variables from .env if present.
+    dotenvy::dotenv().ok();
+
     let api_key = std::env::var("GOOGLE_API_KEY")
         .or_else(|_| std::env::var("GEMINI_API_KEY"))
         .expect("GOOGLE_API_KEY or GEMINI_API_KEY must be set");

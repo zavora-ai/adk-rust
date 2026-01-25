@@ -162,7 +162,14 @@ Returns a JSONL string with createSurface/updateDataModel/updateComponents messa
             adk_core::AdkError::Tool(format!("Failed to encode A2UI JSONL: {}", e))
         })?;
 
-        Ok(Value::String(jsonl))
+        // Return as JSON object with components for LLM compatibility
+        // The frontend will receive this and can render it
+        Ok(serde_json::json!({
+            "surface_id": params.surface_id,
+            "components": params.components,
+            "data_model": params.data_model,
+            "jsonl": jsonl
+        }))
     }
 }
 
@@ -237,10 +244,14 @@ mod tests {
 
     #[tokio::test]
     async fn render_screen_emits_jsonl() {
+        use crate::a2ui::{text, column};
+        
         let tool = RenderScreenTool::new();
         let args = serde_json::json!({
             "components": [
-                { "id": "root", "component": "Text", "text": "Hello", "variant": "h1" }
+                text("title", "Hello World", Some("h1")),
+                text("desc", "Welcome", None),
+                column("root", vec!["title", "desc"])
             ],
             "data_model": { "title": "Hello" }
         });
@@ -258,5 +269,12 @@ mod tests {
         assert!(lines[0].get("createSurface").is_some());
         assert!(lines[1].get("updateDataModel").is_some());
         assert!(lines[2].get("updateComponents").is_some());
+        
+        // Verify component structure
+        let components = &lines[2]["updateComponents"]["components"];
+        assert!(components.is_array());
+        let root = &components[2];
+        assert_eq!(root["id"], "root");
+        assert!(root["component"]["Column"].is_object());
     }
 }

@@ -376,6 +376,10 @@ name = "ui_server"
 path = "ui_server/main.rs"
 
 [[example]]
+name = "a2ui_demo"
+path = "a2ui_demo/main.rs"
+
+[[example]]
 name = "ui_working_support"
 path = "ui_working/support/main.rs"
 

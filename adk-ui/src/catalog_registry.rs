@@ -54,7 +54,7 @@ impl Default for CatalogRegistry {
 
         registry.register_embedded(
             DEFAULT_CATALOG_ID,
-            include_str!("../catalog/default_catalog.json"),
+            include_str!("../catalog/extended_catalog.json"),
             Some(include_str!("../catalog/metadata.json")),
         );
 
@@ -171,7 +171,7 @@ impl CatalogRegistry {
     }
 }
 
-const DEFAULT_CATALOG_ID: &str = "zavora.ai:adk-ui/default@0.1.0";
+const DEFAULT_CATALOG_ID: &str = "zavora.ai:adk-ui/extended@0.2.0";
 
 #[cfg(feature = "remote-catalogs")]
 async fn fetch_remote_catalog(url: &str) -> Result<CatalogArtifact, CatalogError> {

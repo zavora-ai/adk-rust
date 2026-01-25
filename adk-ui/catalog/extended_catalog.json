@@ -1,0 +1,303 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "zavora.ai:adk-ui/extended@0.2.0",
+  "title": "ADK-UI Extended Catalog",
+  "description": "Extended catalog with all React renderer components",
+  "catalogId": "zavora.ai:adk-ui/extended@0.2.0",
+  "components": {
+    "Text": {
+      "description": "Display text with optional styling variants",
+      "properties": {
+        "text": { "type": "string", "description": "Text content" },
+        "variant": { "enum": ["h1", "h2", "h3", "h4", "body", "caption", "code"] }
+      },
+      "required": ["text"]
+    },
+    "Button": {
+      "description": "Interactive button with action",
+      "properties": {
+        "label": { "type": "string" },
+        "actionId": { "type": "string" },
+        "variant": { "enum": ["primary", "secondary", "danger", "ghost", "outline"] },
+        "disabled": { "type": "boolean" },
+        "icon": { "type": "string" }
+      },
+      "required": ["label", "actionId"]
+    },
+    "Icon": {
+      "description": "Display an icon",
+      "properties": {
+        "name": { "type": "string" },
+        "size": { "type": "number" }
+      },
+      "required": ["name"]
+    },
+    "Image": {
+      "description": "Display an image",
+      "properties": {
+        "src": { "type": "string" },
+        "alt": { "type": "string" }
+      },
+      "required": ["src"]
+    },
+    "Badge": {
+      "description": "Small status indicator",
+      "properties": {
+        "label": { "type": "string" },
+        "variant": { "enum": ["default", "info", "success", "warning", "error", "secondary", "outline"] }
+      },
+      "required": ["label"]
+    },
+    "TextInput": {
+      "description": "Single-line text input field",
+      "properties": {
+        "name": { "type": "string" },
+        "label": { "type": "string" },
+        "inputType": { "enum": ["text", "email", "password", "tel", "url"] },
+        "placeholder": { "type": "string" },
+        "required": { "type": "boolean" },
+        "defaultValue": { "type": "string" },
+        "minLength": { "type": "number" },
+        "maxLength": { "type": "number" },
+        "error": { "type": "string" }
+      },
+      "required": ["name", "label"]
+    },
+    "NumberInput": {
+      "description": "Numeric input field",
+      "properties": {
+        "name": { "type": "string" },
+        "label": { "type": "string" },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "step": { "type": "number" },
+        "required": { "type": "boolean" },
+        "defaultValue": { "type": "number" },
+        "error": { "type": "string" }
+      },
+      "required": ["name", "label"]
+    },
+    "Select": {
+      "description": "Dropdown selection",
+      "properties": {
+        "name": { "type": "string" },
+        "label": { "type": "string" },
+        "options": { "type": "array", "items": { "type": "object" } },
+        "required": { "type": "boolean" },
+        "error": { "type": "string" }
+      },
+      "required": ["name", "label", "options"]
+    },
+    "MultiSelect": {
+      "description": "Multiple selection dropdown",
+      "properties": {
+        "name": { "type": "string" },
+        "label": { "type": "string" },
+        "options": { "type": "array" },
+        "required": { "type": "boolean" }
+      },
+      "required": ["name", "label", "options"]
+    },
+    "Switch": {
+      "description": "Toggle switch",
+      "properties": {
+        "name": { "type": "string" },
+        "label": { "type": "string" },
+        "defaultChecked": { "type": "boolean" }
+      },
+      "required": ["name", "label"]
+    },
+    "DateInput": {
+      "description": "Date picker",
+      "properties": {
+        "name": { "type": "string" },
+        "label": { "type": "string" },
+        "required": { "type": "boolean" }
+      },
+      "required": ["name", "label"]
+    },
+    "Slider": {
+      "description": "Numeric range slider",
+      "properties": {
+        "name": { "type": "string" },
+        "label": { "type": "string" },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "step": { "type": "number" },
+        "defaultValue": { "type": "number" }
+      },
+      "required": ["name", "label"]
+    },
+    "Textarea": {
+      "description": "Multi-line text input",
+      "properties": {
+        "name": { "type": "string" },
+        "label": { "type": "string" },
+        "placeholder": { "type": "string" },
+        "rows": { "type": "number" },
+        "required": { "type": "boolean" },
+        "defaultValue": { "type": "string" },
+        "error": { "type": "string" }
+      },
+      "required": ["name", "label"]
+    },
+    "Column": {
+      "description": "Vertical layout container",
+      "properties": {
+        "children": { "type": "array", "items": { "type": "string" } },
+        "gap": { "type": "number" },
+        "align": { "enum": ["start", "center", "end", "stretch"] },
+        "justify": { "enum": ["start", "center", "end", "space-between"] }
+      },
+      "required": ["children"]
+    },
+    "Row": {
+      "description": "Horizontal layout container",
+      "properties": {
+        "children": { "type": "array", "items": { "type": "string" } },
+        "gap": { "type": "number" },
+        "align": { "enum": ["start", "center", "end", "stretch"] },
+        "justify": { "enum": ["start", "center", "end", "space-between"] }
+      },
+      "required": ["children"]
+    },
+    "Grid": {
+      "description": "Grid layout",
+      "properties": {
+        "columns": { "type": "number" },
+        "children": { "type": "array" },
+        "gap": { "type": "number" }
+      },
+      "required": ["columns", "children"]
+    },
+    "Card": {
+      "description": "Container with header and content",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "content": { "type": "array" },
+        "footer": { "type": "array" }
+      }
+    },
+    "Container": {
+      "description": "Generic container",
+      "properties": {
+        "children": { "type": "array" },
+        "padding": { "type": "number" }
+      },
+      "required": ["children"]
+    },
+    "Divider": {
+      "description": "Visual separator"
+    },
+    "Tabs": {
+      "description": "Tabbed interface",
+      "properties": {
+        "tabs": { "type": "array" }
+      },
+      "required": ["tabs"]
+    },
+    "Table": {
+      "description": "Data table",
+      "properties": {
+        "columns": { "type": "array" },
+        "data": { "type": "array" },
+        "sortable": { "type": "boolean" },
+        "pageSize": { "type": "number" },
+        "striped": { "type": "boolean" }
+      },
+      "required": ["columns", "data"]
+    },
+    "List": {
+      "description": "Ordered or unordered list",
+      "properties": {
+        "items": { "type": "array", "items": { "type": "string" } },
+        "ordered": { "type": "boolean" }
+      },
+      "required": ["items"]
+    },
+    "KeyValue": {
+      "description": "Key-value pairs display",
+      "properties": {
+        "pairs": { "type": "array" }
+      },
+      "required": ["pairs"]
+    },
+    "CodeBlock": {
+      "description": "Syntax-highlighted code",
+      "properties": {
+        "code": { "type": "string" },
+        "language": { "type": "string" }
+      },
+      "required": ["code"]
+    },
+    "Chart": {
+      "description": "Data visualization",
+      "properties": {
+        "title": { "type": "string" },
+        "kind": { "enum": ["bar", "line", "area", "pie"] },
+        "data": { "type": "array" },
+        "xKey": { "type": "string" },
+        "yKeys": { "type": "array" },
+        "xLabel": { "type": "string" },
+        "yLabel": { "type": "string" },
+        "showLegend": { "type": "boolean" },
+        "colors": { "type": "array" }
+      },
+      "required": ["kind", "data", "xKey", "yKeys"]
+    },
+    "Alert": {
+      "description": "Alert message",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "variant": { "enum": ["info", "success", "warning", "error"] }
+      },
+      "required": ["title"]
+    },
+    "Progress": {
+      "description": "Progress indicator",
+      "properties": {
+        "value": { "type": "number" },
+        "label": { "type": "string" }
+      },
+      "required": ["value"]
+    },
+    "Toast": {
+      "description": "Temporary notification",
+      "properties": {
+        "message": { "type": "string" },
+        "variant": { "enum": ["info", "success", "warning", "error"] },
+        "duration": { "type": "number" },
+        "dismissible": { "type": "boolean" }
+      },
+      "required": ["message"]
+    },
+    "Modal": {
+      "description": "Overlay dialog",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "array" },
+        "footer": { "type": "array" },
+        "size": { "enum": ["small", "medium", "large", "full"] },
+        "closable": { "type": "boolean" }
+      },
+      "required": ["title", "content"]
+    },
+    "Spinner": {
+      "description": "Loading spinner",
+      "properties": {
+        "size": { "enum": ["small", "medium", "large"] },
+        "label": { "type": "string" }
+      }
+    },
+    "Skeleton": {
+      "description": "Loading placeholder",
+      "properties": {
+        "variant": { "enum": ["text", "circle", "rectangle"] },
+        "width": { "type": "string" },
+        "height": { "type": "string" }
+      }
+    }
+  }
+}

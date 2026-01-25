@@ -5,6 +5,8 @@ pub mod bindings;
 pub mod validator;
 pub mod events;
 pub mod data_model;
+pub mod components;
+pub mod prompts;
 
 pub use messages::{
     A2uiMessage,
@@ -23,3 +25,5 @@ pub use bindings::DynamicString;
 pub use validator::{A2uiSchemaVersion, A2uiValidator, A2uiValidationError};
 pub use events::{A2uiActionEvent, A2uiActionMetadata, UiEventMapper};
 pub use data_model::{DataModelUpdate, DataModelValue, UpdateDataModelBuilder};
+pub use components::{text, column, row, button, image, divider};
+pub use prompts::A2UI_AGENT_PROMPT;

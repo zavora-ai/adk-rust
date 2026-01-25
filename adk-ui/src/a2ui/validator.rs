@@ -107,7 +107,10 @@ fn schema_v0_9() -> Value {
                                     "required": ["id", "component"],
                                     "properties": {
                                         "id": { "type": "string" },
-                                        "component": { "type": "string" }
+                                        "component": { 
+                                            "type": "object",
+                                            "description": "Component definition with nested structure: {ComponentName: {props}}"
+                                        }
                                     }
                                 }
                             }
@@ -269,7 +272,14 @@ mod tests {
         let message = A2uiMessage::UpdateComponents(UpdateComponentsMessage {
             update_components: UpdateComponents {
                 surface_id: "main".to_string(),
-                components: vec![json!({ "id": "root", "component": "Text" })],
+                components: vec![json!({ 
+                    "id": "root", 
+                    "component": { 
+                        "Text": { 
+                            "text": { "literalString": "Hello" } 
+                        } 
+                    } 
+                })],
             },
         });
         assert!(validator.validate_message(&message, A2uiSchemaVersion::V0_9).is_ok());

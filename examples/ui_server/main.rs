@@ -1,7 +1,7 @@
 use adk_agent::LlmAgentBuilder;
 use adk_core::SingleAgentLoader;
 use adk_model::gemini::GeminiModel;
-use adk_ui::{UI_AGENT_PROMPT, UiToolset};
+use adk_ui::{a2ui::A2UI_AGENT_PROMPT, UiToolset};
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -17,10 +17,10 @@ async fn main() -> Result<()> {
     let ui_tools = UiToolset::all_tools();
 
     // Create an agent with UI rendering capabilities
-    // Uses the tested prompt from adk_ui::UI_AGENT_PROMPT
+    // Uses the A2UI v0.9 prompt for proper nested component generation
     let mut builder = LlmAgentBuilder::new("ui_demo")
-        .description("An agent that uses dynamic UI components to interact with users")
-        .instruction(UI_AGENT_PROMPT)
+        .description("An agent that uses A2UI v0.9 components to interact with users")
+        .instruction(A2UI_AGENT_PROMPT)
         .model(Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?));
 
     // Add each tool individually
