@@ -56,11 +56,13 @@ function setStoredAutobuild(value: boolean): void {
  * @param projectId - The current project ID
  * @param autobuildTriggers - Optional trigger configuration from project settings
  * @param projectAutobuildEnabled - Optional project-level autobuild enabled setting (overrides global)
+ * @param canBuild - Optional function to check if build is possible (e.g., has agents and edges)
  */
 export function useBuild(
   projectId: string | undefined, 
   autobuildTriggers?: AutobuildTriggers,
-  projectAutobuildEnabled?: boolean
+  projectAutobuildEnabled?: boolean,
+  canBuild?: () => boolean
 ) {
   const [building, setBuilding] = useState(false);
   const [buildOutput, setBuildOutput] = useState<BuildOutput | null>(null);
@@ -101,6 +103,12 @@ export function useBuild(
   // For autobuild, we don't set buildOutput to avoid showing modal
   const executeBuild = useCallback(async (isAuto: boolean) => {
     if (!projectId || building) return;
+    
+    // Skip build if canvas is empty (no agents or edges)
+    if (canBuild && !canBuild()) {
+      // Silently skip - nothing to build yet
+      return;
+    }
     
     setBuilding(true);
     setIsAutobuild(isAuto);
@@ -161,7 +169,7 @@ export function useBuild(
       es.close();
       eventSourceRef.current = null;
     };
-  }, [projectId, building]);
+  }, [projectId, building, canBuild]);
   
   // Track if user has requested to see build output
   const buildOutputRef = useRef<boolean>(false);

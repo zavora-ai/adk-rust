@@ -7,15 +7,21 @@ import { KEYBOARD_SHORTCUTS } from '../../hooks/useKeyboardShortcuts';
 import { TemplateGallery } from '../Templates';
 import type { Template as NewTemplate } from '../Templates/templates';
 
+export type BuildStatusType = 'none' | 'building' | 'success' | 'error';
+
 interface MenuBarProps {
   onExportCode: () => void;
   onNewProject: () => void;
   onTemplateApplied?: () => void;
   /** Callback when Run is requested after template load */
   onRunTemplate?: () => void;
+  /** Current build status */
+  buildStatus?: BuildStatusType;
+  /** Callback when build status indicator is clicked */
+  onBuildStatusClick?: () => void;
 }
 
-export function MenuBar({ onExportCode, onNewProject, onTemplateApplied, onRunTemplate }: MenuBarProps) {
+export function MenuBar({ onExportCode, onNewProject, onTemplateApplied, onRunTemplate, buildStatus = 'none', onBuildStatusClick }: MenuBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [showTemplateGallery, setShowTemplateGallery] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -206,9 +212,55 @@ export function MenuBar({ onExportCode, onNewProject, onTemplateApplied, onRunTe
       <div className="flex-1" />
 
       {currentProject && (
-        <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-          Project: <span style={{ color: 'var(--text-primary)' }}>{currentProject.name}</span>
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+            Project: <span style={{ color: 'var(--text-primary)' }}>{currentProject.name}</span>
+          </span>
+          {/* Build Status Indicator */}
+          <button
+            onClick={onBuildStatusClick}
+            className="flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium transition-colors"
+            style={{
+              backgroundColor: buildStatus === 'building' ? 'var(--accent-primary)' 
+                : buildStatus === 'success' ? '#22c55e'
+                : buildStatus === 'error' ? '#ef4444'
+                : 'var(--bg-secondary)',
+              color: buildStatus === 'none' ? 'var(--text-muted)' : 'white',
+              cursor: buildStatus === 'none' ? 'default' : 'pointer',
+            }}
+            title={
+              buildStatus === 'building' ? 'Building... Click to view progress'
+                : buildStatus === 'success' ? 'Build succeeded'
+                : buildStatus === 'error' ? 'Build failed - Click to view errors'
+                : 'No build yet'
+            }
+          >
+            {buildStatus === 'building' && (
+              <>
+                <span className="animate-spin">⏳</span>
+                <span>Building...</span>
+              </>
+            )}
+            {buildStatus === 'success' && (
+              <>
+                <span>✓</span>
+                <span>Built</span>
+              </>
+            )}
+            {buildStatus === 'error' && (
+              <>
+                <span>✗</span>
+                <span>Failed</span>
+              </>
+            )}
+            {buildStatus === 'none' && (
+              <>
+                <span>○</span>
+                <span>Not Built</span>
+              </>
+            )}
+          </button>
+        </div>
       )}
 
       {/* Template Gallery Modal */}

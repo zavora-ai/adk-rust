@@ -63,6 +63,14 @@ export function Canvas() {
   // Canvas UI state - pass project settings to initialize from saved preferences
   const { showConsole, toggleConsole, showMinimap, toggleMinimap, showTimeline, toggleTimeline } = useCanvasState(currentProject?.settings, handleUISettingChange);
   
+  // Check if project can be built (has agents and edges)
+  const canBuild = useCallback(() => {
+    if (!currentProject) return false;
+    const agentCount = Object.keys(currentProject.agents).length;
+    const edgeCount = currentProject.workflow.edges.length;
+    return agentCount > 0 && edgeCount > 0;
+  }, [currentProject]);
+
   // Build state - pass project settings for autobuild configuration
   const { 
     building, 
@@ -81,7 +89,8 @@ export function Canvas() {
   } = useBuild(
     currentProject?.id, 
     currentProject?.settings?.autobuildTriggers,
-    currentProject?.settings?.autobuildEnabled
+    currentProject?.settings?.autobuildEnabled,
+    canBuild
   );
 
   // v2.0: Derive build status for console summary (Requirement 13.2)
@@ -464,6 +473,17 @@ export function Canvas() {
           // Show console and trigger build if needed
           if (!showConsole) toggleConsole();
           if (!builtBinaryPath) {
+            handleBuild();
+          }
+        }}
+        buildStatus={buildStatus}
+        onBuildStatusClick={() => {
+          if (building && isAutobuild) {
+            showBuildProgress();
+          } else if (buildOutput) {
+            // Show the build modal with current output
+            // buildOutput is already set, modal will show
+          } else if (!builtBinaryPath) {
             handleBuild();
           }
         }}
