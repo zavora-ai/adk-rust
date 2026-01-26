@@ -115,7 +115,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## ☁️ Vertex AI (Google Cloud) API Keys
+## ☁️ Vertex AI (Google Cloud) via the Google Cloud SDK
+
+When you configure Vertex AI, the client uses the official Google Cloud Rust SDK
+(`google-cloud-aiplatform`) plus `google-cloud-auth` for credentials. This supports
+`generateContent` and `embedContent` requests through Vertex. Other Gemini REST-only
+operations (batch jobs, streaming, files, cache) remain available on the Gemini API
+and are not supported via the Vertex SDK.
+
+### Vertex AI API Keys
 
 For Vertex AI endpoints, you can configure the client with your project and location.
 API key auth is still supported for model inference.
@@ -139,9 +147,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## 🔐 Vertex AI (Google Cloud) Service Accounts
+### Application Default Credentials (ADC)
 
-Service accounts are also supported for Vertex AI. Provide the service account JSON key
+```rust
+use adk_gemini::Gemini;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Gemini::with_google_cloud_adc("my-project", "us-central1")?;
+
+    let response = client
+        .generate_content()
+        .with_user_message("Hello from Vertex AI!")
+        .execute()
+        .await?;
+
+    println!("{}", response.text());
+    Ok(())
+}
+```
+
+### Service Accounts
+
+Service accounts are supported for Vertex AI. Provide the service account JSON key
 and choose the project/location.
 
 ```rust
@@ -152,6 +180,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let service_account_json = std::fs::read_to_string("service-account.json")?;
     let client = Gemini::with_google_cloud_service_account_json(
         &service_account_json,
+        "my-project",
+        "us-central1",
+        "gemini-2.5-flash",
+    )?;
+
+    let response = client
+        .generate_content()
+        .with_user_message("Hello from Vertex AI!")
+        .execute()
+        .await?;
+
+    println!("{}", response.text());
+    Ok(())
+}
+```
+
+### Workload Identity Federation (WIF)
+
+```rust
+use adk_gemini::Gemini;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let wif_json = std::fs::read_to_string("wif-credentials.json")?;
+    let client = Gemini::with_google_cloud_wif_json(
+        &wif_json,
         "my-project",
         "us-central1",
         "gemini-2.5-flash",

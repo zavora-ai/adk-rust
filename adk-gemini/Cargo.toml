@@ -226,6 +226,16 @@ version = "^0.3.1"
 [dependencies.futures-util]
 version = "^0.3"
 
+[dependencies.google-cloud-aiplatform-v1]
+version = "1.5.0"
+features = ["prediction-service"]
+
+[dependencies.google-cloud-auth]
+version = "1.4.0"
+
+[dependencies.google-cloud-gax]
+version = "1.5.0"
+
 [dependencies.mime]
 version = "0.3"
 
@@ -255,9 +265,6 @@ features = ["derive"]
 [dependencies.serde_json]
 version = "^1.0"
 
-[dependencies.jsonwebtoken]
-version = "9.3"
-
 [dependencies.snafu]
 version = "0.8"
 features = ["backtrace"]
@@ -279,7 +286,7 @@ features = [
 
 [dependencies.tokio]
 version = "1"
-features = ["io-util", "sync"]
+features = ["io-util", "rt-multi-thread", "sync"]
 
 [dependencies.tracing]
 version = "0.1.41"
