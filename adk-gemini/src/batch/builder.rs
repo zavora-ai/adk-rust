@@ -5,7 +5,7 @@ use tracing::{Span, instrument};
 use super::handle::BatchHandle;
 use super::model::*;
 use super::*;
-use crate::{client::GeminiClient, generation::GenerateContentRequest};
+use crate::{client::GeminiBackend, generation::GenerateContentRequest};
 
 /// A builder for creating and executing synchronous batch content generation requests.
 ///
@@ -13,14 +13,14 @@ use crate::{client::GeminiClient, generation::GenerateContentRequest};
 /// add multiple `GenerateContentRequest` items and then execute them as a single
 /// long-running operation.
 pub struct BatchBuilder {
-    client: Arc<GeminiClient>,
+    client: Arc<dyn GeminiBackend>,
     display_name: String,
     requests: Vec<GenerateContentRequest>,
 }
 
 impl BatchBuilder {
     /// Create a new batch builder
-    pub(crate) fn new(client: Arc<GeminiClient>) -> Self {
+    pub(crate) fn new(client: Arc<dyn GeminiBackend>) -> Self {
         Self { client, display_name: "RustBatch".to_string(), requests: Vec::new() }
     }
 

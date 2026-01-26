@@ -4,18 +4,18 @@ use std::sync::Arc;
 use tracing::instrument;
 
 use super::*;
-use crate::client::GeminiClient;
+use crate::client::GeminiBackend;
 
 /// A builder for creating a file resource.
 pub struct FileBuilder {
-    client: Arc<GeminiClient>,
+    client: Arc<dyn GeminiBackend>,
     file_bytes: Vec<u8>,
     display_name: Option<String>,
     mime_type: Option<Mime>,
 }
 
 impl FileBuilder {
-    pub(crate) fn new<B: Into<Vec<u8>>>(client: Arc<GeminiClient>, file_bytes: B) -> Self {
+    pub(crate) fn new<B: Into<Vec<u8>>>(client: Arc<dyn GeminiBackend>, file_bytes: B) -> Self {
         Self { client, file_bytes: file_bytes.into(), display_name: None, mime_type: None }
     }
 

@@ -70,7 +70,7 @@ use std::{result::Result, sync::Arc};
 use super::model::*;
 use crate::{
     GenerationResponse,
-    client::{Error as ClientError, GeminiClient},
+    client::{Error as ClientError, GeminiBackend},
     files::handle::FileHandle,
 };
 
@@ -137,7 +137,7 @@ pub enum BatchStatus {
 impl BatchStatus {
     async fn parse_response_file(
         response_file: crate::files::model::File,
-        client: Arc<GeminiClient>,
+        client: Arc<dyn GeminiBackend>,
     ) -> Result<Vec<BatchGenerationResponseItem>, Error> {
         let file = FileHandle::new(client.clone(), response_file);
         let file_content_bytes =
@@ -162,7 +162,7 @@ impl BatchStatus {
 
     async fn process_successful_response(
         response: BatchOperationResponse,
-        client: Arc<GeminiClient>,
+        client: Arc<dyn GeminiBackend>,
     ) -> Result<Vec<BatchGenerationResponseItem>, Error> {
         let results = match response {
             BatchOperationResponse::InlinedResponses { inlined_responses } => inlined_responses
@@ -183,7 +183,7 @@ impl BatchStatus {
 
     async fn from_operation(
         operation: BatchOperation,
-        client: Arc<GeminiClient>,
+        client: Arc<dyn GeminiBackend>,
     ) -> Result<Self, Error> {
         if operation.done {
             // According to Google API documentation, when done=true, result must be present
@@ -235,12 +235,12 @@ impl BatchStatus {
 pub struct BatchHandle {
     /// The unique resource name of the batch operation, e.g., `operations/batch-xxxxxxxx`.
     pub name: String,
-    client: Arc<GeminiClient>,
+    client: Arc<dyn GeminiBackend>,
 }
 
 impl BatchHandle {
     /// Creates a new Batch instance.
-    pub(crate) fn new(name: String, client: Arc<GeminiClient>) -> Self {
+    pub(crate) fn new(name: String, client: Arc<dyn GeminiBackend>) -> Self {
         Self { name, client }
     }
 
