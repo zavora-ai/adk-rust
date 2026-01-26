@@ -6,14 +6,14 @@ use crate::{
     Content, FunctionCallingMode, FunctionDeclaration, GenerationConfig, GenerationResponse,
     Message, Role, Tool,
     cache::CachedContentHandle,
-    client::{Error as ClientError, GeminiClient},
+    client::{Error as ClientError, GeminiBackend},
     generation::{GenerateContentRequest, SpeakerVoiceConfig, SpeechConfig, ThinkingConfig},
     tools::{FunctionCallingConfig, ToolConfig},
 };
 
 /// Builder for content generation requests
 pub struct ContentBuilder {
-    client: Arc<GeminiClient>,
+    client: Arc<dyn GeminiBackend>,
     pub contents: Vec<Content>,
     generation_config: Option<GenerationConfig>,
     tools: Option<Vec<Tool>>,
@@ -24,7 +24,7 @@ pub struct ContentBuilder {
 
 impl ContentBuilder {
     /// Creates a new `ContentBuilder`.
-    pub(crate) fn new(client: Arc<GeminiClient>) -> Self {
+    pub(crate) fn new(client: Arc<dyn GeminiBackend>) -> Self {
         Self {
             client,
             contents: Vec::new(),

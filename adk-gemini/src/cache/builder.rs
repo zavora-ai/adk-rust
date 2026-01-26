@@ -4,7 +4,7 @@ use tracing::instrument;
 
 use snafu::ResultExt;
 
-use crate::client::GeminiClient;
+use crate::client::GeminiBackend;
 use crate::models::Content;
 
 use super::handle::*;
@@ -16,7 +16,7 @@ use crate::tools::ToolConfig;
 
 /// Builder for creating cached content with a fluent API.
 pub struct CacheBuilder {
-    client: Arc<GeminiClient>,
+    client: Arc<dyn GeminiBackend>,
     display_name: Option<String>,
     contents: Vec<Content>,
     system_instruction: Option<Content>,
@@ -27,7 +27,7 @@ pub struct CacheBuilder {
 
 impl CacheBuilder {
     /// Creates a new CacheBuilder instance.
-    pub(crate) fn new(client: Arc<GeminiClient>) -> Self {
+    pub(crate) fn new(client: Arc<dyn GeminiBackend>) -> Self {
         Self {
             client,
             display_name: None,
@@ -118,7 +118,7 @@ impl CacheBuilder {
         system_instruction.present = self.system_instruction.is_some(),
     ))]
     pub async fn execute(self) -> Result<CachedContentHandle, Error> {
-        let model = self.client.model.clone();
+        let model = self.client.model().clone();
         let expiration = self.expiration.ok_or(Error::MissingExpiration)?;
 
         let cached_content = CreateCachedContentRequest {

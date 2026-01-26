@@ -7,12 +7,12 @@ use super::model::{
 };
 use crate::{
     Content, Message,
-    client::{Error as ClientError, GeminiClient},
+    client::{Error as ClientError, GeminiBackend},
 };
 
 /// Builder for embed generation requests
 pub struct EmbedBuilder {
-    client: Arc<GeminiClient>,
+    client: Arc<dyn GeminiBackend>,
     contents: Vec<Content>,
     task_type: Option<TaskType>,
     title: Option<String>,
@@ -21,7 +21,7 @@ pub struct EmbedBuilder {
 
 impl EmbedBuilder {
     /// Create a new embed builder
-    pub(crate) fn new(client: Arc<GeminiClient>) -> Self {
+    pub(crate) fn new(client: Arc<dyn GeminiBackend>) -> Self {
         Self {
             client,
             contents: Vec::new(),
@@ -75,7 +75,7 @@ impl EmbedBuilder {
     ))]
     pub async fn execute(self) -> Result<ContentEmbeddingResponse, ClientError> {
         let request = EmbedContentRequest {
-            model: self.client.model.clone(),
+            model: self.client.model().clone(),
             content: self.contents.first().expect("No content set").clone(),
             task_type: self.task_type,
             title: self.title,
@@ -97,7 +97,7 @@ impl EmbedBuilder {
 
         for content in self.contents {
             let request = EmbedContentRequest {
-                model: self.client.model.clone(),
+                model: self.client.model().clone(),
                 content: content.clone(),
                 task_type: self.task_type.clone(),
                 title: self.title.clone(),

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use super::model::*;
 use super::*;
-use crate::client::GeminiClient;
+use crate::client::GeminiBackend;
 
 /// Represents a cached content resource, providing methods to manage its lifecycle.
 ///
@@ -12,12 +12,12 @@ use crate::client::GeminiClient;
 pub struct CachedContentHandle {
     /// The unique resource name of the cached content, e.g., `cachedContents/cache-xxxxxxxx`.
     pub name: String,
-    client: Arc<GeminiClient>,
+    client: Arc<dyn GeminiBackend>,
 }
 
 impl CachedContentHandle {
     /// Creates a new CachedContentHandle instance.
-    pub(crate) fn new(name: String, client: Arc<GeminiClient>) -> Self {
+    pub(crate) fn new(name: String, client: Arc<dyn GeminiBackend>) -> Self {
         Self { name, client }
     }
 

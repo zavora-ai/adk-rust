@@ -11,7 +11,9 @@ use crate::{
     },
     generation::{ContentBuilder, GenerateContentRequest, GenerationResponse},
 };
+use async_trait::async_trait;
 use eventsource_stream::{EventStreamError, Eventsource};
+use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, TryStreamExt};
 use mime::Mime;
 use reqwest::{
@@ -144,6 +146,93 @@ pub enum Error {
     Io {
         source: std::io::Error,
     },
+
+    #[snafu(display("backend is not yet implemented: {backend}"))]
+    UnsupportedBackend {
+        backend: &'static str,
+    },
+}
+
+#[async_trait]
+pub(crate) trait GeminiBackend: Send + Sync {
+    fn model(&self) -> &Model;
+
+    async fn generate_content_raw(
+        &self,
+        request: GenerateContentRequest,
+    ) -> Result<GenerationResponse, Error>;
+
+    async fn generate_content_stream(
+        &self,
+        request: GenerateContentRequest,
+    ) -> Result<BoxStream<'static, Result<GenerationResponse, Error>>, Error>;
+
+    async fn embed_content(
+        &self,
+        request: EmbedContentRequest,
+    ) -> Result<ContentEmbeddingResponse, Error>;
+
+    async fn embed_content_batch(
+        &self,
+        request: BatchEmbedContentsRequest,
+    ) -> Result<BatchContentEmbeddingResponse, Error>;
+
+    async fn batch_generate_content(
+        &self,
+        request: BatchGenerateContentRequest,
+    ) -> Result<BatchGenerateContentResponse, Error>;
+
+    async fn get_batch_operation(&self, name: &str) -> Result<BatchOperation, Error>;
+
+    async fn list_batch_operations(
+        &self,
+        page_size: Option<u32>,
+        page_token: Option<String>,
+    ) -> Result<ListBatchesResponse, Error>;
+
+    async fn cancel_batch_operation(&self, name: &str) -> Result<(), Error>;
+
+    async fn delete_batch_operation(&self, name: &str) -> Result<(), Error>;
+
+    async fn list_files(
+        &self,
+        page_size: Option<u32>,
+        page_token: Option<String>,
+    ) -> Result<ListFilesResponse, Error>;
+
+    async fn upload_file(
+        &self,
+        display_name: Option<String>,
+        file_bytes: Vec<u8>,
+        mime_type: Mime,
+    ) -> Result<File, Error>;
+
+    async fn get_file(&self, name: &str) -> Result<File, Error>;
+
+    async fn delete_file(&self, name: &str) -> Result<(), Error>;
+
+    async fn download_file(&self, name: &str) -> Result<Vec<u8>, Error>;
+
+    async fn create_cached_content(
+        &self,
+        request: CreateCachedContentRequest,
+    ) -> Result<CachedContent, Error>;
+
+    async fn get_cached_content(&self, name: &str) -> Result<CachedContent, Error>;
+
+    async fn update_cached_content(
+        &self,
+        name: &str,
+        request: CacheExpirationRequest,
+    ) -> Result<CachedContent, Error>;
+
+    async fn delete_cached_content(&self, name: &str) -> Result<(), Error>;
+
+    async fn list_cached_contents(
+        &self,
+        page_size: Option<i32>,
+        page_token: Option<String>,
+    ) -> Result<ListCachedContentsResponse, Error>;
 }
 
 /// Internal client for making requests to the Gemini API
@@ -697,6 +786,129 @@ impl GeminiClient {
     }
 }
 
+#[async_trait]
+impl GeminiBackend for GeminiClient {
+    fn model(&self) -> &Model {
+        &self.model
+    }
+
+    async fn generate_content_raw(
+        &self,
+        request: GenerateContentRequest,
+    ) -> Result<GenerationResponse, Error> {
+        GeminiClient::generate_content_raw(self, request).await
+    }
+
+    async fn generate_content_stream(
+        &self,
+        request: GenerateContentRequest,
+    ) -> Result<BoxStream<'static, Result<GenerationResponse, Error>>, Error> {
+        let stream = GeminiClient::generate_content_stream(self, request).await?;
+        Ok(stream.boxed())
+    }
+
+    async fn embed_content(
+        &self,
+        request: EmbedContentRequest,
+    ) -> Result<ContentEmbeddingResponse, Error> {
+        GeminiClient::embed_content(self, request).await
+    }
+
+    async fn embed_content_batch(
+        &self,
+        request: BatchEmbedContentsRequest,
+    ) -> Result<BatchContentEmbeddingResponse, Error> {
+        GeminiClient::embed_content_batch(self, request).await
+    }
+
+    async fn batch_generate_content(
+        &self,
+        request: BatchGenerateContentRequest,
+    ) -> Result<BatchGenerateContentResponse, Error> {
+        GeminiClient::batch_generate_content(self, request).await
+    }
+
+    async fn get_batch_operation(&self, name: &str) -> Result<BatchOperation, Error> {
+        GeminiClient::get_batch_operation(self, name).await
+    }
+
+    async fn list_batch_operations(
+        &self,
+        page_size: Option<u32>,
+        page_token: Option<String>,
+    ) -> Result<ListBatchesResponse, Error> {
+        GeminiClient::list_batch_operations(self, page_size, page_token).await
+    }
+
+    async fn cancel_batch_operation(&self, name: &str) -> Result<(), Error> {
+        GeminiClient::cancel_batch_operation(self, name).await
+    }
+
+    async fn delete_batch_operation(&self, name: &str) -> Result<(), Error> {
+        GeminiClient::delete_batch_operation(self, name).await
+    }
+
+    async fn list_files(
+        &self,
+        page_size: Option<u32>,
+        page_token: Option<String>,
+    ) -> Result<ListFilesResponse, Error> {
+        GeminiClient::list_files(self, page_size, page_token).await
+    }
+
+    async fn upload_file(
+        &self,
+        display_name: Option<String>,
+        file_bytes: Vec<u8>,
+        mime_type: Mime,
+    ) -> Result<File, Error> {
+        GeminiClient::upload_file(self, display_name, file_bytes, mime_type).await
+    }
+
+    async fn get_file(&self, name: &str) -> Result<File, Error> {
+        GeminiClient::get_file(self, name).await
+    }
+
+    async fn delete_file(&self, name: &str) -> Result<(), Error> {
+        GeminiClient::delete_file(self, name).await
+    }
+
+    async fn download_file(&self, name: &str) -> Result<Vec<u8>, Error> {
+        GeminiClient::download_file(self, name).await
+    }
+
+    async fn create_cached_content(
+        &self,
+        request: CreateCachedContentRequest,
+    ) -> Result<CachedContent, Error> {
+        GeminiClient::create_cached_content(self, request).await
+    }
+
+    async fn get_cached_content(&self, name: &str) -> Result<CachedContent, Error> {
+        GeminiClient::get_cached_content(self, name).await
+    }
+
+    async fn update_cached_content(
+        &self,
+        name: &str,
+        request: CacheExpirationRequest,
+    ) -> Result<CachedContent, Error> {
+        GeminiClient::update_cached_content(self, name, request).await
+    }
+
+    async fn delete_cached_content(&self, name: &str) -> Result<(), Error> {
+        GeminiClient::delete_cached_content(self, name).await
+    }
+
+    async fn list_cached_contents(
+        &self,
+        page_size: Option<i32>,
+        page_token: Option<String>,
+    ) -> Result<ListCachedContentsResponse, Error> {
+        GeminiClient::list_cached_contents(self, page_size, page_token).await
+    }
+}
+
 /// A builder for the `Gemini` client.
 ///
 /// # Examples
@@ -735,6 +947,7 @@ pub struct GeminiBuilder {
     model: Model,
     client_builder: ClientBuilder,
     base_url: Url,
+    backend: BackendKind,
 }
 
 impl GeminiBuilder {
@@ -745,6 +958,7 @@ impl GeminiBuilder {
             model: Model::default(),
             client_builder: ClientBuilder::default(),
             base_url: DEFAULT_BASE_URL.clone(),
+            backend: BackendKind::Http,
         }
     }
 
@@ -768,21 +982,27 @@ impl GeminiBuilder {
 
     /// Builds the `Gemini` client.
     pub fn build(self) -> Result<Gemini, Error> {
-        Ok(Gemini {
-            client: Arc::new(GeminiClient::with_base_url(
+        let client: Arc<dyn GeminiBackend> = match self.backend {
+            BackendKind::Http => Arc::new(GeminiClient::with_base_url(
                 self.client_builder,
                 self.key,
                 self.model,
                 self.base_url,
             )?),
-        })
+        };
+        Ok(Gemini { client })
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BackendKind {
+    Http,
 }
 
 /// Client for the Gemini API
 #[derive(Clone)]
 pub struct Gemini {
-    client: Arc<GeminiClient>,
+    client: Arc<dyn GeminiBackend>,
 }
 
 impl Gemini {

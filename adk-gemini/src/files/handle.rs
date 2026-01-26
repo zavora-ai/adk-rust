@@ -2,16 +2,16 @@ use snafu::ResultExt;
 use std::sync::Arc;
 
 use super::*;
-use crate::client::GeminiClient;
+use crate::client::GeminiBackend;
 
 /// A handle to a file on the Gemini API.
 pub struct FileHandle {
     inner: super::model::File,
-    client: Arc<GeminiClient>,
+    client: Arc<dyn GeminiBackend>,
 }
 
 impl FileHandle {
-    pub(crate) fn new(client: Arc<GeminiClient>, inner: super::model::File) -> Self {
+    pub(crate) fn new(client: Arc<dyn GeminiBackend>, inner: super::model::File) -> Self {
         Self { inner, client }
     }
 
