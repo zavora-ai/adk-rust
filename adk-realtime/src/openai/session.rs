@@ -187,7 +187,7 @@ impl OpenAIRealtimeSession {
 
         let mut sender = self.sender.lock().await;
         sender
-            .send(Message::Text(msg))
+            .send(Message::Text(msg.into()))
             .await
             .map_err(|e| RealtimeError::connection(format!("Send error: {}", e)))?;
 
