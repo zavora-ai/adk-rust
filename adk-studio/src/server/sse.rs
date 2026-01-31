@@ -441,14 +441,34 @@ pub async fn stream_handler(
         // but node_end events are deferred until we have the actual output state
         // from TRACE events (specifically StreamEvent::Done which has final state)
         let mut exec_ctx = ExecutionContext::new();
-        // Store the initial input in the execution state
-        exec_ctx.update_state("input", serde_json::Value::String(input.clone()));
+        
+        // Check if this is a webhook trigger (special input marker)
+        let actual_input = if input == "__webhook__" {
+            // Retrieve the webhook payload stored by the webhook trigger endpoint
+            if let Some(webhook_payload) = crate::server::handlers::get_webhook_payload(&session_id).await {
+                // Store webhook payload in execution state
+                exec_ctx.update_state("webhook_payload", webhook_payload.payload.clone());
+                exec_ctx.update_state("webhook_path", serde_json::Value::String(webhook_payload.path.clone()));
+                exec_ctx.update_state("webhook_method", serde_json::Value::String(webhook_payload.method.clone()));
+                
+                // Use the webhook payload as the input (serialized as JSON)
+                serde_json::to_string(&webhook_payload.payload).unwrap_or_else(|_| "{}".to_string())
+            } else {
+                // No webhook payload found, use empty object
+                tracing::warn!(session_id = %session_id, "Webhook input requested but no payload found");
+                "{}".to_string()
+            }
+        } else {
+            // Regular input
+            exec_ctx.update_state("input", serde_json::Value::String(input.clone()));
+            input.clone()
+        };
 
         // Send input
         {
             let mut sessions = SESSIONS.lock().await;
             if let Some(session) = sessions.get_mut(&session_id) {
-                if session.stdin.write_all(format!("{}\n", input).as_bytes()).await.is_err()
+                if session.stdin.write_all(format!("{}\n", actual_input).as_bytes()).await.is_err()
                     || session.stdin.flush().await.is_err() {
                     yield Ok(Event::default().event("error").data("Failed to send input"));
                     return;

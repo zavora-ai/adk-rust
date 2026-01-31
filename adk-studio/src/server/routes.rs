@@ -22,4 +22,12 @@ pub fn api_routes() -> Router<AppState> {
         // POST /api/sessions/{session_id}/resume - Resume an interrupted workflow
         // Requirements: 3.2, 5.2
         .route("/sessions/:session_id/resume", post(handlers::resume_session))
+        // Webhook trigger endpoints for testing webhooks in development
+        // POST /api/projects/{id}/webhook/*path - Trigger workflow via webhook (async, returns stream URL)
+        // GET /api/projects/{id}/webhook/*path - Trigger workflow via webhook GET (async)
+        .route("/projects/:id/webhook/*path", post(handlers::webhook_trigger))
+        .route("/projects/:id/webhook/*path", get(handlers::webhook_trigger_get))
+        // Synchronous webhook execution - waits for response
+        // POST /api/projects/{id}/webhook-exec/*path - Execute workflow and return response
+        .route("/projects/:id/webhook-exec/*path", post(handlers::webhook_execute))
 }
