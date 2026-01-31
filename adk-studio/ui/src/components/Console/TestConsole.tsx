@@ -146,6 +146,10 @@ interface Props {
   onCollapseChange?: (collapsed: boolean) => void;
   /** HITL: Callback when interrupt state changes */
   onInterruptChange?: (interrupt: InterruptData | null) => void;
+  /** Auto-send a prompt when this value changes (used by Run button) */
+  autoSendPrompt?: string | null;
+  /** Callback when autoSendPrompt has been processed */
+  onAutoSendComplete?: () => void;
 }
 
 /** Validate workflow and return current state */
@@ -189,6 +193,8 @@ export function TestConsole({
   isCollapsed: controlledCollapsed,
   onCollapseChange,
   onInterruptChange,
+  autoSendPrompt,
+  onAutoSendComplete,
 }: Props) {
   const { currentProject } = useStore();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -410,6 +416,56 @@ export function TestConsole({
       }
     );
   };
+
+  /**
+   * Send a message with a specific prompt (used by Run button).
+   * Similar to sendMessage but takes the prompt as a parameter.
+   */
+  const sendWithPrompt = useCallback((prompt: string) => {
+    if (!prompt.trim() || !currentProject || sendingRef.current || isStreaming) return;
+    
+    sendingRef.current = true;
+    const userMsg = prompt.trim();
+    setMessages((m) => [...m, { role: 'user', content: userMsg }]);
+    
+    // Phase 1: Set trigger_input phase to animate trigger→START edge
+    onFlowPhase?.('trigger_input');
+    lastAgentRef.current = null;
+    setRunStatus('running');
+    setLastError(null);
+    
+    // Phase 2: After 500ms, transition to 'input' phase for START→agent animation
+    setTimeout(() => {
+      onFlowPhase?.('input');
+    }, 500);
+    
+    send(
+      userMsg,
+      (text) => {
+        if (text) {
+          setMessages((m) => [...m, { role: 'assistant', content: text, agent: lastAgentRef.current || undefined }]);
+        }
+        onFlowPhase?.('idle');
+        sendingRef.current = false;
+        setRunStatus('success');
+      },
+      (error) => {
+        setMessages((m) => [...m, { role: 'assistant', content: `Error: ${error}` }]);
+        onFlowPhase?.('idle');
+        sendingRef.current = false;
+        setRunStatus('error');
+        setLastError(error);
+      }
+    );
+  }, [currentProject, isStreaming, onFlowPhase, send]);
+
+  // Handle autoSendPrompt - when Run button is clicked with a default prompt
+  useEffect(() => {
+    if (autoSendPrompt && !isStreaming && !sendingRef.current) {
+      sendWithPrompt(autoSendPrompt);
+      onAutoSendComplete?.();
+    }
+  }, [autoSendPrompt, isStreaming, sendWithPrompt, onAutoSendComplete]);
 
   const handleNewSession = () => {
     setMessages([]);

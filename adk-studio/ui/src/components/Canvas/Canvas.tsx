@@ -23,6 +23,7 @@ import { useUndoRedo, useUndoRedoStore } from '../../hooks/useUndoRedo';
 import type { FunctionToolConfig, AgentSchema, ToolConfig, Edge as ProjectEdge } from '../../types/project';
 import type { ActionNodeType } from '../../types/actionNodes';
 import { createDefaultStandardProperties } from '../../types/standardProperties';
+import { DEFAULT_MANUAL_TRIGGER_CONFIG } from '../../types/actionNodes';
 import { TEMPLATES } from '../MenuBar/templates';
 import { validateConnection } from '../../utils/connectionValidation';
 
@@ -123,6 +124,9 @@ export function Canvas() {
   
   // v2.0: Console collapse state
   const [consoleCollapsed, setConsoleCollapsed] = useState(false);
+  
+  // Auto-send prompt state (for Run button to trigger workflow with default prompt)
+  const [autoSendPrompt, setAutoSendPrompt] = useState<string | null>(null);
 
   // Execution state (local for now, will be moved to useExecution in later tasks)
   const [flowPhase, setFlowPhase] = useState<FlowPhase>('idle');
@@ -752,6 +756,18 @@ export function Canvas() {
   const fnConfig = selectedToolId && currentProject.tool_configs?.[selectedToolId]?.type === 'function' 
     ? currentProject.tool_configs[selectedToolId] as FunctionToolConfig 
     : null;
+  
+  // Get default prompt from trigger config (for Run button)
+  const getDefaultPrompt = (): string => {
+    const actionNodes = currentProject.actionNodes || {};
+    const trigger = Object.values(actionNodes).find(
+      node => node.type === 'trigger' && node.triggerType === 'manual'
+    );
+    if (trigger && trigger.type === 'trigger' && trigger.manual) {
+      return trigger.manual.defaultPrompt || DEFAULT_MANUAL_TRIGGER_CONFIG.defaultPrompt;
+    }
+    return DEFAULT_MANUAL_TRIGGER_CONFIG.defaultPrompt;
+  };
 
   // Theme-aware colors for ReactFlow components
   const { mode } = useTheme();
@@ -942,15 +958,14 @@ export function Canvas() {
             isBuilt={!!builtBinaryPath}
             isBuilding={building}
             onRun={() => {
-              // Show console and trigger build if needed
+              // Show console if not visible
               if (!showConsole) toggleConsole();
-              // Focus on the chat input to prompt user to send a message
+              // Expand console if collapsed
+              if (consoleCollapsed) setConsoleCollapsed(false);
+              // Set the auto-send prompt to trigger the workflow with the default prompt
               // Use setTimeout to ensure console is rendered first
               setTimeout(() => {
-                const chatInput = document.querySelector('.test-console-input') as HTMLInputElement;
-                if (chatInput) {
-                  chatInput.focus();
-                }
+                setAutoSendPrompt(getDefaultPrompt());
               }, 100);
             }}
             onStop={() => {
@@ -1036,6 +1051,8 @@ export function Canvas() {
             isCollapsed={consoleCollapsed}
             onCollapseChange={setConsoleCollapsed}
             onInterruptChange={handleInterruptChange}
+            autoSendPrompt={autoSendPrompt}
+            onAutoSendComplete={() => setAutoSendPrompt(null)}
           />
         </div>
       )}
