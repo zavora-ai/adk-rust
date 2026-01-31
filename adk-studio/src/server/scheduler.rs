@@ -30,6 +30,7 @@ struct ScheduledJob {
     trigger_id: String,
     cron: String,
     timezone: String,
+    default_prompt: Option<String>,
     next_run: DateTime<Utc>,
     binary_path: String,
 }
@@ -105,6 +106,7 @@ async fn scan_projects(state: &AppState) -> Vec<ScheduledJob> {
                                 trigger_id: trigger_id.clone(),
                                 cron: schedule.cron.clone(),
                                 timezone: schedule.timezone.clone(),
+                                default_prompt: schedule.default_prompt.clone(),
                                 next_run,
                                 binary_path: binary_path.clone(),
                             });
@@ -137,12 +139,24 @@ async fn execute_job(job: &ScheduledJob) {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     
-    let payload = serde_json::json!({
-        "trigger": "schedule",
-        "cron": job.cron,
-        "timezone": job.timezone,
-        "scheduled_time": job.next_run.to_rfc3339(),
-    });
+    // Use default_prompt if provided, otherwise send schedule metadata
+    let payload = if let Some(prompt) = &job.default_prompt {
+        serde_json::json!({
+            "trigger": "schedule",
+            "input": prompt,
+            "cron": job.cron,
+            "timezone": job.timezone,
+            "scheduled_time": job.next_run.to_rfc3339(),
+        })
+    } else {
+        serde_json::json!({
+            "trigger": "schedule",
+            "input": format!("Scheduled trigger fired at {} (cron: {})", job.next_run.to_rfc3339(), job.cron),
+            "cron": job.cron,
+            "timezone": job.timezone,
+            "scheduled_time": job.next_run.to_rfc3339(),
+        })
+    };
     
     // Notify UI clients (reuse webhook notification channel)
     notify_webhook(&job.project_id, WebhookNotification {

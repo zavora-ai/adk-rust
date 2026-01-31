@@ -80,6 +80,8 @@ export interface ScheduleConfig {
   cron: string;
   /** Timezone (e.g., 'America/New_York') */
   timezone: string;
+  /** Default prompt/input to send when schedule triggers */
+  defaultPrompt?: string;
 }
 
 /**

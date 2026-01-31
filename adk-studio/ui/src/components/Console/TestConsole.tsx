@@ -239,17 +239,26 @@ export function TestConsole({
       return;
     }
     
-    // Add a message showing the webhook was received
+    const isScheduleTrigger = notification.method === 'SCHEDULE';
+    const payload = notification.payload as Record<string, unknown>;
+    
+    // Extract input from payload (for schedule triggers, this is the default prompt)
+    const inputFromPayload = typeof payload?.input === 'string' ? payload.input : null;
+    
+    // Add a message showing the trigger was received
     const payloadStr = typeof notification.payload === 'string' 
       ? notification.payload 
       : JSON.stringify(notification.payload, null, 2);
     
+    const triggerIcon = isScheduleTrigger ? '⏰' : '🔗';
+    const triggerLabel = isScheduleTrigger ? 'Schedule triggered' : 'Webhook received';
+    
     setMessages((m) => [...m, { 
       role: 'user', 
-      content: `🔗 Webhook received: ${notification.path}\n\`\`\`json\n${payloadStr}\n\`\`\`` 
+      content: `${triggerIcon} ${triggerLabel}: ${notification.path}\n\`\`\`json\n${payloadStr}\n\`\`\`` 
     }]);
     
-    // Trigger the workflow with the webhook payload
+    // Trigger the workflow
     sendingRef.current = true;
     
     // Phase 1: Set trigger_input phase to animate trigger→START edge
@@ -263,9 +272,14 @@ export function TestConsole({
       onFlowPhase?.('input');
     }, 500);
     
-    // Send the webhook payload as input (use __webhook__ marker so SSE handler retrieves stored payload)
+    // For schedule triggers with an input, send the input directly
+    // For webhooks, use __webhook__ marker so SSE handler retrieves stored payload
+    const inputToSend = isScheduleTrigger && inputFromPayload 
+      ? inputFromPayload 
+      : '__webhook__';
+    
     send(
-      '__webhook__',
+      inputToSend,
       (text) => {
         if (text) {
           setMessages((m) => [...m, { role: 'assistant', content: text, agent: lastAgentRef.current || undefined }]);
@@ -281,7 +295,7 @@ export function TestConsole({
         setRunStatus('error');
         setLastError(error);
       },
-      notification.session_id // Pass the session_id from the webhook
+      notification.session_id // Pass the session_id from the trigger
     );
   }, [binaryPath, isStreaming, onFlowPhase, send]);
   

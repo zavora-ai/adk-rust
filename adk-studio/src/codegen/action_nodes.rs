@@ -176,6 +176,9 @@ pub struct WebhookAuthConfig {
 pub struct ScheduleConfig {
     pub cron: String,
     pub timezone: String,
+    /// Default prompt/input to send when schedule triggers
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -449,6 +449,29 @@ export function TriggerPanel({ node, onChange }: TriggerPanelProps) {
               onChange={updateSchedule} 
             />
           </CollapsibleSection>
+          
+          <CollapsibleSection title="Trigger Input" defaultOpen>
+            <Field 
+              label="Default Prompt" 
+              hint="sent when schedule fires"
+              tooltip="The prompt/input that will be sent to the workflow when the schedule triggers"
+            >
+              <textarea
+                className="trigger-panel-textarea"
+                value={node.schedule.defaultPrompt || ''}
+                onChange={(e) => updateSchedule({ defaultPrompt: e.target.value })}
+                placeholder="e.g., Generate daily report for {{date}}"
+                rows={3}
+              />
+            </Field>
+            <div className="trigger-panel-info">
+              <span className="trigger-panel-info-icon">ℹ️</span>
+              <span className="trigger-panel-info-text">
+                This prompt will be sent to the first agent when the schedule fires.
+                Leave empty to send schedule metadata (cron, timezone, timestamp).
+              </span>
+            </div>
+          </CollapsibleSection>
         </>
       )}
 
