@@ -945,6 +945,13 @@ export function Canvas() {
               // Show console and trigger build if needed
               if (!showConsole) toggleConsole();
               // Focus on the chat input to prompt user to send a message
+              // Use setTimeout to ensure console is rendered first
+              setTimeout(() => {
+                const chatInput = document.querySelector('.test-console-input') as HTMLInputElement;
+                if (chatInput) {
+                  chatInput.focus();
+                }
+              }, 100);
             }}
             onStop={() => {
               // Stop is handled by TestConsole's cancel function

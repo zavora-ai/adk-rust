@@ -854,7 +854,7 @@ export function TestConsole({
                     }
                   }}
                   placeholder={inputContext.placeholder}
-                  className="flex-1 px-3 py-2 rounded text-sm"
+                  className="test-console-input flex-1 px-3 py-2 rounded text-sm"
                   style={{ 
                     backgroundColor: isDisabled ? 'var(--bg-secondary)' : 'var(--bg-primary)', 
                     // HITL: Use warning border when interrupted, error border when disabled
