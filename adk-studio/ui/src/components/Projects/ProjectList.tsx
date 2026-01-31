@@ -3,9 +3,10 @@ import { useStore } from '../../store';
 import { SettingsModal } from '../Overlays/SettingsModal';
 import { GlobalSettingsModal } from '../Overlays/GlobalSettingsModal';
 import type { ProjectSettings } from '../../types/project';
+import { TEMPLATES } from '../MenuBar/templates';
 
 export function ProjectList() {
-  const { projects, loadingProjects, createProject, openProject, deleteProject } = useStore();
+  const { projects, loadingProjects, createProject, openProject, deleteProject, addAgent, addActionNode, addEdge } = useStore();
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null);
@@ -17,7 +18,28 @@ export function ProjectList() {
     const project = await createProject(newName.trim());
     setNewName('');
     setShowCreate(false);
-    openProject(project.id);
+    await openProject(project.id);
+    
+    // Apply default template (simple_chat with trigger)
+    const defaultTemplate = TEMPLATES.find(t => t.id === 'simple_chat');
+    if (defaultTemplate) {
+      // Add action nodes (including trigger)
+      if (defaultTemplate.actionNodes) {
+        Object.entries(defaultTemplate.actionNodes).forEach(([id, node]) => {
+          addActionNode(id, node);
+        });
+      }
+      // Add agents
+      Object.entries(defaultTemplate.agents).forEach(([id, agent]) => {
+        addAgent(id, agent);
+      });
+      // Add edges
+      defaultTemplate.edges.forEach(e => addEdge(e.from, e.to));
+      
+      // Save project to persist layout direction
+      const { saveProject } = useStore.getState();
+      saveProject();
+    }
   };
 
   const handleOpenSettings = async (e: React.MouseEvent, projectId: string) => {

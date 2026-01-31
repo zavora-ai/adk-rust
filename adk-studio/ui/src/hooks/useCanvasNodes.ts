@@ -101,9 +101,16 @@ export function useCanvasNodes(project: Project | null, execution: ExecutionStat
     const allSubAgents = new Set(agentIds.flatMap(id => project.agents[id].sub_agents || []));
     const topLevelAgents = agentIds.filter(id => !allSubAgents.has(id));
 
-    // Sort ALL workflow items (agents and action nodes) by workflow order
-    // This ensures proper positioning based on edge connections
-    const allWorkflowItems = [...topLevelAgents, ...actionNodeIds];
+    // Find nodes that connect TO START (triggers/entry points)
+    const nodesConnectingToStart = project.workflow.edges
+      .filter((e: WorkflowEdge) => e.to === 'START')
+      .map((e: WorkflowEdge) => e.from)
+      .filter((id: string) => actionNodeIds.includes(id) || topLevelAgents.includes(id));
+
+    // Sort workflow items that come AFTER START (agents and action nodes)
+    const allWorkflowItems = [...topLevelAgents, ...actionNodeIds].filter(
+      id => !nodesConnectingToStart.includes(id)
+    );
     const sortedWorkflowItems: string[] = [];
     let current = 'START';
     const visited = new Set<string>();
@@ -143,17 +150,58 @@ export function useCanvasNodes(project: Project | null, execution: ExecutionStat
 
     const newNodes: Node[] = [];
     
-    // Add START/END if there are any workflow items (agents OR action nodes)
-    if (sortedWorkflowItems.length > 0) {
-      newNodes.push(
-        { id: 'START', position: { x: 50, y: 50 }, data: {}, type: 'start' },
-        { id: 'END', position: { x: 50, y: 150 + sortedWorkflowItems.length * 150 }, data: {}, type: 'end' },
-      );
+    // Calculate positions based on layout direction
+    // For horizontal (LR): Trigger → START → Agents → END
+    // For vertical (TB): Trigger above START, then agents below
+    const nodeSpacing = 200;
+    const triggerOffset = 100;  // Position for trigger nodes
+    const startOffset = triggerOffset + (nodesConnectingToStart.length > 0 ? nodeSpacing : 0);
+    
+    // Total items after START
+    const itemsAfterStart = sortedWorkflowItems.length;
+    
+    // Add trigger nodes (connect TO START)
+    nodesConnectingToStart.forEach((id, i) => {
+      const actionNode = project.actionNodes?.[id];
+      if (actionNode) {
+        const pos = isHorizontal
+          ? { x: triggerOffset, y: 200 }  // Left of START
+          : { x: 300, y: triggerOffset }; // Above START
+        const nodeType = getActionNodeType(actionNode.type);
+        newNodes.push({
+          id,
+          type: nodeType,
+          position: pos,
+          data: { ...actionNode },
+        });
+      }
+    });
+    
+    // Add START/END
+    if (sortedWorkflowItems.length > 0 || nodesConnectingToStart.length > 0) {
+      if (isHorizontal) {
+        // Horizontal layout: Trigger → START → Agents → END
+        const endX = startOffset + (itemsAfterStart + 1) * nodeSpacing;
+        newNodes.push(
+          { id: 'START', position: { x: startOffset, y: 200 }, data: {}, type: 'start' },
+          { id: 'END', position: { x: endX, y: 200 }, data: {}, type: 'end' },
+        );
+      } else {
+        // Vertical layout: Trigger → START → Agents → END
+        const endY = startOffset + (itemsAfterStart + 1) * nodeSpacing;
+        newNodes.push(
+          { id: 'START', position: { x: 300, y: startOffset }, data: {}, type: 'start' },
+          { id: 'END', position: { x: 300, y: endY }, data: {}, type: 'end' },
+        );
+      }
     }
 
     // Add all workflow nodes (agents and action nodes) in workflow order
     sortedWorkflowItems.forEach((id, i) => {
-      const pos = { x: 50, y: 150 + i * 150 };
+      // Position based on layout direction
+      const pos = isHorizontal
+        ? { x: startOffset + (i + 1) * nodeSpacing, y: 200 }  // Horizontal: spread along X
+        : { x: 300, y: startOffset + (i + 1) * nodeSpacing }; // Vertical: spread along Y
       
       // Check if this is an agent
       const agent = project.agents[id];
@@ -268,18 +316,38 @@ export function useCanvasNodes(project: Project | null, execution: ExecutionStat
       
       // Determine source and target handles
       // For multi-port nodes (Switch, Merge), use the port names from edge
-      // For action nodes without port specified, use 'output-0' / 'input-0'
+      // For action nodes, use layout-aware handles (left/right for horizontal, top/bottom for vertical)
       // For agent nodes, use layout-based defaults
       const isSourceActionNode = project.actionNodes?.[e.from] !== undefined;
       const isTargetActionNode = project.actionNodes?.[e.to] !== undefined;
+      const isSourceStartEnd = e.from === 'START' || e.from === 'END';
+      const isTargetStartEnd = e.to === 'START' || e.to === 'END';
       
-      // Default handles based on node type
-      const defaultSourceHandle = isSourceActionNode 
-        ? 'output-0' 
-        : (isHorizontal ? 'right' : 'bottom');
-      const defaultTargetHandle = isTargetActionNode 
-        ? 'input-0' 
-        : (isHorizontal ? 'left' : 'top');
+      // Default handles based on node type and layout direction
+      let defaultSourceHandle: string;
+      let defaultTargetHandle: string;
+      
+      if (isSourceActionNode) {
+        // Action nodes use output-0 (position adapts based on layout in component)
+        defaultSourceHandle = 'output-0';
+      } else if (isSourceStartEnd) {
+        // START/END nodes have named handles
+        defaultSourceHandle = isHorizontal ? 'right' : 'bottom';
+      } else {
+        // Agent nodes
+        defaultSourceHandle = isHorizontal ? 'right' : 'bottom';
+      }
+      
+      if (isTargetActionNode) {
+        // Action nodes use input-0 (position adapts based on layout in component)
+        defaultTargetHandle = 'input-0';
+      } else if (isTargetStartEnd) {
+        // START/END nodes have named handles
+        defaultTargetHandle = isHorizontal ? 'left' : 'top';
+      } else {
+        // Agent nodes
+        defaultTargetHandle = isHorizontal ? 'left' : 'top';
+      }
       
       return { 
         id: `e${i}-${layoutDirection}`,

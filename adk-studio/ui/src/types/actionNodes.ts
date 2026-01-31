@@ -20,6 +20,28 @@ import type { StandardProperties } from './standardProperties';
 export type TriggerType = 'manual' | 'webhook' | 'schedule' | 'event';
 
 /**
+ * Manual trigger configuration for user input.
+ * Defines the label and placeholder text shown in the chat input
+ * when a manual trigger workflow is ready to execute.
+ * @see trigger-input-flow Requirements 1.1, 1.2
+ */
+export interface ManualTriggerConfig {
+  /** Label shown above input field (e.g., "Enter your question") */
+  inputLabel: string;
+  /** Placeholder text for input field (e.g., "Type a message to start...") */
+  defaultPrompt: string;
+}
+
+/**
+ * Default values for manual trigger configuration.
+ * @see trigger-input-flow Requirements 1.1, 1.2
+ */
+export const DEFAULT_MANUAL_TRIGGER_CONFIG: ManualTriggerConfig = {
+  inputLabel: 'Enter your message',
+  defaultPrompt: 'Type a message to start...',
+};
+
+/**
  * HTTP method for webhook triggers.
  */
 export type WebhookMethod = 'GET' | 'POST';
@@ -68,6 +90,8 @@ export interface EventConfig {
   source: string;
   /** Event type to listen for */
   eventType: string;
+  /** Optional filter expression (JSONPath) to filter events */
+  filter?: string;
 }
 
 /**
@@ -81,6 +105,8 @@ export interface TriggerNodeConfig extends StandardProperties {
   webhook?: WebhookConfig;
   schedule?: ScheduleConfig;
   event?: EventConfig;
+  /** Manual trigger specific configuration (input label and default prompt) */
+  manual?: ManualTriggerConfig;
 }
 
 // ============================================

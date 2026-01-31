@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../store';
 import { useSSE, TraceEvent } from '../../hooks/useSSE';
 import type { StateSnapshot } from '../../types/execution';
+import type { Project } from '../../types/project';
 import { ConsoleFilters, EventFilter } from './ConsoleFilters';
 
 interface Message {
@@ -19,6 +20,36 @@ export type BuildStatus = 'none' | 'building' | 'success' | 'error';
 
 /** Run status for summary line */
 export type RunStatus = 'idle' | 'running' | 'success' | 'error';
+
+/** Workflow validation state */
+export type WorkflowState = 
+  | 'no_trigger'      // No trigger node
+  | 'no_agent'        // No agents in workflow
+  | 'not_connected'   // Workflow not connected to END
+  | 'not_built'       // Valid but not compiled
+  | 'ready';          // Ready to run
+
+/** Get informative placeholder text based on workflow state */
+function getPlaceholderText(state: WorkflowState, buildStatus: BuildStatus): string {
+  switch (state) {
+    case 'no_trigger':
+      return '⚠️ Add a trigger node to start your workflow';
+    case 'no_agent':
+      return '⚠️ Add an agent to your workflow';
+    case 'not_connected':
+      return '⚠️ Connect your workflow to END';
+    case 'not_built':
+      if (buildStatus === 'building') {
+        return '🔨 Building... please wait';
+      }
+      if (buildStatus === 'error') {
+        return '❌ Build failed - check errors and rebuild';
+      }
+      return '⚙️ Click Build to compile your workflow';
+    case 'ready':
+      return 'Type a message...';
+  }
+}
 
 interface Props {
   onFlowPhase?: (phase: FlowPhase) => void;
@@ -39,6 +70,36 @@ interface Props {
   isCollapsed?: boolean;
   /** v2.0: Callback when collapse state changes */
   onCollapseChange?: (collapsed: boolean) => void;
+}
+
+/** Validate workflow and return current state */
+function validateWorkflow(project: Project | null, binaryPath: string | null | undefined, buildStatus: BuildStatus): WorkflowState {
+  if (!project) return 'no_trigger';
+  
+  const actionNodes = project.actionNodes || {};
+  const agents = project.agents || {};
+  const edges = project.workflow?.edges || [];
+  
+  // Check for trigger node
+  const hasTrigger = Object.values(actionNodes).some(node => node.type === 'trigger');
+  if (!hasTrigger) return 'no_trigger';
+  
+  // Check for at least one agent
+  const hasAgent = Object.keys(agents).length > 0;
+  if (!hasAgent) return 'no_agent';
+  
+  // Check if workflow is connected to END
+  // Find all nodes that can reach END
+  const nodesWithOutgoingToEnd = edges.filter(e => e.to === 'END').map(e => e.from);
+  const hasEndConnection = nodesWithOutgoingToEnd.length > 0;
+  if (!hasEndConnection) return 'not_connected';
+  
+  // Check if built
+  if (!binaryPath || buildStatus === 'none' || buildStatus === 'error') {
+    return 'not_built';
+  }
+  
+  return 'ready';
 }
 
 export function TestConsole({ 
@@ -393,7 +454,51 @@ export function TestConsole({
       {activeTab === 'chat' && (
         <div className="flex-1 overflow-y-auto p-3 space-y-3">
           {messages.length === 0 && !streamingText && !isThinking && (
-            <div className="text-sm" style={{ color: 'var(--text-muted)' }}>Send a message to test your agent...</div>
+            <div className="text-sm" style={{ color: 'var(--text-muted)' }}>
+              {(() => {
+                const workflowState = validateWorkflow(currentProject, binaryPath, buildStatus);
+                switch (workflowState) {
+                  case 'no_trigger':
+                    return (
+                      <div className="space-y-2">
+                        <p>👋 Welcome! To get started:</p>
+                        <ol className="list-decimal list-inside space-y-1 ml-2">
+                          <li>Add a <strong>Trigger</strong> node from the palette</li>
+                          <li>Add an <strong>Agent</strong> to process requests</li>
+                          <li>Click <strong>Build</strong> to compile</li>
+                        </ol>
+                      </div>
+                    );
+                  case 'no_agent':
+                    return (
+                      <div className="space-y-2">
+                        <p>✅ Trigger added! Next:</p>
+                        <ol className="list-decimal list-inside space-y-1 ml-2">
+                          <li>Add an <strong>Agent</strong> from the palette</li>
+                          <li>Connect it to your workflow</li>
+                          <li>Click <strong>Build</strong> to compile</li>
+                        </ol>
+                      </div>
+                    );
+                  case 'not_connected':
+                    return (
+                      <div className="space-y-2">
+                        <p>⚠️ Almost there!</p>
+                        <p>Connect your workflow to the <strong>END</strong> node, then click <strong>Build</strong>.</p>
+                      </div>
+                    );
+                  case 'not_built':
+                    return (
+                      <div className="space-y-2">
+                        <p>🎉 Workflow ready!</p>
+                        <p>Click <strong>Build</strong> to compile your workflow, then you can start chatting.</p>
+                      </div>
+                    );
+                  case 'ready':
+                    return 'Send a message to test your agent...';
+                }
+              })()}
+            </div>
           )}
           {messages.map((m, i) => (
             <div key={i} className="text-sm" style={{ color: m.role === 'user' ? 'var(--accent-primary)' : 'var(--text-primary)' }}>
@@ -481,33 +586,46 @@ export function TestConsole({
       )}
 
       <div className="p-2 border-t flex gap-2" style={{ borderColor: 'var(--border-default)' }}>
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.repeat) {
-              e.preventDefault();
-              sendMessage();
-            }
-          }}
-          placeholder="Type a message..."
-          className="flex-1 px-3 py-2 rounded text-sm"
-          style={{ 
-            backgroundColor: 'var(--bg-primary)', 
-            border: '1px solid var(--border-default)',
-            color: 'var(--text-primary)'
-          }}
-          disabled={isStreaming}
-        />
-        <button
-          onClick={sendMessage}
-          disabled={isStreaming || !input.trim()}
-          className="px-4 py-2 rounded text-sm disabled:opacity-50"
-          style={{ backgroundColor: 'var(--accent-primary)', color: 'white' }}
-        >
-          Send
-        </button>
+        {(() => {
+          const workflowState = validateWorkflow(currentProject, binaryPath, buildStatus);
+          const isReady = workflowState === 'ready';
+          const placeholder = getPlaceholderText(workflowState, buildStatus);
+          const isDisabled = !isReady || isStreaming;
+          
+          return (
+            <>
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.repeat && isReady) {
+                    e.preventDefault();
+                    sendMessage();
+                  }
+                }}
+                placeholder={placeholder}
+                className="flex-1 px-3 py-2 rounded text-sm"
+                style={{ 
+                  backgroundColor: isDisabled ? 'var(--bg-secondary)' : 'var(--bg-primary)', 
+                  border: `1px solid ${!isReady ? 'var(--accent-warning)' : 'var(--border-default)'}`,
+                  color: isDisabled ? 'var(--text-muted)' : 'var(--text-primary)',
+                  cursor: isDisabled ? 'not-allowed' : 'text',
+                }}
+                disabled={isDisabled}
+              />
+              <button
+                onClick={sendMessage}
+                disabled={isDisabled || !input.trim()}
+                className="px-4 py-2 rounded text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ backgroundColor: 'var(--accent-primary)', color: 'white' }}
+                title={!isReady ? placeholder : 'Send message'}
+              >
+                Send
+              </button>
+            </>
+          );
+        })()}
       </div>
     </div>
   );

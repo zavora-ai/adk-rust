@@ -69,7 +69,77 @@
 }
 
 /* ============================================
-   Trigger Type Selector
+   Trigger Type Selector - Tab Style
+   ============================================ */
+
+.trigger-type-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px solid var(--border-default);
+}
+
+.trigger-type-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.trigger-type-tab:hover {
+  background: var(--bg-hover);
+}
+
+.trigger-type-tab.selected {
+  background: var(--action-trigger);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.trigger-type-tab-icon {
+  font-size: 16px;
+}
+
+.trigger-type-tab-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.trigger-type-tab.selected .trigger-type-tab-label {
+  color: white;
+}
+
+.trigger-type-description {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin: 4px 0;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  border: 1px solid var(--border-default);
+}
+
+.trigger-type-description-icon {
+  font-size: 16px;
+}
+
+.trigger-type-description-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ============================================
+   Trigger Type Selector - Card Style (Legacy)
    ============================================ */
 
 .trigger-type-selector {
@@ -189,6 +259,66 @@
 
 .trigger-panel-input-mono {
   font-family: monospace;
+}
+
+/* ============================================
+   Textarea Styles
+   ============================================ */
+
+.trigger-panel-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  resize: vertical;
+  min-height: 60px;
+  font-family: inherit;
+  line-height: 1.4;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.trigger-panel-textarea:focus {
+  outline: none;
+  border-color: var(--action-trigger);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
+.trigger-panel-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+/* ============================================
+   Manual Trigger Preview
+   ============================================ */
+
+.trigger-panel-manual-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  margin-top: 4px;
+}
+
+.trigger-panel-manual-preview-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.trigger-panel-manual-preview-placeholder {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 4px 8px;
+  background: var(--bg-secondary);
+  border-radius: 3px;
+  border: 1px dashed var(--border-default);
 }
 
 .trigger-panel-select {

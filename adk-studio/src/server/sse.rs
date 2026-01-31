@@ -515,6 +515,12 @@ pub async fn stream_handler(
 }
 
 pub async fn kill_session(Path(session_id): Path<String>) -> &'static str {
-    SESSIONS.lock().await.remove(&session_id);
+    let mut sessions = SESSIONS.lock().await;
+    if let Some(mut session) = sessions.remove(&session_id) {
+        // Kill the child process explicitly
+        if let Err(e) = session._child.kill().await {
+            tracing::warn!("Failed to kill session {}: {}", session_id, e);
+        }
+    }
     "ok"
 }

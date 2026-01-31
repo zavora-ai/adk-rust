@@ -250,13 +250,21 @@ fn generate_flow_diagram(project: &ProjectSchema) -> String {
         
         if next_edges.len() == 1 {
             let next = &next_edges[0].to;
+            // Skip action nodes in the diagram (they're entry points, not execution nodes)
+            if project.action_nodes.contains_key(next) {
+                current = next;
+                continue;
+            }
             diagram.push_str(" → ");
             diagram.push_str(next);
             current = next;
         } else {
             // Multiple branches (router)
             diagram.push_str(" → [");
-            let targets: Vec<_> = next_edges.iter().map(|e| e.to.as_str()).collect();
+            let targets: Vec<_> = next_edges.iter()
+                .map(|e| e.to.as_str())
+                .filter(|t| !project.action_nodes.contains_key(*t))
+                .collect();
             diagram.push_str(&targets.join(" | "));
             diagram.push_str("]");
             break; // Stop at branching point
@@ -381,9 +389,23 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
     let top_level: Vec<_> =
         project.agents.keys().filter(|id| !all_sub_agents.contains(*id)).collect();
 
-    // Find first agent (connected from START)
-    let first_agent: Option<&str> =
+    // Find first node connected from START (could be trigger or agent)
+    let first_from_start: Option<&str> =
         project.workflow.edges.iter().find(|e| e.from == "START").map(|e| e.to.as_str());
+    
+    // Check if first node is a trigger (action node) - if so, find the actual first agent
+    let first_agent: Option<&str> = if let Some(first) = first_from_start {
+        if project.action_nodes.contains_key(first) {
+            // First node is a trigger - find what it connects to
+            project.workflow.edges.iter()
+                .find(|e| e.from == first)
+                .map(|e| e.to.as_str())
+        } else {
+            Some(first)
+        }
+    } else {
+        None
+    };
 
     // Generate all agent nodes
     for agent_id in &top_level {
@@ -413,11 +435,36 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
         code.push_str(&format!("        .add_node({}_node)\n", agent_id));
     }
 
-    // Add edges from workflow
+    // Add edges from workflow, skipping action nodes (trigger, etc.)
+    // Action nodes are entry points that don't participate in the graph execution
     for edge in &project.workflow.edges {
-        let from =
-            if edge.from == "START" { "START".to_string() } else { format!("\"{}\"", edge.from) };
-        let to = if edge.to == "END" { "END".to_string() } else { format!("\"{}\"", edge.to) };
+        // Skip edges involving action nodes - they're just entry point markers
+        let from_is_action = project.action_nodes.contains_key(&edge.from);
+        let to_is_action = project.action_nodes.contains_key(&edge.to);
+        
+        // If source is an action node, skip this edge (we'll connect START directly to the target)
+        if from_is_action {
+            continue;
+        }
+        
+        // If target is an action node, skip (shouldn't happen in normal workflows)
+        if to_is_action && edge.to != "END" {
+            continue;
+        }
+        
+        // If START connects to an action node, connect START to the action node's target instead
+        let (from, to) = if edge.from == "START" && first_from_start.map(|f| project.action_nodes.contains_key(f)).unwrap_or(false) {
+            // START -> trigger -> agent becomes START -> agent
+            if let Some(actual_first) = first_agent {
+                ("START".to_string(), format!("\"{}\"", actual_first))
+            } else {
+                continue; // No valid target
+            }
+        } else {
+            let from = if edge.from == "START" { "START".to_string() } else { format!("\"{}\"", edge.from) };
+            let to = if edge.to == "END" { "END".to_string() } else { format!("\"{}\"", edge.to) };
+            (from, to)
+        };
 
         // Check if source is a router - use conditional edges
         if let Some(agent) = project.agents.get(&edge.from) {

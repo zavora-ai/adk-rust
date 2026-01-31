@@ -315,6 +315,11 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
     setStreamingText('');
     setCurrentAgent('');
     setIsStreaming(false);
+    
+    // Also kill the backend session to stop the running process
+    if (sessionRef.current) {
+      fetch(`/api/sessions/${sessionRef.current}`, { method: 'DELETE' }).catch(() => {});
+    }
   }, []);
 
   const clearEvents = useCallback(() => setEvents([]), []);

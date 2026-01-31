@@ -226,8 +226,16 @@ fn validate_graph_connectivity(project: &ProjectSchema, result: &mut ValidationR
     }
 
     // Check that all top-level agents are reachable
+    // Note: Action nodes (like trigger) are also valid nodes in the graph
     for agent_id in &top_level_agents {
-        if !reachable.contains(agent_id.as_str()) {
+        // Skip if this agent is reachable through an action node
+        // (e.g., START -> trigger -> agent)
+        let reachable_through_action = project.action_nodes.keys().any(|action_id| {
+            reachable.contains(action_id.as_str()) &&
+            project.workflow.edges.iter().any(|e| e.from == *action_id && e.to == **agent_id)
+        });
+        
+        if !reachable.contains(agent_id.as_str()) && !reachable_through_action {
             result.add_error_with_context(
                 ValidationErrorCode::DisconnectedNode,
                 "Agent is not reachable from START",

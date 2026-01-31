@@ -17,6 +17,7 @@ import { memo, ReactNode } from 'react';
 import { StatusIndicator, type NodeStatus } from '../Overlays/StatusIndicator';
 import { Tooltip, ACTION_NODE_TOOLTIPS } from '../Overlays/Tooltip';
 import type { ActionNodeType } from '../../types/actionNodes';
+import { useStore } from '../../store';
 import '../../styles/actionNodes.css';
 
 /**
@@ -144,6 +145,10 @@ export const ActionNodeBase = memo(function ActionNodeBase({
   const icon = ACTION_NODE_ICONS[type];
   const tooltip = ACTION_NODE_TOOLTIPS[type];
   
+  // Get layout direction from store
+  const layoutDirection = useStore(s => s.layoutDirection);
+  const isHorizontal = layoutDirection === 'LR' || layoutDirection === 'RL';
+  
   // Build class names for styling
   const containerClasses = [
     'action-node',
@@ -154,21 +159,25 @@ export const ActionNodeBase = memo(function ActionNodeBase({
     status !== 'idle' && `action-node-status-${status}`,
   ].filter(Boolean).join(' ');
 
-  // Generate input handle positions
+  // Generate input handle positions - supports both vertical (top) and horizontal (left) layouts
   const renderInputHandles = () => {
     return Array.from({ length: inputPorts }).map((_, i) => {
       const id = inputPortIds?.[i] ?? `input-${i}`;
-      const leftPercent = (i + 1) * 100 / (inputPorts + 1);
+      const percent = (i + 1) * 100 / (inputPorts + 1);
       
+      // Render handles for both orientations so edges can connect regardless of layout
       return (
         <Handle
           key={id}
           type="target"
-          position={Position.Top}
+          position={isHorizontal ? Position.Left : Position.Top}
           id={id}
           className="action-node-handle action-node-handle-input"
           style={{ 
-            left: `${leftPercent}%`,
+            ...(isHorizontal 
+              ? { top: `${percent}%`, left: undefined }
+              : { left: `${percent}%`, top: undefined }
+            ),
             background: color,
           }}
         />
@@ -176,21 +185,24 @@ export const ActionNodeBase = memo(function ActionNodeBase({
     });
   };
 
-  // Generate output handle positions
+  // Generate output handle positions - supports both vertical (bottom) and horizontal (right) layouts
   const renderOutputHandles = () => {
     return Array.from({ length: outputPorts }).map((_, i) => {
       const id = outputPortIds?.[i] ?? `output-${i}`;
-      const leftPercent = (i + 1) * 100 / (outputPorts + 1);
+      const percent = (i + 1) * 100 / (outputPorts + 1);
       
       return (
         <Handle
           key={id}
           type="source"
-          position={Position.Bottom}
+          position={isHorizontal ? Position.Right : Position.Bottom}
           id={id}
           className="action-node-handle action-node-handle-output"
           style={{ 
-            left: `${leftPercent}%`,
+            ...(isHorizontal 
+              ? { top: `${percent}%`, right: undefined }
+              : { left: `${percent}%`, bottom: undefined }
+            ),
             background: color,
           }}
         />

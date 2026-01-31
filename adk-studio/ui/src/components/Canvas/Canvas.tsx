@@ -1,4 +1,4 @@
-import { useCallback, useState, useRef, useMemo, DragEvent } from 'react';
+import { useCallback, useState, useRef, useMemo, useEffect, DragEvent } from 'react';
 import { ReactFlow, Background, Controls, MiniMap, Node, Edge, Connection } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useStore } from '../../store';
@@ -356,10 +356,41 @@ export function Canvas() {
   
   // Clear undo history when project changes
   const prevProjectIdRef = useRef<string | null>(null);
+  const hasAppliedInitialLayout = useRef<string | null>(null);
+  
   if (currentProject?.id !== prevProjectIdRef.current) {
     prevProjectIdRef.current = currentProject?.id || null;
+    hasAppliedInitialLayout.current = null; // Reset layout flag for new project
     clearUndoHistory();
   }
+  
+  // Apply layout when a new project is opened (after nodes are rendered)
+  // Also triggers when nodes are added to a project that didn't have any
+  const nodeCount = (currentProject ? Object.keys(currentProject.agents).length + Object.keys(currentProject.actionNodes || {}).length : 0);
+  
+  useEffect(() => {
+    if (!currentProject) return;
+    if (nodeCount === 0) return;
+    
+    // Only apply initial layout once per project
+    if (hasAppliedInitialLayout.current === currentProject.id) return;
+    
+    // Delay to ensure nodes are rendered by ReactFlow
+    // Use multiple attempts to handle race conditions
+    const timer1 = setTimeout(() => {
+      applyLayout();
+    }, 100);
+    
+    const timer2 = setTimeout(() => {
+      applyLayout();
+      hasAppliedInitialLayout.current = currentProject.id;
+    }, 300);
+    
+    return () => {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+    };
+  }, [currentProject, nodeCount, applyLayout]);
 
   // Thought bubble handler
   const handleThought = useCallback((agent: string, thought: string | null) => {
@@ -1030,9 +1061,17 @@ export function Canvas() {
             await openProject(project.id); 
             const defaultTemplate = TEMPLATES.find(t => t.id === 'simple_chat'); 
             if (defaultTemplate) { 
+              // Add action nodes (including trigger)
+              if (defaultTemplate.actionNodes) {
+                Object.entries(defaultTemplate.actionNodes).forEach(([id, node]) => {
+                  addActionNode(id, node);
+                });
+              }
+              // Add agents
               Object.entries(defaultTemplate.agents).forEach(([id, agent]) => { 
                 addAgent(id, agent); 
               }); 
+              // Add edges
               defaultTemplate.edges.forEach(e => addProjectEdge(e.from, e.to)); 
               setTimeout(() => applyLayout(), 100); 
             } 

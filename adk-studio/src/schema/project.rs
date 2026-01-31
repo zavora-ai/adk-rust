@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::{AgentSchema, ToolConfig, ToolSchema, WorkflowSchema};
+use crate::codegen::action_nodes::ActionNodeConfig;
 
 /// Complete project schema
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +21,9 @@ pub struct ProjectSchema {
     pub tools: HashMap<String, ToolSchema>,
     #[serde(default)]
     pub tool_configs: HashMap<String, ToolConfig>,
+    /// Action nodes for non-LLM programmatic operations (v2.0)
+    #[serde(default, rename = "actionNodes")]
+    pub action_nodes: HashMap<String, ActionNodeConfig>,
     #[serde(default)]
     pub workflow: WorkflowSchema,
     #[serde(default)]
@@ -40,6 +44,7 @@ impl ProjectSchema {
             agents: HashMap::new(),
             tools: HashMap::new(),
             tool_configs: HashMap::new(),
+            action_nodes: HashMap::new(),
             workflow: WorkflowSchema::default(),
             created_at: now,
             updated_at: now,

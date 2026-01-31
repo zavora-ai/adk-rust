@@ -3,6 +3,7 @@
  * 
  * Properties panel for configuring Trigger action nodes.
  * Provides UI for selecting trigger type and configuring type-specific options.
+ * Settings are organized by trigger type - only relevant settings are shown.
  * 
  * Requirements: 2.1, 2.2, 2.3, 12.2
  */
@@ -18,7 +19,9 @@ import type {
   EventConfig,
   WebhookMethod,
   WebhookAuth,
+  ManualTriggerConfig,
 } from '../../types/actionNodes';
+import { DEFAULT_MANUAL_TRIGGER_CONFIG } from '../../types/actionNodes';
 import type { StandardProperties } from '../../types/standardProperties';
 import '../../styles/triggerPanel.css';
 
@@ -28,18 +31,27 @@ import '../../styles/triggerPanel.css';
 
 const TRIGGER_TYPES: readonly TriggerType[] = ['manual', 'webhook', 'schedule', 'event'];
 
-const TRIGGER_TYPE_LABELS: Record<TriggerType, string> = {
-  manual: 'Manual Trigger',
-  webhook: 'Webhook',
-  schedule: 'Schedule (Cron)',
-  event: 'Event Source',
-};
-
-const TRIGGER_TYPE_DESCRIPTIONS: Record<TriggerType, string> = {
-  manual: 'Triggered manually by user action',
-  webhook: 'Triggered by HTTP request to a webhook URL',
-  schedule: 'Triggered on a schedule using cron expressions',
-  event: 'Triggered by external event sources',
+const TRIGGER_TYPE_INFO: Record<TriggerType, { label: string; icon: string; description: string }> = {
+  manual: {
+    label: 'Manual',
+    icon: '👆',
+    description: 'Triggered by user action (Run button or API)',
+  },
+  webhook: {
+    label: 'Webhook',
+    icon: '🌐',
+    description: 'Triggered by HTTP request',
+  },
+  schedule: {
+    label: 'Schedule',
+    icon: '⏰',
+    description: 'Triggered on a cron schedule',
+  },
+  event: {
+    label: 'Event',
+    icon: '⚡',
+    description: 'Triggered by external events',
+  },
 };
 
 const WEBHOOK_METHODS: readonly WebhookMethod[] = ['GET', 'POST'];
@@ -146,12 +158,11 @@ export interface TriggerPanelProps {
 /**
  * TriggerPanel provides configuration UI for Trigger action nodes.
  * 
- * Features:
- * - Trigger type selector with descriptions (Requirement 2.1)
- * - Webhook configuration: path, method, auth (Requirement 2.2)
- * - Schedule configuration: cron, timezone, preview (Requirement 2.3)
- * - Event source configuration
- * - Standard properties panel integration
+ * Settings are organized by trigger type:
+ * - Manual: Input label, default prompt
+ * - Webhook: Path, method, authentication
+ * - Schedule: Cron expression, timezone
+ * - Event: Source, event type, filters
  * 
  * @see Requirements 2.1, 2.2, 2.3, 12.2
  */
@@ -165,7 +176,9 @@ export function TriggerPanel({ node, onChange }: TriggerPanelProps) {
     const updates: Partial<TriggerNodeConfig> = { triggerType };
     
     // Initialize type-specific config if not present
-    if (triggerType === 'webhook' && !node.webhook) {
+    if (triggerType === 'manual' && !node.manual) {
+      updates.manual = { ...DEFAULT_MANUAL_TRIGGER_CONFIG };
+    } else if (triggerType === 'webhook' && !node.webhook) {
       updates.webhook = {
         path: '/api/webhook/trigger',
         method: 'POST',
@@ -207,6 +220,17 @@ export function TriggerPanel({ node, onChange }: TriggerPanelProps) {
     });
   }, [node, onChange]);
   
+  const updateManual = useCallback((updates: Partial<ManualTriggerConfig>) => {
+    onChange({
+      ...node,
+      manual: { 
+        ...DEFAULT_MANUAL_TRIGGER_CONFIG,
+        ...node.manual, 
+        ...updates 
+      },
+    });
+  }, [node, onChange]);
+  
   const updateStandardProperties = useCallback((props: StandardProperties) => {
     onChange({ ...node, ...props });
   }, [node, onChange]);
@@ -215,96 +239,148 @@ export function TriggerPanel({ node, onChange }: TriggerPanelProps) {
   // Render
   // ============================================
   
+  const currentType = TRIGGER_TYPE_INFO[node.triggerType];
+  
   return (
     <div className="trigger-panel">
-      {/* Trigger Type Selection (Requirement 2.1) */}
-      <CollapsibleSection title="Trigger Type" defaultOpen>
-        <div className="trigger-type-selector">
-          {TRIGGER_TYPES.map((type) => (
+      {/* Trigger Type Selector - Compact tabs */}
+      <div className="trigger-type-tabs">
+        {TRIGGER_TYPES.map((type) => {
+          const info = TRIGGER_TYPE_INFO[type];
+          return (
             <button
               key={type}
               type="button"
-              className={`trigger-type-option ${node.triggerType === type ? 'selected' : ''}`}
+              className={`trigger-type-tab ${node.triggerType === type ? 'selected' : ''}`}
               onClick={() => updateTriggerType(type)}
+              title={info.description}
             >
-              <span className="trigger-type-label">{TRIGGER_TYPE_LABELS[type]}</span>
-              <span className="trigger-type-description">{TRIGGER_TYPE_DESCRIPTIONS[type]}</span>
+              <span className="trigger-type-tab-icon">{info.icon}</span>
+              <span className="trigger-type-tab-label">{info.label}</span>
             </button>
-          ))}
-        </div>
-      </CollapsibleSection>
+          );
+        })}
+      </div>
       
-      {/* Webhook Configuration (Requirement 2.2) */}
-      {node.triggerType === 'webhook' && node.webhook && (
-        <CollapsibleSection title="Webhook Configuration" defaultOpen>
-          <Field label="Webhook Path" required hint="e.g., /api/webhook/my-flow" tooltip={ACTION_NODE_TOOLTIPS.webhookPath}>
+      {/* Current type description */}
+      <div className="trigger-type-description">
+        <span className="trigger-type-description-icon">{currentType.icon}</span>
+        <span className="trigger-type-description-text">{currentType.description}</span>
+      </div>
+
+      {/* ============================================ */}
+      {/* MANUAL TRIGGER SETTINGS */}
+      {/* ============================================ */}
+      {node.triggerType === 'manual' && (
+        <CollapsibleSection title="Manual Trigger Settings" defaultOpen>
+          <Field 
+            label="Input Label" 
+            hint="shown above chat input"
+            tooltip="The label displayed above the chat input field when the workflow is ready to receive input"
+          >
             <input
               type="text"
               className="trigger-panel-input"
-              value={node.webhook.path}
-              onChange={(e) => updateWebhook({ path: e.target.value })}
-              placeholder="/api/webhook/trigger"
+              value={node.manual?.inputLabel || DEFAULT_MANUAL_TRIGGER_CONFIG.inputLabel}
+              onChange={(e) => updateManual({ inputLabel: e.target.value })}
+              placeholder="e.g., Enter your question"
             />
           </Field>
           
-          <Field label="HTTP Method" required tooltip={ACTION_NODE_TOOLTIPS.webhookMethod}>
-            <div className="trigger-panel-button-group">
-              {WEBHOOK_METHODS.map((method) => (
-                <button
-                  key={method}
-                  type="button"
-                  className={`trigger-panel-button ${node.webhook?.method === method ? 'selected' : ''}`}
-                  onClick={() => updateWebhook({ method })}
-                >
-                  {method}
-                </button>
-              ))}
+          <Field 
+            label="Default Prompt" 
+            hint="placeholder text"
+            tooltip="Placeholder text shown in the chat input field to guide users on what to enter"
+          >
+            <textarea
+              className="trigger-panel-textarea"
+              value={node.manual?.defaultPrompt || DEFAULT_MANUAL_TRIGGER_CONFIG.defaultPrompt}
+              onChange={(e) => updateManual({ defaultPrompt: e.target.value })}
+              placeholder="Placeholder text for input field"
+              rows={3}
+            />
+          </Field>
+          
+          {/* Preview of how it will appear */}
+          <div className="trigger-panel-preview">
+            <span className="trigger-panel-preview-label">Preview:</span>
+            <div className="trigger-panel-manual-preview">
+              <span className="trigger-panel-manual-preview-label">
+                {node.manual?.inputLabel || DEFAULT_MANUAL_TRIGGER_CONFIG.inputLabel}
+              </span>
+              <span className="trigger-panel-manual-preview-placeholder">
+                {node.manual?.defaultPrompt || DEFAULT_MANUAL_TRIGGER_CONFIG.defaultPrompt}
+              </span>
             </div>
-          </Field>
+          </div>
           
-          <Field label="Authentication" tooltip={ACTION_NODE_TOOLTIPS.webhookAuth}>
-            <select
-              className="trigger-panel-select"
-              value={node.webhook.auth}
-              onChange={(e) => updateWebhook({ auth: e.target.value as WebhookAuth })}
-            >
-              {WEBHOOK_AUTH_TYPES.map((auth) => (
-                <option key={auth} value={auth}>
-                  {WEBHOOK_AUTH_LABELS[auth]}
-                </option>
-              ))}
-            </select>
-          </Field>
-          
-          {/* Auth-specific configuration */}
-          {node.webhook.auth === 'bearer' && (
-            <Field label="Token Environment Variable" hint="env var name">
+          <div className="trigger-panel-info">
+            <span className="trigger-panel-info-icon">ℹ️</span>
+            <span className="trigger-panel-info-text">
+              Click the <strong>Run</strong> button or use the API to start this workflow.
+            </span>
+          </div>
+        </CollapsibleSection>
+      )}
+
+      {/* ============================================ */}
+      {/* WEBHOOK SETTINGS */}
+      {/* ============================================ */}
+      {node.triggerType === 'webhook' && node.webhook && (
+        <>
+          <CollapsibleSection title="Endpoint Configuration" defaultOpen>
+            <Field label="Webhook Path" required hint="e.g., /api/webhook/my-flow" tooltip={ACTION_NODE_TOOLTIPS.webhookPath}>
               <input
                 type="text"
                 className="trigger-panel-input"
-                value={node.webhook.authConfig?.tokenEnvVar || ''}
-                onChange={(e) => updateWebhook({ 
-                  authConfig: { ...node.webhook?.authConfig, tokenEnvVar: e.target.value }
-                })}
-                placeholder="WEBHOOK_TOKEN"
+                value={node.webhook.path}
+                onChange={(e) => updateWebhook({ path: e.target.value })}
+                placeholder="/api/webhook/trigger"
               />
             </Field>
-          )}
+            
+            <Field label="HTTP Method" required tooltip={ACTION_NODE_TOOLTIPS.webhookMethod}>
+              <div className="trigger-panel-button-group">
+                {WEBHOOK_METHODS.map((method) => (
+                  <button
+                    key={method}
+                    type="button"
+                    className={`trigger-panel-button ${node.webhook?.method === method ? 'selected' : ''}`}
+                    onClick={() => updateWebhook({ method })}
+                  >
+                    {method}
+                  </button>
+                ))}
+              </div>
+            </Field>
+            
+            {/* Webhook URL Preview */}
+            <div className="trigger-panel-preview">
+              <span className="trigger-panel-preview-label">Endpoint:</span>
+              <code className="trigger-panel-preview-value">
+                {node.webhook.method} {node.webhook.path}
+              </code>
+            </div>
+          </CollapsibleSection>
           
-          {node.webhook.auth === 'api_key' && (
-            <>
-              <Field label="Header Name" hint="e.g., X-API-Key">
-                <input
-                  type="text"
-                  className="trigger-panel-input"
-                  value={node.webhook.authConfig?.headerName || ''}
-                  onChange={(e) => updateWebhook({ 
-                    authConfig: { ...node.webhook?.authConfig, headerName: e.target.value }
-                  })}
-                  placeholder="X-API-Key"
-                />
-              </Field>
-              <Field label="API Key Environment Variable" hint="env var name">
+          <CollapsibleSection title="Authentication" defaultOpen={node.webhook.auth !== 'none'}>
+            <Field label="Auth Type" tooltip={ACTION_NODE_TOOLTIPS.webhookAuth}>
+              <select
+                className="trigger-panel-select"
+                value={node.webhook.auth}
+                onChange={(e) => updateWebhook({ auth: e.target.value as WebhookAuth })}
+              >
+                {WEBHOOK_AUTH_TYPES.map((auth) => (
+                  <option key={auth} value={auth}>
+                    {WEBHOOK_AUTH_LABELS[auth]}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            
+            {/* Bearer Token Configuration */}
+            {node.webhook.auth === 'bearer' && (
+              <Field label="Token Environment Variable" hint="env var name">
                 <input
                   type="text"
                   className="trigger-panel-input"
@@ -312,68 +388,115 @@ export function TriggerPanel({ node, onChange }: TriggerPanelProps) {
                   onChange={(e) => updateWebhook({ 
                     authConfig: { ...node.webhook?.authConfig, tokenEnvVar: e.target.value }
                   })}
-                  placeholder="API_KEY"
+                  placeholder="WEBHOOK_TOKEN"
                 />
               </Field>
-            </>
-          )}
-          
-          {/* Webhook URL Preview */}
-          <div className="trigger-panel-preview">
-            <span className="trigger-panel-preview-label">Webhook URL:</span>
-            <code className="trigger-panel-preview-value">
-              {node.webhook.method} {node.webhook.path}
-            </code>
-          </div>
-        </CollapsibleSection>
+            )}
+            
+            {/* API Key Configuration */}
+            {node.webhook.auth === 'api_key' && (
+              <>
+                <Field label="Header Name" hint="e.g., X-API-Key">
+                  <input
+                    type="text"
+                    className="trigger-panel-input"
+                    value={node.webhook.authConfig?.headerName || ''}
+                    onChange={(e) => updateWebhook({ 
+                      authConfig: { ...node.webhook?.authConfig, headerName: e.target.value }
+                    })}
+                    placeholder="X-API-Key"
+                  />
+                </Field>
+                <Field label="API Key Environment Variable" hint="env var name">
+                  <input
+                    type="text"
+                    className="trigger-panel-input"
+                    value={node.webhook.authConfig?.tokenEnvVar || ''}
+                    onChange={(e) => updateWebhook({ 
+                      authConfig: { ...node.webhook?.authConfig, tokenEnvVar: e.target.value }
+                    })}
+                    placeholder="API_KEY"
+                  />
+                </Field>
+              </>
+            )}
+            
+            {node.webhook.auth === 'none' && (
+              <div className="trigger-panel-info">
+                <span className="trigger-panel-info-icon">⚠️</span>
+                <span className="trigger-panel-info-text">
+                  No authentication. Anyone with the URL can trigger this workflow.
+                </span>
+              </div>
+            )}
+          </CollapsibleSection>
+        </>
       )}
-      
-      {/* Schedule Configuration (Requirement 2.3) */}
+
+      {/* ============================================ */}
+      {/* SCHEDULE SETTINGS */}
+      {/* ============================================ */}
       {node.triggerType === 'schedule' && node.schedule && (
-        <CollapsibleSection title="Schedule Configuration" defaultOpen>
-          <ScheduleSection 
-            schedule={node.schedule} 
-            onChange={updateSchedule} 
-          />
-        </CollapsibleSection>
+        <>
+          <CollapsibleSection title="Schedule Configuration" defaultOpen>
+            <ScheduleSection 
+              schedule={node.schedule} 
+              onChange={updateSchedule} 
+            />
+          </CollapsibleSection>
+        </>
       )}
-      
-      {/* Event Configuration */}
+
+      {/* ============================================ */}
+      {/* EVENT SETTINGS */}
+      {/* ============================================ */}
       {node.triggerType === 'event' && node.event && (
-        <CollapsibleSection title="Event Configuration" defaultOpen>
-          <Field label="Event Source" required hint="identifier">
-            <input
-              type="text"
-              className="trigger-panel-input"
-              value={node.event.source}
-              onChange={(e) => updateEvent({ source: e.target.value })}
-              placeholder="my-event-source"
-            />
-          </Field>
+        <>
+          <CollapsibleSection title="Event Source" defaultOpen>
+            <Field label="Source Identifier" required hint="unique identifier">
+              <input
+                type="text"
+                className="trigger-panel-input"
+                value={node.event.source}
+                onChange={(e) => updateEvent({ source: e.target.value })}
+                placeholder="my-event-source"
+              />
+            </Field>
+            
+            <Field label="Event Type" hint="filter by type">
+              <input
+                type="text"
+                className="trigger-panel-input"
+                value={node.event.eventType}
+                onChange={(e) => updateEvent({ eventType: e.target.value })}
+                placeholder="user.created"
+              />
+            </Field>
+          </CollapsibleSection>
           
-          <Field label="Event Type" hint="filter by type">
-            <input
-              type="text"
-              className="trigger-panel-input"
-              value={node.event.eventType}
-              onChange={(e) => updateEvent({ eventType: e.target.value })}
-              placeholder="user.created"
-            />
-          </Field>
-        </CollapsibleSection>
+          <CollapsibleSection title="Event Filters" defaultOpen={false}>
+            <div className="trigger-panel-info">
+              <span className="trigger-panel-info-icon">ℹ️</span>
+              <span className="trigger-panel-info-text">
+                Event filters allow you to only trigger on events matching specific criteria.
+                Use JSONPath expressions to filter event payloads.
+              </span>
+            </div>
+            
+            <Field label="Filter Expression" hint="JSONPath">
+              <input
+                type="text"
+                className="trigger-panel-input trigger-panel-input-mono"
+                value={node.event.filter || ''}
+                onChange={(e) => updateEvent({ filter: e.target.value })}
+                placeholder="$.data.status == 'active'"
+              />
+            </Field>
+          </CollapsibleSection>
+        </>
       )}
       
-      {/* Manual Trigger Info */}
-      {node.triggerType === 'manual' && (
-        <div className="trigger-panel-info">
-          <span className="trigger-panel-info-icon">ℹ️</span>
-          <span className="trigger-panel-info-text">
-            Manual triggers are started by clicking the Run button or using the API.
-          </span>
-        </div>
-      )}
-      
-      {/* Standard Properties */}
+      {/* Standard Properties - Always at bottom */}
       <StandardPropertiesPanel
         properties={node}
         onChange={updateStandardProperties}
