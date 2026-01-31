@@ -1,5 +1,6 @@
 import { useLayout } from '../../hooks/useLayout';
 import { useViewport } from '@xyflow/react';
+import { Tooltip } from '../Overlays/Tooltip';
 
 interface CanvasToolbarProps {
   onFitView: () => void;
@@ -153,23 +154,28 @@ export function CanvasToolbar({
       {/* @see Requirements 10.8, 10.9: Run and Stop buttons */}
       {/* Run is disabled when not built or during build */}
       {onRun && !isRunning && (
-        <button
-          onClick={onRun}
-          disabled={!isBuilt || isBuilding}
-          className={`px-3 py-1.5 border rounded text-sm flex items-center gap-2 transition-opacity ${
-            !isBuilt || isBuilding 
-              ? 'opacity-50 cursor-not-allowed' 
-              : 'hover:opacity-80'
-          }`}
-          style={{ 
-            backgroundColor: !isBuilt || isBuilding ? 'var(--bg-secondary)' : 'var(--accent-success)', 
-            borderColor: !isBuilt || isBuilding ? 'var(--border-default)' : 'var(--accent-success)', 
-            color: !isBuilt || isBuilding ? 'var(--text-muted)' : 'white' 
-          }}
-          title={isBuilding ? 'Building...' : !isBuilt ? 'Build the project first' : 'Run the workflow'}
+        <Tooltip 
+          content={isBuilding ? 'Build in progress...' : !isBuilt ? 'Build the project first to run' : 'Run the workflow'}
+          position="bottom"
+          delay={100}
         >
-          <span>{isBuilding ? '⏳' : '▶️'}</span> {isBuilding ? 'Building...' : 'Run'}
-        </button>
+          <button
+            onClick={onRun}
+            disabled={!isBuilt || isBuilding}
+            className={`px-3 py-1.5 border rounded text-sm flex items-center gap-2 transition-opacity ${
+              !isBuilt || isBuilding 
+                ? 'opacity-50 cursor-not-allowed' 
+                : 'hover:opacity-80'
+            }`}
+            style={{ 
+              backgroundColor: !isBuilt || isBuilding ? 'var(--bg-secondary)' : 'var(--accent-success)', 
+              borderColor: !isBuilt || isBuilding ? 'var(--border-default)' : 'var(--accent-success)', 
+              color: !isBuilt || isBuilding ? 'var(--text-muted)' : 'white' 
+            }}
+          >
+            <span>{isBuilding ? '⏳' : '▶️'}</span> {isBuilding ? 'Building...' : 'Run'}
+          </button>
+        </Tooltip>
       )}
       {onStop && isRunning && (
         <button
