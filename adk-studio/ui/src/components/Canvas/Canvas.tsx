@@ -84,12 +84,14 @@ export function Canvas() {
   // Canvas UI state - pass project settings to initialize from saved preferences
   const { showConsole, toggleConsole, showMinimap, toggleMinimap, showTimeline, toggleTimeline: _toggleTimeline } = useCanvasState(currentProject?.settings, handleUISettingChange);
   
-  // Check if project can be built (has agents and edges)
+  // Check if project can be built (has agents OR action nodes, and edges)
   const canBuild = useCallback(() => {
     if (!currentProject) return false;
     const agentCount = Object.keys(currentProject.agents).length;
+    const actionNodeCount = Object.keys(currentProject.actionNodes || {}).length;
     const edgeCount = currentProject.workflow.edges.length;
-    return agentCount > 0 && edgeCount > 0;
+    // Allow build if we have either agents OR action nodes, plus edges
+    return (agentCount > 0 || actionNodeCount > 0) && edgeCount > 0;
   }, [currentProject]);
 
   // Build state - pass project settings for autobuild configuration
