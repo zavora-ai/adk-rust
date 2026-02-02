@@ -758,6 +758,9 @@ export function Canvas() {
   // Derived state
   const selectedAgent = selectedNodeId ? currentProject.agents[selectedNodeId] : null;
   const hasAgents = Object.keys(currentProject.agents).length > 0;
+  const hasActionNodes = Object.keys(currentProject.actionNodes || {}).length > 0;
+  // Allow running workflows with either agents OR action nodes
+  const hasRunnableWorkflow = hasAgents || hasActionNodes;
   const agentTools = selectedNodeId ? currentProject.agents[selectedNodeId]?.tools || [] : [];
   const fnConfig = selectedToolId && currentProject.tool_configs?.[selectedToolId]?.type === 'function' 
     ? currentProject.tool_configs[selectedToolId] as FunctionToolConfig 
@@ -1039,7 +1042,7 @@ export function Canvas() {
 
       {/* Timeline View - shows execution history */}
       {/* Only visible when debug mode is enabled */}
-      {showConsole && debugMode && showTimeline && hasAgents && builtBinaryPath && snapshots.length > 0 && (
+      {showConsole && debugMode && showTimeline && hasRunnableWorkflow && builtBinaryPath && snapshots.length > 0 && (
         <TimelineView
           snapshots={snapshots}
           currentIndex={currentSnapshotIndex}
@@ -1050,7 +1053,7 @@ export function Canvas() {
       )}
 
       {/* Console Area */}
-      {showConsole && hasAgents && builtBinaryPath && (
+      {showConsole && hasRunnableWorkflow && builtBinaryPath && (
         <div className={consoleCollapsed ? '' : 'h-64'}>
           <TestConsole 
             onFlowPhase={handleFlowPhase} 
@@ -1069,7 +1072,7 @@ export function Canvas() {
           />
         </div>
       )}
-      {showConsole && hasAgents && !builtBinaryPath && (
+      {showConsole && hasRunnableWorkflow && !builtBinaryPath && (
         <div 
           className="h-32 border-t flex items-center justify-center"
           style={{ backgroundColor: 'var(--surface-panel)', borderColor: 'var(--border-default)', color: 'var(--text-muted)' }}
@@ -1085,12 +1088,12 @@ export function Canvas() {
           </div>
         </div>
       )}
-      {showConsole && !hasAgents && (
+      {showConsole && !hasRunnableWorkflow && (
         <div 
           className="h-32 border-t flex items-center justify-center"
           style={{ backgroundColor: 'var(--surface-panel)', borderColor: 'var(--border-default)', color: 'var(--text-muted)' }}
         >
-          Drag "LLM Agent" onto the canvas to get started
+          Drag an Agent or Action node onto the canvas to get started
         </div>
       )}
 

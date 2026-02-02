@@ -159,10 +159,14 @@ pub fn validate_project(project: &ProjectSchema) -> ValidationResult {
     result
 }
 
-/// Check that the project has at least one agent and one edge
+/// Check that the project has at least one agent OR action node, and at least one edge
 fn validate_not_empty(project: &ProjectSchema, result: &mut ValidationResult) {
-    if project.agents.is_empty() {
-        result.add_error(ValidationErrorCode::NoAgents, "Project must have at least one agent");
+    let has_agents = !project.agents.is_empty();
+    let has_action_nodes = !project.action_nodes.is_empty();
+    
+    // Allow workflows with either agents OR action nodes
+    if !has_agents && !has_action_nodes {
+        result.add_error(ValidationErrorCode::NoAgents, "Project must have at least one agent or action node");
     }
 
     if project.workflow.edges.is_empty() {
