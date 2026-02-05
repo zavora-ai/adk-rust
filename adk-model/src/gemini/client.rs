@@ -2,20 +2,288 @@ use adk_core::{
     Content, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part, Result,
     UsageMetadata,
 };
-use adk_gemini::Gemini;
+use adk_gemini::{Gemini, GeminiBuilder};
 use async_trait::async_trait;
+use std::time::Duration;
+
+/// Configuration for retry logic
+#[derive(Clone, Debug)]
+pub struct RetryConfig {
+    /// Maximum number of retries for rate-limited requests
+    pub max_retries: u32,
+    /// Initial delay before first retry
+    pub initial_delay: Duration,
+    /// Maximum delay between retries
+    pub max_delay: Duration,
+    /// Multiplier for exponential backoff (e.g., 2.0 doubles the delay each time)
+    pub backoff_multiplier: f32,
+    /// Whether retries are enabled
+    pub enabled: bool,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            initial_delay: Duration::from_secs(1),
+            max_delay: Duration::from_secs(60),
+            backoff_multiplier: 2.0,
+            enabled: true,
+        }
+    }
+}
+
+impl RetryConfig {
+    /// Create a new RetryConfig with custom settings
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the maximum number of retries
+    pub fn with_max_retries(mut self, max_retries: u32) -> Self {
+        self.max_retries = max_retries;
+        self
+    }
+
+    /// Set the initial delay before first retry
+    pub fn with_initial_delay(mut self, delay: Duration) -> Self {
+        self.initial_delay = delay;
+        self
+    }
+
+    /// Set the maximum delay between retries
+    pub fn with_max_delay(mut self, delay: Duration) -> Self {
+        self.max_delay = delay;
+        self
+    }
+
+    /// Set the backoff multiplier
+    pub fn with_backoff_multiplier(mut self, multiplier: f32) -> Self {
+        self.backoff_multiplier = multiplier;
+        self
+    }
+
+    /// Disable retries entirely
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Default::default()
+        }
+    }
+}
 
 pub struct GeminiModel {
     client: Gemini,
     model_name: String,
+    retry_config: RetryConfig,
+}
+
+/// Builder for creating GeminiModel instances
+pub struct GeminiModelBuilder {
+    api_key: Option<String>,
+    model_name: String,
+    retry_config: RetryConfig,
+    // For service account auth
+    service_account_json: Option<String>,
+    project_id: Option<String>,
+    location: Option<String>,
+}
+
+impl GeminiModelBuilder {
+    /// Create a new builder for API key authentication
+    pub fn new(model: impl Into<String>) -> Self {
+        Self {
+            api_key: None,
+            model_name: model.into(),
+            retry_config: RetryConfig::default(),
+            service_account_json: None,
+            project_id: None,
+            location: None,
+        }
+    }
+
+    /// Set the API key for authentication
+    pub fn api_key(mut self, key: impl Into<String>) -> Self {
+        self.api_key = Some(key.into());
+        self
+    }
+
+    /// Set service account JSON for authentication
+    pub fn service_account_json(mut self, json: impl Into<String>) -> Self {
+        self.service_account_json = Some(json.into());
+        self
+    }
+
+    /// Set service account from file path
+    pub fn service_account_path(self, path: impl AsRef<std::path::Path>) -> Result<Self> {
+        let json = std::fs::read_to_string(path)
+            .map_err(|e| adk_core::AdkError::Model(format!("Failed to read service account file: {}", e)))?;
+        Ok(self.service_account_json(json))
+    }
+
+    /// Set project ID (required for service account auth)
+    pub fn project_id(mut self, id: impl Into<String>) -> Self {
+        self.project_id = Some(id.into());
+        self
+    }
+
+    /// Set location (required for service account auth, defaults to "us-central1")
+    pub fn location(mut self, loc: impl Into<String>) -> Self {
+        self.location = Some(loc.into());
+        self
+    }
+
+    /// Set retry configuration
+    pub fn retry_config(mut self, config: RetryConfig) -> Self {
+        self.retry_config = config;
+        self
+    }
+
+    /// Configure retries using a closure
+    pub fn configure_retries<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(RetryConfig) -> RetryConfig,
+    {
+        self.retry_config = f(self.retry_config);
+        self
+    }
+
+    /// Build the GeminiModel
+    pub async fn build(self) -> Result<GeminiModel> {
+        match (self.api_key, self.service_account_json) {
+            (Some(api_key), None) => {
+                // API key authentication
+                let client = Gemini::new(api_key)
+                    .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+
+                Ok(GeminiModel {
+                    client,
+                    model_name: self.model_name,
+                    retry_config: self.retry_config,
+                })
+            }
+            (None, Some(service_account_json)) => {
+                // Service account authentication
+                let project_id = self.project_id
+                    .ok_or_else(|| adk_core::AdkError::Model("project_id is required for service account authentication".to_string()))?;
+                let location = self.location.unwrap_or_else(|| "us-central1".to_string());
+
+                Self::build_with_service_account(
+                    service_account_json,
+                    project_id,
+                    location,
+                    self.model_name,
+                    self.retry_config,
+                ).await
+            }
+            (Some(_), Some(_)) => {
+                Err(adk_core::AdkError::Model("Cannot use both API key and service account authentication".to_string()))
+            }
+            (None, None) => {
+                Err(adk_core::AdkError::Model("Either api_key or service_account must be provided".to_string()))
+            }
+        }
+    }
+
+    async fn build_with_service_account(
+        service_account_json: String,
+        project_id: String,
+        location: String,
+        model_name: String,
+        retry_config: RetryConfig,
+    ) -> Result<GeminiModel> {
+        // Create a GCP auth provider from service account JSON
+        let service_account = gcp_auth::CustomServiceAccount::from_json(&service_account_json)
+            .map_err(|e| adk_core::AdkError::Model(format!("Failed to parse service account JSON: {}", e)))?;
+
+        // Get access token with the required scopes
+        use gcp_auth::TokenProvider;
+        let scopes = &["https://www.googleapis.com/auth/cloud-platform"];
+        let token = service_account.token(scopes)
+            .await
+            .map_err(|e| adk_core::AdkError::Model(format!("Failed to get access token: {}", e)))?;
+
+        // Create HTTP client with Bearer token
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token.as_str()))
+                .map_err(|e| adk_core::AdkError::Model(format!("Invalid access token: {}", e)))?,
+        );
+
+        let http_client = reqwest::ClientBuilder::new()
+            .default_headers(headers);
+
+        // Build Vertex AI endpoint URL
+        let base_url = format!(
+            "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/google/",
+            location, project_id, location
+        );
+        let vertex_url = reqwest::Url::parse(&base_url)
+            .map_err(|e| adk_core::AdkError::Model(format!("Invalid Vertex AI URL: {}", e)))?;
+
+        // Create Gemini client with Vertex AI endpoint
+        let vertex_model = format!("models/{}", model_name);
+        let client = GeminiBuilder::new("")
+            .with_model(vertex_model.clone())
+            .with_base_url(vertex_url)
+            .with_http_client(http_client)
+            .build()
+            .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+
+        Ok(GeminiModel {
+            client,
+            model_name: vertex_model,
+            retry_config,
+        })
+    }
 }
 
 impl GeminiModel {
-    pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Result<Self> {
-        let client =
-            Gemini::new(api_key.into()).map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+    /// Create a builder for constructing a GeminiModel
+    pub fn builder(model: impl Into<String>) -> GeminiModelBuilder {
+        GeminiModelBuilder::new(model)
+    }
 
-        Ok(Self { client, model_name: model.into() })
+    /// Create a new GeminiModel with an API key (convenience method)
+    pub async fn new(api_key: impl Into<String>, model: impl Into<String>) -> Result<Self> {
+        GeminiModelBuilder::new(model)
+            .api_key(api_key)
+            .build()
+            .await
+    }
+
+
+    /// Create a new GeminiModel using service account authentication (from JSON string)
+    ///
+    /// This is a convenience method. For more control, use the builder.
+    pub async fn new_with_service_account_json(
+        service_account_json: impl Into<String>,
+        project_id: impl Into<String>,
+        location: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Result<Self> {
+        GeminiModelBuilder::new(model)
+            .service_account_json(service_account_json)
+            .project_id(project_id)
+            .location(location)
+            .build()
+            .await
+    }
+
+    /// Create a new GeminiModel using service account authentication (from file path)
+    ///
+    /// This is a convenience method. For more control, use the builder.
+    pub async fn new_with_service_account_path(
+        service_account_path: impl AsRef<std::path::Path>,
+        project_id: impl Into<String>,
+        location: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Result<Self> {
+        let json_content = std::fs::read_to_string(service_account_path)
+            .map_err(|e| adk_core::AdkError::Model(format!("Failed to read service account file: {}", e)))?;
+
+        Self::new_with_service_account_json(json_content, project_id, location, model).await
     }
 
     fn convert_response(resp: &adk_gemini::GenerationResponse) -> Result<LlmResponse> {
@@ -112,27 +380,9 @@ impl GeminiModel {
             error_message: None,
         })
     }
-}
 
-#[async_trait]
-impl Llm for GeminiModel {
-    fn name(&self) -> &str {
-        &self.model_name
-    }
-
-    #[adk_telemetry::instrument(
-        name = "call_llm",
-        skip(self, req),
-        fields(
-            model.name = %self.model_name,
-            stream = %stream,
-            request.contents_count = %req.contents.len(),
-            request.tools_count = %req.tools.len()
-        )
-    )]
-    async fn generate_content(&self, req: LlmRequest, stream: bool) -> Result<LlmResponseStream> {
-        adk_telemetry::info!("Generating content");
-
+    /// Internal method that does the actual generation without retry logic
+    async fn generate_content_internal(&self, req: LlmRequest, stream: bool) -> Result<LlmResponseStream> {
         let mut builder = self.client.generate_content();
 
         // Add contents using proper builder methods
@@ -327,6 +577,66 @@ impl Llm for GeminiModel {
             };
 
             Ok(Box::pin(stream))
+        }
+    }
+
+    /// Check if an error is a rate limit error (429)
+    fn is_rate_limit_error(&self, error: &adk_core::AdkError) -> bool {
+        match error {
+            adk_core::AdkError::Model(msg) => {
+                msg.contains("429") || msg.contains("RESOURCE_EXHAUSTED") || msg.contains("Resource exhausted")
+            }
+            _ => false,
+        }
+    }
+}
+
+#[async_trait]
+impl Llm for GeminiModel {
+    fn name(&self) -> &str {
+        &self.model_name
+    }
+
+    #[adk_telemetry::instrument(
+        name = "call_llm",
+        skip(self, req),
+        fields(
+            model.name = %self.model_name,
+            stream = %stream,
+            request.contents_count = %req.contents.len(),
+            request.tools_count = %req.tools.len()
+        )
+    )]
+    async fn generate_content(&self, req: LlmRequest, stream: bool) -> Result<LlmResponseStream> {
+        adk_telemetry::info!("Generating content");
+
+        // If retries are disabled, call internal method directly
+        if !self.retry_config.enabled {
+            return self.generate_content_internal(req, stream).await;
+        }
+
+        // Retry logic with exponential backoff for rate limiting (429 errors)
+        let mut retries = 0;
+        let mut delay = self.retry_config.initial_delay;
+
+        loop {
+            let result = self.generate_content_internal(req.clone(), stream).await;
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(e) if retries < self.retry_config.max_retries && self.is_rate_limit_error(&e) => {
+                    retries += 1;
+                    adk_telemetry::warn!(
+                        "Rate limited (429), retrying {}/{} after {:?}",
+                        retries, self.retry_config.max_retries, delay
+                    );
+                    tokio::time::sleep(delay).await;
+                    // Exponential backoff with configurable multiplier
+                    let next_delay = delay.as_secs_f64() * self.retry_config.backoff_multiplier as f64;
+                    delay = Duration::from_secs_f64(next_delay).min(self.retry_config.max_delay);
+                }
+                Err(e) => return Err(e),
+            }
         }
     }
 }

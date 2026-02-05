@@ -1,4 +1,4 @@
 pub mod client;
 pub mod streaming;
 
-pub use client::GeminiModel;
+pub use client::{GeminiModel, GeminiModelBuilder, RetryConfig};

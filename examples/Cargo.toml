@@ -83,6 +83,16 @@ name = "structured_output"
 path = "structured_output/main.rs"
 
 [[example]]
+name = "gemini_service_account"
+path = "gemini_service_account.rs"
+required-features = ["gemini"]
+
+[[example]]
+name = "gemini_retry_config"
+path = "gemini_retry_config.rs"
+required-features = ["gemini"]
+
+[[example]]
 name = "openai_basic"
 path = "openai_basic/main.rs"
 required-features = ["openai"]
@@ -541,6 +551,7 @@ required-features = ["mistralrs"]
 
 [features]
 default = []
+gemini = ["adk-model/gemini"]
 openai = ["adk-model/openai"]
 http-transport = ["adk-tool/http-transport"]
 anthropic = ["adk-model/anthropic"]
