@@ -120,6 +120,7 @@ pub mod mock;
 pub mod ollama;
 #[cfg(feature = "openai")]
 pub mod openai;
+pub mod retry;
 
 #[cfg(feature = "anthropic")]
 pub use anthropic::AnthropicClient;
@@ -134,3 +135,4 @@ pub use mock::MockLlm;
 pub use ollama::{OllamaConfig, OllamaModel};
 #[cfg(feature = "openai")]
 pub use openai::{AzureConfig, AzureOpenAIClient, OpenAIClient, OpenAIConfig};
+pub use retry::RetryConfig;

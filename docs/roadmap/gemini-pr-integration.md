@@ -125,12 +125,32 @@ Integrate Gemini-related pull requests without breaking existing ADK-Rust behavi
 
 - PR #28 websocket upgrade (`tokio-tungstenite 0.26`, rustls migration) cherry-picked and validated.
 
+### Completed now (Phase 3)
+
+- Added `RetryConfig` in `adk-model` with additive configuration API:
+  - `GeminiModel::with_retry_config(...)`
+  - `GeminiModel::set_retry_config(...)`
+  - `GeminiModel::retry_config(...)`
+- Standardized retry logic across remote providers via shared `adk-model` retry module and provider-level additive APIs:
+  - Gemini
+  - OpenAI / Azure OpenAI
+  - Anthropic
+  - DeepSeek
+  - Groq
+- Preserved existing synchronous constructors (`GeminiModel::new`, `new_google_cloud*`) with no call-site breakage.
+- Implemented retry handling for retryable startup/request errors (`429`, `RESOURCE_EXHAUSTED`, `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `502/503/504`).
+- Documented retry limits in code: streaming errors after stream start are surfaced to caller and are not auto-replayed.
+- Kept service-account/token lifecycle ownership in `adk-gemini` (SDK-backed credentials flow), with no duplicated token cache logic in `adk-model`.
+- Added tests for constructor compatibility and retry behavior semantics.
+
 ### Verification run
 
 - `cargo test -p adk-gemini` (pass)
 - `cargo check --manifest-path examples/Cargo.toml --example quickstart` (pass)
 - `cargo check --manifest-path examples/Cargo.toml --example graph_gemini` (pass)
-- `cargo test -p adk-model --tests --features gemini --no-run` (pass)
+- `cargo test -p adk-model --tests --features gemini` (pass)
+- `cargo test -p adk-model --tests --all-features` (pass)
+- `cargo check -p adk-model --all-features` (pass)
 - `cargo test -p adk-realtime --all-features` (pass)
 - `cargo check --manifest-path examples/Cargo.toml --features realtime-openai --example realtime_basic --example realtime_vad --example realtime_tools --example realtime_handoff --example eval_realtime` (pass)
 - Live Vertex smoke with ADC:
@@ -139,4 +159,5 @@ Integrate Gemini-related pull requests without breaking existing ADK-Rust behavi
 
 ### Still pending from roadmap
 
-- PR #30 replacement PR with compatibility-safe retry design
+- None for Phases 1-3 implementation scope.
+- Optional follow-up: run `embedContent` smoke with a model that is explicitly enabled/supported in target project+region.

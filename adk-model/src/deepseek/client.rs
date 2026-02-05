@@ -2,6 +2,9 @@
 
 use super::config::{DEEPSEEK_API_BASE, DeepSeekConfig};
 use super::convert::{self, ChatCompletionRequest, ChatCompletionResponse, ThinkingConfig};
+use crate::retry::{
+    RetryConfig, execute_with_retry, is_retryable_model_error, is_retryable_status_code,
+};
 use adk_core::{AdkError, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part};
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -29,6 +32,7 @@ use serde_json::Value;
 pub struct DeepSeekClient {
     client: Client,
     config: DeepSeekConfig,
+    retry_config: RetryConfig,
 }
 
 impl DeepSeekClient {
@@ -38,7 +42,7 @@ impl DeepSeekClient {
             .build()
             .map_err(|e| AdkError::Model(format!("Failed to create HTTP client: {}", e)))?;
 
-        Ok(Self { client, config })
+        Ok(Self { client, config, retry_config: RetryConfig::default() })
     }
 
     /// Create a client for deepseek-chat model.
@@ -49,6 +53,20 @@ impl DeepSeekClient {
     /// Create a client for deepseek-reasoner model with thinking enabled.
     pub fn reasoner(api_key: impl Into<String>) -> Result<Self, AdkError> {
         Self::new(DeepSeekConfig::reasoner(api_key))
+    }
+
+    #[must_use]
+    pub fn with_retry_config(mut self, retry_config: RetryConfig) -> Self {
+        self.retry_config = retry_config;
+        self
+    }
+
+    pub fn set_retry_config(&mut self, retry_config: RetryConfig) {
+        self.retry_config = retry_config;
+    }
+
+    pub fn retry_config(&self) -> &RetryConfig {
+        &self.retry_config
     }
 
     /// Build the API URL for chat completions.
@@ -110,27 +128,45 @@ impl Llm for DeepSeekClient {
         let api_key = self.config.api_key.clone();
         let chat_request = self.build_request(&request, stream);
         let client = self.client.clone();
+        let retry_config = self.retry_config.clone();
         let thinking_enabled = self.config.thinking_enabled;
 
         let response_stream = try_stream! {
-            let response = client
-                .post(&api_url)
-                .header("Authorization", format!("Bearer {}", api_key))
-                .header("Content-Type", "application/json")
-                .json(&chat_request)
-                .send()
-                .await
-                .map_err(|e| AdkError::Model(format!("DeepSeek API request failed: {}", e)))?;
+            // Retries only cover request setup/execution. Stream failures after start are surfaced
+            // directly and are not auto-replayed.
+            let response = execute_with_retry(&retry_config, is_retryable_model_error, || {
+                let client = client.clone();
+                let api_url = api_url.clone();
+                let api_key = api_key.clone();
+                let chat_request = chat_request.clone();
+                async move {
+                    let response = client
+                        .post(&api_url)
+                        .header("Authorization", format!("Bearer {}", api_key))
+                        .header("Content-Type", "application/json")
+                        .json(&chat_request)
+                        .send()
+                        .await
+                        .map_err(|e| AdkError::Model(format!("DeepSeek API request failed: {}", e)))?;
 
-            if !response.status().is_success() {
-                let status = response.status();
-                let error_text = response.text().await.unwrap_or_default();
-                Err(AdkError::Model(format!(
-                    "DeepSeek API error ({}): {}",
-                    status, error_text
-                )))?;
-                return;
-            }
+                    if !response.status().is_success() {
+                        let status = response.status();
+                        let error_text = response.text().await.unwrap_or_default();
+                        let retryability = if is_retryable_status_code(status.as_u16()) {
+                            "retryable"
+                        } else {
+                            "non-retryable"
+                        };
+                        return Err(AdkError::Model(format!(
+                            "DeepSeek API error ({}, {}): {}",
+                            status, retryability, error_text
+                        )));
+                    }
+
+                    Ok(response)
+                }
+            })
+            .await?;
 
             if stream {
                 // Streaming mode - process SSE events

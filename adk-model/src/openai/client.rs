@@ -2,6 +2,7 @@
 
 use super::config::{AzureConfig, OpenAIConfig};
 use super::convert;
+use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{AdkError, Llm, LlmRequest};
 use async_openai::{
     Client,
@@ -16,6 +17,7 @@ use futures::StreamExt;
 pub struct OpenAIClient {
     client: Client<AsyncOpenAIConfig>,
     model: String,
+    retry_config: RetryConfig,
 }
 
 impl OpenAIClient {
@@ -31,7 +33,11 @@ impl OpenAIClient {
             openai_config = openai_config.with_api_base(base_url);
         }
 
-        Ok(Self { client: Client::with_config(openai_config), model: config.model })
+        Ok(Self {
+            client: Client::with_config(openai_config),
+            model: config.model,
+            retry_config: RetryConfig::default(),
+        })
     }
 
     /// Create a client for an OpenAI-compatible API.
@@ -42,6 +48,20 @@ impl OpenAIClient {
     ) -> Result<Self, AdkError> {
         let config = OpenAIConfig::compatible(api_key.into(), base_url.into(), model.into());
         Self::new(config)
+    }
+
+    #[must_use]
+    pub fn with_retry_config(mut self, retry_config: RetryConfig) -> Self {
+        self.retry_config = retry_config;
+        self
+    }
+
+    pub fn set_retry_config(&mut self, retry_config: RetryConfig) {
+        self.retry_config = retry_config;
+    }
+
+    pub fn retry_config(&self) -> &RetryConfig {
+        &self.retry_config
     }
 }
 
@@ -58,60 +78,73 @@ impl Llm for OpenAIClient {
     ) -> Result<adk_core::LlmResponseStream, AdkError> {
         let model = self.model.clone();
         let client = self.client.clone();
+        let retry_config = self.retry_config.clone();
+        let request_for_retry = request.clone();
 
         let stream = try_stream! {
-            // Convert messages
-            let messages: Vec<_> = request.contents.iter().map(convert::content_to_message).collect();
+            // Retries only cover request setup/execution. Stream failures after start are surfaced
+            // directly and are not auto-replayed.
+            let mut stream = execute_with_retry(&retry_config, is_retryable_model_error, || {
+                let model = model.clone();
+                let client = client.clone();
+                let request = request_for_retry.clone();
+                async move {
+                    let messages: Vec<_> = request
+                        .contents
+                        .iter()
+                        .map(convert::content_to_message)
+                        .collect();
 
-            // Build request
-            let mut request_builder = CreateChatCompletionRequestArgs::default();
-            request_builder.model(&model).messages(messages);
+                    let mut request_builder = CreateChatCompletionRequestArgs::default();
+                    request_builder.model(&model).messages(messages);
 
-            // Add tools if present
-            if !request.tools.is_empty() {
-                let tools = convert::convert_tools(&request.tools);
-                request_builder.tools(tools);
-            }
-
-            // Add generation config
-            if let Some(config) = &request.config {
-                if let Some(temp) = config.temperature {
-                    request_builder.temperature(temp);
-                }
-                if let Some(top_p) = config.top_p {
-                    request_builder.top_p(top_p);
-                }
-                if let Some(max_tokens) = config.max_output_tokens {
-                    request_builder.max_tokens(max_tokens as u32);
-                }
-                // Note: top_k is not supported by OpenAI API
-
-                // Add response_format for structured output (JSON schema)
-                // OpenAI requires additionalProperties: false for strict mode
-                if let Some(schema) = &config.response_schema {
-                    let mut schema_with_strict = schema.clone();
-                    if let Some(obj) = schema_with_strict.as_object_mut() {
-                        obj.insert("additionalProperties".to_string(), serde_json::json!(false));
+                    if !request.tools.is_empty() {
+                        let tools = convert::convert_tools(&request.tools);
+                        request_builder.tools(tools);
                     }
-                    let json_schema = ResponseFormatJsonSchema {
-                        name: request.model.replace(['-', '.', '/'], "_"),
-                        description: None,
-                        schema: Some(schema_with_strict),
-                        strict: Some(true),
-                    };
-                    request_builder.response_format(ResponseFormat::JsonSchema { json_schema });
+
+                    if let Some(config) = &request.config {
+                        if let Some(temp) = config.temperature {
+                            request_builder.temperature(temp);
+                        }
+                        if let Some(top_p) = config.top_p {
+                            request_builder.top_p(top_p);
+                        }
+                        if let Some(max_tokens) = config.max_output_tokens {
+                            request_builder.max_tokens(max_tokens as u32);
+                        }
+
+                        if let Some(schema) = &config.response_schema {
+                            let mut schema_with_strict = schema.clone();
+                            if let Some(obj) = schema_with_strict.as_object_mut() {
+                                obj.insert(
+                                    "additionalProperties".to_string(),
+                                    serde_json::json!(false),
+                                );
+                            }
+                            let json_schema = ResponseFormatJsonSchema {
+                                name: request.model.replace(['-', '.', '/'], "_"),
+                                description: None,
+                                schema: Some(schema_with_strict),
+                                strict: Some(true),
+                            };
+                            request_builder
+                                .response_format(ResponseFormat::JsonSchema { json_schema });
+                        }
+                    }
+
+                    let openai_request = request_builder
+                        .build()
+                        .map_err(|e| AdkError::Model(format!("Failed to build request: {}", e)))?;
+
+                    client
+                        .chat()
+                        .create_stream(openai_request)
+                        .await
+                        .map_err(|e| AdkError::Model(format!("OpenAI API error: {}", e)))
                 }
-            }
-
-            let openai_request = request_builder.build()
-                .map_err(|e| AdkError::Model(format!("Failed to build request: {}", e)))?;
-
-            // Make streaming request
-            let mut stream = client
-                .chat()
-                .create_stream(openai_request)
-                .await
-                .map_err(|e| AdkError::Model(format!("OpenAI API error: {}", e)))?;
+            })
+            .await?;
 
             // For tool calls, we need to accumulate arguments across chunks
             // OpenAI streams tool call arguments incrementally
@@ -247,6 +280,7 @@ impl Llm for OpenAIClient {
 pub struct AzureOpenAIClient {
     client: Client<AsyncAzureConfig>,
     deployment_id: String,
+    retry_config: RetryConfig,
 }
 
 impl AzureOpenAIClient {
@@ -258,7 +292,25 @@ impl AzureOpenAIClient {
             .with_deployment_id(&config.deployment_id)
             .with_api_key(&config.api_key);
 
-        Ok(Self { client: Client::with_config(azure_config), deployment_id: config.deployment_id })
+        Ok(Self {
+            client: Client::with_config(azure_config),
+            deployment_id: config.deployment_id,
+            retry_config: RetryConfig::default(),
+        })
+    }
+
+    #[must_use]
+    pub fn with_retry_config(mut self, retry_config: RetryConfig) -> Self {
+        self.retry_config = retry_config;
+        self
+    }
+
+    pub fn set_retry_config(&mut self, retry_config: RetryConfig) {
+        self.retry_config = retry_config;
+    }
+
+    pub fn retry_config(&self) -> &RetryConfig {
+        &self.retry_config
     }
 }
 
@@ -275,59 +327,71 @@ impl Llm for AzureOpenAIClient {
     ) -> Result<adk_core::LlmResponseStream, AdkError> {
         let deployment_id = self.deployment_id.clone();
         let client = self.client.clone();
+        let retry_config = self.retry_config.clone();
+        let request_for_retry = request.clone();
 
         let stream = try_stream! {
-            // Convert messages
-            let messages: Vec<_> = request.contents.iter().map(convert::content_to_message).collect();
+            let mut stream = execute_with_retry(&retry_config, is_retryable_model_error, || {
+                let deployment_id = deployment_id.clone();
+                let client = client.clone();
+                let request = request_for_retry.clone();
+                async move {
+                    let messages: Vec<_> = request
+                        .contents
+                        .iter()
+                        .map(convert::content_to_message)
+                        .collect();
 
-            // Build request (Azure uses deployment_id as model)
-            let mut request_builder = CreateChatCompletionRequestArgs::default();
-            request_builder.model(&deployment_id).messages(messages);
+                    let mut request_builder = CreateChatCompletionRequestArgs::default();
+                    request_builder.model(&deployment_id).messages(messages);
 
-            // Add tools if present
-            if !request.tools.is_empty() {
-                let tools = convert::convert_tools(&request.tools);
-                request_builder.tools(tools);
-            }
-
-            // Add generation config
-            if let Some(config) = &request.config {
-                if let Some(temp) = config.temperature {
-                    request_builder.temperature(temp);
-                }
-                if let Some(top_p) = config.top_p {
-                    request_builder.top_p(top_p);
-                }
-                if let Some(max_tokens) = config.max_output_tokens {
-                    request_builder.max_tokens(max_tokens as u32);
-                }
-
-                // Add response_format for structured output (JSON schema)
-                // OpenAI requires additionalProperties: false for strict mode
-                if let Some(schema) = &config.response_schema {
-                    let mut schema_with_strict = schema.clone();
-                    if let Some(obj) = schema_with_strict.as_object_mut() {
-                        obj.insert("additionalProperties".to_string(), serde_json::json!(false));
+                    if !request.tools.is_empty() {
+                        let tools = convert::convert_tools(&request.tools);
+                        request_builder.tools(tools);
                     }
-                    let json_schema = ResponseFormatJsonSchema {
-                        name: deployment_id.replace(['-', '.', '/'], "_"),
-                        description: None,
-                        schema: Some(schema_with_strict),
-                        strict: Some(true),
-                    };
-                    request_builder.response_format(ResponseFormat::JsonSchema { json_schema });
+
+                    if let Some(config) = &request.config {
+                        if let Some(temp) = config.temperature {
+                            request_builder.temperature(temp);
+                        }
+                        if let Some(top_p) = config.top_p {
+                            request_builder.top_p(top_p);
+                        }
+                        if let Some(max_tokens) = config.max_output_tokens {
+                            request_builder.max_tokens(max_tokens as u32);
+                        }
+
+                        if let Some(schema) = &config.response_schema {
+                            let mut schema_with_strict = schema.clone();
+                            if let Some(obj) = schema_with_strict.as_object_mut() {
+                                obj.insert(
+                                    "additionalProperties".to_string(),
+                                    serde_json::json!(false),
+                                );
+                            }
+                            let json_schema = ResponseFormatJsonSchema {
+                                name: deployment_id.replace(['-', '.', '/'], "_"),
+                                description: None,
+                                schema: Some(schema_with_strict),
+                                strict: Some(true),
+                            };
+                            request_builder
+                                .response_format(ResponseFormat::JsonSchema { json_schema });
+                        }
+                    }
+
+                    let openai_request = request_builder
+                        .build()
+                        .map_err(|e| AdkError::Model(format!("Failed to build request: {}", e)))?;
+
+                    client
+                        .chat()
+                        .create_stream(openai_request)
+                        .await
+                        .map_err(|e| AdkError::Model(format!("Azure OpenAI API error: {}", e)))
                 }
-            }
-
-            let openai_request = request_builder.build()
-                .map_err(|e| AdkError::Model(format!("Failed to build request: {}", e)))?;
-
-            // Make streaming request
-            let mut stream = client
-                .chat()
-                .create_stream(openai_request)
-                .await
-                .map_err(|e| AdkError::Model(format!("Azure OpenAI API error: {}", e)))?;
+            })
+            .await?;
 
             // Process stream chunks
             while let Some(result) = stream.next().await {

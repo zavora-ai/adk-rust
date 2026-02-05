@@ -2,6 +2,7 @@
 
 use super::config::AnthropicConfig;
 use super::convert;
+use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{AdkError, FinishReason, Llm, LlmRequest, Part};
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -17,6 +18,7 @@ pub struct AnthropicClient {
     client: Anthropic,
     model: String,
     max_tokens: u32,
+    retry_config: RetryConfig,
 }
 
 impl AnthropicClient {
@@ -25,12 +27,86 @@ impl AnthropicClient {
         let client = Anthropic::new(Some(config.api_key.clone()))
             .map_err(|e| AdkError::Model(format!("Failed to create Anthropic client: {}", e)))?;
 
-        Ok(Self { client, model: config.model, max_tokens: config.max_tokens })
+        Ok(Self {
+            client,
+            model: config.model,
+            max_tokens: config.max_tokens,
+            retry_config: RetryConfig::default(),
+        })
     }
 
     /// Create a client with just an API key (uses default model).
     pub fn from_api_key(api_key: impl Into<String>) -> Result<Self, AdkError> {
         Self::new(AnthropicConfig::new(api_key, "claude-sonnet-4-20250514"))
+    }
+
+    #[must_use]
+    pub fn with_retry_config(mut self, retry_config: RetryConfig) -> Self {
+        self.retry_config = retry_config;
+        self
+    }
+
+    pub fn set_retry_config(&mut self, retry_config: RetryConfig) {
+        self.retry_config = retry_config;
+    }
+
+    pub fn retry_config(&self) -> &RetryConfig {
+        &self.retry_config
+    }
+
+    fn build_message_params(
+        model: &str,
+        max_tokens: u32,
+        request: &LlmRequest,
+    ) -> claudius::MessageCreateParams {
+        let mut system_prompt = None;
+        let mut messages = Vec::new();
+
+        for content in &request.contents {
+            if content.role == "system" {
+                let text: String = content
+                    .parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        Part::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !text.is_empty() {
+                    system_prompt = Some(text);
+                }
+            } else {
+                messages.push(convert::content_to_message(content));
+            }
+        }
+
+        let tools = if request.tools.is_empty() {
+            Vec::new()
+        } else {
+            convert::convert_tools(&request.tools)
+        };
+
+        let temperature = request.config.as_ref().and_then(|c| c.temperature);
+        let top_p = request.config.as_ref().and_then(|c| c.top_p);
+        let top_k = request.config.as_ref().and_then(|c| c.top_k);
+        let effective_max_tokens = request
+            .config
+            .as_ref()
+            .and_then(|c| c.max_output_tokens)
+            .map(|t| t as u32)
+            .unwrap_or(max_tokens);
+
+        convert::build_message_params(
+            model,
+            effective_max_tokens,
+            messages,
+            tools,
+            system_prompt,
+            temperature,
+            top_p,
+            top_k,
+        )
     }
 }
 
@@ -48,65 +124,25 @@ impl Llm for AnthropicClient {
         let model = self.model.clone();
         let max_tokens = self.max_tokens;
         let client = self.client.clone();
+        let retry_config = self.retry_config.clone();
+        let request_for_retry = request.clone();
 
         let response_stream = try_stream! {
-            // Extract system prompt from contents if present
-            let mut system_prompt = None;
-            let mut messages = Vec::new();
-
-            for content in &request.contents {
-                if content.role == "system" {
-                    // Extract system prompt text
-                    let text: String = content.parts.iter()
-                        .filter_map(|p| match p {
-                            Part::Text { text } => Some(text.clone()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    if !text.is_empty() {
-                        system_prompt = Some(text);
-                    }
-                } else {
-                    messages.push(convert::content_to_message(content));
-                }
-            }
-
-            // Convert tools
-            let tools = if request.tools.is_empty() {
-                Vec::new()
-            } else {
-                convert::convert_tools(&request.tools)
-            };
-
-            // Build generation config
-            let temperature = request.config.as_ref().and_then(|c| c.temperature);
-            let top_p = request.config.as_ref().and_then(|c| c.top_p);
-            let top_k = request.config.as_ref().and_then(|c| c.top_k);
-            let effective_max_tokens = request.config
-                .as_ref()
-                .and_then(|c| c.max_output_tokens)
-                .map(|t| t as u32)
-                .unwrap_or(max_tokens);
-
-            // Build params
-            let params = convert::build_message_params(
-                &model,
-                effective_max_tokens,
-                messages,
-                tools,
-                system_prompt,
-                temperature,
-                top_p,
-                top_k,
-            );
-
             if stream {
                 // Streaming mode
-                let event_stream = client
-                    .stream(params)
-                    .await
-                    .map_err(|e| AdkError::Model(format!("Anthropic API error: {}", e)))?;
+                let client_ref = &client;
+                let model_ref = model.as_str();
+                let event_stream = execute_with_retry(&retry_config, is_retryable_model_error, || {
+                    let request = request_for_retry.clone();
+                    async move {
+                        let params = Self::build_message_params(model_ref, max_tokens, &request);
+                        client_ref
+                            .stream(params)
+                            .await
+                            .map_err(|e| AdkError::Model(format!("Anthropic API error: {}", e)))
+                    }
+                })
+                .await?;
 
                 // Pin the stream for iteration
                 let mut pinned_stream = pin!(event_stream);
@@ -213,10 +249,19 @@ impl Llm for AnthropicClient {
                 }
             } else {
                 // Non-streaming mode
-                let message = client
-                    .send(params)
-                    .await
-                    .map_err(|e| AdkError::Model(format!("Anthropic API error: {}", e)))?;
+                let client_ref = &client;
+                let model_ref = model.as_str();
+                let message = execute_with_retry(&retry_config, is_retryable_model_error, || {
+                    let request = request_for_retry.clone();
+                    async move {
+                        let params = Self::build_message_params(model_ref, max_tokens, &request);
+                        client_ref
+                            .send(params)
+                            .await
+                            .map_err(|e| AdkError::Model(format!("Anthropic API error: {}", e)))
+                    }
+                })
+                .await?;
 
                 yield convert::from_anthropic_message(&message);
             }
