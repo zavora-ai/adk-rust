@@ -3,7 +3,7 @@ use adk_core::{
     BeforeModelCallback, BeforeModelResult, BeforeToolCallback, CallbackContext, Content, Event,
     EventActions, FunctionResponseData, GlobalInstructionProvider, InstructionProvider,
     InvocationContext, Llm, LlmRequest, LlmResponse, MemoryEntry, Part, ReadonlyContext, Result,
-    Tool, ToolContext,
+    Tool, ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest, ToolContext,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -42,6 +42,7 @@ pub struct LlmAgent {
     after_model_callbacks: Arc<Vec<AfterModelCallback>>,
     before_tool_callbacks: Arc<Vec<BeforeToolCallback>>,
     after_tool_callbacks: Arc<Vec<AfterToolCallback>>,
+    tool_confirmation_policy: ToolConfirmationPolicy,
     #[allow(dead_code)] // Used when guardrails feature is enabled
     input_guardrails: GuardrailSet,
     #[allow(dead_code)] // Used when guardrails feature is enabled
@@ -84,6 +85,7 @@ pub struct LlmAgentBuilder {
     after_model_callbacks: Vec<AfterModelCallback>,
     before_tool_callbacks: Vec<BeforeToolCallback>,
     after_tool_callbacks: Vec<AfterToolCallback>,
+    tool_confirmation_policy: ToolConfirmationPolicy,
     input_guardrails: GuardrailSet,
     output_guardrails: GuardrailSet,
 }
@@ -113,6 +115,7 @@ impl LlmAgentBuilder {
             after_model_callbacks: Vec::new(),
             before_tool_callbacks: Vec::new(),
             after_tool_callbacks: Vec::new(),
+            tool_confirmation_policy: ToolConfirmationPolicy::Never,
             input_guardrails: GuardrailSet::new(),
             output_guardrails: GuardrailSet::new(),
         }
@@ -225,6 +228,24 @@ impl LlmAgentBuilder {
         self
     }
 
+    /// Configure tool confirmation requirements for this agent.
+    pub fn tool_confirmation_policy(mut self, policy: ToolConfirmationPolicy) -> Self {
+        self.tool_confirmation_policy = policy;
+        self
+    }
+
+    /// Require confirmation for a specific tool name.
+    pub fn require_tool_confirmation(mut self, tool_name: impl Into<String>) -> Self {
+        self.tool_confirmation_policy = self.tool_confirmation_policy.with_tool(tool_name);
+        self
+    }
+
+    /// Require confirmation for all tool calls.
+    pub fn require_tool_confirmation_for_all(mut self) -> Self {
+        self.tool_confirmation_policy = ToolConfirmationPolicy::Always;
+        self
+    }
+
     /// Set input guardrails to validate user input before processing.
     ///
     /// Input guardrails run before the agent processes the request and can:
@@ -278,6 +299,7 @@ impl LlmAgentBuilder {
             after_model_callbacks: Arc::new(self.after_model_callbacks),
             before_tool_callbacks: Arc::new(self.before_tool_callbacks),
             after_tool_callbacks: Arc::new(self.after_tool_callbacks),
+            tool_confirmation_policy: self.tool_confirmation_policy,
             input_guardrails: self.input_guardrails,
             output_guardrails: self.output_guardrails,
         })
@@ -412,6 +434,7 @@ impl Agent for LlmAgent {
         let after_model_callbacks = self.after_model_callbacks.clone();
         let before_tool_callbacks = self.before_tool_callbacks.clone();
         let after_tool_callbacks = self.after_tool_callbacks.clone();
+        let tool_confirmation_policy = self.tool_confirmation_policy.clone();
 
         let s = stream! {
             // ===== BEFORE AGENT CALLBACKS =====
@@ -904,8 +927,14 @@ impl Agent for LlmAgent {
 
                 // Execute function calls and add responses to history
                 if let Some(content) = &accumulated_content {
+                    let mut tool_call_index = 0usize;
                     for part in &content.parts {
                         if let Part::FunctionCall { name, args, id } = part {
+                            let fallback_call_id =
+                                format!("{}_{}_{}", invocation_id, name, tool_call_index);
+                            tool_call_index += 1;
+                            let function_call_id = id.clone().unwrap_or(fallback_call_id);
+
                             // Handle transfer_to_agent specially
                             if name == "transfer_to_agent" {
                                 let target_agent = args.get("agent_name")
@@ -925,17 +954,77 @@ impl Agent for LlmAgent {
                             // Allows policy checks or callback-provided short-circuit responses.
                             let mut tool_actions = EventActions::default();
                             let mut response_content: Option<Content> = None;
+                            let mut run_after_tool_callbacks = true;
 
-                            for callback in before_tool_callbacks.as_ref() {
-                                match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
-                                    Ok(Some(content)) => {
-                                        response_content = Some(content);
-                                        break;
+                            // ===== TOOL CONFIRMATION POLICY =====
+                            // If configured and no decision is provided, emit an interrupt event
+                            // before execution. Callers can resume by re-running with a decision
+                            // in RunConfig.tool_confirmation_decisions.
+                            if tool_confirmation_policy.requires_confirmation(name) {
+                                match ctx.run_config().tool_confirmation_decisions.get(name).copied()
+                                {
+                                    Some(ToolConfirmationDecision::Approve) => {
+                                        tool_actions.tool_confirmation_decision =
+                                            Some(ToolConfirmationDecision::Approve);
                                     }
-                                    Ok(None) => continue,
-                                    Err(e) => {
-                                        yield Err(e);
+                                    Some(ToolConfirmationDecision::Deny) => {
+                                        tool_actions.tool_confirmation_decision =
+                                            Some(ToolConfirmationDecision::Deny);
+                                        response_content = Some(Content {
+                                            role: "function".to_string(),
+                                            parts: vec![Part::FunctionResponse {
+                                                function_response: FunctionResponseData {
+                                                    name: name.clone(),
+                                                    response: serde_json::json!({
+                                                        "error": format!(
+                                                            "Tool '{}' execution denied by confirmation policy",
+                                                            name
+                                                        ),
+                                                    }),
+                                                },
+                                                id: id.clone(),
+                                            }],
+                                        });
+                                        run_after_tool_callbacks = false;
+                                    }
+                                    None => {
+                                        let mut confirmation_event = Event::new(&invocation_id);
+                                        confirmation_event.author = agent_name.clone();
+                                        confirmation_event.llm_response.interrupted = true;
+                                        confirmation_event.llm_response.turn_complete = true;
+                                        confirmation_event.llm_response.content = Some(Content {
+                                            role: "model".to_string(),
+                                            parts: vec![Part::Text {
+                                                text: format!(
+                                                    "Tool confirmation required for '{}'. Provide approve/deny decision to continue.",
+                                                    name
+                                                ),
+                                            }],
+                                        });
+                                        confirmation_event.actions.tool_confirmation =
+                                            Some(ToolConfirmationRequest {
+                                                tool_name: name.clone(),
+                                                function_call_id: Some(function_call_id),
+                                                args: args.clone(),
+                                            });
+                                        yield Ok(confirmation_event);
                                         return;
+                                    }
+                                }
+                            }
+
+                            if response_content.is_none() {
+                                for callback in before_tool_callbacks.as_ref() {
+                                    match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                                        Ok(Some(content)) => {
+                                            response_content = Some(content);
+                                            break;
+                                        }
+                                        Ok(None) => continue,
+                                        Err(e) => {
+                                            yield Err(e);
+                                            return;
+                                        }
                                     }
                                 }
                             }
@@ -976,7 +1065,13 @@ impl Agent for LlmAgent {
                                         }
                                     }.instrument(tool_span).await;
 
+                                    let confirmation_decision =
+                                        tool_actions.tool_confirmation_decision;
                                     tool_actions = tool_ctx.actions();
+                                    if tool_actions.tool_confirmation_decision.is_none() {
+                                        tool_actions.tool_confirmation_decision =
+                                            confirmation_decision;
+                                    }
                                     response_content = Some(Content {
                                         role: "function".to_string(),
                                         parts: vec![Part::FunctionResponse {
@@ -1006,16 +1101,18 @@ impl Agent for LlmAgent {
                             // ===== AFTER TOOL CALLBACKS =====
                             // Allows post-processing of tool outputs or audit side effects.
                             let mut response_content = response_content.expect("tool response content is set");
-                            for callback in after_tool_callbacks.as_ref() {
-                                match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
-                                    Ok(Some(modified_content)) => {
-                                        response_content = modified_content;
-                                        break;
-                                    }
-                                    Ok(None) => continue,
-                                    Err(e) => {
-                                        yield Err(e);
-                                        return;
+                            if run_after_tool_callbacks {
+                                for callback in after_tool_callbacks.as_ref() {
+                                    match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                                        Ok(Some(modified_content)) => {
+                                            response_content = modified_content;
+                                            break;
+                                        }
+                                        Ok(None) => continue,
+                                        Err(e) => {
+                                            yield Err(e);
+                                            return;
+                                        }
                                     }
                                 }
                             }

@@ -1,6 +1,7 @@
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
-    Content, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part, Result,
+    CitationMetadata, CitationSource, Content, FinishReason, Llm, LlmRequest, LlmResponse,
+    LlmResponseStream, Part, Result,
     UsageMetadata,
 };
 use adk_gemini::Gemini;
@@ -187,10 +188,30 @@ impl GeminiModel {
                 _ => FinishReason::Other,
             });
 
+        let citation_metadata = resp
+            .candidates
+            .first()
+            .and_then(|c| c.citation_metadata.as_ref())
+            .map(|meta| CitationMetadata {
+                citation_sources: meta
+                    .citation_sources
+                    .iter()
+                    .map(|source| CitationSource {
+                        uri: source.uri.clone(),
+                        title: source.title.clone(),
+                        start_index: source.start_index,
+                        end_index: source.end_index,
+                        license: source.license.clone(),
+                        publication_date: source.publication_date.map(|d| d.to_string()),
+                    })
+                    .collect(),
+            });
+
         Ok(LlmResponse {
             content,
             usage_metadata,
             finish_reason,
+            citation_metadata,
             partial: false,
             turn_complete: true,
             interrupted: false,
@@ -516,5 +537,51 @@ mod tests {
 
         assert!(matches!(error, AdkError::Model(_)));
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn convert_response_preserves_citation_metadata() {
+        let response = adk_gemini::GenerationResponse {
+            candidates: vec![adk_gemini::Candidate {
+                content: adk_gemini::Content {
+                    role: Some(adk_gemini::Role::Model),
+                    parts: Some(vec![adk_gemini::Part::Text {
+                        text: "hello world".to_string(),
+                        thought: None,
+                        thought_signature: None,
+                    }]),
+                },
+                safety_ratings: None,
+                citation_metadata: Some(adk_gemini::CitationMetadata {
+                    citation_sources: vec![adk_gemini::CitationSource {
+                        uri: Some("https://example.com".to_string()),
+                        title: Some("Example".to_string()),
+                        start_index: Some(0),
+                        end_index: Some(5),
+                        license: Some("CC-BY".to_string()),
+                        publication_date: None,
+                    }],
+                }),
+                grounding_metadata: None,
+                finish_reason: Some(adk_gemini::FinishReason::Stop),
+                index: Some(0),
+            }],
+            prompt_feedback: None,
+            usage_metadata: None,
+            model_version: None,
+            response_id: None,
+        };
+
+        let converted = GeminiModel::convert_response(&response).expect("conversion should succeed");
+        let metadata = converted
+            .citation_metadata
+            .expect("citation metadata should be mapped");
+        assert_eq!(metadata.citation_sources.len(), 1);
+        assert_eq!(
+            metadata.citation_sources[0].uri.as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(metadata.citation_sources[0].start_index, Some(0));
+        assert_eq!(metadata.citation_sources[0].end_index, Some(5));
     }
 }

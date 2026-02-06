@@ -36,6 +36,29 @@ impl InMemoryArtifactService {
         }
     }
 
+    fn validate_file_name(file_name: &str) -> Result<()> {
+        if file_name.is_empty() {
+            return Err(adk_core::AdkError::Artifact(
+                "invalid artifact file name: empty name".to_string(),
+            ));
+        }
+
+        // Prevent path traversal and path-like names; artifacts are logical keys, not paths.
+        if file_name.contains('/')
+            || file_name.contains('\\')
+            || file_name == "."
+            || file_name == ".."
+            || file_name.contains("..")
+        {
+            return Err(adk_core::AdkError::Artifact(format!(
+                "invalid artifact file name '{}': path separators and traversal patterns are not allowed",
+                file_name
+            )));
+        }
+
+        Ok(())
+    }
+
     fn find_latest_version(
         &self,
         app_name: &str,
@@ -68,6 +91,7 @@ impl Default for InMemoryArtifactService {
 #[async_trait]
 impl ArtifactService for InMemoryArtifactService {
     async fn save(&self, req: SaveRequest) -> Result<SaveResponse> {
+        Self::validate_file_name(&req.file_name)?;
         let session_id = Self::get_session_id(&req.session_id, &req.file_name);
 
         let version = if let Some(v) = req.version {
@@ -93,6 +117,7 @@ impl ArtifactService for InMemoryArtifactService {
     }
 
     async fn load(&self, req: LoadRequest) -> Result<LoadResponse> {
+        Self::validate_file_name(&req.file_name)?;
         let session_id = Self::get_session_id(&req.session_id, &req.file_name);
 
         if let Some(version) = req.version {
@@ -120,6 +145,7 @@ impl ArtifactService for InMemoryArtifactService {
     }
 
     async fn delete(&self, req: DeleteRequest) -> Result<()> {
+        Self::validate_file_name(&req.file_name)?;
         let session_id = Self::get_session_id(&req.session_id, &req.file_name);
 
         let mut artifacts = self.artifacts.write().unwrap();
@@ -165,6 +191,7 @@ impl ArtifactService for InMemoryArtifactService {
     }
 
     async fn versions(&self, req: VersionsRequest) -> Result<VersionsResponse> {
+        Self::validate_file_name(&req.file_name)?;
         let session_id = Self::get_session_id(&req.session_id, &req.file_name);
         let artifacts = self.artifacts.read().unwrap();
 

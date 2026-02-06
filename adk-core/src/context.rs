@@ -1,7 +1,8 @@
 use crate::{Agent, Result, types::Content};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 #[async_trait]
@@ -101,14 +102,76 @@ pub enum IncludeContents {
     Default,
 }
 
+/// Decision applied when a tool execution requires human confirmation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolConfirmationDecision {
+    Approve,
+    Deny,
+}
+
+/// Policy defining which tools require human confirmation before execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolConfirmationPolicy {
+    /// No tool confirmation is required.
+    #[default]
+    Never,
+    /// Every tool call requires confirmation.
+    Always,
+    /// Only the listed tool names require confirmation.
+    PerTool(BTreeSet<String>),
+}
+
+impl ToolConfirmationPolicy {
+    /// Returns true when the given tool name must be confirmed before execution.
+    pub fn requires_confirmation(&self, tool_name: &str) -> bool {
+        match self {
+            Self::Never => false,
+            Self::Always => true,
+            Self::PerTool(tools) => tools.contains(tool_name),
+        }
+    }
+
+    /// Add one tool name to the confirmation policy (converts `Never` to `PerTool`).
+    pub fn with_tool(mut self, tool_name: impl Into<String>) -> Self {
+        let tool_name = tool_name.into();
+        match &mut self {
+            Self::Never => {
+                let mut tools = BTreeSet::new();
+                tools.insert(tool_name);
+                Self::PerTool(tools)
+            }
+            Self::Always => Self::Always,
+            Self::PerTool(tools) => {
+                tools.insert(tool_name);
+                self
+            }
+        }
+    }
+}
+
+/// Payload describing a tool call awaiting human confirmation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolConfirmationRequest {
+    pub tool_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function_call_id: Option<String>,
+    pub args: Value,
+}
+
 #[derive(Debug, Clone)]
 pub struct RunConfig {
     pub streaming_mode: StreamingMode,
+    /// Optional per-tool confirmation decisions for the current run.
+    /// Keys are tool names.
+    pub tool_confirmation_decisions: HashMap<String, ToolConfirmationDecision>,
 }
 
 impl Default for RunConfig {
     fn default() -> Self {
-        Self { streaming_mode: StreamingMode::SSE }
+        Self { streaming_mode: StreamingMode::SSE, tool_confirmation_decisions: HashMap::new() }
     }
 }
 
@@ -120,6 +183,7 @@ mod tests {
     fn test_run_config_default() {
         let config = RunConfig::default();
         assert_eq!(config.streaming_mode, StreamingMode::SSE);
+        assert!(config.tool_confirmation_decisions.is_empty());
     }
 
     #[test]
@@ -127,5 +191,17 @@ mod tests {
         assert_eq!(StreamingMode::SSE, StreamingMode::SSE);
         assert_ne!(StreamingMode::SSE, StreamingMode::None);
         assert_ne!(StreamingMode::None, StreamingMode::Bidi);
+    }
+
+    #[test]
+    fn test_tool_confirmation_policy() {
+        let policy = ToolConfirmationPolicy::default();
+        assert!(!policy.requires_confirmation("search"));
+
+        let policy = policy.with_tool("search");
+        assert!(policy.requires_confirmation("search"));
+        assert!(!policy.requires_confirmation("write_file"));
+
+        assert!(ToolConfirmationPolicy::Always.requires_confirmation("any_tool"));
     }
 }

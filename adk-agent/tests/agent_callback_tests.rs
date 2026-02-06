@@ -28,6 +28,7 @@ impl adk_core::Llm for MockLlm {
                 }),
                 usage_metadata: None,
                 finish_reason: None,
+                citation_metadata: None,
                 partial: false,
                 turn_complete: true,
                 interrupted: false,

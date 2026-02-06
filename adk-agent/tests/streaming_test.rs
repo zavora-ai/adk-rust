@@ -45,6 +45,7 @@ impl Llm for MockModel {
                     content: Some(content),
                     usage_metadata: None,
                     finish_reason: if is_last { Some(FinishReason::Stop) } else { None },
+                    citation_metadata: None,
                     partial: !is_last,
                     turn_complete: is_last,
                     interrupted: false,

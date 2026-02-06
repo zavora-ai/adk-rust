@@ -154,7 +154,7 @@ fn test_context_with_run_config() {
 
     let content = Content::new("user");
 
-    let config = RunConfig { streaming_mode: StreamingMode::SSE };
+    let config = RunConfig { streaming_mode: StreamingMode::SSE, ..RunConfig::default() };
 
     let ctx = InvocationContext::new(
         "inv-123".to_string(),

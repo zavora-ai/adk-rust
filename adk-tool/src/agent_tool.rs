@@ -408,9 +408,8 @@ impl InvocationContext for AgentToolInvocationContext {
 
     fn run_config(&self) -> &RunConfig {
         // Use default config for sub-agent (SSE mode)
-        static DEFAULT_CONFIG: RunConfig =
-            RunConfig { streaming_mode: adk_core::StreamingMode::SSE };
-        &DEFAULT_CONFIG
+        static DEFAULT_CONFIG: std::sync::OnceLock<RunConfig> = std::sync::OnceLock::new();
+        DEFAULT_CONFIG.get_or_init(RunConfig::default)
     }
 
     fn end_invocation(&self) {

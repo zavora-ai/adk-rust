@@ -31,6 +31,7 @@ impl MockModel {
                 content: Some(content),
                 usage_metadata: None,
                 finish_reason: Some(FinishReason::Stop),
+                citation_metadata: None,
                 partial: false,
                 turn_complete: true,
                 interrupted: false,

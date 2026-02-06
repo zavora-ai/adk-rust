@@ -37,6 +37,8 @@ pub struct LlmResponse {
     pub content: Option<Content>,
     pub usage_metadata: Option<UsageMetadata>,
     pub finish_reason: Option<FinishReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub citation_metadata: Option<CitationMetadata>,
     pub partial: bool,
     pub turn_complete: bool,
     pub interrupted: bool,
@@ -49,6 +51,25 @@ pub struct UsageMetadata {
     pub prompt_token_count: i32,
     pub candidates_token_count: i32,
     pub total_token_count: i32,
+}
+
+/// Citation metadata emitted by model providers for source attribution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CitationMetadata {
+    pub citation_sources: Vec<CitationSource>,
+}
+
+/// One citation source with optional offsets.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CitationSource {
+    pub uri: Option<String>,
+    pub title: Option<String>,
+    pub start_index: Option<i32>,
+    pub end_index: Option<i32>,
+    pub license: Option<String>,
+    pub publication_date: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +112,7 @@ impl LlmResponse {
             content: Some(content),
             usage_metadata: None,
             finish_reason: Some(FinishReason::Stop),
+            citation_metadata: None,
             partial: false,
             turn_complete: true,
             interrupted: false,
@@ -152,6 +174,51 @@ mod tests {
         assert!(resp.turn_complete);
         assert!(!resp.partial);
         assert_eq!(resp.finish_reason, Some(FinishReason::Stop));
+        assert!(resp.citation_metadata.is_none());
+    }
+
+    #[test]
+    fn test_llm_response_deserialize_without_citations() {
+        let json = serde_json::json!({
+            "content": {
+                "role": "model",
+                "parts": [{"text": "hello"}]
+            },
+            "partial": false,
+            "turn_complete": true,
+            "interrupted": false
+        });
+
+        let response: LlmResponse = serde_json::from_value(json).expect("should deserialize");
+        assert!(response.citation_metadata.is_none());
+    }
+
+    #[test]
+    fn test_llm_response_roundtrip_with_citations() {
+        let response = LlmResponse {
+            content: Some(Content::new("model").with_text("hello")),
+            usage_metadata: None,
+            finish_reason: Some(FinishReason::Stop),
+            citation_metadata: Some(CitationMetadata {
+                citation_sources: vec![CitationSource {
+                    uri: Some("https://example.com".to_string()),
+                    title: Some("Example".to_string()),
+                    start_index: Some(0),
+                    end_index: Some(5),
+                    license: None,
+                    publication_date: Some("2026-01-01T00:00:00Z".to_string()),
+                }],
+            }),
+            partial: false,
+            turn_complete: true,
+            interrupted: false,
+            error_code: None,
+            error_message: None,
+        };
+
+        let encoded = serde_json::to_string(&response).expect("serialize");
+        let decoded: LlmResponse = serde_json::from_str(&encoded).expect("deserialize");
+        assert_eq!(decoded.citation_metadata, response.citation_metadata);
     }
 
     #[test]

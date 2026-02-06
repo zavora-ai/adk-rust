@@ -1,3 +1,4 @@
+use crate::context::{ToolConfirmationDecision, ToolConfirmationRequest};
 use crate::model::LlmResponse;
 use crate::types::Content;
 use chrono::{DateTime, Utc};
@@ -48,6 +49,10 @@ pub struct EventActions {
     pub skip_summarization: bool,
     pub transfer_to_agent: Option<String>,
     pub escalate: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_confirmation: Option<ToolConfirmationRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_confirmation_decision: Option<ToolConfirmationDecision>,
 }
 
 impl Event {
@@ -195,6 +200,8 @@ mod tests {
         let actions = EventActions::default();
         assert!(actions.state_delta.is_empty());
         assert!(!actions.skip_summarization);
+        assert!(actions.tool_confirmation.is_none());
+        assert!(actions.tool_confirmation_decision.is_none());
     }
 
     #[test]

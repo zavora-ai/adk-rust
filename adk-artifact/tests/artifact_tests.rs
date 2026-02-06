@@ -209,3 +209,34 @@ async fn test_user_scoped_artifacts() {
 
     assert_eq!(load_resp.part, Part::Text { text: "user data".to_string() });
 }
+
+#[tokio::test]
+async fn test_reject_invalid_artifact_file_names() {
+    let service = InMemoryArtifactService::new();
+    let invalid_names = ["../secret", "a/b.txt", r"a\b.txt"];
+
+    for file_name in invalid_names {
+        let save_result = service
+            .save(SaveRequest {
+                app_name: "app1".to_string(),
+                user_id: "user1".to_string(),
+                session_id: "session1".to_string(),
+                file_name: file_name.to_string(),
+                part: Part::Text { text: "blocked".to_string() },
+                version: None,
+            })
+            .await;
+        assert!(save_result.is_err(), "save should reject '{}'", file_name);
+
+        let load_result = service
+            .load(LoadRequest {
+                app_name: "app1".to_string(),
+                user_id: "user1".to_string(),
+                session_id: "session1".to_string(),
+                file_name: file_name.to_string(),
+                version: None,
+            })
+            .await;
+        assert!(load_result.is_err(), "load should reject '{}'", file_name);
+    }
+}

@@ -1,7 +1,8 @@
 use adk_agent::LlmAgentBuilder;
 use adk_core::{
     Agent, CallbackContext, Content, FinishReason, InvocationContext, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Part, Result, RunConfig, Session, State, Tool, ToolContext,
+    LlmResponseStream, Part, Result, RunConfig, Session, State, Tool, ToolConfirmationDecision,
+    ToolContext,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -95,44 +96,12 @@ impl Tool for CountingTool {
     }
 
     fn description(&self) -> &str {
-        "Test tool"
-    }
-
-    fn parameters_schema(&self) -> Option<Value> {
-        None
-    }
-
-    fn response_schema(&self) -> Option<Value> {
-        None
+        "Tool used in confirmation tests"
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(json!({ "status": "tool-ok" }))
-    }
-}
-
-struct MockSession;
-
-impl Session for MockSession {
-    fn id(&self) -> &str {
-        "session-1"
-    }
-
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-
-    fn user_id(&self) -> &str {
-        "user-1"
-    }
-
-    fn state(&self) -> &dyn State {
-        &MockState
-    }
-
-    fn conversation_history(&self) -> Vec<Content> {
-        Vec::new()
     }
 }
 
@@ -150,14 +119,45 @@ impl State for MockState {
     }
 }
 
+struct MockSession {
+    state: MockState,
+}
+
+impl Session for MockSession {
+    fn id(&self) -> &str {
+        "session-1"
+    }
+
+    fn app_name(&self) -> &str {
+        "test-app"
+    }
+
+    fn user_id(&self) -> &str {
+        "user-1"
+    }
+
+    fn state(&self) -> &dyn State {
+        &self.state
+    }
+
+    fn conversation_history(&self) -> Vec<Content> {
+        Vec::new()
+    }
+}
+
 struct MockContext {
     session: MockSession,
     user_content: Content,
+    run_config: RunConfig,
 }
 
 impl MockContext {
-    fn new() -> Self {
-        Self { session: MockSession, user_content: Content::new("user").with_text("start") }
+    fn new(run_config: RunConfig) -> Self {
+        Self {
+            session: MockSession { state: MockState },
+            user_content: Content::new("user").with_text("start"),
+            run_config,
+        }
     }
 }
 
@@ -214,8 +214,7 @@ impl InvocationContext for MockContext {
     }
 
     fn run_config(&self) -> &RunConfig {
-        static RUN_CONFIG: std::sync::OnceLock<RunConfig> = std::sync::OnceLock::new();
-        RUN_CONFIG.get_or_init(RunConfig::default)
+        &self.run_config
     }
 
     fn end_invocation(&self) {}
@@ -226,9 +225,9 @@ impl InvocationContext for MockContext {
 }
 
 #[tokio::test]
-async fn test_before_tool_callback_short_circuits_tool_execution() {
+async fn test_tool_confirmation_interrupts_when_decision_missing() {
     let model = Arc::new(SequencedModel::new(vec![
-        SequencedModel::function_call_response("test_tool", json!({}), "call-1"),
+        SequencedModel::function_call_response("test_tool", json!({"x": 1}), "call-1"),
         SequencedModel::text_response("done"),
     ]));
     let tool = Arc::new(CountingTool::new());
@@ -237,45 +236,31 @@ async fn test_before_tool_callback_short_circuits_tool_execution() {
     let agent = LlmAgentBuilder::new("test-agent")
         .model(model)
         .tool(tool)
-        .before_tool_callback(Box::new(|_ctx| {
-            Box::pin(async move {
-                Ok(Some(Content {
-                    role: "function".to_string(),
-                    parts: vec![Part::Text { text: "blocked".to_string() }],
-                }))
-            })
-        }))
+        .require_tool_confirmation("test_tool")
         .build()
         .unwrap();
 
-    let mut stream = agent.run(Arc::new(MockContext::new())).await.unwrap();
-    let mut saw_blocked = false;
+    let mut stream = agent.run(Arc::new(MockContext::new(RunConfig::default()))).await.unwrap();
+    let mut saw_confirmation_interrupt = false;
 
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
-        if let Some(content) = event.llm_response.content {
-            for part in content.parts {
-                if let Part::Text { text } = part {
-                    if text == "blocked" {
-                        saw_blocked = true;
-                    }
-                }
-            }
+        if event.llm_response.interrupted {
+            let request = event.actions.tool_confirmation.as_ref().unwrap();
+            assert_eq!(request.tool_name, "test_tool");
+            assert_eq!(request.function_call_id.as_deref(), Some("call-1"));
+            saw_confirmation_interrupt = true;
         }
     }
 
-    assert!(saw_blocked, "before_tool callback output should be emitted");
-    assert_eq!(tool_calls.load(Ordering::SeqCst), 0, "tool should be skipped");
+    assert!(saw_confirmation_interrupt, "expected confirmation interrupt event");
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 0, "tool should not execute before approval");
 }
 
 #[tokio::test]
-async fn test_after_tool_callback_overrides_result_and_order() {
-    let call_order: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let before_order = call_order.clone();
-    let after_order = call_order.clone();
-
+async fn test_tool_confirmation_deny_skips_tool_execution() {
     let model = Arc::new(SequencedModel::new(vec![
-        SequencedModel::function_call_response("test_tool", json!({}), "call-2"),
+        SequencedModel::function_call_response("test_tool", json!({"x": 1}), "call-2"),
         SequencedModel::text_response("done"),
     ]));
     let tool = Arc::new(CountingTool::new());
@@ -284,76 +269,77 @@ async fn test_after_tool_callback_overrides_result_and_order() {
     let agent = LlmAgentBuilder::new("test-agent")
         .model(model)
         .tool(tool)
-        .before_tool_callback(Box::new(move |_ctx| {
-            let before_order = before_order.clone();
-            Box::pin(async move {
-                before_order.lock().unwrap().push("before_tool".to_string());
-                Ok(None)
-            })
-        }))
-        .after_tool_callback(Box::new(move |_ctx| {
-            let after_order = after_order.clone();
-            Box::pin(async move {
-                after_order.lock().unwrap().push("after_tool".to_string());
-                Ok(Some(Content {
-                    role: "function".to_string(),
-                    parts: vec![Part::Text { text: "after-override".to_string() }],
-                }))
-            })
-        }))
+        .require_tool_confirmation("test_tool")
         .build()
         .unwrap();
 
-    let mut stream = agent.run(Arc::new(MockContext::new())).await.unwrap();
-    let mut saw_override = false;
+    let mut run_config = RunConfig::default();
+    run_config.tool_confirmation_decisions.insert(
+        "test_tool".to_string(),
+        ToolConfirmationDecision::Deny,
+    );
+
+    let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
+    let mut saw_denied_response = false;
 
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
-        if let Some(content) = event.llm_response.content {
-            for part in content.parts {
-                if let Part::Text { text } = part {
-                    if text == "after-override" {
-                        saw_override = true;
-                    }
+        if event.actions.tool_confirmation_decision == Some(ToolConfirmationDecision::Deny) {
+            let content = event.llm_response.content.as_ref().unwrap();
+            if let Some(Part::FunctionResponse { function_response, .. }) = content.parts.first() {
+                let error = function_response
+                    .response
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                if error.contains("denied") {
+                    saw_denied_response = true;
                 }
             }
         }
     }
 
-    assert_eq!(tool_calls.load(Ordering::SeqCst), 1, "tool should execute once");
-    assert!(saw_override, "after_tool callback override should be emitted");
-    assert_eq!(call_order.lock().unwrap().clone(), vec!["before_tool", "after_tool"]);
+    assert!(saw_denied_response, "expected denied function response");
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 0, "tool must not execute when denied");
 }
 
 #[tokio::test]
-async fn test_before_tool_callback_error_aborts_tool_execution() {
-    let model = Arc::new(SequencedModel::new(vec![SequencedModel::function_call_response(
-        "test_tool",
-        json!({}),
-        "call-3",
-    )]));
+async fn test_tool_confirmation_approve_executes_tool() {
+    let model = Arc::new(SequencedModel::new(vec![
+        SequencedModel::function_call_response("test_tool", json!({"x": 1}), "call-3"),
+        SequencedModel::text_response("done"),
+    ]));
     let tool = Arc::new(CountingTool::new());
     let tool_calls = tool.calls.clone();
 
     let agent = LlmAgentBuilder::new("test-agent")
         .model(model)
         .tool(tool)
-        .before_tool_callback(Box::new(|_ctx| {
-            Box::pin(async move { Err(adk_core::AdkError::Agent("blocked".to_string())) })
-        }))
+        .require_tool_confirmation("test_tool")
         .build()
         .unwrap();
 
-    let mut stream = agent.run(Arc::new(MockContext::new())).await.unwrap();
-    let mut saw_error = false;
+    let mut run_config = RunConfig::default();
+    run_config.tool_confirmation_decisions.insert(
+        "test_tool".to_string(),
+        ToolConfirmationDecision::Approve,
+    );
+
+    let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
+    let mut saw_tool_result = false;
 
     while let Some(result) = stream.next().await {
-        if result.is_err() {
-            saw_error = true;
-            break;
+        let event = result.unwrap();
+        if event.actions.tool_confirmation_decision == Some(ToolConfirmationDecision::Approve) {
+            let content = event.llm_response.content.as_ref().unwrap();
+            if let Some(Part::FunctionResponse { function_response, .. }) = content.parts.first() {
+                if function_response.response.get("status") == Some(&json!("tool-ok")) {
+                    saw_tool_result = true;
+                }
+            }
         }
     }
 
-    assert!(saw_error, "callback error should be propagated to stream");
-    assert_eq!(tool_calls.load(Ordering::SeqCst), 0, "tool should not execute on callback error");
+    assert!(saw_tool_result, "expected approved tool execution response");
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 1, "tool should execute exactly once");
 }

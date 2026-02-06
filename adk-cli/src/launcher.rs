@@ -114,7 +114,7 @@ impl Launcher {
 
     /// Set streaming mode (defaults to SSE if not specified).
     pub fn with_streaming_mode(mut self, mode: StreamingMode) -> Self {
-        self.run_config = Some(RunConfig { streaming_mode: mode });
+        self.run_config = Some(RunConfig { streaming_mode: mode, ..RunConfig::default() });
         self
     }
 

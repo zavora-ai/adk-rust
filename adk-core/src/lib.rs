@@ -80,13 +80,14 @@ pub use callbacks::{
 pub use context::{
     Artifacts, CallbackContext, IncludeContents, InvocationContext, Memory, MemoryEntry,
     ReadonlyContext, ReadonlyState, RunConfig, Session, State, StreamingMode,
+    ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest,
 };
 pub use error::{AdkError, Result};
 pub use event::{Event, EventActions, KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER};
 pub use instruction_template::inject_session_state;
 pub use model::{
-    FinishReason, GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream,
-    UsageMetadata,
+    CitationMetadata, CitationSource, FinishReason, GenerateContentConfig, Llm, LlmRequest,
+    LlmResponse, LlmResponseStream, UsageMetadata,
 };
 pub use tool::{Tool, ToolContext, ToolPredicate, Toolset};
 pub use types::{Content, FunctionResponseData, Part};
