@@ -163,6 +163,7 @@ impl Launcher {
             session_service,
             artifact_service: self.artifact_service,
             memory_service: None,
+            plugin_manager: None,
             run_config: self.run_config,
         })?;
 

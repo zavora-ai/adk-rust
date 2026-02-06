@@ -40,6 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         session_service: sessions.clone(),
         artifact_service: Some(artifacts.clone()),
         memory_service: None,
+        plugin_manager: None,
         run_config: None,
     };
     println!("✓ RunnerConfig with all fields");

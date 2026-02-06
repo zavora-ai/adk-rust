@@ -62,7 +62,7 @@ let cache_plugin = Plugin::new(PluginConfig {
 // Create plugin manager
 let manager = PluginManager::new(vec![logging_plugin, cache_plugin]);
 
-// Use with Runner (integration pending)
+// Use with Runner
 ```
 
 ## Callback Types

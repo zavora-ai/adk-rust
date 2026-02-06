@@ -51,6 +51,7 @@ let config = RunnerConfig {
     session_service: sessions,
     artifact_service: Some(artifacts),
     memory_service: None,
+    plugin_manager: None,
     run_config: None,  // Uses default SSE streaming
 };
 
@@ -83,6 +84,7 @@ while let Some(event) = stream.next().await {
 | `session_service` | `Arc<dyn SessionService>` | Session storage backend |
 | `artifact_service` | `Option<Arc<dyn ArtifactService>>` | Optional artifact storage |
 | `memory_service` | `Option<Arc<dyn Memory>>` | Optional memory/RAG service |
+| `plugin_manager` | `Option<Arc<PluginManager>>` | Optional plugin lifecycle hooks |
 | `run_config` | `Option<RunConfig>` | Streaming mode config |
 
 ## Runner vs Direct Agent Execution

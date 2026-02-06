@@ -1,6 +1,7 @@
 use crate::InvocationContext;
 use adk_artifact::ArtifactService;
 use adk_core::{Agent, Content, EventStream, Memory, Result, RunConfig};
+use adk_plugin::PluginManager;
 use adk_session::SessionService;
 use async_stream::stream;
 use std::sync::Arc;
@@ -12,6 +13,7 @@ pub struct RunnerConfig {
     pub session_service: Arc<dyn SessionService>,
     pub artifact_service: Option<Arc<dyn ArtifactService>>,
     pub memory_service: Option<Arc<dyn Memory>>,
+    pub plugin_manager: Option<Arc<PluginManager>>,
     /// Optional run configuration (streaming mode, etc.)
     /// If not provided, uses default (SSE streaming)
     #[allow(dead_code)]
@@ -24,6 +26,7 @@ pub struct Runner {
     session_service: Arc<dyn SessionService>,
     artifact_service: Option<Arc<dyn ArtifactService>>,
     memory_service: Option<Arc<dyn Memory>>,
+    plugin_manager: Option<Arc<PluginManager>>,
     run_config: RunConfig,
 }
 
@@ -35,6 +38,7 @@ impl Runner {
             session_service: config.session_service,
             artifact_service: config.artifact_service,
             memory_service: config.memory_service,
+            plugin_manager: config.plugin_manager,
             run_config: config.run_config.unwrap_or_default(),
         })
     }
@@ -50,6 +54,7 @@ impl Runner {
         let root_agent = self.root_agent.clone();
         let artifact_service = self.artifact_service.clone();
         let memory_service = self.memory_service.clone();
+        let plugin_manager = self.plugin_manager.clone();
         let run_config = self.run_config.clone();
 
         let s = stream! {
@@ -80,13 +85,14 @@ impl Runner {
 
             // Create invocation context with MutableSession
             let invocation_id = format!("inv-{}", uuid::Uuid::new_v4());
-            let mut ctx = InvocationContext::new(
+            let mut effective_user_content = user_content.clone();
+            let mut invocation_ctx = InvocationContext::new(
                 invocation_id.clone(),
                 agent_to_run.clone(),
                 user_id.clone(),
                 app_name.clone(),
                 session_id.clone(),
-                user_content.clone(),
+                effective_user_content.clone(),
                 Arc::from(session),
             );
 
@@ -99,27 +105,104 @@ impl Runner {
                     user_id.clone(),
                     session_id.clone(),
                 );
-                ctx = ctx.with_artifacts(Arc::new(scoped));
+                invocation_ctx = invocation_ctx.with_artifacts(Arc::new(scoped));
             }
             if let Some(memory) = memory_service {
-                ctx = ctx.with_memory(memory);
+                invocation_ctx = invocation_ctx.with_memory(memory);
             }
 
             // Apply run config (streaming mode, etc.)
-            ctx = ctx.with_run_config(run_config.clone());
+            invocation_ctx = invocation_ctx.with_run_config(run_config.clone());
 
-            let ctx = Arc::new(ctx);
+            let mut ctx = Arc::new(invocation_ctx);
+
+            if let Some(manager) = plugin_manager.as_ref() {
+                match manager
+                    .run_before_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>)
+                    .await
+                {
+                    Ok(Some(content)) => {
+                        let mut early_event = adk_core::Event::new(&invocation_id);
+                        early_event.author = agent_to_run.name().to_string();
+                        early_event.llm_response.content = Some(content);
+
+                        ctx.mutable_session().append_event(early_event.clone());
+                        if let Err(e) = session_service.append_event(&session_id, early_event.clone()).await {
+                            yield Err(e);
+                            return;
+                        }
+
+                        yield Ok(early_event);
+                        manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                        return;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                        yield Err(e);
+                        return;
+                    }
+                }
+
+                match manager
+                    .run_on_user_message(
+                        ctx.clone() as Arc<dyn adk_core::InvocationContext>,
+                        effective_user_content.clone(),
+                    )
+                    .await
+                {
+                    Ok(Some(modified)) => {
+                        effective_user_content = modified;
+
+                        let mut refreshed_ctx = InvocationContext::with_mutable_session(
+                            invocation_id.clone(),
+                            agent_to_run.clone(),
+                            user_id.clone(),
+                            app_name.clone(),
+                            session_id.clone(),
+                            effective_user_content.clone(),
+                            ctx.mutable_session().clone(),
+                        );
+
+                        if let Some(service) = artifact_service_clone.clone() {
+                            let scoped = adk_artifact::ScopedArtifacts::new(
+                                service,
+                                app_name.clone(),
+                                user_id.clone(),
+                                session_id.clone(),
+                            );
+                            refreshed_ctx = refreshed_ctx.with_artifacts(Arc::new(scoped));
+                        }
+                        if let Some(memory) = memory_service_clone.clone() {
+                            refreshed_ctx = refreshed_ctx.with_memory(memory);
+                        }
+                        refreshed_ctx = refreshed_ctx.with_run_config(run_config.clone());
+                        ctx = Arc::new(refreshed_ctx);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        if let Some(manager) = plugin_manager.as_ref() {
+                            manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                        }
+                        yield Err(e);
+                        return;
+                    }
+                }
+            }
 
             // Append user message to session service (persistent storage)
             let mut user_event = adk_core::Event::new(&invocation_id);
             user_event.author = "user".to_string();
-            user_event.llm_response.content = Some(user_content.clone());
+            user_event.llm_response.content = Some(effective_user_content.clone());
 
             // Also add to mutable session for immediate visibility
             // Note: adk_session::Event is a re-export of adk_core::Event, so we can use it directly
             ctx.mutable_session().append_event(user_event.clone());
 
             if let Err(e) = session_service.append_event(&session_id, user_event).await {
+                if let Some(manager) = plugin_manager.as_ref() {
+                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                }
                 yield Err(e);
                 return;
             }
@@ -130,12 +213,16 @@ impl Runner {
                 "gcp.vertex.agent.invocation_id" = %invocation_id,
                 "gcp.vertex.agent.session_id" = %session_id,
                 "gcp.vertex.agent.event_id" = %invocation_id, // Use invocation_id as event_id for agent spans
+                "gen_ai.conversation.id" = %session_id,
                 "agent.name" = %agent_to_run.name()
             );
 
             let mut agent_stream = match agent_to_run.run(ctx.clone()).instrument(agent_span).await {
                 Ok(s) => s,
                 Err(e) => {
+                    if let Some(manager) = plugin_manager.as_ref() {
+                        manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                    }
                     yield Err(e);
                     return;
                 }
@@ -148,6 +235,28 @@ impl Runner {
             while let Some(result) = agent_stream.next().await {
                 match result {
                     Ok(event) => {
+                        let mut event = event;
+
+                        if let Some(manager) = plugin_manager.as_ref() {
+                            match manager
+                                .run_on_event(
+                                    ctx.clone() as Arc<dyn adk_core::InvocationContext>,
+                                    event.clone(),
+                                )
+                                .await
+                            {
+                                Ok(Some(modified)) => {
+                                    event = modified;
+                                }
+                                Ok(None) => {}
+                                Err(e) => {
+                                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                                    yield Err(e);
+                                    return;
+                                }
+                            }
+                        }
+
                         // Check for transfer action
                         if let Some(target) = &event.actions.transfer_to_agent {
                             transfer_target = Some(target.clone());
@@ -167,12 +276,18 @@ impl Runner {
 
                         // Append event to session service (persistent storage)
                         if let Err(e) = session_service.append_event(&session_id, event.clone()).await {
+                            if let Some(manager) = plugin_manager.as_ref() {
+                                manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                            }
                             yield Err(e);
                             return;
                         }
                         yield Ok(event);
                     }
                     Err(e) => {
+                        if let Some(manager) = plugin_manager.as_ref() {
+                            manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                        }
                         yield Err(e);
                         return;
                     }
@@ -190,7 +305,7 @@ impl Runner {
                         user_id.clone(),
                         app_name.clone(),
                         session_id.clone(),
-                        user_content.clone(),
+                        effective_user_content.clone(),
                         ctx.mutable_session().clone(),
                     );
 
@@ -213,6 +328,9 @@ impl Runner {
                     let mut transfer_stream = match target_agent.run(transfer_ctx.clone()).await {
                         Ok(s) => s,
                         Err(e) => {
+                            if let Some(manager) = plugin_manager.as_ref() {
+                                manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                            }
                             yield Err(e);
                             return;
                         }
@@ -222,6 +340,27 @@ impl Runner {
                     while let Some(result) = transfer_stream.next().await {
                         match result {
                             Ok(event) => {
+                                let mut event = event;
+                                if let Some(manager) = plugin_manager.as_ref() {
+                                    match manager
+                                        .run_on_event(
+                                            transfer_ctx.clone() as Arc<dyn adk_core::InvocationContext>,
+                                            event.clone(),
+                                        )
+                                        .await
+                                    {
+                                        Ok(Some(modified)) => {
+                                            event = modified;
+                                        }
+                                        Ok(None) => {}
+                                        Err(e) => {
+                                            manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                                            yield Err(e);
+                                            return;
+                                        }
+                                    }
+                                }
+
                                 // Apply state delta for transferred agent too
                                 if !event.actions.state_delta.is_empty() {
                                     transfer_ctx.mutable_session().apply_state_delta(&event.actions.state_delta);
@@ -231,18 +370,28 @@ impl Runner {
                                 transfer_ctx.mutable_session().append_event(event.clone());
 
                                 if let Err(e) = session_service.append_event(&session_id, event.clone()).await {
+                                    if let Some(manager) = plugin_manager.as_ref() {
+                                        manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                                    }
                                     yield Err(e);
                                     return;
                                 }
                                 yield Ok(event);
                             }
                             Err(e) => {
+                                if let Some(manager) = plugin_manager.as_ref() {
+                                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                                }
                                 yield Err(e);
                                 return;
                             }
                         }
                     }
                 }
+            }
+
+            if let Some(manager) = plugin_manager.as_ref() {
+                manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
             }
         };
 

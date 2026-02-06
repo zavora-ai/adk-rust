@@ -103,6 +103,7 @@ pub async fn run_sse(
             session_service: controller.config.session_service.clone(),
             artifact_service: controller.config.artifact_service.clone(),
             memory_service: None,
+            plugin_manager: None,
             run_config: None,
         })
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -204,6 +205,7 @@ pub async fn run_sse_compat(
         session_service: controller.config.session_service.clone(),
         artifact_service: controller.config.artifact_service.clone(),
         memory_service: None,
+        plugin_manager: None,
         run_config: Some(adk_core::RunConfig { streaming_mode }),
     })
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

@@ -55,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         session_service,
         artifact_service: None,
         memory_service: None,
+        plugin_manager: None,
         run_config: None,
     })?;
 

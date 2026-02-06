@@ -116,6 +116,7 @@ where
                     "gcp.vertex.agent.session_id",
                     "gcp.vertex.agent.invocation_id",
                     "gcp.vertex.agent.event_id",
+                    "gen_ai.conversation.id",
                 ];
 
                 for key in context_keys {
@@ -189,6 +190,48 @@ where
 
         // Export the span
         self.exporter.export_span(&span_name, attributes);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    #[test]
+    fn test_conversation_id_propagates_to_child_spans() {
+        let exporter = Arc::new(AdkSpanExporter::new());
+        let layer = AdkSpanLayer::new(exporter.clone());
+        let subscriber = tracing_subscriber::registry().with(layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            let parent = tracing::info_span!(
+                "agent.execute",
+                "gcp.vertex.agent.event_id" = "evt-parent",
+                "gcp.vertex.agent.invocation_id" = "inv-1",
+                "gcp.vertex.agent.session_id" = "session-1",
+                "gen_ai.conversation.id" = "session-1",
+                "agent.name" = "test-agent"
+            );
+
+            let _parent_guard = parent.enter();
+
+            let child = tracing::info_span!(
+                "call_llm",
+                "gcp.vertex.agent.event_id" = "evt-child",
+                "gcp.vertex.agent.llm_request" = "{}"
+            );
+            let _child_guard = child.enter();
+            tracing::info!("child span body");
+        });
+
+        let child_trace =
+            exporter.get_trace_by_event_id("evt-child").expect("child span should be exported");
+        assert_eq!(
+            child_trace.get("gen_ai.conversation.id").map(String::as_str),
+            Some("session-1")
+        );
     }
 }
 

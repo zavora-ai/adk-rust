@@ -5,8 +5,8 @@ use adk_runner::{Runner, RunnerConfig};
 use adk_session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
 use axum::{
     extract::{
-        ws::{Message, WebSocket},
         Path, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
     },
     response::Response,
 };
@@ -53,13 +53,15 @@ async fn handle_socket(mut socket: WebSocket, project_id: String, state: AppStat
             let req: RunRequest = match serde_json::from_str(&text) {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = send_event(&mut socket, StreamEvent::Error { message: e.to_string() }).await;
+                    let _ = send_event(&mut socket, StreamEvent::Error { message: e.to_string() })
+                        .await;
                     continue;
                 }
             };
 
             if let Err(e) = stream_response(&mut socket, &project_id, &req, &state).await {
-                let _ = send_event(&mut socket, StreamEvent::Error { message: e.to_string() }).await;
+                let _ =
+                    send_event(&mut socket, StreamEvent::Error { message: e.to_string() }).await;
             }
         }
     }
@@ -79,8 +81,8 @@ async fn stream_response(
     let id: uuid::Uuid = project_id.parse()?;
     let storage = state.storage.read().await;
     let project = storage.get(id).await?;
-    let (agent_name, agent_schema) = project.agents.iter().next()
-        .ok_or_else(|| anyhow::anyhow!("No agents"))?;
+    let (agent_name, agent_schema) =
+        project.agents.iter().next().ok_or_else(|| anyhow::anyhow!("No agents"))?;
 
     let agent = compile_agent(agent_name, agent_schema, &req.api_key)?;
     let agent_name = agent_name.to_string();
@@ -91,20 +93,26 @@ async fn stream_response(
     let svc = session_service().clone();
     let session_id = project_id.to_string();
 
-    let session = match svc.get(GetRequest {
-        app_name: "studio".into(),
-        user_id: "user".into(),
-        session_id: session_id.clone(),
-        num_recent_events: None,
-        after: None,
-    }).await {
-        Ok(s) => s,
-        Err(_) => svc.create(CreateRequest {
+    let session = match svc
+        .get(GetRequest {
             app_name: "studio".into(),
             user_id: "user".into(),
-            session_id: Some(session_id),
-            state: HashMap::new(),
-        }).await?
+            session_id: session_id.clone(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+    {
+        Ok(s) => s,
+        Err(_) => {
+            svc.create(CreateRequest {
+                app_name: "studio".into(),
+                user_id: "user".into(),
+                session_id: Some(session_id),
+                state: HashMap::new(),
+            })
+            .await?
+        }
     };
 
     let runner = Runner::new(RunnerConfig {
@@ -113,6 +121,8 @@ async fn stream_response(
         session_service: svc,
         artifact_service: None,
         memory_service: None,
+        plugin_manager: None,
+        run_config: None,
     })?;
 
     let content = Content::new("user").with_text(&req.input);

@@ -28,6 +28,7 @@ pub async fn run_console(agent: Arc<dyn Agent>, app_name: String, user_id: Strin
         session_service: session_service.clone(),
         artifact_service: None,
         memory_service: None,
+        plugin_manager: None,
         run_config: None,
     })?;
 

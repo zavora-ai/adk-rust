@@ -34,6 +34,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         session_service: session_service.clone(),
         artifact_service: None,
         memory_service: None,
+        plugin_manager: None,
         run_config: None,
     })?;
 

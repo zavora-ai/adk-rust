@@ -273,6 +273,7 @@ async fn run_batch_mode(
             session_service: session_service.clone(),
             artifact_service: None,
             memory_service: None,
+            plugin_manager: None,
             run_config: None,
         };
 

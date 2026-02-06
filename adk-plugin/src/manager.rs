@@ -4,8 +4,8 @@
 
 use crate::Plugin;
 use adk_core::{
-    BeforeModelResult, CallbackContext, Content, Event, InvocationContext, LlmRequest,
-    LlmResponse, Result, Tool,
+    BeforeModelResult, CallbackContext, Content, Event, InvocationContext, LlmRequest, LlmResponse,
+    Result, Tool,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,9 +20,7 @@ pub struct PluginManagerConfig {
 
 impl Default for PluginManagerConfig {
     fn default() -> Self {
-        Self {
-            close_timeout: Duration::from_secs(5),
-        }
+        Self { close_timeout: Duration::from_secs(5) }
     }
 }
 
@@ -61,10 +59,7 @@ pub struct PluginManager {
 impl PluginManager {
     /// Create a new plugin manager with the given plugins.
     pub fn new(plugins: Vec<Plugin>) -> Self {
-        Self {
-            plugins,
-            config: PluginManagerConfig::default(),
-        }
+        Self { plugins, config: PluginManagerConfig::default() }
     }
 
     /// Create a new plugin manager with custom configuration.
@@ -91,6 +86,7 @@ impl PluginManager {
         content: Content,
     ) -> Result<Option<Content>> {
         let mut current_content = content;
+        let mut was_modified = false;
 
         for plugin in &self.plugins {
             if let Some(callback) = plugin.on_user_message() {
@@ -98,6 +94,7 @@ impl PluginManager {
                 match callback(ctx.clone(), current_content.clone()).await {
                     Ok(Some(modified)) => {
                         debug!(plugin = plugin.name(), "Content modified by plugin");
+                        was_modified = true;
                         current_content = modified;
                     }
                     Ok(None) => {
@@ -111,8 +108,7 @@ impl PluginManager {
             }
         }
 
-        // Return None if content wasn't modified (same as original)
-        Ok(None)
+        Ok(if was_modified { Some(current_content) } else { None })
     }
 
     /// Run on_event callbacks from all plugins.
@@ -124,6 +120,7 @@ impl PluginManager {
         event: Event,
     ) -> Result<Option<Event>> {
         let mut current_event = event;
+        let mut was_modified = false;
 
         for plugin in &self.plugins {
             if let Some(callback) = plugin.on_event() {
@@ -131,6 +128,7 @@ impl PluginManager {
                 match callback(ctx.clone(), current_event.clone()).await {
                     Ok(Some(modified)) => {
                         debug!(plugin = plugin.name(), "Event modified by plugin");
+                        was_modified = true;
                         current_event = modified;
                     }
                     Ok(None) => {
@@ -144,16 +142,13 @@ impl PluginManager {
             }
         }
 
-        Ok(None)
+        Ok(if was_modified { Some(current_event) } else { None })
     }
 
     /// Run before_run callbacks from all plugins.
     ///
     /// If any plugin returns content, the run should be skipped.
-    pub async fn run_before_run(
-        &self,
-        ctx: Arc<dyn InvocationContext>,
-    ) -> Result<Option<Content>> {
+    pub async fn run_before_run(&self, ctx: Arc<dyn InvocationContext>) -> Result<Option<Content>> {
         for plugin in &self.plugins {
             if let Some(callback) = plugin.before_run() {
                 debug!(plugin = plugin.name(), "Running before_run callback");
@@ -191,10 +186,7 @@ impl PluginManager {
     /// Run before_agent callbacks from all plugins.
     ///
     /// If any plugin returns content, the agent run should be skipped.
-    pub async fn run_before_agent(
-        &self,
-        ctx: Arc<dyn CallbackContext>,
-    ) -> Result<Option<Content>> {
+    pub async fn run_before_agent(&self, ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
         for plugin in &self.plugins {
             if let Some(callback) = plugin.before_agent() {
                 debug!(plugin = plugin.name(), "Running before_agent callback");
@@ -218,10 +210,7 @@ impl PluginManager {
     }
 
     /// Run after_agent callbacks from all plugins.
-    pub async fn run_after_agent(
-        &self,
-        ctx: Arc<dyn CallbackContext>,
-    ) -> Result<Option<Content>> {
+    pub async fn run_after_agent(&self, ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
         for plugin in &self.plugins {
             if let Some(callback) = plugin.after_agent() {
                 debug!(plugin = plugin.name(), "Running after_agent callback");
@@ -283,12 +272,14 @@ impl PluginManager {
         response: LlmResponse,
     ) -> Result<Option<LlmResponse>> {
         let mut current_response = response;
+        let mut was_modified = false;
 
         for plugin in &self.plugins {
             if let Some(callback) = plugin.after_model() {
                 debug!(plugin = plugin.name(), "Running after_model callback");
                 match callback(ctx.clone(), current_response.clone()).await {
                     Ok(Some(modified)) => {
+                        was_modified = true;
                         current_response = modified;
                     }
                     Ok(None) => {
@@ -302,7 +293,7 @@ impl PluginManager {
             }
         }
 
-        Ok(None)
+        Ok(if was_modified { Some(current_response) } else { None })
     }
 
     /// Run on_model_error callbacks from all plugins.
@@ -335,10 +326,7 @@ impl PluginManager {
     }
 
     /// Run before_tool callbacks from all plugins.
-    pub async fn run_before_tool(
-        &self,
-        ctx: Arc<dyn CallbackContext>,
-    ) -> Result<Option<Content>> {
+    pub async fn run_before_tool(&self, ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
         for plugin in &self.plugins {
             if let Some(callback) = plugin.before_tool() {
                 debug!(plugin = plugin.name(), "Running before_tool callback");
@@ -362,10 +350,7 @@ impl PluginManager {
     }
 
     /// Run after_tool callbacks from all plugins.
-    pub async fn run_after_tool(
-        &self,
-        ctx: Arc<dyn CallbackContext>,
-    ) -> Result<Option<Content>> {
+    pub async fn run_after_tool(&self, ctx: Arc<dyn CallbackContext>) -> Result<Option<Content>> {
         for plugin in &self.plugins {
             if let Some(callback) = plugin.after_tool() {
                 debug!(plugin = plugin.name(), "Running after_tool callback");
@@ -398,7 +383,11 @@ impl PluginManager {
     ) -> Result<Option<serde_json::Value>> {
         for plugin in &self.plugins {
             if let Some(callback) = plugin.on_tool_error() {
-                debug!(plugin = plugin.name(), tool = tool.name(), "Running on_tool_error callback");
+                debug!(
+                    plugin = plugin.name(),
+                    tool = tool.name(),
+                    "Running on_tool_error callback"
+                );
                 match callback(ctx.clone(), tool.clone(), args.clone(), error.clone()).await {
                     Ok(Some(result)) => {
                         debug!(plugin = plugin.name(), "on_tool_error provided fallback result");
@@ -454,14 +443,8 @@ mod tests {
     #[test]
     fn test_plugin_manager_creation() {
         let plugins = vec![
-            Plugin::new(PluginConfig {
-                name: "test1".to_string(),
-                ..Default::default()
-            }),
-            Plugin::new(PluginConfig {
-                name: "test2".to_string(),
-                ..Default::default()
-            }),
+            Plugin::new(PluginConfig { name: "test1".to_string(), ..Default::default() }),
+            Plugin::new(PluginConfig { name: "test2".to_string(), ..Default::default() }),
         ];
 
         let manager = PluginManager::new(plugins);

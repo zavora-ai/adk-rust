@@ -44,7 +44,8 @@ impl Executor {
             session_service: self.config.runner_config.session_service.clone(),
             artifact_service: self.config.runner_config.artifact_service.clone(),
             memory_service: self.config.runner_config.memory_service.clone(),
-            run_config: None,
+            plugin_manager: self.config.runner_config.plugin_manager.clone(),
+            run_config: self.config.runner_config.run_config.clone(),
         })?;
 
         // Create processor

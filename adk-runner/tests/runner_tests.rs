@@ -1,9 +1,11 @@
 use adk_core::{Agent, Content, EventStream, InvocationContext, Part, Result};
+use adk_plugin::{Plugin, PluginConfig, PluginManager};
 use adk_runner::{Runner, RunnerConfig};
 use adk_session::{Event, Events, GetRequest, Session, SessionService, State};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use std::sync::Arc;
+use futures::StreamExt;
+use std::sync::{Arc, Mutex};
 
 // Mock Agent
 struct MockAgent {
@@ -152,6 +154,7 @@ fn test_runner_creation() {
         session_service,
         artifact_service: None,
         memory_service: None,
+        plugin_manager: None,
         run_config: None,
     });
 
@@ -170,6 +173,7 @@ async fn test_runner_run() {
         session_service,
         artifact_service: None,
         memory_service: None,
+        plugin_manager: None,
         run_config: None,
     })
     .unwrap();
@@ -295,4 +299,165 @@ impl Agent for MockAgentWithSubs {
     async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
         Ok(Box::pin(futures::stream::empty()))
     }
+}
+
+struct EchoUserContentAgent;
+
+#[async_trait]
+impl Agent for EchoUserContentAgent {
+    fn name(&self) -> &str {
+        "echo"
+    }
+
+    fn description(&self) -> &str {
+        "Echoes current user content"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        let input_text = ctx
+            .user_content()
+            .parts
+            .iter()
+            .find_map(|p| match p {
+                Part::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        let mut event = Event::new(ctx.invocation_id());
+        event.author = "echo".to_string();
+        event.llm_response.content =
+            Some(Content::new("model").with_text(format!("agent-saw:{input_text}")));
+
+        let s = futures::stream::iter(vec![Ok(event)]);
+        Ok(Box::pin(s))
+    }
+}
+
+#[tokio::test]
+async fn test_plugin_callback_order_and_mutation() {
+    let call_order: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let before_order = call_order.clone();
+    let on_user_order = call_order.clone();
+    let on_event_order = call_order.clone();
+    let after_order = call_order.clone();
+
+    let plugin = Plugin::new(PluginConfig {
+        name: "test-plugin".to_string(),
+        before_run: Some(Box::new(move |_ctx| {
+            let before_order = before_order.clone();
+            Box::pin(async move {
+                before_order.lock().unwrap().push("before_run".to_string());
+                Ok(None)
+            })
+        })),
+        on_user_message: Some(Box::new(move |_ctx, mut content| {
+            let on_user_order = on_user_order.clone();
+            Box::pin(async move {
+                on_user_order.lock().unwrap().push("on_user_message".to_string());
+                if let Some(Part::Text { text }) = content.parts.first_mut() {
+                    *text = format!("{text} [plugin]");
+                }
+                Ok(Some(content))
+            })
+        })),
+        on_event: Some(Box::new(move |_ctx, mut event| {
+            let on_event_order = on_event_order.clone();
+            Box::pin(async move {
+                on_event_order.lock().unwrap().push("on_event".to_string());
+                if let Some(content) = &mut event.llm_response.content {
+                    content.parts.push(Part::Text { text: "[event-mutated]".to_string() });
+                }
+                Ok(Some(event))
+            })
+        })),
+        after_run: Some(Box::new(move |_ctx| {
+            let after_order = after_order.clone();
+            Box::pin(async move {
+                after_order.lock().unwrap().push("after_run".to_string());
+            })
+        })),
+        ..Default::default()
+    });
+
+    let runner = Runner::new(RunnerConfig {
+        app_name: "test_app".to_string(),
+        agent: Arc::new(EchoUserContentAgent),
+        session_service: Arc::new(MockSessionService),
+        artifact_service: None,
+        memory_service: None,
+        plugin_manager: Some(Arc::new(PluginManager::new(vec![plugin]))),
+        run_config: None,
+    })
+    .unwrap();
+
+    let content = Content::new("user").with_text("hello");
+    let mut stream =
+        runner.run("user123".to_string(), "session456".to_string(), content).await.unwrap();
+
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event.unwrap());
+    }
+
+    assert_eq!(
+        call_order.lock().unwrap().clone(),
+        vec!["before_run", "on_user_message", "on_event", "after_run"]
+    );
+
+    assert_eq!(events.len(), 1);
+    let text_parts: Vec<String> = events[0]
+        .llm_response
+        .content
+        .as_ref()
+        .unwrap()
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            Part::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert!(text_parts.iter().any(|t| t.contains("agent-saw:hello [plugin]")));
+    assert!(text_parts.iter().any(|t| t == "[event-mutated]"));
+}
+
+#[tokio::test]
+async fn test_plugin_error_propagates_from_on_user_message() {
+    let plugin = Plugin::new(PluginConfig {
+        name: "failing-plugin".to_string(),
+        on_user_message: Some(Box::new(|_ctx, _content| {
+            Box::pin(async move { Err(adk_core::AdkError::Agent("boom".to_string())) })
+        })),
+        ..Default::default()
+    });
+
+    let runner = Runner::new(RunnerConfig {
+        app_name: "test_app".to_string(),
+        agent: Arc::new(EchoUserContentAgent),
+        session_service: Arc::new(MockSessionService),
+        artifact_service: None,
+        memory_service: None,
+        plugin_manager: Some(Arc::new(PluginManager::new(vec![plugin]))),
+        run_config: None,
+    })
+    .unwrap();
+
+    let mut stream = runner
+        .run(
+            "user123".to_string(),
+            "session456".to_string(),
+            Content::new("user").with_text("hello"),
+        )
+        .await
+        .unwrap();
+
+    let first = stream.next().await.expect("expected stream item");
+    assert!(first.is_err());
 }

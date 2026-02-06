@@ -178,6 +178,7 @@ fn create_message_stream(
                 session_service: controller.config.session_service.clone(),
                 artifact_service: controller.config.artifact_service.clone(),
                 memory_service: None,
+                plugin_manager: None,
                 run_config: None,
             }),
         });
@@ -262,6 +263,7 @@ async fn handle_message_send(
             session_service: controller.config.session_service.clone(),
             artifact_service: controller.config.artifact_service.clone(),
             memory_service: None,
+            plugin_manager: None,
             run_config: None,
         }),
     });
@@ -372,6 +374,7 @@ async fn handle_tasks_cancel(
             session_service: controller.config.session_service.clone(),
             artifact_service: controller.config.artifact_service.clone(),
             memory_service: None,
+            plugin_manager: None,
             run_config: None,
         }),
     });

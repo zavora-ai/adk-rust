@@ -16,6 +16,7 @@ readme = "README.md"
 adk-core.workspace = true
 adk-artifact.workspace = true
 adk-session.workspace = true
+adk-plugin.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
 futures.workspace = true

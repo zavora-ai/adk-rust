@@ -410,8 +410,8 @@ impl Agent for LlmAgent {
         let after_agent_callbacks = self.after_callbacks.clone();
         let before_model_callbacks = self.before_model_callbacks.clone();
         let after_model_callbacks = self.after_model_callbacks.clone();
-        let _before_tool_callbacks = self.before_tool_callbacks.clone();
-        let _after_tool_callbacks = self.after_tool_callbacks.clone();
+        let before_tool_callbacks = self.before_tool_callbacks.clone();
+        let after_tool_callbacks = self.after_tool_callbacks.clone();
 
         let s = stream! {
             // ===== BEFORE AGENT CALLBACKS =====
@@ -693,6 +693,7 @@ impl Agent for LlmAgent {
                         "gcp.vertex.agent.event_id" = %llm_event_id,
                         "gcp.vertex.agent.invocation_id" = %invocation_id,
                         "gcp.vertex.agent.session_id" = %ctx.session_id(),
+                        "gen_ai.conversation.id" = %ctx.session_id(),
                         "gcp.vertex.agent.llm_request" = %request_json,
                         "gcp.vertex.agent.llm_response" = tracing::field::Empty  // Placeholder for later recording
                     );
@@ -920,60 +921,110 @@ impl Agent for LlmAgent {
                                 return;
                             }
 
+                            // ===== BEFORE TOOL CALLBACKS =====
+                            // Allows policy checks or callback-provided short-circuit responses.
+                            let mut tool_actions = EventActions::default();
+                            let mut response_content: Option<Content> = None;
 
-                            // Find and execute tool
-                            let (tool_result, tool_actions) = if let Some(tool) = tools.iter().find(|t| t.name() == name) {
-                                // ✅ Use AgentToolContext that preserves parent context
-                                let tool_ctx: Arc<dyn ToolContext> = Arc::new(AgentToolContext::new(
-                                    ctx.clone(),
-                                    format!("{}_{}", invocation_id, name),
-                                ));
-
-                                // Create span name following adk-go pattern: "execute_tool {name}"
-                                let span_name = format!("execute_tool {}", name);
-                                let tool_span = tracing::info_span!(
-                                    "",
-                                    otel.name = %span_name,
-                                    tool.name = %name,
-                                    "gcp.vertex.agent.event_id" = %format!("{}_{}", invocation_id, name),
-                                    "gcp.vertex.agent.invocation_id" = %invocation_id,
-                                    "gcp.vertex.agent.session_id" = %ctx.session_id()
-                                );
-
-                                // Use instrument() for proper async span handling
-                                let result = async {
-                                    tracing::info!(tool.name = %name, tool.args = %args, "tool_call");
-                                    match tool.execute(tool_ctx.clone(), args.clone()).await {
-                                        Ok(result) => {
-                                            tracing::info!(tool.name = %name, tool.result = %result, "tool_result");
-                                            result
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(tool.name = %name, error = %e, "tool_error");
-                                            serde_json::json!({ "error": e.to_string() })
-                                        }
+                            for callback in before_tool_callbacks.as_ref() {
+                                match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                                    Ok(Some(content)) => {
+                                        response_content = Some(content);
+                                        break;
                                     }
-                                }.instrument(tool_span).await;
+                                    Ok(None) => continue,
+                                    Err(e) => {
+                                        yield Err(e);
+                                        return;
+                                    }
+                                }
+                            }
 
-                                (result, tool_ctx.actions())
-                            } else {
-                                (serde_json::json!({ "error": format!("Tool {} not found", name) }), EventActions::default())
-                            };
+                            // Find and execute tool unless callbacks already short-circuited.
+                            if response_content.is_none() {
+                                if let Some(tool) = tools.iter().find(|t| t.name() == name) {
+                                    // ✅ Use AgentToolContext that preserves parent context
+                                    let tool_ctx: Arc<dyn ToolContext> = Arc::new(AgentToolContext::new(
+                                        ctx.clone(),
+                                        format!("{}_{}", invocation_id, name),
+                                    ));
+
+                                    // Create span name following adk-go pattern: "execute_tool {name}"
+                                    let span_name = format!("execute_tool {}", name);
+                                    let tool_span = tracing::info_span!(
+                                        "",
+                                        otel.name = %span_name,
+                                        tool.name = %name,
+                                        "gcp.vertex.agent.event_id" = %format!("{}_{}", invocation_id, name),
+                                        "gcp.vertex.agent.invocation_id" = %invocation_id,
+                                        "gcp.vertex.agent.session_id" = %ctx.session_id(),
+                                        "gen_ai.conversation.id" = %ctx.session_id()
+                                    );
+
+                                    // Use instrument() for proper async span handling
+                                    let result = async {
+                                        tracing::info!(tool.name = %name, tool.args = %args, "tool_call");
+                                        match tool.execute(tool_ctx.clone(), args.clone()).await {
+                                            Ok(result) => {
+                                                tracing::info!(tool.name = %name, tool.result = %result, "tool_result");
+                                                result
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(tool.name = %name, error = %e, "tool_error");
+                                                serde_json::json!({ "error": e.to_string() })
+                                            }
+                                        }
+                                    }.instrument(tool_span).await;
+
+                                    tool_actions = tool_ctx.actions();
+                                    response_content = Some(Content {
+                                        role: "function".to_string(),
+                                        parts: vec![Part::FunctionResponse {
+                                            function_response: FunctionResponseData {
+                                                name: name.clone(),
+                                                response: result,
+                                            },
+                                            id: id.clone(),
+                                        }],
+                                    });
+                                } else {
+                                    response_content = Some(Content {
+                                        role: "function".to_string(),
+                                        parts: vec![Part::FunctionResponse {
+                                            function_response: FunctionResponseData {
+                                                name: name.clone(),
+                                                response: serde_json::json!({
+                                                    "error": format!("Tool {} not found", name)
+                                                }),
+                                            },
+                                            id: id.clone(),
+                                        }],
+                                    });
+                                }
+                            }
+
+                            // ===== AFTER TOOL CALLBACKS =====
+                            // Allows post-processing of tool outputs or audit side effects.
+                            let mut response_content = response_content.expect("tool response content is set");
+                            for callback in after_tool_callbacks.as_ref() {
+                                match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                                    Ok(Some(modified_content)) => {
+                                        response_content = modified_content;
+                                        break;
+                                    }
+                                    Ok(None) => continue,
+                                    Err(e) => {
+                                        yield Err(e);
+                                        return;
+                                    }
+                                }
+                            }
 
                             // Yield tool execution event
                             let mut tool_event = Event::new(&invocation_id);
                             tool_event.author = agent_name.clone();
                             tool_event.actions = tool_actions.clone();
-                            tool_event.llm_response.content = Some(Content {
-                                role: "function".to_string(),
-                                parts: vec![Part::FunctionResponse {
-                                    function_response: FunctionResponseData {
-                                        name: name.clone(),
-                                        response: tool_result.clone(),
-                                    },
-                                    id: id.clone(),
-                                }],
-                            });
+                            tool_event.llm_response.content = Some(response_content.clone());
                             yield Ok(tool_event);
 
                             // Check if tool requested escalation or skip_summarization
@@ -983,16 +1034,7 @@ impl Agent for LlmAgent {
                             }
 
                             // Add function response to history
-                            conversation_history.push(Content {
-                                role: "function".to_string(),
-                                parts: vec![Part::FunctionResponse {
-                                    function_response: FunctionResponseData {
-                                        name: name.clone(),
-                                        response: tool_result,
-                                    },
-                                    id: id.clone(),
-                                }],
-                            });
+                            conversation_history.push(response_content);
                         }
                     }
                 }
