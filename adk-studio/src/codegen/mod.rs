@@ -470,12 +470,40 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
         }
     }
 
+    // Identify all_match switch nodes early — needed to detect parallel branch agents
+    let all_match_switch_nodes_early: std::collections::HashSet<&str> = project
+        .action_nodes
+        .iter()
+        .filter(|(_, n)| {
+            if let ActionNodeConfig::Switch(config) = n {
+                config.evaluation_mode == EvaluationMode::AllMatch
+            } else {
+                false
+            }
+        })
+        .map(|(id, _)| id.as_str())
+        .collect();
+
+    // Identify agents that are in parallel fan-out branches (predecessor is an all_match switch)
+    // These agents must write to unique output keys to avoid overwriting each other
+    let mut parallel_branch_agents: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for edge in &project.workflow.edges {
+        if all_match_switch_nodes_early.contains(edge.from.as_str()) {
+            // This edge goes from an all_match switch to a branch target
+            // If the target is an agent, it's in a parallel branch
+            if project.agents.contains_key(&edge.to) {
+                parallel_branch_agents.insert(edge.to.clone());
+            }
+        }
+    }
+
     // Generate all agent nodes with their predecessors
     for agent_id in &top_level {
         if let Some(agent) = project.agents.get(*agent_id) {
             // Get first predecessor for backward compat (most nodes have exactly one)
             let predecessors = predecessor_map.get(agent_id.as_str());
             let first_predecessor = predecessors.and_then(|v| v.first().copied());
+            let is_parallel = parallel_branch_agents.contains(*agent_id);
             match agent.agent_type {
                 AgentType::Router => {
                     code.push_str(&generate_router_node(agent_id, agent));
@@ -487,6 +515,7 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
                         project,
                         first_predecessor,
                         &predecessor_map,
+                        is_parallel,
                     ));
                 }
                 _ => {
@@ -507,7 +536,7 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
         .collect();
 
     for (node_id, node) in &executable_action_nodes {
-        code.push_str(&generate_action_node_function(node_id, node));
+        code.push_str(&generate_action_node_function(node_id, node, &predecessor_map, &parallel_branch_agents));
     }
 
     // Build graph
@@ -590,7 +619,14 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
         }
     }
     let base_channels = vec!["message".to_string(), "classification".to_string(), "response".to_string()];
-    let all_channels: Vec<String> = base_channels.into_iter().chain(extra_channels.into_iter()).collect();
+    // Add unique output channels for parallel-branch agents
+    let parallel_channels: Vec<String> = parallel_branch_agents.iter()
+        .map(|id| format!("{}_response", id))
+        .collect();
+    let all_channels: Vec<String> = base_channels.into_iter()
+        .chain(extra_channels.into_iter())
+        .chain(parallel_channels.into_iter())
+        .collect();
     let channel_list = all_channels.iter().map(|c| format!("\"{}\"", c)).collect::<Vec<_>>().join(", ");
     code.push_str(&format!("    let graph = StateGraph::with_channels(&[{}])\n", channel_list));
 
@@ -1013,6 +1049,7 @@ fn generate_llm_node_v2(
     project: &ProjectSchema,
     predecessor: Option<&str>,
     predecessor_map: &std::collections::HashMap<&str, Vec<&str>>,
+    is_parallel_branch: bool,
 ) -> String {
     let mut code = String::new();
     let model = agent.model.as_deref().unwrap_or("gemini-2.0-flash");
@@ -1270,7 +1307,12 @@ fn generate_llm_node_v2(
     code.push_str("                }\n");
     code.push_str("            }\n");
     code.push_str("            if !full_text.is_empty() {\n");
-    code.push_str("                updates.insert(\"response\".to_string(), json!(full_text));\n");
+    if is_parallel_branch {
+        // Parallel branch agents write to a unique key to avoid overwriting each other
+        code.push_str(&format!("                updates.insert(\"{}_response\".to_string(), json!(full_text));\n", id));
+    } else {
+        code.push_str("                updates.insert(\"response\".to_string(), json!(full_text));\n");
+    }
     code.push_str("            }\n");
     code.push_str("            updates\n");
     code.push_str("        });\n\n");
@@ -1708,10 +1750,19 @@ fn generate_all_match_condition_check(code: &mut String, op: &str, value_str: &s
 fn generate_action_node_function(
     node_id: &str,
     node: &crate::codegen::action_nodes::ActionNodeConfig,
+    predecessor_map: &std::collections::HashMap<&str, Vec<&str>>,
+    parallel_branch_agents: &std::collections::HashSet<String>,
 ) -> String {
     use crate::codegen::action_nodes::ActionNodeConfig;
 
     let mut code = String::new();
+
+    // Check if this node's predecessor is a parallel-branch agent
+    // If so, expressions like {{response}} should be rewritten to {{predecessor_response}}
+    let parallel_predecessor: Option<&str> = predecessor_map
+        .get(node_id)
+        .and_then(|preds| preds.iter().find(|p| parallel_branch_agents.contains(**p)))
+        .copied();
 
     match node {
         ActionNodeConfig::Set(config) => {
@@ -1725,7 +1776,13 @@ fn generate_action_node_function(
                 match var.value_type.as_str() {
                     "expression" => {
                         // Expression type - interpolate variables from state
-                        let expr = var.value.as_str().unwrap_or("");
+                        let raw_expr = var.value.as_str().unwrap_or("");
+                        // If predecessor is a parallel-branch agent, rewrite {{response}} to {{agent_response}}
+                        let expr = if let Some(pred_id) = parallel_predecessor {
+                            raw_expr.replace("{{response}}", &format!("{{{{{}_response}}}}", pred_id))
+                        } else {
+                            raw_expr.to_string()
+                        };
                         // Simple variable interpolation: replace {{var}} with state value
                         code.push_str(&format!("        // Set {} from expression\n", key));
                         code.push_str(&format!(
@@ -1759,10 +1816,41 @@ fn generate_action_node_function(
                     }
                     _ => {
                         // String or other types
-                        code.push_str(&format!(
-                            "        output = output.with_update(\"{}\", json!({}));\n",
-                            key, var.value
-                        ));
+                        let raw_val = var.value.as_str().unwrap_or("");
+                        if raw_val.contains("{{") {
+                            // String contains template variables — treat like expression
+                            let val = if let Some(pred_id) = parallel_predecessor {
+                                raw_val.replace("{{response}}", &format!("{{{{{}_response}}}}", pred_id))
+                            } else {
+                                raw_val.to_string()
+                            };
+                            code.push_str(&format!("        // Set {} from string template\n", key));
+                            code.push_str(&format!(
+                                "        let mut {}_value = \"{}\".to_string();\n",
+                                key,
+                                val.replace('"', "\\\"")
+                            ));
+                            code.push_str("        for (k, v) in ctx.state.iter() {\n");
+                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str("            if let Some(s) = v.as_str() {\n");
+                            code.push_str(&format!(
+                                "                {}_value = {}_value.replace(&pattern, s);\n",
+                                key, key
+                            ));
+                            code.push_str("            } else {\n");
+                            code.push_str(&format!("                {}_value = {}_value.replace(&pattern, &v.to_string());\n", key, key));
+                            code.push_str("            }\n");
+                            code.push_str("        }\n");
+                            code.push_str(&format!(
+                                "        output = output.with_update(\"{}\", json!({}_value));\n",
+                                key, key
+                            ));
+                        } else {
+                            code.push_str(&format!(
+                                "        output = output.with_update(\"{}\", json!({}));\n",
+                                key, var.value
+                            ));
+                        }
                     }
                 }
             }
