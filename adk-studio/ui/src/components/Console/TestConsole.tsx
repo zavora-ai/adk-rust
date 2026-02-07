@@ -287,6 +287,27 @@ export function TestConsole({
   const sendingRef = useRef(false);
   const lastAgentRef = useRef<string | null>(null);
   
+  // Auto-clear session when a build succeeds.
+  // This ensures stale conversation history from the old binary doesn't persist.
+  // When Set/Transform node values change and the project is rebuilt, the old session
+  // process is running the OLD binary — we need to kill it and start fresh.
+  const prevBuildStatusRef = useRef<BuildStatus>(buildStatus);
+  const hadMessagesRef = useRef(false);
+  useEffect(() => { hadMessagesRef.current = messages.length > 0; }, [messages.length]);
+  useEffect(() => {
+    const prev = prevBuildStatusRef.current;
+    prevBuildStatusRef.current = buildStatus;
+    // Detect transition to 'success' from 'building' (a fresh build just completed)
+    if (prev === 'building' && buildStatus === 'success') {
+      console.log('[TestConsole] Build succeeded, starting fresh session');
+      // Only show notification if there was an active conversation
+      if (hadMessagesRef.current) {
+        setMessages([{ role: 'assistant', content: '🔄 Build complete — session refreshed with updated workflow.' }]);
+      }
+      newSession();
+    }
+  }, [buildStatus, newSession]);
+  
   // Webhook events: Subscribe to webhook notifications and auto-trigger workflow
   const handleWebhookReceived = useCallback((notification: WebhookNotification) => {
     // Determine the effective binary path: use prop or notification's binary_path
