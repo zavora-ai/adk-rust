@@ -1,4 +1,5 @@
 use adk_server::create_app;
+use adk_ui::{TOOL_ENVELOPE_VERSION, UI_DEFAULT_PROTOCOL, UI_PROTOCOL_CAPABILITIES};
 use adk_session::{
     CreateRequest, DeleteRequest, Event, GetRequest, ListRequest, Session, SessionService,
 };
@@ -177,22 +178,26 @@ async fn test_ui_capabilities() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["default_protocol"], "adk_ui");
-    assert!(json["protocols"].as_array().unwrap().iter().any(|entry| entry["protocol"] == "a2ui"));
-    assert!(
-        json["protocols"]
-            .as_array()
-            .unwrap()
+    assert_eq!(json["default_protocol"], UI_DEFAULT_PROTOCOL);
+    assert_eq!(json["tool_envelope_version"], TOOL_ENVELOPE_VERSION);
+
+    let protocols = json["protocols"].as_array().unwrap();
+    assert_eq!(protocols.len(), UI_PROTOCOL_CAPABILITIES.len());
+
+    for expected in UI_PROTOCOL_CAPABILITIES {
+        let entry = protocols
             .iter()
-            .any(|entry| entry["protocol"] == "ag_ui")
-    );
-    assert!(
-        json["protocols"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|entry| entry["protocol"] == "mcp_apps")
-    );
+            .find(|entry| entry["protocol"] == expected.protocol)
+            .unwrap_or_else(|| panic!("missing protocol capability for {}", expected.protocol));
+
+        let versions: Vec<&str> =
+            entry["versions"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        let features: Vec<&str> =
+            entry["features"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+
+        assert_eq!(versions, expected.versions, "version mismatch for {}", expected.protocol);
+        assert_eq!(features, expected.features, "feature mismatch for {}", expected.protocol);
+    }
 }
 
 #[tokio::test]
