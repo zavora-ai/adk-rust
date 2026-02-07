@@ -7,7 +7,7 @@
  * Requirements: 10.1, 10.2
  */
 
-import { memo, useMemo } from 'react';
+import { useMemo } from 'react';
 import { getSmoothStepPath, type EdgeProps } from '@xyflow/react';
 
 /**
@@ -38,7 +38,7 @@ export interface AnimatedEdgeData {
  * @see Requirement 10.1: Edge SHALL display animated flow indicator
  * @see Requirement 10.2: Flow animation SHALL use dashed line animation
  */
-export const AnimatedEdge = memo(function AnimatedEdge({
+export function AnimatedEdge({
   id,
   sourceX,
   sourceY,
@@ -155,8 +155,6 @@ export const AnimatedEdge = memo(function AnimatedEdge({
       `}</style>
     </>
   );
-});
-
-AnimatedEdge.displayName = 'AnimatedEdge';
+}
 
 export default AnimatedEdge;

@@ -345,11 +345,16 @@ export function useCanvasNodes(project: Project | null, execution: ExecutionStat
       const targetIndex = executionPath.indexOf(e.to);
       const isInPath = sourceIndex !== -1 && targetIndex !== -1 && targetIndex === sourceIndex + 1;
       
-      // Edge is animated if it leads TO the currently active node from a node in the path,
-      // but NOT during 'output' phase — once the agent is generating output, the input
-      // edge is "done" and should show as completed (green), not still flowing.
+      // Edge is animated if it leads TO the currently active node from a node
+      // in the execution path. The activeAgent is managed by a queue with 300ms
+      // display time per node, so each node gets visible edge animation even if
+      // the underlying execution is faster.
+      // Note: We no longer check flowPhase !== 'output' here because during loop
+      // iterations, the LLM's streaming text sets flowPhase to 'output' almost
+      // immediately, which would suppress edge animations for action nodes that
+      // execute between LLM calls. The queue timing handles visibility instead.
       const isLeadingToActive = isExecuting && activeAgent && e.to === activeAgent 
-        && executionPath.includes(e.from) && flowPhase !== 'output';
+        && executionPath.includes(e.from);
       // Animate agent→END when we're in output phase (data flowing out)
       const isAgentToEnd = flowPhase === 'output' && e.to === 'END' && executionPath.includes(e.from);
       
@@ -390,8 +395,10 @@ export function useCanvasNodes(project: Project | null, execution: ExecutionStat
         defaultTargetHandle = isHorizontal ? 'left' : 'top';
       }
       
+      const isInPathNotAnimated = isInPath && !animated;
+      
       return { 
-        id: `e${i}-${layoutDirection}`,
+        id: `e${i}-${layoutDirection}${animated ? '-anim' : isInPathNotAnimated ? '-path' : ''}`,
         source: e.from, 
         target: e.to, 
         // Use dataflow edge type when overlay is enabled, otherwise animated
@@ -404,7 +411,7 @@ export function useCanvasNodes(project: Project | null, execution: ExecutionStat
           highlightedKey,
           onKeyHover,
           // v2.0: Execution path data — completed path segments (not currently animated)
-          isExecutionPath: isInPath && !animated,
+          isExecutionPath: isInPathNotAnimated,
         },
         // Use port-specific handles if specified, otherwise use defaults
         sourceHandle: e.fromPort || defaultSourceHandle,

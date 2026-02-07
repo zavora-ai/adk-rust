@@ -149,13 +149,18 @@ export function useCanvasExecution(deps: {
     }
 
     pendingIdleRef.current = false;
-    const ep = execPathRef.current;
-    // Skip if already displayed or queued or already in path
+    // Skip if this exact agent is currently being displayed (avoid double-queue
+    // from rapid duplicate events). But DO allow re-queuing nodes that are
+    // already in the execution path — this is essential for loop iterations
+    // where the same node (e.g. loop_items, transform_prompt) executes
+    // multiple times and each iteration needs edge animation.
     if (currentDisplayedAgentRef.current === agent) return;
-    if (activeAgentQueueRef.current.includes(agent)) return;
-    if (ep.path.includes(agent)) return;
+    // Also skip if the same agent is already the last item in the queue
+    // (prevents rapid duplicate queueing within the same iteration)
+    const queue = activeAgentQueueRef.current;
+    if (queue.length > 0 && queue[queue.length - 1] === agent) return;
 
-    activeAgentQueueRef.current.push(agent);
+    queue.push(agent);
     processAgentQueue();
   }, [processAgentQueue]);
 
