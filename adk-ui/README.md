@@ -114,7 +114,14 @@ let update = UiUpdate::replace(
 
 ## Protocol Outputs
 
-`render_screen` and `render_page` can emit three interoperable output formats:
+All render tools support protocol-aware output selection.
+
+Protocol behavior:
+
+- `render_screen` / `render_page`: default to `a2ui`
+- legacy render tools (`render_form`, `render_card`, `render_alert`, etc.): default to legacy `adk_ui` payloads unless `protocol` is set
+
+Supported protocol values:
 
 - `a2ui` (default): A2UI JSONL payloads
 - `ag_ui`: AG-UI event stream (wrapped as `RUN_STARTED` -> `CUSTOM` -> `RUN_FINISHED`)
@@ -130,6 +137,31 @@ Example tool args:
   }
 }
 ```
+
+Protocol responses are emitted with a standard envelope shape:
+
+```json
+{
+  "protocol": "a2ui",
+  "version": "1.0",
+  "surface_id": "main",
+  "components": [],
+  "data_model": {},
+  "jsonl": "..."
+}
+```
+
+For `ag_ui` the payload includes `events`; for `mcp_apps` it includes `payload`.
+
+## Interop Adapters
+
+`adk-ui` includes adapter primitives for protocol conversion from canonical surfaces:
+
+- `A2uiAdapter`
+- `AgUiAdapter`
+- `McpAppsAdapter`
+
+These adapters implement a shared `UiProtocolAdapter` trait and are used by render tools to avoid per-tool protocol conversion drift.
 
 ## React Client
 
