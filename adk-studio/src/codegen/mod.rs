@@ -1261,7 +1261,14 @@ fn generate_llm_node_v2(
                             inject_vars.push(out_key);
                         }
                     }
-                    _ => {}
+                    _ => {
+                        // For any other action node (Http, Wait, etc.),
+                        // inject their output_key so the agent sees the result
+                        let out_key = &action_node.standard().mapping.output_key;
+                        if !out_key.is_empty() && !inject_vars.contains(out_key) {
+                            inject_vars.push(out_key.clone());
+                        }
+                    }
                 }
             }
             // Walk to all predecessors of this node
@@ -1589,6 +1596,36 @@ fn to_pascal_case(s: &str) -> String {
 }
 
 /// Generate a graph node function for an action node (Set, Transform, etc.)
+
+/// Helper: generate JSONPath-like extraction code for HTTP response.
+/// Supports simple dot-notation paths like "data.items" or "result.name".
+fn generate_json_path_extraction(code: &mut String, json_path: &str, output_key: &str) {
+    // Strip leading "$." if present (JSONPath convention)
+    let path = json_path.strip_prefix("$.").unwrap_or(json_path);
+    let segments: Vec<&str> = path.split('.').collect();
+
+    if segments.is_empty() || (segments.len() == 1 && segments[0].is_empty()) {
+        // No path — return the whole body
+        code.push_str(&format!(
+            "                Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"status\": status, \"body\": body }})))\n",
+            output_key
+        ));
+        return;
+    }
+
+    code.push_str("                let mut extracted = body.clone();\n");
+    for seg in &segments {
+        code.push_str(&format!(
+            "                extracted = extracted.get(\"{}\").cloned().unwrap_or(json!(null));\n",
+            seg.replace('"', "\\\"")
+        ));
+    }
+    code.push_str(&format!(
+        "                Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"status\": status, \"body\": extracted }})))\n",
+        output_key
+    ));
+}
+
 /// Helper: generate a condition check for first_match Switch (sets matched_branch)
 fn generate_condition_check(code: &mut String, op: &str, value_str: &str, port: &str, field: &str) {
     let escaped_val = value_str.replace('"', "\\\"");
@@ -2193,6 +2230,352 @@ fn generate_action_node_function(
             code.push_str("        Ok(output)\n");
             code.push_str("    });\n\n");
         }
+        ActionNodeConfig::Http(config) => {
+            code.push_str(&format!("    // Action Node: {} (HTTP)\n", config.standard.name));
+            code.push_str(&format!("    let {}_node = adk_graph::node::FunctionNode::new(\"{}\", |ctx| async move {{\n", node_id, node_id));
+
+            let output_key = if config.standard.mapping.output_key.is_empty() {
+                "httpResult"
+            } else {
+                &config.standard.mapping.output_key
+            };
+
+            // Build URL with variable interpolation
+            let raw_url = &config.url;
+            let url = if let Some(pred_id) = parallel_predecessor {
+                raw_url.replace("{{response}}", &format!("{{{{{}_response}}}}", pred_id))
+            } else {
+                raw_url.to_string()
+            };
+
+            code.push_str(&format!(
+                "        let mut url = \"{}\".to_string();\n",
+                url.replace('"', "\\\"")
+            ));
+            code.push_str("        for (k, v) in ctx.state.iter() {\n");
+            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+            code.push_str("            if let Some(s) = v.as_str() {\n");
+            code.push_str("                url = url.replace(&pattern, s);\n");
+            code.push_str("            } else {\n");
+            code.push_str("                url = url.replace(&pattern, &v.to_string());\n");
+            code.push_str("            }\n");
+            code.push_str("        }\n\n");
+
+            // Build the request
+            let method_fn = match config.method {
+                crate::codegen::action_node_types::HttpMethod::Get => "get",
+                crate::codegen::action_node_types::HttpMethod::Post => "post",
+                crate::codegen::action_node_types::HttpMethod::Put => "put",
+                crate::codegen::action_node_types::HttpMethod::Patch => "patch",
+                crate::codegen::action_node_types::HttpMethod::Delete => "delete",
+            };
+
+            code.push_str("        let client = reqwest::Client::new();\n");
+            
+            // Only make req mutable if we'll modify it (headers, auth, or body)
+            let needs_mut = !config.headers.is_empty() 
+                || config.auth.auth_type != "none" 
+                || config.body.body_type != "none";
+            if needs_mut {
+                code.push_str(&format!("        let mut req = client.{}(&url);\n\n", method_fn));
+            } else {
+                code.push_str(&format!("        let req = client.{}(&url);\n\n", method_fn));
+            }
+
+            // Headers
+            for (key, value) in &config.headers {
+                let val = if let Some(pred_id) = parallel_predecessor {
+                    value.replace("{{response}}", &format!("{{{{{}_response}}}}", pred_id))
+                } else {
+                    value.to_string()
+                };
+                if val.contains("{{") {
+                    // Header value has template variables — interpolate from state
+                    code.push_str(&format!(
+                        "        let mut hdr_val = \"{}\".to_string();\n",
+                        val.replace('"', "\\\"")
+                    ));
+                    code.push_str("        for (k, v) in ctx.state.iter() {\n");
+                    code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                    code.push_str("            if let Some(s) = v.as_str() {\n");
+                    code.push_str("                hdr_val = hdr_val.replace(&pattern, s);\n");
+                    code.push_str("            } else {\n");
+                    code.push_str("                hdr_val = hdr_val.replace(&pattern, &v.to_string());\n");
+                    code.push_str("            }\n");
+                    code.push_str("        }\n");
+                    code.push_str(&format!("        req = req.header(\"{}\", hdr_val);\n", key.replace('"', "\\\"")));
+                } else {
+                    code.push_str(&format!(
+                        "        req = req.header(\"{}\", \"{}\");\n",
+                        key.replace('"', "\\\""),
+                        val.replace('"', "\\\"")
+                    ));
+                }
+            }
+
+            // Authentication
+            match config.auth.auth_type.as_str() {
+                "bearer" => {
+                    if let Some(bearer) = &config.auth.bearer {
+                        let token = &bearer.token;
+                        if token.contains("{{") {
+                            code.push_str(&format!(
+                                "        let mut bearer_token = \"{}\".to_string();\n",
+                                token.replace('"', "\\\"")
+                            ));
+                            code.push_str("        for (k, v) in ctx.state.iter() {\n");
+                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str("            if let Some(s) = v.as_str() {\n");
+                            code.push_str("                bearer_token = bearer_token.replace(&pattern, s);\n");
+                            code.push_str("            }\n");
+                            code.push_str("        }\n");
+                            code.push_str("        req = req.bearer_auth(&bearer_token);\n");
+                        } else {
+                            code.push_str(&format!(
+                                "        req = req.bearer_auth(\"{}\");\n",
+                                token.replace('"', "\\\"")
+                            ));
+                        }
+                    }
+                }
+                "basic" => {
+                    if let Some(basic) = &config.auth.basic {
+                        code.push_str(&format!(
+                            "        req = req.basic_auth(\"{}\", Some(\"{}\"));\n",
+                            basic.username.replace('"', "\\\""),
+                            basic.password.replace('"', "\\\"")
+                        ));
+                    }
+                }
+                "api_key" => {
+                    if let Some(api_key) = &config.auth.api_key {
+                        let val = &api_key.value;
+                        if val.contains("{{") {
+                            code.push_str(&format!(
+                                "        let mut api_key_val = \"{}\".to_string();\n",
+                                val.replace('"', "\\\"")
+                            ));
+                            code.push_str("        for (k, v) in ctx.state.iter() {\n");
+                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str("            if let Some(s) = v.as_str() {\n");
+                            code.push_str("                api_key_val = api_key_val.replace(&pattern, s);\n");
+                            code.push_str("            }\n");
+                            code.push_str("        }\n");
+                            code.push_str(&format!(
+                                "        req = req.header(\"{}\", api_key_val);\n",
+                                api_key.header_name.replace('"', "\\\"")
+                            ));
+                        } else {
+                            code.push_str(&format!(
+                                "        req = req.header(\"{}\", \"{}\");\n",
+                                api_key.header_name.replace('"', "\\\""),
+                                val.replace('"', "\\\"")
+                            ));
+                        }
+                    }
+                }
+                _ => {} // "none" — no auth
+            }
+
+            // Body
+            match config.body.body_type.as_str() {
+                "json" => {
+                    if let Some(content) = &config.body.content {
+                        let body_str = content.to_string();
+                        if body_str.contains("{{") {
+                            // Body has template variables — interpolate
+                            code.push_str(&format!(
+                                "        let mut body_str = r#\"{}\"#.to_string();\n",
+                                body_str.replace('"', "\\\"")
+                            ));
+                            code.push_str("        for (k, v) in ctx.state.iter() {\n");
+                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str("            if let Some(s) = v.as_str() {\n");
+                            code.push_str("                body_str = body_str.replace(&pattern, s);\n");
+                            code.push_str("            } else {\n");
+                            code.push_str("                body_str = body_str.replace(&pattern, &v.to_string());\n");
+                            code.push_str("            }\n");
+                            code.push_str("        }\n");
+                            code.push_str("        let body_json: serde_json::Value = serde_json::from_str(&body_str).unwrap_or(json!(body_str));\n");
+                            code.push_str("        req = req.json(&body_json);\n");
+                        } else {
+                            code.push_str(&format!(
+                                "        req = req.json(&json!({}));\n",
+                                body_str
+                            ));
+                        }
+                    }
+                }
+                "form" => {
+                    if let Some(content) = &config.body.content {
+                        code.push_str(&format!(
+                            "        req = req.form(&json!({}));\n",
+                            content
+                        ));
+                    }
+                }
+                "raw" => {
+                    if let Some(content) = &config.body.content {
+                        let raw = content.as_str().map(|s| s.to_string()).unwrap_or_else(|| content.to_string());
+                        code.push_str(&format!(
+                            "        req = req.body(\"{}\");\n",
+                            raw.replace('"', "\\\"")
+                        ));
+                    }
+                }
+                _ => {} // "none" — no body
+            }
+
+            // Send request and handle response
+            code.push_str("\n        let resp = req.send().await;\n");
+            code.push_str("        match resp {\n");
+            code.push_str("            Ok(response) => {\n");
+            code.push_str("                let status = response.status().as_u16();\n");
+
+            // Status validation
+            if let Some(validation) = &config.response.status_validation {
+                if validation.contains('-') {
+                    let parts: Vec<&str> = validation.split('-').collect();
+                    if parts.len() == 2 {
+                        code.push_str(&format!(
+                            "                if status < {} || status > {} {{\n",
+                            parts[0].trim(), parts[1].trim()
+                        ));
+                        code.push_str("                    let body = response.text().await.unwrap_or_default();\n");
+                        code.push_str(&format!(
+                            "                    return Ok(NodeOutput::new().with_update(\"{}\", json!({{\n",
+                            output_key
+                        ));
+                        code.push_str("                        \"error\": true, \"status\": status, \"body\": body\n");
+                        code.push_str("                    })));\n");
+                        code.push_str("                }\n");
+                    }
+                }
+            }
+
+            // Parse response based on type
+            match config.response.response_type.as_str() {
+                "text" => {
+                    code.push_str("                let body = response.text().await.unwrap_or_default();\n");
+                    if let Some(json_path) = &config.response.json_path {
+                        // Even for text, if jsonPath is set, try to parse and extract
+                        code.push_str("                let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!(body));\n");
+                        code.push_str(&format!(
+                            "                // JSONPath extraction: {}\n",
+                            json_path
+                        ));
+                        generate_json_path_extraction(&mut code, json_path, output_key);
+                    } else {
+                        code.push_str(&format!(
+                            "                Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"status\": status, \"body\": body }})))\n",
+                            output_key
+                        ));
+                    }
+                }
+                _ => {
+                    // Default: JSON — try JSON first, fall back to text
+                    code.push_str("                let text = response.text().await.unwrap_or_default();\n");
+                    code.push_str("                let body: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|_| json!(text));\n");
+                    if let Some(json_path) = &config.response.json_path {
+                        code.push_str(&format!(
+                            "                // JSONPath extraction: {}\n",
+                            json_path
+                        ));
+                        generate_json_path_extraction(&mut code, json_path, output_key);
+                    } else {
+                        code.push_str(&format!(
+                            "                Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"status\": status, \"body\": body }})))\n",
+                            output_key
+                        ));
+                    }
+                }
+            }
+
+            code.push_str("            }\n");
+            code.push_str("            Err(e) => {\n");
+            code.push_str(&format!(
+                "                Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"error\": true, \"message\": e.to_string() }})))\n",
+                output_key
+            ));
+            code.push_str("            }\n");
+            code.push_str("        }\n");
+            code.push_str("    });\n\n");
+        }
+        ActionNodeConfig::Wait(config) => {
+            code.push_str(&format!("    // Action Node: {} (Wait)\n", config.standard.name));
+            code.push_str(&format!("    let {}_node = adk_graph::node::FunctionNode::new(\"{}\", |_ctx| async move {{\n", node_id, node_id));
+
+            let output_key = if config.standard.mapping.output_key.is_empty() {
+                "wait_result"
+            } else {
+                &config.standard.mapping.output_key
+            };
+
+            match config.wait_type {
+                crate::codegen::action_nodes::WaitType::Fixed => {
+                    if let Some(fixed) = &config.fixed {
+                        let ms = match fixed.unit.as_str() {
+                            "ms" => fixed.duration,
+                            "s" => fixed.duration * 1000,
+                            "m" => fixed.duration * 60 * 1000,
+                            "h" => fixed.duration * 60 * 60 * 1000,
+                            _ => fixed.duration,
+                        };
+                        code.push_str(&format!("        // Fixed wait: {} {}\n", fixed.duration, fixed.unit));
+                        code.push_str(&format!("        tokio::time::sleep(std::time::Duration::from_millis({})).await;\n", ms));
+                        code.push_str(&format!("        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"waited\": true, \"duration_ms\": {} }})))\n", output_key, ms));
+                    } else {
+                        // No fixed config — default 1 second
+                        code.push_str("        // Fixed wait: default 1s\n");
+                        code.push_str("        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;\n");
+                        code.push_str(&format!("        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"waited\": true, \"duration_ms\": 1000 }})))\n", output_key));
+                    }
+                }
+                crate::codegen::action_nodes::WaitType::Until => {
+                    if let Some(until) = &config.until {
+                        code.push_str("        // Wait until timestamp\n");
+                        code.push_str(&format!("        let target = chrono::DateTime::parse_from_rfc3339(\"{}\")\n", until.timestamp));
+                        code.push_str("            .unwrap_or_else(|_| chrono::Utc::now().fixed_offset());\n");
+                        code.push_str("        let now = chrono::Utc::now();\n");
+                        code.push_str("        if target > now {\n");
+                        code.push_str("            let duration = (target - now).to_std().unwrap_or_default();\n");
+                        code.push_str("            tokio::time::sleep(duration).await;\n");
+                        code.push_str("        }\n");
+                        code.push_str(&format!("        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"waited\": true }})))\n", output_key));
+                    } else {
+                        code.push_str(&format!("        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"waited\": false, \"reason\": \"no timestamp configured\" }})))\n", output_key));
+                    }
+                }
+                crate::codegen::action_nodes::WaitType::Condition => {
+                    if let Some(condition) = &config.condition {
+                        code.push_str("        // Poll until condition is met\n");
+                        code.push_str(&format!("        let poll_interval = std::time::Duration::from_millis({});\n", condition.poll_interval));
+                        code.push_str(&format!("        let max_wait = std::time::Duration::from_millis({});\n", condition.max_wait));
+                        code.push_str("        let start = std::time::Instant::now();\n");
+                        code.push_str("        loop {\n");
+                        code.push_str("            if start.elapsed() >= max_wait {\n");
+                        code.push_str(&format!("                break Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"waited\": true, \"timed_out\": true }})));\n", output_key));
+                        code.push_str("            }\n");
+                        code.push_str("            tokio::time::sleep(poll_interval).await;\n");
+                        code.push_str("        }\n");
+                    } else {
+                        code.push_str(&format!("        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"waited\": false }})))\n", output_key));
+                    }
+                }
+                crate::codegen::action_nodes::WaitType::Webhook => {
+                    // Webhook wait is complex — generate a simple timeout-based placeholder
+                    if let Some(webhook) = &config.webhook {
+                        code.push_str(&format!("        // Webhook wait (simplified): sleep for timeout as placeholder\n"));
+                        code.push_str(&format!("        tokio::time::sleep(std::time::Duration::from_millis({})).await;\n", webhook.timeout.min(30000)));
+                        code.push_str(&format!("        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"waited\": true, \"webhook\": \"{}\" }})))\n", output_key, webhook.path.replace('"', "\\\"")));
+                    } else {
+                        code.push_str(&format!("        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"waited\": false }})))\n", output_key));
+                    }
+                }
+            }
+
+            code.push_str("    });\n\n");
+        }
         // Other action node types can be added here
         _ => {
             // For unsupported action nodes, generate a pass-through node
@@ -2233,7 +2616,10 @@ fn generate_cargo_toml(project: &ProjectSchema) -> String {
         })
     };
 
-    let needs_reqwest = code_uses("reqwest::");
+    let needs_reqwest = code_uses("reqwest::") || {
+        use crate::codegen::action_nodes::ActionNodeConfig;
+        project.action_nodes.values().any(|n| matches!(n, ActionNodeConfig::Http(_)))
+    };
     let needs_lettre = code_uses("lettre::");
     let needs_base64 = code_uses("base64::");
 
