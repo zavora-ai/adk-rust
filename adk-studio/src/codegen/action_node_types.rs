@@ -1278,6 +1278,11 @@ impl ActionNodeConfig {
                 let key = &cfg.standard.mapping.output_key;
                 if key.is_empty() { vec![] } else { vec![key.clone()] }
             }
+            ActionNodeConfig::Switch(cfg) => {
+                // Switch nodes produce a branch key
+                let key = &cfg.standard.mapping.output_key;
+                if key.is_empty() { vec!["branch".to_string()] } else { vec![key.clone()] }
+            }
             _ => {
                 // Other nodes use the standard output_key mapping
                 let key = &self.standard().mapping.output_key;

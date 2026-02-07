@@ -1330,6 +1330,102 @@ fn generate_action_node_function(
             ));
             code.push_str("    });\n\n");
         }
+        ActionNodeConfig::Switch(config) => {
+            code.push_str(&format!("    // Action Node: {} (Switch)\n", config.standard.name));
+            code.push_str(&format!("    let {}_node = adk_graph::node::FunctionNode::new(\"{}\", |ctx| async move {{\n", node_id, node_id));
+
+            let output_key = if config.standard.mapping.output_key.is_empty() {
+                "branch"
+            } else {
+                &config.standard.mapping.output_key
+            };
+
+            // Evaluate conditions against state
+            code.push_str("        let mut matched_branch: Option<&str> = None;\n");
+
+            for condition in &config.conditions {
+                let field = &condition.field;
+                let op = &condition.operator;
+                let port = &condition.output_port;
+                let value_str = condition
+                    .value
+                    .as_ref()
+                    .map(|v| match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    })
+                    .unwrap_or_default();
+
+                code.push_str(&format!(
+                    "        // Condition: {} {} {}\n",
+                    field, op, value_str
+                ));
+                code.push_str("        if matched_branch.is_none() {\n");
+                code.push_str(&format!(
+                    "            let field_val = ctx.state.get(\"{}\").and_then(|v| v.as_str()).unwrap_or(\"\");\n",
+                    field
+                ));
+
+                match op.as_str() {
+                    "equals" | "==" => {
+                        code.push_str(&format!(
+                            "            if field_val == \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
+                            value_str.replace('"', "\\\""), port
+                        ));
+                    }
+                    "not_equals" | "!=" => {
+                        code.push_str(&format!(
+                            "            if field_val != \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
+                            value_str.replace('"', "\\\""), port
+                        ));
+                    }
+                    "contains" => {
+                        code.push_str(&format!(
+                            "            if field_val.contains(\"{}\") {{ matched_branch = Some(\"{}\"); }}\n",
+                            value_str.replace('"', "\\\""), port
+                        ));
+                    }
+                    "greater_than" | ">" => {
+                        code.push_str(&format!(
+                            "            if field_val > \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
+                            value_str.replace('"', "\\\""), port
+                        ));
+                    }
+                    "less_than" | "<" => {
+                        code.push_str(&format!(
+                            "            if field_val < \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
+                            value_str.replace('"', "\\\""), port
+                        ));
+                    }
+                    _ => {
+                        // Default to equals
+                        code.push_str(&format!(
+                            "            if field_val == \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
+                            value_str.replace('"', "\\\""), port
+                        ));
+                    }
+                }
+                code.push_str("        }\n");
+            }
+
+            // Default branch
+            if let Some(default) = &config.default_branch {
+                code.push_str(&format!(
+                    "        let branch = matched_branch.unwrap_or(\"{}\");\n",
+                    default
+                ));
+            } else {
+                code.push_str(
+                    "        let branch = matched_branch.unwrap_or(\"default\");\n",
+                );
+            }
+
+            code.push_str(&format!(
+                "        Ok(NodeOutput::new().with_update(\"{}\", json!(branch)))\n",
+                output_key
+            ));
+            code.push_str("    });\n\n");
+        }
         // Other action node types can be added here
         _ => {
             // For unsupported action nodes, generate a pass-through node
