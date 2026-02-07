@@ -345,10 +345,13 @@ export function useCanvasNodes(project: Project | null, execution: ExecutionStat
       const targetIndex = executionPath.indexOf(e.to);
       const isInPath = sourceIndex !== -1 && targetIndex !== -1 && targetIndex === sourceIndex + 1;
       
-      // Edge is animated if it leads TO the currently active node from a node in the path
-      const isLeadingToActive = isExecuting && activeAgent && e.to === activeAgent && executionPath.includes(e.from);
-      // Also animate agent→END when we're in output phase
-      const isAgentToEnd = flowPhase === 'output' && e.to === 'END';
+      // Edge is animated if it leads TO the currently active node from a node in the path,
+      // but NOT during 'output' phase — once the agent is generating output, the input
+      // edge is "done" and should show as completed (green), not still flowing.
+      const isLeadingToActive = isExecuting && activeAgent && e.to === activeAgent 
+        && executionPath.includes(e.from) && flowPhase !== 'output';
+      // Animate agent→END when we're in output phase (data flowing out)
+      const isAgentToEnd = flowPhase === 'output' && e.to === 'END' && executionPath.includes(e.from);
       
       const animated = isTriggerToStart || isLeadingToActive || isAgentToEnd;
       
