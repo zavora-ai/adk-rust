@@ -11,6 +11,7 @@ This currently includes:
 - Phase 1: embedded Three.js runtime with incremental `create/patch/remove` op application
 - Phase 2: prompt-intent planning with session context (last prompt/command/selection)
 - Phase 3 (vertical slice): DevOps-style workbench panel and live status patch loop
+- Phase 4: approval-gated action handling with audit trail and execute/reject outcomes
 
 ## Run
 
@@ -38,6 +39,7 @@ Optional environment variables:
 - `planner.rs` and `executor.rs` provide the initial prompt->ops pipeline.
 - `policy.rs` adds risk-tier tagging for action proposals.
 - `server.rs` applies command/select events back into scene patches and short live status updates.
+- `session.rs` stores pending actions and per-session action audit entries.
 - Frontend component kinds implemented in v1 runtime:
   - `group`
   - `text3d`

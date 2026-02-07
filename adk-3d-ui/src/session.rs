@@ -8,6 +8,7 @@ use serde::Serialize;
 use tokio::sync::{Mutex, RwLock, broadcast};
 use uuid::Uuid;
 
+use crate::policy::{ProposedAction, RiskTier};
 use crate::protocol::{Seq, SessionId, SseEnvelope, SsePayload, UiEventRequest};
 
 const CHANNEL_CAPACITY: usize = 256;
@@ -19,6 +20,24 @@ pub struct OutboundMessage {
     pub data: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionDecision {
+    Proposed,
+    Approved,
+    Rejected,
+    Executed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ActionAuditEntry {
+    pub action_id: String,
+    pub label: String,
+    pub risk: RiskTier,
+    pub decision: ActionDecision,
+    pub ts: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SessionContext {
     pub last_prompt: Option<String>,
@@ -26,6 +45,8 @@ pub struct SessionContext {
     pub selected_id: Option<String>,
     pub last_intent_domain: Option<String>,
     pub last_node_ids: Vec<String>,
+    pub pending_action: Option<ProposedAction>,
+    pub audit_log: Vec<ActionAuditEntry>,
 }
 
 #[derive(Debug)]
@@ -150,8 +171,88 @@ impl SessionManager {
         ctx.last_node_ids = node_ids;
         Some(())
     }
+
+    pub async fn set_pending_action(
+        &self,
+        session_id: &str,
+        pending_action: Option<ProposedAction>,
+    ) -> Option<()> {
+        let sessions = self.sessions.read().await;
+        let state = sessions.get(session_id)?;
+        state.context.write().await.pending_action = pending_action;
+        Some(())
+    }
+
+    pub async fn append_audit_entry(
+        &self,
+        session_id: &str,
+        entry: ActionAuditEntry,
+    ) -> Option<()> {
+        let sessions = self.sessions.read().await;
+        let state = sessions.get(session_id)?;
+        let mut ctx = state.context.write().await;
+        ctx.audit_log.push(entry);
+        if ctx.audit_log.len() > 128 {
+            let drain_to = ctx.audit_log.len() - 128;
+            ctx.audit_log.drain(0..drain_to);
+        }
+        Some(())
+    }
 }
 
 pub fn to_json<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ActionAuditEntry, ActionDecision, SessionManager};
+    use crate::policy::{ProposedAction, RiskTier};
+
+    #[tokio::test]
+    async fn pending_action_roundtrip() {
+        let sessions = SessionManager::default();
+        let session_id = sessions.create_session().await;
+
+        let action = ProposedAction {
+            action_id: "action-xyz".to_string(),
+            label: "Rollback".to_string(),
+            rationale: "failure spike".to_string(),
+            risk: RiskTier::Dangerous,
+            requires_approval: true,
+        };
+        let _ = sessions
+            .set_pending_action(&session_id, Some(action.clone()))
+            .await;
+
+        let context = sessions
+            .get_context(&session_id)
+            .await
+            .expect("context exists");
+        assert_eq!(
+            context.pending_action.as_ref().map(|a| a.action_id.as_str()),
+            Some("action-xyz")
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_log_appends_entries() {
+        let sessions = SessionManager::default();
+        let session_id = sessions.create_session().await;
+
+        let entry = ActionAuditEntry {
+            action_id: "action-xyz".to_string(),
+            label: "Rollback".to_string(),
+            risk: RiskTier::Dangerous,
+            decision: ActionDecision::Proposed,
+            ts: chrono::Utc::now().to_rfc3339(),
+        };
+        let _ = sessions.append_audit_entry(&session_id, entry).await;
+
+        let context = sessions
+            .get_context(&session_id)
+            .await
+            .expect("context exists");
+        assert_eq!(context.audit_log.len(), 1);
+    }
 }

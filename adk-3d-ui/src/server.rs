@@ -17,13 +17,15 @@ use tracing::{error, info};
 use crate::{
     executor::scene_plan_to_ops,
     planner::{PlanningContext, build_scene_plan},
-    policy::RiskTier,
+    policy::{ProposedAction, RiskTier},
     protocol::{
-        DonePayload, ErrorPayload, PingPayload, RunPromptRequest, RunPromptResponse,
+        DonePayload, ErrorPayload, LogPayload, PingPayload, RunPromptRequest, RunPromptResponse,
         SessionCreateResponse, SsePayload, ToastLevel, ToastPayload, UiEvent, UiEventAck, UiOp,
         UiOpsPayload, UiPatchOp, UiProps, UiEventRequest,
     },
-    session::{OutboundMessage, SessionContext, SessionManager},
+    session::{
+        ActionAuditEntry, ActionDecision, OutboundMessage, SessionContext, SessionManager,
+    },
 };
 
 #[derive(Clone, Debug, Default)]
@@ -166,25 +168,14 @@ async fn post_ui_event(
             action_id,
             approved,
         } => {
-            let message = if *approved {
-                format!("Approved action `{action_id}`.")
-            } else {
-                format!("Rejected action `{action_id}`.")
-            };
-            let _ = state
-                .sessions
-                .publish(
-                    &session_id,
-                    SsePayload::Toast(ToastPayload {
-                        level: if *approved {
-                            ToastLevel::Success
-                        } else {
-                            ToastLevel::Info
-                        },
-                        message,
-                    }),
-                )
-                .await;
+            handle_action_approval(
+                &state,
+                &session_id,
+                action_id,
+                *approved,
+                Some(request.seq),
+            )
+            .await;
         }
     }
 
@@ -260,6 +251,16 @@ async fn publish_plan_for_prompt(
         .await;
 
     if let Some(action) = &plan.action {
+        let _ = state
+            .sessions
+            .set_pending_action(session_id, Some(action.clone()))
+            .await;
+        let proposed = action_audit_entry(action, ActionDecision::Proposed);
+        let _ = state
+            .sessions
+            .append_audit_entry(session_id, proposed.clone())
+            .await;
+
         let message = match action.risk {
             RiskTier::Dangerous => {
                 "Dangerous action detected. Approval will be required before execution."
@@ -281,6 +282,21 @@ async fn publish_plan_for_prompt(
                 }),
             )
             .await;
+
+        publish_log(
+            state,
+            session_id,
+            "info",
+            "Proposed action for approval flow",
+            json!({
+                "action_id": action.action_id,
+                "risk": format!("{:?}", action.risk).to_lowercase(),
+                "requires_approval": action.requires_approval,
+            }),
+        )
+        .await;
+    } else {
+        let _ = state.sessions.set_pending_action(session_id, None).await;
     }
 
     let ops = scene_plan_to_ops(&plan, reply_to);
@@ -435,4 +451,223 @@ fn spawn_live_status_patch_loop(state: AppState, session_id: String, node_ids: V
             )
             .await;
     });
+}
+
+async fn handle_action_approval(
+    state: &AppState,
+    session_id: &str,
+    action_id: &str,
+    approved: bool,
+    reply_to: Option<u64>,
+) {
+    let context = state
+        .sessions
+        .get_context(session_id)
+        .await
+        .unwrap_or_default();
+
+    let Some(pending) = context.pending_action.clone() else {
+        let _ = state
+            .sessions
+            .publish(
+                session_id,
+                SsePayload::Toast(ToastPayload {
+                    level: ToastLevel::Warning,
+                    message: "No pending action to approve or reject.".to_string(),
+                }),
+            )
+            .await;
+        return;
+    };
+
+    if pending.action_id != action_id {
+        let _ = state
+            .sessions
+            .publish(
+                session_id,
+                SsePayload::Error(ErrorPayload {
+                    code: "action_id_mismatch".to_string(),
+                    message: format!(
+                        "Action `{}` does not match pending action `{}`",
+                        action_id, pending.action_id
+                    ),
+                }),
+            )
+            .await;
+        return;
+    }
+
+    let decision = if approved {
+        ActionDecision::Approved
+    } else {
+        ActionDecision::Rejected
+    };
+    let _ = state
+        .sessions
+        .append_audit_entry(session_id, action_audit_entry(&pending, decision))
+        .await;
+
+    if !approved {
+        let _ = state.sessions.set_pending_action(session_id, None).await;
+        let mut subtitle = UiProps::new();
+        subtitle.insert(
+            "subtitle".to_string(),
+            json!("Action rejected. No changes were applied."),
+        );
+        let _ = state
+            .sessions
+            .publish(
+                session_id,
+                SsePayload::UiOps(UiOpsPayload {
+                    reply_to,
+                    ops: vec![UiOp::Patch(UiPatchOp {
+                        id: "action-card".to_string(),
+                        props: subtitle,
+                    })],
+                }),
+            )
+            .await;
+        let _ = state
+            .sessions
+            .publish(
+                session_id,
+                SsePayload::Toast(ToastPayload {
+                    level: ToastLevel::Info,
+                    message: format!("Rejected action `{}`.", action_id),
+                }),
+            )
+            .await;
+        publish_log(
+            state,
+            session_id,
+            "info",
+            "Action rejected",
+            json!({ "action_id": action_id }),
+        )
+        .await;
+        return;
+    }
+
+    execute_approved_action(state, session_id, &pending, &context, reply_to).await;
+    let _ = state
+        .sessions
+        .append_audit_entry(session_id, action_audit_entry(&pending, ActionDecision::Executed))
+        .await;
+    let _ = state.sessions.set_pending_action(session_id, None).await;
+}
+
+async fn execute_approved_action(
+    state: &AppState,
+    session_id: &str,
+    action: &ProposedAction,
+    context: &SessionContext,
+    reply_to: Option<u64>,
+) {
+    let focus = context
+        .selected_id
+        .clone()
+        .or_else(|| context.last_node_ids.first().cloned());
+
+    let mut ops = Vec::new();
+    if let Some(node_id) = focus {
+        let mut node_props = UiProps::new();
+        node_props.insert("status".to_string(), json!("healthy"));
+        node_props.insert("selected".to_string(), json!(true));
+        ops.push(UiOp::Patch(UiPatchOp {
+            id: node_id.clone(),
+            props: node_props,
+        }));
+
+        let mut workbench_props = UiProps::new();
+        workbench_props.insert(
+            "title".to_string(),
+            json!(format!("Remediation Applied: {node_id}")),
+        );
+        workbench_props.insert(
+            "subtitle".to_string(),
+            json!("Action execution simulated successfully. Audit trail updated."),
+        );
+        ops.push(UiOp::Patch(UiPatchOp {
+            id: "workbench-panel".to_string(),
+            props: workbench_props,
+        }));
+    }
+
+    let mut action_props = UiProps::new();
+    action_props.insert(
+        "subtitle".to_string(),
+        json!("Action approved and execution completed."),
+    );
+    ops.push(UiOp::Patch(UiPatchOp {
+        id: "action-card".to_string(),
+        props: action_props,
+    }));
+
+    let _ = state
+        .sessions
+        .publish(
+            session_id,
+            SsePayload::UiOps(UiOpsPayload { reply_to, ops }),
+        )
+        .await;
+    let _ = state
+        .sessions
+        .publish(
+            session_id,
+            SsePayload::Toast(ToastPayload {
+                level: ToastLevel::Success,
+                message: format!(
+                    "Executed action `{}` (risk: {}).",
+                    action.action_id,
+                    format!("{:?}", action.risk).to_lowercase()
+                ),
+            }),
+        )
+        .await;
+    publish_log(
+        state,
+        session_id,
+        "info",
+        "Action executed",
+        json!({
+            "action_id": action.action_id,
+            "risk": format!("{:?}", action.risk).to_lowercase(),
+            "requires_approval": action.requires_approval,
+        }),
+    )
+    .await;
+}
+
+fn action_audit_entry(action: &ProposedAction, decision: ActionDecision) -> ActionAuditEntry {
+    ActionAuditEntry {
+        action_id: action.action_id.clone(),
+        label: action.label.clone(),
+        risk: action.risk,
+        decision,
+        ts: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
+async fn publish_log(
+    state: &AppState,
+    session_id: &str,
+    level: &str,
+    message: &str,
+    fields: serde_json::Value,
+) {
+    let log_fields = fields
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    let _ = state
+        .sessions
+        .publish(
+            session_id,
+            SsePayload::Log(LogPayload {
+                level: level.to_string(),
+                message: message.to_string(),
+                fields: log_fields,
+            }),
+        )
+        .await;
 }

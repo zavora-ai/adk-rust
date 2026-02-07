@@ -99,6 +99,9 @@
         opacity: 0.6;
         cursor: not-allowed;
       }
+      #reject {
+        background: linear-gradient(90deg, #ff7f9d 0%, #f05066 100%);
+      }
       .stack > * + * {
         margin-top: 10px;
       }
@@ -169,11 +172,14 @@
           <textarea id="prompt">Show me platform health and what needs attention right now.</textarea>
           <button id="run">Run Prompt</button>
           <button id="command">Send Command Event</button>
+          <button id="approve" disabled>Approve Pending Action</button>
+          <button id="reject" disabled>Reject Pending Action</button>
           <input id="session" readonly />
           <div class="pills">
             <span class="pill" id="opsCount">ops: 0</span>
             <span class="pill" id="objectsCount">objects: 0</span>
             <span class="pill" id="fps">fps: --</span>
+            <span class="pill" id="pendingAction">pending_action: none</span>
           </div>
         </section>
 
@@ -197,15 +203,20 @@
       const promptEl = document.getElementById("prompt");
       const runBtn = document.getElementById("run");
       const commandBtn = document.getElementById("command");
+      const approveBtn = document.getElementById("approve");
+      const rejectBtn = document.getElementById("reject");
       const opsCountEl = document.getElementById("opsCount");
       const objectsCountEl = document.getElementById("objectsCount");
       const fpsEl = document.getElementById("fps");
+      const pendingActionEl = document.getElementById("pendingAction");
       const viewport = document.getElementById("viewport");
 
       let sessionId = null;
       let eventSource = null;
       let clientSeq = 0;
       let opsApplied = 0;
+      let pendingActionId = null;
+      let pendingActionRisk = null;
 
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(58, 1, 0.1, 200);
@@ -250,6 +261,19 @@
         const timestamp = new Date().toISOString();
         const payload = data ? `\n${JSON.stringify(data, null, 2)}` : "";
         logEl.textContent = `[${timestamp}] ${line}${payload}\n\n` + logEl.textContent;
+      }
+
+      function setPendingAction(actionId, risk) {
+        pendingActionId = actionId || null;
+        pendingActionRisk = risk || null;
+        const enabled = Boolean(pendingActionId);
+        approveBtn.disabled = !enabled;
+        rejectBtn.disabled = !enabled;
+        if (!enabled) {
+          pendingActionEl.textContent = "pending_action: none";
+          return;
+        }
+        pendingActionEl.textContent = `pending_action: ${pendingActionId} (${pendingActionRisk || "unknown"})`;
       }
 
       function colorForStatus(status) {
@@ -579,6 +603,17 @@
           return;
         }
         for (const op of ops) {
+          if ((op.op === "create" || op.op === "patch") && op.id === "action-card" && op.props) {
+            if (op.props.actionId) {
+              setPendingAction(op.props.actionId, op.props.risk || "unknown");
+            }
+            if (typeof op.props.subtitle === "string") {
+              const subtitle = op.props.subtitle.toLowerCase();
+              if (subtitle.includes("approved") || subtitle.includes("rejected")) {
+                setPendingAction(null, null);
+              }
+            }
+          }
           if (op.op === "create") {
             applyCreate(op);
             opsApplied += 1;
@@ -759,6 +794,16 @@
 
       runBtn.addEventListener("click", runPrompt);
       commandBtn.addEventListener("click", () => postEvent({ type: "command", text: "show me incident blast radius" }));
+      approveBtn.addEventListener("click", async () => {
+        if (!pendingActionId) return;
+        await postEvent({ type: "approve_action", action_id: pendingActionId, approved: true });
+        setPendingAction(null, null);
+      });
+      rejectBtn.addEventListener("click", async () => {
+        if (!pendingActionId) return;
+        await postEvent({ type: "approve_action", action_id: pendingActionId, approved: false });
+        setPendingAction(null, null);
+      });
 
       boot().catch((err) => {
         statusEl.textContent = "error";

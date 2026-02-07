@@ -33,6 +33,7 @@ pub enum SsePayload {
     Toast(ToastPayload),
     Done(DonePayload),
     Error(ErrorPayload),
+    Log(LogPayload),
     Ping(PingPayload),
 }
 
@@ -43,6 +44,7 @@ impl SsePayload {
             Self::Toast(_) => "toast",
             Self::Done(_) => "done",
             Self::Error(_) => "error",
+            Self::Log(_) => "log",
             Self::Ping(_) => "ping",
         }
     }
@@ -79,6 +81,14 @@ pub struct DonePayload {
 pub struct ErrorPayload {
     pub code: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogPayload {
+    pub level: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub fields: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
