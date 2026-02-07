@@ -82,14 +82,17 @@ export const SwitchNode = memo(function SwitchNode({ data, selected }: Props) {
   const conditions = data.conditions || [];
   const conditionCount = conditions.length;
   const hasDefault = !!data.defaultBranch;
-  const outputPorts = conditionCount + (hasDefault ? 1 : 0);
   const isExpressionMode = data.expressionMode?.enabled;
   
-  // Generate output port IDs based on conditions
+  // Generate output port IDs based on conditions, deduplicating default branch
+  // if it matches an existing condition's outputPort
+  const conditionPorts = conditions.map((c) => c.outputPort);
+  const defaultIsNew = hasDefault && !conditionPorts.includes(data.defaultBranch!);
   const outputPortIds = [
-    ...conditions.map((c) => c.outputPort),
-    ...(hasDefault ? [data.defaultBranch!] : []),
+    ...conditionPorts,
+    ...(defaultIsNew ? [data.defaultBranch!] : []),
   ];
+  const outputPorts = outputPortIds.length;
 
   return (
     <ActionNodeBase

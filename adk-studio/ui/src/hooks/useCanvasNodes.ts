@@ -123,66 +123,72 @@ export function useCanvasNodes(project: Project | null, execution: ExecutionStat
       .map((e: WorkflowEdge) => e.from)
       .filter((id: string) => actionNodeIds.includes(id) || topLevelAgents.includes(id));
 
-    // Sort workflow items that come AFTER START (agents and action nodes)
+    // Build adjacency for graph-aware layout (BFS layering)
     const allWorkflowItems = [...topLevelAgents, ...actionNodeIds].filter(
       id => !nodesConnectingToStart.includes(id)
     );
-    const sortedWorkflowItems: string[] = [];
-    let current = 'START';
-    const visited = new Set<string>();
+    const allNodeIds = new Set([...allWorkflowItems, 'START', 'END']);
     
-    // Follow edges from START to END to determine order
-    while (sortedWorkflowItems.length < allWorkflowItems.length) {
-      const nextEdge = project.workflow.edges.find((e: WorkflowEdge) => 
-        e.from === current && 
-        e.to !== 'END' && 
-        allWorkflowItems.includes(e.to) && 
-        !visited.has(e.to)
-      );
-      
-      if (nextEdge) {
-        sortedWorkflowItems.push(nextEdge.to);
-        visited.add(nextEdge.to);
-        current = nextEdge.to;
-      } else {
-        // Try to find any unvisited item connected in the workflow
-        const anyEdge = project.workflow.edges.find((e: WorkflowEdge) => 
-          allWorkflowItems.includes(e.to) && !visited.has(e.to)
-        );
-        if (anyEdge) {
-          sortedWorkflowItems.push(anyEdge.to);
-          visited.add(anyEdge.to);
-          current = anyEdge.to;
-        } else {
-          break;
+    // Build forward adjacency from edges (only workflow-relevant nodes)
+    const forwardEdges: Record<string, string[]> = {};
+    const inDegree: Record<string, number> = {};
+    for (const id of allNodeIds) {
+      forwardEdges[id] = [];
+      inDegree[id] = 0;
+    }
+    for (const e of project.workflow.edges) {
+      if (nodesConnectingToStart.includes(e.from)) continue; // skip trigger→START
+      if (allNodeIds.has(e.from) && allNodeIds.has(e.to)) {
+        forwardEdges[e.from].push(e.to);
+        inDegree[e.to] = (inDegree[e.to] || 0) + 1;
+      }
+    }
+    
+    // BFS from START to assign layers (longest path for better spread)
+    const layers: Record<string, number> = {};
+    const queue: string[] = ['START'];
+    layers['START'] = 0;
+    while (queue.length > 0) {
+      const node = queue.shift()!;
+      for (const next of (forwardEdges[node] || [])) {
+        const newLayer = layers[node] + 1;
+        if (layers[next] === undefined || newLayer > layers[next]) {
+          layers[next] = newLayer;
+          queue.push(next);
         }
       }
     }
     
-    // Add any remaining items not in workflow
-    allWorkflowItems.forEach(id => { 
-      if (!sortedWorkflowItems.includes(id)) sortedWorkflowItems.push(id); 
-    });
-
+    // Assign remaining unvisited nodes to last layer
+    const maxLayer = Math.max(0, ...Object.values(layers));
+    for (const id of allWorkflowItems) {
+      if (layers[id] === undefined) layers[id] = maxLayer + 1;
+    }
+    if (layers['END'] === undefined) layers['END'] = maxLayer + 1;
+    
+    // Group nodes by layer
+    const layerGroups: Record<number, string[]> = {};
+    for (const [id, layer] of Object.entries(layers)) {
+      if (id === 'START' || id === 'END') continue;
+      if (!allWorkflowItems.includes(id)) continue;
+      if (!layerGroups[layer]) layerGroups[layer] = [];
+      layerGroups[layer].push(id);
+    }
+    
     const newNodes: Node[] = [];
-    
-    // Calculate positions based on layout direction
-    // For horizontal (LR): Trigger → START → Agents → END
-    // For vertical (TB): Trigger above START, then agents below
     const nodeSpacing = 200;
-    const triggerOffset = 100;  // Position for trigger nodes
+    const branchSpacing = 250; // horizontal spacing between parallel branches
+    const triggerOffset = 100;
     const startOffset = triggerOffset + (nodesConnectingToStart.length > 0 ? nodeSpacing : 0);
-    
-    // Total items after START
-    const itemsAfterStart = sortedWorkflowItems.length;
+    const centerX = 300;
     
     // Add trigger nodes (connect TO START)
     nodesConnectingToStart.forEach((id, _i) => {
       const actionNode = project.actionNodes?.[id];
       if (actionNode) {
         const pos = isHorizontal
-          ? { x: triggerOffset, y: 200 }  // Left of START
-          : { x: 300, y: triggerOffset }; // Above START
+          ? { x: triggerOffset, y: 200 }
+          : { x: centerX, y: triggerOffset };
         const nodeType = getActionNodeType(actionNode.type);
         newNodes.push({
           id,
@@ -194,59 +200,64 @@ export function useCanvasNodes(project: Project | null, execution: ExecutionStat
     });
     
     // Add START/END
-    if (sortedWorkflowItems.length > 0 || nodesConnectingToStart.length > 0) {
+    const endLayer = layers['END'] || maxLayer + 1;
+    if (allWorkflowItems.length > 0 || nodesConnectingToStart.length > 0) {
       if (isHorizontal) {
-        // Horizontal layout: Trigger → START → Agents → END
-        const endX = startOffset + (itemsAfterStart + 1) * nodeSpacing;
         newNodes.push(
           { id: 'START', position: { x: startOffset, y: 200 }, data: {}, type: 'start' },
-          { id: 'END', position: { x: endX, y: 200 }, data: {}, type: 'end' },
+          { id: 'END', position: { x: startOffset + endLayer * nodeSpacing, y: 200 }, data: {}, type: 'end' },
         );
       } else {
-        // Vertical layout: Trigger → START → Agents → END
-        const endY = startOffset + (itemsAfterStart + 1) * nodeSpacing;
         newNodes.push(
-          { id: 'START', position: { x: 300, y: startOffset }, data: {}, type: 'start' },
-          { id: 'END', position: { x: 300, y: endY }, data: {}, type: 'end' },
+          { id: 'START', position: { x: centerX, y: startOffset }, data: {}, type: 'start' },
+          { id: 'END', position: { x: centerX, y: startOffset + endLayer * nodeSpacing }, data: {}, type: 'end' },
         );
       }
     }
 
-    // Add all workflow nodes (agents and action nodes) in workflow order
-    sortedWorkflowItems.forEach((id, i) => {
-      // Position based on layout direction
-      const pos = isHorizontal
-        ? { x: startOffset + (i + 1) * nodeSpacing, y: 200 }  // Horizontal: spread along X
-        : { x: 300, y: startOffset + (i + 1) * nodeSpacing }; // Vertical: spread along Y
+    // Add all workflow nodes positioned by layer, spreading parallel nodes
+    for (const [layerStr, ids] of Object.entries(layerGroups)) {
+      const layer = Number(layerStr);
+      const count = ids.length;
       
-      // Check if this is an agent
-      const agent = project.agents[id];
-      if (agent) {
-        const subAgentTools = (agent.sub_agents || []).reduce((acc, subId) => {
-          acc[subId] = project.agents[subId]?.tools || [];
-          return acc;
-        }, {} as Record<string, string[]>);
+      ids.forEach((id, idx) => {
+        // Calculate position: center parallel nodes around the center axis
+        const offset = (idx - (count - 1) / 2) * branchSpacing;
+        const mainAxisPos = startOffset + layer * nodeSpacing;
         
-        if (agent.type === 'sequential') newNodes.push({ id, type: 'sequential', position: pos, data: { label: id, subAgents: agent.sub_agents, subAgentTools } });
-        else if (agent.type === 'loop') newNodes.push({ id, type: 'loop', position: pos, data: { label: id, subAgents: agent.sub_agents, subAgentTools, maxIterations: agent.max_iterations || 3 } });
-        else if (agent.type === 'parallel') newNodes.push({ id, type: 'parallel', position: pos, data: { label: id, subAgents: agent.sub_agents, subAgentTools } });
-        else if (agent.type === 'router') newNodes.push({ id, type: 'router', position: pos, data: { label: id, routes: agent.routes || [] } });
-        else newNodes.push({ id, type: 'llm', position: pos, data: { label: id, model: agent.model, tools: agent.tools || [] } });
-        return;
-      }
-      
-      // Check if this is an action node
-      const actionNode = project.actionNodes?.[id];
-      if (actionNode) {
-        const nodeType = getActionNodeType(actionNode.type);
-        newNodes.push({
-          id,
-          type: nodeType,
-          position: pos,
-          data: { ...actionNode },
-        });
-      }
-    });
+        const pos = isHorizontal
+          ? { x: mainAxisPos, y: 200 + offset }
+          : { x: centerX + offset, y: mainAxisPos };
+        
+        // Check if this is an agent
+        const agent = project.agents[id];
+        if (agent) {
+          const subAgentTools = (agent.sub_agents || []).reduce((acc, subId) => {
+            acc[subId] = project.agents[subId]?.tools || [];
+            return acc;
+          }, {} as Record<string, string[]>);
+          
+          if (agent.type === 'sequential') newNodes.push({ id, type: 'sequential', position: pos, data: { label: id, subAgents: agent.sub_agents, subAgentTools } });
+          else if (agent.type === 'loop') newNodes.push({ id, type: 'loop', position: pos, data: { label: id, subAgents: agent.sub_agents, subAgentTools, maxIterations: agent.max_iterations || 3 } });
+          else if (agent.type === 'parallel') newNodes.push({ id, type: 'parallel', position: pos, data: { label: id, subAgents: agent.sub_agents, subAgentTools } });
+          else if (agent.type === 'router') newNodes.push({ id, type: 'router', position: pos, data: { label: id, routes: agent.routes || [] } });
+          else newNodes.push({ id, type: 'llm', position: pos, data: { label: id, model: agent.model, tools: agent.tools || [] } });
+          return;
+        }
+        
+        // Check if this is an action node
+        const actionNode = project.actionNodes?.[id];
+        if (actionNode) {
+          const nodeType = getActionNodeType(actionNode.type);
+          newNodes.push({
+            id,
+            type: nodeType,
+            position: pos,
+            data: { ...actionNode },
+          });
+        }
+      });
+    }
 
     setNodes(newNodes);
   }, [project, currentStructureHash, setNodes]);
