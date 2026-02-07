@@ -1,7 +1,7 @@
 use adk_agent::LlmAgentBuilder;
 use adk_core::SingleAgentLoader;
 use adk_model::gemini::GeminiModel;
-use adk_ui::{a2ui::A2UI_AGENT_PROMPT, UiToolset};
+use adk_ui::{UiToolset, a2ui::A2UI_AGENT_PROMPT};
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -27,9 +27,12 @@ async fn main() -> Result<()> {
 
     let mut builder = LlmAgentBuilder::new("ui_working_inventory")
         .description("Inventory restock agent with working UI flows")
-        .instruction(&format!("{}
+        .instruction(&format!(
+            "{}
 
-{}", A2UI_AGENT_PROMPT, INSTRUCTION))
+{}",
+            A2UI_AGENT_PROMPT, INSTRUCTION
+        ))
         .model(Arc::new(GeminiModel::new(&api_key, "gemini-3-flash-preview")?));
 
     for tool in ui_tools {

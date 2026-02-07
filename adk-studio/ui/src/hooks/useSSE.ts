@@ -245,24 +245,13 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
           }
           addEvent('done', `${trace.total_steps} steps`);
           
-          // v2.0: Update the last agent snapshot with the final output state
-          // This fixes the timing issue where node_end fires before response is captured
-          if (trace.state_snapshot) {
-            setSnapshots(prev => {
-              if (prev.length === 0) return prev;
-              
-              // Find the last non-done snapshot and update its output state
-              const updated = [...prev];
-              const lastIdx = updated.length - 1;
-              if (updated[lastIdx] && updated[lastIdx].nodeId !== '__done__') {
-                updated[lastIdx] = {
-                  ...updated[lastIdx],
-                  outputState: trace.state_snapshot?.output || updated[lastIdx].outputState,
-                };
-              }
-              return updated;
-            });
-          }
+          // v2.0: The done handler previously updated the last snapshot with
+          // the final output state to fix a timing issue. This is no longer
+          // needed because:
+          // 1. LLM agents emit node_end from the message handler (with response)
+          // 2. Action nodes emit node_end from emit_pending_node_ends (with
+          //    reconstructed output from the project config)
+          // Overwriting would clobber the per-node output with the full state.
         }
       });
 

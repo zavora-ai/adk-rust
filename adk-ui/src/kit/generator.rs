@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::spec::KitSpec;
 
@@ -56,8 +56,7 @@ impl KitGenerator {
 
         let theme_css = format!(
             ":root {{\n  --adk-primary: {};\n  --adk-font-family: \"{}\";\n}}\n",
-            spec.colors.primary,
-            spec.typography.family
+            spec.colors.primary, spec.typography.family
         );
 
         KitArtifacts { catalog, tokens, templates, theme_css }
@@ -81,7 +80,7 @@ fn slugify(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::spec::{KitBrand, KitColors, KitTypography, KitSpec};
+    use crate::kit::spec::{KitBrand, KitColors, KitSpec, KitTypography};
 
     #[test]
     fn generates_catalog_with_expected_id() {
@@ -104,10 +103,7 @@ mod tests {
         };
 
         let artifacts = KitGenerator::new().generate(&spec);
-        assert_eq!(
-            artifacts.catalog["catalogId"],
-            "zavora.ai:adk-ui/kit/fintech-pro@0.1.0"
-        );
+        assert_eq!(artifacts.catalog["catalogId"], "zavora.ai:adk-ui/kit/fintech-pro@0.1.0");
         assert!(artifacts.tokens["colors"]["primary"].is_string());
     }
 }

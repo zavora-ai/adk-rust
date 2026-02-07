@@ -1,8 +1,7 @@
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
     CitationMetadata, CitationSource, Content, FinishReason, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Part, Result,
-    UsageMetadata,
+    LlmResponseStream, Part, Result, UsageMetadata,
 };
 use adk_gemini::Gemini;
 use async_trait::async_trait;
@@ -188,23 +187,22 @@ impl GeminiModel {
                 _ => FinishReason::Other,
             });
 
-        let citation_metadata = resp
-            .candidates
-            .first()
-            .and_then(|c| c.citation_metadata.as_ref())
-            .map(|meta| CitationMetadata {
-                citation_sources: meta
-                    .citation_sources
-                    .iter()
-                    .map(|source| CitationSource {
-                        uri: source.uri.clone(),
-                        title: source.title.clone(),
-                        start_index: source.start_index,
-                        end_index: source.end_index,
-                        license: source.license.clone(),
-                        publication_date: source.publication_date.map(|d| d.to_string()),
-                    })
-                    .collect(),
+        let citation_metadata =
+            resp.candidates.first().and_then(|c| c.citation_metadata.as_ref()).map(|meta| {
+                CitationMetadata {
+                    citation_sources: meta
+                        .citation_sources
+                        .iter()
+                        .map(|source| CitationSource {
+                            uri: source.uri.clone(),
+                            title: source.title.clone(),
+                            start_index: source.start_index,
+                            end_index: source.end_index,
+                            license: source.license.clone(),
+                            publication_date: source.publication_date.map(|d| d.to_string()),
+                        })
+                        .collect(),
+                }
             });
 
         Ok(LlmResponse {
@@ -572,15 +570,11 @@ mod tests {
             response_id: None,
         };
 
-        let converted = GeminiModel::convert_response(&response).expect("conversion should succeed");
-        let metadata = converted
-            .citation_metadata
-            .expect("citation metadata should be mapped");
+        let converted =
+            GeminiModel::convert_response(&response).expect("conversion should succeed");
+        let metadata = converted.citation_metadata.expect("citation metadata should be mapped");
         assert_eq!(metadata.citation_sources.len(), 1);
-        assert_eq!(
-            metadata.citation_sources[0].uri.as_deref(),
-            Some("https://example.com")
-        );
+        assert_eq!(metadata.citation_sources[0].uri.as_deref(), Some("https://example.com"));
         assert_eq!(metadata.citation_sources[0].start_index, Some(0));
         assert_eq!(metadata.citation_sources[0].end_index, Some(5));
     }

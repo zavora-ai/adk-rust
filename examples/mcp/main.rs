@@ -28,7 +28,7 @@ use adk_model::GeminiModel;
 use adk_tool::{McpTaskConfig, McpToolset};
 use async_trait::async_trait;
 use futures::StreamExt;
-use rmcp::{transport::TokioChildProcess, ServiceExt};
+use rmcp::{ServiceExt, transport::TokioChildProcess};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
@@ -78,9 +78,7 @@ impl MockContext {
             session: MockSession,
             user_content: Content {
                 role: "user".to_string(),
-                parts: vec![Part::Text {
-                    text: text.to_string(),
-                }],
+                parts: vec![Part::Text { text: text.to_string() }],
             },
         }
     }

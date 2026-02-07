@@ -274,10 +274,9 @@ async fn test_tool_confirmation_deny_skips_tool_execution() {
         .unwrap();
 
     let mut run_config = RunConfig::default();
-    run_config.tool_confirmation_decisions.insert(
-        "test_tool".to_string(),
-        ToolConfirmationDecision::Deny,
-    );
+    run_config
+        .tool_confirmation_decisions
+        .insert("test_tool".to_string(), ToolConfirmationDecision::Deny);
 
     let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
     let mut saw_denied_response = false;
@@ -320,10 +319,9 @@ async fn test_tool_confirmation_approve_executes_tool() {
         .unwrap();
 
     let mut run_config = RunConfig::default();
-    run_config.tool_confirmation_decisions.insert(
-        "test_tool".to_string(),
-        ToolConfirmationDecision::Approve,
-    );
+    run_config
+        .tool_confirmation_decisions
+        .insert("test_tool".to_string(), ToolConfirmationDecision::Approve);
 
     let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
     let mut saw_tool_result = false;

@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Helper functions to create A2UI v0.9 components with correct nested structure.
 
@@ -7,11 +7,11 @@ pub fn text(id: &str, text: &str, variant: Option<&str>) -> Value {
     let mut component = json!({
         "text": { "literalString": text }
     });
-    
+
     if let Some(v) = variant {
         component["variant"] = json!(v);
     }
-    
+
     json!({
         "id": id,
         "component": {

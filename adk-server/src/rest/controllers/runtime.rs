@@ -206,10 +206,7 @@ pub async fn run_sse_compat(
         artifact_service: controller.config.artifact_service.clone(),
         memory_service: None,
         plugin_manager: None,
-        run_config: Some(adk_core::RunConfig {
-            streaming_mode,
-            ..adk_core::RunConfig::default()
-        }),
+        run_config: Some(adk_core::RunConfig { streaming_mode, ..adk_core::RunConfig::default() }),
     })
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

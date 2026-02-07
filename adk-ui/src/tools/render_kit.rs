@@ -3,7 +3,7 @@ use adk_core::{Result, Tool, ToolContext};
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 /// Parameters for the render_kit tool.
@@ -46,8 +46,9 @@ impl Tool for RenderKitTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let params: RenderKitParams = serde_json::from_value(args.clone())
-            .map_err(|e| adk_core::AdkError::Tool(format!("Invalid parameters: {}. Got: {}", e, args)))?;
+        let params: RenderKitParams = serde_json::from_value(args.clone()).map_err(|e| {
+            adk_core::AdkError::Tool(format!("Invalid parameters: {}. Got: {}", e, args))
+        })?;
 
         let generator = KitGenerator::new();
         let artifacts = generator.generate(&params.spec);
@@ -82,10 +83,7 @@ mod tests {
 
     impl TestContext {
         fn new() -> Self {
-            Self {
-                content: Content::new("user"),
-                actions: Mutex::new(EventActions::default()),
-            }
+            Self { content: Content::new("user"), actions: Mutex::new(EventActions::default()) }
         }
     }
 

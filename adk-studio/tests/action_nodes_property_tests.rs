@@ -71,19 +71,10 @@ fn arb_standard_properties() -> impl Strategy<Value = StandardProperties> {
                     retry_delay: Some(1000),
                     fallback_value: Some(serde_json::json!(null)),
                 },
-                tracing: Tracing {
-                    enabled: true,
-                    log_level,
-                },
+                tracing: Tracing { enabled: true, log_level },
                 callbacks: Callbacks::default(),
-                execution: ExecutionControl {
-                    timeout,
-                    condition: None,
-                },
-                mapping: InputOutputMapping {
-                    input_mapping: None,
-                    output_key,
-                },
+                execution: ExecutionControl { timeout, condition: None },
+                mapping: InputOutputMapping { input_mapping: None, output_key },
             }
         })
 }
@@ -114,10 +105,7 @@ fn arb_trigger_node_config() -> impl Strategy<Value = TriggerNodeConfig> {
             None
         };
         let schedule = if trigger_type == TriggerType::Schedule {
-            Some(ScheduleConfig {
-                cron: "0 * * * *".to_string(),
-                timezone: "UTC".to_string(),
-            })
+            Some(ScheduleConfig { cron: "0 * * * *".to_string(), timezone: "UTC".to_string() })
         } else {
             None
         };
@@ -129,13 +117,7 @@ fn arb_trigger_node_config() -> impl Strategy<Value = TriggerNodeConfig> {
         } else {
             None
         };
-        TriggerNodeConfig {
-            standard,
-            trigger_type,
-            webhook,
-            schedule,
-            event,
-        }
+        TriggerNodeConfig { standard, trigger_type, webhook, schedule, event }
     })
 }
 
@@ -154,8 +136,8 @@ fn arb_http_method() -> impl Strategy<Value = HttpMethod> {
 }
 
 fn arb_http_node_config() -> impl Strategy<Value = HttpNodeConfig> {
-    (arb_standard_properties(), arb_http_method(), arb_url()).prop_map(
-        |(standard, method, url)| HttpNodeConfig {
+    (arb_standard_properties(), arb_http_method(), arb_url()).prop_map(|(standard, method, url)| {
+        HttpNodeConfig {
             standard,
             method,
             url,
@@ -166,18 +148,15 @@ fn arb_http_node_config() -> impl Strategy<Value = HttpNodeConfig> {
                 api_key: None,
             },
             headers: HashMap::new(),
-            body: HttpBody {
-                body_type: "none".to_string(),
-                content: None,
-            },
+            body: HttpBody { body_type: "none".to_string(), content: None },
             response: HttpResponse {
                 response_type: "json".to_string(),
                 status_validation: Some("200-299".to_string()),
                 json_path: None,
             },
             rate_limit: None,
-        },
-    )
+        }
+    })
 }
 
 // ============================================
@@ -185,11 +164,7 @@ fn arb_http_node_config() -> impl Strategy<Value = HttpNodeConfig> {
 // ============================================
 
 fn arb_set_mode() -> impl Strategy<Value = SetMode> {
-    prop_oneof![
-        Just(SetMode::Set),
-        Just(SetMode::Merge),
-        Just(SetMode::Delete),
-    ]
+    prop_oneof![Just(SetMode::Set), Just(SetMode::Merge), Just(SetMode::Delete),]
 }
 
 fn arb_set_node_config() -> impl Strategy<Value = SetNodeConfig> {
@@ -271,11 +246,7 @@ fn arb_switch_node_config() -> impl Strategy<Value = SwitchNodeConfig> {
 // ============================================
 
 fn arb_loop_type() -> impl Strategy<Value = LoopType> {
-    prop_oneof![
-        Just(LoopType::ForEach),
-        Just(LoopType::While),
-        Just(LoopType::Times),
-    ]
+    prop_oneof![Just(LoopType::ForEach), Just(LoopType::While), Just(LoopType::Times),]
 }
 
 fn arb_loop_node_config() -> impl Strategy<Value = LoopNodeConfig> {
@@ -290,16 +261,12 @@ fn arb_loop_node_config() -> impl Strategy<Value = LoopNodeConfig> {
             None
         };
         let while_config = if loop_type == LoopType::While {
-            Some(WhileConfig {
-                condition: "count < 10".to_string(),
-            })
+            Some(WhileConfig { condition: "count < 10".to_string() })
         } else {
             None
         };
         let times = if loop_type == LoopType::Times {
-            Some(TimesConfig {
-                count: serde_json::json!(5),
-            })
+            Some(TimesConfig { count: serde_json::json!(5) })
         } else {
             None
         };
@@ -320,11 +287,7 @@ fn arb_loop_node_config() -> impl Strategy<Value = LoopNodeConfig> {
 // ============================================
 
 fn arb_merge_mode() -> impl Strategy<Value = MergeMode> {
-    prop_oneof![
-        Just(MergeMode::WaitAll),
-        Just(MergeMode::WaitAny),
-        Just(MergeMode::WaitN),
-    ]
+    prop_oneof![Just(MergeMode::WaitAll), Just(MergeMode::WaitAny), Just(MergeMode::WaitN),]
 }
 
 fn arb_combine_strategy() -> impl Strategy<Value = CombineStrategy> {
@@ -337,19 +300,16 @@ fn arb_combine_strategy() -> impl Strategy<Value = CombineStrategy> {
 }
 
 fn arb_merge_node_config() -> impl Strategy<Value = MergeNodeConfig> {
-    (
-        arb_standard_properties(),
-        arb_merge_mode(),
-        arb_combine_strategy(),
-    )
-        .prop_map(|(standard, mode, combine_strategy)| MergeNodeConfig {
+    (arb_standard_properties(), arb_merge_mode(), arb_combine_strategy()).prop_map(
+        |(standard, mode, combine_strategy)| MergeNodeConfig {
             standard,
             mode,
             wait_count: Some(2),
             combine_strategy,
             branch_keys: None,
             timeout: MergeTimeout::default(),
-        })
+        },
+    )
 }
 
 // ============================================
@@ -368,25 +328,17 @@ fn arb_wait_type() -> impl Strategy<Value = WaitType> {
 fn arb_wait_node_config() -> impl Strategy<Value = WaitNodeConfig> {
     (arb_standard_properties(), arb_wait_type()).prop_map(|(standard, wait_type)| {
         let fixed = if wait_type == WaitType::Fixed {
-            Some(FixedDuration {
-                duration: 1000,
-                unit: "ms".to_string(),
-            })
+            Some(FixedDuration { duration: 1000, unit: "ms".to_string() })
         } else {
             None
         };
         let until = if wait_type == WaitType::Until {
-            Some(UntilConfig {
-                timestamp: "2025-01-01T00:00:00Z".to_string(),
-            })
+            Some(UntilConfig { timestamp: "2025-01-01T00:00:00Z".to_string() })
         } else {
             None
         };
         let webhook = if wait_type == WaitType::Webhook {
-            Some(WebhookWaitConfig {
-                path: "/wait".to_string(),
-                timeout: 30000,
-            })
+            Some(WebhookWaitConfig { path: "/wait".to_string(), timeout: 30000 })
         } else {
             None
         };
@@ -399,14 +351,7 @@ fn arb_wait_node_config() -> impl Strategy<Value = WaitNodeConfig> {
         } else {
             None
         };
-        WaitNodeConfig {
-            standard,
-            wait_type,
-            fixed,
-            until,
-            webhook,
-            condition,
-        }
+        WaitNodeConfig { standard, wait_type, fixed, until, webhook, condition }
     })
 }
 
@@ -526,11 +471,11 @@ proptest! {
     #[test]
     fn prop_code_generation_validity(config in arb_action_node_config()) {
         let node_id = config.standard().id.clone();
-        
+
         // Create a HashMap with the single config
         let mut nodes = HashMap::new();
         nodes.insert(node_id.clone(), config);
-        
+
         let code = generate_action_nodes_code(&nodes);
 
         // Property: Generated code must pass validation

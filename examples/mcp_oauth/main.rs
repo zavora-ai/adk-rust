@@ -98,10 +98,12 @@ async fn main() -> Result<()> {
         Err(e) => {
             let error_msg = e.to_string();
             println!("❌ Failed to connect: {}\n", error_msg);
-            
+
             // Provide specific guidance based on error type
             if error_msg.contains("Auth required") {
-                println!("The server requires authentication but didn't receive valid credentials.");
+                println!(
+                    "The server requires authentication but didn't receive valid credentials."
+                );
                 println!("Check that your GITHUB_TOKEN is valid and has Copilot access.\n");
             } else if error_msg.contains("Unexpected content type") {
                 println!("The server returned an unexpected response format.");
@@ -112,9 +114,9 @@ async fn main() -> Result<()> {
             } else if error_msg.contains("401") || error_msg.contains("403") {
                 println!("Authentication failed. Check your token permissions.\n");
             }
-            
+
             println!("Falling back to public MCP servers to demonstrate auth patterns...\n");
-            
+
             // Demonstrate with public servers that don't require auth
             demonstrate_public_servers(google_api_key).await?;
         }
@@ -123,7 +125,10 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_with_toolset<S>(toolset: adk_tool::McpToolset<S>, google_api_key: Option<String>) -> Result<()>
+async fn run_with_toolset<S>(
+    toolset: adk_tool::McpToolset<S>,
+    google_api_key: Option<String>,
+) -> Result<()>
 where
     S: Service<rmcp::RoleClient> + Send + Sync + 'static,
 {
@@ -136,11 +141,8 @@ where
             println!("Discovered {} tools:", tools.len());
             for tool in &tools {
                 let desc = tool.description();
-                let short_desc = if desc.len() > 70 {
-                    format!("{}...", &desc[..70])
-                } else {
-                    desc.to_string()
-                };
+                let short_desc =
+                    if desc.len() > 70 { format!("{}...", &desc[..70]) } else { desc.to_string() };
                 println!("  - {}: {}", tool.name(), short_desc);
             }
             println!();
@@ -192,16 +194,12 @@ where
 
 async fn demonstrate_public_servers(google_api_key: Option<String>) -> Result<()> {
     println!("Connecting to public MCP servers (no auth required)...\n");
-    
+
     // Connect to Fetch MCP server (public, no auth)
     let fetch_server = "https://remote.mcpservers.org/fetch/mcp";
     println!("Connecting to: {}", fetch_server);
-    
-    match McpHttpClientBuilder::new(fetch_server)
-        .timeout(Duration::from_secs(30))
-        .connect()
-        .await
-    {
+
+    match McpHttpClientBuilder::new(fetch_server).timeout(Duration::from_secs(30)).connect().await {
         Ok(toolset) => {
             println!("✅ Connected to Fetch MCP server!\n");
             run_with_toolset(toolset, google_api_key).await?;

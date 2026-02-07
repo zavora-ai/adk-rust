@@ -1640,8 +1640,6 @@ mod client_tests {
         assert!(GeminiClient::is_vertex_transport_error_message(
             "the transport reports an error: client error (SendRequest): http2 error"
         ));
-        assert!(!GeminiClient::is_vertex_transport_error_message(
-            "permission denied"
-        ));
+        assert!(!GeminiClient::is_vertex_transport_error_message("permission denied"));
     }
 }

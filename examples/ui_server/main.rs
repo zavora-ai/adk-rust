@@ -1,7 +1,7 @@
 use adk_agent::LlmAgentBuilder;
 use adk_core::SingleAgentLoader;
 use adk_model::gemini::GeminiModel;
-use adk_ui::{a2ui::A2UI_AGENT_PROMPT, UiToolset};
+use adk_ui::{UiToolset, a2ui::A2UI_AGENT_PROMPT};
 use anyhow::Result;
 use std::sync::Arc;
 

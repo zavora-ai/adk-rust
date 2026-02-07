@@ -47,15 +47,15 @@ impl UiEventMapper {
                 action_id.clone(),
                 serde_json::to_value(data).unwrap_or_else(|_| Value::Object(Default::default())),
             ),
-            UiEvent::ButtonClick { action_id } => (action_id.clone(), Value::Object(Default::default())),
-            UiEvent::InputChange { name, value } => (
-                "input_change".to_string(),
-                serde_json::json!({ "name": name, "value": value }),
-            ),
-            UiEvent::TabChange { index } => (
-                "tab_change".to_string(),
-                serde_json::json!({ "index": index }),
-            ),
+            UiEvent::ButtonClick { action_id } => {
+                (action_id.clone(), Value::Object(Default::default()))
+            }
+            UiEvent::InputChange { name, value } => {
+                ("input_change".to_string(), serde_json::json!({ "name": name, "value": value }))
+            }
+            UiEvent::TabChange { index } => {
+                ("tab_change".to_string(), serde_json::json!({ "index": index }))
+            }
         };
 
         A2uiActionEvent {

@@ -186,11 +186,7 @@ pub struct IterationInfo {
 impl WorkflowExecutor {
     /// Create a new workflow executor
     pub fn new(action_nodes: HashMap<String, ActionNodeConfig>) -> Self {
-        Self {
-            state: Arc::new(RwLock::new(HashMap::new())),
-            action_nodes,
-            event_sender: None,
-        }
+        Self { state: Arc::new(RwLock::new(HashMap::new())), action_nodes, event_sender: None }
     }
 
     /// Create executor with event sender for SSE
@@ -281,9 +277,8 @@ impl WorkflowExecutor {
         }
 
         // Execute with error handling
-        let result = self
-            .execute_with_error_handling(node_id, node, &standard.error_handling)
-            .await;
+        let result =
+            self.execute_with_error_handling(node_id, node, &standard.error_handling).await;
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
 
@@ -371,10 +366,7 @@ impl WorkflowExecutor {
                     self.execute_node_inner(node),
                 )
                 .await
-                .map_err(|_| ActionError::Timeout {
-                    node: node_id.to_string(),
-                    timeout_ms,
-                })??;
+                .map_err(|_| ActionError::Timeout { node: node_id.to_string(), timeout_ms })??;
                 Ok((result, 0))
             }
             ErrorMode::Continue => {
@@ -438,10 +430,7 @@ impl WorkflowExecutor {
                 {
                     Ok(Ok(result)) => Ok((result, 0)),
                     Ok(Err(_)) | Err(_) => {
-                        let fallback = error_handling
-                            .fallback_value
-                            .clone()
-                            .unwrap_or(Value::Null);
+                        let fallback = error_handling.fallback_value.clone().unwrap_or(Value::Null);
                         tracing::warn!(node = node_id, "Using fallback value");
                         Ok((fallback, 0))
                     }
@@ -488,18 +477,13 @@ impl WorkflowExecutor {
         use crate::codegen::action_nodes::TriggerType;
 
         match config.trigger_type {
-            TriggerType::Manual => {
-                Ok(serde_json::json!({
-                    "trigger": "manual",
-                    "timestamp": chrono::Utc::now().to_rfc3339()
-                }))
-            }
+            TriggerType::Manual => Ok(serde_json::json!({
+                "trigger": "manual",
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            })),
             TriggerType::Webhook => {
                 // Webhook payload should be in state
-                let payload = self
-                    .get_state_value("webhook_payload")
-                    .await
-                    .unwrap_or(Value::Null);
+                let payload = self.get_state_value("webhook_payload").await.unwrap_or(Value::Null);
                 Ok(payload)
             }
             TriggerType::Schedule => {
@@ -515,10 +499,7 @@ impl WorkflowExecutor {
                 }
             }
             TriggerType::Event => {
-                let event_data = self
-                    .get_state_value("event_data")
-                    .await
-                    .unwrap_or(Value::Null);
+                let event_data = self.get_state_value("event_data").await.unwrap_or(Value::Null);
                 Ok(event_data)
             }
         }
@@ -545,8 +526,7 @@ impl WorkflowExecutor {
             "note": "HTTP execution happens in generated code"
         });
 
-        self.set_state_value(config.standard.mapping.output_key.clone(), result.clone())
-            .await;
+        self.set_state_value(config.standard.mapping.output_key.clone(), result.clone()).await;
         Ok(result)
     }
 
@@ -595,8 +575,7 @@ impl WorkflowExecutor {
         }
 
         let output = Value::Object(result);
-        self.set_state_value(config.standard.mapping.output_key.clone(), output.clone())
-            .await;
+        self.set_state_value(config.standard.mapping.output_key.clone(), output.clone()).await;
         Ok(output)
     }
 
@@ -619,8 +598,7 @@ impl WorkflowExecutor {
             }
         };
 
-        self.set_state_value(config.standard.mapping.output_key.clone(), result.clone())
-            .await;
+        self.set_state_value(config.standard.mapping.output_key.clone(), result.clone()).await;
         Ok(result)
     }
 
@@ -652,9 +630,7 @@ impl WorkflowExecutor {
         if let Some(default) = &config.default_branch {
             Ok(serde_json::json!({ "branch": default }))
         } else {
-            Err(ActionError::NoMatchingBranch {
-                node: config.standard.id.clone(),
-            })
+            Err(ActionError::NoMatchingBranch { node: config.standard.id.clone() })
         }
     }
 
@@ -706,8 +682,7 @@ impl WorkflowExecutor {
                 if let Some(times) = &config.times {
                     let count = times.count.as_u64().unwrap_or(0) as usize;
                     for i in 0..count {
-                        self.set_state_value("index".to_string(), serde_json::json!(i))
-                            .await;
+                        self.set_state_value("index".to_string(), serde_json::json!(i)).await;
 
                         if config.results.collect {
                             let state = self.get_state().await;
@@ -735,11 +710,7 @@ impl WorkflowExecutor {
             }
         }
 
-        let output = if config.results.collect {
-            serde_json::json!(results)
-        } else {
-            Value::Null
-        };
+        let output = if config.results.collect { serde_json::json!(results) } else { Value::Null };
 
         if let Some(agg_key) = &config.results.aggregation_key {
             self.set_state_value(agg_key.clone(), output.clone()).await;
@@ -763,9 +734,7 @@ impl WorkflowExecutor {
             .as_ref()
             .map(|keys| {
                 keys.iter()
-                    .filter_map(|k| {
-                        current_state.get(k).map(|v| (k.clone(), v.clone()))
-                    })
+                    .filter_map(|k| current_state.get(k).map(|v| (k.clone(), v.clone())))
                     .collect()
             })
             .unwrap_or_default();
@@ -804,20 +773,15 @@ impl WorkflowExecutor {
                 }
                 Value::Object(map)
             }
-            CombineStrategy::First => branch_results
-                .into_iter()
-                .next()
-                .map(|(_, v)| v)
-                .unwrap_or(Value::Null),
-            CombineStrategy::Last => branch_results
-                .into_iter()
-                .last()
-                .map(|(_, v)| v)
-                .unwrap_or(Value::Null),
+            CombineStrategy::First => {
+                branch_results.into_iter().next().map(|(_, v)| v).unwrap_or(Value::Null)
+            }
+            CombineStrategy::Last => {
+                branch_results.into_iter().last().map(|(_, v)| v).unwrap_or(Value::Null)
+            }
         };
 
-        self.set_state_value(config.standard.mapping.output_key.clone(), result.clone())
-            .await;
+        self.set_state_value(config.standard.mapping.output_key.clone(), result.clone()).await;
         Ok(result)
     }
 
@@ -848,9 +812,7 @@ impl WorkflowExecutor {
                         .with_timezone(&chrono::Utc);
                     let now = chrono::Utc::now();
                     if target > now {
-                        let duration = (target - now)
-                            .to_std()
-                            .unwrap_or(Duration::from_secs(0));
+                        let duration = (target - now).to_std().unwrap_or(Duration::from_secs(0));
                         tokio::time::sleep(duration).await;
                     }
                 }
@@ -893,9 +855,7 @@ impl WorkflowExecutor {
     ) -> Result<Value, ActionError> {
         // Code execution would need a JavaScript sandbox like quickjs
         // For now, return a placeholder
-        Err(ActionError::Execution(
-            "Code node execution requires JavaScript sandbox".to_string(),
-        ))
+        Err(ActionError::Execution("Code node execution requires JavaScript sandbox".to_string()))
     }
 
     /// Execute Database node
@@ -904,25 +864,21 @@ impl WorkflowExecutor {
         config: &crate::codegen::action_nodes::DatabaseNodeConfig,
     ) -> Result<Value, ActionError> {
         use crate::codegen::action_nodes::DatabaseType;
-        
+
         let state = self.get_state().await;
-        
+
         // Interpolate connection string
         let connection_string = interpolate_variables(&config.connection.connection_string, &state);
-        
+
         match config.db_type {
             DatabaseType::Postgresql | DatabaseType::Mysql | DatabaseType::Sqlite => {
                 self.execute_sql_database(config, &connection_string, &state).await
             }
-            DatabaseType::Mongodb => {
-                self.execute_mongodb(config, &connection_string, &state).await
-            }
-            DatabaseType::Redis => {
-                self.execute_redis(config, &connection_string, &state).await
-            }
+            DatabaseType::Mongodb => self.execute_mongodb(config, &connection_string, &state).await,
+            DatabaseType::Redis => self.execute_redis(config, &connection_string, &state).await,
         }
     }
-    
+
     /// Execute SQL database operations (PostgreSQL, MySQL, SQLite)
     async fn execute_sql_database(
         &self,
@@ -931,19 +887,19 @@ impl WorkflowExecutor {
         state: &State,
     ) -> Result<Value, ActionError> {
         use sqlx::{AnyPool, Column, Row};
-        
+
         let sql_config = config.sql.as_ref().ok_or_else(|| {
             ActionError::Execution("SQL configuration required for SQL databases".to_string())
         })?;
-        
+
         // Interpolate query
         let query = interpolate_variables(&sql_config.query, state);
-        
+
         // Create connection pool
         let pool = AnyPool::connect(connection_string)
             .await
             .map_err(|e| ActionError::Execution(format!("Database connection failed: {}", e)))?;
-        
+
         // Execute based on operation type
         let result = match sql_config.operation.as_str() {
             "query" => {
@@ -951,31 +907,34 @@ impl WorkflowExecutor {
                     .fetch_all(&pool)
                     .await
                     .map_err(|e| ActionError::Execution(format!("Query failed: {}", e)))?;
-                
+
                 // Convert rows to JSON - use String for Any driver compatibility
-                let json_rows: Vec<Value> = rows.iter().map(|row| {
-                    let mut obj = serde_json::Map::new();
-                    for (i, column) in row.columns().iter().enumerate() {
-                        // Try to get as string first, then try other types
-                        let value: Value = if let Ok(s) = row.try_get::<String, _>(i) {
-                            // Try to parse as JSON, otherwise use as string
-                            serde_json::from_str(&s).unwrap_or(Value::String(s))
-                        } else if let Ok(n) = row.try_get::<i64, _>(i) {
-                            Value::Number(n.into())
-                        } else if let Ok(f) = row.try_get::<f64, _>(i) {
-                            serde_json::Number::from_f64(f)
-                                .map(Value::Number)
-                                .unwrap_or(Value::Null)
-                        } else if let Ok(b) = row.try_get::<bool, _>(i) {
-                            Value::Bool(b)
-                        } else {
-                            Value::Null
-                        };
-                        obj.insert(column.name().to_string(), value);
-                    }
-                    Value::Object(obj)
-                }).collect();
-                
+                let json_rows: Vec<Value> = rows
+                    .iter()
+                    .map(|row| {
+                        let mut obj = serde_json::Map::new();
+                        for (i, column) in row.columns().iter().enumerate() {
+                            // Try to get as string first, then try other types
+                            let value: Value = if let Ok(s) = row.try_get::<String, _>(i) {
+                                // Try to parse as JSON, otherwise use as string
+                                serde_json::from_str(&s).unwrap_or(Value::String(s))
+                            } else if let Ok(n) = row.try_get::<i64, _>(i) {
+                                Value::Number(n.into())
+                            } else if let Ok(f) = row.try_get::<f64, _>(i) {
+                                serde_json::Number::from_f64(f)
+                                    .map(Value::Number)
+                                    .unwrap_or(Value::Null)
+                            } else if let Ok(b) = row.try_get::<bool, _>(i) {
+                                Value::Bool(b)
+                            } else {
+                                Value::Null
+                            };
+                            obj.insert(column.name().to_string(), value);
+                        }
+                        Value::Object(obj)
+                    })
+                    .collect();
+
                 serde_json::json!({
                     "success": true,
                     "operation": "query",
@@ -988,7 +947,7 @@ impl WorkflowExecutor {
                     .execute(&pool)
                     .await
                     .map_err(|e| ActionError::Execution(format!("Execute failed: {}", e)))?;
-                
+
                 serde_json::json!({
                     "success": true,
                     "operation": sql_config.operation,
@@ -1002,17 +961,17 @@ impl WorkflowExecutor {
                 )));
             }
         };
-        
+
         // Close pool
         pool.close().await;
-        
+
         // Store in state
         let mut state_write = self.state.write().await;
         state_write.insert(config.standard.mapping.output_key.clone(), result.clone());
-        
+
         Ok(result)
     }
-    
+
     /// Execute MongoDB operations
     async fn execute_mongodb(
         &self,
@@ -1020,50 +979,53 @@ impl WorkflowExecutor {
         connection_string: &str,
         state: &State,
     ) -> Result<Value, ActionError> {
-        use mongodb::{bson::doc, Client};
         use futures::TryStreamExt;
-        
-        let mongo_config = config.mongodb.as_ref().ok_or_else(|| {
-            ActionError::Execution("MongoDB configuration required".to_string())
-        })?;
-        
+        use mongodb::{Client, bson::doc};
+
+        let mongo_config = config
+            .mongodb
+            .as_ref()
+            .ok_or_else(|| ActionError::Execution("MongoDB configuration required".to_string()))?;
+
         // Connect to MongoDB
         let client = Client::with_uri_str(connection_string)
             .await
             .map_err(|e| ActionError::Execution(format!("MongoDB connection failed: {}", e)))?;
-        
+
         // Extract database name from connection string or use default
-        let db_name = connection_string
-            .split('/')
-            .last()
-            .and_then(|s| s.split('?').next())
-            .unwrap_or("test");
-        
+        let db_name =
+            connection_string.split('/').last().and_then(|s| s.split('?').next()).unwrap_or("test");
+
         let db = client.database(db_name);
-        
+
         // Interpolate collection name with state variables
         let collection_name = interpolate_variables(&mongo_config.collection, state);
         let collection = db.collection::<mongodb::bson::Document>(&collection_name);
-        
+
         // Execute based on operation
         let result = match mongo_config.operation.as_str() {
             "find" => {
-                let filter = mongo_config.filter.as_ref()
+                let filter = mongo_config
+                    .filter
+                    .as_ref()
                     .map(|f| mongodb::bson::to_document(f).unwrap_or_default())
                     .unwrap_or_default();
-                
-                let mut cursor = collection.find(filter)
+
+                let mut cursor = collection
+                    .find(filter)
                     .await
                     .map_err(|e| ActionError::Execution(format!("Find failed: {}", e)))?;
-                
+
                 let mut docs = Vec::new();
-                while let Some(doc) = cursor.try_next().await
-                    .map_err(|e| ActionError::Execution(format!("Cursor error: {}", e)))? {
-                    let json: Value = mongodb::bson::from_document(doc)
-                        .unwrap_or(Value::Null);
+                while let Some(doc) = cursor
+                    .try_next()
+                    .await
+                    .map_err(|e| ActionError::Execution(format!("Cursor error: {}", e)))?
+                {
+                    let json: Value = mongodb::bson::from_document(doc).unwrap_or(Value::Null);
                     docs.push(json);
                 }
-                
+
                 serde_json::json!({
                     "success": true,
                     "operation": "find",
@@ -1072,18 +1034,20 @@ impl WorkflowExecutor {
                 })
             }
             "findOne" => {
-                let filter = mongo_config.filter.as_ref()
+                let filter = mongo_config
+                    .filter
+                    .as_ref()
                     .map(|f| mongodb::bson::to_document(f).unwrap_or_default())
                     .unwrap_or_default();
-                
-                let doc = collection.find_one(filter)
+
+                let doc = collection
+                    .find_one(filter)
                     .await
                     .map_err(|e| ActionError::Execution(format!("FindOne failed: {}", e)))?;
-                
-                let json_doc = doc.map(|d| {
-                    mongodb::bson::from_document::<Value>(d).unwrap_or(Value::Null)
-                });
-                
+
+                let json_doc =
+                    doc.map(|d| mongodb::bson::from_document::<Value>(d).unwrap_or(Value::Null));
+
                 serde_json::json!({
                     "success": true,
                     "operation": "findOne",
@@ -1091,14 +1055,19 @@ impl WorkflowExecutor {
                 })
             }
             "insert" => {
-                let document = mongo_config.document.as_ref()
+                let document = mongo_config
+                    .document
+                    .as_ref()
                     .map(|d| mongodb::bson::to_document(d).unwrap_or_default())
-                    .ok_or_else(|| ActionError::Execution("Document required for insert".to_string()))?;
-                
-                let result = collection.insert_one(document)
+                    .ok_or_else(|| {
+                        ActionError::Execution("Document required for insert".to_string())
+                    })?;
+
+                let result = collection
+                    .insert_one(document)
                     .await
                     .map_err(|e| ActionError::Execution(format!("Insert failed: {}", e)))?;
-                
+
                 serde_json::json!({
                     "success": true,
                     "operation": "insert",
@@ -1106,18 +1075,25 @@ impl WorkflowExecutor {
                 })
             }
             "update" => {
-                let filter = mongo_config.filter.as_ref()
+                let filter = mongo_config
+                    .filter
+                    .as_ref()
                     .map(|f| mongodb::bson::to_document(f).unwrap_or_default())
                     .unwrap_or_default();
-                
-                let update = mongo_config.document.as_ref()
+
+                let update = mongo_config
+                    .document
+                    .as_ref()
                     .map(|d| doc! { "$set": mongodb::bson::to_document(d).unwrap_or_default() })
-                    .ok_or_else(|| ActionError::Execution("Update document required".to_string()))?;
-                
-                let result = collection.update_many(filter, update)
+                    .ok_or_else(|| {
+                        ActionError::Execution("Update document required".to_string())
+                    })?;
+
+                let result = collection
+                    .update_many(filter, update)
                     .await
                     .map_err(|e| ActionError::Execution(format!("Update failed: {}", e)))?;
-                
+
                 serde_json::json!({
                     "success": true,
                     "operation": "update",
@@ -1126,14 +1102,17 @@ impl WorkflowExecutor {
                 })
             }
             "delete" => {
-                let filter = mongo_config.filter.as_ref()
+                let filter = mongo_config
+                    .filter
+                    .as_ref()
                     .map(|f| mongodb::bson::to_document(f).unwrap_or_default())
                     .unwrap_or_default();
-                
-                let result = collection.delete_many(filter)
+
+                let result = collection
+                    .delete_many(filter)
                     .await
                     .map_err(|e| ActionError::Execution(format!("Delete failed: {}", e)))?;
-                
+
                 serde_json::json!({
                     "success": true,
                     "operation": "delete",
@@ -1147,14 +1126,14 @@ impl WorkflowExecutor {
                 )));
             }
         };
-        
+
         // Store in state
         let mut state_write = self.state.write().await;
         state_write.insert(config.standard.mapping.output_key.clone(), result.clone());
-        
+
         Ok(result)
     }
-    
+
     /// Execute Redis operations
     async fn execute_redis(
         &self,
@@ -1163,26 +1142,29 @@ impl WorkflowExecutor {
         _state: &State,
     ) -> Result<Value, ActionError> {
         use redis::AsyncCommands;
-        
-        let redis_config = config.redis.as_ref().ok_or_else(|| {
-            ActionError::Execution("Redis configuration required".to_string())
-        })?;
-        
+
+        let redis_config = config
+            .redis
+            .as_ref()
+            .ok_or_else(|| ActionError::Execution("Redis configuration required".to_string()))?;
+
         // Connect to Redis
         let client = redis::Client::open(connection_string)
             .map_err(|e| ActionError::Execution(format!("Redis connection failed: {}", e)))?;
-        
-        let mut conn = client.get_multiplexed_async_connection()
+
+        let mut conn = client
+            .get_multiplexed_async_connection()
             .await
             .map_err(|e| ActionError::Execution(format!("Redis connection failed: {}", e)))?;
-        
+
         // Execute based on operation
         let result = match redis_config.operation.as_str() {
             "get" => {
-                let value: Option<String> = conn.get(&redis_config.key)
+                let value: Option<String> = conn
+                    .get(&redis_config.key)
                     .await
                     .map_err(|e| ActionError::Execution(format!("Redis GET failed: {}", e)))?;
-                
+
                 serde_json::json!({
                     "success": true,
                     "operation": "get",
@@ -1191,20 +1173,19 @@ impl WorkflowExecutor {
                 })
             }
             "set" => {
-                let value = redis_config.value.as_ref()
-                    .map(|v| v.to_string())
-                    .unwrap_or_default();
-                
+                let value = redis_config.value.as_ref().map(|v| v.to_string()).unwrap_or_default();
+
                 if let Some(ttl) = redis_config.ttl {
-                    let _: () = conn.set_ex(&redis_config.key, &value, ttl)
-                        .await
-                        .map_err(|e| ActionError::Execution(format!("Redis SETEX failed: {}", e)))?;
+                    let _: () = conn.set_ex(&redis_config.key, &value, ttl).await.map_err(|e| {
+                        ActionError::Execution(format!("Redis SETEX failed: {}", e))
+                    })?;
                 } else {
-                    let _: () = conn.set(&redis_config.key, &value)
+                    let _: () = conn
+                        .set(&redis_config.key, &value)
                         .await
                         .map_err(|e| ActionError::Execution(format!("Redis SET failed: {}", e)))?;
                 }
-                
+
                 serde_json::json!({
                     "success": true,
                     "operation": "set",
@@ -1212,10 +1193,11 @@ impl WorkflowExecutor {
                 })
             }
             "del" => {
-                let deleted: i64 = conn.del(&redis_config.key)
+                let deleted: i64 = conn
+                    .del(&redis_config.key)
                     .await
                     .map_err(|e| ActionError::Execution(format!("Redis DEL failed: {}", e)))?;
-                
+
                 serde_json::json!({
                     "success": true,
                     "operation": "del",
@@ -1224,14 +1206,13 @@ impl WorkflowExecutor {
                 })
             }
             "hget" => {
-                let field = redis_config.value.as_ref()
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                
-                let value: Option<String> = conn.hget(&redis_config.key, field)
+                let field = redis_config.value.as_ref().and_then(|v| v.as_str()).unwrap_or("");
+
+                let value: Option<String> = conn
+                    .hget(&redis_config.key, field)
                     .await
                     .map_err(|e| ActionError::Execution(format!("Redis HGET failed: {}", e)))?;
-                
+
                 serde_json::json!({
                     "success": true,
                     "operation": "hget",
@@ -1241,16 +1222,18 @@ impl WorkflowExecutor {
                 })
             }
             "hset" => {
-                let value_obj = redis_config.value.as_ref()
-                    .and_then(|v| v.as_object())
-                    .ok_or_else(|| ActionError::Execution("HSET requires object value".to_string()))?;
-                
+                let value_obj =
+                    redis_config.value.as_ref().and_then(|v| v.as_object()).ok_or_else(|| {
+                        ActionError::Execution("HSET requires object value".to_string())
+                    })?;
+
                 for (field, val) in value_obj {
-                    let _: () = conn.hset(&redis_config.key, field, val.to_string())
+                    let _: () = conn
+                        .hset(&redis_config.key, field, val.to_string())
                         .await
                         .map_err(|e| ActionError::Execution(format!("Redis HSET failed: {}", e)))?;
                 }
-                
+
                 serde_json::json!({
                     "success": true,
                     "operation": "hset",
@@ -1258,14 +1241,13 @@ impl WorkflowExecutor {
                 })
             }
             "lpush" => {
-                let value = redis_config.value.as_ref()
-                    .map(|v| v.to_string())
-                    .unwrap_or_default();
-                
-                let len: i64 = conn.lpush(&redis_config.key, &value)
+                let value = redis_config.value.as_ref().map(|v| v.to_string()).unwrap_or_default();
+
+                let len: i64 = conn
+                    .lpush(&redis_config.key, &value)
                     .await
                     .map_err(|e| ActionError::Execution(format!("Redis LPUSH failed: {}", e)))?;
-                
+
                 serde_json::json!({
                     "success": true,
                     "operation": "lpush",
@@ -1274,10 +1256,11 @@ impl WorkflowExecutor {
                 })
             }
             "rpop" => {
-                let value: Option<String> = conn.rpop(&redis_config.key, None)
+                let value: Option<String> = conn
+                    .rpop(&redis_config.key, None)
                     .await
                     .map_err(|e| ActionError::Execution(format!("Redis RPOP failed: {}", e)))?;
-                
+
                 serde_json::json!({
                     "success": true,
                     "operation": "rpop",
@@ -1292,11 +1275,11 @@ impl WorkflowExecutor {
                 )));
             }
         };
-        
+
         // Store in state
         let mut state_write = self.state.write().await;
         state_write.insert(config.standard.mapping.output_key.clone(), result.clone());
-        
+
         Ok(result)
     }
 
@@ -1307,13 +1290,13 @@ impl WorkflowExecutor {
     ) -> Result<Value, ActionError> {
         use crate::codegen::action_nodes::EmailMode;
         use lettre::{
-            message::{header::ContentType, Attachment, MultiPart, SinglePart},
-            transport::smtp::authentication::Credentials,
             AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
+            message::{Attachment, MultiPart, SinglePart, header::ContentType},
+            transport::smtp::authentication::Credentials,
         };
-        
+
         let state = self.get_state().await;
-        
+
         match config.mode {
             EmailMode::Monitor => {
                 // IMAP monitoring is not implemented in runtime
@@ -1324,17 +1307,19 @@ impl WorkflowExecutor {
             }
             EmailMode::Send => {
                 let smtp = config.smtp.as_ref().ok_or_else(|| {
-                    ActionError::Execution("SMTP configuration required for sending emails".to_string())
+                    ActionError::Execution(
+                        "SMTP configuration required for sending emails".to_string(),
+                    )
                 })?;
-                
+
                 let recipients = config.recipients.as_ref().ok_or_else(|| {
                     ActionError::Execution("Recipients required for sending emails".to_string())
                 })?;
-                
+
                 let content = config.content.as_ref().ok_or_else(|| {
                     ActionError::Execution("Email content required for sending emails".to_string())
                 })?;
-                
+
                 // Interpolate values
                 let host = interpolate_variables(&smtp.host, &state);
                 let username = interpolate_variables(&smtp.username, &state);
@@ -1343,7 +1328,7 @@ impl WorkflowExecutor {
                 let to = interpolate_variables(&recipients.to, &state);
                 let subject = interpolate_variables(&content.subject, &state);
                 let body = interpolate_variables(&content.body, &state);
-                
+
                 // Build from address
                 let from = if let Some(from_name) = &smtp.from_name {
                     let name = interpolate_variables(from_name, &state);
@@ -1351,7 +1336,7 @@ impl WorkflowExecutor {
                 } else {
                     from_email.clone()
                 };
-                
+
                 // Build message
                 let mut message_builder = Message::builder()
                     .from(from.parse().map_err(|e| {
@@ -1361,7 +1346,7 @@ impl WorkflowExecutor {
                         ActionError::Execution(format!("Invalid to address: {}", e))
                     })?)
                     .subject(&subject);
-                
+
                 // Add CC if present
                 if let Some(cc) = &recipients.cc {
                     let cc_addr = interpolate_variables(cc, &state);
@@ -1371,7 +1356,7 @@ impl WorkflowExecutor {
                         })?);
                     }
                 }
-                
+
                 // Add BCC if present
                 if let Some(bcc) = &recipients.bcc {
                     let bcc_addr = interpolate_variables(bcc, &state);
@@ -1381,26 +1366,22 @@ impl WorkflowExecutor {
                         })?);
                     }
                 }
-                
+
                 // Build body based on type
                 let body_part = match content.body_type {
                     crate::codegen::action_nodes::EmailBodyType::Html => {
-                        SinglePart::builder()
-                            .header(ContentType::TEXT_HTML)
-                            .body(body)
+                        SinglePart::builder().header(ContentType::TEXT_HTML).body(body)
                     }
                     crate::codegen::action_nodes::EmailBodyType::Text => {
-                        SinglePart::builder()
-                            .header(ContentType::TEXT_PLAIN)
-                            .body(body)
+                        SinglePart::builder().header(ContentType::TEXT_PLAIN).body(body)
                     }
                 };
-                
+
                 // Build email with or without attachments
                 let email = if let Some(attachments) = &config.attachments {
                     if !attachments.is_empty() {
                         let mut multipart = MultiPart::mixed().singlepart(body_part);
-                        
+
                         for attachment in attachments {
                             if let Some(attachment_data) = state.get(&attachment.state_key) {
                                 let data = if let Some(s) = attachment_data.as_str() {
@@ -1412,30 +1393,34 @@ impl WorkflowExecutor {
                                 } else {
                                     serde_json::to_vec(attachment_data).unwrap_or_default()
                                 };
-                                
-                                let mime_type_str = attachment.mime_type.as_deref()
+
+                                let mime_type_str = attachment
+                                    .mime_type
+                                    .as_deref()
                                     .unwrap_or("application/octet-stream");
-                                
-                                let content_type: ContentType = mime_type_str.parse()
+
+                                let content_type: ContentType = mime_type_str
+                                    .parse()
                                     .unwrap_or_else(|_| ContentType::TEXT_PLAIN);
-                                
+
                                 let att = Attachment::new(attachment.filename.clone())
                                     .body(data, content_type);
                                 multipart = multipart.singlepart(att);
                             }
                         }
-                        
+
                         message_builder.multipart(multipart)
                     } else {
                         message_builder.singlepart(body_part)
                     }
                 } else {
                     message_builder.singlepart(body_part)
-                }.map_err(|e| ActionError::Execution(format!("Failed to build email: {}", e)))?;
-                
+                }
+                .map_err(|e| ActionError::Execution(format!("Failed to build email: {}", e)))?;
+
                 // Create SMTP transport
                 let creds = Credentials::new(username, password);
-                
+
                 let mailer: AsyncSmtpTransport<Tokio1Executor> = if smtp.secure {
                     AsyncSmtpTransport::<Tokio1Executor>::relay(&host)
                         .map_err(|e| ActionError::Execution(format!("SMTP relay error: {}", e)))?
@@ -1448,21 +1433,23 @@ impl WorkflowExecutor {
                         .credentials(creds)
                         .build()
                 };
-                
+
                 // Send email
-                let response = mailer.send(email).await
+                let response = mailer
+                    .send(email)
+                    .await
                     .map_err(|e| ActionError::Execution(format!("Failed to send email: {}", e)))?;
-                
+
                 let result = serde_json::json!({
                     "success": true,
                     "message": format!("Email sent to {}", to),
                     "response_code": response.code().to_string()
                 });
-                
+
                 // Store in state
                 let mut state_write = self.state.write().await;
                 state_write.insert(config.standard.mapping.output_key.clone(), result.clone());
-                
+
                 Ok(result)
             }
         }
@@ -1473,68 +1460,72 @@ impl WorkflowExecutor {
         &self,
         config: &crate::codegen::action_nodes::NotificationNodeConfig,
     ) -> Result<Value, ActionError> {
-        use crate::codegen::action_nodes::{NotificationChannel, MessageFormat};
-        
+        use crate::codegen::action_nodes::{MessageFormat, NotificationChannel};
+
         let state = self.get_state().await;
-        
+
         // Interpolate webhook URL
         let webhook_url = interpolate_variables(&config.webhook_url, &state);
-        
+
         // Interpolate message text
         let message_text = interpolate_variables(&config.message.text, &state);
-        
+
         // Build payload based on channel
         let payload = match config.channel {
             NotificationChannel::Slack => {
                 let mut payload = serde_json::json!({
                     "text": message_text
                 });
-                
+
                 // Add blocks if present
                 if let Some(blocks) = &config.message.blocks {
                     if !blocks.is_empty() {
                         payload["blocks"] = serde_json::json!(blocks);
                     }
                 }
-                
+
                 // Add mrkdwn flag for markdown
                 if config.message.format == MessageFormat::Markdown {
                     payload["mrkdwn"] = serde_json::json!(true);
                 }
-                
+
                 // Add optional fields
                 if let Some(username) = &config.username {
-                    payload["username"] = serde_json::json!(interpolate_variables(username, &state));
+                    payload["username"] =
+                        serde_json::json!(interpolate_variables(username, &state));
                 }
                 if let Some(icon_url) = &config.icon_url {
-                    payload["icon_url"] = serde_json::json!(interpolate_variables(icon_url, &state));
+                    payload["icon_url"] =
+                        serde_json::json!(interpolate_variables(icon_url, &state));
                 }
                 if let Some(channel) = &config.target_channel {
                     payload["channel"] = serde_json::json!(interpolate_variables(channel, &state));
                 }
-                
+
                 payload
             }
             NotificationChannel::Discord => {
                 let mut payload = serde_json::json!({
                     "content": message_text
                 });
-                
+
                 // Add embeds if present
                 if let Some(blocks) = &config.message.blocks {
                     if !blocks.is_empty() {
                         payload["embeds"] = serde_json::json!(blocks);
                     }
                 }
-                
+
                 // Add optional fields
                 if let Some(username) = &config.username {
-                    payload["username"] = serde_json::json!(interpolate_variables(username, &state));
+                    payload["username"] =
+                        serde_json::json!(interpolate_variables(username, &state));
                 }
                 if let Some(icon_url) = &config.icon_url {
-                    payload["avatar_url"] = serde_json::json!(interpolate_variables(icon_url, &state));
+                    payload["avatar_url"] =
+                        serde_json::json!(interpolate_variables(icon_url, &state));
                 }
-                
+
                 payload
             }
             NotificationChannel::Teams => {
@@ -1585,7 +1576,7 @@ impl WorkflowExecutor {
                 }
             }
         };
-        
+
         // Send the notification
         let client = reqwest::Client::new();
         let response = client
@@ -1595,7 +1586,7 @@ impl WorkflowExecutor {
             .send()
             .await
             .map_err(|e| ActionError::Execution(format!("Notification send failed: {}", e)))?;
-        
+
         let status = response.status();
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
@@ -1604,18 +1595,18 @@ impl WorkflowExecutor {
                 status, error_body
             )));
         }
-        
+
         // Return result
         let result = serde_json::json!({
             "success": true,
             "channel": format!("{:?}", config.channel),
             "status": status.as_u16()
         });
-        
+
         // Store in state
         let mut state_write = self.state.write().await;
         state_write.insert(config.standard.mapping.output_key.clone(), result.clone());
-        
+
         Ok(result)
     }
 
@@ -1704,12 +1695,7 @@ fn interpolate_variables(template: &str, state: &State) -> String {
                     other => other.to_string(),
                 })
                 .unwrap_or_default();
-            result = format!(
-                "{}{}{}",
-                &result[..open_pos],
-                replacement,
-                &result[close_pos + 2..]
-            );
+            result = format!("{}{}{}", &result[..open_pos], replacement, &result[close_pos + 2..]);
             start = open_pos + replacement.len();
         } else {
             break;
@@ -1777,49 +1763,26 @@ fn evaluate_operator(operator: &str, value: &Value, compare_to: &Option<Value>) 
     match operator {
         "eq" => value == compare_value,
         "neq" => value != compare_value,
-        "gt" => {
-            value.as_f64().zip(compare_value.as_f64())
-                .map(|(a, b)| a > b)
-                .unwrap_or(false)
-        }
-        "lt" => {
-            value.as_f64().zip(compare_value.as_f64())
-                .map(|(a, b)| a < b)
-                .unwrap_or(false)
-        }
-        "gte" => {
-            value.as_f64().zip(compare_value.as_f64())
-                .map(|(a, b)| a >= b)
-                .unwrap_or(false)
-        }
-        "lte" => {
-            value.as_f64().zip(compare_value.as_f64())
-                .map(|(a, b)| a <= b)
-                .unwrap_or(false)
-        }
+        "gt" => value.as_f64().zip(compare_value.as_f64()).map(|(a, b)| a > b).unwrap_or(false),
+        "lt" => value.as_f64().zip(compare_value.as_f64()).map(|(a, b)| a < b).unwrap_or(false),
+        "gte" => value.as_f64().zip(compare_value.as_f64()).map(|(a, b)| a >= b).unwrap_or(false),
+        "lte" => value.as_f64().zip(compare_value.as_f64()).map(|(a, b)| a <= b).unwrap_or(false),
         "contains" => {
-            value.as_str().zip(compare_value.as_str())
-                .map(|(a, b)| a.contains(b))
-                .unwrap_or(false)
+            value.as_str().zip(compare_value.as_str()).map(|(a, b)| a.contains(b)).unwrap_or(false)
         }
-        "startsWith" => {
-            value.as_str().zip(compare_value.as_str())
-                .map(|(a, b)| a.starts_with(b))
-                .unwrap_or(false)
-        }
+        "startsWith" => value
+            .as_str()
+            .zip(compare_value.as_str())
+            .map(|(a, b)| a.starts_with(b))
+            .unwrap_or(false),
         "endsWith" => {
-            value.as_str().zip(compare_value.as_str())
-                .map(|(a, b)| a.ends_with(b))
-                .unwrap_or(false)
+            value.as_str().zip(compare_value.as_str()).map(|(a, b)| a.ends_with(b)).unwrap_or(false)
         }
-        "empty" => {
-            value.as_str().map(|s| s.is_empty()).unwrap_or(value.is_null())
-        }
+        "empty" => value.as_str().map(|s| s.is_empty()).unwrap_or(value.is_null()),
         "exists" => !value.is_null(),
         _ => false,
     }
 }
-
 
 // ============================================
 // Tests
@@ -1873,13 +1836,11 @@ mod tests {
             proptest::option::of(arb_retry_delay()),
             proptest::option::of(arb_fallback_value()),
         )
-            .prop_map(|(mode, retry_count, retry_delay, fallback_value)| {
-                ErrorHandling {
-                    mode,
-                    retry_count,
-                    retry_delay,
-                    fallback_value,
-                }
+            .prop_map(|(mode, retry_count, retry_delay, fallback_value)| ErrorHandling {
+                mode,
+                retry_count,
+                retry_delay,
+                fallback_value,
             })
     }
 
@@ -2060,10 +2021,7 @@ mod tests {
 
     #[test]
     fn test_action_error_display() {
-        let error = ActionError::RetryExhausted {
-            node: "http_1".to_string(),
-            attempts: 3,
-        };
+        let error = ActionError::RetryExhausted { node: "http_1".to_string(), attempts: 3 };
         let display = format!("{}", error);
         assert!(display.contains("http_1"));
         assert!(display.contains("3"));
@@ -2073,7 +2031,7 @@ mod tests {
     fn test_interpolate_variables_simple() {
         let mut state = HashMap::new();
         state.insert("name".to_string(), Value::String("Alice".to_string()));
-        
+
         let result = interpolate_variables("Hello, {{name}}!", &state);
         assert_eq!(result, "Hello, Alice!");
     }
@@ -2081,11 +2039,8 @@ mod tests {
     #[test]
     fn test_interpolate_variables_nested() {
         let mut state = HashMap::new();
-        state.insert(
-            "user".to_string(),
-            serde_json::json!({"name": "Bob", "age": 30}),
-        );
-        
+        state.insert("user".to_string(), serde_json::json!({"name": "Bob", "age": 30}));
+
         let result = interpolate_variables("Name: {{user.name}}", &state);
         assert_eq!(result, "Name: Bob");
     }
@@ -2101,9 +2056,9 @@ mod tests {
     fn test_deep_merge_objects() {
         let base = serde_json::json!({"a": 1, "b": {"c": 2}});
         let overlay = serde_json::json!({"b": {"d": 3}, "e": 4});
-        
+
         let result = deep_merge(&base, &overlay);
-        
+
         assert_eq!(result["a"], 1);
         assert_eq!(result["b"]["c"], 2);
         assert_eq!(result["b"]["d"], 3);
@@ -2155,7 +2110,7 @@ mod tests {
     fn test_evaluate_operator_empty() {
         let value = Value::String("".to_string());
         assert!(evaluate_operator("empty", &value, &None));
-        
+
         let non_empty = Value::String("test".to_string());
         assert!(!evaluate_operator("empty", &non_empty, &None));
     }
@@ -2164,7 +2119,7 @@ mod tests {
     fn test_evaluate_operator_exists() {
         let value = Value::String("test".to_string());
         assert!(evaluate_operator("exists", &value, &None));
-        
+
         let null_value = Value::Null;
         assert!(!evaluate_operator("exists", &null_value, &None));
     }

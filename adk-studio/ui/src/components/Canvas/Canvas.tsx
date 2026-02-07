@@ -124,6 +124,11 @@ export function Canvas() {
     onZoomOut: zoomOut,
     onUndo: undoRedo.undo,
     onRedo: undoRedo.redo,
+    onRun: builtBinaryPath ? () => {
+      if (!showConsole) toggleConsole();
+      if (consoleCollapsed) setConsoleCollapsed(false);
+      setTimeout(() => setAutoSendPrompt(getDefaultPrompt()), 100);
+    } : undefined,
   });
 
   const { onDragStart, onActionDragStart, onDragOver, onDrop, createActionNode } = useCanvasDragDrop({

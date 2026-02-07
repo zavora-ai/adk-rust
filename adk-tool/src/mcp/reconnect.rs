@@ -5,7 +5,7 @@
 //
 // Handles:
 // - Connection closed errors
-// - EOF errors  
+// - EOF errors
 // - Session not found errors
 // - Automatic retry with reconnection
 
@@ -21,32 +21,30 @@ use tracing::{debug, info, warn};
 /// Errors that should trigger a connection refresh
 pub fn should_refresh_connection(error: &str) -> bool {
     let error_lower = error.to_lowercase();
-    
+
     // Connection closed
-    if error_lower.contains("connection closed") 
-        || error_lower.contains("connectionclosed") {
+    if error_lower.contains("connection closed") || error_lower.contains("connectionclosed") {
         return true;
     }
-    
+
     // EOF / pipe closed
-    if error_lower.contains("eof") 
+    if error_lower.contains("eof")
         || error_lower.contains("closed pipe")
-        || error_lower.contains("broken pipe") {
+        || error_lower.contains("broken pipe")
+    {
         return true;
     }
-    
+
     // Session not found (server restarted)
-    if error_lower.contains("session not found")
-        || error_lower.contains("session missing") {
+    if error_lower.contains("session not found") || error_lower.contains("session missing") {
         return true;
     }
-    
+
     // Transport errors
-    if error_lower.contains("transport error")
-        || error_lower.contains("connection reset") {
+    if error_lower.contains("transport error") || error_lower.contains("connection reset") {
         return true;
     }
-    
+
     false
 }
 
@@ -84,11 +82,7 @@ pub struct RefreshConfig {
 
 impl Default for RefreshConfig {
     fn default() -> Self {
-        Self {
-            max_attempts: 3,
-            retry_delay_ms: 1000,
-            log_reconnections: true,
-        }
+        Self { max_attempts: 3, retry_delay_ms: 1000, log_reconnections: true }
     }
 }
 
@@ -190,11 +184,7 @@ where
     ///
     /// The first operation will trigger a connection.
     pub fn lazy(factory: Arc<F>) -> Self {
-        Self {
-            client: Arc::new(Mutex::new(None)),
-            factory,
-            config: RefreshConfig::default(),
-        }
+        Self { client: Arc::new(Mutex::new(None)), factory, config: RefreshConfig::default() }
     }
 
     /// Set the refresh configuration.
@@ -212,7 +202,7 @@ where
     /// Ensure we have a valid connection, creating one if needed.
     async fn ensure_connected(&self) -> Result<(), String> {
         let mut guard = self.client.lock().await;
-        
+
         if guard.is_none() {
             if self.config.log_reconnections {
                 info!("MCP client not connected, creating connection");
@@ -220,14 +210,14 @@ where
             let new_client = self.factory.create_connection().await?;
             *guard = Some(new_client);
         }
-        
+
         Ok(())
     }
 
     /// Refresh the connection by creating a new client.
     async fn refresh_connection(&self) -> Result<(), String> {
         let mut guard = self.client.lock().await;
-        
+
         // Close existing connection if any
         if let Some(old_client) = guard.take() {
             if self.config.log_reconnections {
@@ -238,13 +228,13 @@ where
             // Give it a moment to clean up
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
-        
+
         if self.config.log_reconnections {
             info!("Refreshing MCP connection");
         }
         let new_client = self.factory.create_connection().await?;
         *guard = Some(new_client);
-        
+
         Ok(())
     }
 
@@ -255,7 +245,7 @@ where
     pub async fn list_tools(&self) -> Result<RetryResult<Vec<McpTool>>, String> {
         // Ensure we have a connection
         self.ensure_connected().await?;
-        
+
         // First attempt
         {
             let guard = self.client.lock().await;
@@ -278,12 +268,17 @@ where
         // Retry with reconnection
         for attempt in 1..=self.config.max_attempts {
             if self.config.log_reconnections {
-                info!(attempt = attempt, max = self.config.max_attempts, "Reconnection attempt for list_tools");
+                info!(
+                    attempt = attempt,
+                    max = self.config.max_attempts,
+                    "Reconnection attempt for list_tools"
+                );
             }
 
             // Wait before retry
             if self.config.retry_delay_ms > 0 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(self.config.retry_delay_ms)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(self.config.retry_delay_ms))
+                    .await;
             }
 
             // Try to refresh
@@ -300,7 +295,11 @@ where
                 match client.list_all_tools().await {
                     Ok(tools) => {
                         if self.config.log_reconnections {
-                            debug!(attempt = attempt, tool_count = tools.len(), "list_tools succeeded after reconnection");
+                            debug!(
+                                attempt = attempt,
+                                tool_count = tools.len(),
+                                "list_tools succeeded after reconnection"
+                            );
                         }
                         return Ok(RetryResult::reconnected(tools));
                     }
@@ -316,20 +315,20 @@ where
         // Final attempt
         let guard = self.client.lock().await;
         if let Some(ref client) = *guard {
-            client.list_all_tools()
-                .await
-                .map(RetryResult::ok)
-                .map_err(|e| e.to_string())
+            client.list_all_tools().await.map(RetryResult::ok).map_err(|e| e.to_string())
         } else {
             Err("No MCP client available".to_string())
         }
     }
 
     /// Call a tool on the MCP server with automatic reconnection.
-    pub async fn call_tool(&self, params: CallToolRequestParams) -> Result<RetryResult<CallToolResult>, String> {
+    pub async fn call_tool(
+        &self,
+        params: CallToolRequestParams,
+    ) -> Result<RetryResult<CallToolResult>, String> {
         // Ensure we have a connection
         self.ensure_connected().await?;
-        
+
         // First attempt
         {
             let guard = self.client.lock().await;
@@ -357,7 +356,8 @@ where
 
             // Wait before retry
             if self.config.retry_delay_ms > 0 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(self.config.retry_delay_ms)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(self.config.retry_delay_ms))
+                    .await;
             }
 
             // Try to refresh
@@ -390,17 +390,16 @@ where
         // Final attempt
         let guard = self.client.lock().await;
         if let Some(ref client) = *guard {
-            client.call_tool(params)
-                .await
-                .map(RetryResult::ok)
-                .map_err(|e| e.to_string())
+            client.call_tool(params).await.map(RetryResult::ok).map_err(|e| e.to_string())
         } else {
             Err("No MCP client available".to_string())
         }
     }
 
     /// Get the cancellation token for the current connection.
-    pub async fn cancellation_token(&self) -> Option<rmcp::service::RunningServiceCancellationToken> {
+    pub async fn cancellation_token(
+        &self,
+    ) -> Option<rmcp::service::RunningServiceCancellationToken> {
         let guard = self.client.lock().await;
         guard.as_ref().map(|c| c.cancellation_token())
     }
@@ -443,25 +442,19 @@ where
 {
     /// Create a new simple client wrapper.
     pub fn new(client: RunningService<RoleClient, S>) -> Self {
-        Self {
-            client: Arc::new(Mutex::new(client)),
-        }
+        Self { client: Arc::new(Mutex::new(client)) }
     }
 
     /// List all tools from the MCP server.
     pub async fn list_tools(&self) -> Result<Vec<McpTool>, String> {
         let client = self.client.lock().await;
-        client.list_all_tools()
-            .await
-            .map_err(|e| e.to_string())
+        client.list_all_tools().await.map_err(|e| e.to_string())
     }
 
     /// Call a tool on the MCP server.
     pub async fn call_tool(&self, params: CallToolRequestParams) -> Result<CallToolResult, String> {
         let client = self.client.lock().await;
-        client.call_tool(params)
-            .await
-            .map_err(|e| e.to_string())
+        client.call_tool(params).await.map_err(|e| e.to_string())
     }
 
     /// Get the cancellation token.
@@ -490,7 +483,7 @@ mod tests {
         assert!(should_refresh_connection("session not found"));
         assert!(should_refresh_connection("transport error"));
         assert!(should_refresh_connection("connection reset"));
-        
+
         // Should not refresh for other errors
         assert!(!should_refresh_connection("invalid argument"));
         assert!(!should_refresh_connection("permission denied"));
@@ -511,7 +504,7 @@ mod tests {
             .with_max_attempts(5)
             .with_retry_delay_ms(500)
             .without_logging();
-        
+
         assert_eq!(config.max_attempts, 5);
         assert_eq!(config.retry_delay_ms, 500);
         assert!(!config.log_reconnections);

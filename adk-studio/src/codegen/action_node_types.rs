@@ -97,10 +97,7 @@ pub struct ExecutionControl {
 
 impl Default for ExecutionControl {
     fn default() -> Self {
-        Self {
-            timeout: default_timeout(),
-            condition: None,
-        }
+        Self { timeout: default_timeout(), condition: None }
     }
 }
 
@@ -1263,6 +1260,29 @@ impl ActionNodeConfig {
             ActionNodeConfig::Notification(_) => "notification",
             ActionNodeConfig::Rss(_) => "rss",
             ActionNodeConfig::File(_) => "file",
+        }
+    }
+
+    /// Return the state keys this action node is expected to produce.
+    ///
+    /// Used by the SSE backend to reconstruct per-node output snapshots
+    /// when the generated binary doesn't emit intermediate state updates.
+    pub fn expected_output_keys(&self) -> Vec<String> {
+        match self {
+            ActionNodeConfig::Set(cfg) => {
+                // Set nodes produce one key per variable
+                cfg.variables.iter().map(|v| v.key.clone()).collect()
+            }
+            ActionNodeConfig::Transform(cfg) => {
+                // Transform nodes produce a single output key
+                let key = &cfg.standard.mapping.output_key;
+                if key.is_empty() { vec![] } else { vec![key.clone()] }
+            }
+            _ => {
+                // Other nodes use the standard output_key mapping
+                let key = &self.standard().mapping.output_key;
+                if key.is_empty() { vec![] } else { vec![key.clone()] }
+            }
         }
     }
 }

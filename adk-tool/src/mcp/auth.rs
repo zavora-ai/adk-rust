@@ -40,10 +40,7 @@ impl McpAuth {
 
     /// Create API key auth
     pub fn api_key(header: impl Into<String>, key: impl Into<String>) -> Self {
-        McpAuth::ApiKey {
-            header: header.into(),
-            key: key.into(),
-        }
+        McpAuth::ApiKey { header: header.into(), key: key.into() }
     }
 
     /// Create OAuth2 auth
@@ -176,19 +173,15 @@ impl OAuth2Config {
                 )));
             }
 
-            let token_response: TokenResponse = response
-                .json()
-                .await
-                .map_err(|e| AuthError::TokenParse(e.to_string()))?;
+            let token_response: TokenResponse =
+                response.json().await.map_err(|e| AuthError::TokenParse(e.to_string()))?;
 
             Ok(CachedToken::from_response(token_response))
         }
 
         #[cfg(not(feature = "http-transport"))]
         {
-            Err(AuthError::NotSupported(
-                "OAuth2 requires the 'http-transport' feature".to_string(),
-            ))
+            Err(AuthError::NotSupported("OAuth2 requires the 'http-transport' feature".to_string()))
         }
     }
 

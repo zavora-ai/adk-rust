@@ -34,11 +34,7 @@ where
 mod tests {
     use super::*;
     use crate::a2ui::messages::{
-        A2uiMessage,
-        CreateSurface,
-        CreateSurfaceMessage,
-        DeleteSurface,
-        DeleteSurfaceMessage,
+        A2uiMessage, CreateSurface, CreateSurfaceMessage, DeleteSurface, DeleteSurfaceMessage,
     };
 
     #[test]

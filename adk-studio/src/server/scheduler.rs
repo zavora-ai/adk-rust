@@ -9,12 +9,12 @@
 //! - UI notification via SSE when scheduled runs start
 //! - Graceful shutdown support
 
+use crate::codegen::action_nodes::{ActionNodeConfig, TriggerType};
 use crate::server::handlers::{
-    get_project_binary_path, is_project_built, notify_webhook, WebhookNotification,
+    WebhookNotification, get_project_binary_path, is_project_built, notify_webhook,
 };
 use crate::server::state::AppState;
 use chrono::Timelike;
-use crate::codegen::action_nodes::{ActionNodeConfig, TriggerType};
 use chrono::{DateTime, Utc};
 use cron::Schedule;
 use std::collections::HashMap;
@@ -48,11 +48,7 @@ pub struct SchedulerState {
 
 impl SchedulerState {
     pub fn new() -> Self {
-        Self {
-            jobs: HashMap::new(),
-            running: false,
-            last_executed: HashMap::new(),
-        }
+        Self { jobs: HashMap::new(), running: false, last_executed: HashMap::new() }
     }
 }
 
@@ -68,15 +64,12 @@ fn get_next_run(cron_expr: &str, _timezone: &str) -> Option<DateTime<Utc>> {
     // Standard cron has 5 fields: minute hour day month weekday
     // Convert 5-field to 6-field by prepending "0" for seconds
     let parts: Vec<&str> = cron_expr.trim().split_whitespace().collect();
-    let cron_with_seconds = if parts.len() == 5 {
-        format!("0 {}", cron_expr)
-    } else {
-        cron_expr.to_string()
-    };
-    
+    let cron_with_seconds =
+        if parts.len() == 5 { format!("0 {}", cron_expr) } else { cron_expr.to_string() };
+
     // Parse the cron expression
     let schedule = Schedule::from_str(&cron_with_seconds).ok()?;
-    
+
     // Get the next occurrence
     // Note: For simplicity, we're using UTC. In production, you'd want to
     // properly handle timezone conversion using chrono-tz
@@ -93,19 +86,19 @@ async fn scan_projects(state: &AppState) -> Vec<ScheduledJob> {
             return Vec::new();
         }
     };
-    
+
     let mut jobs = Vec::new();
-    
+
     for meta in projects {
         let project = match storage.get(meta.id).await {
             Ok(p) => p,
             Err(_) => continue,
         };
-        
+
         // Check if project is built
         let is_built = is_project_built(&project.name);
         let binary_path = get_project_binary_path(&project.name);
-        
+
         // Debug: Log projects with triggers
         for (trigger_id, node) in &project.action_nodes {
             if let ActionNodeConfig::Trigger(trigger) = node {
@@ -120,11 +113,11 @@ async fn scan_projects(state: &AppState) -> Vec<ScheduledJob> {
                 );
             }
         }
-        
+
         if !is_built {
             continue;
         }
-        
+
         // Find schedule triggers
         for (trigger_id, node) in &project.action_nodes {
             if let ActionNodeConfig::Trigger(trigger) = node {
@@ -171,7 +164,7 @@ async fn scan_projects(state: &AppState) -> Vec<ScheduledJob> {
             }
         }
     }
-    
+
     jobs
 }
 
@@ -184,16 +177,16 @@ async fn execute_job(job: &ScheduledJob) {
         cron = %job.cron,
         "Executing scheduled job"
     );
-    
+
     // Generate a session ID
     let session_id = uuid::Uuid::new_v4().to_string();
-    
+
     // Create a notification payload
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    
+
     // Use default_prompt if provided, otherwise send schedule metadata
     let payload = if let Some(prompt) = &job.default_prompt {
         serde_json::json!({
@@ -212,17 +205,21 @@ async fn execute_job(job: &ScheduledJob) {
             "scheduled_time": job.next_run.to_rfc3339(),
         })
     };
-    
+
     // Notify UI clients (reuse webhook notification channel)
-    notify_webhook(&job.project_id, WebhookNotification {
-        session_id: session_id.clone(),
-        path: format!("/schedule/{}", job.trigger_id),
-        method: "SCHEDULE".to_string(),
-        payload,
-        timestamp,
-        binary_path: Some(job.binary_path.clone()),
-    }).await;
-    
+    notify_webhook(
+        &job.project_id,
+        WebhookNotification {
+            session_id: session_id.clone(),
+            path: format!("/schedule/{}", job.trigger_id),
+            method: "SCHEDULE".to_string(),
+            payload,
+            timestamp,
+            binary_path: Some(job.binary_path.clone()),
+        },
+    )
+    .await;
+
     tracing::info!(
         project_id = %job.project_id,
         session_id = %session_id,
@@ -241,20 +238,20 @@ pub async fn start_scheduler(state: AppState) {
         }
         scheduler.running = true;
     }
-    
+
     tracing::info!("Starting schedule trigger service");
-    
+
     // Scheduler loop
     loop {
         // Scan projects every 30 seconds
         let jobs = scan_projects(&state).await;
-        
+
         tracing::info!(
             job_count = jobs.len(),
             "Scheduler scan complete - found {} schedule triggers",
             jobs.len()
         );
-        
+
         for job in &jobs {
             tracing::debug!(
                 project = %job.project_name,
@@ -263,7 +260,7 @@ pub async fn start_scheduler(state: AppState) {
                 "Found scheduled job"
             );
         }
-        
+
         // Update scheduler state
         {
             let mut scheduler = SCHEDULER.write().await;
@@ -271,16 +268,17 @@ pub async fn start_scheduler(state: AppState) {
                 tracing::info!("Scheduler stopped");
                 break;
             }
-            
+
             scheduler.jobs.clear();
             for job in &jobs {
-                scheduler.jobs
+                scheduler
+                    .jobs
                     .entry(job.project_id.clone())
                     .or_insert_with(Vec::new)
                     .push(job.clone());
             }
         }
-        
+
         // Check for jobs that need to run
         let now = Utc::now();
         // Round down to the current minute for comparison
@@ -289,10 +287,10 @@ pub async fn start_scheduler(state: AppState) {
             tokio::time::sleep(Duration::from_secs(30)).await;
             continue;
         };
-        
+
         for job in &jobs {
             let job_key = format!("{}:{}", job.project_id, job.trigger_id);
-            
+
             // Check if we should execute this job
             // A job should run if:
             // 1. The current minute matches the cron schedule
@@ -300,28 +298,29 @@ pub async fn start_scheduler(state: AppState) {
             let should_execute = {
                 let scheduler = SCHEDULER.read().await;
                 let last_exec = scheduler.last_executed.get(&job_key);
-                
+
                 // Check if we already executed in this minute
                 let already_executed = last_exec
                     .and_then(|t| t.with_second(0).and_then(|t| t.with_nanosecond(0)))
                     .map(|t| t >= current_minute)
                     .unwrap_or(false);
-                
+
                 // The cron library's next_run is always in the future
                 // If next_run is within the next minute, it means the current minute matches the schedule
                 // (because cron gives us the NEXT occurrence, and if it's in the next minute, we're currently in a matching minute)
-                let next_run_minute = match job.next_run.with_second(0).and_then(|t| t.with_nanosecond(0)) {
-                    Some(t) => t,
-                    None => continue,
-                };
+                let next_run_minute =
+                    match job.next_run.with_second(0).and_then(|t| t.with_nanosecond(0)) {
+                        Some(t) => t,
+                        None => continue,
+                    };
                 let time_to_next = (next_run_minute - current_minute).num_seconds();
-                
+
                 // If next run is within 60 seconds, we're in a matching minute
                 let is_matching_minute = time_to_next <= 60 && time_to_next > 0;
-                
+
                 is_matching_minute && !already_executed
             };
-            
+
             if should_execute {
                 tracing::info!(
                     project = %job.project_name,
@@ -330,17 +329,17 @@ pub async fn start_scheduler(state: AppState) {
                     current_minute = %current_minute,
                     "Executing scheduled job"
                 );
-                
+
                 // Mark as executed
                 {
                     let mut scheduler = SCHEDULER.write().await;
                     scheduler.last_executed.insert(job_key, now);
                 }
-                
+
                 execute_job(&job).await;
             }
         }
-        
+
         // Log scheduled jobs
         if !jobs.is_empty() {
             tracing::debug!(
@@ -349,7 +348,7 @@ pub async fn start_scheduler(state: AppState) {
                 jobs.len()
             );
         }
-        
+
         // Sleep for 30 seconds before next check
         tokio::time::sleep(Duration::from_secs(30)).await;
     }
@@ -365,7 +364,8 @@ pub async fn stop_scheduler() {
 /// Get the list of scheduled jobs for a project
 pub async fn get_project_schedules(project_id: &str) -> Vec<ScheduledJobInfo> {
     let scheduler = SCHEDULER.read().await;
-    scheduler.jobs
+    scheduler
+        .jobs
         .get(project_id)
         .map(|jobs| {
             jobs.iter()

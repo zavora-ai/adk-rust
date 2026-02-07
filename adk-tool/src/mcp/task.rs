@@ -4,7 +4,7 @@
 // Tasks allow tools to be queued and polled rather than blocking.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 /// Configuration for MCP task-based execution
@@ -34,10 +34,7 @@ impl Default for McpTaskConfig {
 impl McpTaskConfig {
     /// Create a new task config with tasks enabled
     pub fn enabled() -> Self {
-        Self {
-            enable_tasks: true,
-            ..Default::default()
-        }
+        Self { enable_tasks: true, ..Default::default() }
     }
 
     /// Set the poll interval

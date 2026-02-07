@@ -1,21 +1,30 @@
 use adk_core::{Content, EventActions, ReadonlyContext, Tool, ToolContext};
 use adk_ui::tools::{RenderPageTool, RenderScreenTool};
 use async_trait::async_trait;
-use jsonschema::{options, Resource, Validator};
+use jsonschema::{Resource, Validator, options};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
 fn build_reference_validator() -> Validator {
-    let server_schema: Value = serde_json::from_str(include_str!("../catalog/a2ui/v0_9/server_to_client.json"))
-        .expect("server_to_client.json should parse");
-    let standard_catalog: Value = serde_json::from_str(include_str!("../catalog/a2ui/v0_9/standard_catalog.json"))
-        .expect("standard_catalog.json should parse");
-    let common_types: Value = serde_json::from_str(include_str!("../catalog/a2ui/v0_9/common_types.json"))
-        .expect("common_types.json should parse");
+    let server_schema: Value =
+        serde_json::from_str(include_str!("../catalog/a2ui/v0_9/server_to_client.json"))
+            .expect("server_to_client.json should parse");
+    let standard_catalog: Value =
+        serde_json::from_str(include_str!("../catalog/a2ui/v0_9/standard_catalog.json"))
+            .expect("standard_catalog.json should parse");
+    let common_types: Value =
+        serde_json::from_str(include_str!("../catalog/a2ui/v0_9/common_types.json"))
+            .expect("common_types.json should parse");
 
     options()
-        .with_resource("standard_catalog.json", Resource::from_contents(standard_catalog).expect("catalog resource"))
-        .with_resource("common_types.json", Resource::from_contents(common_types).expect("types resource"))
+        .with_resource(
+            "standard_catalog.json",
+            Resource::from_contents(standard_catalog).expect("catalog resource"),
+        )
+        .with_resource(
+            "common_types.json",
+            Resource::from_contents(common_types).expect("types resource"),
+        )
         .build(&server_schema)
         .expect("validator should build")
 }
@@ -35,10 +44,7 @@ struct TestContext {
 
 impl TestContext {
     fn new() -> Self {
-        Self {
-            content: Content::new("user"),
-            actions: Mutex::new(EventActions::default()),
-        }
+        Self { content: Content::new("user"), actions: Mutex::new(EventActions::default()) }
     }
 }
 

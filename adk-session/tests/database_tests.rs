@@ -153,14 +153,8 @@ mod tests {
         event.author = "agent".to_string();
         event.timestamp = Utc::now() + Duration::seconds(1);
         event.actions.state_delta.insert("result".to_string(), json!("ok"));
-        event
-            .actions
-            .state_delta
-            .insert(format!("{}locale", KEY_PREFIX_APP), json!("en-US"));
-        event
-            .actions
-            .state_delta
-            .insert(format!("{}name", KEY_PREFIX_USER), json!("Alice"));
+        event.actions.state_delta.insert(format!("{}locale", KEY_PREFIX_APP), json!("en-US"));
+        event.actions.state_delta.insert(format!("{}name", KEY_PREFIX_USER), json!("Alice"));
         event
             .actions
             .state_delta

@@ -90,10 +90,7 @@ async fn main() -> Result<()> {
     };
 
     // Connect to Sequential Thinking MCP server
-    println!(
-        "2. Connecting to Sequential Thinking MCP server: {}",
-        thinking_server
-    );
+    println!("2. Connecting to Sequential Thinking MCP server: {}", thinking_server);
     let thinking_toolset = match McpHttpClientBuilder::new(thinking_server)
         .timeout(Duration::from_secs(30))
         .connect()

@@ -9,5 +9,5 @@ pub mod server;
 pub mod storage;
 
 pub use schema::{AgentSchema, ProjectSchema, ToolSchema, WorkflowSchema};
-pub use server::{AppState, api_routes, start_scheduler, stop_scheduler, cleanup_stale_sessions};
+pub use server::{AppState, api_routes, cleanup_stale_sessions, start_scheduler, stop_scheduler};
 pub use storage::FileStorage;

@@ -28,6 +28,8 @@ interface Props {
   onUndo?: () => void;
   /** v2.0: Redo handler (Ctrl/Cmd + Shift + Z) - for future use */
   onRedo?: () => void;
+  /** Run workflow handler (F5) */
+  onRun?: () => void;
 }
 
 /**
@@ -35,6 +37,7 @@ interface Props {
  * @see Requirements 11.9: Display keyboard shortcuts in Help menu
  */
 export const KEYBOARD_SHORTCUTS = [
+  { key: 'F5', description: 'Run workflow', category: 'Execution' },
   { key: 'Delete / Backspace', description: 'Delete selected node or tool', category: 'Edit' },
   { key: 'Ctrl/Cmd + D', description: 'Duplicate selected node', category: 'Edit' },
   { key: 'Escape', description: 'Deselect all', category: 'Edit' },
@@ -78,12 +81,20 @@ export function useKeyboardShortcuts({
   onZoomOut,
   onUndo,
   onRedo,
+  onRun,
 }: Props) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const active = document.activeElement;
       
-      // Requirement 11.10: Ignore shortcuts when typing in input fields
+      // F5: Run workflow — works globally, even from input fields
+      if (e.key === 'F5' && onRun) {
+        e.preventDefault();
+        onRun();
+        return;
+      }
+
+      // Requirement 11.10: Ignore other shortcuts when typing in input fields
       if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA' || 
           (active as HTMLElement)?.isContentEditable) {
         return;
@@ -188,5 +199,6 @@ export function useKeyboardShortcuts({
     onZoomOut,
     onUndo,
     onRedo,
+    onRun,
   ]);
 }

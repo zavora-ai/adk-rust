@@ -1,6 +1,6 @@
 use crate::schema::{ProjectMeta, ProjectSchema};
 use crate::server::events::ResumeEvent;
-use crate::server::graph_runner::{deserialize_interrupt_response, INTERRUPTED_SESSIONS};
+use crate::server::graph_runner::{INTERRUPTED_SESSIONS, deserialize_interrupt_response};
 use crate::server::sse::send_resume_response;
 use crate::server::state::AppState;
 use axum::{
@@ -277,8 +277,14 @@ pub async fn build_project(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Write to temp directory
-    let mut project_name = project.name.to_lowercase().replace(' ', "_").replace(|c: char| !c.is_alphanumeric() && c != '_', "");
-    if project_name.is_empty() || project_name.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    let mut project_name = project
+        .name
+        .to_lowercase()
+        .replace(' ', "_")
+        .replace(|c: char| !c.is_alphanumeric() && c != '_', "");
+    if project_name.is_empty()
+        || project_name.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+    {
         project_name = format!("project_{}", project_name);
     }
     let build_dir = std::env::temp_dir().join("adk-studio-builds").join(&project_name);
@@ -322,7 +328,6 @@ pub async fn build_project(
         Ok(Json(BuildResponse { success: false, output: combined, binary_path: None }))
     }
 }
-
 
 // ============================================
 // HITL Resume Endpoint
@@ -406,15 +411,9 @@ pub async fn resume_session(
     Json(req): Json<ResumeRequest>,
 ) -> ApiResult<ResumeResponse> {
     // Task 10.1: Get the interrupted session state
-    let interrupted_state = INTERRUPTED_SESSIONS
-        .get(&session_id)
-        .await
-        .ok_or_else(|| {
-            err(
-                StatusCode::NOT_FOUND,
-                format!("Session '{}' not found or not interrupted", session_id),
-            )
-        })?;
+    let interrupted_state = INTERRUPTED_SESSIONS.get(&session_id).await.ok_or_else(|| {
+        err(StatusCode::NOT_FOUND, format!("Session '{}' not found or not interrupted", session_id))
+    })?;
 
     let node_id = interrupted_state.node_id.clone();
     let thread_id = interrupted_state.thread_id.clone();
@@ -494,7 +493,7 @@ pub struct WebhookTriggerResponse {
 }
 
 /// Get the binary path for a project based on its name.
-/// 
+///
 /// The binary is built to: `{temp_dir}/adk-studio-builds/_shared_target/debug/{project_name}`
 pub fn get_project_binary_path(project_name: &str) -> String {
     let project_name = project_name.to_lowercase().replace(' ', "_");
@@ -569,10 +568,7 @@ pub async fn webhook_trigger(
 ) -> ApiResult<WebhookTriggerResponse> {
     // Get the project to validate webhook configuration
     let storage = state.storage.read().await;
-    let project = storage
-        .get(id)
-        .await
-        .map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
+    let project = storage.get(id).await.map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
 
     // Find the webhook trigger in the project
     let webhook_path = format!("/{}", path.trim_start_matches('/'));
@@ -593,10 +589,12 @@ pub async fn webhook_trigger(
     // Find the binary path for this project
     let binary_path = get_project_binary_path(&project.name);
     let binary_exists = is_project_built(&project.name);
-    
+
     let stream_url = format!(
         "/api/projects/{}/stream?input=__webhook__&session_id={}&binary_path={}",
-        id, session_id, percent_encode(&binary_path)
+        id,
+        session_id,
+        percent_encode(&binary_path)
     );
 
     // Notify UI clients that a webhook was received
@@ -604,15 +602,19 @@ pub async fn webhook_trigger(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    
-    notify_webhook(&id.to_string(), WebhookNotification {
-        session_id: session_id.clone(),
-        path: webhook_path.clone(),
-        method: "POST".to_string(),
-        payload: payload.clone(),
-        timestamp,
-        binary_path: if binary_exists { Some(binary_path.clone()) } else { None },
-    }).await;
+
+    notify_webhook(
+        &id.to_string(),
+        WebhookNotification {
+            session_id: session_id.clone(),
+            path: webhook_path.clone(),
+            method: "POST".to_string(),
+            payload: payload.clone(),
+            timestamp,
+            binary_path: if binary_exists { Some(binary_path.clone()) } else { None },
+        },
+    )
+    .await;
 
     tracing::info!(
         project_id = %id,
@@ -661,10 +663,7 @@ pub async fn webhook_trigger_get(
 ) -> ApiResult<WebhookTriggerResponse> {
     // Get the project to validate webhook configuration
     let storage = state.storage.read().await;
-    let project = storage
-        .get(id)
-        .await
-        .map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
+    let project = storage.get(id).await.map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
 
     // Find the webhook trigger in the project
     let webhook_path = format!("/{}", path.trim_start_matches('/'));
@@ -687,10 +686,12 @@ pub async fn webhook_trigger_get(
     // Find the binary path for this project
     let binary_path = get_project_binary_path(&project.name);
     let binary_exists = is_project_built(&project.name);
-    
+
     let stream_url = format!(
         "/api/projects/{}/stream?input=__webhook__&session_id={}&binary_path={}",
-        id, session_id, percent_encode(&binary_path)
+        id,
+        session_id,
+        percent_encode(&binary_path)
     );
 
     // Notify UI clients that a webhook was received
@@ -698,15 +699,19 @@ pub async fn webhook_trigger_get(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    
-    notify_webhook(&id.to_string(), WebhookNotification {
-        session_id: session_id.clone(),
-        path: webhook_path.clone(),
-        method: "GET".to_string(),
-        payload: payload.clone(),
-        timestamp,
-        binary_path: if binary_exists { Some(binary_path.clone()) } else { None },
-    }).await;
+
+    notify_webhook(
+        &id.to_string(),
+        WebhookNotification {
+            session_id: session_id.clone(),
+            path: webhook_path.clone(),
+            method: "GET".to_string(),
+            payload: payload.clone(),
+            timestamp,
+            binary_path: if binary_exists { Some(binary_path.clone()) } else { None },
+        },
+    )
+    .await;
 
     tracing::info!(
         project_id = %id,
@@ -793,15 +798,12 @@ pub async fn webhook_execute(
 ) -> ApiResult<WebhookExecuteResponse> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
     use tokio::process::Command;
-    
+
     let start_time = std::time::Instant::now();
-    
+
     // Get the project to validate webhook configuration
     let storage = state.storage.read().await;
-    let project = storage
-        .get(id)
-        .await
-        .map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
+    let project = storage.get(id).await.map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
 
     // Find the webhook trigger in the project
     let webhook_path = format!("/{}", path.trim_start_matches('/'));
@@ -861,7 +863,7 @@ pub async fn webhook_execute(
 
     // Send the webhook payload as input
     let input = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
-    
+
     if let Some(stdin) = child.stdin.take() {
         let mut writer = BufWriter::new(stdin);
         if let Err(e) = writer.write_all(format!("{}\n", input).as_bytes()).await {
@@ -890,7 +892,7 @@ pub async fn webhook_execute(
         let mut reader = BufReader::new(stdout);
         let timeout = tokio::time::Duration::from_secs(60);
         let deadline = tokio::time::Instant::now() + timeout;
-        
+
         loop {
             if tokio::time::Instant::now() > deadline {
                 let _ = child.kill().await;
@@ -902,12 +904,14 @@ pub async fn webhook_execute(
                     duration_ms: start_time.elapsed().as_millis() as u64,
                 }));
             }
-            
+
             let mut line = String::new();
             match tokio::time::timeout(
                 tokio::time::Duration::from_millis(100),
-                reader.read_line(&mut line)
-            ).await {
+                reader.read_line(&mut line),
+            )
+            .await
+            {
                 Ok(Ok(0)) => break, // EOF
                 Ok(Ok(_)) => {
                     let line = line.trim_start_matches("> ");
@@ -924,7 +928,7 @@ pub async fn webhook_execute(
                     }
                 }
                 Ok(Err(_)) => break, // Read error
-                Err(_) => continue, // Timeout, keep trying
+                Err(_) => continue,  // Timeout, keep trying
             }
         }
     }
@@ -966,7 +970,7 @@ fn find_webhook_trigger(
     method: &str,
 ) -> Option<WebhookTriggerConfig> {
     use crate::codegen::action_nodes::{ActionNodeConfig, TriggerType};
-    
+
     // Check action nodes for trigger nodes with webhook type
     for (_node_id, node) in &project.action_nodes {
         if let ActionNodeConfig::Trigger(trigger_config) = node {
@@ -975,14 +979,16 @@ fn find_webhook_trigger(
                     // Check if path matches (normalize both)
                     let normalized_path = path.trim_start_matches('/');
                     let normalized_webhook_path = webhook.path.trim_start_matches('/');
-                    
+
                     if normalized_path == normalized_webhook_path && webhook.method == method {
                         return Some(WebhookTriggerConfig {
                             auth: webhook.auth.clone(),
-                            header_name: webhook.auth_config
+                            header_name: webhook
+                                .auth_config
                                 .as_ref()
                                 .and_then(|c| c.header_name.clone()),
-                            token_env_var: webhook.auth_config
+                            token_env_var: webhook
+                                .auth_config
                                 .as_ref()
                                 .and_then(|c| c.token_env_var.clone()),
                         });
@@ -1001,10 +1007,8 @@ fn validate_webhook_auth(
 ) -> Result<(), (StatusCode, Json<ApiError>)> {
     match config.auth.as_str() {
         "bearer" => {
-            let auth_header = headers
-                .get("Authorization")
-                .and_then(|v| v.to_str().ok());
-            
+            let auth_header = headers.get("Authorization").and_then(|v| v.to_str().ok());
+
             match auth_header {
                 Some(header) if header.starts_with("Bearer ") => {
                     // In development, we just check that a bearer token is present
@@ -1013,7 +1017,7 @@ fn validate_webhook_auth(
                     if token.is_empty() {
                         return Err(err(StatusCode::UNAUTHORIZED, "Empty bearer token"));
                     }
-                    
+
                     // If token_env_var is set, validate against it
                     if let Some(env_var) = &config.token_env_var {
                         if let Ok(expected_token) = std::env::var(env_var) {
@@ -1025,16 +1029,17 @@ fn validate_webhook_auth(
                     }
                     Ok(())
                 }
-                Some(_) => Err(err(StatusCode::UNAUTHORIZED, "Invalid Authorization header format. Expected: Bearer <token>")),
+                Some(_) => Err(err(
+                    StatusCode::UNAUTHORIZED,
+                    "Invalid Authorization header format. Expected: Bearer <token>",
+                )),
                 None => Err(err(StatusCode::UNAUTHORIZED, "Missing Authorization header")),
             }
         }
         "api_key" => {
             let header_name = config.header_name.as_deref().unwrap_or("X-API-Key");
-            let api_key = headers
-                .get(header_name)
-                .and_then(|v| v.to_str().ok());
-            
+            let api_key = headers.get(header_name).and_then(|v| v.to_str().ok());
+
             match api_key {
                 Some(key) if !key.is_empty() => {
                     // If token_env_var is set, validate against it
@@ -1049,10 +1054,9 @@ fn validate_webhook_auth(
                     Ok(())
                 }
                 Some(_) => Err(err(StatusCode::UNAUTHORIZED, "Empty API key")),
-                None => Err(err(
-                    StatusCode::UNAUTHORIZED,
-                    format!("Missing {} header", header_name),
-                )),
+                None => {
+                    Err(err(StatusCode::UNAUTHORIZED, format!("Missing {} header", header_name)))
+                }
             }
         }
         "none" | _ => Ok(()),
@@ -1079,7 +1083,12 @@ pub struct WebhookPayload {
 }
 
 /// Store a webhook payload for later retrieval by the stream handler.
-async fn store_webhook_payload(session_id: &str, path: &str, method: &str, payload: serde_json::Value) {
+async fn store_webhook_payload(
+    session_id: &str,
+    path: &str,
+    method: &str,
+    payload: serde_json::Value,
+) {
     let mut payloads = WEBHOOK_PAYLOADS.write().await;
     payloads.insert(
         session_id.to_string(),
@@ -1138,7 +1147,9 @@ pub struct WebhookNotification {
 }
 
 /// Get or create a broadcast channel for a project's webhook notifications.
-async fn get_webhook_channel(project_id: &str) -> tokio::sync::broadcast::Sender<WebhookNotification> {
+async fn get_webhook_channel(
+    project_id: &str,
+) -> tokio::sync::broadcast::Sender<WebhookNotification> {
     let mut channels = WEBHOOK_CHANNELS.write().await;
     if let Some(sender) = channels.get(project_id) {
         sender.clone()
@@ -1157,11 +1168,12 @@ pub async fn notify_webhook(project_id: &str, notification: WebhookNotification)
 }
 
 /// Subscribe to webhook notifications for a project.
-pub async fn subscribe_webhook_notifications(project_id: &str) -> tokio::sync::broadcast::Receiver<WebhookNotification> {
+pub async fn subscribe_webhook_notifications(
+    project_id: &str,
+) -> tokio::sync::broadcast::Receiver<WebhookNotification> {
     let sender = get_webhook_channel(project_id).await;
     sender.subscribe()
 }
-
 
 // ============================================
 // Event Trigger Endpoints
@@ -1216,7 +1228,7 @@ fn find_event_trigger(
     event_type: &str,
 ) -> Option<EventTriggerConfig> {
     use crate::codegen::action_nodes::{ActionNodeConfig, TriggerType};
-    
+
     // Check action nodes for trigger nodes with event type
     for (_node_id, node) in &project.action_nodes {
         if let ActionNodeConfig::Trigger(trigger_config) = node {
@@ -1225,8 +1237,9 @@ fn find_event_trigger(
                     // Match source and event_type
                     // Empty source or event_type in config means "match any"
                     let source_matches = event.source.is_empty() || event.source == source;
-                    let type_matches = event.event_type.is_empty() || event.event_type == event_type;
-                    
+                    let type_matches =
+                        event.event_type.is_empty() || event.event_type == event_type;
+
                     if source_matches && type_matches {
                         return Some(EventTriggerConfig {
                             source: event.source.clone(),
@@ -1250,18 +1263,16 @@ fn apply_event_filter(filter: Option<&str>, data: &serde_json::Value) -> bool {
             // Simple filter implementation for common patterns
             // Full JSONPath would require a library like jsonpath-rust
             // For now, support basic patterns like "$.data.status == 'active'"
-            
+
             // Parse simple equality expressions: $.path.to.field == 'value'
             if let Some(eq_pos) = filter_expr.find("==") {
                 let path_part = filter_expr[..eq_pos].trim();
-                let value_part = filter_expr[eq_pos + 2..].trim().trim_matches('\'').trim_matches('"');
-                
+                let value_part =
+                    filter_expr[eq_pos + 2..].trim().trim_matches('\'').trim_matches('"');
+
                 // Navigate the JSON path
-                let path_parts: Vec<&str> = path_part
-                    .trim_start_matches("$.")
-                    .split('.')
-                    .collect();
-                
+                let path_parts: Vec<&str> = path_part.trim_start_matches("$.").split('.').collect();
+
                 let mut current = data;
                 for part in path_parts {
                     match current.get(part) {
@@ -1269,7 +1280,7 @@ fn apply_event_filter(filter: Option<&str>, data: &serde_json::Value) -> bool {
                         None => return false,
                     }
                 }
-                
+
                 // Compare the value
                 match current {
                     serde_json::Value::String(s) => s == value_part,
@@ -1331,10 +1342,7 @@ pub async fn event_trigger(
 ) -> ApiResult<EventTriggerResponse> {
     // Get the project
     let storage = state.storage.read().await;
-    let project = storage
-        .get(id)
-        .await
-        .map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
+    let project = storage.get(id).await.map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
 
     // Find matching event trigger
     let trigger = find_event_trigger(&project, &req.source, &req.event_type);
@@ -1385,7 +1393,13 @@ pub async fn event_trigger(
     });
 
     // Store the event payload for the stream handler
-    store_webhook_payload(&session_id, &format!("event:{}/{}", req.source, req.event_type), "EVENT", event_payload.clone()).await;
+    store_webhook_payload(
+        &session_id,
+        &format!("event:{}/{}", req.source, req.event_type),
+        "EVENT",
+        event_payload.clone(),
+    )
+    .await;
 
     // Find the binary path for this project
     let binary_path = get_project_binary_path(&project.name);
@@ -1393,7 +1407,9 @@ pub async fn event_trigger(
 
     let stream_url = format!(
         "/api/projects/{}/stream?input=__webhook__&session_id={}&binary_path={}",
-        id, session_id, percent_encode(&binary_path)
+        id,
+        session_id,
+        percent_encode(&binary_path)
     );
 
     // Notify UI clients that an event was received
@@ -1402,14 +1418,18 @@ pub async fn event_trigger(
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
 
-    notify_webhook(&id.to_string(), WebhookNotification {
-        session_id: session_id.clone(),
-        path: format!("event:{}/{}", req.source, req.event_type),
-        method: "EVENT".to_string(),
-        payload: event_payload.clone(),
-        timestamp,
-        binary_path: if binary_exists { Some(binary_path.clone()) } else { None },
-    }).await;
+    notify_webhook(
+        &id.to_string(),
+        WebhookNotification {
+            session_id: session_id.clone(),
+            path: format!("event:{}/{}", req.source, req.event_type),
+            method: "EVENT".to_string(),
+            payload: event_payload.clone(),
+            timestamp,
+            binary_path: if binary_exists { Some(binary_path.clone()) } else { None },
+        },
+    )
+    .await;
 
     tracing::info!(
         project_id = %id,

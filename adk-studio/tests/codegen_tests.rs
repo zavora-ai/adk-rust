@@ -12,10 +12,7 @@ fn project(name: &str, agents: HashMap<String, AgentSchema>) -> ProjectSchema {
     p.agents = agents.clone();
     // Add default workflow edges for single-agent projects
     if let Some(agent_id) = agents.keys().next() {
-        p.workflow.edges = vec![
-            Edge::new("START", agent_id),
-            Edge::new(agent_id, "END"),
-        ];
+        p.workflow.edges = vec![Edge::new("START", agent_id), Edge::new(agent_id, "END")];
     }
     p
 }
@@ -30,10 +27,7 @@ fn project_with_tools(
     p.tool_configs = tool_configs;
     // Add default workflow edges for single-agent projects
     if let Some(agent_id) = agents.keys().next() {
-        p.workflow.edges = vec![
-            Edge::new("START", agent_id),
-            Edge::new(agent_id, "END"),
-        ];
+        p.workflow.edges = vec![Edge::new("START", agent_id), Edge::new(agent_id, "END")];
     }
     p
 }
@@ -149,10 +143,7 @@ fn sequential_agent_generates_container() {
         },
     );
 
-    let edges = vec![
-        Edge::new("START", "pipeline"),
-        Edge::new("pipeline", "END"),
-    ];
+    let edges = vec![Edge::new("START", "pipeline"), Edge::new("pipeline", "END")];
     let code = get_main_rs(&project_with_workflow("test", agents, edges));
     assert!(code.contains("SequentialAgent::new"));
 }
@@ -176,10 +167,7 @@ fn sequential_agent_includes_sub_agents() {
         },
     );
 
-    let edges = vec![
-        Edge::new("START", "pipeline"),
-        Edge::new("pipeline", "END"),
-    ];
+    let edges = vec![Edge::new("START", "pipeline"), Edge::new("pipeline", "END")];
     let code = get_main_rs(&project_with_workflow("test", agents, edges));
     assert!(code.contains("writer_agent"));
     assert!(code.contains("editor_agent"));
@@ -206,10 +194,7 @@ fn sequential_sub_agent_with_tools() {
         },
     );
 
-    let edges = vec![
-        Edge::new("START", "pipeline"),
-        Edge::new("pipeline", "END"),
-    ];
+    let edges = vec![Edge::new("START", "pipeline"), Edge::new("pipeline", "END")];
     let code = get_main_rs(&project_with_workflow("test", agents, edges));
     assert!(code.contains("researcher_builder"));
     assert!(code.contains("GoogleSearchTool"));
@@ -239,10 +224,7 @@ fn loop_agent_generates_container() {
         },
     );
 
-    let edges = vec![
-        Edge::new("START", "looper"),
-        Edge::new("looper", "END"),
-    ];
+    let edges = vec![Edge::new("START", "looper"), Edge::new("looper", "END")];
     let code = get_main_rs(&project_with_workflow("test", agents, edges));
     assert!(code.contains("LoopAgent::new"));
 }
@@ -265,10 +247,7 @@ fn loop_agent_with_max_iterations() {
         },
     );
 
-    let edges = vec![
-        Edge::new("START", "looper"),
-        Edge::new("looper", "END"),
-    ];
+    let edges = vec![Edge::new("START", "looper"), Edge::new("looper", "END")];
     let code = get_main_rs(&project_with_workflow("test", agents, edges));
     assert!(code.contains("with_max_iterations(7)"));
 }
@@ -291,10 +270,7 @@ fn loop_agent_default_iterations() {
         },
     );
 
-    let edges = vec![
-        Edge::new("START", "looper"),
-        Edge::new("looper", "END"),
-    ];
+    let edges = vec![Edge::new("START", "looper"), Edge::new("looper", "END")];
     let code = get_main_rs(&project_with_workflow("test", agents, edges));
     assert!(code.contains("with_max_iterations(3)"));
 }
@@ -319,10 +295,7 @@ fn loop_agent_filters_exit_loop_from_output() {
         },
     );
 
-    let edges = vec![
-        Edge::new("START", "looper"),
-        Edge::new("looper", "END"),
-    ];
+    let edges = vec![Edge::new("START", "looper"), Edge::new("looper", "END")];
     let code = get_main_rs(&project_with_workflow("test", agents, edges));
     assert!(code.contains(r#"replace("exit_loop", "")"#));
 }
@@ -350,10 +323,7 @@ fn parallel_agent_generates_container() {
         },
     );
 
-    let edges = vec![
-        Edge::new("START", "parallel"),
-        Edge::new("parallel", "END"),
-    ];
+    let edges = vec![Edge::new("START", "parallel"), Edge::new("parallel", "END")];
     let code = get_main_rs(&project_with_workflow("test", agents, edges));
     assert!(code.contains("ParallelAgent::new"));
 }
@@ -377,10 +347,7 @@ fn parallel_agent_includes_sub_agents() {
         },
     );
 
-    let edges = vec![
-        Edge::new("START", "parallel"),
-        Edge::new("parallel", "END"),
-    ];
+    let edges = vec![Edge::new("START", "parallel"), Edge::new("parallel", "END")];
     let code = get_main_rs(&project_with_workflow("test", agents, edges));
     assert!(code.contains("task_a_agent"));
     assert!(code.contains("task_b_agent"));
@@ -657,7 +624,6 @@ fn generated_code_allows_unused() {
     assert!(code.contains("#![allow(unused_imports, unused_variables)]"));
 }
 
-
 // =============================================================================
 // Code Comments (Requirement 12.2)
 // =============================================================================
@@ -704,14 +670,10 @@ fn generated_code_documents_sequential_flow() {
         },
     );
 
-    let edges = vec![
-        Edge::new("START", "pipeline"),
-        Edge::new("pipeline", "END"),
-    ];
+    let edges = vec![Edge::new("START", "pipeline"), Edge::new("pipeline", "END")];
     let code = get_main_rs(&project_with_workflow("test", agents, edges));
     assert!(code.contains("Sub-agents: writer → editor"), "Should document sub-agent flow");
 }
-
 
 // =============================================================================
 // Environment Variable Warnings (Requirement 12.10)
@@ -737,7 +699,6 @@ fn generated_code_documents_browser_env_var() {
     let code = get_main_rs(&project("test", agents));
     assert!(code.contains("CHROME_PATH"), "Should document browser env var");
 }
-
 
 // =============================================================================
 // Template Code Generation (Requirement 12.9)
@@ -771,16 +732,13 @@ fn template_simple_chat_generates_code() {
             routes: vec![],
         },
     );
-    
-    let edges = vec![
-        Edge::new("START", "chat_agent"),
-        Edge::new("chat_agent", "END"),
-    ];
-    
+
+    let edges = vec![Edge::new("START", "chat_agent"), Edge::new("chat_agent", "END")];
+
     let project = create_template_project("Simple Chat", agents, edges);
     let result = generate_rust_project(&project);
     assert!(result.is_ok(), "Simple chat template should generate valid code");
-    
+
     let generated = result.unwrap();
     let main_rs = generated.files.iter().find(|f| f.path == "src/main.rs").unwrap();
     assert!(main_rs.content.contains("LlmAgentBuilder"));
@@ -829,16 +787,14 @@ fn template_research_pipeline_generates_code() {
             routes: vec![],
         },
     );
-    
-    let edges = vec![
-        Edge::new("START", "research_pipeline"),
-        Edge::new("research_pipeline", "END"),
-    ];
-    
+
+    let edges =
+        vec![Edge::new("START", "research_pipeline"), Edge::new("research_pipeline", "END")];
+
     let project = create_template_project("Research Pipeline", agents, edges);
     let result = generate_rust_project(&project);
     assert!(result.is_ok(), "Research pipeline template should generate valid code");
-    
+
     let generated = result.unwrap();
     let main_rs = generated.files.iter().find(|f| f.path == "src/main.rs").unwrap();
     assert!(main_rs.content.contains("SequentialAgent"));
@@ -887,16 +843,13 @@ fn template_content_refiner_generates_code() {
             routes: vec![],
         },
     );
-    
-    let edges = vec![
-        Edge::new("START", "content_refiner"),
-        Edge::new("content_refiner", "END"),
-    ];
-    
+
+    let edges = vec![Edge::new("START", "content_refiner"), Edge::new("content_refiner", "END")];
+
     let project = create_template_project("Content Refiner", agents, edges);
     let result = generate_rust_project(&project);
     assert!(result.is_ok(), "Content refiner template should generate valid code");
-    
+
     let generated = result.unwrap();
     let main_rs = generated.files.iter().find(|f| f.path == "src/main.rs").unwrap();
     assert!(main_rs.content.contains("LoopAgent"));
@@ -946,16 +899,14 @@ fn template_parallel_analyzer_generates_code() {
             routes: vec![],
         },
     );
-    
-    let edges = vec![
-        Edge::new("START", "parallel_analyzer"),
-        Edge::new("parallel_analyzer", "END"),
-    ];
-    
+
+    let edges =
+        vec![Edge::new("START", "parallel_analyzer"), Edge::new("parallel_analyzer", "END")];
+
     let project = create_template_project("Parallel Analyzer", agents, edges);
     let result = generate_rust_project(&project);
     assert!(result.is_ok(), "Parallel analyzer template should generate valid code");
-    
+
     let generated = result.unwrap();
     let main_rs = generated.files.iter().find(|f| f.path == "src/main.rs").unwrap();
     assert!(main_rs.content.contains("ParallelAgent"));
@@ -1020,7 +971,7 @@ fn template_support_router_generates_code() {
             routes: vec![],
         },
     );
-    
+
     let edges = vec![
         Edge::new("START", "router"),
         Edge::new("router", "tech_support"),
@@ -1030,11 +981,11 @@ fn template_support_router_generates_code() {
         Edge::new("billing_support", "END"),
         Edge::new("general_support", "END"),
     ];
-    
+
     let project = create_template_project("Support Router", agents, edges);
     let result = generate_rust_project(&project);
     assert!(result.is_ok(), "Support router template should generate valid code");
-    
+
     let generated = result.unwrap();
     let main_rs = generated.files.iter().find(|f| f.path == "src/main.rs").unwrap();
     assert!(main_rs.content.contains("Router"));
@@ -1059,16 +1010,13 @@ fn template_web_researcher_generates_code() {
             routes: vec![],
         },
     );
-    
-    let edges = vec![
-        Edge::new("START", "web_agent"),
-        Edge::new("web_agent", "END"),
-    ];
-    
+
+    let edges = vec![Edge::new("START", "web_agent"), Edge::new("web_agent", "END")];
+
     let project = create_template_project("Web Researcher", agents, edges);
     let result = generate_rust_project(&project);
     assert!(result.is_ok(), "Web researcher template should generate valid code");
-    
+
     let generated = result.unwrap();
     let main_rs = generated.files.iter().find(|f| f.path == "src/main.rs").unwrap();
     assert!(main_rs.content.contains("BrowserSession"));
@@ -1124,22 +1072,23 @@ fn template_writing_team_generates_code() {
             model: None,
             instruction: String::new(),
             tools: vec![],
-            sub_agents: vec!["writer".to_string(), "editor".to_string(), "fact_checker".to_string()],
+            sub_agents: vec![
+                "writer".to_string(),
+                "editor".to_string(),
+                "fact_checker".to_string(),
+            ],
             position: Default::default(),
             max_iterations: None,
             routes: vec![],
         },
     );
-    
-    let edges = vec![
-        Edge::new("START", "writing_team"),
-        Edge::new("writing_team", "END"),
-    ];
-    
+
+    let edges = vec![Edge::new("START", "writing_team"), Edge::new("writing_team", "END")];
+
     let project = create_template_project("Writing Team", agents, edges);
     let result = generate_rust_project(&project);
     assert!(result.is_ok(), "Writing team template should generate valid code");
-    
+
     let generated = result.unwrap();
     let main_rs = generated.files.iter().find(|f| f.path == "src/main.rs").unwrap();
     assert!(main_rs.content.contains("SequentialAgent"));
@@ -1190,16 +1139,13 @@ fn template_eval_loop_generates_code() {
             routes: vec![],
         },
     );
-    
-    let edges = vec![
-        Edge::new("START", "eval_loop"),
-        Edge::new("eval_loop", "END"),
-    ];
-    
+
+    let edges = vec![Edge::new("START", "eval_loop"), Edge::new("eval_loop", "END")];
+
     let project = create_template_project("Eval Loop", agents, edges);
     let result = generate_rust_project(&project);
     assert!(result.is_ok(), "Eval loop template should generate valid code");
-    
+
     let generated = result.unwrap();
     let main_rs = generated.files.iter().find(|f| f.path == "src/main.rs").unwrap();
     assert!(main_rs.content.contains("LoopAgent"));
@@ -1222,12 +1168,9 @@ fn template_voice_assistant_generates_code() {
             routes: vec![],
         },
     );
-    
-    let edges = vec![
-        Edge::new("START", "voice_agent"),
-        Edge::new("voice_agent", "END"),
-    ];
-    
+
+    let edges = vec![Edge::new("START", "voice_agent"), Edge::new("voice_agent", "END")];
+
     let project = create_template_project("Voice Assistant", agents, edges);
     let result = generate_rust_project(&project);
     assert!(result.is_ok(), "Voice assistant template should generate valid code");
@@ -1249,12 +1192,9 @@ fn template_realtime_translator_generates_code() {
             routes: vec![],
         },
     );
-    
-    let edges = vec![
-        Edge::new("START", "translator"),
-        Edge::new("translator", "END"),
-    ];
-    
+
+    let edges = vec![Edge::new("START", "translator"), Edge::new("translator", "END")];
+
     let project = create_template_project("Realtime Translator", agents, edges);
     let result = generate_rust_project(&project);
     assert!(result.is_ok(), "Realtime translator template should generate valid code");

@@ -68,14 +68,7 @@ impl InterruptData {
         data: Value,
         step: usize,
     ) -> Self {
-        Self {
-            node_id,
-            message,
-            data,
-            thread_id,
-            checkpoint_id,
-            step,
-        }
+        Self { node_id, message, data, thread_id, checkpoint_id, step }
     }
 
     /// Convert to JSON string for SSE emission.
@@ -147,9 +140,7 @@ pub struct InterruptedSessionStore {
 impl InterruptedSessionStore {
     /// Create a new empty store.
     pub fn new() -> Self {
-        Self {
-            sessions: RwLock::new(HashMap::new()),
-        }
+        Self { sessions: RwLock::new(HashMap::new()) }
     }
 
     /// Store an interrupted session state.
@@ -206,9 +197,7 @@ impl InterruptedSessionStore {
     pub async fn cleanup_old(&self, max_age_ms: u64) {
         let now = current_timestamp_ms();
         let mut sessions = self.sessions.write().await;
-        sessions.retain(|_, state| {
-            now - state.interrupted_at < max_age_ms
-        });
+        sessions.retain(|_, state| now - state.interrupted_at < max_age_ms);
     }
 }
 
@@ -222,7 +211,7 @@ impl InterruptedSessionStore {
 /// ## Usage
 /// ```rust,ignore
 /// let handler = GraphInterruptHandler::new(store, emitter);
-/// 
+///
 /// // When graph execution returns Interrupted error:
 /// match graph.invoke(input, config).await {
 ///     Err(GraphError::Interrupted(interrupted)) => {
@@ -241,21 +230,12 @@ pub struct GraphInterruptHandler {
 impl GraphInterruptHandler {
     /// Create a new interrupt handler.
     pub fn new(store: Arc<InterruptedSessionStore>) -> Self {
-        Self {
-            store,
-            emitter: None,
-        }
+        Self { store, emitter: None }
     }
 
     /// Create a new interrupt handler with SSE emitter.
-    pub fn with_emitter(
-        store: Arc<InterruptedSessionStore>,
-        emitter: HitlEventEmitter,
-    ) -> Self {
-        Self {
-            store,
-            emitter: Some(emitter),
-        }
+    pub fn with_emitter(store: Arc<InterruptedSessionStore>, emitter: HitlEventEmitter) -> Self {
+        Self { store, emitter: Some(emitter) }
     }
 
     /// Handle an interrupt from ADK-Graph.
@@ -304,11 +284,8 @@ impl GraphInterruptHandler {
         }
 
         // Store interrupted state for resumption
-        let session_state = InterruptedSessionState::new(
-            session_id.to_string(),
-            interrupt_data,
-            state,
-        );
+        let session_state =
+            InterruptedSessionState::new(session_id.to_string(), interrupt_data, state);
         self.store.store(session_id, session_state).await;
     }
 
@@ -352,11 +329,7 @@ impl GraphInterruptHandler {
                 // For dynamic interrupts, we need to determine the node_id
                 // from the checkpoint or use a default
                 let node_id = "dynamic".to_string();
-                (
-                    node_id,
-                    interrupt_message,
-                    interrupt_data.unwrap_or(Value::Null),
-                )
+                (node_id, interrupt_message, interrupt_data.unwrap_or(Value::Null))
             }
         };
 
@@ -369,7 +342,8 @@ impl GraphInterruptHandler {
             data,
             state,
             step,
-        ).await;
+        )
+        .await;
     }
 
     /// Get the interrupted state for a session.
@@ -383,7 +357,10 @@ impl GraphInterruptHandler {
     }
 
     /// Clear the interrupted state for a session (after resumption).
-    pub async fn clear_interrupted_state(&self, session_id: &str) -> Option<InterruptedSessionState> {
+    pub async fn clear_interrupted_state(
+        &self,
+        session_id: &str,
+    ) -> Option<InterruptedSessionState> {
         self.store.remove(session_id).await
     }
 }
@@ -407,11 +384,7 @@ impl GraphInterruptHandler {
 ///
 /// ## Requirements
 /// Validates: Requirement 5.1 - SSE Event Types
-pub fn serialize_interrupt_data(
-    node_id: &str,
-    message: &str,
-    data: Value,
-) -> Value {
+pub fn serialize_interrupt_data(node_id: &str, message: &str, data: Value) -> Value {
     serde_json::json!({
         "nodeId": node_id,
         "message": message,
@@ -432,9 +405,7 @@ pub fn serialize_interrupt_data(
 /// A HashMap of state updates to apply before resuming.
 pub fn deserialize_interrupt_response(response: Value) -> HashMap<String, Value> {
     match response {
-        Value::Object(map) => {
-            map.into_iter().collect()
-        }
+        Value::Object(map) => map.into_iter().collect(),
         _ => {
             // If response is not an object, wrap it in a "response" key
             let mut updates = HashMap::new();
@@ -463,7 +434,7 @@ fn current_timestamp_ms() -> u64 {
 lazy_static::lazy_static! {
     /// Global store for interrupted session states.
     /// This is shared across all SSE handlers.
-    pub static ref INTERRUPTED_SESSIONS: Arc<InterruptedSessionStore> = 
+    pub static ref INTERRUPTED_SESSIONS: Arc<InterruptedSessionStore> =
         Arc::new(InterruptedSessionStore::new());
 }
 
@@ -527,11 +498,8 @@ mod tests {
         let mut state = HashMap::new();
         state.insert("task".to_string(), serde_json::json!("Delete files"));
 
-        let session_state = InterruptedSessionState::new(
-            "session-789".to_string(),
-            interrupt_data,
-            state,
-        );
+        let session_state =
+            InterruptedSessionState::new("session-789".to_string(), interrupt_data, state);
 
         // Store the session
         store.store("session-789", session_state.clone()).await;
@@ -595,16 +563,18 @@ mod tests {
         state.insert("task".to_string(), serde_json::json!("Delete files"));
 
         // Handle an interrupt
-        handler.handle_interrupt(
-            "session-123",
-            "thread-456".to_string(),
-            "checkpoint-789".to_string(),
-            "review".to_string(),
-            "Human approval required".to_string(),
-            serde_json::json!({"risk_level": "high"}),
-            state,
-            5,
-        ).await;
+        handler
+            .handle_interrupt(
+                "session-123",
+                "thread-456".to_string(),
+                "checkpoint-789".to_string(),
+                "review".to_string(),
+                "Human approval required".to_string(),
+                serde_json::json!({"risk_level": "high"}),
+                state,
+                5,
+            )
+            .await;
 
         // Verify the interrupt was stored
         assert!(handler.is_interrupted("session-123").await);
@@ -636,11 +606,8 @@ mod tests {
             1,
         );
 
-        let mut session_state = InterruptedSessionState::new(
-            "old-session".to_string(),
-            interrupt_data,
-            HashMap::new(),
-        );
+        let mut session_state =
+            InterruptedSessionState::new("old-session".to_string(), interrupt_data, HashMap::new());
         // Set timestamp to 2 hours ago
         session_state.interrupted_at = current_timestamp_ms() - (2 * 60 * 60 * 1000);
 

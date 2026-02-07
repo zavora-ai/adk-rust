@@ -115,11 +115,12 @@ impl McpHttpClientBuilder {
     /// - Connection to the server fails
     /// - Authentication fails
     #[cfg(feature = "http-transport")]
-    pub async fn connect(self) -> Result<super::McpToolset<impl rmcp::service::Service<rmcp::RoleClient>>> {
+    pub async fn connect(
+        self,
+    ) -> Result<super::McpToolset<impl rmcp::service::Service<rmcp::RoleClient>>> {
         use rmcp::ServiceExt;
         use rmcp::transport::streamable_http_client::{
-            StreamableHttpClientTransport,
-            StreamableHttpClientTransportConfig,
+            StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
         };
 
         // Extract the raw token from auth config
@@ -128,9 +129,10 @@ impl McpHttpClientBuilder {
             McpAuth::Bearer(token) => Some(token.clone()),
             McpAuth::OAuth2(config) => {
                 // Get token from OAuth2 flow
-                let token = config.get_or_refresh_token().await.map_err(|e| {
-                    AdkError::Tool(format!("OAuth2 authentication failed: {}", e))
-                })?;
+                let token = config
+                    .get_or_refresh_token()
+                    .await
+                    .map_err(|e| AdkError::Tool(format!("OAuth2 authentication failed: {}", e)))?;
                 Some(token)
             }
             McpAuth::ApiKey { .. } => {
@@ -143,7 +145,7 @@ impl McpHttpClientBuilder {
 
         // Build transport config with authentication
         let mut config = StreamableHttpClientTransportConfig::with_uri(self.endpoint.as_str());
-        
+
         // Set auth header if we have a token (rmcp adds "Bearer " prefix via bearer_auth)
         if let Some(token) = token {
             config = config.auth_header(token);
@@ -153,9 +155,10 @@ impl McpHttpClientBuilder {
         let transport = StreamableHttpClientTransport::from_config(config);
 
         // Connect using the service extension
-        let client = ().serve(transport).await.map_err(|e| {
-            AdkError::Tool(format!("Failed to connect to MCP server: {}", e))
-        })?;
+        let client = ()
+            .serve(transport)
+            .await
+            .map_err(|e| AdkError::Tool(format!("Failed to connect to MCP server: {}", e)))?;
 
         Ok(super::McpToolset::new(client))
     }
@@ -165,7 +168,8 @@ impl McpHttpClientBuilder {
     pub async fn connect(self) -> Result<()> {
         Err(AdkError::Tool(
             "HTTP transport requires the 'http-transport' feature. \
-             Add `adk-tool = { features = [\"http-transport\"] }` to your Cargo.toml".to_string()
+             Add `adk-tool = { features = [\"http-transport\"] }` to your Cargo.toml"
+                .to_string(),
         ))
     }
 }
@@ -201,15 +205,15 @@ mod tests {
 
     #[test]
     fn test_builder_timeout() {
-        let builder = McpHttpClientBuilder::new("https://mcp.example.com")
-            .timeout(Duration::from_secs(60));
+        let builder =
+            McpHttpClientBuilder::new("https://mcp.example.com").timeout(Duration::from_secs(60));
         assert_eq!(builder.get_timeout(), Duration::from_secs(60));
     }
 
     #[test]
     fn test_builder_headers() {
-        let builder = McpHttpClientBuilder::new("https://mcp.example.com")
-            .header("X-Custom", "value");
+        let builder =
+            McpHttpClientBuilder::new("https://mcp.example.com").header("X-Custom", "value");
         assert!(builder.headers.contains_key("X-Custom"));
     }
 }

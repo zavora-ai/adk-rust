@@ -1,6 +1,7 @@
 use crate::a2ui::{
-    encode_jsonl, A2uiMessage, A2uiSchemaVersion, A2uiValidator, CreateSurface, CreateSurfaceMessage,
+    A2uiMessage, A2uiSchemaVersion, A2uiValidator, CreateSurface, CreateSurfaceMessage,
     UpdateComponents, UpdateComponentsMessage, UpdateDataModel, UpdateDataModelMessage,
+    encode_jsonl,
 };
 use crate::catalog_registry::CatalogRegistry;
 use adk_core::{Result, Tool, ToolContext};
@@ -83,8 +84,9 @@ Returns a JSONL string with createSurface/updateDataModel/updateComponents messa
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let params: RenderScreenParams = serde_json::from_value(args.clone())
-            .map_err(|e| adk_core::AdkError::Tool(format!("Invalid parameters: {}. Got: {}", e, args)))?;
+        let params: RenderScreenParams = serde_json::from_value(args.clone()).map_err(|e| {
+            adk_core::AdkError::Tool(format!("Invalid parameters: {}. Got: {}", e, args))
+        })?;
 
         if params.components.is_empty() {
             return Err(adk_core::AdkError::Tool(
@@ -93,23 +95,19 @@ Returns a JSONL string with createSurface/updateDataModel/updateComponents messa
         }
 
         let has_root = params.components.iter().any(|component| {
-            component
-                .get("id")
-                .and_then(Value::as_str)
-                .map(|id| id == "root")
-                .unwrap_or(false)
+            component.get("id").and_then(Value::as_str).map(|id| id == "root").unwrap_or(false)
         });
 
         if !has_root {
             return Err(adk_core::AdkError::Tool(
-                "Invalid parameters: components must include a root component with id \"root\".".to_string(),
+                "Invalid parameters: components must include a root component with id \"root\"."
+                    .to_string(),
             ));
         }
 
         let registry = CatalogRegistry::new();
-        let catalog_id = params
-            .catalog_id
-            .unwrap_or_else(|| registry.default_catalog_id().to_string());
+        let catalog_id =
+            params.catalog_id.unwrap_or_else(|| registry.default_catalog_id().to_string());
 
         let mut messages: Vec<A2uiMessage> = Vec::new();
 
@@ -158,9 +156,8 @@ Returns a JSONL string with createSurface/updateDataModel/updateComponents messa
             }
         }
 
-        let jsonl = encode_jsonl(messages).map_err(|e| {
-            adk_core::AdkError::Tool(format!("Failed to encode A2UI JSONL: {}", e))
-        })?;
+        let jsonl = encode_jsonl(messages)
+            .map_err(|e| adk_core::AdkError::Tool(format!("Failed to encode A2UI JSONL: {}", e)))?;
 
         // Return as JSON object with components for LLM compatibility
         // The frontend will receive this and can render it
@@ -187,10 +184,7 @@ mod tests {
 
     impl TestContext {
         fn new() -> Self {
-            Self {
-                content: Content::new("user"),
-                actions: Mutex::new(EventActions::default()),
-            }
+            Self { content: Content::new("user"), actions: Mutex::new(EventActions::default()) }
         }
     }
 
@@ -244,8 +238,8 @@ mod tests {
 
     #[tokio::test]
     async fn render_screen_emits_jsonl() {
-        use crate::a2ui::{text, column};
-        
+        use crate::a2ui::{column, text};
+
         let tool = RenderScreenTool::new();
         let args = serde_json::json!({
             "components": [
@@ -258,26 +252,23 @@ mod tests {
 
         let ctx: Arc<dyn ToolContext> = Arc::new(TestContext::new());
         let value = tool.execute(ctx, args).await.unwrap();
-        
+
         // The tool now returns a JSON object with components, data_model, and jsonl
         assert!(value.is_object());
         assert!(value.get("surface_id").is_some());
         assert!(value.get("components").is_some());
         assert!(value.get("jsonl").is_some());
-        
+
         // Verify JSONL is still generated
         let jsonl = value["jsonl"].as_str().unwrap();
-        let lines: Vec<Value> = jsonl
-            .trim_end()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
+        let lines: Vec<Value> =
+            jsonl.trim_end().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
 
         assert_eq!(lines.len(), 3);
         assert!(lines[0].get("createSurface").is_some());
         assert!(lines[1].get("updateDataModel").is_some());
         assert!(lines[2].get("updateComponents").is_some());
-        
+
         // Verify component structure in the returned JSON
         let components = value["components"].as_array().unwrap();
         assert_eq!(components.len(), 3);

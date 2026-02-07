@@ -1,5 +1,5 @@
-pub mod spec;
 pub mod generator;
+pub mod spec;
 
-pub use spec::{KitSpec, KitBrand, KitColors, KitTypography, KitComponents, KitDensity, KitRadius};
 pub use generator::{KitArtifacts, KitGenerator};
+pub use spec::{KitBrand, KitColors, KitComponents, KitDensity, KitRadius, KitSpec, KitTypography};

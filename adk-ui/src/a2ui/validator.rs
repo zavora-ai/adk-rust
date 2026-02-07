@@ -1,5 +1,5 @@
 use jsonschema::Validator;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::messages::A2uiMessage;
 
@@ -35,22 +35,37 @@ pub struct A2uiValidator {
 
 impl A2uiValidator {
     pub fn new() -> Result<Self, A2uiValidationError> {
-        let v0_9 = Validator::new(&schema_v0_9())
-            .map_err(|e| A2uiValidationError { message: format!("Invalid v0.9 schema: {}", e), instance_path: "/".to_string() })?;
-        let v0_8 = Validator::new(&schema_v0_8())
-            .map_err(|e| A2uiValidationError { message: format!("Invalid v0.8 schema: {}", e), instance_path: "/".to_string() })?;
+        let v0_9 = Validator::new(&schema_v0_9()).map_err(|e| A2uiValidationError {
+            message: format!("Invalid v0.9 schema: {}", e),
+            instance_path: "/".to_string(),
+        })?;
+        let v0_8 = Validator::new(&schema_v0_8()).map_err(|e| A2uiValidationError {
+            message: format!("Invalid v0.8 schema: {}", e),
+            instance_path: "/".to_string(),
+        })?;
 
         Ok(Self { v0_9, v0_8 })
     }
 
-    pub fn validate_message(&self, message: &A2uiMessage, version: A2uiSchemaVersion) -> Result<(), Vec<A2uiValidationError>> {
+    pub fn validate_message(
+        &self,
+        message: &A2uiMessage,
+        version: A2uiSchemaVersion,
+    ) -> Result<(), Vec<A2uiValidationError>> {
         let value = serde_json::to_value(message).map_err(|e| {
-            vec![A2uiValidationError { message: format!("Serialization failed: {}", e), instance_path: "/".to_string() }]
+            vec![A2uiValidationError {
+                message: format!("Serialization failed: {}", e),
+                instance_path: "/".to_string(),
+            }]
         })?;
         self.validate_value(&value, version)
     }
 
-    pub fn validate_value(&self, value: &Value, version: A2uiSchemaVersion) -> Result<(), Vec<A2uiValidationError>> {
+    pub fn validate_value(
+        &self,
+        value: &Value,
+        version: A2uiSchemaVersion,
+    ) -> Result<(), Vec<A2uiValidationError>> {
         let validator = match version {
             A2uiSchemaVersion::V0_9 => &self.v0_9,
             A2uiSchemaVersion::V0_8 => &self.v0_8,
@@ -107,7 +122,7 @@ fn schema_v0_9() -> Value {
                                     "required": ["id", "component"],
                                     "properties": {
                                         "id": { "type": "string" },
-                                        "component": { 
+                                        "component": {
                                             "type": "object",
                                             "description": "Component definition with nested structure: {ComponentName: {props}}"
                                         }
@@ -225,11 +240,7 @@ fn schema_v0_8() -> Value {
 mod tests {
     use super::*;
     use crate::a2ui::messages::{
-        A2uiMessage,
-        CreateSurface,
-        CreateSurfaceMessage,
-        UpdateComponents,
-        UpdateComponentsMessage,
+        A2uiMessage, CreateSurface, CreateSurfaceMessage, UpdateComponents, UpdateComponentsMessage,
     };
     use serde_json::json;
 
@@ -272,13 +283,13 @@ mod tests {
         let message = A2uiMessage::UpdateComponents(UpdateComponentsMessage {
             update_components: UpdateComponents {
                 surface_id: "main".to_string(),
-                components: vec![json!({ 
-                    "id": "root", 
-                    "component": { 
-                        "Text": { 
-                            "text": { "literalString": "Hello" } 
-                        } 
-                    } 
+                components: vec![json!({
+                    "id": "root",
+                    "component": {
+                        "Text": {
+                            "text": { "literalString": "Hello" }
+                        }
+                    }
                 })],
             },
         });

@@ -7,7 +7,7 @@
 //!
 //! Requirements: 12.4, 12.5
 
-use crate::schema::{AgentSchema, AgentType, ProjectSchema, ToolConfig, END, START};
+use crate::schema::{AgentSchema, AgentType, END, ProjectSchema, START, ToolConfig};
 use std::collections::{HashMap, HashSet};
 
 /// Validation error with specific details
@@ -163,10 +163,13 @@ pub fn validate_project(project: &ProjectSchema) -> ValidationResult {
 fn validate_not_empty(project: &ProjectSchema, result: &mut ValidationResult) {
     let has_agents = !project.agents.is_empty();
     let has_action_nodes = !project.action_nodes.is_empty();
-    
+
     // Allow workflows with either agents OR action nodes
     if !has_agents && !has_action_nodes {
-        result.add_error(ValidationErrorCode::NoAgents, "Project must have at least one agent or action node");
+        result.add_error(
+            ValidationErrorCode::NoAgents,
+            "Project must have at least one agent or action node",
+        );
     }
 
     if project.workflow.edges.is_empty() {
@@ -235,10 +238,10 @@ fn validate_graph_connectivity(project: &ProjectSchema, result: &mut ValidationR
         // Skip if this agent is reachable through an action node
         // (e.g., START -> trigger -> agent)
         let reachable_through_action = project.action_nodes.keys().any(|action_id| {
-            reachable.contains(action_id.as_str()) &&
-            project.workflow.edges.iter().any(|e| e.from == *action_id && e.to == **agent_id)
+            reachable.contains(action_id.as_str())
+                && project.workflow.edges.iter().any(|e| e.from == *action_id && e.to == **agent_id)
         });
-        
+
         if !reachable.contains(agent_id.as_str()) && !reachable_through_action {
             result.add_error_with_context(
                 ValidationErrorCode::DisconnectedNode,
@@ -423,10 +426,7 @@ mod tests {
                 routes: vec![],
             },
         );
-        project.workflow.edges = vec![
-            Edge::new(START, "agent1"),
-            Edge::new("agent1", END),
-        ];
+        project.workflow.edges = vec![Edge::new(START, "agent1"), Edge::new("agent1", END)];
         project
     }
 
@@ -511,10 +511,7 @@ mod tests {
                 routes: vec![], // No routes!
             },
         );
-        project.workflow.edges = vec![
-            Edge::new(START, "router"),
-            Edge::new("router", END),
-        ];
+        project.workflow.edges = vec![Edge::new(START, "router"), Edge::new("router", END)];
         let result = validate_project(&project);
         assert!(!result.is_valid());
         assert!(result.errors.iter().any(|e| e.code == ValidationErrorCode::InvalidRouteConfig));
@@ -539,10 +536,7 @@ mod tests {
                 }],
             },
         );
-        project.workflow.edges = vec![
-            Edge::new(START, "router"),
-            Edge::new("router", END),
-        ];
+        project.workflow.edges = vec![Edge::new(START, "router"), Edge::new("router", END)];
         let result = validate_project(&project);
         assert!(!result.is_valid());
         assert!(result.errors.iter().any(|e| e.code == ValidationErrorCode::InvalidRouteConfig));
@@ -564,10 +558,7 @@ mod tests {
                 routes: vec![],
             },
         );
-        project.workflow.edges = vec![
-            Edge::new(START, "seq"),
-            Edge::new("seq", END),
-        ];
+        project.workflow.edges = vec![Edge::new(START, "seq"), Edge::new("seq", END)];
         let result = validate_project(&project);
         assert!(!result.is_valid());
         assert!(result.errors.iter().any(|e| e.code == ValidationErrorCode::MissingRequiredField));
@@ -589,16 +580,12 @@ mod tests {
                 routes: vec![],
             },
         );
-        project.workflow.edges = vec![
-            Edge::new(START, "seq"),
-            Edge::new("seq", END),
-        ];
+        project.workflow.edges = vec![Edge::new(START, "seq"), Edge::new("seq", END)];
         let result = validate_project(&project);
         assert!(!result.is_valid());
         assert!(result.errors.iter().any(|e| e.code == ValidationErrorCode::InvalidSubAgentRef));
     }
 }
-
 
 /// Get a list of required environment variables for a project
 ///
@@ -608,12 +595,13 @@ mod tests {
 /// Requirement: 12.10 - Warn when required env vars are missing
 pub fn get_required_env_vars(project: &ProjectSchema) -> Vec<EnvVarRequirement> {
     let mut env_vars = Vec::new();
-    
+
     // All projects using Gemini models need an API key
-    let uses_gemini = project.agents.values().any(|a| {
-        a.model.as_ref().map(|m| m.contains("gemini")).unwrap_or(true)
-    });
-    
+    let uses_gemini = project
+        .agents
+        .values()
+        .any(|a| a.model.as_ref().map(|m| m.contains("gemini")).unwrap_or(true));
+
     if uses_gemini {
         env_vars.push(EnvVarRequirement {
             name: "GOOGLE_API_KEY".to_string(),
@@ -622,12 +610,14 @@ pub fn get_required_env_vars(project: &ProjectSchema) -> Vec<EnvVarRequirement> 
             required: true,
         });
     }
-    
+
     // Check for MCP tools that might need specific env vars
     for (tool_id, config) in &project.tool_configs {
         if let ToolConfig::Mcp(mcp) = config {
             // Common MCP servers that need env vars
-            if mcp.server_command.contains("github") || mcp.server_args.iter().any(|a| a.contains("github")) {
+            if mcp.server_command.contains("github")
+                || mcp.server_args.iter().any(|a| a.contains("github"))
+            {
                 env_vars.push(EnvVarRequirement {
                     name: "GITHUB_TOKEN".to_string(),
                     description: format!("GitHub token for MCP server ({})", tool_id),
@@ -635,8 +625,10 @@ pub fn get_required_env_vars(project: &ProjectSchema) -> Vec<EnvVarRequirement> 
                     required: false, // May work without for public repos
                 });
             }
-            
-            if mcp.server_command.contains("slack") || mcp.server_args.iter().any(|a| a.contains("slack")) {
+
+            if mcp.server_command.contains("slack")
+                || mcp.server_args.iter().any(|a| a.contains("slack"))
+            {
                 env_vars.push(EnvVarRequirement {
                     name: "SLACK_BOT_TOKEN".to_string(),
                     description: format!("Slack bot token for MCP server ({})", tool_id),
@@ -646,18 +638,19 @@ pub fn get_required_env_vars(project: &ProjectSchema) -> Vec<EnvVarRequirement> 
             }
         }
     }
-    
+
     // Check for browser tool (may need headless browser setup)
     let uses_browser = project.agents.values().any(|a| a.tools.contains(&"browser".to_string()));
     if uses_browser {
         env_vars.push(EnvVarRequirement {
             name: "CHROME_PATH".to_string(),
-            description: "Path to Chrome/Chromium executable (optional, auto-detected if not set)".to_string(),
+            description: "Path to Chrome/Chromium executable (optional, auto-detected if not set)"
+                .to_string(),
             alternatives: vec!["CHROMIUM_PATH".to_string()],
             required: false,
         });
     }
-    
+
     env_vars
 }
 
@@ -682,7 +675,7 @@ impl EnvVarRequirement {
         }
         self.alternatives.iter().any(|alt| std::env::var(alt).is_ok())
     }
-    
+
     /// Get all possible variable names (primary + alternatives)
     pub fn all_names(&self) -> Vec<&str> {
         let mut names = vec![self.name.as_str()];
@@ -698,7 +691,7 @@ impl EnvVarRequirement {
 pub fn check_env_vars(project: &ProjectSchema) -> Vec<EnvVarWarning> {
     let requirements = get_required_env_vars(project);
     let mut warnings = Vec::new();
-    
+
     for req in requirements {
         if !req.is_set() {
             warnings.push(EnvVarWarning {
@@ -709,7 +702,7 @@ pub fn check_env_vars(project: &ProjectSchema) -> Vec<EnvVarWarning> {
             });
         }
     }
-    
+
     warnings
 }
 
@@ -761,7 +754,7 @@ mod env_var_tests {
                 routes: vec![],
             },
         );
-        
+
         let env_vars = get_required_env_vars(&project);
         assert!(env_vars.iter().any(|v| v.name == "GOOGLE_API_KEY"));
     }
@@ -782,7 +775,7 @@ mod env_var_tests {
                 routes: vec![],
             },
         );
-        
+
         let env_vars = get_required_env_vars(&project);
         assert!(env_vars.iter().any(|v| v.name == "CHROME_PATH"));
     }
@@ -807,11 +800,14 @@ mod env_var_tests {
             "agent_mcp".to_string(),
             ToolConfig::Mcp(McpToolConfig {
                 server_command: "npx".to_string(),
-                server_args: vec!["-y".to_string(), "@modelcontextprotocol/server-github".to_string()],
+                server_args: vec![
+                    "-y".to_string(),
+                    "@modelcontextprotocol/server-github".to_string(),
+                ],
                 tool_filter: vec![],
             }),
         );
-        
+
         let env_vars = get_required_env_vars(&project);
         assert!(env_vars.iter().any(|v| v.name == "GITHUB_TOKEN"));
     }

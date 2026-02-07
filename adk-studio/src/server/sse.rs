@@ -1,7 +1,5 @@
 use crate::server::events::TraceEventV2;
-use crate::server::graph_runner::{
-    GraphInterruptHandler, INTERRUPTED_SESSIONS,
-};
+use crate::server::graph_runner::{GraphInterruptHandler, INTERRUPTED_SESSIONS};
 use crate::server::state::AppState;
 use axum::{
     extract::{Path, Query, State},
@@ -42,7 +40,11 @@ pub async fn cleanup_stale_sessions(max_age: std::time::Duration) {
     });
     let removed = before - sessions.len();
     if removed > 0 {
-        tracing::info!(removed = removed, remaining = sessions.len(), "Stale session cleanup complete");
+        tracing::info!(
+            removed = removed,
+            remaining = sessions.len(),
+            "Stale session cleanup complete"
+        );
     }
 }
 
@@ -79,6 +81,12 @@ struct ExecutionContext {
     pending_agents: Vec<PendingAgent>,
     /// Completed agent outputs (from TRACE events with state)
     completed_outputs: HashMap<String, serde_json::Value>,
+    /// Durations recorded from raw TRACE node_end events (node → ms)
+    recorded_durations: HashMap<String, u64>,
+    /// Expected output keys per action node (node_id → keys).
+    /// Populated from the project's action node configuration so we can
+    /// reconstruct per-node output snapshots from the final state.
+    action_node_output_keys: HashMap<String, Vec<String>>,
 }
 
 impl ExecutionContext {
@@ -88,17 +96,27 @@ impl ExecutionContext {
             step: 0,
             pending_agents: Vec::new(),
             completed_outputs: HashMap::new(),
+            recorded_durations: HashMap::new(),
+            action_node_output_keys: HashMap::new(),
         }
     }
 
     /// Record node start - captures input state but doesn't emit event yet.
-    /// Returns the trace event JSON for immediate emission.
-    fn node_start(&mut self, node: &str) -> String {
+    /// Returns the trace event JSON for immediate emission, or None if already pending.
+    fn node_start(&mut self, node: &str) -> Option<String> {
+        // Prevent duplicate tracking — a node can only be pending once.
+        // This happens when both stderr ("Starting agent execution") and
+        // TRACE node_start fire for the same agent, or when execute_stream()
+        // and execute() both trigger the tracing subscriber.
+        if self.pending_agents.iter().any(|p| p.name == node) {
+            return None;
+        }
+
         self.step += 1;
-        
+
         // Capture current state as input state for this node
         let input_state = serde_json::to_value(&self.current_state).unwrap_or_default();
-        
+
         // Push to pending stack
         self.pending_agents.push(PendingAgent {
             name: node.to_string(),
@@ -106,54 +124,8 @@ impl ExecutionContext {
             start_time: std::time::Instant::now(),
             input_state: input_state.clone(),
         });
-        
+
         let event = TraceEventV2::node_start(node, self.step, input_state);
-        event.to_json()
-    }
-
-    /// Record node end with output state from graph execution.
-    /// This is called when we parse a TRACE event with state information.
-    fn node_end_with_state(&mut self, node: &str, output_state: serde_json::Value) -> Option<String> {
-        // Find and remove the pending agent
-        let pending_idx = self.pending_agents.iter().position(|p| p.name == node)?;
-        let pending = self.pending_agents.remove(pending_idx);
-        
-        let duration_ms = pending.start_time.elapsed().as_millis() as u64;
-        
-        // Merge output state into current state for subsequent nodes
-        if let serde_json::Value::Object(map) = &output_state {
-            for (k, v) in map {
-                self.current_state.insert(k.clone(), v.clone());
-            }
-        }
-        
-        let event = TraceEventV2::node_end(
-            node,
-            pending.step,
-            duration_ms,
-            pending.input_state,
-            output_state,
-        );
-        Some(event.to_json())
-    }
-
-    /// Record node end without explicit output state (fallback).
-    /// Uses current accumulated state as output.
-    fn node_end_fallback(&mut self, node: &str) -> Option<String> {
-        // Find and remove the pending agent
-        let pending_idx = self.pending_agents.iter().position(|p| p.name == node)?;
-        let pending = self.pending_agents.remove(pending_idx);
-        
-        let duration_ms = pending.start_time.elapsed().as_millis() as u64;
-        let output_state = serde_json::to_value(&self.current_state).unwrap_or_default();
-        
-        let event = TraceEventV2::node_end(
-            node,
-            pending.step,
-            duration_ms,
-            pending.input_state,
-            output_state,
-        );
         Some(event.to_json())
     }
 
@@ -163,38 +135,44 @@ impl ExecutionContext {
         let Ok(event) = serde_json::from_str::<serde_json::Value>(trace_json) else {
             return (None, false, false);
         };
-        
+
         let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        
+
         match event_type {
             "node_start" => {
                 // NodeStart from adk-graph — track action nodes that aren't
                 // already tracked via stderr ("Starting agent execution").
-                // This ensures set_node, transform_node, etc. appear in the
-                // timeline with proper state snapshots.
                 let node = event.get("node").and_then(|v| v.as_str()).unwrap_or("");
-                if !node.is_empty() && !self.pending_agents.iter().any(|p| p.name == node) {
-                    let trace_data = self.node_start(node);
-                    // suppress_raw=true: we emit our enriched version instead
-                    return (Some(trace_data), false, true);
+                if !node.is_empty() {
+                    if let Some(trace_data) = self.node_start(node) {
+                        // suppress_raw=true: we emit our enriched version instead
+                        return (Some(trace_data), false, true);
+                    }
                 }
                 (None, false, false)
             }
             "node_end" => {
-                // NodeEnd from adk-graph doesn't include state, just duration
-                // Use node_end_fallback to emit our own node_end with accumulated state
-                // if we haven't already emitted one for this node
+                // NodeEnd from adk-graph doesn't include state, just duration.
+                // For action nodes (Set, Transform, etc.) the published adk-graph
+                // doesn't emit Updates events in Messages mode, so we don't know
+                // what state they produced yet. Keep them pending until the Done
+                // event arrives with the full final state, then reconstruct each
+                // node's output by diffing input states.
+                //
+                // For LLM agents, node_end_with_state is called from the "message"
+                // handler when is_final=true, so they won't be pending here.
                 let node = event.get("node").and_then(|v| v.as_str()).unwrap_or("");
                 if !node.is_empty() {
-                    // Check if this node is still pending (hasn't been emitted via message event)
-                    if self.pending_agents.iter().any(|p| p.name == node) {
-                        if let Some(event_json) = self.node_end_fallback(node) {
-                            // suppress_raw=true: our enriched version has state_snapshot
-                            return (Some(event_json), false, true);
-                        }
+                    let is_pending = self.pending_agents.iter().any(|p| p.name == node);
+                    if is_pending {
+                        // Record the raw duration from the TRACE event so we can
+                        // use it later when we emit the reconstructed node_end.
+                        let duration = event.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                        self.recorded_durations.insert(node.to_string(), duration);
                     }
                 }
-                (None, false, false)
+                // Suppress the raw node_end — we'll emit enriched versions later
+                (None, false, true)
             }
             "message" => {
                 // Message event contains agent output text
@@ -202,7 +180,7 @@ impl ExecutionContext {
                 let node = event.get("node").and_then(|v| v.as_str()).unwrap_or("");
                 let content = event.get("content").and_then(|v| v.as_str()).unwrap_or("");
                 let is_final = event.get("is_final").and_then(|v| v.as_bool()).unwrap_or(false);
-                
+
                 if !node.is_empty() && !content.is_empty() {
                     // Store the agent's response in completed_outputs
                     // This will be used when emitting node_end events
@@ -211,16 +189,17 @@ impl ExecutionContext {
                         "input": self.current_state.get("input").cloned().unwrap_or(serde_json::Value::Null)
                     });
                     self.completed_outputs.insert(node.to_string(), agent_response.clone());
-                    
-                    // If this is a final message, also update current state
+
+                    // If this is a final message, update current state but DON'T
+                    // emit node_end yet. We defer ALL node_ends to emit_pending_node_ends()
+                    // so they arrive in correct step order (action nodes before LLM agents
+                    // that run after them). The node_end will be emitted when the Done
+                    // event arrives.
                     if is_final {
-                        self.current_state.insert("response".to_string(), serde_json::Value::String(content.to_string()));
-                        
-                        // Emit node_end immediately for this agent since we have the final output
-                        // This provides more granular timeline updates
-                        if let Some(event_json) = self.node_end_with_state(node, agent_response) {
-                            return (Some(event_json), false, false);
-                        }
+                        self.current_state.insert(
+                            "response".to_string(),
+                            serde_json::Value::String(content.to_string()),
+                        );
                     }
                 }
                 (None, false, false)
@@ -237,7 +216,8 @@ impl ExecutionContext {
                 (None, false, false)
             }
             "updates" => {
-                // State updates from a node
+                // State updates from a node (emitted by local adk-graph builds,
+                // but NOT by the published crate used in generated binaries).
                 let node = event.get("node").and_then(|v| v.as_str()).unwrap_or("");
                 if let Some(updates) = event.get("updates") {
                     if let serde_json::Value::Object(map) = updates {
@@ -284,20 +264,22 @@ impl ExecutionContext {
     fn process_interrupt_event(&self, trace_json: &str) -> Option<InterruptInfo> {
         let event: serde_json::Value = serde_json::from_str(trace_json).ok()?;
         let event_type = event.get("type").and_then(|v| v.as_str())?;
-        
+
         if event_type == "interrupted" {
-            let node_id = event.get("node").and_then(|v| v.as_str())
-                .unwrap_or("unknown").to_string();
-            let message = event.get("message").and_then(|v| v.as_str())
-                .unwrap_or("Workflow interrupted").to_string();
+            let node_id =
+                event.get("node").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+            let message = event
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Workflow interrupted")
+                .to_string();
             let data = event.get("data").cloned().unwrap_or(serde_json::Value::Null);
-            let thread_id = event.get("thread_id").and_then(|v| v.as_str())
-                .unwrap_or("").to_string();
-            let checkpoint_id = event.get("checkpoint_id").and_then(|v| v.as_str())
-                .unwrap_or("").to_string();
-            let step = event.get("step").and_then(|v| v.as_u64())
-                .unwrap_or(0) as usize;
-            
+            let thread_id =
+                event.get("thread_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let checkpoint_id =
+                event.get("checkpoint_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let step = event.get("step").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+
             Some(InterruptInfo {
                 node_id,
                 message,
@@ -312,50 +294,124 @@ impl ExecutionContext {
         }
     }
 
-    /// Emit node_end events for all pending agents using their captured output state.
-    /// Called when we receive the Done event with final state.
-    /// 
-    /// For multi-agent workflows, each agent's output is captured from Message events
-    /// in the TRACE output. This ensures each agent shows its own response, not the
-    /// final accumulated state.
+    /// Emit node_end events for all pending agents, using the final state
+    /// from the Done event to populate output snapshots.
+    ///
+    /// The published adk-graph crate (used by generated binaries) does NOT emit
+    /// Updates events for action nodes in Messages mode. So when Done arrives
+    /// with the full final state, we use it to reconstruct meaningful output
+    /// for each pending action node.
+    ///
+    /// Strategy: if we know the expected output keys for a node (from the
+    /// project's action node config), we extract exactly those keys from the
+    /// final state. Otherwise we fall back to showing all new keys.
+    ///
+    /// LLM agents that already emitted via Message events won't be pending here.
     fn emit_pending_node_ends(&mut self) -> Vec<String> {
         let mut events = Vec::new();
-        
-        // Process in order (first started, first ended)
-        // We need to emit in the correct order for the timeline
-        let pending: Vec<_> = self.pending_agents.drain(..).collect();
-        
-        for pending_agent in pending {
-            let duration_ms = pending_agent.start_time.elapsed().as_millis() as u64;
-            
-            // Use the agent's captured output if available
-            // This comes from Message events in the TRACE output
-            let output_state = self.completed_outputs
-                .remove(&pending_agent.name)
-                .unwrap_or_else(|| {
-                    // Fallback: use current state but include the input
-                    let mut state = serde_json::Map::new();
-                    state.insert("input".to_string(), 
-                        pending_agent.input_state.get("input")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null));
-                    if let Some(response) = self.current_state.get("response") {
-                        state.insert("response".to_string(), response.clone());
+        let mut pending: Vec<_> = self.pending_agents.drain(..).collect();
+
+        if pending.is_empty() {
+            return events;
+        }
+
+        // Sort by step order so snapshots arrive chronologically
+        pending.sort_by_key(|a| a.step);
+
+        let final_state = &self.current_state;
+
+        // Progressive state: accumulates each node's output so the next node's
+        // input_state reflects the full pipeline state up to that point.
+        // Start from the first node's captured input_state (typically just {input}).
+        let mut running_state: HashMap<String, serde_json::Value> =
+            if let Some(first) = pending.first() {
+                match &first.input_state {
+                    serde_json::Value::Object(map) => {
+                        map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
                     }
-                    serde_json::Value::Object(state)
-                });
-            
+                    _ => HashMap::new(),
+                }
+            } else {
+                HashMap::new()
+            };
+
+        for agent in &pending {
+            // Use recorded TRACE duration if available, otherwise wall-clock
+            let duration_ms = self
+                .recorded_durations
+                .remove(&agent.name)
+                .unwrap_or_else(|| agent.start_time.elapsed().as_millis() as u64);
+
+            // The input state for this node is the accumulated running state
+            let input_state = serde_json::to_value(&running_state).unwrap_or_default();
+
+            // Determine the output state for this node
+            let output_state = if let Some(captured) = self.completed_outputs.remove(&agent.name) {
+                captured
+            } else if let Some(expected_keys) = self.action_node_output_keys.get(&agent.name) {
+                // We know exactly which keys this action node produces.
+                // Extract those keys from the final state.
+                let mut output = serde_json::Map::new();
+                for key in expected_keys {
+                    if let Some(value) = final_state.get(key) {
+                        output.insert(key.clone(), value.clone());
+                    }
+                }
+                if output.is_empty() {
+                    self.diff_against_input(&input_state, final_state)
+                } else {
+                    serde_json::Value::Object(output)
+                }
+            } else {
+                // Unknown node type — show all keys that weren't in the input
+                self.diff_against_input(&input_state, final_state)
+            };
+
+            // Merge this node's output into the running state for the next node
+            if let serde_json::Value::Object(map) = &output_state {
+                for (k, v) in map {
+                    running_state.insert(k.clone(), v.clone());
+                }
+            }
+
             let event = TraceEventV2::node_end(
-                &pending_agent.name,
-                pending_agent.step,
+                &agent.name,
+                agent.step,
                 duration_ms,
-                pending_agent.input_state,
+                input_state,
                 output_state,
             );
             events.push(event.to_json());
         }
-        
+
         events
+    }
+
+    /// Compute the diff between a node's input state and the final state.
+    /// Returns keys present in final_state but not in input_state, excluding
+    /// the "response" key (which belongs to LLM agents).
+    fn diff_against_input(
+        &self,
+        input_state: &serde_json::Value,
+        final_state: &HashMap<String, serde_json::Value>,
+    ) -> serde_json::Value {
+        let input_keys: std::collections::HashSet<String> = match input_state {
+            serde_json::Value::Object(map) => map.keys().cloned().collect(),
+            _ => std::collections::HashSet::new(),
+        };
+
+        let mut output = serde_json::Map::new();
+        for (key, value) in final_state {
+            if !input_keys.contains(key) && key != "response" {
+                output.insert(key.clone(), value.clone());
+            }
+        }
+
+        if output.is_empty() {
+            serde_json::to_value(final_state).unwrap_or_default()
+        } else {
+            serde_json::Value::Object(output)
+        }
     }
 
     /// Record execution complete and return the done event JSON.
@@ -373,7 +429,7 @@ impl ExecutionContext {
     fn update_state(&mut self, key: &str, value: serde_json::Value) {
         self.current_state.insert(key.to_string(), value);
     }
-    
+
     /// Check if there are pending agents
     fn has_pending_agents(&self) -> bool {
         !self.pending_agents.is_empty()
@@ -411,7 +467,7 @@ async fn get_or_create_session(
         .map_err(|e| format!("Failed to start binary: {}", e))?;
 
     let stdin = BufWriter::new(
-        child.stdin.take().ok_or_else(|| "Failed to capture child stdin".to_string())?
+        child.stdin.take().ok_or_else(|| "Failed to capture child stdin".to_string())?,
     );
     let stdout = child.stdout.take().ok_or_else(|| "Failed to capture child stdout".to_string())?;
     let stderr = child.stderr.take().ok_or_else(|| "Failed to capture child stderr".to_string())?;
@@ -438,7 +494,13 @@ async fn get_or_create_session(
 
     sessions.insert(
         session_id.to_string(),
-        SessionProcess { stdin, stdout_rx, stderr_rx, _child: child, created_at: std::time::Instant::now() },
+        SessionProcess {
+            stdin,
+            stdout_rx,
+            stderr_rx,
+            _child: child,
+            created_at: std::time::Instant::now(),
+        },
     );
     Ok(())
 }
@@ -446,13 +508,32 @@ async fn get_or_create_session(
 pub async fn stream_handler(
     Path(_id): Path<String>,
     Query(query): Query<StreamQuery>,
-    State(_state): State<AppState>,
+    State(app_state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let api_key =
         query.api_key.or_else(|| std::env::var("GOOGLE_API_KEY").ok()).unwrap_or_default();
     let input = query.input.clone();
     let binary_path = query.binary_path;
     let session_id = query.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    // Load the project's action node output key mappings so we can
+    // reconstruct per-node output snapshots from the final state.
+    let action_node_output_keys: HashMap<String, Vec<String>> = {
+        if let Ok(project_id) = uuid::Uuid::parse_str(&_id) {
+            let storage = app_state.storage.read().await;
+            if let Ok(project) = storage.get(project_id).await {
+                project
+                    .action_nodes
+                    .iter()
+                    .map(|(id, cfg)| (id.clone(), cfg.expected_output_keys()))
+                    .collect()
+            } else {
+                HashMap::new()
+            }
+        } else {
+            HashMap::new()
+        }
+    };
 
     let stream = async_stream::stream! {
         let Some(bin_path) = binary_path else {
@@ -472,7 +553,8 @@ pub async fn stream_handler(
         // but node_end events are deferred until we have the actual output state
         // from TRACE events (specifically StreamEvent::Done which has final state)
         let mut exec_ctx = ExecutionContext::new();
-        
+        exec_ctx.action_node_output_keys = action_node_output_keys;
+
         // Check if this is a webhook trigger (special input marker)
         let actual_input = if input == "__webhook__" {
             // Retrieve the webhook payload stored by the webhook trigger endpoint
@@ -481,7 +563,7 @@ pub async fn stream_handler(
                 exec_ctx.update_state("webhook_payload", webhook_payload.payload.clone());
                 exec_ctx.update_state("webhook_path", serde_json::Value::String(webhook_payload.path.clone()));
                 exec_ctx.update_state("webhook_method", serde_json::Value::String(webhook_payload.method.clone()));
-                
+
                 // Use the webhook payload as the input (serialized as JSON)
                 serde_json::to_string(&webhook_payload.payload).unwrap_or_else(|_| "{}".to_string())
             } else {
@@ -527,7 +609,7 @@ pub async fn stream_handler(
                 };
                 // Drain stderr silently
                 let _ = stderr_msg;
-                
+
                 match stdout_msg {
                     Some(line) => {
                         let trimmed = line.trim_start_matches("> ");
@@ -596,7 +678,7 @@ pub async fn stream_handler(
                     // Process TRACE events from adk-graph to extract state information
                     // This is where we get the actual output state for each agent
                     let (enriched_event, is_done, suppress_raw) = exec_ctx.process_stream_event(trace);
-                    
+
                     // Check for interrupt events (Task 9: Handle ADK-Graph Interrupts)
                     // Requirements: 3.1, 5.2
                     if let Some(interrupt_info) = exec_ctx.process_interrupt_event(trace) {
@@ -612,7 +694,7 @@ pub async fn stream_handler(
                             interrupt_info.state.clone(),
                             interrupt_info.step,
                         ).await;
-                        
+
                         // Emit interrupt event to frontend
                         let interrupt_event = serde_json::json!({
                             "type": "interrupt",
@@ -627,33 +709,33 @@ pub async fn stream_handler(
                                 .unwrap_or(0)
                         });
                         yield Ok(Event::default().event("interrupt").data(interrupt_event.to_string()));
-                        
+
                         // Don't break - the workflow is paused, waiting for user input
                         // The frontend will call the resume endpoint when ready
                     }
-                    
+
                     // Emit the enriched event (node_start/node_end with state_snapshot)
                     if let Some(event_json) = enriched_event {
                         yield Ok(Event::default().event("trace").data(event_json));
                     }
-                    
+
                     // If this is a Done event, emit all pending node_end events
                     // with the correct output state (now that we have it)
                     if is_done {
                         for event_json in exec_ctx.emit_pending_node_ends() {
                             yield Ok(Event::default().event("trace").data(event_json));
                         }
-                        
+
                         // Also pass through the original trace for backward compatibility
                         yield Ok(Event::default().event("trace").data(trace));
-                        
+
                         // For action-node-only workflows (no LLM response), emit end event here
                         // This ensures the UI knows the workflow completed
                         yield Ok(Event::default().event("trace").data(exec_ctx.done()));
                         yield Ok(Event::default().event("end").data(""));
                         break;
                     }
-                    
+
                     // Pass through the raw trace for backward compatibility,
                     // unless we already emitted an enriched version (suppress_raw)
                     if !suppress_raw {
@@ -668,7 +750,7 @@ pub async fn stream_handler(
                     // Update execution state with the response
                     exec_ctx.update_state("response", serde_json::Value::String(decoded.clone()));
                     yield Ok(Event::default().event("chunk").data(decoded));
-                    
+
                     // Emit any remaining pending node_end events with final state
                     // This handles the case where RESPONSE comes before/without Done event
                     if exec_ctx.has_pending_agents() {
@@ -676,7 +758,7 @@ pub async fn stream_handler(
                             yield Ok(Event::default().event("trace").data(event_json));
                         }
                     }
-                    
+
                     // Emit done event with final state snapshot (v2.0)
                     yield Ok(Event::default().event("trace").data(exec_ctx.done()));
                     yield Ok(Event::default().event("end").data(""));
@@ -701,11 +783,11 @@ pub async fn stream_handler(
                         exec_ctx.update_state(&format!("tool_{}", name), serde_json::Value::String(result.to_string()));
                         yield Ok(Event::default().event("tool_result").data(serde_json::json!({"name": name, "result": result}).to_string()));
                     } else if msg == "Starting agent execution" {
-                        // Emit node_start for sub-agent with state snapshot (v2.0)
-                        // This is emitted immediately so the UI can show the agent is running
-                        let agent = json.get("span").and_then(|s| s.get("agent.name")).and_then(|v| v.as_str()).unwrap_or("");
-                        let trace_data = exec_ctx.node_start(agent);
-                        yield Ok(Event::default().event("trace").data(trace_data));
+                        // Don't emit node_start here — the TRACE node_start event
+                        // from stdout will handle it in the correct execution order.
+                        // Emitting from stderr causes a race condition where the
+                        // chat_agent gets tracked before action nodes that execute
+                        // before it (e.g., set, transform).
                     } else if msg == "Agent execution complete" {
                         // Don't emit node_end here - we defer until we have actual output state
                         // The node_end will be emitted when we process the Done TRACE event
@@ -770,34 +852,30 @@ pub async fn send_resume_response(
     response: serde_json::Value,
 ) -> Result<(), String> {
     let mut sessions = SESSIONS.lock().await;
-    
+
     let session = sessions
         .get_mut(session_id)
         .ok_or_else(|| format!("Session '{}' not found", session_id))?;
-    
+
     // Format the response as a JSON string to send to the subprocess
     let response_str = serde_json::to_string(&response)
         .map_err(|e| format!("Failed to serialize response: {}", e))?;
-    
+
     // Send the response to the subprocess stdin
     session
         .stdin
         .write_all(format!("{}\n", response_str).as_bytes())
         .await
         .map_err(|e| format!("Failed to write to stdin: {}", e))?;
-    
-    session
-        .stdin
-        .flush()
-        .await
-        .map_err(|e| format!("Failed to flush stdin: {}", e))?;
-    
+
+    session.stdin.flush().await.map_err(|e| format!("Failed to flush stdin: {}", e))?;
+
     tracing::info!(
         session_id = %session_id,
         response = %response_str,
         "Sent resume response to subprocess"
     );
-    
+
     Ok(())
 }
 
@@ -819,7 +897,7 @@ pub async fn list_active_sessions() -> Vec<String> {
 // SSE endpoint for UI clients to receive webhook notifications.
 
 /// SSE endpoint for webhook notifications.
-/// 
+///
 /// The UI subscribes to this endpoint to receive real-time notifications
 /// when webhooks are triggered. This allows the UI to automatically
 /// start streaming the workflow execution.
@@ -835,10 +913,10 @@ pub async fn webhook_events_handler(
     let stream = async_stream::stream! {
         // Subscribe to webhook notifications for this project
         let mut receiver = crate::server::handlers::subscribe_webhook_notifications(&id).await;
-        
+
         // Send initial connection event
         yield Ok(Event::default().event("connected").data(format!("{{\"project_id\":\"{}\"}}", id)));
-        
+
         // Listen for webhook notifications
         loop {
             match receiver.recv().await {

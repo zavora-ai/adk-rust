@@ -90,11 +90,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Discovered {} tools with task support:", tools.len());
     for tool in &tools {
-        let long_running = if tool.is_long_running() {
-            " [LONG-RUNNING]"
-        } else {
-            ""
-        };
+        let long_running = if tool.is_long_running() { " [LONG-RUNNING]" } else { "" };
         println!("  - {}{}: {}", tool.name(), long_running, tool.description());
     }
     println!();
@@ -106,10 +102,8 @@ async fn main() -> anyhow::Result<()> {
     println!();
 
     // 5. Build agent
-    let mut builder = LlmAgentBuilder::new("mcp_task_support")
-        .model(model)
-        .instruction(
-            "You have access to MCP tools with task support enabled.\n\n\
+    let mut builder = LlmAgentBuilder::new("mcp_task_support").model(model).instruction(
+        "You have access to MCP tools with task support enabled.\n\n\
              Available tools:\n\
              - echo: Repeats a message\n\
              - add: Adds two numbers\n\
@@ -117,7 +111,7 @@ async fn main() -> anyhow::Result<()> {
              - getTime: Gets the current time\n\n\
              When using longRunningOperation, the system will automatically \
              poll for completion rather than blocking.",
-        );
+    );
 
     for tool in tools {
         builder = builder.tool(tool);

@@ -1,14 +1,14 @@
 use crate::a2ui::{
-    encode_jsonl, stable_child_id, stable_id, stable_indexed_id, A2uiMessage, A2uiSchemaVersion,
-    A2uiValidator, CreateSurface, CreateSurfaceMessage, UpdateComponents, UpdateComponentsMessage,
-    UpdateDataModel, UpdateDataModelMessage, text, column, row, image, divider,
+    A2uiMessage, A2uiSchemaVersion, A2uiValidator, CreateSurface, CreateSurfaceMessage,
+    UpdateComponents, UpdateComponentsMessage, UpdateDataModel, UpdateDataModelMessage, column,
+    divider, encode_jsonl, image, row, stable_child_id, stable_id, stable_indexed_id, text,
 };
 use crate::catalog_registry::CatalogRegistry;
 use adk_core::{Result, Tool, ToolContext};
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 fn default_surface_id() -> String {
@@ -118,13 +118,13 @@ impl Tool for RenderPageTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let params: RenderPageParams = serde_json::from_value(args.clone())
-            .map_err(|e| adk_core::AdkError::Tool(format!("Invalid parameters: {}. Got: {}", e, args)))?;
+        let params: RenderPageParams = serde_json::from_value(args.clone()).map_err(|e| {
+            adk_core::AdkError::Tool(format!("Invalid parameters: {}. Got: {}", e, args))
+        })?;
 
         let registry = CatalogRegistry::new();
-        let catalog_id = params
-            .catalog_id
-            .unwrap_or_else(|| registry.default_catalog_id().to_string());
+        let catalog_id =
+            params.catalog_id.unwrap_or_else(|| registry.default_catalog_id().to_string());
 
         let page_id = stable_id(&format!("page:{}:{}", params.surface_id, params.title));
         let mut components: Vec<Value> = Vec::new();
@@ -180,7 +180,7 @@ impl Tool for RenderPageTool {
                     let button_id = stable_indexed_id(&actions_id, "button", idx);
                     let label_id = stable_child_id(&button_id, "label");
                     components.push(text(&label_id, &action.label, None));
-                    
+
                     // Build button with action
                     let mut button_comp = json!({
                         "id": button_id,
@@ -195,14 +195,15 @@ impl Tool for RenderPageTool {
                             }
                         }
                     });
-                    
+
                     if let Some(variant) = &action.variant {
                         button_comp["component"]["Button"]["variant"] = json!(variant);
                     }
                     if let Some(context) = &action.context {
-                        button_comp["component"]["Button"]["action"]["event"]["context"] = context.clone();
+                        button_comp["component"]["Button"]["action"]["event"]["context"] =
+                            context.clone();
                     }
-                    
+
                     components.push(button_comp);
                     action_ids.push(button_id);
                 }
@@ -211,7 +212,8 @@ impl Tool for RenderPageTool {
                 section_children.push(actions_id);
             }
 
-            let section_children_str: Vec<&str> = section_children.iter().map(|s| s.as_str()).collect();
+            let section_children_str: Vec<&str> =
+                section_children.iter().map(|s| s.as_str()).collect();
             components.push(column(&section_id, section_children_str));
             root_children.push(section_id);
 
@@ -271,9 +273,8 @@ impl Tool for RenderPageTool {
             }
         }
 
-        let jsonl = encode_jsonl(messages).map_err(|e| {
-            adk_core::AdkError::Tool(format!("Failed to encode A2UI JSONL: {}", e))
-        })?;
+        let jsonl = encode_jsonl(messages)
+            .map_err(|e| adk_core::AdkError::Tool(format!("Failed to encode A2UI JSONL: {}", e)))?;
 
         Ok(Value::String(jsonl))
     }
@@ -293,10 +294,7 @@ mod tests {
 
     impl TestContext {
         fn new() -> Self {
-            Self {
-                content: Content::new("user"),
-                actions: Mutex::new(EventActions::default()),
-            }
+            Self { content: Content::new("user"), actions: Mutex::new(EventActions::default()) }
         }
     }
 
@@ -368,11 +366,8 @@ mod tests {
         let ctx: Arc<dyn ToolContext> = Arc::new(TestContext::new());
         let value = tool.execute(ctx, args).await.unwrap();
         let jsonl = value.as_str().unwrap();
-        let lines: Vec<Value> = jsonl
-            .trim_end()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
+        let lines: Vec<Value> =
+            jsonl.trim_end().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
 
         assert_eq!(lines.len(), 2);
         assert!(lines[0].get("createSurface").is_some());

@@ -1,5 +1,5 @@
-use crate::schema::*;
 use crate::a2ui::{stable_child_id, stable_id};
+use crate::schema::*;
 use adk_core::{Result, Tool, ToolContext};
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -244,10 +244,7 @@ mod tests {
 
     impl TestContext {
         fn new() -> Self {
-            Self {
-                content: Content::new("user"),
-                actions: Mutex::new(EventActions::default()),
-            }
+            Self { content: Content::new("user"), actions: Mutex::new(EventActions::default()) }
         }
     }
 

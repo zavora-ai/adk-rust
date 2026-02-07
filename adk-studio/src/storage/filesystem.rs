@@ -51,9 +51,9 @@ impl FileStorage {
         // Atomic write: write to temp file then rename to avoid corruption on crash
         let tmp_path = path.with_extension("json.tmp");
         fs::write(&tmp_path, content).await?;
-        fs::rename(&tmp_path, &path).await.with_context(|| {
-            format!("Failed to rename temp file to {}", path.display())
-        })?;
+        fs::rename(&tmp_path, &path)
+            .await
+            .with_context(|| format!("Failed to rename temp file to {}", path.display()))?;
         Ok(())
     }
 

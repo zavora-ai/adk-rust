@@ -155,7 +155,7 @@ export function CanvasToolbar({
       {/* Run is disabled when not built or during build */}
       {onRun && !isRunning && (
         <Tooltip 
-          content={isBuilding ? 'Build in progress...' : !isBuilt ? 'Build the project first to run' : 'Run the workflow'}
+          content={isBuilding ? 'Build in progress...' : !isBuilt ? 'Build the project first to run' : 'Run the workflow (F5)'}
           position="bottom"
           delay={100}
         >

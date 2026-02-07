@@ -34,10 +34,7 @@ impl StateSnapshot {
 
     /// Create a snapshot with only input state (for node_start events).
     pub fn with_input(input: serde_json::Value) -> Self {
-        Self {
-            input,
-            output: serde_json::Value::Object(Default::default()),
-        }
+        Self { input, output: serde_json::Value::Object(Default::default()) }
     }
 
     /// Extract top-level keys from the output state for data flow overlays.
@@ -387,11 +384,7 @@ impl TraceEventV2 {
             duration_ms: None,
             total_steps: None,
             state_snapshot: Some(snapshot),
-            state_keys: if state_keys.is_empty() {
-                None
-            } else {
-                Some(state_keys)
-            },
+            state_keys: if state_keys.is_empty() { None } else { Some(state_keys) },
             state: None,
         }
     }
@@ -413,17 +406,17 @@ impl TraceEventV2 {
             duration_ms: Some(duration_ms),
             total_steps: None,
             state_snapshot: Some(snapshot),
-            state_keys: if state_keys.is_empty() {
-                None
-            } else {
-                Some(state_keys)
-            },
+            state_keys: if state_keys.is_empty() { None } else { Some(state_keys) },
             state: None,
         }
     }
 
     /// Create a done event with final state snapshot.
-    pub fn done(total_steps: u32, input_state: serde_json::Value, output_state: serde_json::Value) -> Self {
+    pub fn done(
+        total_steps: u32,
+        input_state: serde_json::Value,
+        output_state: serde_json::Value,
+    ) -> Self {
         let snapshot = StateSnapshot::new(input_state, output_state);
         let state_keys = snapshot.extract_state_keys();
         Self {
@@ -433,18 +426,15 @@ impl TraceEventV2 {
             duration_ms: None,
             total_steps: Some(total_steps),
             state_snapshot: Some(snapshot),
-            state_keys: if state_keys.is_empty() {
-                None
-            } else {
-                Some(state_keys)
-            },
+            state_keys: if state_keys.is_empty() { None } else { Some(state_keys) },
             state: None,
         }
     }
 
     /// Create a state update event.
     pub fn state_update(output_state: serde_json::Value) -> Self {
-        let snapshot = StateSnapshot::new(serde_json::Value::Object(Default::default()), output_state);
+        let snapshot =
+            StateSnapshot::new(serde_json::Value::Object(Default::default()), output_state);
         let state_keys = snapshot.extract_state_keys();
         Self {
             event_type: "state".to_string(),
@@ -453,11 +443,7 @@ impl TraceEventV2 {
             duration_ms: None,
             total_steps: None,
             state_snapshot: Some(snapshot),
-            state_keys: if state_keys.is_empty() {
-                None
-            } else {
-                Some(state_keys)
-            },
+            state_keys: if state_keys.is_empty() { None } else { Some(state_keys) },
             state: None,
         }
     }
@@ -489,8 +475,7 @@ impl ExecutionStateTracker {
     /// Record node start and return the trace event.
     pub fn node_start(&mut self, node: &str) -> TraceEventV2 {
         self.step += 1;
-        self.node_start_times
-            .insert(node.to_string(), std::time::Instant::now());
+        self.node_start_times.insert(node.to_string(), std::time::Instant::now());
         let input_state = serde_json::to_value(&self.current_state).unwrap_or_default();
         TraceEventV2::node_start(node, self.step, input_state)
     }
@@ -518,11 +503,7 @@ impl ExecutionStateTracker {
     /// Record execution complete and return the done event.
     pub fn done(&self) -> TraceEventV2 {
         let output_state = serde_json::to_value(&self.current_state).unwrap_or_default();
-        TraceEventV2::done(
-            self.step,
-            serde_json::Value::Object(Default::default()),
-            output_state,
-        )
+        TraceEventV2::done(self.step, serde_json::Value::Object(Default::default()), output_state)
     }
 
     /// Update current state with new values.
@@ -629,8 +610,9 @@ mod tests {
             "risk_level": "high",
             "action": "Set 'approved' to true to continue"
         });
-        let event = InterruptEvent::new("review", "HIGH RISK: Human approval required", data.clone());
-        
+        let event =
+            InterruptEvent::new("review", "HIGH RISK: Human approval required", data.clone());
+
         assert_eq!(event.event_type, "interrupt");
         assert_eq!(event.node_id, "review");
         assert_eq!(event.message, "HIGH RISK: Human approval required");
@@ -657,7 +639,7 @@ mod tests {
     fn test_interrupt_response_event() {
         let response = serde_json::json!({ "approved": true, "comment": "Looks good" });
         let event = InterruptResponseEvent::new("review", response.clone());
-        
+
         assert_eq!(event.event_type, "interrupt_response");
         assert_eq!(event.node_id, "review");
         assert_eq!(event.response, response);
@@ -672,7 +654,7 @@ mod tests {
     #[test]
     fn test_resume_event() {
         let event = ResumeEvent::new("review");
-        
+
         assert_eq!(event.event_type, "resume");
         assert_eq!(event.node_id, "review");
         assert!(event.timestamp > 0);
@@ -695,9 +677,9 @@ mod tests {
                 "action": "Set 'approved' to true to continue"
             }),
         );
-        
+
         let parsed: serde_json::Value = serde_json::from_str(&interrupt.to_json()).unwrap();
-        
+
         // Verify required fields exist
         assert_eq!(parsed["type"], "interrupt");
         assert_eq!(parsed["node_id"], "review");

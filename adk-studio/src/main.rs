@@ -1,4 +1,6 @@
-use adk_studio::{AppState, FileStorage, api_routes, embedded, start_scheduler, cleanup_stale_sessions};
+use adk_studio::{
+    AppState, FileStorage, api_routes, cleanup_stale_sessions, embedded, start_scheduler,
+};
 use axum::{Router, extract::Path as AxumPath, routing::get};
 use std::net::SocketAddr;
 use std::path::PathBuf;

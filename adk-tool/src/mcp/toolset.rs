@@ -300,10 +300,7 @@ where
                     }
 
                     if !self.try_refresh_connection().await? {
-                        return Err(AdkError::Tool(format!(
-                            "Failed to list MCP tools: {}",
-                            error
-                        )));
+                        return Err(AdkError::Tool(format!("Failed to list MCP tools: {}", error)));
                     }
                     attempt += 1;
                 }
@@ -391,7 +388,10 @@ where
         Ok(true)
     }
 
-    async fn call_tool_with_retry(&self, params: CallToolRequestParams) -> Result<rmcp::model::CallToolResult> {
+    async fn call_tool_with_retry(
+        &self,
+        params: CallToolRequestParams,
+    ) -> Result<rmcp::model::CallToolResult> {
         let has_connection_factory = self.connection_factory.is_some();
         let mut attempt = 0u32;
 
@@ -447,10 +447,7 @@ where
     }
 
     /// Poll a task until completion or timeout
-    async fn poll_task(
-        &self,
-        task_id: &str,
-    ) -> std::result::Result<Value, TaskError> {
+    async fn poll_task(&self, task_id: &str) -> std::result::Result<Value, TaskError> {
         let start = Instant::now();
         let mut attempts = 0u32;
 
@@ -480,11 +477,7 @@ where
             tokio::time::sleep(self.task_config.poll_duration()).await;
             attempts += 1;
 
-            debug!(
-                task_id = task_id,
-                attempt = attempts,
-                "Polling MCP task status"
-            );
+            debug!(task_id = task_id, attempt = attempts, "Polling MCP task status");
 
             // Poll task status using tasks/get
             // Note: This requires the MCP server to support SEP-1686 task lifecycle
@@ -647,9 +640,7 @@ where
             }
         }
 
-        Err(TaskError::CreateFailed(
-            "No task_id in response".to_string(),
-        ))
+        Err(TaskError::CreateFailed("No task_id in response".to_string()))
     }
 }
 
@@ -683,10 +674,7 @@ where
         let use_task_mode = self.task_config.enable_tasks && self.is_long_running;
 
         if use_task_mode {
-            debug!(
-                tool = self.name,
-                "Executing tool in task mode (long-running)"
-            );
+            debug!(tool = self.name, "Executing tool in task mode (long-running)");
 
             // Create task request with task parameters
             let task_params = self.task_config.to_task_params();
@@ -713,16 +701,17 @@ where
                 .await?;
 
             // Extract task ID
-            let task_id = self.extract_task_id(&create_result).map_err(|e| {
-                AdkError::Tool(format!("Failed to get task ID: {}", e))
-            })?;
+            let task_id = self
+                .extract_task_id(&create_result)
+                .map_err(|e| AdkError::Tool(format!("Failed to get task ID: {}", e)))?;
 
             debug!(tool = self.name, task_id = task_id, "Task created, polling for completion");
 
             // Poll for completion
-            let result = self.poll_task(&task_id).await.map_err(|e| {
-                AdkError::Tool(format!("Task execution failed: {}", e))
-            })?;
+            let result = self
+                .poll_task(&task_id)
+                .await
+                .map_err(|e| AdkError::Tool(format!("Task execution failed: {}", e)))?;
 
             return Ok(result);
         }
@@ -849,11 +838,6 @@ mod tests {
     #[test]
     fn test_should_retry_mcp_operation_non_reconnectable_error() {
         let config = RefreshConfig::default().with_max_attempts(3);
-        assert!(!should_retry_mcp_operation(
-            "invalid arguments for tool",
-            0,
-            &config,
-            true
-        ));
+        assert!(!should_retry_mcp_operation("invalid arguments for tool", 0, &config, true));
     }
 }

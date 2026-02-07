@@ -239,12 +239,7 @@ pub struct PluginBuilder {
 impl PluginBuilder {
     /// Create a new plugin builder with the given name.
     pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            config: PluginConfig {
-                name: name.into(),
-                ..Default::default()
-            },
-        }
+        Self { config: PluginConfig { name: name.into(), ..Default::default() } }
     }
 
     /// Set the on_user_message callback.

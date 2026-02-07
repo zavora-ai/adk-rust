@@ -91,10 +91,7 @@ impl CatalogRegistry {
         catalog: &'static str,
         metadata: Option<&'static str>,
     ) -> &mut Self {
-        self.entries.insert(
-            catalog_id.into(),
-            CatalogEntry::Embedded { catalog, metadata },
-        );
+        self.entries.insert(catalog_id.into(), CatalogEntry::Embedded { catalog, metadata });
         self
     }
 
@@ -110,10 +107,9 @@ impl CatalogRegistry {
 
         match entry {
             CatalogEntry::Embedded { catalog, metadata } => {
-                let catalog_value: Value = serde_json::from_str(catalog)
-                    .map_err(|e| CatalogError::Json(e.to_string()))?;
-                let metadata_value = metadata
-                    .and_then(|raw| serde_json::from_str(raw).ok());
+                let catalog_value: Value =
+                    serde_json::from_str(catalog).map_err(|e| CatalogError::Json(e.to_string()))?;
+                let metadata_value = metadata.and_then(|raw| serde_json::from_str(raw).ok());
                 Ok(CatalogArtifact {
                     catalog_id: catalog_id.to_string(),
                     catalog: catalog_value,
@@ -124,15 +120,13 @@ impl CatalogRegistry {
             CatalogEntry::File { catalog_path, metadata_path } => {
                 let raw = std::fs::read_to_string(catalog_path)
                     .map_err(|e| CatalogError::Io(e.to_string()))?;
-                let catalog_value: Value = serde_json::from_str(&raw)
-                    .map_err(|e| CatalogError::Json(e.to_string()))?;
+                let catalog_value: Value =
+                    serde_json::from_str(&raw).map_err(|e| CatalogError::Json(e.to_string()))?;
 
                 let metadata_value = match metadata_path {
-                    Some(path) => {
-                        std::fs::read_to_string(path)
-                            .ok()
-                            .and_then(|s| serde_json::from_str(&s).ok())
-                    }
+                    Some(path) => std::fs::read_to_string(path)
+                        .ok()
+                        .and_then(|s| serde_json::from_str(&s).ok()),
                     None => None,
                 };
 
@@ -175,19 +169,14 @@ const DEFAULT_CATALOG_ID: &str = "zavora.ai:adk-ui/extended@0.2.0";
 
 #[cfg(feature = "remote-catalogs")]
 async fn fetch_remote_catalog(url: &str) -> Result<CatalogArtifact, CatalogError> {
-    let response = reqwest::get(url)
-        .await
-        .map_err(|e| CatalogError::Remote(e.to_string()))?;
+    let response = reqwest::get(url).await.map_err(|e| CatalogError::Remote(e.to_string()))?;
     let status = response.status();
     if !status.is_success() {
         return Err(CatalogError::Remote(format!("HTTP {}", status)));
     }
-    let text = response
-        .text()
-        .await
-        .map_err(|e| CatalogError::Remote(e.to_string()))?;
-    let catalog: Value = serde_json::from_str(&text)
-        .map_err(|e| CatalogError::Json(e.to_string()))?;
+    let text = response.text().await.map_err(|e| CatalogError::Remote(e.to_string()))?;
+    let catalog: Value =
+        serde_json::from_str(&text).map_err(|e| CatalogError::Json(e.to_string()))?;
 
     Ok(CatalogArtifact {
         catalog_id: url.to_string(),
