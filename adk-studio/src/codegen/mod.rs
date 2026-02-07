@@ -2576,6 +2576,406 @@ fn generate_action_node_function(
 
             code.push_str("    });\n\n");
         }
+        ActionNodeConfig::Database(config) => {
+            code.push_str(&format!("    // Action Node: {} (Database - {:?})\n", config.standard.name, config.db_type));
+            code.push_str(&format!("    let {}_node = adk_graph::node::FunctionNode::new(\"{}\", |ctx| async move {{\n", node_id, node_id));
+
+            let output_key = if config.standard.mapping.output_key.is_empty() {
+                "dbResult"
+            } else {
+                &config.standard.mapping.output_key
+            };
+
+            // Connection string with variable interpolation
+            let conn_str = &config.connection.connection_string;
+            if conn_str.contains("{{") {
+                code.push_str(&format!(
+                    "        let mut conn_str = \"{}\".to_string();\n",
+                    conn_str.replace('"', "\\\"")
+                ));
+                code.push_str("        for (k, v) in ctx.state.iter() {\n");
+                code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                code.push_str("            if let Some(s) = v.as_str() {\n");
+                code.push_str("                conn_str = conn_str.replace(&pattern, s);\n");
+                code.push_str("            } else {\n");
+                code.push_str("                conn_str = conn_str.replace(&pattern, &v.to_string());\n");
+                code.push_str("            }\n");
+                code.push_str("        }\n");
+            } else {
+                code.push_str(&format!(
+                    "        let conn_str = \"{}\".to_string();\n",
+                    conn_str.replace('"', "\\\"")
+                ));
+            }
+
+            // Also support credential_ref — override conn_str from state if ref is set
+            if let Some(cred_ref) = &config.connection.credential_ref {
+                if !cred_ref.is_empty() {
+                    code.push_str(&format!(
+                        "        let conn_str = ctx.state.get(\"{}\").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or(conn_str);\n",
+                        cred_ref
+                    ));
+                }
+            }
+
+            match config.db_type {
+                crate::codegen::action_node_types::DatabaseType::Postgresql
+                | crate::codegen::action_node_types::DatabaseType::Mysql
+                | crate::codegen::action_node_types::DatabaseType::Sqlite => {
+                    // SQL databases via sqlx
+                    if let Some(sql) = &config.sql {
+                        let query = &sql.query;
+                        // Interpolate {{variables}} in the query
+                        if query.contains("{{") {
+                            code.push_str(&format!(
+                                "        let mut query_str = \"{}\".to_string();\n",
+                                query.replace('"', "\\\"")
+                            ));
+                            code.push_str("        for (k, v) in ctx.state.iter() {\n");
+                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str("            if let Some(s) = v.as_str() {\n");
+                            code.push_str("                query_str = query_str.replace(&pattern, s);\n");
+                            code.push_str("            } else {\n");
+                            code.push_str("                query_str = query_str.replace(&pattern, &v.to_string());\n");
+                            code.push_str("            }\n");
+                            code.push_str("        }\n");
+                        } else {
+                            code.push_str(&format!(
+                                "        let query_str = \"{}\".to_string();\n",
+                                query.replace('"', "\\\"")
+                            ));
+                        }
+
+                        match config.db_type {
+                            crate::codegen::action_node_types::DatabaseType::Sqlite => {
+                                code.push_str("        let pool = sqlx::SqlitePool::connect(&conn_str).await\n");
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"SQLite connection failed: {}\", e)))?;\n");
+                            }
+                            crate::codegen::action_node_types::DatabaseType::Mysql => {
+                                code.push_str("        let pool = sqlx::MySqlPool::connect(&conn_str).await\n");
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"MySQL connection failed: {}\", e)))?;\n");
+                            }
+                            _ => {
+                                // PostgreSQL (default)
+                                code.push_str("        let pool = sqlx::PgPool::connect(&conn_str).await\n");
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"PostgreSQL connection failed: {}\", e)))?;\n");
+                            }
+                        }
+
+                        match sql.operation.as_str() {
+                            "query" => {
+                                // SELECT — returns rows as JSON array
+                                code.push_str("        let rows: Vec<serde_json::Value> = sqlx::query(&query_str)\n");
+                                code.push_str("            .fetch_all(&pool).await\n");
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"Query failed: {}\", e)))?\n");
+                                code.push_str("            .iter()\n");
+                                code.push_str("            .map(|row| {\n");
+                                code.push_str("                use sqlx::Row;\n");
+                                code.push_str("                let mut obj = serde_json::Map::new();\n");
+                                code.push_str("                for col in row.columns() {\n");
+                                code.push_str("                    let name = col.name().to_string();\n");
+                                code.push_str("                    let val: serde_json::Value = row.try_get::<String, _>(col.name())\n");
+                                code.push_str("                        .map(|s| json!(s))\n");
+                                code.push_str("                        .or_else(|_| row.try_get::<i64, _>(col.name()).map(|n| json!(n)))\n");
+                                code.push_str("                        .or_else(|_| row.try_get::<f64, _>(col.name()).map(|n| json!(n)))\n");
+                                code.push_str("                        .or_else(|_| row.try_get::<bool, _>(col.name()).map(|b| json!(b)))\n");
+                                code.push_str("                        .unwrap_or(json!(null));\n");
+                                code.push_str("                    obj.insert(name, val);\n");
+                                code.push_str("                }\n");
+                                code.push_str("                serde_json::Value::Object(obj)\n");
+                                code.push_str("            })\n");
+                                code.push_str("            .collect();\n");
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"rows\": rows, \"count\": rows.len() }})))\n",
+                                    output_key
+                                ));
+                            }
+                            _ => {
+                                // INSERT, UPDATE, DELETE, UPSERT — returns affected rows
+                                code.push_str("        let result = sqlx::query(&query_str)\n");
+                                code.push_str("            .execute(&pool).await\n");
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"Query failed: {}\", e)))?;\n");
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"affected\": result.rows_affected(), \"operation\": \"{}\" }})))\n",
+                                    output_key, sql.operation
+                                ));
+                            }
+                        }
+                    } else {
+                        code.push_str(&format!(
+                            "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"error\": true, \"message\": \"No SQL query configured\" }})))\n",
+                            output_key
+                        ));
+                    }
+                }
+                crate::codegen::action_node_types::DatabaseType::Mongodb => {
+                    if let Some(mongo) = &config.mongodb {
+                        code.push_str("        let client = mongodb::Client::with_uri_str(&conn_str).await\n");
+                        code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"MongoDB connection failed: {}\", e)))?;\n");
+                        // Extract database name from connection string
+                        code.push_str("        let db_name = conn_str.rsplit('/').next()\n");
+                        code.push_str("            .and_then(|s| s.split('?').next())\n");
+                        code.push_str("            .filter(|s| !s.is_empty())\n");
+                        code.push_str("            .unwrap_or(\"test\");\n");
+                        code.push_str("        let db = client.database(db_name);\n");
+                        code.push_str(&format!(
+                            "        let collection = db.collection::<mongodb::bson::Document>(\"{}\");\n",
+                            mongo.collection.replace('"', "\\\"")
+                        ));
+
+                        let filter_str = mongo.filter.as_ref()
+                            .map(|f| f.to_string())
+                            .unwrap_or_else(|| "{}".to_string());
+
+                        match mongo.operation.as_str() {
+                            "find" => {
+                                code.push_str(&format!(
+                                    "        let filter_json: serde_json::Value = serde_json::from_str(r#\"{}\"#).unwrap_or(json!({{}}));\n",
+                                    filter_str.replace('"', "\\\"")
+                                ));
+                                code.push_str("        let filter_doc = mongodb::bson::to_document(&filter_json).unwrap_or_default();\n");
+                                code.push_str("        use futures::TryStreamExt;\n");
+                                code.push_str("        let mut cursor = collection.find(filter_doc).await\n");
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"MongoDB find failed: {}\", e)))?;\n");
+                                code.push_str("        let mut docs: Vec<serde_json::Value> = Vec::new();\n");
+                                code.push_str("        while let Some(doc) = cursor.try_next().await\n");
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"Cursor error: {}\", e)))? {\n");
+                                code.push_str("            if let Ok(json) = mongodb::bson::from_document::<serde_json::Value>(doc) {\n");
+                                code.push_str("                docs.push(json);\n");
+                                code.push_str("            }\n");
+                                code.push_str("        }\n");
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"docs\": docs, \"count\": docs.len() }})))\n",
+                                    output_key
+                                ));
+                            }
+                            "findOne" => {
+                                code.push_str(&format!(
+                                    "        let filter_json: serde_json::Value = serde_json::from_str(r#\"{}\"#).unwrap_or(json!({{}}));\n",
+                                    filter_str.replace('"', "\\\"")
+                                ));
+                                code.push_str("        let filter_doc = mongodb::bson::to_document(&filter_json).unwrap_or_default();\n");
+                                code.push_str("        let result = collection.find_one(filter_doc).await\n");
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"MongoDB findOne failed: {}\", e)))?;\n");
+                                code.push_str("        let doc_json = result.map(|d| mongodb::bson::from_document::<serde_json::Value>(d).unwrap_or(json!(null))).unwrap_or(json!(null));\n");
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"doc\": doc_json }})))\n",
+                                    output_key
+                                ));
+                            }
+                            "insert" => {
+                                let doc_str = mongo.document.as_ref()
+                                    .map(|d| d.to_string())
+                                    .unwrap_or_else(|| "{}".to_string());
+                                code.push_str(&format!(
+                                    "        let doc_json: serde_json::Value = serde_json::from_str(r#\"{}\"#).unwrap_or(json!({{}}));\n",
+                                    doc_str.replace('"', "\\\"")
+                                ));
+                                code.push_str("        let doc = mongodb::bson::to_document(&doc_json).unwrap_or_default();\n");
+                                code.push_str("        let result = collection.insert_one(doc).await\n");
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"MongoDB insert failed: {}\", e)))?;\n");
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"inserted_id\": result.inserted_id.to_string() }})))\n",
+                                    output_key
+                                ));
+                            }
+                            "update" => {
+                                code.push_str(&format!(
+                                    "        let filter_json: serde_json::Value = serde_json::from_str(r#\"{}\"#).unwrap_or(json!({{}}));\n",
+                                    filter_str.replace('"', "\\\"")
+                                ));
+                                code.push_str("        let filter_doc = mongodb::bson::to_document(&filter_json).unwrap_or_default();\n");
+                                let doc_str = mongo.document.as_ref()
+                                    .map(|d| d.to_string())
+                                    .unwrap_or_else(|| "{}".to_string());
+                                code.push_str(&format!(
+                                    "        let update_json: serde_json::Value = serde_json::from_str(r#\"{}\"#).unwrap_or(json!({{}}));\n",
+                                    doc_str.replace('"', "\\\"")
+                                ));
+                                code.push_str("        let update_doc = mongodb::bson::to_document(&update_json).unwrap_or_default();\n");
+                                code.push_str("        let result = collection.update_many(filter_doc, update_doc).await\n");
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"MongoDB update failed: {}\", e)))?;\n");
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"matched\": result.matched_count, \"modified\": result.modified_count }})))\n",
+                                    output_key
+                                ));
+                            }
+                            "delete" => {
+                                code.push_str(&format!(
+                                    "        let filter_json: serde_json::Value = serde_json::from_str(r#\"{}\"#).unwrap_or(json!({{}}));\n",
+                                    filter_str.replace('"', "\\\"")
+                                ));
+                                code.push_str("        let filter_doc = mongodb::bson::to_document(&filter_json).unwrap_or_default();\n");
+                                code.push_str("        let result = collection.delete_many(filter_doc).await\n");
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"MongoDB delete failed: {}\", e)))?;\n");
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"deleted\": result.deleted_count }})))\n",
+                                    output_key
+                                ));
+                            }
+                            _ => {
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"error\": true, \"message\": \"Unknown MongoDB operation\" }})))\n",
+                                    output_key
+                                ));
+                            }
+                        }
+                    } else {
+                        code.push_str(&format!(
+                            "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"error\": true, \"message\": \"No MongoDB config\" }})))\n",
+                            output_key
+                        ));
+                    }
+                }
+                crate::codegen::action_node_types::DatabaseType::Redis => {
+                    if let Some(redis_cfg) = &config.redis {
+                        code.push_str("        let client = redis::Client::open(conn_str.as_str())\n");
+                        code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"Redis connection failed: {}\", e)))?;\n");
+                        code.push_str("        let mut con = client.get_multiplexed_async_connection().await\n");
+                        code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"Redis connect failed: {}\", e)))?;\n");
+
+                        // Key with variable interpolation
+                        let key = &redis_cfg.key;
+                        if key.contains("{{") {
+                            code.push_str(&format!(
+                                "        let mut redis_key = \"{}\".to_string();\n",
+                                key.replace('"', "\\\"")
+                            ));
+                            code.push_str("        for (k, v) in ctx.state.iter() {\n");
+                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str("            if let Some(s) = v.as_str() {\n");
+                            code.push_str("                redis_key = redis_key.replace(&pattern, s);\n");
+                            code.push_str("            }\n");
+                            code.push_str("        }\n");
+                        } else {
+                            code.push_str(&format!(
+                                "        let redis_key = \"{}\".to_string();\n",
+                                key.replace('"', "\\\"")
+                            ));
+                        }
+
+                        code.push_str("        use redis::AsyncCommands;\n");
+
+                        match redis_cfg.operation.as_str() {
+                            "get" => {
+                                code.push_str("        let val: Option<String> = con.get(&redis_key).await\n");
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"Redis GET failed: {}\", e)))?;\n");
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"value\": val }})))\n",
+                                    output_key
+                                ));
+                            }
+                            "set" => {
+                                let val_str = redis_cfg.value.as_ref()
+                                    .map(|v| match v {
+                                        serde_json::Value::String(s) => s.clone(),
+                                        other => other.to_string(),
+                                    })
+                                    .unwrap_or_default();
+                                code.push_str(&format!(
+                                    "        let val = \"{}\";\n",
+                                    val_str.replace('"', "\\\"")
+                                ));
+                                if let Some(ttl) = redis_cfg.ttl {
+                                    code.push_str(&format!(
+                                        "        let _: () = con.set_ex(&redis_key, val, {}).await\n",
+                                        ttl
+                                    ));
+                                } else {
+                                    code.push_str("        let _: () = con.set(&redis_key, val).await\n");
+                                }
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"Redis SET failed: {}\", e)))?;\n");
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"set\": true, \"key\": redis_key }})))\n",
+                                    output_key
+                                ));
+                            }
+                            "del" => {
+                                code.push_str("        let deleted: i64 = con.del(&redis_key).await\n");
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"Redis DEL failed: {}\", e)))?;\n");
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"deleted\": deleted }})))\n",
+                                    output_key
+                                ));
+                            }
+                            "hget" => {
+                                // For HGET, use value as field name
+                                let field = redis_cfg.value.as_ref()
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("field");
+                                code.push_str(&format!(
+                                    "        let val: Option<String> = con.hget(&redis_key, \"{}\").await\n",
+                                    field.replace('"', "\\\"")
+                                ));
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"Redis HGET failed: {}\", e)))?;\n");
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"value\": val }})))\n",
+                                    output_key
+                                ));
+                            }
+                            "hset" => {
+                                let val_str = redis_cfg.value.as_ref()
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_else(|| "{}".to_string());
+                                code.push_str(&format!(
+                                    "        let fields: serde_json::Value = serde_json::from_str(r#\"{}\"#).unwrap_or(json!({{}}));\n",
+                                    val_str.replace('"', "\\\"")
+                                ));
+                                code.push_str("        if let Some(obj) = fields.as_object() {\n");
+                                code.push_str("            for (field, val) in obj {\n");
+                                code.push_str("                let val_str = val.as_str().map(|s| s.to_string()).unwrap_or_else(|| val.to_string());\n");
+                                code.push_str("                let _: () = con.hset(&redis_key, field, &val_str).await\n");
+                                code.push_str("                    .map_err(|e| adk_graph::node::NodeError::Other(format!(\"Redis HSET failed: {}\", e)))?;\n");
+                                code.push_str("            }\n");
+                                code.push_str("        }\n");
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"set\": true, \"key\": redis_key }})))\n",
+                                    output_key
+                                ));
+                            }
+                            "lpush" => {
+                                let val_str = redis_cfg.value.as_ref()
+                                    .map(|v| match v {
+                                        serde_json::Value::String(s) => s.clone(),
+                                        other => other.to_string(),
+                                    })
+                                    .unwrap_or_default();
+                                code.push_str(&format!(
+                                    "        let len: i64 = con.lpush(&redis_key, \"{}\").await\n",
+                                    val_str.replace('"', "\\\"")
+                                ));
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"Redis LPUSH failed: {}\", e)))?;\n");
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"length\": len }})))\n",
+                                    output_key
+                                ));
+                            }
+                            "rpop" => {
+                                code.push_str("        let val: Option<String> = con.rpop(&redis_key, None).await\n");
+                                code.push_str("            .map_err(|e| adk_graph::node::NodeError::Other(format!(\"Redis RPOP failed: {}\", e)))?;\n");
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"value\": val }})))\n",
+                                    output_key
+                                ));
+                            }
+                            _ => {
+                                code.push_str(&format!(
+                                    "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"error\": true, \"message\": \"Unknown Redis operation\" }})))\n",
+                                    output_key
+                                ));
+                            }
+                        }
+                    } else {
+                        code.push_str(&format!(
+                            "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"error\": true, \"message\": \"No Redis config\" }})))\n",
+                            output_key
+                        ));
+                    }
+                }
+            }
+
+            code.push_str("    });\n\n");
+        }
         // Other action node types can be added here
         _ => {
             // For unsupported action nodes, generate a pass-through node
@@ -2622,6 +3022,29 @@ fn generate_cargo_toml(project: &ProjectSchema) -> String {
     };
     let needs_lettre = code_uses("lettre::");
     let needs_base64 = code_uses("base64::");
+
+    // Database dependencies based on action node db_type
+    let (needs_sqlx_pg, needs_sqlx_mysql, needs_sqlx_sqlite, needs_mongodb, needs_redis) = {
+        use crate::codegen::action_nodes::ActionNodeConfig;
+        use crate::codegen::action_node_types::DatabaseType;
+        let mut pg = false;
+        let mut mysql = false;
+        let mut sqlite = false;
+        let mut mongo = false;
+        let mut redis = false;
+        for node in project.action_nodes.values() {
+            if let ActionNodeConfig::Database(cfg) = node {
+                match cfg.db_type {
+                    DatabaseType::Postgresql => pg = true,
+                    DatabaseType::Mysql => mysql = true,
+                    DatabaseType::Sqlite => sqlite = true,
+                    DatabaseType::Mongodb => mongo = true,
+                    DatabaseType::Redis => redis = true,
+                }
+            }
+        }
+        (pg, mysql, sqlite, mongo, redis)
+    };
 
     // Use path dependencies in dev mode, version dependencies in prod
     let use_path_deps = std::env::var("ADK_DEV_MODE").is_ok();
@@ -2679,6 +3102,23 @@ uuid = {{ version = "1", features = ["v4"] }}
     }
     if needs_base64 {
         deps.push_str("base64 = \"0.21\"\n");
+    }
+
+    // Database dependencies
+    let needs_sqlx = needs_sqlx_pg || needs_sqlx_mysql || needs_sqlx_sqlite;
+    if needs_sqlx {
+        let mut sqlx_features = vec!["runtime-tokio"];
+        if needs_sqlx_pg { sqlx_features.push("postgres"); }
+        if needs_sqlx_mysql { sqlx_features.push("mysql"); }
+        if needs_sqlx_sqlite { sqlx_features.push("sqlite"); }
+        let features_str = sqlx_features.iter().map(|f| format!("\"{}\"", f)).collect::<Vec<_>>().join(", ");
+        deps.push_str(&format!("sqlx = {{ version = \"0.8\", features = [{}] }}\n", features_str));
+    }
+    if needs_mongodb {
+        deps.push_str("mongodb = \"3\"\nfutures = \"0.3\"\n");
+    }
+    if needs_redis {
+        deps.push_str("redis = { version = \"0.27\", features = [\"tokio-comp\"] }\n");
     }
 
     // Add rmcp if any agent uses MCP (handles mcp, mcp_1, mcp_2, etc.)
