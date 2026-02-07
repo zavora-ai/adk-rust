@@ -409,3 +409,91 @@ async fn test_run_path_honors_ui_protocol_header() {
     let body_str = String::from_utf8(body.to_vec()).unwrap();
     assert!(body_str.contains("\"ui_protocol\":\"mcp_apps\""));
 }
+
+#[tokio::test]
+async fn test_ui_resources_register_list_and_read() {
+    let config =
+        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(MockSessionService));
+    let app = create_app(config);
+
+    let register_body = serde_json::json!({
+        "uri": "ui://tests/surface-1",
+        "name": "test-surface",
+        "mimeType": "text/html;profile=mcp-app",
+        "text": "<html><body>surface</body></html>",
+        "_meta": {
+            "ui": {
+                "domain": "https://example.com"
+            }
+        }
+    });
+
+    let register_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/ui/resources/register")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&register_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(register_response.status(), StatusCode::CREATED);
+
+    let list_response = app
+        .clone()
+        .oneshot(Request::builder().uri("/api/ui/resources").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let list_body = axum::body::to_bytes(list_response.into_body(), usize::MAX).await.unwrap();
+    let list_json: serde_json::Value = serde_json::from_slice(&list_body).unwrap();
+    assert!(list_json["resources"].as_array().unwrap().iter().any(|resource| {
+        resource["uri"] == "ui://tests/surface-1"
+            && resource["mimeType"] == "text/html;profile=mcp-app"
+    }));
+
+    let read_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/ui/resources/read?uri=ui://tests/surface-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(read_response.status(), StatusCode::OK);
+    let read_body = axum::body::to_bytes(read_response.into_body(), usize::MAX).await.unwrap();
+    let read_json: serde_json::Value = serde_json::from_slice(&read_body).unwrap();
+    assert_eq!(read_json["contents"][0]["uri"], "ui://tests/surface-1");
+    assert_eq!(read_json["contents"][0]["mimeType"], "text/html;profile=mcp-app");
+}
+
+#[tokio::test]
+async fn test_ui_resources_reject_invalid_uri() {
+    let config =
+        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(MockSessionService));
+    let app = create_app(config);
+
+    let register_body = serde_json::json!({
+        "uri": "http://invalid-uri",
+        "name": "test-surface",
+        "mimeType": "text/html;profile=mcp-app",
+        "text": "<html><body>surface</body></html>"
+    });
+
+    let register_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/ui/resources/register")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&register_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(register_response.status(), StatusCode::BAD_REQUEST);
+}
