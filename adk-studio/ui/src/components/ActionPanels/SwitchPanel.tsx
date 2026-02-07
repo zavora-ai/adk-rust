@@ -39,9 +39,9 @@ const EVALUATION_MODE_CONFIG: Record<EvaluationMode, {
     icon: '1️⃣',
   },
   all_match: {
-    label: 'All Match',
-    description: 'Evaluate all conditions (multi-output)',
-    icon: '🔢',
+    label: 'All Match (Fan Out)',
+    description: 'Execute all branches in parallel',
+    icon: '🔀',
   },
 };
 

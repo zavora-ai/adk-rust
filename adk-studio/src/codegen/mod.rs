@@ -422,12 +422,13 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
     let top_level: Vec<_> =
         project.agents.keys().filter(|id| !all_sub_agents.contains(*id)).collect();
 
-    // Build predecessor map from workflow edges
-    // This tells us what node comes before each node in the workflow
+    // Build predecessor map from workflow edges (multi-predecessor for fan-in/merge support)
+    // This tells us what node(s) come before each node in the workflow.
     //
     // IMPORTANT: We must skip back-edges (edges TO loop nodes that create cycles)
     // to avoid infinite loops when walking the predecessor chain.
     use crate::codegen::action_nodes::ActionNodeConfig;
+    use crate::codegen::action_nodes::EvaluationMode;
     let loop_node_ids: std::collections::HashSet<&str> = project
         .action_nodes
         .iter()
@@ -435,7 +436,7 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
         .map(|(id, _)| id.as_str())
         .collect();
 
-    let mut predecessor_map: std::collections::HashMap<&str, &str> =
+    let mut predecessor_map: std::collections::HashMap<&str, Vec<&str>> =
         std::collections::HashMap::new();
     for edge in &project.workflow.edges {
         // Skip trigger nodes - they're entry points, not execution nodes
@@ -451,26 +452,30 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
             && !edge.from.is_empty()
             && project.action_nodes.get(&edge.from).map(|n| !matches!(n, ActionNodeConfig::Loop(_))).unwrap_or(true)
             && !project.workflow.edges.iter().any(|e2| e2.from == edge.to && e2.to == edge.from);
-        // ^ A back-edge is an edge TO a loop node from a non-loop node that isn't the
-        //   direct forward edge. We detect it by checking: the target is a loop node,
-        //   and the source is not the node that the loop feeds into.
 
         if from_is_trigger || is_back_edge {
             continue;
         }
 
         if edge.from != "START" && edge.to != "END" {
-            predecessor_map.insert(edge.to.as_str(), edge.from.as_str());
+            let preds = predecessor_map.entry(edge.to.as_str()).or_default();
+            if !preds.contains(&edge.from.as_str()) {
+                preds.push(edge.from.as_str());
+            }
         } else if edge.from == "START" {
-            // START connects to first node - mark it as having no predecessor (reads from "message")
-            predecessor_map.insert(edge.to.as_str(), "START");
+            let preds = predecessor_map.entry(edge.to.as_str()).or_default();
+            if !preds.contains(&"START") {
+                preds.push("START");
+            }
         }
     }
 
     // Generate all agent nodes with their predecessors
     for agent_id in &top_level {
         if let Some(agent) = project.agents.get(*agent_id) {
-            let predecessor = predecessor_map.get(agent_id.as_str()).copied();
+            // Get first predecessor for backward compat (most nodes have exactly one)
+            let predecessors = predecessor_map.get(agent_id.as_str());
+            let first_predecessor = predecessors.and_then(|v| v.first().copied());
             match agent.agent_type {
                 AgentType::Router => {
                     code.push_str(&generate_router_node(agent_id, agent));
@@ -480,7 +485,7 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
                         agent_id,
                         agent,
                         project,
-                        predecessor,
+                        first_predecessor,
                         &predecessor_map,
                     ));
                 }
@@ -508,19 +513,79 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
     // Build graph
     code.push_str("    // Build the graph\n");
 
-    // Collect additional state channels needed by loop nodes
+    // Collect additional state channels needed by action nodes
+    // Every key that an action node writes to must be registered as a channel
     let mut extra_channels: Vec<String> = Vec::new();
-    for (loop_id, node) in &project.action_nodes {
-        if let ActionNodeConfig::Loop(config) = node {
-            extra_channels.push(format!("{}_loop_index", loop_id));
-            extra_channels.push(format!("{}_loop_done", loop_id));
-            if let Some(fe) = &config.for_each {
-                extra_channels.push(fe.item_var.clone());
-                extra_channels.push(fe.index_var.clone());
+    for (node_id, node) in &project.action_nodes {
+        match node {
+            ActionNodeConfig::Set(config) => {
+                // Set nodes produce one channel per variable
+                for var in &config.variables {
+                    if !extra_channels.contains(&var.key) {
+                        extra_channels.push(var.key.clone());
+                    }
+                }
             }
-            if config.results.collect {
-                let agg_key = config.results.aggregation_key.as_deref().unwrap_or("loop_results");
-                extra_channels.push(agg_key.to_string());
+            ActionNodeConfig::Transform(config) => {
+                // Transform nodes produce a single output channel
+                let key = &config.standard.mapping.output_key;
+                if !key.is_empty() && !extra_channels.contains(key) {
+                    extra_channels.push(key.clone());
+                }
+            }
+            ActionNodeConfig::Switch(config) => {
+                // Switch nodes produce a branch key channel
+                let key = if config.standard.mapping.output_key.is_empty() {
+                    "branch".to_string()
+                } else {
+                    config.standard.mapping.output_key.clone()
+                };
+                if !extra_channels.contains(&key) {
+                    extra_channels.push(key);
+                }
+            }
+            ActionNodeConfig::Loop(config) => {
+                extra_channels.push(format!("{}_loop_index", node_id));
+                extra_channels.push(format!("{}_loop_done", node_id));
+                if let Some(fe) = &config.for_each {
+                    if !extra_channels.contains(&fe.item_var) {
+                        extra_channels.push(fe.item_var.clone());
+                    }
+                    if !extra_channels.contains(&fe.index_var) {
+                        extra_channels.push(fe.index_var.clone());
+                    }
+                }
+                if config.results.collect {
+                    let agg_key = config.results.aggregation_key.as_deref().unwrap_or("loop_results");
+                    if !extra_channels.contains(&agg_key.to_string()) {
+                        extra_channels.push(agg_key.to_string());
+                    }
+                }
+            }
+            ActionNodeConfig::Merge(config) => {
+                let key = if config.standard.mapping.output_key.is_empty() {
+                    "merged".to_string()
+                } else {
+                    config.standard.mapping.output_key.clone()
+                };
+                if !extra_channels.contains(&key) {
+                    extra_channels.push(key);
+                }
+                // Also add branch keys as channels (they're read from state)
+                if let Some(keys) = &config.branch_keys {
+                    for k in keys {
+                        if !extra_channels.contains(k) {
+                            extra_channels.push(k.clone());
+                        }
+                    }
+                }
+            }
+            _ => {
+                // Other action nodes: register their output_key if set
+                let key = &node.standard().mapping.output_key;
+                if !key.is_empty() && !extra_channels.contains(key) {
+                    extra_channels.push(key.clone());
+                }
             }
         }
     }
@@ -563,11 +628,31 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
     };
 
     // Collect switch node IDs so we can handle their edges specially
+    // Separate first_match (conditional routing) from all_match (fan-out)
     let switch_nodes: std::collections::HashSet<&str> = project
         .action_nodes
         .iter()
         .filter(|(_, n)| matches!(n, ActionNodeConfig::Switch(_)))
         .map(|(id, _)| id.as_str())
+        .collect();
+
+    let all_match_switch_nodes: std::collections::HashSet<&str> = project
+        .action_nodes
+        .iter()
+        .filter(|(_, n)| {
+            if let ActionNodeConfig::Switch(config) = n {
+                config.evaluation_mode == EvaluationMode::AllMatch
+            } else {
+                false
+            }
+        })
+        .map(|(id, _)| id.as_str())
+        .collect();
+
+    let first_match_switch_nodes: std::collections::HashSet<&str> = switch_nodes
+        .iter()
+        .filter(|id| !all_match_switch_nodes.contains(*id))
+        .copied()
         .collect();
 
     // Collect loop node IDs so we can handle their edges specially
@@ -578,11 +663,12 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
         .map(|(id, _)| id.as_str())
         .collect();
 
-    // Build a map of switch_node_id -> Vec<(from_port, target_node)> from edges
+    // Build a map of first_match switch_node_id -> Vec<(from_port, target_node)> from edges
+    // all_match switches use direct edges (fan-out), so they're NOT in this map
     let mut switch_edge_map: std::collections::HashMap<&str, Vec<(String, String)>> =
         std::collections::HashMap::new();
     for edge in &project.workflow.edges {
-        if switch_nodes.contains(edge.from.as_str()) {
+        if first_match_switch_nodes.contains(edge.from.as_str()) {
             let port = edge.from_port.clone().unwrap_or_default();
             let target = if edge.to == "END" {
                 "END".to_string()
@@ -653,8 +739,9 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
             continue;
         }
 
-        // Skip individual edges FROM switch nodes - they'll be handled as conditional edges
-        if switch_nodes.contains(edge.from.as_str()) {
+        // Skip individual edges FROM first_match switch nodes - they'll be handled as conditional edges
+        // all_match switch nodes use regular direct edges for fan-out
+        if first_match_switch_nodes.contains(edge.from.as_str()) {
             continue;
         }
 
@@ -925,7 +1012,7 @@ fn generate_llm_node_v2(
     agent: &AgentSchema,
     project: &ProjectSchema,
     predecessor: Option<&str>,
-    predecessor_map: &std::collections::HashMap<&str, &str>,
+    predecessor_map: &std::collections::HashMap<&str, Vec<&str>>,
 ) -> String {
     let mut code = String::new();
     let model = agent.model.as_deref().unwrap_or("gemini-2.0-flash");
@@ -1089,13 +1176,26 @@ fn generate_llm_node_v2(
 
     // Check if any predecessor in the chain is a Set or Transform action node
     // Walk backwards through the predecessor chain to find all Set nodes that feed into this agent
+    // Supports multiple predecessors (fan-in from merge/parallel branches)
     {
         use crate::codegen::action_nodes::ActionNodeConfig;
-        let mut current = predecessor;
+        let mut queue: Vec<&str> = if let Some(pred) = predecessor {
+            vec![pred]
+        } else {
+            vec![]
+        };
+        // Also add any additional predecessors (fan-in)
+        if let Some(preds) = predecessor_map.get(id) {
+            for p in preds {
+                if !queue.contains(p) {
+                    queue.push(p);
+                }
+            }
+        }
         let mut visited_preds = std::collections::HashSet::new();
-        while let Some(pred_id) = current {
+        while let Some(pred_id) = queue.pop() {
             if pred_id == "START" || visited_preds.contains(pred_id) {
-                break;
+                continue;
             }
             visited_preds.insert(pred_id);
             if let Some(action_node) = project.action_nodes.get(pred_id) {
@@ -1113,11 +1213,28 @@ fn generate_llm_node_v2(
                             inject_vars.push(out_key.clone());
                         }
                     }
+                    ActionNodeConfig::Merge(merge_config) => {
+                        // Merge node output key contains the combined result
+                        let out_key = if merge_config.standard.mapping.output_key.is_empty() {
+                            "merged".to_string()
+                        } else {
+                            merge_config.standard.mapping.output_key.clone()
+                        };
+                        if !inject_vars.contains(&out_key) {
+                            inject_vars.push(out_key);
+                        }
+                    }
                     _ => {}
                 }
             }
-            // Walk to the next predecessor
-            current = predecessor_map.get(pred_id).copied();
+            // Walk to all predecessors of this node
+            if let Some(preds) = predecessor_map.get(pred_id) {
+                for p in preds {
+                    if !visited_preds.contains(*p) {
+                        queue.push(p);
+                    }
+                }
+            }
         }
     }
 
@@ -1430,6 +1547,164 @@ fn to_pascal_case(s: &str) -> String {
 }
 
 /// Generate a graph node function for an action node (Set, Transform, etc.)
+/// Helper: generate a condition check for first_match Switch (sets matched_branch)
+fn generate_condition_check(code: &mut String, op: &str, value_str: &str, port: &str, field: &str) {
+    let escaped_val = value_str.replace('"', "\\\"");
+    match op {
+        "equals" | "==" | "eq" => {
+            code.push_str(&format!(
+                "            if field_val == \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
+                escaped_val, port
+            ));
+        }
+        "not_equals" | "!=" | "neq" => {
+            code.push_str(&format!(
+                "            if field_val != \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
+                escaped_val, port
+            ));
+        }
+        "contains" => {
+            code.push_str(&format!(
+                "            if field_val.contains(\"{}\") {{ matched_branch = Some(\"{}\"); }}\n",
+                escaped_val, port
+            ));
+        }
+        "greater_than" | ">" | "gt" => {
+            code.push_str(&format!(
+                "            if field_val > \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
+                escaped_val, port
+            ));
+        }
+        "less_than" | "<" | "lt" => {
+            code.push_str(&format!(
+                "            if field_val < \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
+                escaped_val, port
+            ));
+        }
+        "gte" | ">=" => {
+            code.push_str(&format!(
+                "            if field_val >= \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
+                escaped_val, port
+            ));
+        }
+        "lte" | "<=" => {
+            code.push_str(&format!(
+                "            if field_val <= \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
+                escaped_val, port
+            ));
+        }
+        "startsWith" => {
+            code.push_str(&format!(
+                "            if field_val.starts_with(\"{}\") {{ matched_branch = Some(\"{}\"); }}\n",
+                escaped_val, port
+            ));
+        }
+        "endsWith" => {
+            code.push_str(&format!(
+                "            if field_val.ends_with(\"{}\") {{ matched_branch = Some(\"{}\"); }}\n",
+                escaped_val, port
+            ));
+        }
+        "empty" => {
+            code.push_str(&format!(
+                "            if field_val.is_empty() {{ matched_branch = Some(\"{}\"); }}\n",
+                port
+            ));
+        }
+        "exists" => {
+            code.push_str(&format!(
+                "            if ctx.state.contains_key(\"{}\") {{ matched_branch = Some(\"{}\"); }}\n",
+                field, port
+            ));
+        }
+        _ => {
+            code.push_str(&format!(
+                "            if field_val == \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
+                escaped_val, port
+            ));
+        }
+    }
+}
+
+/// Helper: generate a condition check for all_match Switch (pushes to matched_branches vec)
+fn generate_all_match_condition_check(code: &mut String, op: &str, value_str: &str, port: &str, field: &str) {
+    let escaped_val = value_str.replace('"', "\\\"");
+    match op {
+        "equals" | "==" | "eq" => {
+            code.push_str(&format!(
+                "            if field_val == \"{}\" {{ matched_branches.push(\"{}\".to_string()); }}\n",
+                escaped_val, port
+            ));
+        }
+        "not_equals" | "!=" | "neq" => {
+            code.push_str(&format!(
+                "            if field_val != \"{}\" {{ matched_branches.push(\"{}\".to_string()); }}\n",
+                escaped_val, port
+            ));
+        }
+        "contains" => {
+            code.push_str(&format!(
+                "            if field_val.contains(\"{}\") {{ matched_branches.push(\"{}\".to_string()); }}\n",
+                escaped_val, port
+            ));
+        }
+        "greater_than" | ">" | "gt" => {
+            code.push_str(&format!(
+                "            if field_val > \"{}\" {{ matched_branches.push(\"{}\".to_string()); }}\n",
+                escaped_val, port
+            ));
+        }
+        "less_than" | "<" | "lt" => {
+            code.push_str(&format!(
+                "            if field_val < \"{}\" {{ matched_branches.push(\"{}\".to_string()); }}\n",
+                escaped_val, port
+            ));
+        }
+        "gte" | ">=" => {
+            code.push_str(&format!(
+                "            if field_val >= \"{}\" {{ matched_branches.push(\"{}\".to_string()); }}\n",
+                escaped_val, port
+            ));
+        }
+        "lte" | "<=" => {
+            code.push_str(&format!(
+                "            if field_val <= \"{}\" {{ matched_branches.push(\"{}\".to_string()); }}\n",
+                escaped_val, port
+            ));
+        }
+        "startsWith" => {
+            code.push_str(&format!(
+                "            if field_val.starts_with(\"{}\") {{ matched_branches.push(\"{}\".to_string()); }}\n",
+                escaped_val, port
+            ));
+        }
+        "endsWith" => {
+            code.push_str(&format!(
+                "            if field_val.ends_with(\"{}\") {{ matched_branches.push(\"{}\".to_string()); }}\n",
+                escaped_val, port
+            ));
+        }
+        "empty" => {
+            code.push_str(&format!(
+                "            if field_val.is_empty() {{ matched_branches.push(\"{}\".to_string()); }}\n",
+                port
+            ));
+        }
+        "exists" => {
+            code.push_str(&format!(
+                "            if ctx.state.contains_key(\"{}\") {{ matched_branches.push(\"{}\".to_string()); }}\n",
+                field, port
+            ));
+        }
+        _ => {
+            code.push_str(&format!(
+                "            if field_val == \"{}\" {{ matched_branches.push(\"{}\".to_string()); }}\n",
+                escaped_val, port
+            ));
+        }
+    }
+}
+
 fn generate_action_node_function(
     node_id: &str,
     node: &crate::codegen::action_nodes::ActionNodeConfig,
@@ -1531,126 +1806,95 @@ fn generate_action_node_function(
                 &config.standard.mapping.output_key
             };
 
-            // Evaluate conditions against state
-            code.push_str("        let mut matched_branch: Option<&str> = None;\n");
+            match config.evaluation_mode {
+                crate::codegen::action_nodes::EvaluationMode::FirstMatch => {
+                    // First match: evaluate conditions, return first matching branch for routing
+                    code.push_str("        let mut matched_branch: Option<&str> = None;\n");
 
-            for condition in &config.conditions {
-                let field = &condition.field;
-                let op = &condition.operator;
-                let port = &condition.output_port;
-                let value_str = condition
-                    .value
-                    .as_ref()
-                    .map(|v| match v {
-                        serde_json::Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    })
-                    .unwrap_or_default();
+                    for condition in &config.conditions {
+                        let field = &condition.field;
+                        let op = &condition.operator;
+                        let port = &condition.output_port;
+                        let value_str = condition
+                            .value
+                            .as_ref()
+                            .map(|v| match v {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            })
+                            .unwrap_or_default();
 
-                code.push_str(&format!(
-                    "        // Condition: {} {} {}\n",
-                    field, op, value_str
-                ));
-                code.push_str("        if matched_branch.is_none() {\n");
-                code.push_str(&format!(
-                    "            let field_val = ctx.state.get(\"{}\").and_then(|v| v.as_str()).unwrap_or(\"\");\n",
-                    field
-                ));
+                        code.push_str(&format!(
+                            "        // Condition: {} {} {}\n",
+                            field, op, value_str
+                        ));
+                        code.push_str("        if matched_branch.is_none() {\n");
+                        code.push_str(&format!(
+                            "            let field_val = ctx.state.get(\"{}\").and_then(|v| v.as_str()).unwrap_or(\"\");\n",
+                            field
+                        ));
 
-                match op.as_str() {
-                    "equals" | "==" | "eq" => {
-                        code.push_str(&format!(
-                            "            if field_val == \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
-                            value_str.replace('"', "\\\""), port
-                        ));
+                        generate_condition_check(&mut code, op, &value_str, port, field);
+                        code.push_str("        }\n");
                     }
-                    "not_equals" | "!=" | "neq" => {
+
+                    // Default branch
+                    if let Some(default) = &config.default_branch {
                         code.push_str(&format!(
-                            "            if field_val != \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
-                            value_str.replace('"', "\\\""), port
+                            "        let branch = matched_branch.unwrap_or(\"{}\");\n",
+                            default
                         ));
+                    } else {
+                        code.push_str(
+                            "        let branch = matched_branch.unwrap_or(\"default\");\n",
+                        );
                     }
-                    "contains" => {
-                        code.push_str(&format!(
-                            "            if field_val.contains(\"{}\") {{ matched_branch = Some(\"{}\"); }}\n",
-                            value_str.replace('"', "\\\""), port
-                        ));
-                    }
-                    "greater_than" | ">" | "gt" => {
-                        code.push_str(&format!(
-                            "            if field_val > \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
-                            value_str.replace('"', "\\\""), port
-                        ));
-                    }
-                    "less_than" | "<" | "lt" => {
-                        code.push_str(&format!(
-                            "            if field_val < \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
-                            value_str.replace('"', "\\\""), port
-                        ));
-                    }
-                    "gte" | ">=" => {
-                        code.push_str(&format!(
-                            "            if field_val >= \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
-                            value_str.replace('"', "\\\""), port
-                        ));
-                    }
-                    "lte" | "<=" => {
-                        code.push_str(&format!(
-                            "            if field_val <= \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
-                            value_str.replace('"', "\\\""), port
-                        ));
-                    }
-                    "startsWith" => {
-                        code.push_str(&format!(
-                            "            if field_val.starts_with(\"{}\") {{ matched_branch = Some(\"{}\"); }}\n",
-                            value_str.replace('"', "\\\""), port
-                        ));
-                    }
-                    "endsWith" => {
-                        code.push_str(&format!(
-                            "            if field_val.ends_with(\"{}\") {{ matched_branch = Some(\"{}\"); }}\n",
-                            value_str.replace('"', "\\\""), port
-                        ));
-                    }
-                    "empty" => {
-                        code.push_str(&format!(
-                            "            if field_val.is_empty() {{ matched_branch = Some(\"{}\"); }}\n",
-                            port
-                        ));
-                    }
-                    "exists" => {
-                        code.push_str(&format!(
-                            "            if ctx.state.contains_key(\"{}\") {{ matched_branch = Some(\"{}\"); }}\n",
-                            field, port
-                        ));
-                    }
-                    _ => {
-                        // Default to equals
-                        code.push_str(&format!(
-                            "            if field_val == \"{}\" {{ matched_branch = Some(\"{}\"); }}\n",
-                            value_str.replace('"', "\\\""), port
-                        ));
-                    }
+
+                    code.push_str(&format!(
+                        "        Ok(NodeOutput::new().with_update(\"{}\", json!(branch)))\n",
+                        output_key
+                    ));
                 }
-                code.push_str("        }\n");
+                crate::codegen::action_nodes::EvaluationMode::AllMatch => {
+                    // All match (fan-out): evaluate all conditions, store matched branches in state
+                    // All connected branches execute via direct edges regardless — this is for observability
+                    code.push_str("        let mut matched_branches: Vec<String> = Vec::new();\n\n");
+
+                    for condition in &config.conditions {
+                        let field = &condition.field;
+                        let op = &condition.operator;
+                        let port = &condition.output_port;
+                        let value_str = condition
+                            .value
+                            .as_ref()
+                            .map(|v| match v {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            })
+                            .unwrap_or_default();
+
+                        code.push_str(&format!(
+                            "        // Condition: {} {} {}\n",
+                            field, op, value_str
+                        ));
+                        code.push_str("        {\n");
+                        code.push_str(&format!(
+                            "            let field_val = ctx.state.get(\"{}\").and_then(|v| v.as_str()).unwrap_or(\"\");\n",
+                            field
+                        ));
+
+                        generate_all_match_condition_check(&mut code, op, &value_str, port, field);
+                        code.push_str("        }\n");
+                    }
+
+                    // Store matched branches as a JSON array for observability/debugging
+                    code.push_str(&format!(
+                        "\n        Ok(NodeOutput::new().with_update(\"{}\", json!(matched_branches)))\n",
+                        output_key
+                    ));
+                }
             }
 
-            // Default branch
-            if let Some(default) = &config.default_branch {
-                code.push_str(&format!(
-                    "        let branch = matched_branch.unwrap_or(\"{}\");\n",
-                    default
-                ));
-            } else {
-                code.push_str(
-                    "        let branch = matched_branch.unwrap_or(\"default\");\n",
-                );
-            }
-
-            code.push_str(&format!(
-                "        Ok(NodeOutput::new().with_update(\"{}\", json!(branch)))\n",
-                output_key
-            ));
             code.push_str("    });\n\n");
         }
         ActionNodeConfig::Loop(config) => {
@@ -1772,6 +2016,89 @@ fn generate_action_node_function(
                     code.push_str("        } else {\n");
                     code.push_str(&format!("            output = output.with_update(\"{}\", json!(true));\n", done_key));
                     code.push_str("        }\n");
+                }
+            }
+
+            code.push_str("        Ok(output)\n");
+            code.push_str("    });\n\n");
+        }
+        ActionNodeConfig::Merge(config) => {
+            code.push_str(&format!("    // Action Node: {} (Merge)\n", config.standard.name));
+            code.push_str(&format!("    let {}_node = adk_graph::node::FunctionNode::new(\"{}\", |ctx| async move {{\n", node_id, node_id));
+            code.push_str("        let mut output = NodeOutput::new();\n");
+
+            let output_key = if config.standard.mapping.output_key.is_empty() {
+                "merged"
+            } else {
+                &config.standard.mapping.output_key
+            };
+
+            // Determine branch keys for collecting results
+            let branch_keys = config.branch_keys.as_deref().unwrap_or(&[]);
+
+            match config.combine_strategy {
+                crate::codegen::action_nodes::CombineStrategy::Array => {
+                    code.push_str("        // Combine strategy: array — collect branch outputs into an array\n");
+                    code.push_str("        let mut results: Vec<serde_json::Value> = Vec::new();\n");
+                    if branch_keys.is_empty() {
+                        // Collect all non-system state values
+                        code.push_str("        for (k, v) in ctx.state.iter() {\n");
+                        code.push_str("            if k != \"message\" && k != \"classification\" {\n");
+                        code.push_str("                results.push(v.clone());\n");
+                        code.push_str("            }\n");
+                        code.push_str("        }\n");
+                    } else {
+                        for key in branch_keys {
+                            code.push_str(&format!("        if let Some(v) = ctx.state.get(\"{}\") {{\n", key));
+                            code.push_str("            results.push(v.clone());\n");
+                            code.push_str("        }\n");
+                        }
+                    }
+                    code.push_str(&format!("        output = output.with_update(\"{}\", json!(results));\n", output_key));
+                }
+                crate::codegen::action_nodes::CombineStrategy::Object => {
+                    code.push_str("        // Combine strategy: object — merge branch outputs into an object\n");
+                    code.push_str("        let mut merged = serde_json::Map::new();\n");
+                    if branch_keys.is_empty() {
+                        code.push_str("        for (k, v) in ctx.state.iter() {\n");
+                        code.push_str("            if k != \"message\" && k != \"classification\" {\n");
+                        code.push_str("                merged.insert(k.clone(), v.clone());\n");
+                        code.push_str("            }\n");
+                        code.push_str("        }\n");
+                    } else {
+                        for key in branch_keys {
+                            code.push_str(&format!("        if let Some(v) = ctx.state.get(\"{}\") {{\n", key));
+                            code.push_str(&format!("            merged.insert(\"{}\".to_string(), v.clone());\n", key));
+                            code.push_str("        }\n");
+                        }
+                    }
+                    code.push_str(&format!("        output = output.with_update(\"{}\", json!(merged));\n", output_key));
+                }
+                crate::codegen::action_nodes::CombineStrategy::First => {
+                    code.push_str("        // Combine strategy: first — use first available branch output\n");
+                    if branch_keys.is_empty() {
+                        code.push_str("        let first_val = ctx.state.get(\"response\").cloned().unwrap_or(json!(null));\n");
+                    } else {
+                        code.push_str("        let first_val = None\n");
+                        for key in branch_keys {
+                            code.push_str(&format!("            .or_else(|| ctx.state.get(\"{}\").cloned())\n", key));
+                        }
+                        code.push_str("            .unwrap_or(json!(null));\n");
+                    }
+                    code.push_str(&format!("        output = output.with_update(\"{}\", first_val);\n", output_key));
+                }
+                crate::codegen::action_nodes::CombineStrategy::Last => {
+                    code.push_str("        // Combine strategy: last — use last available branch output\n");
+                    if branch_keys.is_empty() {
+                        code.push_str("        let last_val = ctx.state.get(\"response\").cloned().unwrap_or(json!(null));\n");
+                    } else {
+                        code.push_str("        let last_val = None\n");
+                        for key in branch_keys.iter().rev() {
+                            code.push_str(&format!("            .or_else(|| ctx.state.get(\"{}\").cloned())\n", key));
+                        }
+                        code.push_str("            .unwrap_or(json!(null));\n");
+                    }
+                    code.push_str(&format!("        output = output.with_update(\"{}\", last_val);\n", output_key));
                 }
             }
 

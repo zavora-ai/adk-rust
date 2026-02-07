@@ -109,10 +109,10 @@ export const SwitchNode = memo(function SwitchNode({ data, selected }: Props) {
         <div className="switch-node-header-row">
           <span className={`switch-node-mode-badge ${data.evaluationMode}`}>
             <span className="switch-node-mode-icon">
-              {data.evaluationMode === 'first_match' ? '1️⃣' : '🔢'}
+              {data.evaluationMode === 'first_match' ? '1️⃣' : '🔀'}
             </span>
             <span className="switch-node-mode-label">
-              {data.evaluationMode === 'first_match' ? 'First Match' : 'All Match'}
+              {data.evaluationMode === 'first_match' ? 'First Match' : 'Fan Out'}
             </span>
           </span>
           

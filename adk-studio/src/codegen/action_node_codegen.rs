@@ -986,8 +986,9 @@ impl ActionNodeCodeGen for SwitchNodeConfig {
                 }
             }
             EvaluationMode::AllMatch => {
-                code.push_str("    // All match evaluation (returns all matching branches)\n");
-                code.push_str("    let mut matched_branches = Vec::new();\n\n");
+                code.push_str("    // All match evaluation (fan-out: all branches execute via direct edges)\n");
+                code.push_str("    // Store matched branches in state for observability\n");
+                code.push_str("    let mut matched_branches: Vec<String> = Vec::new();\n\n");
                 for condition in &self.conditions {
                     code.push_str(&format!(
                         "    if let Some(value) = get_nested_value(state, \"{}\") {{\n",
@@ -997,15 +998,15 @@ impl ActionNodeCodeGen for SwitchNodeConfig {
                         generate_condition_comparison(&condition.operator, &condition.value);
                     code.push_str(&format!("        if {} {{\n", comparison));
                     code.push_str(&format!(
-                        "            matched_branches.push(\"{}\");\n",
+                        "            matched_branches.push(\"{}\".to_string());\n",
                         condition.output_port
                     ));
                     code.push_str("        }\n");
                     code.push_str("    }\n");
                 }
-                code.push_str("\n    if !matched_branches.is_empty() {\n");
-                code.push_str("        return Ok(matched_branches[0]); // Return first for now\n");
-                code.push_str("    }\n\n");
+                code.push_str("\n    // All connected branches execute regardless — fan-out via direct edges\n");
+                code.push_str("    // matched_branches is stored for debugging/observability\n");
+                code.push_str("    Ok(serde_json::to_string(&matched_branches).unwrap_or_default())\n");
             }
         }
 
