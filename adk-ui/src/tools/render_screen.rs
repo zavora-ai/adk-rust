@@ -1,9 +1,9 @@
 use crate::a2ui::{
-    A2uiSchemaVersion, A2uiValidator, encode_jsonl,
+    A2uiSchemaVersion, A2uiValidator,
 };
 use crate::catalog_registry::CatalogRegistry;
 use crate::interop::{
-    UiProtocol, UiSurface, surface_to_event_stream, surface_to_mcp_apps_payload,
+    A2uiAdapter, AgUiAdapter, McpAppsAdapter, UiProtocol, UiProtocolAdapter, UiSurface,
 };
 use crate::tools::SurfaceProtocolOptions;
 use adk_core::{Result, Tool, ToolContext};
@@ -146,38 +146,22 @@ Returns a JSONL string with createSurface/updateDataModel/updateComponents messa
                     }
                 }
 
-                let jsonl = encode_jsonl(messages).map_err(|e| {
-                    adk_core::AdkError::Tool(format!("Failed to encode A2UI JSONL: {}", e))
-                })?;
-
-                // Return as JSON object with components for LLM compatibility.
-                Ok(serde_json::json!({
-                    "protocol": "a2ui",
-                    "surface_id": params.surface_id,
-                    "components": params.components,
-                    "data_model": params.data_model,
-                    "jsonl": jsonl
-                }))
+                let adapter = A2uiAdapter;
+                let payload = adapter.from_canonical(&surface)?;
+                adapter.validate(&payload)?;
+                Ok(payload)
             }
             UiProtocol::AgUi => {
-                let thread_id = params.protocol_options.resolved_ag_ui_thread_id(&params.surface_id);
+                let thread_id =
+                    params.protocol_options.resolved_ag_ui_thread_id(&params.surface_id);
                 let run_id = params.protocol_options.resolved_ag_ui_run_id(&params.surface_id);
-                let events = surface_to_event_stream(&surface, thread_id, run_id);
-                Ok(serde_json::json!({
-                    "protocol": "ag_ui",
-                    "surface_id": surface.surface_id,
-                    "events": events
-                }))
+                let adapter = AgUiAdapter::new(thread_id, run_id);
+                adapter.from_canonical(&surface)
             }
             UiProtocol::McpApps => {
                 let options = params.protocol_options.parse_mcp_options()?;
-
-                let payload = surface_to_mcp_apps_payload(&surface, options);
-                Ok(serde_json::json!({
-                    "protocol": "mcp_apps",
-                    "surface_id": surface.surface_id,
-                    "payload": payload
-                }))
+                let adapter = McpAppsAdapter::new(options);
+                adapter.from_canonical(&surface)
             }
         }
     }

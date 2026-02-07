@@ -1,7 +1,9 @@
+mod adapter;
 pub mod ag_ui;
 pub mod mcp_apps;
 pub mod surface;
 
+pub use adapter::{A2uiAdapter, AgUiAdapter, McpAppsAdapter, UiProtocolAdapter};
 pub use ag_ui::{
     ADK_UI_SURFACE_EVENT_NAME, AgUiCustomEvent, AgUiErrorEvent, AgUiEvent, AgUiEventType,
     AgUiStateDeltaEvent, AgUiStateSnapshotEvent, AgUiStepEvent, AgUiTextMessageDeltaEvent,

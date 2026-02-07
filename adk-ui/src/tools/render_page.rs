@@ -4,7 +4,7 @@ use crate::a2ui::{
 };
 use crate::catalog_registry::CatalogRegistry;
 use crate::interop::{
-    UiProtocol, UiSurface, surface_to_event_stream, surface_to_mcp_apps_payload,
+    AgUiAdapter, McpAppsAdapter, UiProtocol, UiProtocolAdapter, UiSurface,
 };
 use crate::tools::SurfaceProtocolOptions;
 use adk_core::{Result, Tool, ToolContext};
@@ -269,23 +269,16 @@ impl Tool for RenderPageTool {
                 Ok(Value::String(jsonl))
             }
             UiProtocol::AgUi => {
-                let thread_id = params.protocol_options.resolved_ag_ui_thread_id(&params.surface_id);
+                let thread_id =
+                    params.protocol_options.resolved_ag_ui_thread_id(&params.surface_id);
                 let run_id = params.protocol_options.resolved_ag_ui_run_id(&params.surface_id);
-                let events = surface_to_event_stream(&surface, thread_id, run_id);
-                Ok(serde_json::json!({
-                    "protocol": "ag_ui",
-                    "surface_id": surface.surface_id,
-                    "events": events
-                }))
+                let adapter = AgUiAdapter::new(thread_id, run_id);
+                adapter.from_canonical(&surface)
             }
             UiProtocol::McpApps => {
                 let options = params.protocol_options.parse_mcp_options()?;
-                let payload = surface_to_mcp_apps_payload(&surface, options);
-                Ok(serde_json::json!({
-                    "protocol": "mcp_apps",
-                    "surface_id": surface.surface_id,
-                    "payload": payload
-                }))
+                let adapter = McpAppsAdapter::new(options);
+                adapter.from_canonical(&surface)
             }
         }
     }
