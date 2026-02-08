@@ -27,7 +27,7 @@ serde_json.workspace = true
 schemars = "0.8"
 rmcp = { version = "0.14", features = ["client"] }
 tracing.workspace = true
-base64 = "0.21"
+base64 = "0.22"
 uuid.workspace = true
 futures.workspace = true
 # Optional: HTTP client for remote MCP servers
