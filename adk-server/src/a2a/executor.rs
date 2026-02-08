@@ -46,6 +46,7 @@ impl Executor {
             memory_service: self.config.runner_config.memory_service.clone(),
             plugin_manager: self.config.runner_config.plugin_manager.clone(),
             run_config: self.config.runner_config.run_config.clone(),
+            compaction_config: self.config.runner_config.compaction_config.clone(),
         })?;
 
         // Create processor

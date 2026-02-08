@@ -1,7 +1,10 @@
 use adk_core::{
-    AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result,
+    AfterAgentCallback, Agent, BeforeAgentCallback, CallbackContext, Event, EventStream,
+    InvocationContext, Result,
 };
+use async_stream::stream;
 use async_trait::async_trait;
+use futures::StreamExt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -16,10 +19,8 @@ pub struct CustomAgent {
     name: String,
     description: String,
     sub_agents: Vec<Arc<dyn Agent>>,
-    #[allow(dead_code)] // Part of public API, callbacks not yet implemented
-    before_callbacks: Vec<BeforeAgentCallback>,
-    #[allow(dead_code)] // Part of public API, callbacks not yet implemented
-    after_callbacks: Vec<AfterAgentCallback>,
+    before_callbacks: Arc<Vec<BeforeAgentCallback>>,
+    after_callbacks: Arc<Vec<AfterAgentCallback>>,
     handler: RunHandler,
 }
 
@@ -44,7 +45,68 @@ impl Agent for CustomAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
-        (self.handler)(ctx).await
+        let handler = &self.handler;
+        let before_callbacks = self.before_callbacks.clone();
+        let after_callbacks = self.after_callbacks.clone();
+        let agent_name = self.name.clone();
+
+        // Execute before callbacks — if any returns content, short-circuit
+        for callback in before_callbacks.as_ref() {
+            match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                Ok(Some(content)) => {
+                    let invocation_id = ctx.invocation_id().to_string();
+                    let s = stream! {
+                        let mut early_event = Event::new(&invocation_id);
+                        early_event.author = agent_name.clone();
+                        early_event.llm_response.content = Some(content);
+                        yield Ok(early_event);
+
+                        for after_cb in after_callbacks.as_ref() {
+                            match after_cb(ctx.clone() as Arc<dyn CallbackContext>).await {
+                                Ok(Some(after_content)) => {
+                                    let mut after_event = Event::new(&invocation_id);
+                                    after_event.author = agent_name.clone();
+                                    after_event.llm_response.content = Some(after_content);
+                                    yield Ok(after_event);
+                                    return;
+                                }
+                                Ok(None) => continue,
+                                Err(e) => { yield Err(e); return; }
+                            }
+                        }
+                    };
+                    return Ok(Box::pin(s));
+                }
+                Ok(None) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+
+        // Run the actual handler
+        let mut inner_stream = (handler)(ctx.clone()).await?;
+
+        let s = stream! {
+            while let Some(result) = inner_stream.next().await {
+                yield result;
+            }
+
+            // Execute after callbacks
+            for callback in after_callbacks.as_ref() {
+                match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                    Ok(Some(content)) => {
+                        let mut after_event = Event::new(ctx.invocation_id());
+                        after_event.author = agent_name.clone();
+                        after_event.llm_response.content = Some(content);
+                        yield Ok(after_event);
+                        break;
+                    }
+                    Ok(None) => continue,
+                    Err(e) => { yield Err(e); return; }
+                }
+            }
+        };
+
+        Ok(Box::pin(s))
     }
 }
 
@@ -123,8 +185,8 @@ impl CustomAgentBuilder {
             name: self.name,
             description: self.description,
             sub_agents: self.sub_agents,
-            before_callbacks: self.before_callbacks,
-            after_callbacks: self.after_callbacks,
+            before_callbacks: Arc::new(self.before_callbacks),
+            after_callbacks: Arc::new(self.after_callbacks),
             handler,
         })
     }

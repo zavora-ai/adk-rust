@@ -180,6 +180,7 @@ fn create_message_stream(
                 memory_service: None,
                 plugin_manager: None,
                 run_config: None,
+        compaction_config: None,
             }),
         });
 
@@ -265,6 +266,7 @@ async fn handle_message_send(
             memory_service: None,
             plugin_manager: None,
             run_config: None,
+            compaction_config: None,
         }),
     });
 
@@ -376,6 +378,7 @@ async fn handle_tasks_cancel(
             memory_service: None,
             plugin_manager: None,
             run_config: None,
+            compaction_config: None,
         }),
     });
 

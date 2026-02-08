@@ -275,6 +275,7 @@ async fn run_batch_mode(
             memory_service: None,
             plugin_manager: None,
             run_config: None,
+            compaction_config: None,
         };
 
         let runner = Runner::new(config)?;

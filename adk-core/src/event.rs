@@ -37,6 +37,19 @@ pub struct Event {
     pub provider_metadata: HashMap<String, String>,
 }
 
+/// Metadata for a compacted (summarized) event.
+/// When context compaction is enabled, older events are summarized into a single
+/// compacted event containing this metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventCompaction {
+    /// Timestamp of the earliest event that was compacted.
+    pub start_timestamp: DateTime<Utc>,
+    /// Timestamp of the latest event that was compacted.
+    pub end_timestamp: DateTime<Utc>,
+    /// The summarized content replacing the original events.
+    pub compacted_content: Content,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EventActions {
     pub state_delta: HashMap<String, serde_json::Value>,
@@ -48,6 +61,9 @@ pub struct EventActions {
     pub tool_confirmation: Option<ToolConfirmationRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_confirmation_decision: Option<ToolConfirmationDecision>,
+    /// Present when this event is a compaction summary replacing older events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<EventCompaction>,
 }
 
 impl Event {

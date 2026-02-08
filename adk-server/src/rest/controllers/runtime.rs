@@ -7,8 +7,8 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
 };
 use futures::stream::{self, Stream};
-use serde_json::json;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::convert::Infallible;
 use tracing::{Instrument, info, warn};
 
@@ -105,7 +105,10 @@ fn parse_ui_profile(raw: &str) -> Option<UiProfile> {
     }
 }
 
-fn resolve_ui_profile(headers: &HeaderMap, body_ui_protocol: Option<&str>) -> Result<UiProfile, RuntimeError> {
+fn resolve_ui_profile(
+    headers: &HeaderMap,
+    body_ui_protocol: Option<&str>,
+) -> Result<UiProfile, RuntimeError> {
     let header_value = headers.get(UI_PROTOCOL_HEADER).and_then(|v| v.to_str().ok());
     let candidate = header_value.or(body_ui_protocol);
 
@@ -196,12 +199,10 @@ pub async fn run_sse(
             .map_err(|_| (StatusCode::NOT_FOUND, "session not found".to_string()))?;
 
         // Load agent
-        let agent = controller
-            .config
-            .agent_loader
-            .load_agent(&app_name)
-            .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to load agent".to_string()))?;
+        let agent =
+            controller.config.agent_loader.load_agent(&app_name).await.map_err(|_| {
+                (StatusCode::INTERNAL_SERVER_ERROR, "failed to load agent".to_string())
+            })?;
 
         // Create runner
         let runner = adk_runner::Runner::new(adk_runner::RunnerConfig {
@@ -212,6 +213,7 @@ pub async fn run_sse(
             memory_service: None,
             plugin_manager: None,
             run_config: None,
+            compaction_config: None,
         })
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create runner".to_string()))?;
 
@@ -296,7 +298,9 @@ pub async fn run_sse_compat(
                 state: std::collections::HashMap::new(),
             })
             .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create session".to_string()))?;
+            .map_err(|_| {
+                (StatusCode::INTERNAL_SERVER_ERROR, "failed to create session".to_string())
+            })?;
     }
 
     // Load agent
@@ -319,6 +323,7 @@ pub async fn run_sse_compat(
         memory_service: None,
         plugin_manager: None,
         run_config: Some(adk_core::RunConfig { streaming_mode, ..adk_core::RunConfig::default() }),
+        compaction_config: None,
     })
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create runner".to_string()))?;
 

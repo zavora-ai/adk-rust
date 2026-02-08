@@ -72,6 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         memory_service: None,
         plugin_manager: None,
         run_config: None,
+        compaction_config: None,
     })?;
 
     println!("\nSession configured with:");

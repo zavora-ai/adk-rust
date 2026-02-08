@@ -52,6 +52,7 @@ async fn main() -> Result<()> {
             memory_service: None,
             plugin_manager: None,
             run_config: None,
+            compaction_config: None,
         })?;
         println!("   Runner created successfully");
     } else {

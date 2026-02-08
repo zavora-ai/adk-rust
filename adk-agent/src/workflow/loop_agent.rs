@@ -1,22 +1,27 @@
 use adk_core::{
-    AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result,
+    AfterAgentCallback, Agent, BeforeAgentCallback, CallbackContext, Event, EventStream,
+    InvocationContext, Result,
 };
 use adk_skill::{SelectionPolicy, SkillIndex, load_skill_index};
 use async_stream::stream;
 use async_trait::async_trait;
 use std::sync::Arc;
 
+/// Default maximum iterations for LoopAgent when none is specified.
+/// Prevents infinite loops from consuming unbounded resources.
+pub const DEFAULT_LOOP_MAX_ITERATIONS: u32 = 1000;
+
 /// Loop agent executes sub-agents repeatedly for N iterations or until escalation
 pub struct LoopAgent {
     name: String,
     description: String,
     sub_agents: Vec<Arc<dyn Agent>>,
-    max_iterations: Option<u32>,
+    max_iterations: u32,
     skills_index: Option<Arc<SkillIndex>>,
     skill_policy: SelectionPolicy,
     max_skill_chars: usize,
-    before_callbacks: Vec<BeforeAgentCallback>,
-    after_callbacks: Vec<AfterAgentCallback>,
+    before_callbacks: Arc<Vec<BeforeAgentCallback>>,
+    after_callbacks: Arc<Vec<AfterAgentCallback>>,
 }
 
 impl LoopAgent {
@@ -25,12 +30,12 @@ impl LoopAgent {
             name: name.into(),
             description: String::new(),
             sub_agents,
-            max_iterations: None,
+            max_iterations: DEFAULT_LOOP_MAX_ITERATIONS,
             skills_index: None,
             skill_policy: SelectionPolicy::default(),
             max_skill_chars: 2000,
-            before_callbacks: Vec::new(),
-            after_callbacks: Vec::new(),
+            before_callbacks: Arc::new(Vec::new()),
+            after_callbacks: Arc::new(Vec::new()),
         }
     }
 
@@ -40,7 +45,7 @@ impl LoopAgent {
     }
 
     pub fn with_max_iterations(mut self, max: u32) -> Self {
-        self.max_iterations = Some(max);
+        self.max_iterations = max;
         self
     }
 
@@ -70,12 +75,16 @@ impl LoopAgent {
     }
 
     pub fn before_callback(mut self, callback: BeforeAgentCallback) -> Self {
-        self.before_callbacks.push(callback);
+        Arc::get_mut(&mut self.before_callbacks)
+            .expect("before_callbacks not yet shared")
+            .push(callback);
         self
     }
 
     pub fn after_callback(mut self, callback: AfterAgentCallback) -> Self {
-        self.after_callbacks.push(callback);
+        Arc::get_mut(&mut self.after_callbacks)
+            .expect("after_callbacks not yet shared")
+            .push(callback);
         self
     }
 }
@@ -97,6 +106,9 @@ impl Agent for LoopAgent {
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
         let sub_agents = self.sub_agents.clone();
         let max_iterations = self.max_iterations;
+        let before_callbacks = self.before_callbacks.clone();
+        let after_callbacks = self.after_callbacks.clone();
+        let agent_name = self.name.clone();
         let run_ctx = super::skill_context::with_skill_injected_context(
             ctx,
             self.skills_index.as_ref(),
@@ -107,7 +119,36 @@ impl Agent for LoopAgent {
         let s = stream! {
             use futures::StreamExt;
 
-            let mut count = max_iterations;
+            // ===== BEFORE AGENT CALLBACKS =====
+            for callback in before_callbacks.as_ref() {
+                match callback(run_ctx.clone() as Arc<dyn CallbackContext>).await {
+                    Ok(Some(content)) => {
+                        let mut early_event = Event::new(run_ctx.invocation_id());
+                        early_event.author = agent_name.clone();
+                        early_event.llm_response.content = Some(content);
+                        yield Ok(early_event);
+
+                        for after_cb in after_callbacks.as_ref() {
+                            match after_cb(run_ctx.clone() as Arc<dyn CallbackContext>).await {
+                                Ok(Some(after_content)) => {
+                                    let mut after_event = Event::new(run_ctx.invocation_id());
+                                    after_event.author = agent_name.clone();
+                                    after_event.llm_response.content = Some(after_content);
+                                    yield Ok(after_event);
+                                    return;
+                                }
+                                Ok(None) => continue,
+                                Err(e) => { yield Err(e); return; }
+                            }
+                        }
+                        return;
+                    }
+                    Ok(None) => continue,
+                    Err(e) => { yield Err(e); return; }
+                }
+            }
+
+            let mut remaining = max_iterations;
 
             loop {
                 let mut should_exit = false;
@@ -135,15 +176,32 @@ impl Agent for LoopAgent {
                     }
 
                     if should_exit {
-                        return;
+                        break;
                     }
                 }
 
-                if let Some(ref mut c) = count {
-                    *c -= 1;
-                    if *c == 0 {
-                        return;
+                if should_exit {
+                    break;
+                }
+
+                remaining -= 1;
+                if remaining == 0 {
+                    break;
+                }
+            }
+
+            // ===== AFTER AGENT CALLBACKS =====
+            for callback in after_callbacks.as_ref() {
+                match callback(run_ctx.clone() as Arc<dyn CallbackContext>).await {
+                    Ok(Some(content)) => {
+                        let mut after_event = Event::new(run_ctx.invocation_id());
+                        after_event.author = agent_name.clone();
+                        after_event.llm_response.content = Some(content);
+                        yield Ok(after_event);
+                        break;
                     }
+                    Ok(None) => continue,
+                    Err(e) => { yield Err(e); return; }
                 }
             }
         };

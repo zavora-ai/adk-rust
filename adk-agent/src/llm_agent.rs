@@ -16,6 +16,9 @@ use crate::guardrails::GuardrailSet;
 /// Default maximum number of LLM round-trips (iterations) before the agent stops.
 pub const DEFAULT_MAX_ITERATIONS: u32 = 100;
 
+/// Default tool execution timeout (5 minutes).
+pub const DEFAULT_TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 pub struct LlmAgent {
     name: String,
     description: String,
@@ -40,6 +43,8 @@ pub struct LlmAgent {
     output_key: Option<String>,
     /// Maximum number of LLM round-trips before stopping
     max_iterations: u32,
+    /// Timeout for individual tool executions
+    tool_timeout: std::time::Duration,
     before_callbacks: Arc<Vec<BeforeAgentCallback>>,
     after_callbacks: Arc<Vec<AfterAgentCallback>>,
     before_model_callbacks: Arc<Vec<BeforeModelCallback>>,
@@ -86,6 +91,7 @@ pub struct LlmAgentBuilder {
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
     max_iterations: u32,
+    tool_timeout: std::time::Duration,
     before_callbacks: Vec<BeforeAgentCallback>,
     after_callbacks: Vec<AfterAgentCallback>,
     before_model_callbacks: Vec<BeforeModelCallback>,
@@ -119,6 +125,7 @@ impl LlmAgentBuilder {
             sub_agents: Vec::new(),
             output_key: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
+            tool_timeout: DEFAULT_TOOL_TIMEOUT,
             before_callbacks: Vec::new(),
             after_callbacks: Vec::new(),
             before_model_callbacks: Vec::new(),
@@ -225,6 +232,13 @@ impl LlmAgentBuilder {
     /// Default is 100.
     pub fn max_iterations(mut self, max: u32) -> Self {
         self.max_iterations = max;
+        self
+    }
+
+    /// Set the timeout for individual tool executions.
+    /// Default is 5 minutes. Tools that exceed this timeout will return an error.
+    pub fn tool_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.tool_timeout = timeout;
         self
     }
 
@@ -336,6 +350,7 @@ impl LlmAgentBuilder {
             sub_agents: self.sub_agents,
             output_key: self.output_key,
             max_iterations: self.max_iterations,
+            tool_timeout: self.tool_timeout,
             before_callbacks: Arc::new(self.before_callbacks),
             after_callbacks: Arc::new(self.after_callbacks),
             before_model_callbacks: Arc::new(self.before_model_callbacks),
@@ -473,6 +488,7 @@ impl Agent for LlmAgent {
         let output_schema = self.output_schema.clone();
         let include_contents = self.include_contents;
         let max_iterations = self.max_iterations;
+        let tool_timeout = self.tool_timeout;
         // Clone Arc references (cheap)
         let before_agent_callbacks = self.before_callbacks.clone();
         let after_agent_callbacks = self.after_callbacks.clone();
@@ -645,6 +661,28 @@ impl Agent for LlmAgent {
                 }
             };
 
+            // Build tool lookup map for O(1) access (instead of linear scan)
+            let tool_map: std::collections::HashMap<String, Arc<dyn Tool>> = tools
+                .iter()
+                .map(|t| (t.name().to_string(), t.clone()))
+                .collect();
+
+            // Helper: extract long-running tool IDs from content
+            let collect_long_running_ids = |content: &Content| -> Vec<String> {
+                content.parts.iter()
+                    .filter_map(|p| {
+                        if let Part::FunctionCall { name, .. } = p {
+                            if let Some(tool) = tool_map.get(name) {
+                                if tool.is_long_running() {
+                                    return Some(name.clone());
+                                }
+                            }
+                        }
+                        None
+                    })
+                    .collect()
+            };
+
             // Build tool declarations for Gemini
             // Uses enhanced_description() which includes NOTE for long-running tools
             let mut tool_declarations = std::collections::HashMap::new();
@@ -757,19 +795,7 @@ impl Agent for LlmAgent {
 
                     // Populate long_running_tool_ids for function calls from long-running tools
                     if let Some(ref content) = cached_response.content {
-                        let long_running_ids: Vec<String> = content.parts.iter()
-                            .filter_map(|p| {
-                                if let Part::FunctionCall { name, .. } = p {
-                                    if let Some(tool) = tools.iter().find(|t| t.name() == name) {
-                                        if tool.is_long_running() {
-                                            return Some(name.clone());
-                                        }
-                                    }
-                                }
-                                None
-                            })
-                            .collect();
-                        cached_event.long_running_tool_ids = long_running_ids;
+                        cached_event.long_running_tool_ids = collect_long_running_ids(content);
                     }
 
                     yield Ok(cached_event);
@@ -864,19 +890,7 @@ impl Agent for LlmAgent {
 
                             // Populate long_running_tool_ids
                             if let Some(ref content) = chunk.content {
-                                let long_running_ids: Vec<String> = content.parts.iter()
-                                    .filter_map(|p| {
-                                        if let Part::FunctionCall { name, .. } = p {
-                                            if let Some(tool) = tools.iter().find(|t| t.name() == name) {
-                                                if tool.is_long_running() {
-                                                    return Some(name.clone());
-                                                }
-                                            }
-                                        }
-                                        None
-                                    })
-                                    .collect();
-                                partial_event.long_running_tool_ids = long_running_ids;
+                                partial_event.long_running_tool_ids = collect_long_running_ids(content);
                             }
 
                             yield Ok(partial_event);
@@ -910,19 +924,7 @@ impl Agent for LlmAgent {
 
                         // Populate long_running_tool_ids
                         if let Some(ref content) = accumulated_content {
-                            let long_running_ids: Vec<String> = content.parts.iter()
-                                .filter_map(|p| {
-                                    if let Part::FunctionCall { name, .. } = p {
-                                        if let Some(tool) = tools.iter().find(|t| t.name() == name) {
-                                            if tool.is_long_running() {
-                                                return Some(name.clone());
-                                            }
-                                        }
-                                    }
-                                    None
-                                })
-                                .collect();
-                            final_event.long_running_tool_ids = long_running_ids;
+                            final_event.long_running_tool_ids = collect_long_running_ids(content);
                         }
 
                         yield Ok(final_event);
@@ -954,8 +956,7 @@ impl Agent for LlmAgent {
                 // If so, we should NOT continue the loop - the tool returned a pending status
                 // and the agent/client will poll for completion later
                 let all_calls_are_long_running = has_function_calls && function_call_names.iter().all(|name| {
-                    tools.iter()
-                        .find(|t| t.name() == name)
+                    tool_map.get(name)
                         .map(|t| t.is_long_running())
                         .unwrap_or(false)
                 });
@@ -1015,6 +1016,35 @@ impl Agent for LlmAgent {
                                     .and_then(|v| v.as_str())
                                     .unwrap_or_default()
                                     .to_string();
+
+                                // Validate that the target agent exists in sub_agents
+                                let valid_target = sub_agents.iter().any(|a| a.name() == target_agent);
+                                if !valid_target {
+                                    // Return error to LLM so it can try again
+                                    let error_content = Content {
+                                        role: "function".to_string(),
+                                        parts: vec![Part::FunctionResponse {
+                                            function_response: FunctionResponseData {
+                                                name: name.clone(),
+                                                response: serde_json::json!({
+                                                    "error": format!(
+                                                        "Agent '{}' not found. Available agents: {:?}",
+                                                        target_agent,
+                                                        sub_agents.iter().map(|a| a.name()).collect::<Vec<_>>()
+                                                    )
+                                                }),
+                                            },
+                                            id: id.clone(),
+                                        }],
+                                    };
+                                    conversation_history.push(error_content.clone());
+
+                                    let mut error_event = Event::new(&invocation_id);
+                                    error_event.author = agent_name.clone();
+                                    error_event.llm_response.content = Some(error_content);
+                                    yield Ok(error_event);
+                                    continue;
+                                }
 
                                 let mut transfer_event = Event::new(&invocation_id);
                                 transfer_event.author = agent_name.clone();
@@ -1105,7 +1135,7 @@ impl Agent for LlmAgent {
 
                             // Find and execute tool unless callbacks already short-circuited.
                             if response_content.is_none() {
-                                if let Some(tool) = tools.iter().find(|t| t.name() == name) {
+                                if let Some(tool) = tool_map.get(name) {
                                     // ✅ Use AgentToolContext that preserves parent context
                                     let tool_ctx: Arc<dyn ToolContext> = Arc::new(AgentToolContext::new(
                                         ctx.clone(),
@@ -1124,17 +1154,28 @@ impl Agent for LlmAgent {
                                         "gen_ai.conversation.id" = %ctx.session_id()
                                     );
 
-                                    // Use instrument() for proper async span handling
+                                    // Use instrument() for proper async span handling, with timeout
+                                    let tool_clone = tool.clone();
                                     let result = async {
                                         tracing::info!(tool.name = %name, tool.args = %args, "tool_call");
-                                        match tool.execute(tool_ctx.clone(), args.clone()).await {
-                                            Ok(result) => {
+                                        let exec_future = tool_clone.execute(tool_ctx.clone(), args.clone());
+                                        match tokio::time::timeout(tool_timeout, exec_future).await {
+                                            Ok(Ok(result)) => {
                                                 tracing::info!(tool.name = %name, tool.result = %result, "tool_result");
                                                 result
                                             }
-                                            Err(e) => {
+                                            Ok(Err(e)) => {
                                                 tracing::warn!(tool.name = %name, error = %e, "tool_error");
                                                 serde_json::json!({ "error": e.to_string() })
+                                            }
+                                            Err(_) => {
+                                                tracing::warn!(tool.name = %name, timeout_secs = tool_timeout.as_secs(), "tool_timeout");
+                                                serde_json::json!({
+                                                    "error": format!(
+                                                        "Tool '{}' timed out after {} seconds",
+                                                        name, tool_timeout.as_secs()
+                                                    )
+                                                })
                                             }
                                         }
                                     }.instrument(tool_span).await;

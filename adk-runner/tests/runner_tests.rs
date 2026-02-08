@@ -158,6 +158,7 @@ fn test_runner_creation() {
         memory_service: None,
         plugin_manager: None,
         run_config: None,
+        compaction_config: None,
     });
 
     assert!(runner.is_ok());
@@ -177,6 +178,7 @@ async fn test_runner_run() {
         memory_service: None,
         plugin_manager: None,
         run_config: None,
+        compaction_config: None,
     })
     .unwrap();
 
@@ -395,6 +397,7 @@ async fn test_plugin_callback_order_and_mutation() {
         memory_service: None,
         plugin_manager: Some(Arc::new(PluginManager::new(vec![plugin]))),
         run_config: None,
+        compaction_config: None,
     })
     .unwrap();
 
@@ -448,6 +451,7 @@ async fn test_plugin_error_propagates_from_on_user_message() {
         memory_service: None,
         plugin_manager: Some(Arc::new(PluginManager::new(vec![plugin]))),
         run_config: None,
+        compaction_config: None,
     })
     .unwrap();
 
@@ -493,6 +497,7 @@ async fn test_skill_injector_plugin_mutates_user_prompt() {
         memory_service: None,
         plugin_manager: Some(plugin_manager),
         run_config: None,
+        compaction_config: None,
     })
     .unwrap();
 
@@ -539,6 +544,7 @@ async fn test_runner_with_auto_skills_mutates_user_prompt() {
         memory_service: None,
         plugin_manager: None,
         run_config: None,
+        compaction_config: None,
     })
     .unwrap()
     .with_auto_skills(

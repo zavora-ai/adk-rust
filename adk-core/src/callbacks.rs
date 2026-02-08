@@ -70,3 +70,37 @@ pub type InstructionProvider = Box<
         + Sync,
 >;
 pub type GlobalInstructionProvider = InstructionProvider;
+
+// ===== Context Compaction =====
+
+use crate::Event;
+use async_trait::async_trait;
+
+/// Trait for summarizing events during context compaction.
+///
+/// Implementations receive a window of events and produce a single
+/// compacted event containing a summary. The runner calls this when
+/// the compaction interval is reached.
+#[async_trait]
+pub trait BaseEventsSummarizer: Send + Sync {
+    /// Summarize the given events into a single compacted event.
+    /// Returns `None` if no compaction is needed (e.g., empty input).
+    async fn summarize_events(&self, events: &[Event]) -> Result<Option<Event>>;
+}
+
+/// Configuration for automatic context compaction.
+///
+/// Mirrors ADK Python's `EventsCompactionConfig`:
+/// - `compaction_interval`: Number of invocations before triggering compaction
+/// - `overlap_size`: Events from the previous window to include in the next summary
+/// - `summarizer`: The strategy used to produce summaries
+#[derive(Clone)]
+pub struct EventsCompactionConfig {
+    /// Number of completed invocations that triggers compaction.
+    pub compaction_interval: u32,
+    /// How many events from the previous compacted window to include
+    /// in the next compaction for continuity.
+    pub overlap_size: u32,
+    /// The summarizer implementation (e.g., LLM-based).
+    pub summarizer: Arc<dyn BaseEventsSummarizer>,
+}

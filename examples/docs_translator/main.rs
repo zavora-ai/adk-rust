@@ -212,6 +212,7 @@ async fn translate_language(
         memory_service: None,
         plugin_manager: None,
         run_config: None,
+        compaction_config: None,
     })?);
     
     let mut stats = TranslationStats {

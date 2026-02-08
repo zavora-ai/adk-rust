@@ -61,6 +61,13 @@ impl MutableSession {
         let mut events = self.events.write().unwrap();
         events.push(event);
     }
+
+    /// Get a snapshot of all events in the session.
+    /// Used by the runner for compaction decisions.
+    pub fn events_snapshot(&self) -> Vec<Event> {
+        let events = self.events.read().unwrap();
+        events.clone()
+    }
 }
 
 impl adk_core::Session for MutableSession {

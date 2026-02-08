@@ -57,6 +57,7 @@
 //!     .build()?;
 //! ```
 
+pub mod compaction;
 mod custom_agent;
 pub mod guardrails;
 mod llm_agent;
@@ -64,11 +65,12 @@ pub mod tool_call_markup;
 mod workflow;
 
 pub use adk_core::Agent;
+pub use compaction::LlmEventSummarizer;
 pub use custom_agent::{CustomAgent, CustomAgentBuilder};
 pub use guardrails::GuardrailSet;
-pub use llm_agent::{DEFAULT_MAX_ITERATIONS, LlmAgent, LlmAgentBuilder};
+pub use llm_agent::{DEFAULT_MAX_ITERATIONS, DEFAULT_TOOL_TIMEOUT, LlmAgent, LlmAgentBuilder};
 pub use tool_call_markup::{normalize_content, normalize_option_content};
 pub use workflow::{
-    ConditionalAgent, LlmConditionalAgent, LlmConditionalAgentBuilder, LoopAgent, ParallelAgent,
-    SequentialAgent,
+    ConditionalAgent, DEFAULT_LOOP_MAX_ITERATIONS, LlmConditionalAgent, LlmConditionalAgentBuilder,
+    LoopAgent, ParallelAgent, SequentialAgent,
 };

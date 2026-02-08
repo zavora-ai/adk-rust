@@ -73,22 +73,23 @@ pub mod types;
 pub use agent::{Agent, EventStream};
 pub use agent_loader::{AgentLoader, MultiAgentLoader, SingleAgentLoader};
 pub use callbacks::{
-    AfterAgentCallback, AfterModelCallback, AfterToolCallback, BeforeAgentCallback,
-    BeforeModelCallback, BeforeModelResult, BeforeToolCallback, GlobalInstructionProvider,
-    InstructionProvider,
+    AfterAgentCallback, AfterModelCallback, AfterToolCallback, BaseEventsSummarizer,
+    BeforeAgentCallback, BeforeModelCallback, BeforeModelResult, BeforeToolCallback,
+    EventsCompactionConfig, GlobalInstructionProvider, InstructionProvider,
 };
 pub use context::{
-    Artifacts, CallbackContext, IncludeContents, InvocationContext, Memory, MemoryEntry,
-    ReadonlyContext, ReadonlyState, RunConfig, Session, State, StreamingMode,
-    ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest,
-    validate_state_key, MAX_STATE_KEY_LEN,
+    Artifacts, CallbackContext, IncludeContents, InvocationContext, MAX_STATE_KEY_LEN, Memory,
+    MemoryEntry, ReadonlyContext, ReadonlyState, RunConfig, Session, State, StreamingMode,
+    ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest, validate_state_key,
 };
 pub use error::{AdkError, Result};
-pub use event::{Event, EventActions, KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER};
+pub use event::{
+    Event, EventActions, EventCompaction, KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER,
+};
 pub use instruction_template::inject_session_state;
 pub use model::{
     CitationMetadata, CitationSource, FinishReason, GenerateContentConfig, Llm, LlmRequest,
     LlmResponse, LlmResponseStream, UsageMetadata,
 };
 pub use tool::{Tool, ToolContext, ToolPredicate, Toolset};
-pub use types::{Content, FunctionResponseData, Part, MAX_INLINE_DATA_SIZE};
+pub use types::{Content, FunctionResponseData, MAX_INLINE_DATA_SIZE, Part};
