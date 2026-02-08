@@ -71,7 +71,7 @@ mongodb = "3"
 redis = { version = "0.27", features = ["tokio-comp"] }
 
 # Platform directories
-dirs = "5"
+dirs = "6"
 
 # Cron expression parsing for schedule triggers
 cron = "0.12"
