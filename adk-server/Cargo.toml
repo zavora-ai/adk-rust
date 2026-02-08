@@ -33,7 +33,7 @@ anyhow.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 axum = { version = "0.8", features = ["macros"] }
-tower = { version = "0.4", features = ["util"] }
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace", "cors", "timeout", "set-header", "limit"] }
 tracing = "0.1"
 base64 = "0.22"
