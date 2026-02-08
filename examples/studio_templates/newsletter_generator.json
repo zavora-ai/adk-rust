@@ -1,0 +1,177 @@
+{
+  "id": "tpl-newsletter-generator",
+  "version": "1.0.0",
+  "name": "Newsletter Generator",
+  "description": "Pull content from multiple sources (RSS, HackerNews, Product Hunt), curate with AI, draft a newsletter, and send via email API",
+  "settings": {
+    "default_model": "gemini-2.0-flash",
+    "env_vars": {},
+    "layoutDirection": "LR",
+    "layoutMode": "free",
+    "debugMode": false
+  },
+  "agents": {
+    "content_curator": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a content curator for a weekly tech newsletter. Given raw content from multiple sources (HackerNews top stories, Product Hunt launches, and blog RSS feeds), select the 5-7 most interesting and relevant items.\n\nSelection criteria:\n- Relevance to software engineering and AI/ML\n- Novelty and uniqueness\n- Practical value for developers\n- Mix of news, tools, and insights\n\nFor each selected item, output:\n{\"items\": [{\"title\": \"...\", \"url\": \"...\", \"source\": \"hackernews|producthunt|rss\", \"category\": \"news|tool|insight|tutorial\", \"one_liner\": \"Why this matters in 1 sentence\"}]}",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    },
+    "newsletter_writer": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a newsletter writer with a warm, knowledgeable voice. Given curated content items, write a newsletter edition.\n\nFormat:\n- Opening: 2-3 sentence hook about the week's theme\n- For each item: catchy subheading, 2-3 sentence writeup, link\n- Closing: Brief sign-off with a thought-provoking question\n\nTone: Conversational but informed. Like a smart friend sharing what they found interesting this week. No hype, no clickbait.\n\nOutput the newsletter as formatted HTML suitable for email.",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    }
+  },
+  "tools": {},
+  "tool_configs": {},
+  "actionNodes": {
+    "manual_trigger": {
+      "type": "trigger",
+      "id": "manual_trigger",
+      "name": "Generate Newsletter",
+      "description": "Kick off weekly newsletter generation",
+      "triggerType": "manual",
+      "manual": {
+        "buttonLabel": "Generate This Week's Issue",
+        "defaultPrompt": "Generate the weekly developer newsletter for the week of February 8, 2026. Focus on AI/ML tooling, Rust ecosystem, and cloud infrastructure trends.",
+        "showPromptInput": true
+      },
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 30000 },
+      "mapping": { "outputKey": "trigger_input" }
+    },
+    "fetch_hackernews": {
+      "type": "http",
+      "id": "fetch_hackernews",
+      "name": "Fetch HackerNews",
+      "description": "Get top stories from HackerNews API",
+      "method": "GET",
+      "url": "https://hacker-news.firebaseio.com/v0/topstories.json?limitToFirst=20&orderBy=\"$key\"",
+      "auth": { "type": "none" },
+      "headers": {},
+      "body": { "type": "none" },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "hackernews_stories" }
+    },
+    "fetch_producthunt": {
+      "type": "http",
+      "id": "fetch_producthunt",
+      "name": "Fetch Product Hunt",
+      "description": "Get trending products from Product Hunt API",
+      "method": "POST",
+      "url": "https://api.producthunt.com/v2/api/graphql",
+      "auth": { "type": "bearer", "bearer": { "token": "{{PRODUCTHUNT_TOKEN}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"query\": \"{ posts(order: RANKING, first: 10) { edges { node { name tagline url votesCount } } } }\"}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "producthunt_launches" }
+    },
+    "fetch_rss": {
+      "type": "http",
+      "id": "fetch_rss",
+      "name": "Fetch Blog RSS",
+      "description": "Fetch latest posts from curated engineering blog RSS feeds",
+      "method": "GET",
+      "url": "https://api.rss2json.com/v1/api.json?rss_url=https://blog.rust-lang.org/feed.xml&count=10",
+      "auth": { "type": "none" },
+      "headers": {},
+      "body": { "type": "none" },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "rss_posts" }
+    },
+    "combine_sources": {
+      "type": "transform",
+      "id": "combine_sources",
+      "name": "Combine Sources",
+      "description": "Merge all content sources into a single feed for curation",
+      "transformExpression": "{ sources: { hackernews: input.hackernews_stories, producthunt: input.producthunt_launches, rss: input.rss_posts }, total_items: (input.hackernews_stories?.length || 0) + (input.producthunt_launches?.length || 0) + (input.rss_posts?.length || 0), fetched_at: new Date().toISOString() }",
+      "inputKey": "all_sources",
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "combined_feed" }
+    },
+    "send_email": {
+      "type": "http",
+      "id": "send_email",
+      "name": "Send via SendGrid",
+      "description": "Send the newsletter to the mailing list via SendGrid API",
+      "method": "POST",
+      "url": "https://api.sendgrid.com/v3/mail/send",
+      "auth": { "type": "bearer", "bearer": { "token": "{{SENDGRID_API_KEY}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"personalizations\": [{\"to\": [{\"email\": \"{{NEWSLETTER_LIST_EMAIL}}\"}]}], \"from\": {\"email\": \"newsletter@company.com\", \"name\": \"Dev Weekly\"}, \"subject\": \"Dev Weekly — {{newsletter_subject}}\", \"content\": [{\"type\": \"text/html\", \"value\": \"{{newsletter_html}}\"}]}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 3000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "send_result" }
+    },
+    "log_to_db": {
+      "type": "database",
+      "id": "log_to_db",
+      "name": "Log Issue",
+      "description": "Record the newsletter issue in the database for tracking",
+      "dbType": "postgresql",
+      "connection": { "connectionString": "{{DATABASE_URL}}", "poolSize": 3 },
+      "sql": {
+        "operation": "insert",
+        "query": "INSERT INTO newsletter_issues (issue_date, subject, items_count, sent_at) VALUES ($1, $2, $3, NOW())",
+        "parameters": ["{{issue_date}}", "{{newsletter_subject}}", "{{curated_items_count}}"]
+      },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "db_result" }
+    }
+  },
+  "workflow": {
+    "type": "graph",
+    "edges": [
+      { "from": "manual_trigger", "to": "START" },
+      { "from": "START", "to": "fetch_hackernews" },
+      { "from": "START", "to": "fetch_producthunt" },
+      { "from": "START", "to": "fetch_rss" },
+      { "from": "fetch_hackernews", "to": "combine_sources" },
+      { "from": "fetch_producthunt", "to": "combine_sources" },
+      { "from": "fetch_rss", "to": "combine_sources" },
+      { "from": "combine_sources", "to": "content_curator" },
+      { "from": "content_curator", "to": "newsletter_writer" },
+      { "from": "newsletter_writer", "to": "send_email" },
+      { "from": "send_email", "to": "log_to_db" },
+      { "from": "log_to_db", "to": "END" }
+    ],
+    "conditions": []
+  },
+  "created_at": "2026-02-08T00:00:00Z",
+  "updated_at": "2026-02-08T00:00:00Z"
+}

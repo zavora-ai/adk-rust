@@ -1,0 +1,113 @@
+{
+  "id": "tpl-customer-onboarding",
+  "version": "1.0.0",
+  "name": "Customer Onboarding",
+  "description": "Automated onboarding: enrich new signup data, generate a personalized welcome email, and push to CRM",
+  "settings": {
+    "default_model": "gemini-2.0-flash",
+    "env_vars": {},
+    "layoutDirection": "LR",
+    "layoutMode": "free",
+    "debugMode": false
+  },
+  "agents": {
+    "welcome_writer": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a customer success writer. Given enriched customer data (company name, industry, size, role), write a short, warm, personalized welcome email. Include:\n1. A greeting using their first name\n2. One sentence acknowledging their industry\n3. Two specific features relevant to their use case\n4. A clear CTA to book an onboarding call\n\nOutput ONLY the email body text, no subject line.",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    }
+  },
+  "tools": {},
+  "tool_configs": {},
+  "actionNodes": {
+    "manual_trigger": {
+      "type": "trigger",
+      "id": "manual_trigger",
+      "name": "New Signup",
+      "description": "Triggered when a new user signs up",
+      "triggerType": "manual",
+      "manual": {
+        "buttonLabel": "Simulate Signup",
+        "defaultPrompt": "New signup: Jane Smith, jane@acmecorp.com, VP of Engineering at AcmeCorp (Series B, 120 employees, fintech)",
+        "showPromptInput": true
+      },
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 30000 },
+      "mapping": { "outputKey": "trigger_input" }
+    },
+    "enrich_contact": {
+      "type": "http",
+      "id": "enrich_contact",
+      "name": "Enrich Contact",
+      "description": "Look up company data from Clearbit or similar enrichment API",
+      "method": "GET",
+      "url": "https://api.clearbit.com/v2/companies/find?domain={{contact_domain}}",
+      "auth": { "type": "bearer", "bearer": { "token": "{{CLEARBIT_API_KEY}}" } },
+      "headers": {},
+      "body": { "type": "none" },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 1000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "enrichment_data" }
+    },
+    "set_context": {
+      "type": "set",
+      "id": "set_context",
+      "name": "Set Onboarding Context",
+      "description": "Combine signup data with enrichment for the LLM",
+      "mode": "set",
+      "variables": [
+        { "key": "customer_name", "value": "{{trigger_input.name}}", "valueType": "string", "isSecret": false },
+        { "key": "company", "value": "{{enrichment_data.name}}", "valueType": "string", "isSecret": false },
+        { "key": "industry", "value": "{{enrichment_data.category.industry}}", "valueType": "string", "isSecret": false },
+        { "key": "employee_count", "value": "{{enrichment_data.metrics.employees}}", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "onboarding_context" }
+    },
+    "send_to_crm": {
+      "type": "http",
+      "id": "send_to_crm",
+      "name": "Push to CRM",
+      "description": "Create contact and log welcome email in HubSpot/Salesforce",
+      "method": "POST",
+      "url": "https://api.hubapi.com/crm/v3/objects/contacts",
+      "auth": { "type": "bearer", "bearer": { "token": "{{HUBSPOT_API_KEY}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"properties\":{\"email\":\"{{contact_email}}\",\"firstname\":\"{{customer_name}}\",\"company\":\"{{company}}\",\"onboarding_email_sent\":true}}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 2000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "crm_result" }
+    }
+  },
+  "workflow": {
+    "type": "graph",
+    "edges": [
+      { "from": "manual_trigger", "to": "START" },
+      { "from": "START", "to": "enrich_contact" },
+      { "from": "enrich_contact", "to": "set_context" },
+      { "from": "set_context", "to": "welcome_writer" },
+      { "from": "welcome_writer", "to": "send_to_crm" },
+      { "from": "send_to_crm", "to": "END" }
+    ],
+    "conditions": []
+  },
+  "created_at": "2026-02-08T00:00:00Z",
+  "updated_at": "2026-02-08T00:00:00Z"
+}

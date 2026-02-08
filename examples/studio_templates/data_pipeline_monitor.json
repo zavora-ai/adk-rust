@@ -1,0 +1,222 @@
+{
+  "id": "tpl-data-pipeline-monitor",
+  "version": "1.0.0",
+  "name": "Data Pipeline Monitor",
+  "description": "Monitor ETL pipeline health, detect failures, diagnose root causes with AI, auto-retry failed jobs, and alert the data team",
+  "settings": {
+    "default_model": "gemini-2.0-flash",
+    "env_vars": {},
+    "layoutDirection": "LR",
+    "layoutMode": "free",
+    "debugMode": false
+  },
+  "agents": {
+    "failure_diagnostician": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a data engineering expert who diagnoses ETL pipeline failures. Given pipeline run metadata, error logs, and recent changes, determine the root cause.\n\nCommon failure patterns:\n- Schema drift: upstream source changed column types or added/removed fields\n- Data volume spike: input data 10x larger than usual, causing OOM or timeouts\n- Dependency failure: upstream pipeline didn't complete, missing input data\n- Infrastructure: Spark executor OOM, S3 throttling, network timeout\n- Code regression: recent deploy introduced a bug\n\nOutput JSON:\n{\"root_cause\": \"schema_drift|volume_spike|dependency|infrastructure|code_regression|unknown\", \"confidence\": 0.85, \"diagnosis\": \"Detailed explanation\", \"auto_retryable\": true, \"fix_suggestion\": \"What to do\", \"estimated_fix_time\": \"15 minutes\"}",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    }
+  },
+  "tools": {},
+  "tool_configs": {},
+  "actionNodes": {
+    "manual_trigger": {
+      "type": "trigger",
+      "id": "manual_trigger",
+      "name": "Pipeline Alert",
+      "description": "Triggered by Airflow/Dagster failure callback or manual check",
+      "triggerType": "manual",
+      "manual": {
+        "buttonLabel": "Check Pipeline",
+        "defaultPrompt": "Pipeline failure alert:\nDAG: daily_user_analytics\nTask: transform_events\nRun ID: scheduled__2026-02-08T06:00:00\nStatus: FAILED\nDuration: 47 minutes (usually 12 min)\nError: java.lang.OutOfMemoryError: Java heap space at org.apache.spark.executor.Executor\nLast successful run: 2026-02-07T06:00:00 (14 min)\nRecent changes: New 'video_events' source added yesterday, no code changes in 3 days\nInput data size: 84GB (usual: 12GB)",
+        "showPromptInput": true
+      },
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 30000 },
+      "mapping": { "outputKey": "trigger_input" }
+    },
+    "fetch_run_history": {
+      "type": "http",
+      "id": "fetch_run_history",
+      "name": "Fetch Run History",
+      "description": "Get recent pipeline run history from Airflow API for context",
+      "method": "GET",
+      "url": "https://{{AIRFLOW_HOST}}/api/v1/dags/{{dag_id}}/dagRuns?limit=10&order_by=-execution_date",
+      "auth": { "type": "basic", "basic": { "username": "{{AIRFLOW_USER}}", "password": "{{AIRFLOW_PASSWORD}}" } },
+      "headers": { "Accept": "application/json" },
+      "body": { "type": "none" },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "run_history" }
+    },
+    "fetch_logs": {
+      "type": "http",
+      "id": "fetch_logs",
+      "name": "Fetch Error Logs",
+      "description": "Pull task logs from Airflow for the failed run",
+      "method": "GET",
+      "url": "https://{{AIRFLOW_HOST}}/api/v1/dags/{{dag_id}}/dagRuns/{{run_id}}/taskInstances/{{task_id}}/logs/1",
+      "auth": { "type": "basic", "basic": { "username": "{{AIRFLOW_USER}}", "password": "{{AIRFLOW_PASSWORD}}" } },
+      "headers": { "Accept": "application/json" },
+      "body": { "type": "none" },
+      "response": { "type": "text" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "error_logs" }
+    },
+    "route_action": {
+      "type": "switch",
+      "id": "route_action",
+      "name": "Route Action",
+      "description": "Auto-retry if retryable, escalate if not",
+      "evaluationMode": "first_match",
+      "conditions": [
+        { "id": "retryable", "name": "Auto-Retryable", "field": "diagnosis.auto_retryable", "operator": "eq", "value": "true", "outputPort": "retry" }
+      ],
+      "defaultBranch": "escalate",
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "action_route" }
+    },
+    "retry_pipeline": {
+      "type": "http",
+      "id": "retry_pipeline",
+      "name": "Retry Pipeline",
+      "description": "Trigger a retry of the failed DAG run via Airflow API",
+      "method": "POST",
+      "url": "https://{{AIRFLOW_HOST}}/api/v1/dags/{{dag_id}}/dagRuns",
+      "auth": { "type": "basic", "basic": { "username": "{{AIRFLOW_USER}}", "password": "{{AIRFLOW_PASSWORD}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"dag_run_id\": \"retry__{{run_id}}\", \"conf\": {\"retry_of\": \"{{run_id}}\", \"auto_retried\": true}}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "retry", "retryCount": 1, "retryDelay": 5000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "retry_result" }
+    },
+    "set_retry_context": {
+      "type": "set",
+      "id": "set_retry_context",
+      "name": "Retry Context",
+      "description": "Set context for auto-retry notification",
+      "mode": "set",
+      "variables": [
+        { "key": "action_taken", "value": "auto_retry", "valueType": "string", "isSecret": false },
+        { "key": "notify_channel", "value": "#data-pipeline-alerts", "valueType": "string", "isSecret": false },
+        { "key": "alert_level", "value": "warning", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "notification_context" }
+    },
+    "set_escalate_context": {
+      "type": "set",
+      "id": "set_escalate_context",
+      "name": "Escalation Context",
+      "description": "Set context for escalation — needs human intervention",
+      "mode": "set",
+      "variables": [
+        { "key": "action_taken", "value": "escalated", "valueType": "string", "isSecret": false },
+        { "key": "notify_channel", "value": "#data-team-urgent", "valueType": "string", "isSecret": false },
+        { "key": "alert_level", "value": "critical", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "notification_context" }
+    },
+    "merge_actions": {
+      "type": "merge",
+      "id": "merge_actions",
+      "name": "Merge Actions",
+      "description": "Rejoin retry and escalation branches",
+      "mode": "wait_all",
+      "combineStrategy": "object",
+      "timeout": { "enabled": true, "ms": 20000, "behavior": "continue" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 25000 },
+      "mapping": { "outputKey": "merged_action" }
+    },
+    "notify_slack": {
+      "type": "http",
+      "id": "notify_slack",
+      "name": "Alert Data Team",
+      "description": "Post pipeline status and diagnosis to Slack",
+      "method": "POST",
+      "url": "https://slack.com/api/chat.postMessage",
+      "auth": { "type": "bearer", "bearer": { "token": "{{SLACK_BOT_TOKEN}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"channel\": \"{{notification_context.notify_channel}}\", \"text\": \"📊 *Pipeline {{notification_context.alert_level}}*: {{dag_id}}\\nRoot cause: {{diagnosis.root_cause}} ({{diagnosis.confidence}}% confidence)\\nDiagnosis: {{diagnosis.diagnosis}}\\nAction: {{notification_context.action_taken}}\\nFix: {{diagnosis.fix_suggestion}}\"}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 1000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "slack_result" }
+    },
+    "log_incident": {
+      "type": "database",
+      "id": "log_incident",
+      "name": "Log Incident",
+      "description": "Record the pipeline incident for trend analysis",
+      "dbType": "postgresql",
+      "connection": { "connectionString": "{{DATABASE_URL}}", "poolSize": 3 },
+      "sql": {
+        "operation": "insert",
+        "query": "INSERT INTO pipeline_incidents (dag_id, run_id, root_cause, confidence, auto_retried, action_taken, diagnosed_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())",
+        "parameters": ["{{dag_id}}", "{{run_id}}", "{{diagnosis.root_cause}}", "{{diagnosis.confidence}}", "{{diagnosis.auto_retryable}}", "{{notification_context.action_taken}}"]
+      },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "db_result" }
+    }
+  },
+  "workflow": {
+    "type": "graph",
+    "edges": [
+      { "from": "manual_trigger", "to": "START" },
+      { "from": "START", "to": "fetch_run_history" },
+      { "from": "START", "to": "fetch_logs" },
+      { "from": "fetch_run_history", "to": "failure_diagnostician" },
+      { "from": "fetch_logs", "to": "failure_diagnostician" },
+      { "from": "failure_diagnostician", "to": "route_action" },
+      { "from": "route_action", "to": "retry_pipeline", "fromPort": "retry" },
+      { "from": "retry_pipeline", "to": "set_retry_context" },
+      { "from": "route_action", "to": "set_escalate_context", "fromPort": "escalate" },
+      { "from": "set_retry_context", "to": "merge_actions" },
+      { "from": "set_escalate_context", "to": "merge_actions" },
+      { "from": "merge_actions", "to": "notify_slack" },
+      { "from": "notify_slack", "to": "log_incident" },
+      { "from": "log_incident", "to": "END" }
+    ],
+    "conditions": []
+  },
+  "created_at": "2026-02-08T00:00:00Z",
+  "updated_at": "2026-02-08T00:00:00Z"
+}

@@ -1,0 +1,171 @@
+{
+  "id": "tpl-content-moderation",
+  "version": "1.0.0",
+  "name": "Content Moderation Pipeline",
+  "description": "Classify user-generated content for policy violations, auto-approve safe content, escalate flagged items for human review",
+  "settings": {
+    "default_model": "gemini-2.0-flash",
+    "env_vars": {},
+    "layoutDirection": "LR",
+    "layoutMode": "free",
+    "debugMode": false
+  },
+  "agents": {
+    "content_classifier": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a content moderation classifier. Analyze the submitted content and classify it into exactly one category:\n\n- \"safe\": No policy violations, appropriate content\n- \"flagged\": Potentially problematic — needs human review (borderline language, ambiguous intent)\n- \"violation\": Clear policy violation (hate speech, harassment, explicit content, spam)\n\nAlso assign a confidence score from 0.0 to 1.0.\n\nOutput JSON only:\n{\"category\": \"safe|flagged|violation\", \"confidence\": 0.95, \"reason\": \"brief explanation\"}",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    },
+    "response_drafter": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a community manager. Based on the moderation result, draft an appropriate response:\n\n- For violations: Write a polite but firm removal notice explaining which policy was violated and how the user can appeal.\n- For flagged content: Write a note explaining the content is under review and will be visible again once approved.\n- For safe content: Write a brief confirmation that the content is live.\n\nKeep responses under 3 sentences. Be professional and empathetic.",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    }
+  },
+  "tools": {},
+  "tool_configs": {},
+  "actionNodes": {
+    "manual_trigger": {
+      "type": "trigger",
+      "id": "manual_trigger",
+      "name": "Content Submitted",
+      "description": "Triggered when a user submits content",
+      "triggerType": "manual",
+      "manual": {
+        "buttonLabel": "Submit Content",
+        "defaultPrompt": "User posted: 'I just tried your new feature and it completely broke my workflow. This is unacceptable and your team should be ashamed. Fix this NOW or I'm switching to a competitor.'",
+        "showPromptInput": true
+      },
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 30000 },
+      "mapping": { "outputKey": "trigger_input" }
+    },
+    "route_by_category": {
+      "type": "switch",
+      "id": "route_by_category",
+      "name": "Route by Category",
+      "description": "Branch based on classification result",
+      "evaluationMode": "first_match",
+      "conditions": [
+        { "id": "violation", "name": "Violation", "field": "classification.category", "operator": "eq", "value": "violation", "outputPort": "violation" },
+        { "id": "flagged", "name": "Flagged", "field": "classification.category", "operator": "eq", "value": "flagged", "outputPort": "flagged" }
+      ],
+      "defaultBranch": "safe",
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "route_result" }
+    },
+    "set_approved": {
+      "type": "set",
+      "id": "set_approved",
+      "name": "Auto-Approve",
+      "description": "Mark content as approved — no action needed",
+      "mode": "set",
+      "variables": [
+        { "key": "status", "value": "approved", "valueType": "string", "isSecret": false },
+        { "key": "action", "value": "publish", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "moderation_result" }
+    },
+    "set_review": {
+      "type": "set",
+      "id": "set_review",
+      "name": "Queue for Review",
+      "description": "Mark content for human review",
+      "mode": "set",
+      "variables": [
+        { "key": "status", "value": "pending_review", "valueType": "string", "isSecret": false },
+        { "key": "action", "value": "hide_pending", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "moderation_result" }
+    },
+    "set_removed": {
+      "type": "set",
+      "id": "set_removed",
+      "name": "Remove Content",
+      "description": "Mark content as removed for policy violation",
+      "mode": "set",
+      "variables": [
+        { "key": "status", "value": "removed", "valueType": "string", "isSecret": false },
+        { "key": "action", "value": "remove_and_notify", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "moderation_result" }
+    },
+    "notify_slack": {
+      "type": "http",
+      "id": "notify_slack",
+      "name": "Notify Slack",
+      "description": "Post moderation summary to the #moderation Slack channel",
+      "method": "POST",
+      "url": "{{SLACK_WEBHOOK_URL}}",
+      "auth": { "type": "none" },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"text\":\"Content moderation: {{moderation_result.status}} — {{classification.reason}}\"}"
+      },
+      "response": { "type": "text" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "slack_result" }
+    },
+    "merge_branches": {
+      "type": "merge",
+      "id": "merge_branches",
+      "name": "Merge Branches",
+      "description": "Rejoin all moderation branches",
+      "mode": "wait_all",
+      "combineStrategy": "object",
+      "timeout": { "enabled": true, "ms": 30000, "behavior": "continue" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 35000 },
+      "mapping": { "outputKey": "merged_result" }
+    }
+  },
+  "workflow": {
+    "type": "graph",
+    "edges": [
+      { "from": "manual_trigger", "to": "START" },
+      { "from": "START", "to": "content_classifier" },
+      { "from": "content_classifier", "to": "route_by_category" },
+      { "from": "route_by_category", "to": "set_approved", "fromPort": "safe" },
+      { "from": "route_by_category", "to": "set_review", "fromPort": "flagged" },
+      { "from": "route_by_category", "to": "set_removed", "fromPort": "violation" },
+      { "from": "set_approved", "to": "merge_branches" },
+      { "from": "set_review", "to": "merge_branches" },
+      { "from": "set_removed", "to": "merge_branches" },
+      { "from": "merge_branches", "to": "response_drafter" },
+      { "from": "response_drafter", "to": "notify_slack" },
+      { "from": "notify_slack", "to": "END" }
+    ],
+    "conditions": []
+  },
+  "created_at": "2026-02-08T00:00:00Z",
+  "updated_at": "2026-02-08T00:00:00Z"
+}
