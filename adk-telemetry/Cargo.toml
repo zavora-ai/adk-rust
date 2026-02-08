@@ -15,7 +15,7 @@ readme = "README.md"
 [dependencies]
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
-opentelemetry = "0.21"
+opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.14", features = ["metrics"] }
 tracing-opentelemetry = "0.22"
