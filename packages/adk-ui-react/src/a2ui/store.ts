@@ -52,9 +52,15 @@ export class A2uiStore {
             return;
         }
 
+        // Reject prototype-polluting keys
+        const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
         let cursor: Record<string, unknown> = surface.dataModel;
         for (let i = 0; i < tokens.length - 1; i += 1) {
             const key = tokens[i];
+            if (FORBIDDEN_KEYS.has(key)) {
+                return;
+            }
             const next = cursor[key];
             if (typeof next === "object" && next !== null) {
                 cursor = next as Record<string, unknown>;
@@ -65,6 +71,9 @@ export class A2uiStore {
             }
         }
         const lastKey = tokens[tokens.length - 1];
+        if (FORBIDDEN_KEYS.has(lastKey)) {
+            return;
+        }
         if (typeof value === "undefined") {
             delete cursor[lastKey];
         } else {

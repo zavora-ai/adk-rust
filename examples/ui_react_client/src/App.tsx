@@ -150,6 +150,13 @@ function makeSessionId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
+  // Fallback for environments without crypto.randomUUID — uses crypto.getRandomValues
+  // for better randomness than Math.random().
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return `session-${Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')}`;
+  }
   return `session-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
 }
 

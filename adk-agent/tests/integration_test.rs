@@ -119,7 +119,7 @@ async fn test_real_gemini_interaction() {
     dotenvy::dotenv().ok();
     let api_key = env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY must be set");
 
-    println!("Using Gemini API Key: {}...", &api_key[..10]);
+    println!("Using Gemini API Key: [REDACTED]");
 
     let model = Arc::new(GeminiModel::new(api_key, "gemini-1.5-flash").unwrap());
 

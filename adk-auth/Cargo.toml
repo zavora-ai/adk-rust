@@ -14,7 +14,7 @@ readme = "README.md"
 
 [features]
 default = []
-sso = ["reqwest", "dashmap", "base64"]
+sso = ["jsonwebtoken", "reqwest", "dashmap", "base64"]
 
 [dependencies]
 adk-core.workspace = true
@@ -27,7 +27,7 @@ tracing.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 
 # SSO dependencies (optional)
-jsonwebtoken = { version = "9.3", optional = true }
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"], optional = true }
 reqwest = { workspace = true, features = ["json"], optional = true }
 dashmap = { version = "6", optional = true }
 base64 = { version = "0.22", optional = true }

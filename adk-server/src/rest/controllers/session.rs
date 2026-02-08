@@ -19,11 +19,14 @@ impl SessionController {
 
     /// Helper function to convert a session to SessionResponse with actual events and state
     fn session_to_response(session: &dyn adk_session::Session) -> SessionResponse {
-        // Convert events to JSON values
+        // Convert events to JSON values, capping at a reasonable limit to prevent
+        // uncontrolled allocation from very large session histories.
+        const MAX_EVENTS: usize = 10_000;
         let events: Vec<serde_json::Value> = session
             .events()
             .all()
             .into_iter()
+            .take(MAX_EVENTS)
             .map(|event| serde_json::to_value(event).unwrap_or(serde_json::Value::Null))
             .collect();
 

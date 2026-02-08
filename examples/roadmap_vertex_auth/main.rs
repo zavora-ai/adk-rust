@@ -132,9 +132,8 @@ async fn main() -> Result<()> {
     model.set_retry_config(RetryConfig::default().with_max_retries(3));
 
     println!(
-        "Mode: {:?}\nProject: {}\nLocation: {}\nModel: {}",
+        "Mode: {:?}\nProject: [configured]\nLocation: {}\nModel: {}",
         mode,
-        project_id,
         location,
         model.name()
     );

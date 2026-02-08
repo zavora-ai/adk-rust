@@ -61,10 +61,10 @@ fn main() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    println!("   sub: {}", claims.sub);
+    println!("   sub: [REDACTED]");
     println!("   iss: {}", claims.iss);
-    println!("   email: {:?}", claims.email);
-    println!("   name: {:?}", claims.name);
+    println!("   email: [REDACTED]");
+    println!("   name: [REDACTED]");
     println!("   groups: {:?}", claims.groups);
     println!("   exp: {} (Unix timestamp)", claims.exp);
     println!();

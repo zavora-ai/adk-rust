@@ -99,13 +99,21 @@ function extractSurfaceFromAgUiEvents(events: Array<Record<string, unknown>>): U
 }
 
 function extractSurfaceScriptFromHtml(html: string): string | null {
-    const scriptPattern =
-        /<script[^>]*id=["']adk-ui-surface["'][^>]*>([\s\S]*?)<\/script>/i;
-    const match = html.match(scriptPattern);
-    if (!match || !match[1]) {
-        return null;
-    }
-    return match[1].trim();
+    // Use indexOf-based extraction to avoid polynomial ReDoS with regex on untrusted HTML
+    const openTagStart = html.indexOf('<script');
+    if (openTagStart === -1) return null;
+
+    const idAttr = html.indexOf('adk-ui-surface', openTagStart);
+    if (idAttr === -1) return null;
+
+    const openTagEnd = html.indexOf('>', idAttr);
+    if (openTagEnd === -1) return null;
+
+    const closeTag = html.indexOf('</script>', openTagEnd);
+    if (closeTag === -1) return null;
+
+    const content = html.substring(openTagEnd + 1, closeTag).trim();
+    return content.length > 0 ? content : null;
 }
 
 function extractSurfaceFromMcpPayload(payload: Record<string, unknown>): UiSurface | null {

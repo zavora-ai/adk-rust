@@ -1,0 +1,45 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "rust"
+    ignore:
+      # Transitive deps with known vulnerabilities that require upstream fixes
+      # time: pulled by google-cloud-* crates
+      # bytes: pulled by axum, tonic, hyper, etc.
+      - dependency-name: "time"
+        update-types: ["version-update:semver-patch"]
+      - dependency-name: "bytes"
+        update-types: ["version-update:semver-patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/packages/adk-ui-react"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "javascript"
+
+  - package-ecosystem: "npm"
+    directory: "/adk-studio/ui"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "javascript"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"

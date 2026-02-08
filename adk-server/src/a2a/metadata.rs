@@ -3,11 +3,22 @@ use std::collections::HashMap;
 
 pub const META_PREFIX: &str = "adk_";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InvocationMeta {
     pub user_id: String,
     pub session_id: String,
     pub event_meta: HashMap<String, Value>,
+}
+
+// Intentionally omit Debug to avoid cleartext logging of user_id/session_id
+impl std::fmt::Debug for InvocationMeta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InvocationMeta")
+            .field("user_id", &"[REDACTED]")
+            .field("session_id", &self.session_id)
+            .field("event_meta_keys", &self.event_meta.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 pub fn to_a2a_meta_key(key: &str) -> String {
