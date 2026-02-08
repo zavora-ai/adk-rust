@@ -56,7 +56,7 @@ mime_guess = "2"
 handlebars = "6"
 
 # Schema validation
-jsonschema = "0.26"
+jsonschema = "0.29"
 
 # HTTP client for notifications and webhooks
 reqwest = { version = "0.12", features = ["json"] }
