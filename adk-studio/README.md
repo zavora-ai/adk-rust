@@ -32,6 +32,18 @@ Or build from source:
 cargo build --release -p adk-studio
 ```
 
+## Uninstall
+
+```bash
+# Remove the binary
+cargo uninstall adk-studio
+
+# Optionally remove project data (macOS)
+rm -rf ~/Library/Application\ Support/adk-studio/
+# Linux
+rm -rf ~/.local/share/adk-studio/
+```
+
 ## Quick Start
 
 ```bash
