@@ -539,50 +539,8 @@ name = "auth_google"
 path = "auth_google/main.rs"
 required-features = ["sso"]
 
-[[example]]
-name = "mistralrs_basic"
-path = "mistralrs_basic/main.rs"
-required-features = ["mistralrs"]
-
-[[example]]
-name = "mistralrs_tools"
-path = "mistralrs_tools/main.rs"
-required-features = ["mistralrs"]
-
-[[example]]
-name = "mistralrs_vision"
-path = "mistralrs_vision/main.rs"
-required-features = ["mistralrs"]
-
-[[example]]
-name = "mistralrs_isq"
-path = "mistralrs_isq/main.rs"
-required-features = ["mistralrs"]
-
-[[example]]
-name = "mistralrs_lora"
-path = "mistralrs_lora/main.rs"
-required-features = ["mistralrs"]
-
-[[example]]
-name = "mistralrs_multimodel"
-path = "mistralrs_multimodel/main.rs"
-required-features = ["mistralrs"]
-
-[[example]]
-name = "mistralrs_mcp"
-path = "mistralrs_mcp/main.rs"
-required-features = ["mistralrs"]
-
-[[example]]
-name = "mistralrs_speech"
-path = "mistralrs_speech/main.rs"
-required-features = ["mistralrs"]
-
-[[example]]
-name = "mistralrs_diffusion"
-path = "mistralrs_diffusion/main.rs"
-required-features = ["mistralrs"]
+# Note: mistralrs examples are part of the adk-mistralrs crate (excluded from workspace)
+# Build them explicitly: cargo build -p adk-mistralrs --examples
 
 # Note: ralph is now a separate crate at examples/ralph/
 # Run with: cargo run -p ralph
