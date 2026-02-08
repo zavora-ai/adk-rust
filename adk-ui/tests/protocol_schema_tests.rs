@@ -266,9 +266,9 @@ fn mcp_apps_invalid_vector_reports_diagnostic() {
     let errors = collect_errors(&validator, &invalid);
     assert!(!errors.is_empty(), "expected mcp schema failure");
     assert!(
-        errors
-            .iter()
-            .any(|error| error.contains("uri") || error.contains("minItems") || error.contains("_meta")),
+        errors.iter().any(|error| error.contains("uri")
+            || error.contains("minItems")
+            || error.contains("_meta")),
         "expected mcp diagnostic mentioning required fields, got {:?}",
         errors
     );

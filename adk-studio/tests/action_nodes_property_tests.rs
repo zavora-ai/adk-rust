@@ -105,7 +105,7 @@ fn arb_trigger_node_config() -> impl Strategy<Value = TriggerNodeConfig> {
             None
         };
         let schedule = if trigger_type == TriggerType::Schedule {
-            Some(ScheduleConfig { cron: "0 * * * *".to_string(), timezone: "UTC".to_string() })
+            Some(ScheduleConfig { cron: "0 * * * *".to_string(), timezone: "UTC".to_string(), default_prompt: None })
         } else {
             None
         };
@@ -113,6 +113,7 @@ fn arb_trigger_node_config() -> impl Strategy<Value = TriggerNodeConfig> {
             Some(EventConfig {
                 source: "system".to_string(),
                 event_type: "notification".to_string(),
+                filter: None,
             })
         } else {
             None
@@ -578,6 +579,10 @@ proptest! {
             ActionNodeConfig::Wait(c) => c.generate_code(&node_id),
             ActionNodeConfig::Code(c) => c.generate_code(&node_id),
             ActionNodeConfig::Database(c) => c.generate_code(&node_id),
+            ActionNodeConfig::Email(_)
+            | ActionNodeConfig::Notification(_)
+            | ActionNodeConfig::Rss(_)
+            | ActionNodeConfig::File(_) => String::new(),
         };
 
         // Property: Braces must be balanced

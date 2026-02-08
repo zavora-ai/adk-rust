@@ -16,19 +16,20 @@ Agent execution runtime for ADK-Rust.
 - **Artifact Handling** - Manages binary artifacts during execution
 - **Event Streaming** - Streams agent events with state propagation
 - **Agent Transfer** - Automatic handling of agent-to-agent transfers
+- **Context Compaction** - Automatic summarization of older events to reduce LLM context size
 
 ## Installation
 
 ```toml
 [dependencies]
-adk-runner = "0.2"
+adk-runner = "0.3"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.2", features = ["runner"] }
+adk-rust = { version = "0.3", features = ["runner"] }
 ```
 
 ## Quick Start
@@ -86,6 +87,8 @@ while let Some(event) = stream.next().await {
 | `memory_service` | `Option<Arc<dyn Memory>>` | Optional memory/RAG service |
 | `plugin_manager` | `Option<Arc<PluginManager>>` | Optional plugin lifecycle hooks |
 | `run_config` | `Option<RunConfig>` | Streaming mode config |
+| `compaction_config` | `Option<EventsCompactionConfig>` | Context compaction settings |
+| `compaction_config` | `Option<EventsCompactionConfig>` | Context compaction settings |
 
 ## Runner vs Direct Agent Execution
 
@@ -122,6 +125,66 @@ Runner applies state changes immediately:
 // Runner applies it to the mutable session so
 // downstream agents can read the updated state.
 ```
+
+## Context Compaction
+
+Runner supports automatic context compaction to keep LLM context manageable in long conversations:
+
+```rust
+use adk_agent::LlmEventSummarizer;
+use adk_runner::{Runner, RunnerConfig, EventsCompactionConfig};
+use std::sync::Arc;
+
+let summarizer = Arc::new(LlmEventSummarizer::new(summarizer_model));
+
+let config = RunnerConfig {
+    // ... other fields ...
+    compaction_config: Some(EventsCompactionConfig {
+        compaction_interval: 3,  // Compact every 3 invocations
+        overlap_size: 1,         // Keep 1 event overlap for continuity
+        summarizer,
+    }),
+};
+```
+
+Compaction runs after each invocation completes. When the user-event count reaches the interval, older events are summarized into a single compacted event. The `BaseEventsSummarizer` and `EventsCompactionConfig` types are re-exported from `adk-core` for convenience.
+
+See [Context Compaction](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/sessions/context-compaction.md) for the full guide.
+
+## Context Compaction
+
+Runner supports automatic sliding-window context compaction to keep LLM context size manageable in long-running sessions. When enabled, the runner periodically summarizes older events into a single compacted event.
+
+```rust
+use adk_runner::{Runner, RunnerConfig, EventsCompactionConfig};
+use adk_agent::LlmEventSummarizer;
+use std::sync::Arc;
+
+let summarizer = LlmEventSummarizer::new(model.clone());
+
+let config = RunnerConfig {
+    app_name: "my_app".to_string(),
+    agent: my_agent,
+    session_service: sessions,
+    artifact_service: Some(artifacts),
+    memory_service: None,
+    plugin_manager: None,
+    run_config: None,
+    compaction_config: Some(EventsCompactionConfig {
+        compaction_interval: 3,  // Compact every 3 invocations
+        overlap_size: 1,         // Keep 1 event overlap for continuity
+        summarizer: Arc::new(summarizer),
+    }),
+};
+
+let runner = Runner::new(config)?;
+```
+
+When compaction triggers, `MutableSession::conversation_history()` automatically uses the most recent compaction summary instead of the original events, keeping the context window bounded.
+
+Re-exported for convenience: `adk_runner::{BaseEventsSummarizer, EventsCompactionConfig}`.
+
+See [Context Compaction](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/sessions/context-compaction.md) for full documentation.
 
 ## Related Crates
 

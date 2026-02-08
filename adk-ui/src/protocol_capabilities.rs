@@ -93,7 +93,8 @@ mod tests {
 
     #[test]
     fn capability_specs_cover_supported_protocols() {
-        let protocols: Vec<&str> = UI_PROTOCOL_CAPABILITIES.iter().map(|spec| spec.protocol).collect();
+        let protocols: Vec<&str> =
+            UI_PROTOCOL_CAPABILITIES.iter().map(|spec| spec.protocol).collect();
         assert_eq!(protocols, SUPPORTED_UI_PROTOCOLS);
     }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { useStore } from './store';
 import { ProjectList } from './components/Projects/ProjectList';
@@ -8,6 +8,7 @@ import { WalkthroughModal, GlobalSettingsModal, TemplateWalkthroughModal } from 
 import { useWalkthrough } from './hooks/useWalkthrough';
 import { useTheme } from './hooks/useTheme';
 import { loadGlobalSettings } from './types/settings';
+import { api } from './api/client';
 
 // Component to apply theme from global settings
 function ThemeInitializer() {
@@ -30,6 +31,8 @@ function ThemeInitializer() {
 export default function App() {
   const { currentProject, fetchProjects } = useStore();
   const [showGlobalSettings, setShowGlobalSettings] = useState(false);
+  const [deploying, setDeploying] = useState(false);
+  const [deployMessage, setDeployMessage] = useState<string | null>(null);
   const { 
     isVisible: showWalkthrough, 
     complete: completeWalkthrough, 
@@ -49,6 +52,33 @@ export default function App() {
       openWalkthrough();
     }
   }, [shouldShowOnFirstRun, openWalkthrough]);
+
+  const handleDeploy = useCallback(async () => {
+    if (!currentProject || deploying) return;
+    setDeploying(true);
+    setDeployMessage(null);
+    try {
+      const result = await api.projects.deploy(currentProject.id, {
+        register: true,
+        openSpatialOs: true,
+      });
+      if (result.openUrl) {
+        window.open(result.openUrl, '_blank', 'noopener,noreferrer');
+      }
+      if (result.registration.success) {
+        setDeployMessage(`Deployed. Manifest: ${result.manifestPath}`);
+      } else {
+        setDeployMessage(
+          `Manifest created. Spatial OS registration failed: ${result.registration.message}`
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setDeployMessage(`Deploy failed: ${message}`);
+    } finally {
+      setDeploying(false);
+    }
+  }, [currentProject, deploying]);
 
   return (
     <ThemeProvider>
@@ -72,6 +102,19 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2">
             <button
+              onClick={handleDeploy}
+              disabled={!currentProject || deploying}
+              className="px-3 py-1.5 rounded text-xs font-semibold border transition-opacity disabled:opacity-50"
+              style={{
+                borderColor: 'var(--accent-primary)',
+                color: 'var(--accent-primary)',
+                backgroundColor: 'transparent',
+              }}
+              title="Create deploy manifest and register with ADK Spatial OS"
+            >
+              {deploying ? 'Deploying...' : 'Deploy'}
+            </button>
+            <button
               onClick={() => setShowGlobalSettings(true)}
               className="p-1.5 rounded hover:opacity-80 transition-opacity"
               style={{ color: 'var(--text-secondary)' }}
@@ -83,6 +126,18 @@ export default function App() {
           </div>
         </header>
         <main className="flex-1 overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
+          {deployMessage && (
+            <div
+              className="px-4 py-2 text-xs border-b"
+              style={{
+                backgroundColor: 'var(--surface-panel)',
+                borderColor: 'var(--border-default)',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              {deployMessage}
+            </div>
+          )}
           {currentProject ? (
             <ReactFlowProvider>
               <Canvas />

@@ -117,8 +117,8 @@ async fn main() -> Result<()> {
     let api_key = std::env::var("GOOGLE_API_KEY")
         .or_else(|_| std::env::var("GEMINI_API_KEY"))
         .expect("GOOGLE_API_KEY or GEMINI_API_KEY must be set");
-    let model_name = std::env::var("UI_DEMO_MODEL")
-        .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
+    let model_name =
+        std::env::var("UI_DEMO_MODEL").unwrap_or_else(|_| "gemini-2.5-flash".to_string());
 
     let ui_tools = UiToolset::all_tools();
 

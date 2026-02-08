@@ -3,9 +3,7 @@ use crate::a2ui::{
     stable_id, stable_indexed_id, text,
 };
 use crate::catalog_registry::CatalogRegistry;
-use crate::interop::{
-    AgUiAdapter, McpAppsAdapter, UiProtocol, UiProtocolAdapter, UiSurface,
-};
+use crate::interop::{AgUiAdapter, McpAppsAdapter, UiProtocol, UiProtocolAdapter, UiSurface};
 use crate::tools::SurfaceProtocolOptions;
 use adk_core::{Result, Tool, ToolContext};
 use async_trait::async_trait;
@@ -409,9 +407,6 @@ mod tests {
         let ctx: Arc<dyn ToolContext> = Arc::new(TestContext::new());
         let value = tool.execute(ctx, args).await.unwrap();
         assert_eq!(value["protocol"], "mcp_apps");
-        assert_eq!(
-            value["payload"]["toolMeta"]["_meta"]["ui"]["resourceUri"],
-            "ui://tests/page"
-        );
+        assert_eq!(value["payload"]["toolMeta"]["_meta"]["ui"]["resourceUri"], "ui://tests/page");
     }
 }

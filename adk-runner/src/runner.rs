@@ -459,10 +459,15 @@ impl Runner {
                         .map(|(i, _)| i)
                         .collect();
 
-                    // Keep the last `overlap` user messages intact
-                    let compact_up_to = if user_msg_indices.len() > overlap {
+                    // Keep the last `overlap` user messages intact.
+                    // When overlap is 0, compact everything.
+                    let compact_up_to = if overlap == 0 {
+                        all_events.len()
+                    } else if user_msg_indices.len() > overlap {
+                        // Compact up to (but not including) the overlap-th-from-last user message
                         user_msg_indices[user_msg_indices.len() - overlap]
                     } else {
+                        // Not enough user messages to satisfy overlap — skip compaction
                         0
                     };
 

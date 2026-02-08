@@ -60,9 +60,7 @@ mod tests {
         let envelope = ToolEnvelope::new(
             ToolEnvelopeProtocol::A2ui,
             "main",
-            Payload {
-                value: "ok".to_string(),
-            },
+            Payload { value: "ok".to_string() },
         )
         .with_meta(Some(json!({"trace_id": "abc"})));
 

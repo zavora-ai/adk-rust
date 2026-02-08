@@ -10,7 +10,7 @@ use crate::{ServerConfig, web_ui};
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    http::{HeaderValue, Method, header},
+    http::{HeaderName, HeaderValue, Method, header},
     routing::{get, post},
 };
 use tower::ServiceBuilder;
@@ -25,7 +25,11 @@ use tower_http::{
 fn build_cors_layer(config: &ServerConfig) -> CorsLayer {
     let cors = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            HeaderName::from_static("x-adk-ui-protocol"),
+        ]);
 
     if config.security.allowed_origins.is_empty() {
         // Development mode: allow all origins (with warning logged at startup)

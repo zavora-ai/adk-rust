@@ -143,7 +143,10 @@ fn is_allowed_domain(domain: &str) -> bool {
         || domain.starts_with("http://127.0.0.1")
 }
 
-fn validate_domain_list(domains: Option<&Vec<String>>, field: &str) -> Result<(), adk_core::AdkError> {
+fn validate_domain_list(
+    domains: Option<&Vec<String>>,
+    field: &str,
+) -> Result<(), adk_core::AdkError> {
     let Some(domains) = domains else {
         return Ok(());
     };
@@ -191,11 +194,7 @@ fn sanitize_resource_token(raw: &str) -> String {
         }
     }
     let trimmed = out.trim_matches('-');
-    if trimmed.is_empty() {
-        "surface".to_string()
-    } else {
-        trimmed.to_string()
-    }
+    if trimmed.is_empty() { "surface".to_string() } else { trimmed.to_string() }
 }
 
 fn build_inline_html(surface: &UiSurface) -> String {
@@ -236,9 +235,9 @@ pub fn surface_to_mcp_apps_payload(
     let resource_uri = options.resource_uri.unwrap_or_else(|| {
         format!("ui://adk-rust/{}", sanitize_resource_token(surface.surface_id.as_str()))
     });
-    let resource_name = options
-        .resource_name
-        .unwrap_or_else(|| format!("adk-ui-{}", sanitize_resource_token(surface.surface_id.as_str())));
+    let resource_name = options.resource_name.unwrap_or_else(|| {
+        format!("adk-ui-{}", sanitize_resource_token(surface.surface_id.as_str()))
+    });
     let resource_description = options
         .resource_description
         .or_else(|| Some("ADK UI surface rendered via MCP Apps resource".to_string()));
@@ -275,7 +274,10 @@ pub fn surface_to_mcp_apps_payload(
         .unwrap_or_else(|| vec![McpToolVisibility::Model, McpToolVisibility::App]);
     let tool_meta = McpToolMeta {
         meta: Some(McpToolMetaEnvelope {
-            ui: Some(McpUiToolMeta { resource_uri: Some(resource_uri), visibility: Some(visibility) }),
+            ui: Some(McpUiToolMeta {
+                resource_uri: Some(resource_uri),
+                visibility: Some(visibility),
+            }),
         }),
     };
 

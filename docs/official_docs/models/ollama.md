@@ -94,7 +94,7 @@ ollama pull gemma2        # Google's efficient model
 
 ```toml
 [dependencies]
-adk-model = { version = "0.2", features = ["ollama"] }
+adk-model = { version = "0.3", features = ["ollama"] }
 ```
 
 ---
@@ -154,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.2", features = ["cli", "ollama"] }
+adk-rust = { version = "0.3", features = ["cli", "ollama"] }
 tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 anyhow = "1.0"

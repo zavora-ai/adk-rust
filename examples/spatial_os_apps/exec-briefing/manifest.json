@@ -1,0 +1,44 @@
+{
+  "id": "exec-briefing",
+  "name": "Executive Briefing",
+  "version": "0.1.0",
+  "description": "Generate executive summaries, risk snapshots, and decision memos.",
+  "capabilities": [
+    "executive-reporting",
+    "risk-summary",
+    "decision-support",
+    "workflow:single"
+  ],
+  "permissions": [
+    "read.incident",
+    "read.release",
+    "read.metrics"
+  ],
+  "handoff_allowlist": [
+    "sre-war-room",
+    "release-manager",
+    "customer-comms"
+  ],
+  "default_risk": "safe",
+  "starter_prompts": [
+    "Summarize current platform risk in five executive bullets.",
+    "Create a one-page incident brief with impact, owner, and next decision point.",
+    "Generate a release risk memo with go/no-go recommendation and rationale."
+  ],
+  "runtime": {
+    "mode": "adk_runner",
+    "workflow_type": "single",
+    "root_agent_id": "exec-briefing-agent",
+    "default_model": "gemini-2.5-flash",
+    "provider": "auto",
+    "instruction": "You are the Executive Briefing agent. Convert technical state into concise leadership updates with explicit risks and decisions.",
+    "supports_sub_agents": false,
+    "supports_a2a": false,
+    "callback_mode": "observe",
+    "tool_confirmation_policy": "never",
+    "guardrails": {
+      "input_profiles": [],
+      "output_profiles": []
+    }
+  }
+}

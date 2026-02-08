@@ -108,18 +108,36 @@ impl Agent for ParallelAgent {
                 });
             }
 
+            let mut first_error: Option<adk_core::AdkError> = None;
+
             while let Some(result) = futures.next().await {
                 match result {
                     Ok(mut stream) => {
                         while let Some(event_result) = stream.next().await {
-                            yield event_result;
+                            match event_result {
+                                Ok(event) => yield Ok(event),
+                                Err(e) => {
+                                    if first_error.is_none() {
+                                        first_error = Some(e);
+                                    }
+                                    // Continue draining other agents instead of returning
+                                    break;
+                                }
+                            }
                         }
                     }
                     Err(e) => {
-                        yield Err(e);
-                        return;
+                        if first_error.is_none() {
+                            first_error = Some(e);
+                        }
+                        // Continue draining remaining futures to avoid resource leaks
                     }
                 }
+            }
+
+            // After all agents complete, propagate the first error if any
+            if let Some(e) = first_error {
+                yield Err(e);
             }
         };
 

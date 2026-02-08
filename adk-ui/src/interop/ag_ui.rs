@@ -471,13 +471,8 @@ mod tests {
     fn state_and_error_helpers_emit_expected_shapes() {
         let snapshot = state_snapshot_event("thread-1", "run-1", json!({"phase": "planning"}));
         let delta = state_delta_event("thread-1", "run-1", json!({"phase": "acting"}));
-        let error = error_event(
-            "thread-1",
-            "run-1",
-            "tool timeout",
-            Some("TIMEOUT".to_string()),
-            true,
-        );
+        let error =
+            error_event("thread-1", "run-1", "tool timeout", Some("TIMEOUT".to_string()), true);
 
         let snapshot_json = serde_json::to_value(snapshot).unwrap();
         let delta_json = serde_json::to_value(delta).unwrap();

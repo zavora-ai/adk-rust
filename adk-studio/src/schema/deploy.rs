@@ -56,6 +56,47 @@ pub struct SpatialAppRuntime {
     pub instruction: Option<String>,
     pub supports_sub_agents: bool,
     pub supports_a2a: bool,
+    #[serde(default)]
+    pub callback_mode: DeployCallbackMode,
+    #[serde(default)]
+    pub tool_confirmation_policy: DeployToolConfirmationPolicy,
+    #[serde(default)]
+    pub guardrails: DeployGuardrailPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DeployCallbackMode {
+    #[default]
+    Off,
+    Observe,
+    Enforce,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DeployToolConfirmationPolicy {
+    #[default]
+    Never,
+    Always,
+    PerTool(Vec<String>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeployGuardrailProfile {
+    HarmfulContent,
+    PiiRedaction,
+    #[serde(rename = "output_max_length_2000")]
+    OutputMaxLength2000,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DeployGuardrailPolicy {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_profiles: Vec<DeployGuardrailProfile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_profiles: Vec<DeployGuardrailProfile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -126,6 +167,18 @@ impl DeployManifest {
                         .values()
                         .any(|agent| !agent.sub_agents.is_empty()),
                     supports_a2a: false,
+                    callback_mode: DeployCallbackMode::Observe,
+                    tool_confirmation_policy: DeployToolConfirmationPolicy::Never,
+                    guardrails: DeployGuardrailPolicy {
+                        input_profiles: vec![
+                            DeployGuardrailProfile::HarmfulContent,
+                            DeployGuardrailProfile::PiiRedaction,
+                        ],
+                        output_profiles: vec![
+                            DeployGuardrailProfile::PiiRedaction,
+                            DeployGuardrailProfile::OutputMaxLength2000,
+                        ],
+                    },
                 },
             },
             runtime: DeployRuntime {

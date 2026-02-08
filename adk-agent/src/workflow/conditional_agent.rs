@@ -56,6 +56,8 @@ pub struct ConditionalAgent {
     condition: ConditionFn,
     if_agent: Arc<dyn Agent>,
     else_agent: Option<Arc<dyn Agent>>,
+    /// Cached list of all branch agents for tree discovery via `sub_agents()`.
+    all_agents: Vec<Arc<dyn Agent>>,
     skills_index: Option<Arc<SkillIndex>>,
     skill_policy: SelectionPolicy,
     max_skill_chars: usize,
@@ -68,12 +70,14 @@ impl ConditionalAgent {
     where
         F: Fn(&dyn InvocationContext) -> bool + Send + Sync + 'static,
     {
+        let all_agents = vec![if_agent.clone()];
         Self {
             name: name.into(),
             description: String::new(),
             condition: Box::new(condition),
             if_agent,
             else_agent: None,
+            all_agents,
             skills_index: None,
             skill_policy: SelectionPolicy::default(),
             max_skill_chars: 2000,
@@ -88,6 +92,7 @@ impl ConditionalAgent {
     }
 
     pub fn with_else(mut self, else_agent: Arc<dyn Agent>) -> Self {
+        self.all_agents.push(else_agent.clone());
         self.else_agent = Some(else_agent);
         self
     }
@@ -139,7 +144,7 @@ impl Agent for ConditionalAgent {
     }
 
     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
-        &[]
+        &self.all_agents
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {

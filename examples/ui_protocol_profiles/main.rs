@@ -236,7 +236,10 @@ fn args_with_protocol(template: &Value, protocol: &str) -> Value {
 
 fn summarize(value: &Value) -> String {
     if let Some(jsonl) = value.as_str() {
-        return format!("jsonl_string(lines={})", jsonl.lines().filter(|line| !line.is_empty()).count());
+        return format!(
+            "jsonl_string(lines={})",
+            jsonl.lines().filter(|line| !line.is_empty()).count()
+        );
     }
     if let Some(object) = value.as_object() {
         let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();

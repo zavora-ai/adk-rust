@@ -15,7 +15,7 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.2.0"
+adk-rust = "0.3.0"
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 ```
@@ -602,11 +602,13 @@ ParallelAgent::new("name", vec![agent1, agent2, agent3])
     .after_callback(callback)
 ```
 
+If any sub-agent fails, `ParallelAgent` drains all remaining futures before propagating the first error, preventing resource leaks.
+
 ### LoopAgent
 
 ```rust
 LoopAgent::new("name", vec![agent1, agent2])
-    .with_max_iterations(5)     // Safety limit (recommended)
+    .with_max_iterations(5)     // Safety limit (recommended, default: 1000)
     .with_description("Optional description")
     .before_callback(callback)
     .after_callback(callback)

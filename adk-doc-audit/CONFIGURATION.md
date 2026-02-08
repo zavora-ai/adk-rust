@@ -54,7 +54,7 @@ generate_suggestions = true
 
 # Advanced settings
 rust_version_override = "1.85.0"  # Override detected Rust version
-workspace_version_override = "0.2.0"  # Override detected workspace version
+workspace_version_override = "0.3.0"  # Override detected workspace version
 ```
 
 ## Environment Variables

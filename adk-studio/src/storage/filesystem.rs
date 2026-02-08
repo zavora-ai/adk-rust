@@ -1,6 +1,6 @@
 use crate::schema::{ProjectMeta, ProjectSchema};
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::fs;
 use uuid::Uuid;
 
@@ -64,5 +64,9 @@ impl FileStorage {
 
     pub async fn exists(&self, id: Uuid) -> bool {
         self.project_path(id).exists()
+    }
+
+    pub fn base_dir(&self) -> &Path {
+        &self.base_dir
     }
 }

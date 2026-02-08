@@ -10,7 +10,7 @@ keywords = ["adk", "agent", "plugin", "ai", "llm"]
 categories = ["development-tools", "asynchronous"]
 
 [dependencies]
-adk-core = { path = "../adk-core", version = "0.2.2" }
+adk-core = { path = "../adk-core", version = "0.3.0" }
 async-trait = "0.1"
 tracing = "0.1"
 tokio = { version = "1", features = ["sync", "time"] }

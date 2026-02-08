@@ -93,7 +93,32 @@ impl adk_core::Session for MutableSession {
         let events = self.events.read().unwrap();
         let mut history = Vec::new();
 
+        // Find the most recent compaction event — everything before its
+        // end_timestamp has been summarized and should be replaced by the
+        // compacted content.
+        let mut compaction_boundary = None;
+        for event in events.iter().rev() {
+            if let Some(ref compaction) = event.actions.compaction {
+                // Insert the summary as the first history entry
+                history.push(compaction.compacted_content.clone());
+                compaction_boundary = Some(compaction.end_timestamp);
+                break;
+            }
+        }
+
         for event in events.iter() {
+            // Skip the compaction event itself (author == "system" with compaction data)
+            if event.actions.compaction.is_some() {
+                continue;
+            }
+
+            // Skip events that were already compacted
+            if let Some(boundary) = compaction_boundary {
+                if event.timestamp <= boundary {
+                    continue;
+                }
+            }
+
             if let Some(content) = &event.llm_response.content {
                 let role = match event.author.as_str() {
                     "user" => "user".to_string(),

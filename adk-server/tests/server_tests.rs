@@ -1,8 +1,8 @@
 use adk_server::create_app;
-use adk_ui::{TOOL_ENVELOPE_VERSION, UI_DEFAULT_PROTOCOL, UI_PROTOCOL_CAPABILITIES};
 use adk_session::{
     CreateRequest, DeleteRequest, Event, GetRequest, ListRequest, Session, SessionService,
 };
+use adk_ui::{TOOL_ENVELOPE_VERSION, UI_DEFAULT_PROTOCOL, UI_PROTOCOL_CAPABILITIES};
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -136,7 +136,8 @@ impl adk_core::Agent for StreamingTestAgent {
     async fn run(
         &self,
         ctx: Arc<dyn adk_core::InvocationContext>,
-    ) -> adk_core::Result<Pin<Box<dyn futures::Stream<Item = adk_core::Result<Event>> + Send>>> {
+    ) -> adk_core::Result<Pin<Box<dyn futures::Stream<Item = adk_core::Result<Event>> + Send>>>
+    {
         let invocation_id = ctx.invocation_id().to_string();
         let output = stream::once(async move {
             let mut event = Event::new(invocation_id);
@@ -169,9 +170,7 @@ async fn test_ui_capabilities() {
     let app = create_app(config);
 
     let response = app
-        .oneshot(
-            Request::builder().uri("/api/ui/capabilities").body(Body::empty()).unwrap(),
-        )
+        .oneshot(Request::builder().uri("/api/ui/capabilities").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -201,21 +200,18 @@ async fn test_ui_capabilities() {
         match expected.deprecation {
             Some(deprecation) => {
                 assert_eq!(
-                    entry["deprecation"]["stage"],
-                    deprecation.stage,
+                    entry["deprecation"]["stage"], deprecation.stage,
                     "deprecation stage mismatch for {}",
                     expected.protocol
                 );
                 assert_eq!(
-                    entry["deprecation"]["announcedOn"],
-                    deprecation.announced_on,
+                    entry["deprecation"]["announcedOn"], deprecation.announced_on,
                     "deprecation announcedOn mismatch for {}",
                     expected.protocol
                 );
                 let sunset_target = entry["deprecation"]["sunsetTargetOn"].as_str();
                 assert_eq!(
-                    sunset_target,
-                    deprecation.sunset_target_on,
+                    sunset_target, deprecation.sunset_target_on,
                     "deprecation sunsetTargetOn mismatch for {}",
                     expected.protocol
                 );
@@ -226,8 +222,7 @@ async fn test_ui_capabilities() {
                     .filter_map(|v| v.as_str())
                     .collect();
                 assert_eq!(
-                    replacements,
-                    deprecation.replacement_protocols,
+                    replacements, deprecation.replacement_protocols,
                     "deprecation replacement mismatch for {}",
                     expected.protocol
                 );
@@ -431,8 +426,10 @@ async fn test_run_path_honors_ui_protocol_header() {
         .await
         .unwrap();
 
-    let config =
-        adk_server::ServerConfig::new(Arc::new(adk_core::SingleAgentLoader::new(agent)), session_service);
+    let config = adk_server::ServerConfig::new(
+        Arc::new(adk_core::SingleAgentLoader::new(agent)),
+        session_service,
+    );
     let app = create_app(config);
 
     let body = serde_json::json!({
@@ -456,6 +453,39 @@ async fn test_run_path_honors_ui_protocol_header() {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let body_str = String::from_utf8(body.to_vec()).unwrap();
     assert!(body_str.contains("\"ui_protocol\":\"mcp_apps\""));
+}
+
+#[tokio::test]
+async fn test_run_sse_cors_preflight_allows_protocol_header() {
+    let config =
+        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(MockSessionService));
+    let app = create_app(config);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/api/run_sse")
+                .header("origin", "http://localhost:5173")
+                .header("access-control-request-method", "POST")
+                .header("access-control-request-headers", "content-type,x-adk-ui-protocol")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let allow_headers = response
+        .headers()
+        .get("access-control-allow-headers")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        allow_headers.to_ascii_lowercase().contains("x-adk-ui-protocol"),
+        "cors allow headers missing x-adk-ui-protocol: {}",
+        allow_headers
+    );
 }
 
 #[tokio::test]

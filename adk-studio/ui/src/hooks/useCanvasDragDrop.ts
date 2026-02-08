@@ -1,9 +1,10 @@
 import { useCallback, DragEvent } from 'react';
-import { useReactFlow } from '@xyflow/react';
+import { useReactFlow, type Node } from '@xyflow/react';
 import { useStore } from '../store';
 import type { ActionNodeType, ActionNodeConfig } from '../types/actionNodes';
 import { createDefaultStandardProperties } from '../types/standardProperties';
 import type { AutobuildTriggerType } from './useBuild';
+import type { LayoutDirection } from '../types/layout';
 
 /**
  * Ephemeral drop position — consumed by useCanvasNodes when building new nodes.
@@ -22,8 +23,8 @@ export function consumePendingDropPosition(): { x: number; y: number } | null {
  * Parameters for the useCanvasDragDrop hook.
  */
 export interface UseCanvasDragDropParams {
-  /** Callback to create an agent with undo support */
-  createAgentWithUndo: (agentType?: string) => void;
+  /** Callback to create an agent with undo support. Returns the new agent ID. */
+  createAgentWithUndo: (agentType?: string, skipWiring?: boolean) => string | undefined;
   /** Currently selected agent node ID */
   selectedNodeId: string | null;
   /** Callback to apply layout after node changes */
@@ -106,12 +107,139 @@ function findClosestEdge(
   return closest;
 }
 
+/** Minimum spacing (px) between nodes along the main layout axis after edge-split insertion. */
+const EDGE_SPLIT_SPACING = 220;
+
+/**
+ * After inserting a node via edge-split, ensure proper spacing between the
+ * source → inserted → downstream chain. Repositions the inserted node at the
+ * midpoint between its source and the first downstream node, then shifts all
+ * downstream nodes if there still isn't enough room.
+ *
+ * @param insertedNodeId  The node that was just inserted
+ * @param dropPosition    Where the inserted node was placed (flow coords)
+ * @param direction       Current layout direction ('LR' or 'TB')
+ * @param getNodes        ReactFlow getNodes
+ * @param setNodes        ReactFlow setNodes
+ * @param projectEdges    Current project workflow edges (after split)
+ */
+function autoSpaceAfterSplit(
+  insertedNodeId: string,
+  dropPosition: { x: number; y: number },
+  direction: LayoutDirection,
+  getNodes: () => Node[],
+  setNodes: (updater: (nodes: Node[]) => Node[]) => void,
+  projectEdges: Array<{ from: string; to: string }>,
+) {
+  const nodes = getNodes();
+  const isHorizontal = direction === 'LR' || direction === 'RL';
+
+  // Build position map
+  const posMap = new Map<string, { x: number; y: number; w: number; h: number }>();
+  for (const n of nodes) {
+    const w = (n.measured?.width ?? n.width ?? 180) as number;
+    const h = (n.measured?.height ?? n.height ?? 80) as number;
+    posMap.set(n.id, { x: n.position.x, y: n.position.y, w, h });
+  }
+
+  // Build forward adjacency
+  const forward: Record<string, string[]> = {};
+  for (const e of projectEdges) {
+    if (!forward[e.from]) forward[e.from] = [];
+    forward[e.from].push(e.to);
+  }
+
+  // Find the source node (who connects TO the inserted node)
+  const sourceEdge = projectEdges.find(e => e.to === insertedNodeId);
+  const sourceId = sourceEdge?.from;
+  const sourcePos = sourceId ? posMap.get(sourceId) : null;
+
+  // BFS from insertedNode to collect all downstream node IDs
+  const downstream = new Set<string>();
+  const visited = new Set<string>([insertedNodeId]);
+  const startTargets = forward[insertedNodeId] || [];
+  for (const t of startTargets) {
+    if (!visited.has(t)) { visited.add(t); downstream.add(t); }
+  }
+  const bfsQueue = [...downstream];
+  while (bfsQueue.length > 0) {
+    const current = bfsQueue.shift()!;
+    for (const next of (forward[current] || [])) {
+      if (!visited.has(next)) {
+        visited.add(next);
+        downstream.add(next);
+        bfsQueue.push(next);
+      }
+    }
+  }
+
+  if (downstream.size === 0) return;
+
+  // Get main-axis positions
+  const axis = (p: { x: number; y: number }) => isHorizontal ? p.x : p.y;
+  const insertedMainAxis = axis(dropPosition);
+
+  // Find the closest downstream node along the main axis
+  let closestDownstreamPos = Infinity;
+  for (const id of downstream) {
+    const p = posMap.get(id);
+    if (!p) continue;
+    const pos = axis(p);
+    if (pos < closestDownstreamPos) closestDownstreamPos = pos;
+  }
+
+  // Calculate how much to shift downstream nodes
+  const gapToDownstream = closestDownstreamPos - insertedMainAxis;
+  const shiftNeeded = EDGE_SPLIT_SPACING - gapToDownstream;
+
+  // Also check if the inserted node is too close to its source
+  let insertedShift = 0;
+  if (sourcePos) {
+    const sourceMainAxis = axis(sourcePos) + (isHorizontal ? (sourcePos.w || 180) : (sourcePos.h || 80));
+    const gapFromSource = insertedMainAxis - sourceMainAxis;
+    if (gapFromSource < EDGE_SPLIT_SPACING * 0.4) {
+      // Too close to source — nudge the inserted node forward
+      insertedShift = EDGE_SPLIT_SPACING * 0.4 - gapFromSource;
+    }
+  }
+
+  // Total shift for downstream = shift needed + any inserted node nudge
+  const totalDownstreamShift = Math.max(0, shiftNeeded) + insertedShift;
+
+  if (totalDownstreamShift <= 0 && insertedShift <= 0) return;
+
+  setNodes((nds) =>
+    nds.map((n) => {
+      // Nudge the inserted node if it's too close to source
+      if (n.id === insertedNodeId && insertedShift > 0) {
+        return {
+          ...n,
+          position: isHorizontal
+            ? { x: n.position.x + insertedShift, y: n.position.y }
+            : { x: n.position.x, y: n.position.y + insertedShift },
+        };
+      }
+      // Shift all downstream nodes
+      if (downstream.has(n.id) && totalDownstreamShift > 0) {
+        return {
+          ...n,
+          position: isHorizontal
+            ? { x: n.position.x + totalDownstreamShift, y: n.position.y }
+            : { x: n.position.x, y: n.position.y + totalDownstreamShift },
+        };
+      }
+      return n;
+    })
+  );
+}
+
 /**
  * Hook that encapsulates all drag-and-drop handlers for the Canvas.
  *
  * Key behaviors:
  * - Nodes are placed at the drop cursor position (n8n-style)
  * - Dropping near an edge midpoint splits the edge (insert between nodes)
+ * - After edge-split, downstream nodes are auto-spaced to prevent overlap
  * - Auto-layout is only applied when no drop position is available (palette click)
  * - Node positions are persisted and respected
  *
@@ -123,7 +251,7 @@ export function useCanvasDragDrop({
   applyLayout,
   invalidateBuild,
 }: UseCanvasDragDropParams): UseCanvasDragDropReturn {
-  const { screenToFlowPosition, getNodes } = useReactFlow();
+  const { screenToFlowPosition, getNodes, setNodes } = useReactFlow();
   const addActionNode = useStore(s => s.addActionNode);
   const addProjectEdge = useStore(s => s.addEdge);
   const removeProjectEdge = useStore(s => s.removeEdge);
@@ -196,6 +324,13 @@ export function useCanvasDragDrop({
         removeProjectEdge(edgeToSplit.from, edgeToSplit.to);
         addProjectEdge(edgeToSplit.from, nodeId);
         addProjectEdge(nodeId, edgeToSplit.to);
+
+        // Auto-space downstream nodes so nothing overlaps after insertion
+        setTimeout(() => {
+          const updatedEdges = useStore.getState().currentProject?.workflow.edges || [];
+          const dir = useStore.getState().layoutDirection;
+          autoSpaceAfterSplit(nodeId, dropPosition, dir, getNodes, setNodes, updatedEdges);
+        }, 50);
         return;
       }
     }
@@ -209,7 +344,7 @@ export function useCanvasDragDrop({
       addProjectEdge('START', nodeId);
     }
     addProjectEdge(nodeId, 'END');
-  }, [addProjectEdge, removeProjectEdge, getNodes]);
+  }, [addProjectEdge, removeProjectEdge, getNodes, setNodes]);
 
   // Create action node handler — used by palette click (no drop position)
   const createActionNode = useCallback((type: ActionNodeType, dropPosition?: { x: number; y: number }) => {
@@ -326,11 +461,14 @@ export function useCanvasDragDrop({
       return;
     }
 
-    // Handle agent drop — place at cursor position
+    // Handle agent drop — place at cursor position and wire via edge-splitting
     const type = e.dataTransfer.getData('application/reactflow');
     if (type) {
       _pendingDropPosition = flowPosition;
-      createAgentWithUndo(type);
+      const newAgentId = createAgentWithUndo(type, true); // skipWiring=true, we'll wire it ourselves
+      if (newAgentId) {
+        wireNodeIntoWorkflow(newAgentId, false, flowPosition);
+      }
       invalidateBuild('onAgentAdd');
       // Don't auto-layout — node will be placed at drop position
     }

@@ -40,13 +40,7 @@ pub struct Edge {
 
 impl Edge {
     pub fn new(from: impl Into<String>, to: impl Into<String>) -> Self {
-        Self {
-            from: from.into(),
-            to: to.into(),
-            condition: None,
-            from_port: None,
-            to_port: None,
-        }
+        Self { from: from.into(), to: to.into(), condition: None, from_port: None, to_port: None }
     }
 
     pub fn conditional(

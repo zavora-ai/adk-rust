@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 
-> **🎉 v0.2.1 Released!** OpenAI structured output fix, iteration control, and new examples. [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
+> **🎉 v0.3.0 Released!** ADK Studio action nodes & debugger, ADK UI support for A2UI, AG UI and MCP Apps, Skills.md augmentation, and Vertex AI integration....including an all new ADK-Rust VS Code Extension! [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 
 A comprehensive and production-ready Rust framework for building AI agents. Create powerful and high-performance AI agent systems with a flexible, modular architecture. Model-agnostic. Type-safe. Blazingly fast.
 
@@ -116,14 +116,14 @@ Requires Rust 1.85 or later (Rust 2024 edition). Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.2.0"
+adk-rust = "0.3.0"
 
 # Or individual crates
-adk-core = "0.2.0"
-adk-agent = "0.2.0"
-adk-model = "0.2.0"  # Add features for providers: features = ["openai", "anthropic"]
-adk-tool = "0.2.0"
-adk-runner = "0.2.0"
+adk-core = "0.3.0"
+adk-agent = "0.3.0"
+adk-model = "0.3.0"  # Add features for providers: features = ["openai", "anthropic"]
+adk-tool = "0.3.0"
+adk-runner = "0.3.0"
 ```
 
 **Nightly (latest features):**
@@ -324,11 +324,11 @@ ls examples/
 ## ADK-Rust Studio
 
 [![adk-studio](https://img.shields.io/crates/v/adk-studio.svg)](https://crates.io/crates/adk-studio)
-![New](https://img.shields.io/badge/new-v0.2.0-brightgreen)
+![New](https://img.shields.io/badge/new-v0.3.0-brightgreen)
 
-A visual development environment for building AI agents with drag-and-drop:
+A visual development environment for building AI agents with drag-and-drop. Design complex multi-agent workflows, compile to production Rust code, and test live — all from your browser.
 
-![ADK-Rust Studio - Support Router](adk-studio/docs/studio-screenshot.png)
+![ADK Studio — Visual Agent Builder with Debug Mode](assets/studio-hero.png)
 
 ```bash
 # Install and run
@@ -337,12 +337,14 @@ adk-studio
 ```
 
 **Features**:
-- Drag-and-drop agent creation with ReactFlow canvas
-- Full agent palette: LLM, Sequential, Parallel, Loop, Router
-- Tools: Function, MCP, Browser, Google Search
-- Real-time chat with SSE streaming
-- Code generation: Compile visual designs to ADK-Rust
-- Build and run executables from Studio
+- Drag-and-drop canvas with LLM agents, workflow agents, and 14 action nodes
+- Execution Timeline with step-by-step replay and State Inspector
+- Debug mode with live input/output state visualization per node
+- Real-time chat with SSE streaming and event trace
+- 14 action nodes: Trigger, HTTP, Set, Transform, Switch, Loop, Merge, Wait, Code, Database, Email, Notification, RSS, File
+- Triggers: Manual, Webhook (with auth), Cron Schedule, Event (with JSONPath filters)
+- Code generation: Compile visual designs to production ADK-Rust with auto-detected dependencies
+- Build, run, and deploy executables directly from Studio
 
 ## Advanced Features
 
@@ -675,7 +677,7 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 # All-in-one crate
-adk-rust = "0.2.0"
+adk-rust = "0.3.0"
 
 # Or individual crates for finer control
 adk-core = "0.2.1"
@@ -846,12 +848,24 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 
 ## Roadmap
 
+**Implemented** (v0.3.0):
+- **adk-gemini overhaul** — Vertex AI support (ADC, Service Accounts, WIF), v1 stable API, image generation, speech generation, thinking mode, content caching, batch processing, URL context
+- **Context compaction** — automatic conversation history summarization to stay within token limits
+- **Production hardening** — deterministic event ordering, bounded history, configurable limits across adk-core, adk-agent, adk-runner
+- **ADK Studio debug mode** — Execution Timeline with step-by-step replay, State Inspector with per-node input/output visualization
+- **Action nodes code generation** — HTTP (reqwest), Database (sqlx/mongodb/redis), Email (lettre/imap), Code (boa_engine JS sandbox) compile to production Rust
+- **14 action nodes** — Trigger, HTTP, Set, Transform, Switch, Loop, Merge, Wait, Code, Database, Email, Notification, RSS, File
+- **Triggers** — Manual, Webhook (with bearer/API key auth), Cron Schedule (with timezone), Event (with JSONPath filters)
+- **A2UI protocol support** — render_screen, render_page, render_kit tools with AG-UI and MCP Apps adapters
+- **SSO/OAuth integration** — Auth0, Okta, Azure AD, Google OIDC providers in adk-auth
+- **Plugin system** (adk-plugin) — dynamic agent/tool/model loading with hot-reload
+
 **Implemented** (v0.2.0):
 - Core framework and agent types
 - Multi-provider LLM support (Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama)
-- **Native local inference** (adk-mistralrs) with ISQ quantization, LoRA adapters, vision/speech/diffusion
+- Native local inference (adk-mistralrs) with ISQ quantization, LoRA adapters, vision/speech/diffusion
 - Tool system with MCP support
-- Agent Tool - Use agents as callable tools
+- Agent Tool — use agents as callable tools
 - Session and artifact management
 - Memory system with vector embeddings
 - REST and A2A servers
@@ -860,9 +874,9 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 - Graph-based workflows (LangGraph-style) with checkpointing and human-in-the-loop
 - Browser automation (46 WebDriver tools)
 - Agent evaluation framework with trajectory validation and LLM-judged scoring
-- **Dynamic UI generation** (adk-ui) with 28 components, 10 templates, React client
-- **Guardrails** (adk-guardrail) with PII redaction, content filtering, schema validation
-- **ADK-Rust Studio** - Visual agent builder with drag-and-drop, code generation, live streaming
+- Dynamic UI generation (adk-ui) with 28 components, 10 templates, React client
+- Guardrails (adk-guardrail) with PII redaction, content filtering, schema validation
+- ADK Studio — visual agent builder with drag-and-drop, code generation, live streaming
 
 **Planned** (see [docs/roadmap/](docs/roadmap/)):
 

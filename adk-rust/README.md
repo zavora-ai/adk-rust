@@ -20,7 +20,7 @@ cargo new my_agent && cd my_agent
 
 ```toml
 [dependencies]
-adk-rust = "0.2.0"
+adk-rust = "0.3.0"
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 ```
@@ -199,7 +199,7 @@ cargo run -- serve --port 8080
 
 ```toml
 # Full (default)
-adk-rust = "0.2.0"
+adk-rust = "0.3.0"
 
 # Minimal
 adk-rust = { version = "0.2.1", default-features = false, features = ["minimal"] }

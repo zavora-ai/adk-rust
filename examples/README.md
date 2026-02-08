@@ -150,8 +150,7 @@ examples/
 │   ├── ui_react_client/             # React client
 │   ├── ui_react_client_mui/         # React + MUI client
 │   ├── a2ui_demo/                   # A2UI protocol demo
-│   ├── 3d_ui_ops_center/            # Three.js 3D ops center
-│   └── spatial_os_shell/            # AI-native spatial shell
+│   └── spatial_os_apps/             # Sample deploy/import manifests for ADK Spatial OS
 │
 ├── 🔐 Auth & Security
 │   ├── auth_basic/                  # Basic RBAC
@@ -242,6 +241,10 @@ cargo run --example auth_sso --features sso
 
 # Standalone crate
 cargo run -p ralph
+
+# ADK Spatial OS sample app pack
+cargo run -p adk-spatial-os
+./examples/spatial_os_apps/import_all.sh
 ```
 
 ## Example Categories

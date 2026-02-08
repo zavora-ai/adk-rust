@@ -31,7 +31,11 @@ pub struct UiSurface {
 }
 
 impl UiSurface {
-    pub fn new(surface_id: impl Into<String>, catalog_id: impl Into<String>, components: Vec<Value>) -> Self {
+    pub fn new(
+        surface_id: impl Into<String>,
+        catalog_id: impl Into<String>,
+        components: Vec<Value>,
+    ) -> Self {
         Self {
             surface_id: surface_id.into(),
             catalog_id: catalog_id.into(),

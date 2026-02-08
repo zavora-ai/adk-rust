@@ -18,6 +18,8 @@ adk-mistralrs/Cargo.lock
 *.swo
 *~
 .DS_Store
+.kiro/
+.vite/
 
 # Environment
 .env
@@ -68,6 +70,7 @@ Thumbs.db
 # Development tooling
 /scripts/
 /.kiro/
+/.kiro/specs/
 /.claude/
 /.vscode/
 

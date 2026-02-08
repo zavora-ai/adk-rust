@@ -1,4 +1,4 @@
-use crate::schema::{ProjectMeta, ProjectSchema};
+use crate::schema::{DeployManifest, ProjectMeta, ProjectSchema};
 use crate::server::events::ResumeEvent;
 use crate::server::graph_runner::{INTERRUPTED_SESSIONS, deserialize_interrupt_response};
 use crate::server::sse::send_resume_response;
@@ -154,6 +154,142 @@ pub async fn compile_project(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(generated))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployRequest {
+    #[serde(default)]
+    pub spatial_os_url: Option<String>,
+    #[serde(default)]
+    pub register: Option<bool>,
+    #[serde(default)]
+    pub open_spatial_os: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpatialRegistrationResult {
+    pub attempted: bool,
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployResponse {
+    pub success: bool,
+    pub manifest: DeployManifest,
+    pub manifest_path: String,
+    pub spatial_os_url: String,
+    pub registration: SpatialRegistrationResult,
+    pub open_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpatialOsRegisterResponse {
+    #[allow(dead_code)]
+    ok: bool,
+    #[allow(dead_code)]
+    created: bool,
+    #[allow(dead_code)]
+    app_id: String,
+    message: String,
+}
+
+fn normalize_spatial_os_url(candidate: Option<String>) -> String {
+    candidate
+        .or_else(|| std::env::var("ADK_SPATIAL_OS_URL").ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:8199".to_string())
+        .trim_end_matches('/')
+        .to_string()
+}
+
+async fn register_with_spatial_os(
+    spatial_os_url: &str,
+    manifest: &DeployManifest,
+) -> Result<SpatialOsRegisterResponse, String> {
+    let endpoint = format!("{spatial_os_url}/api/os/apps/register");
+    let payload = serde_json::json!({
+        "manifest": manifest.app.clone(),
+        "source": "adk_studio",
+        "source_project_id": manifest.source.project_id.clone(),
+    });
+
+    let response = reqwest::Client::new()
+        .post(endpoint)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|error| format!("failed to reach Spatial OS: {error}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_else(|_| "unknown error".to_string());
+        return Err(format!("Spatial OS rejected registration ({status}): {body}"));
+    }
+
+    response
+        .json::<SpatialOsRegisterResponse>()
+        .await
+        .map_err(|error| format!("invalid response from Spatial OS: {error}"))
+}
+
+/// Build a deployment manifest and register the app with Spatial OS.
+pub async fn deploy_project(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<DeployRequest>,
+) -> ApiResult<DeployResponse> {
+    let storage = state.storage.read().await;
+    let project = storage.get(id).await.map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
+    let base_dir = storage.base_dir().to_path_buf();
+    drop(storage);
+
+    let manifest = DeployManifest::from_project(&project);
+    let deploy_dir = base_dir.join("deploy").join(id.to_string());
+    tokio::fs::create_dir_all(&deploy_dir)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let manifest_path = deploy_dir.join("deploy_manifest.json");
+    let manifest_payload = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    tokio::fs::write(&manifest_path, manifest_payload)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let spatial_os_url = normalize_spatial_os_url(req.spatial_os_url);
+    let should_register = req.register.unwrap_or(true);
+    let registration = if should_register {
+        match register_with_spatial_os(&spatial_os_url, &manifest).await {
+            Ok(result) => SpatialRegistrationResult {
+                attempted: true,
+                success: true,
+                message: result.message,
+            },
+            Err(message) => SpatialRegistrationResult { attempted: true, success: false, message },
+        }
+    } else {
+        SpatialRegistrationResult {
+            attempted: false,
+            success: false,
+            message: "registration skipped by request".to_string(),
+        }
+    };
+
+    let open_url =
+        if req.open_spatial_os.unwrap_or(true) { Some(spatial_os_url.clone()) } else { None };
+
+    Ok(Json(DeployResponse {
+        success: true,
+        manifest,
+        manifest_path: manifest_path.to_string_lossy().to_string(),
+        spatial_os_url,
+        registration,
+        open_url,
+    }))
 }
 
 /// Build response

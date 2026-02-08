@@ -89,7 +89,7 @@ adk-realtime/
 
 ```toml
 [dependencies]
-adk-model = { version = "0.2", features = ["realtime"] }
+adk-model = { version = "0.3", features = ["realtime"] }
 ```
 
 ---

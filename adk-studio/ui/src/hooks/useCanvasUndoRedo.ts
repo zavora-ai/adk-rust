@@ -13,7 +13,7 @@ import type { AutobuildTriggerType } from './useBuild';
  * @see Requirements 2.5, 2.7: Canvas delegates handlers
  */
 export function useCanvasUndoRedo(deps: {
-  createAgent: (agentType?: string) => void;
+  createAgent: (agentType?: string, skipWiring?: boolean) => string | undefined;
   removeAgent: (nodeId: string) => void;
   removeActionNode: (nodeId: string) => void;
   applyLayout: () => void;
@@ -80,10 +80,10 @@ export function useCanvasUndoRedo(deps: {
   });
 
   // Wrapped createAgent that records for undo
-  const createAgentWithUndo = useCallback((agentType?: string) => {
+  const createAgentWithUndo = useCallback((agentType?: string, skipWiring?: boolean): string | undefined => {
     const edgesBefore = [...(useStore.getState().currentProject?.workflow.edges || [])];
 
-    createAgent(agentType);
+    const newId = createAgent(agentType, skipWiring);
 
     setTimeout(() => {
       const state = useStore.getState();
@@ -94,11 +94,13 @@ export function useCanvasUndoRedo(deps: {
         (e) => !edgesBefore.some((eb) => eb.from === e.from && eb.to === e.to)
       );
 
-      const newAgentId = newEdges.find((e) => e.to === 'END')?.from;
+      const newAgentId = newEdges.find((e) => e.to === 'END')?.from
+        || (newId && project.agents[newId] ? newId : undefined);
       if (newAgentId && project.agents[newAgentId]) {
         undoRedo.recordAddNode(newAgentId, project.agents[newAgentId], newEdges, edgesBefore);
       }
     }, 0);
+    return newId;
   }, [createAgent, undoRedo]);
 
   // Wrapped removeAgent that records for undo and applies layout

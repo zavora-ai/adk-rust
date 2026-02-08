@@ -1,0 +1,43 @@
+{
+  "id": "support-triage-desk",
+  "name": "Support Triage Desk",
+  "version": "0.1.0",
+  "description": "Classify inbound support tickets, draft responses, and route escalations.",
+  "capabilities": [
+    "support",
+    "triage",
+    "routing",
+    "workflow:sequential"
+  ],
+  "permissions": [
+    "read.ticket",
+    "write.ticket",
+    "send.mail"
+  ],
+  "handoff_allowlist": [
+    "sre-war-room",
+    "customer-comms"
+  ],
+  "default_risk": "controlled",
+  "starter_prompts": [
+    "Classify new critical tickets by severity and suggest first response messages.",
+    "Route every ticket missing an owner and propose escalation targets.",
+    "Draft concise customer replies for all open P1 incidents."
+  ],
+  "runtime": {
+    "mode": "adk_runner",
+    "workflow_type": "sequential",
+    "root_agent_id": "support-orchestrator",
+    "default_model": "gemini-2.5-flash",
+    "provider": "auto",
+    "instruction": "You are the Support Triage Desk. Categorize requests clearly, assign owners, and keep customer communication concise.",
+    "supports_sub_agents": true,
+    "supports_a2a": false,
+    "callback_mode": "observe",
+    "tool_confirmation_policy": "never",
+    "guardrails": {
+      "input_profiles": [],
+      "output_profiles": []
+    }
+  }
+}

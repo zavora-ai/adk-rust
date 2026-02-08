@@ -17,19 +17,20 @@ Agent implementations for ADK-Rust (LLM, Custom, Workflow agents).
 - **LoopAgent** - Iterate until exit condition or max iterations
 - **ConditionalAgent** - Branch based on conditions
 - **LlmConditionalAgent** - LLM-powered routing to sub-agents
+- **LlmEventSummarizer** - LLM-based context compaction for long conversations
 
 ## Installation
 
 ```toml
 [dependencies]
-adk-agent = "0.2"
+adk-agent = "0.3"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.2", features = ["agents"] }
+adk-rust = { version = "0.3", features = ["agents"] }
 ```
 
 ## Quick Start
@@ -68,6 +69,11 @@ let agent = LlmAgentBuilder::new("assistant")
 | `with_skill_budget(chars)` | Cap injected skill content length |
 | `tool(tool)` | Add a tool |
 | `sub_agent(agent)` | Add a sub-agent for transfers |
+| `max_iterations(n)` | Set maximum LLM round-trips (default: 100) |
+| `tool_timeout(duration)` | Set per-tool execution timeout (default: 5 min) |
+| `require_tool_confirmation(names)` | Require user confirmation for specific tools |
+| `require_tool_confirmation_for_all()` | Require user confirmation for all tools |
+| `tool_confirmation_policy(policy)` | Set custom tool confirmation policy |
 | `input_schema(json)` | Set input JSON schema |
 | `output_schema(json)` | Set output JSON schema |
 | `output_key(key)` | Set state key for output |
@@ -126,6 +132,7 @@ let team = ParallelAgent::new("team", vec![
 // Loop: repeat until exit or max iterations
 let iterator = LoopAgent::new("iterator", vec![worker.clone()])
     .with_max_iterations(10);
+// Default max iterations is 1000 (DEFAULT_LOOP_MAX_ITERATIONS)
 ```
 
 ### Conditional Agents
@@ -192,12 +199,37 @@ let custom = CustomAgentBuilder::new("processor")
 
 ## Features
 
-- Automatic tool execution loop
-- Agent transfer between sub-agents
+- Automatic tool execution loop (with configurable timeout: `DEFAULT_TOOL_TIMEOUT` = 5 min)
+- Configurable max iterations (`DEFAULT_MAX_ITERATIONS` = 100 for LlmAgent, `DEFAULT_LOOP_MAX_ITERATIONS` = 1000 for LoopAgent)
+- Agent transfer between sub-agents (with validation against registered sub-agents)
 - Streaming event output
 - Callback hooks at every stage
 - Input/output guardrails
 - Schema validation
+- Tool confirmation policies (`ToolConfirmationPolicy::Never`, `Always`, `PerTool`)
+- Context compaction via `LlmEventSummarizer`
+
+## Context Compaction
+
+`LlmEventSummarizer` uses an LLM to summarize older conversation events, reducing context size for long-running sessions. This is the Rust equivalent of ADK Python's `LlmEventSummarizer`.
+
+```rust
+use adk_agent::LlmEventSummarizer;
+use adk_core::EventsCompactionConfig;
+use std::sync::Arc;
+
+let summarizer = LlmEventSummarizer::new(model.clone());
+// Optionally customize the prompt template:
+// let summarizer = summarizer.with_prompt_template("Custom: {conversation_history}");
+
+let compaction_config = EventsCompactionConfig {
+    compaction_interval: 3,  // Compact every 3 invocations
+    overlap_size: 1,         // Keep 1 event overlap for continuity
+    summarizer: Arc::new(summarizer),
+};
+```
+
+Pass `compaction_config` to `RunnerConfig` to enable automatic compaction. See [Context Compaction](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/sessions/context-compaction.md) for full details.
 
 ## Related Crates
 

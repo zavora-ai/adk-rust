@@ -43,7 +43,7 @@ Add to your `Cargo.toml`:
 adk-graph = { version = "0.2.1", features = ["sqlite"] }
 adk-agent = "0.2.1"
 adk-model = "0.2.1"
-adk-core = "0.2.0"
+adk-core = "0.3.0"
 ```
 
 ### Basic Graph with AgentNode

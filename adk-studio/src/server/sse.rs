@@ -121,18 +121,21 @@ impl ExecutionContext {
         // Sort by step so they emit in chronological order.
         let mut pending: Vec<_> = self.pending_agents.drain(..).collect();
         pending.sort_by_key(|p| p.step);
+        let pending_count = pending.len();
 
         for prev in pending {
-            // If this pending node hasn't produced output yet, defer it.
-            // This handles both:
-            // - Action nodes whose expected output keys aren't in state yet
-            // - LLM agents running in parallel that haven't emitted a message yet
+            // If this pending node hasn't produced output yet, check if we should defer it.
+            // Deferral is ONLY for parallel branches — when multiple nodes are pending
+            // simultaneously. In sequential flow (single pending node), the arrival of
+            // a new node_start proves the previous node finished, so close it immediately.
             let has_captured = self.completed_outputs.contains_key(&prev.name);
-            if !has_captured {
+            let is_parallel = pending_count > 1;
+            if !has_captured && is_parallel {
                 let is_action_node = self.action_node_output_keys.contains_key(&prev.name);
                 if is_action_node {
                     if let Some(expected_keys) = self.action_node_output_keys.get(&prev.name) {
-                        let any_key_present = expected_keys.iter().any(|k| self.current_state.contains_key(k));
+                        let any_key_present =
+                            expected_keys.iter().any(|k| self.current_state.contains_key(k));
                         if !any_key_present && !expected_keys.is_empty() {
                             still_pending.push(prev);
                             continue;
@@ -146,7 +149,9 @@ impl ExecutionContext {
                 }
             }
 
-            let duration_ms = self.recorded_durations.remove(&prev.name)
+            let duration_ms = self
+                .recorded_durations
+                .remove(&prev.name)
                 .unwrap_or_else(|| prev.start_time.elapsed().as_millis() as u64);
 
             let output_state = if let Some(captured) = self.completed_outputs.remove(&prev.name) {
@@ -238,7 +243,8 @@ impl ExecutionContext {
                     if is_pending {
                         // Record the raw duration from the TRACE event so we can
                         // use it later when we emit the reconstructed node_end.
-                        let duration = event.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let duration =
+                            event.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
                         self.recorded_durations.insert(node.to_string(), duration);
                     }
                 }

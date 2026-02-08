@@ -1,13 +1,9 @@
-use axum::{
-    Json,
-    extract::Query,
-    http::StatusCode,
-};
+use adk_ui::interop::mcp_apps::{McpUiPermissions, McpUiResourceCsp};
 use adk_ui::{
     McpAppsRenderOptions, TOOL_ENVELOPE_VERSION, UI_DEFAULT_PROTOCOL, UI_PROTOCOL_CAPABILITIES,
     UiProtocolDeprecationSpec, validate_mcp_apps_render_options,
 };
-use adk_ui::interop::mcp_apps::{McpUiPermissions, McpUiResourceCsp};
+use axum::{Json, extract::Query, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -35,7 +31,9 @@ pub struct UiProtocolDeprecation {
     pub note: Option<&'static str>,
 }
 
-fn map_deprecation(spec: Option<&'static UiProtocolDeprecationSpec>) -> Option<UiProtocolDeprecation> {
+fn map_deprecation(
+    spec: Option<&'static UiProtocolDeprecationSpec>,
+) -> Option<UiProtocolDeprecation> {
     let spec = spec?;
     Some(UiProtocolDeprecation {
         stage: spec.stage,
@@ -138,19 +136,21 @@ fn validate_ui_resource_mime(mime_type: &str) -> Result<(), (StatusCode, String)
     Ok(())
 }
 
-fn parse_ui_meta_options(meta: &Option<Value>) -> Result<McpAppsRenderOptions, (StatusCode, String)> {
+fn parse_ui_meta_options(
+    meta: &Option<Value>,
+) -> Result<McpAppsRenderOptions, (StatusCode, String)> {
     let Some(meta_value) = meta else {
         return Ok(McpAppsRenderOptions::default());
     };
-    let meta_object = meta_value.as_object().ok_or_else(|| {
-        (StatusCode::BAD_REQUEST, "_meta must be a JSON object".to_string())
-    })?;
+    let meta_object = meta_value
+        .as_object()
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "_meta must be a JSON object".to_string()))?;
     let Some(ui_value) = meta_object.get("ui") else {
         return Ok(McpAppsRenderOptions::default());
     };
-    let ui_object = ui_value.as_object().ok_or_else(|| {
-        (StatusCode::BAD_REQUEST, "_meta.ui must be a JSON object".to_string())
-    })?;
+    let ui_object = ui_value
+        .as_object()
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "_meta.ui must be a JSON object".to_string()))?;
 
     let domain = ui_object
         .get("domain")
@@ -195,22 +195,13 @@ fn parse_ui_meta_options(meta: &Option<Value>) -> Result<McpAppsRenderOptions, (
         })
         .transpose()?;
 
-    Ok(McpAppsRenderOptions {
-        domain,
-        prefers_border,
-        csp,
-        permissions,
-        ..Default::default()
-    })
+    Ok(McpAppsRenderOptions { domain, prefers_border, csp, permissions, ..Default::default() })
 }
 
 fn validate_ui_meta(meta: &Option<Value>) -> Result<McpAppsRenderOptions, (StatusCode, String)> {
     let options = parse_ui_meta_options(meta)?;
     validate_mcp_apps_render_options(&options).map_err(|error| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("Invalid _meta.ui options for mcp_apps: {}", error),
-        )
+        (StatusCode::BAD_REQUEST, format!("Invalid _meta.ui options for mcp_apps: {}", error))
     })?;
     Ok(options)
 }
@@ -247,9 +238,9 @@ pub async fn read_ui_resource(
     Query(query): Query<ReadUiResourceQuery>,
 ) -> Result<Json<UiResourceReadResponse>, (StatusCode, String)> {
     validate_ui_resource_uri(&query.uri)?;
-    let guard = resource_registry()
-        .read()
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "resource registry poisoned".to_string()))?;
+    let guard = resource_registry().read().map_err(|_| {
+        (StatusCode::INTERNAL_SERVER_ERROR, "resource registry poisoned".to_string())
+    })?;
     let Some(entry) = guard.get(&query.uri) else {
         warn!(uri = %query.uri, "ui resource read failed: not found");
         return Err((StatusCode::NOT_FOUND, format!("resource not found: {}", query.uri)));

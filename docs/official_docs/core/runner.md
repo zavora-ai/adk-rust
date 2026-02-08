@@ -16,7 +16,7 @@ The `Runner` manages the complete lifecycle of agent execution:
 
 ```toml
 [dependencies]
-adk-runner = "0.2.0"
+adk-runner = "0.3.0"
 ```
 
 ## RunnerConfig
@@ -35,7 +35,9 @@ let config = RunnerConfig {
     session_service: Arc::new(InMemorySessionService::new()),
     artifact_service: Some(Arc::new(InMemoryArtifactService::new())),
     memory_service: None,
+    plugin_manager: None,
     run_config: None,
+    compaction_config: None,
 };
 
 let runner = Runner::new(config)?;
@@ -50,6 +52,8 @@ let runner = Runner::new(config)?;
 | `session_service` | `Arc<dyn SessionService>` | Yes | Session storage backend |
 | `artifact_service` | `Option<Arc<dyn ArtifactService>>` | No | Artifact storage |
 | `memory_service` | `Option<Arc<dyn Memory>>` | No | Long-term memory |
+| `plugin_manager` | `Option<Arc<PluginManager>>` | No | Plugin lifecycle hooks |
+| `compaction_config` | `Option<EventsCompactionConfig>` | No | Context compaction settings |
 | `run_config` | `Option<RunConfig>` | No | Execution options |
 
 ## Running Agents
@@ -212,6 +216,32 @@ The Runner will:
 3. Update session state with new active agent
 4. Continue execution with the new agent
 
+## Context Compaction
+
+For long-running sessions, enable automatic context compaction to keep the LLM context window bounded:
+
+```rust
+use adk_runner::{Runner, RunnerConfig, EventsCompactionConfig};
+use adk_agent::LlmEventSummarizer;
+use std::sync::Arc;
+
+let summarizer = LlmEventSummarizer::new(model.clone());
+
+let config = RunnerConfig {
+    // ... other fields ...
+    compaction_config: Some(EventsCompactionConfig {
+        compaction_interval: 3,  // Compact every 3 invocations
+        overlap_size: 1,         // Keep 1 event overlap for continuity
+        summarizer: Arc::new(summarizer),
+    }),
+    // ...
+};
+```
+
+When compaction triggers, older events are replaced by a summary event. `conversation_history()` automatically uses the summary instead of the original events.
+
+See [Context Compaction](../sessions/context-compaction.md) for full documentation.
+
 ## Integration with Launcher
 
 The `Launcher` uses `Runner` internally:
@@ -230,7 +260,9 @@ let runner = Runner::new(RunnerConfig {
     session_service: Arc::new(InMemorySessionService::new()),
     artifact_service: Some(Arc::new(FileArtifactService::new("./artifacts")?)),
     memory_service: None,
+    plugin_manager: None,
     run_config: None,
+    compaction_config: None,
 })?;
 ```
 
@@ -251,7 +283,9 @@ let config = RunnerConfig {
     session_service: Arc::new(DatabaseSessionService::new(db_pool)),
     artifact_service: Some(Arc::new(S3ArtifactService::new(s3_client))),
     memory_service: Some(Arc::new(QdrantMemoryService::new(qdrant_client))),
-    run_config: None,  // Uses default SSE streaming
+    plugin_manager: None,
+    run_config: None,
+    compaction_config: None,  // Enable with EventsCompactionConfig for long sessions
 };
 
 let runner = Runner::new(config)?;

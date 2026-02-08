@@ -1293,10 +1293,14 @@ impl ActionNodeConfig {
                 ];
                 match cfg.loop_type {
                     LoopType::ForEach => {
-                        let item_var = cfg.for_each.as_ref()
+                        let item_var = cfg
+                            .for_each
+                            .as_ref()
                             .map(|f| f.item_var.clone())
                             .unwrap_or_else(|| "item".to_string());
-                        let index_var = cfg.for_each.as_ref()
+                        let index_var = cfg
+                            .for_each
+                            .as_ref()
                             .map(|f| f.index_var.clone())
                             .unwrap_or_else(|| "index".to_string());
                         keys.push(item_var);
@@ -1307,11 +1311,15 @@ impl ActionNodeConfig {
                     _ => {}
                 }
                 if cfg.results.collect {
-                    let agg_key = cfg.results.aggregation_key.as_deref()
-                        .unwrap_or("loop_results");
+                    let agg_key = cfg.results.aggregation_key.as_deref().unwrap_or("loop_results");
                     keys.push(agg_key.to_string());
                 }
                 keys
+            }
+            ActionNodeConfig::Merge(cfg) => {
+                // Merge nodes produce a single merged output key
+                let key = &cfg.standard.mapping.output_key;
+                if key.is_empty() { vec!["merged".to_string()] } else { vec![key.clone()] }
             }
             _ => {
                 // Other nodes use the standard output_key mapping

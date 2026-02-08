@@ -10,7 +10,7 @@ interface Props {
 
 type SettingsTab = 'defaults' | 'codegen' | 'ui' | 'build';
 
-const ADK_VERSIONS = ['0.2.1', '0.2.0', '0.1.9', '0.1.0'];
+const ADK_VERSIONS = ['0.3.0', '0.2.1', '0.2.0', '0.1.9', '0.1.0'];
 const RUST_EDITIONS = ['2024', '2021'] as const;
 
 export function GlobalSettingsModal({ onClose, onThemeChange }: Props) {
@@ -194,7 +194,7 @@ export function GlobalSettingsModal({ onClose, onThemeChange }: Props) {
                   }}
                 >
                   {ADK_VERSIONS.map(v => (
-                    <option key={v} value={v}>{v}{v === '0.2.1' ? ' (latest)' : ''}</option>
+                    <option key={v} value={v}>{v}{v === '0.3.0' ? ' (latest)' : ''}</option>
                   ))}
                 </select>
               </Field>

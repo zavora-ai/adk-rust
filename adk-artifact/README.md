@@ -21,7 +21,7 @@ Artifacts are useful for storing images, documents, audio, and other binary data
 
 ```toml
 [dependencies]
-adk-artifact = "0.2.0"
+adk-artifact = "0.3.0"
 ```
 
 Or use the meta-crate:

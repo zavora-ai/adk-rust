@@ -187,7 +187,7 @@ async fn main() -> anyhow::Result<()> {
 
 > **Note**: The `DatabaseSessionService` requires the `database` feature flag:
 > ```toml
-> adk-session = { version = "0.2", features = ["database"] }
+> adk-session = { version = "0.3", features = ["database"] }
 > ```
 
 ## Session Lifecycle

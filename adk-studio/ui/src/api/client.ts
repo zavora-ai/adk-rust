@@ -30,6 +30,27 @@ export interface BuildResponse {
   binary_path: string | null;
 }
 
+export interface DeployRequest {
+  spatialOsUrl?: string;
+  register?: boolean;
+  openSpatialOs?: boolean;
+}
+
+export interface SpatialRegistrationResult {
+  attempted: boolean;
+  success: boolean;
+  message: string;
+}
+
+export interface DeployResponse {
+  success: boolean;
+  manifest: unknown;
+  manifestPath: string;
+  spatialOsUrl: string;
+  registration: SpatialRegistrationResult;
+  openUrl: string | null;
+}
+
 export const api = {
   projects: {
     list: () => request<ProjectMeta[]>('/projects'),
@@ -50,5 +71,10 @@ export const api = {
       request<GeneratedProject>(`/projects/${id}/compile`),
     build: (id: string) =>
       request<BuildResponse>(`/projects/${id}/build`, { method: 'POST' }),
+    deploy: (id: string, payload: DeployRequest = {}) =>
+      request<DeployResponse>(`/projects/${id}/deploy`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
   },
 };

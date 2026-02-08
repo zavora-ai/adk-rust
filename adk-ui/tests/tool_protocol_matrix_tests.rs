@@ -271,16 +271,14 @@ fn extract_event_types(value: &Value) -> Vec<String> {
 }
 
 fn extract_resource_uri(value: &Value) -> Option<String> {
-    value
-        .pointer("/payload/resource/uri")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .or_else(|| {
+    value.pointer("/payload/resource/uri").and_then(Value::as_str).map(ToString::to_string).or_else(
+        || {
             value
                 .pointer("/payload/payload/resource/uri")
                 .and_then(Value::as_str)
                 .map(ToString::to_string)
-        })
+        },
+    )
 }
 
 fn extract_jsonl_line_count(value: &Value) -> Option<usize> {
@@ -290,9 +288,10 @@ fn extract_jsonl_line_count(value: &Value) -> Option<usize> {
     if let Some(s) = value.get("jsonl").and_then(Value::as_str) {
         return Some(s.lines().filter(|line| !line.trim().is_empty()).count());
     }
-    value.pointer("/payload/jsonl").and_then(Value::as_str).map(|s| {
-        s.lines().filter(|line| !line.trim().is_empty()).count()
-    })
+    value
+        .pointer("/payload/jsonl")
+        .and_then(Value::as_str)
+        .map(|s| s.lines().filter(|line| !line.trim().is_empty()).count())
 }
 
 fn validate_contract(tool: &str, protocol: &str, value: &Value) {
@@ -358,8 +357,9 @@ async fn collect_matrix_snapshots() -> Vec<MatrixSnapshot> {
 
     for protocol in protocols {
         for tool in &tools {
-            let template =
-                templates.get(tool.name()).unwrap_or_else(|| panic!("missing args for {}", tool.name()));
+            let template = templates
+                .get(tool.name())
+                .unwrap_or_else(|| panic!("missing args for {}", tool.name()));
             let args = args_with_protocol(template, protocol);
             let ctx: Arc<dyn ToolContext> = Arc::new(TestContext::new());
             let value = tool
@@ -400,8 +400,9 @@ async fn tool_protocol_matrix_snapshot_matches_fixture() {
         fs::write(&path, fixture).expect("write fixture file");
     }
 
-    let expected_raw = fs::read_to_string(&path)
-        .unwrap_or_else(|_| panic!("missing fixture at {}. Run with UPDATE_SNAPSHOTS=1", path.display()));
+    let expected_raw = fs::read_to_string(&path).unwrap_or_else(|_| {
+        panic!("missing fixture at {}. Run with UPDATE_SNAPSHOTS=1", path.display())
+    });
     let expected: Vec<MatrixSnapshot> =
         serde_json::from_str(&expected_raw).expect("parse fixture JSON");
 

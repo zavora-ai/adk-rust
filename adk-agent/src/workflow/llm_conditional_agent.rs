@@ -63,6 +63,8 @@ pub struct LlmConditionalAgent {
     instruction: String,
     routes: HashMap<String, Arc<dyn Agent>>,
     default_agent: Option<Arc<dyn Agent>>,
+    /// Cached list of all route agents (+ default) for tree discovery via `sub_agents()`.
+    all_agents: Vec<Arc<dyn Agent>>,
     skills_index: Option<Arc<SkillIndex>>,
     skill_policy: SelectionPolicy,
     max_skill_chars: usize,
@@ -163,6 +165,12 @@ impl LlmConditionalAgentBuilder {
             ));
         }
 
+        // Collect all agents for sub_agents() tree discovery
+        let mut all_agents: Vec<Arc<dyn Agent>> = self.routes.values().cloned().collect();
+        if let Some(ref default) = self.default_agent {
+            all_agents.push(default.clone());
+        }
+
         Ok(LlmConditionalAgent {
             name: self.name,
             description: self.description.unwrap_or_default(),
@@ -170,6 +178,7 @@ impl LlmConditionalAgentBuilder {
             instruction,
             routes: self.routes,
             default_agent: self.default_agent,
+            all_agents,
             skills_index: self.skills_index,
             skill_policy: self.skill_policy,
             max_skill_chars: self.max_skill_chars,
@@ -195,8 +204,7 @@ impl Agent for LlmConditionalAgent {
     }
 
     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
-        // Return empty - routes are internal
-        &[]
+        &self.all_agents
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {

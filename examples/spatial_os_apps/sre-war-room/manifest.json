@@ -1,0 +1,46 @@
+{
+  "id": "sre-war-room",
+  "name": "SRE War Room",
+  "version": "0.1.0",
+  "description": "Incident triage, runbook planning, and risk-aware remediation guidance.",
+  "capabilities": [
+    "ops",
+    "incident",
+    "remediation",
+    "timeline",
+    "workflow:graph"
+  ],
+  "permissions": [
+    "read.telemetry",
+    "read.runbook",
+    "write.remediation",
+    "write.incident"
+  ],
+  "handoff_allowlist": [
+    "customer-comms",
+    "exec-briefing",
+    "release-manager"
+  ],
+  "default_risk": "controlled",
+  "starter_prompts": [
+    "Identify the top two degraded services and propose the lowest-risk remediation order.",
+    "Create an incident timeline with owners, impact, and the next two checkpoints.",
+    "Summarize platform health in three bullets for leadership and list open risks."
+  ],
+  "runtime": {
+    "mode": "adk_runner",
+    "workflow_type": "graph",
+    "root_agent_id": "incident-orchestrator",
+    "default_model": "gemini-2.5-flash",
+    "provider": "auto",
+    "instruction": "You are the SRE War Room orchestrator. Prioritize safety, explain blast radius, and produce operator-ready actions.",
+    "supports_sub_agents": true,
+    "supports_a2a": false,
+    "callback_mode": "observe",
+    "tool_confirmation_policy": "always",
+    "guardrails": {
+      "input_profiles": [],
+      "output_profiles": []
+    }
+  }
+}

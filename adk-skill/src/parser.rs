@@ -2,15 +2,8 @@ use crate::error::{SkillError, SkillResult};
 use crate::model::{ParsedSkill, SkillFrontmatter};
 use std::path::Path;
 
-const CONVENTION_FILES: &[&str] = &[
-    "AGENTS.md",
-    "AGENT.md",
-    "CLAUDE.md",
-    "GEMINI.md",
-    "COPILOT.md",
-    "SKILLS.md",
-    "SOUL.md",
-];
+const CONVENTION_FILES: &[&str] =
+    &["AGENTS.md", "AGENT.md", "CLAUDE.md", "GEMINI.md", "COPILOT.md", "SKILLS.md", "SOUL.md"];
 
 pub fn parse_skill_markdown(path: &Path, content: &str) -> SkillResult<ParsedSkill> {
     let normalized = content.replace("\r\n", "\n");
@@ -108,9 +101,7 @@ fn parse_convention_markdown(path: &Path, content: &str) -> SkillResult<ParsedSk
         "SKILLS.MD" => {
             ("skills".to_string(), vec!["convention".to_string(), "skills-md".to_string()])
         }
-        "SOUL.MD" => {
-            ("soul".to_string(), vec!["convention".to_string(), "soul-md".to_string()])
-        }
+        "SOUL.MD" => ("soul".to_string(), vec!["convention".to_string(), "soul-md".to_string()]),
         _ => (
             path.file_stem()
                 .and_then(|stem| stem.to_str())

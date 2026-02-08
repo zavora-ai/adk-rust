@@ -68,6 +68,8 @@ The left sidebar contains the **Agent Palette** with available agent types:
 - **Loop** - Iterate until exit condition
 - **Router** - Route to sub-agents based on input
 
+Below the agent palette, the **Action Node Palette** provides 14 non-LLM programmatic nodes for deterministic operations (HTTP requests, database queries, branching, loops, etc.). See the [Action Nodes Guide](action-nodes.md) for details.
+
 Click on **LLM Agent** to add it to the canvas.
 
 ![Agent on Canvas](images/03_agent_on_canvas.png)
@@ -127,6 +129,42 @@ You can copy this code or use **Compile** to generate a complete Rust project.
 | **Parallel** | Execute sub-agents concurrently |
 | **Loop** | Iterate until exit condition |
 | **Router** | Route to sub-agents based on input |
+
+### Action Nodes
+
+14 non-LLM programmatic nodes for deterministic workflow operations. See the [Action Nodes Guide](action-nodes.md) for full details.
+
+![Action Nodes Workflow](images/08_action_nodes_workflow.png)
+
+| Node | Description |
+|------|-------------|
+| **Trigger** 🎯 | Workflow entry point (manual, webhook, schedule, event) |
+| **HTTP** 🌐 | Make HTTP requests to external APIs |
+| **Set** 📝 | Define and manipulate workflow state variables |
+| **Transform** ⚙️ | Transform data with expressions or built-in operations |
+| **Switch** 🔀 | Conditional branching based on conditions |
+| **Loop** 🔄 | Iterate over arrays or repeat operations |
+| **Merge** 🔗 | Combine multiple branches back into single flow |
+| **Wait** ⏱️ | Pause workflow for duration or condition |
+| **Code** 💻 | Execute custom JavaScript in sandboxed runtime |
+| **Database** 🗄️ | Database operations (PostgreSQL, MySQL, SQLite, MongoDB, Redis) |
+| **Email** 📧 | Send via SMTP or monitor via IMAP |
+| **Notification** 🔔 | Send to Slack, Discord, Teams, or webhooks |
+| **RSS** 📡 | Monitor RSS/Atom feeds |
+| **File** 📁 | File operations on local or cloud storage |
+
+### Triggers
+
+Workflows start with a Trigger node. See the [Triggers Guide](triggers.md) for full details.
+
+![Trigger Properties Panel](images/09_trigger_properties.png)
+
+| Trigger | Description |
+|---------|-------------|
+| **Manual** | User-initiated via chat input |
+| **Webhook** | HTTP endpoint with optional auth |
+| **Schedule** | Cron-based timing with timezone |
+| **Event** | External system events with JSONPath filtering |
 
 ### Tool Types
 
@@ -243,6 +281,16 @@ All action nodes support `{{variable}}` interpolation and receive predecessor no
 |----------|--------|-------------|
 | `/api/chat` | POST | Send message (SSE stream) |
 
+### Triggers
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/projects/:id/webhook/*path` | POST, GET | Webhook trigger (async) |
+| `/api/projects/:id/webhook-exec/*path` | POST | Webhook trigger (sync, waits for result) |
+| `/api/projects/:id/webhook-events` | GET | SSE stream for webhook notifications |
+| `/api/projects/:id/events` | POST | Event trigger |
+| `/api/sessions/:id/resume` | POST | Resume interrupted workflow (HITL) |
+
 ## Environment Variables
 
 | Variable | Description | Required |
@@ -337,4 +385,4 @@ Studio includes pre-built templates:
 
 ---
 
-**Previous**: [← Memory](../security/memory.md) | **Next**: [Development Guidelines →](../development/development-guidelines.md)
+**Previous**: [← Memory](../security/memory.md) | **Next**: [Action Nodes →](action-nodes.md)

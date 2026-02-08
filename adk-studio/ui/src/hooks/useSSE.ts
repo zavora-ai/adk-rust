@@ -67,6 +67,14 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [iteration, setIteration] = useState(0);
   
+  // Ref-based queue of node_start events for edge animation.
+  // React batches state updates, so rapid node_start events (action nodes
+  // completing in <1ms) would collapse into a single currentAgent update.
+  // This ref-based queue preserves every node_start. A state counter
+  // triggers the consumer effect without causing infinite loops.
+  const nodeStartQueueRef = useRef<string[]>([]);
+  const [nodeStartTick, setNodeStartTick] = useState(0);
+  
   // v2.0: State snapshots for timeline debugging
   const [snapshots, setSnapshots] = useState<StateSnapshot[]>([]);
   const [currentSnapshotIndex, setCurrentSnapshotIndex] = useState(-1);
@@ -145,6 +153,7 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
       setCurrentAgent('');
       setToolCalls([]);
       setIteration(0);
+      nodeStartQueueRef.current = [];
       // v2.0: Reset snapshots and state keys for new execution
       setSnapshots([]);
       setCurrentSnapshotIndex(-1);
@@ -207,7 +216,23 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
           seenAgentsRef.current.add(node);
           agentRef.current = node;
           setCurrentAgent(node);
+          // Push to node start queue so the animation system sees every node,
+          // even when React batches rapid state updates from fast action nodes.
+          nodeStartQueueRef.current.push(node);
+          setNodeStartTick(t => t + 1);
           addEvent('agent_start', `Iter ${iterRef.current + 1}, Step ${trace.step}`, node);
+          
+          // When a new node starts (e.g. loop iteration 2+), reset flowPhase
+          // back to 'input' so edge animations fire. Without this, the phase
+          // stays 'output' from the previous LLM response and the edge
+          // animation check (flowPhase !== 'output') suppresses all animations.
+          //
+          // CRITICAL: Also clear streamingText so the TestConsole effect
+          // `if (streamingText) { onFlowPhase?.('output') }` doesn't
+          // immediately race and override this back to 'output'.
+          textRef.current = '';
+          setStreamingText('');
+          setFlowPhase('input');
           
           // v2.0: Don't capture snapshot at node_start - wait for node_end
           // This avoids showing "running" spinners that never update
@@ -441,5 +466,8 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
     setFlowPhase,
     interrupt,
     setInterrupt,
+    // Edge animation: queue of node_start events (preserves rapid-fire action nodes)
+    nodeStartQueueRef,
+    nodeStartTick,
   };
 }

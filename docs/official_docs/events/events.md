@@ -26,6 +26,7 @@ pub struct Event {
     pub llm_response: LlmResponse,     // Contains content and LLM metadata
     pub actions: EventActions,         // Side effects and metadata
     pub long_running_tool_ids: Vec<String>,  // IDs of long-running tools
+    pub provider_metadata: HashMap<String, String>,  // Provider-specific metadata
 }
 ```
 
@@ -83,6 +84,9 @@ pub struct EventActions {
     pub skip_summarization: bool,               // Skip this event in summaries
     pub transfer_to_agent: Option<String>,      // Transfer control to another agent
     pub escalate: bool,                         // Escalate to human or supervisor
+    pub tool_confirmation: Option<ToolConfirmationRequest>,      // Pending tool confirmation
+    pub tool_confirmation_decision: Option<ToolConfirmationDecision>, // Approval/denial
+    pub compaction: Option<EventCompaction>,     // Context compaction summary
 }
 ```
 
@@ -356,6 +360,17 @@ if event.actions.escalate {
     println!("Escalation requested");
 }
 
+// Context compaction
+if let Some(compaction) = &event.actions.compaction {
+    println!("Compacted events from {} to {}",
+        compaction.start_timestamp, compaction.end_timestamp);
+}
+
+// Tool confirmation
+if let Some(confirmation) = &event.actions.tool_confirmation {
+    println!("Tool {} awaiting confirmation", confirmation.tool_name);
+}
+
 // Skip summarization
 if event.actions.skip_summarization {
     println!("Skip this event in summaries");
@@ -532,6 +547,7 @@ println!("Event occurred at: {}", event.timestamp.format("%Y-%m-%d %H:%M:%S"));
 
 - [Sessions](../sessions/sessions.md) - Session management and lifecycle
 - [State Management](../sessions/state.md) - Working with session state
+- [Context Compaction](../sessions/context-compaction.md) - Sliding-window event summarization
 - [Artifacts](../artifacts/artifacts.md) - Managing binary data
 - [Multi-Agent Systems](../agents/multi-agent.md) - Agent transfers and coordination
 - [Callbacks](../callbacks/callbacks.md) - Intercepting and modifying events

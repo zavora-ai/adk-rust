@@ -2,15 +2,8 @@ use crate::error::{SkillError, SkillResult};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-const CONVENTION_FILES: &[&str] = &[
-    "AGENTS.md",
-    "AGENT.md",
-    "CLAUDE.md",
-    "GEMINI.md",
-    "COPILOT.md",
-    "SKILLS.md",
-    "SOUL.md",
-];
+const CONVENTION_FILES: &[&str] =
+    &["AGENTS.md", "AGENT.md", "CLAUDE.md", "GEMINI.md", "COPILOT.md", "SKILLS.md", "SOUL.md"];
 
 const IGNORED_DIRS: &[&str] =
     &[".git", ".hg", ".svn", "target", "node_modules", ".next", "dist", "build", "coverage"];
@@ -78,10 +71,7 @@ fn is_convention_file(path: &Path, root: &Path) -> bool {
         return false;
     };
 
-    if !CONVENTION_FILES
-        .iter()
-        .any(|candidate| name.eq_ignore_ascii_case(candidate))
-    {
+    if !CONVENTION_FILES.iter().any(|candidate| name.eq_ignore_ascii_case(candidate)) {
         return false;
     }
 

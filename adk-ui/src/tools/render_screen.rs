@@ -1,6 +1,4 @@
-use crate::a2ui::{
-    A2uiSchemaVersion, A2uiValidator,
-};
+use crate::a2ui::{A2uiSchemaVersion, A2uiValidator};
 use crate::catalog_registry::CatalogRegistry;
 use crate::interop::{
     A2uiAdapter, AgUiAdapter, McpAppsAdapter, UiProtocol, UiProtocolAdapter, UiSurface,
@@ -114,10 +112,11 @@ Returns a JSONL string with createSurface/updateDataModel/updateComponents messa
         let catalog_id =
             params.catalog_id.unwrap_or_else(|| registry.default_catalog_id().to_string());
 
-        let surface = UiSurface::new(params.surface_id.clone(), catalog_id, params.components.clone())
-            .with_data_model(params.data_model.clone())
-            .with_theme(params.theme.clone())
-            .with_send_data_model(params.send_data_model);
+        let surface =
+            UiSurface::new(params.surface_id.clone(), catalog_id, params.components.clone())
+                .with_data_model(params.data_model.clone())
+                .with_theme(params.theme.clone())
+                .with_send_data_model(params.send_data_model);
 
         match params.protocol_options.protocol {
             UiProtocol::A2ui => {
@@ -319,9 +318,6 @@ mod tests {
 
         assert_eq!(value["protocol"], "mcp_apps");
         assert_eq!(value["payload"]["resource"]["uri"], "ui://tests/screen");
-        assert_eq!(
-            value["payload"]["toolMeta"]["_meta"]["ui"]["resourceUri"],
-            "ui://tests/screen"
-        );
+        assert_eq!(value["payload"]["toolMeta"]["_meta"]["ui"]["resourceUri"], "ui://tests/screen");
     }
 }

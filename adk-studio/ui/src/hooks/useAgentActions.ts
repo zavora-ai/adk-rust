@@ -9,7 +9,13 @@ export function useAgentActions() {
   const removeEdge = useStore(s => s.removeEdge);
   const selectNode = useStore(s => s.selectNode);
 
-  const createAgent = useCallback((agentType: string = 'llm') => {
+  /**
+   * Create a new agent and wire it into the workflow.
+   * @param agentType - Type of agent to create
+   * @param skipWiring - If true, skip automatic edge wiring (caller will handle it)
+   * @returns The new agent's ID, or undefined if creation failed
+   */
+  const createAgent = useCallback((agentType: string = 'llm', skipWiring?: boolean): string | undefined => {
     // Read current project from store directly to avoid stale closures
     const currentProject = useStore.getState().currentProject;
     if (!currentProject) return;
@@ -50,13 +56,16 @@ export function useAgentActions() {
 
     // Re-read current project to get the latest edges after adding agents
     const updatedProject = useStore.getState().currentProject;
-    if (!updatedProject) return;
+    if (!updatedProject) return id;
     
-    const edgeToEnd = updatedProject.workflow.edges.find(e => e.to === 'END');
-    if (edgeToEnd) { removeEdge(edgeToEnd.from, 'END'); addEdge(edgeToEnd.from, id); }
-    else addEdge('START', id);
-    addEdge(id, 'END');
+    if (!skipWiring) {
+      const edgeToEnd = updatedProject.workflow.edges.find(e => e.to === 'END');
+      if (edgeToEnd) { removeEdge(edgeToEnd.from, 'END'); addEdge(edgeToEnd.from, id); }
+      else addEdge('START', id);
+      addEdge(id, 'END');
+    }
     selectNode(id);
+    return id;
   }, [addAgent, addEdge, removeEdge, selectNode]);
 
   const duplicateAgent = useCallback((nodeId: string) => {

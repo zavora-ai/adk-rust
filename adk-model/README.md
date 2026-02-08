@@ -25,7 +25,7 @@ The crate implements the `Llm` trait from `adk-core`, allowing models to be used
 
 ```toml
 [dependencies]
-adk-model = "0.2.0"
+adk-model = "0.3.0"
 ```
 
 Or use the meta-crate:

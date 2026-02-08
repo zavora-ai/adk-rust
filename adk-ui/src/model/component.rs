@@ -13,11 +13,10 @@ impl CanonicalComponent {
     }
 
     pub fn component_kind(&self) -> Option<&str> {
-        self.0.get("component").and_then(Value::as_str).or_else(|| {
-            self.0
-                .get("type")
-                .and_then(Value::as_str)
-        })
+        self.0
+            .get("component")
+            .and_then(Value::as_str)
+            .or_else(|| self.0.get("type").and_then(Value::as_str))
     }
 }
 

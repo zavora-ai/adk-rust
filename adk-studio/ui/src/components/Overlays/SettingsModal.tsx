@@ -12,7 +12,7 @@ interface Props {
 
 type SettingsTab = 'general' | 'codegen' | 'ui' | 'env';
 
-const ADK_VERSIONS = ['0.2.1', '0.2.0', '0.1.9', '0.1.0'];
+const ADK_VERSIONS = ['0.3.0', '0.2.1', '0.2.0', '0.1.9', '0.1.0'];
 const RUST_EDITIONS = ['2024', '2021'] as const;
 
 export function SettingsModal({ settings, projectName, projectDescription, onSave, onClose }: Props) {
@@ -27,7 +27,7 @@ export function SettingsModal({ settings, projectName, projectDescription, onSav
   useEffect(() => {
     setLocalSettings({
       ...settings,
-      adkVersion: settings.adkVersion || '0.2.1',
+      adkVersion: settings.adkVersion || '0.3.0',
       rustEdition: settings.rustEdition || '2024',
       defaultProvider: settings.defaultProvider || 'gemini',
       default_model: settings.default_model || 'gemini-2.5-flash',
@@ -195,7 +195,7 @@ export function SettingsModal({ settings, projectName, projectDescription, onSav
             <div className="space-y-4">
               <Field label="ADK-Rust Version" hint="Version of ADK crates to use in generated code">
                 <select
-                  value={localSettings.adkVersion || '0.2.1'}
+                  value={localSettings.adkVersion || '0.3.0'}
                   onChange={e => updateSetting('adkVersion', e.target.value)}
                   className="w-full px-3 py-2 rounded text-sm"
                   style={{
@@ -205,7 +205,7 @@ export function SettingsModal({ settings, projectName, projectDescription, onSav
                   }}
                 >
                   {ADK_VERSIONS.map(v => (
-                    <option key={v} value={v}>{v}{v === '0.2.1' ? ' (latest)' : ''}</option>
+                    <option key={v} value={v}>{v}{v === '0.3.0' ? ' (latest)' : ''}</option>
                   ))}
                 </select>
               </Field>
@@ -237,8 +237,8 @@ export function SettingsModal({ settings, projectName, projectDescription, onSav
                   edition = "{localSettings.rustEdition || '2024'}"<br />
                   <br />
                   [dependencies]<br />
-                  adk-core = "{localSettings.adkVersion || '0.2.1'}"<br />
-                  adk-agent = "{localSettings.adkVersion || '0.2.1'}"<br />
+                  adk-core = "{localSettings.adkVersion || '0.3.0'}"<br />
+                  adk-agent = "{localSettings.adkVersion || '0.3.0'}"<br />
                   ...
                 </code>
               </div>

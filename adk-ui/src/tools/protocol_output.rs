@@ -68,27 +68,20 @@ impl Default for SurfaceProtocolOptions {
 
 impl SurfaceProtocolOptions {
     pub fn resolved_ag_ui_thread_id(&self, surface_id: &str) -> String {
-        self.ag_ui_thread_id
-            .clone()
-            .unwrap_or_else(|| format!("thread-{}", surface_id))
+        self.ag_ui_thread_id.clone().unwrap_or_else(|| format!("thread-{}", surface_id))
     }
 
     pub fn resolved_ag_ui_run_id(&self, surface_id: &str) -> String {
-        self.ag_ui_run_id
-            .clone()
-            .unwrap_or_else(|| format!("run-{}", surface_id))
+        self.ag_ui_run_id.clone().unwrap_or_else(|| format!("run-{}", surface_id))
     }
 
     pub fn parse_mcp_options(&self) -> Result<McpAppsRenderOptions, adk_core::AdkError> {
         let options = match &self.mcp_apps {
-            Some(value) => serde_json::from_value::<McpAppsRenderOptions>(value.clone()).map_err(
-                |error| {
-                    adk_core::AdkError::Tool(format!(
-                        "Invalid mcp_apps options payload: {}",
-                        error
-                    ))
-                },
-            ),
+            Some(value) => {
+                serde_json::from_value::<McpAppsRenderOptions>(value.clone()).map_err(|error| {
+                    adk_core::AdkError::Tool(format!("Invalid mcp_apps options payload: {}", error))
+                })
+            }
             None => Ok(McpAppsRenderOptions::default()),
         }?;
         validate_mcp_apps_render_options(&options)?;

@@ -72,6 +72,8 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 ## Studio
 
 - [ADK Studio](studio/studio.md) - Visual development environment for building agents
+- [Action Nodes](studio/action-nodes.md) - Non-LLM programmatic nodes for automation workflows
+- [Triggers](studio/triggers.md) - Webhook, schedule, and event triggers for workflows
 
 ## Development
 

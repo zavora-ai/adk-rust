@@ -400,11 +400,14 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
     // Add js_value_to_json helper if any Code action nodes exist
     {
         use crate::codegen::action_nodes::ActionNodeConfig;
-        let has_code_nodes = project.action_nodes.values().any(|n| matches!(n, ActionNodeConfig::Code(_)));
+        let has_code_nodes =
+            project.action_nodes.values().any(|n| matches!(n, ActionNodeConfig::Code(_)));
         if has_code_nodes {
             code.push_str("/// Convert a boa_engine JsValue to serde_json::Value\n");
             code.push_str("fn js_value_to_json(val: &boa_engine::JsValue, ctx: &mut boa_engine::Context) -> serde_json::Value {\n");
-            code.push_str("    // Handle Undefined/Null before to_json (which panics on Undefined)\n");
+            code.push_str(
+                "    // Handle Undefined/Null before to_json (which panics on Undefined)\n",
+            );
             code.push_str("    if val.is_undefined() || val.is_null() {\n");
             code.push_str("        return serde_json::Value::Null;\n");
             code.push_str("    }\n");
@@ -477,7 +480,11 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
         let is_back_edge = loop_node_ids.contains(edge.to.as_str())
             && edge.from != "START"
             && !edge.from.is_empty()
-            && project.action_nodes.get(&edge.from).map(|n| !matches!(n, ActionNodeConfig::Loop(_))).unwrap_or(true)
+            && project
+                .action_nodes
+                .get(&edge.from)
+                .map(|n| !matches!(n, ActionNodeConfig::Loop(_)))
+                .unwrap_or(true)
             && !project.workflow.edges.iter().any(|e2| e2.from == edge.to && e2.to == edge.from);
 
         if from_is_trigger || is_back_edge {
@@ -513,7 +520,8 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
 
     // Identify agents that are in parallel fan-out branches (predecessor is an all_match switch)
     // These agents must write to unique output keys to avoid overwriting each other
-    let mut parallel_branch_agents: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut parallel_branch_agents: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     for edge in &project.workflow.edges {
         if all_match_switch_nodes_early.contains(edge.from.as_str()) {
             // This edge goes from an all_match switch to a branch target
@@ -557,13 +565,16 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
     let executable_action_nodes: Vec<_> = project
         .action_nodes
         .iter()
-        .filter(|(_, node)| {
-            !matches!(node, ActionNodeConfig::Trigger(_))
-        })
+        .filter(|(_, node)| !matches!(node, ActionNodeConfig::Trigger(_)))
         .collect();
 
     for (node_id, node) in &executable_action_nodes {
-        code.push_str(&generate_action_node_function(node_id, node, &predecessor_map, &parallel_branch_agents));
+        code.push_str(&generate_action_node_function(
+            node_id,
+            node,
+            &predecessor_map,
+            &parallel_branch_agents,
+        ));
     }
 
     // Build graph
@@ -612,7 +623,8 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
                     }
                 }
                 if config.results.collect {
-                    let agg_key = config.results.aggregation_key.as_deref().unwrap_or("loop_results");
+                    let agg_key =
+                        config.results.aggregation_key.as_deref().unwrap_or("loop_results");
                     if !extra_channels.contains(&agg_key.to_string()) {
                         extra_channels.push(agg_key.to_string());
                     }
@@ -645,16 +657,18 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
             }
         }
     }
-    let base_channels = vec!["message".to_string(), "classification".to_string(), "response".to_string()];
+    let base_channels =
+        vec!["message".to_string(), "classification".to_string(), "response".to_string()];
     // Add unique output channels for parallel-branch agents
-    let parallel_channels: Vec<String> = parallel_branch_agents.iter()
-        .map(|id| format!("{}_response", id))
-        .collect();
-    let all_channels: Vec<String> = base_channels.into_iter()
+    let parallel_channels: Vec<String> =
+        parallel_branch_agents.iter().map(|id| format!("{}_response", id)).collect();
+    let all_channels: Vec<String> = base_channels
+        .into_iter()
         .chain(extra_channels.into_iter())
         .chain(parallel_channels.into_iter())
         .collect();
-    let channel_list = all_channels.iter().map(|c| format!("\"{}\"", c)).collect::<Vec<_>>().join(", ");
+    let channel_list =
+        all_channels.iter().map(|c| format!("\"{}\"", c)).collect::<Vec<_>>().join(", ");
     code.push_str(&format!("    let graph = StateGraph::with_channels(&[{}])\n", channel_list));
 
     // Add all agent nodes
@@ -712,11 +726,8 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
         .map(|(id, _)| id.as_str())
         .collect();
 
-    let first_match_switch_nodes: std::collections::HashSet<&str> = switch_nodes
-        .iter()
-        .filter(|id| !all_match_switch_nodes.contains(*id))
-        .copied()
-        .collect();
+    let first_match_switch_nodes: std::collections::HashSet<&str> =
+        switch_nodes.iter().filter(|id| !all_match_switch_nodes.contains(*id)).copied().collect();
 
     // Collect loop node IDs so we can handle their edges specially
     let loop_nodes: std::collections::HashSet<&str> = project
@@ -733,11 +744,7 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
     for edge in &project.workflow.edges {
         if first_match_switch_nodes.contains(edge.from.as_str()) {
             let port = edge.from_port.clone().unwrap_or_default();
-            let target = if edge.to == "END" {
-                "END".to_string()
-            } else {
-                edge.to.clone()
-            };
+            let target = if edge.to == "END" { "END".to_string() } else { edge.to.clone() };
             switch_edge_map.entry(edge.from.as_str()).or_default().push((port, target));
         }
     }
@@ -873,16 +880,16 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
             let conditions: Vec<String> = targets
                 .iter()
                 .map(|(port, target)| {
-                    let target_str = if target == "END" {
-                        "END".to_string()
-                    } else {
-                        format!("\"{}\"", target)
-                    };
+                    let target_str =
+                        if target == "END" { "END".to_string() } else { format!("\"{}\"", target) };
                     format!("(\"{}\", {})", port, target_str)
                 })
                 .collect();
 
-            code.push_str(&format!("        // Switch node: {} - conditional routing by '{}'\n", switch_id, output_key));
+            code.push_str(&format!(
+                "        // Switch node: {} - conditional routing by '{}'\n",
+                switch_id, output_key
+            ));
             code.push_str("        .add_conditional_edges(\n");
             code.push_str(&format!("            \"{}\",\n", switch_id));
             code.push_str(&format!("            Router::by_field(\"{}\"),\n", output_key));
@@ -896,29 +903,39 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
     for loop_id in &loop_nodes {
         let done_key = format!("{}_loop_done", loop_id);
         let body_targets = loop_body_map.get(loop_id).cloned().unwrap_or_default();
-        let exit_targets = loop_exit_map.get(loop_id).cloned().unwrap_or_else(|| vec!["END".to_string()]);
+        let exit_targets =
+            loop_exit_map.get(loop_id).cloned().unwrap_or_else(|| vec!["END".to_string()]);
 
         if let Some(body_first) = body_targets.first() {
             let exit_first = exit_targets.first().map(|s| s.as_str()).unwrap_or("END");
 
             let body_target_str = format!("\"{}\"", body_first);
-            let exit_target_str = if exit_first == "END" {
-                "END".to_string()
-            } else {
-                format!("\"{}\"", exit_first)
-            };
+            let exit_target_str =
+                if exit_first == "END" { "END".to_string() } else { format!("\"{}\"", exit_first) };
 
-            code.push_str(&format!("        // Loop node: {} - conditional cycle by '{}'\n", loop_id, done_key));
+            code.push_str(&format!(
+                "        // Loop node: {} - conditional cycle by '{}'\n",
+                loop_id, done_key
+            ));
             code.push_str("        .add_conditional_edges(\n");
             code.push_str(&format!("            \"{}\",\n", loop_id));
-            code.push_str(&format!("            Router::by_bool(\"{}\", \"exit\", \"body\"),\n", done_key));
-            code.push_str(&format!("            [(\"body\", {}), (\"exit\", {})],\n", body_target_str, exit_target_str));
+            code.push_str(&format!(
+                "            Router::by_bool(\"{}\", \"exit\", \"body\"),\n",
+                done_key
+            ));
+            code.push_str(&format!(
+                "            [(\"body\", {}), (\"exit\", {})],\n",
+                body_target_str, exit_target_str
+            ));
             code.push_str("        )\n");
 
             // Add back-edge from last body node to loop node (cycle)
             for (back_from, back_to) in &loop_back_edges {
                 if back_to.as_str() == *loop_id {
-                    code.push_str(&format!("        .add_edge(\"{}\", \"{}\")\n", back_from, loop_id));
+                    code.push_str(&format!(
+                        "        .add_edge(\"{}\", \"{}\")\n",
+                        back_from, loop_id
+                    ));
                 }
             }
         }
@@ -1243,11 +1260,7 @@ fn generate_llm_node_v2(
     // Supports multiple predecessors (fan-in from merge/parallel branches)
     {
         use crate::codegen::action_nodes::ActionNodeConfig;
-        let mut queue: Vec<&str> = if let Some(pred) = predecessor {
-            vec![pred]
-        } else {
-            vec![]
-        };
+        let mut queue: Vec<&str> = if let Some(pred) = predecessor { vec![pred] } else { vec![] };
         // Also add any additional predecessors (fan-in)
         if let Some(preds) = predecessor_map.get(id) {
             for p in preds {
@@ -1343,9 +1356,14 @@ fn generate_llm_node_v2(
     code.push_str("            if !full_text.is_empty() {\n");
     if is_parallel_branch {
         // Parallel branch agents write to a unique key to avoid overwriting each other
-        code.push_str(&format!("                updates.insert(\"{}_response\".to_string(), json!(full_text));\n", id));
+        code.push_str(&format!(
+            "                updates.insert(\"{}_response\".to_string(), json!(full_text));\n",
+            id
+        ));
     } else {
-        code.push_str("                updates.insert(\"response\".to_string(), json!(full_text));\n");
+        code.push_str(
+            "                updates.insert(\"response\".to_string(), json!(full_text));\n",
+        );
     }
     code.push_str("            }\n");
     code.push_str("            updates\n");
@@ -1733,7 +1751,13 @@ fn generate_condition_check(code: &mut String, op: &str, value_str: &str, port: 
 }
 
 /// Helper: generate a condition check for all_match Switch (pushes to matched_branches vec)
-fn generate_all_match_condition_check(code: &mut String, op: &str, value_str: &str, port: &str, field: &str) {
+fn generate_all_match_condition_check(
+    code: &mut String,
+    op: &str,
+    value_str: &str,
+    port: &str,
+    field: &str,
+) {
     let escaped_val = value_str.replace('"', "\\\"");
     match op {
         "equals" | "==" | "eq" => {
@@ -1843,7 +1867,8 @@ fn generate_action_node_function(
                         let raw_expr = var.value.as_str().unwrap_or("");
                         // If predecessor is a parallel-branch agent, rewrite {{response}} to {{agent_response}}
                         let expr = if let Some(pred_id) = parallel_predecessor {
-                            raw_expr.replace("{{response}}", &format!("{{{{{}_response}}}}", pred_id))
+                            raw_expr
+                                .replace("{{response}}", &format!("{{{{{}_response}}}}", pred_id))
                         } else {
                             raw_expr.to_string()
                         };
@@ -1884,18 +1909,26 @@ fn generate_action_node_function(
                         if raw_val.contains("{{") {
                             // String contains template variables — treat like expression
                             let val = if let Some(pred_id) = parallel_predecessor {
-                                raw_val.replace("{{response}}", &format!("{{{{{}_response}}}}", pred_id))
+                                raw_val.replace(
+                                    "{{response}}",
+                                    &format!("{{{{{}_response}}}}", pred_id),
+                                )
                             } else {
                                 raw_val.to_string()
                             };
-                            code.push_str(&format!("        // Set {} from string template\n", key));
+                            code.push_str(&format!(
+                                "        // Set {} from string template\n",
+                                key
+                            ));
                             code.push_str(&format!(
                                 "        let mut {}_value = \"{}\".to_string();\n",
                                 key,
                                 val.replace('"', "\\\"")
                             ));
                             code.push_str("        for (k, v) in ctx.state.iter() {\n");
-                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str(
+                                "            let pattern = format!(\"{{{{{}}}}}\", k);\n",
+                            );
                             code.push_str("            if let Some(s) = v.as_str() {\n");
                             code.push_str(&format!(
                                 "                {}_value = {}_value.replace(&pattern, s);\n",
@@ -2010,7 +2043,9 @@ fn generate_action_node_function(
                 crate::codegen::action_nodes::EvaluationMode::AllMatch => {
                     // All match (fan-out): evaluate all conditions, store matched branches in state
                     // All connected branches execute via direct edges regardless — this is for observability
-                    code.push_str("        let mut matched_branches: Vec<String> = Vec::new();\n\n");
+                    code.push_str(
+                        "        let mut matched_branches: Vec<String> = Vec::new();\n\n",
+                    );
 
                     for condition in &config.conditions {
                         let field = &condition.field;
@@ -2056,9 +2091,15 @@ fn generate_action_node_function(
 
             match config.loop_type {
                 crate::codegen::action_nodes::LoopType::ForEach => {
-                    let source = config.for_each.as_ref().map(|f| f.source_array.as_str()).unwrap_or("items");
-                    let item_var = config.for_each.as_ref().map(|f| f.item_var.as_str()).unwrap_or("item");
-                    let index_var = config.for_each.as_ref().map(|f| f.index_var.as_str()).unwrap_or("index");
+                    let source = config
+                        .for_each
+                        .as_ref()
+                        .map(|f| f.source_array.as_str())
+                        .unwrap_or("items");
+                    let item_var =
+                        config.for_each.as_ref().map(|f| f.item_var.as_str()).unwrap_or("item");
+                    let index_var =
+                        config.for_each.as_ref().map(|f| f.index_var.as_str()).unwrap_or("index");
                     let counter_key = format!("{}_loop_index", node_id);
                     let done_key = format!("{}_loop_done", node_id);
 
@@ -2066,43 +2107,78 @@ fn generate_action_node_function(
                     code.push_str(&format!("        let source_arr = ctx.state.get(\"{}\").and_then(|v| v.as_array()).cloned().unwrap_or_default();\n", source));
                     code.push_str(&format!("        let idx = ctx.state.get(\"{}\").and_then(|v| v.as_u64()).unwrap_or(0) as usize;\n", counter_key));
                     code.push_str("        if idx < source_arr.len() {\n");
-                    code.push_str(&format!("            let current_item = source_arr[idx].clone();\n"));
-                    code.push_str(&format!("            output = output.with_update(\"{}\", current_item);\n", item_var));
-                    code.push_str(&format!("            output = output.with_update(\"{}\", json!(idx));\n", index_var));
-                    code.push_str(&format!("            output = output.with_update(\"{}\", json!(idx + 1));\n", counter_key));
-                    code.push_str(&format!("            output = output.with_update(\"{}\", json!(false));\n", done_key));
+                    code.push_str(&format!(
+                        "            let current_item = source_arr[idx].clone();\n"
+                    ));
+                    code.push_str(&format!(
+                        "            output = output.with_update(\"{}\", current_item);\n",
+                        item_var
+                    ));
+                    code.push_str(&format!(
+                        "            output = output.with_update(\"{}\", json!(idx));\n",
+                        index_var
+                    ));
+                    code.push_str(&format!(
+                        "            output = output.with_update(\"{}\", json!(idx + 1));\n",
+                        counter_key
+                    ));
+                    code.push_str(&format!(
+                        "            output = output.with_update(\"{}\", json!(false));\n",
+                        done_key
+                    ));
 
                     // Collect results
                     if config.results.collect {
-                        let agg_key = config.results.aggregation_key.as_deref().unwrap_or("loop_results");
-                        code.push_str(&format!("            // Collect previous iteration result if any\n"));
+                        let agg_key =
+                            config.results.aggregation_key.as_deref().unwrap_or("loop_results");
+                        code.push_str(&format!(
+                            "            // Collect previous iteration result if any\n"
+                        ));
                         code.push_str(&format!("            let mut results = ctx.state.get(\"{}\").and_then(|v| v.as_array()).cloned().unwrap_or_default();\n", agg_key));
                         code.push_str("            if idx > 0 {\n");
-                        code.push_str("                // Capture the response from the previous iteration\n");
-                        code.push_str("                if let Some(resp) = ctx.state.get(\"response\") {\n");
+                        code.push_str(
+                            "                // Capture the response from the previous iteration\n",
+                        );
+                        code.push_str(
+                            "                if let Some(resp) = ctx.state.get(\"response\") {\n",
+                        );
                         code.push_str("                    results.push(resp.clone());\n");
                         code.push_str("                }\n");
                         code.push_str("            }\n");
-                        code.push_str(&format!("            output = output.with_update(\"{}\", json!(results));\n", agg_key));
+                        code.push_str(&format!(
+                            "            output = output.with_update(\"{}\", json!(results));\n",
+                            agg_key
+                        ));
                     }
 
                     code.push_str("        } else {\n");
-                    code.push_str(&format!("            output = output.with_update(\"{}\", json!(true));\n", done_key));
+                    code.push_str(&format!(
+                        "            output = output.with_update(\"{}\", json!(true));\n",
+                        done_key
+                    ));
 
                     // Final collection on completion
                     if config.results.collect {
-                        let agg_key = config.results.aggregation_key.as_deref().unwrap_or("loop_results");
+                        let agg_key =
+                            config.results.aggregation_key.as_deref().unwrap_or("loop_results");
                         code.push_str(&format!("            let mut results = ctx.state.get(\"{}\").and_then(|v| v.as_array()).cloned().unwrap_or_default();\n", agg_key));
-                        code.push_str("            if let Some(resp) = ctx.state.get(\"response\") {\n");
+                        code.push_str(
+                            "            if let Some(resp) = ctx.state.get(\"response\") {\n",
+                        );
                         code.push_str("                results.push(resp.clone());\n");
                         code.push_str("            }\n");
-                        code.push_str(&format!("            output = output.with_update(\"{}\", json!(results));\n", agg_key));
+                        code.push_str(&format!(
+                            "            output = output.with_update(\"{}\", json!(results));\n",
+                            agg_key
+                        ));
                     }
 
                     code.push_str("        }\n");
                 }
                 crate::codegen::action_nodes::LoopType::Times => {
-                    let count = config.times.as_ref()
+                    let count = config
+                        .times
+                        .as_ref()
                         .map(|t| match &t.count {
                             serde_json::Value::Number(n) => n.as_u64().unwrap_or(3) as usize,
                             _ => 3,
@@ -2114,47 +2190,80 @@ fn generate_action_node_function(
                     code.push_str(&format!("        // times: repeat {} times\n", count));
                     code.push_str(&format!("        let idx = ctx.state.get(\"{}\").and_then(|v| v.as_u64()).unwrap_or(0) as usize;\n", counter_key));
                     code.push_str(&format!("        if idx < {} {{\n", count));
-                    code.push_str(&format!("            output = output.with_update(\"index\", json!(idx));\n"));
-                    code.push_str(&format!("            output = output.with_update(\"{}\", json!(idx + 1));\n", counter_key));
-                    code.push_str(&format!("            output = output.with_update(\"{}\", json!(false));\n", done_key));
+                    code.push_str(&format!(
+                        "            output = output.with_update(\"index\", json!(idx));\n"
+                    ));
+                    code.push_str(&format!(
+                        "            output = output.with_update(\"{}\", json!(idx + 1));\n",
+                        counter_key
+                    ));
+                    code.push_str(&format!(
+                        "            output = output.with_update(\"{}\", json!(false));\n",
+                        done_key
+                    ));
 
                     if config.results.collect {
-                        let agg_key = config.results.aggregation_key.as_deref().unwrap_or("loop_results");
+                        let agg_key =
+                            config.results.aggregation_key.as_deref().unwrap_or("loop_results");
                         code.push_str(&format!("            let mut results = ctx.state.get(\"{}\").and_then(|v| v.as_array()).cloned().unwrap_or_default();\n", agg_key));
                         code.push_str("            if idx > 0 {\n");
-                        code.push_str("                if let Some(resp) = ctx.state.get(\"response\") {\n");
+                        code.push_str(
+                            "                if let Some(resp) = ctx.state.get(\"response\") {\n",
+                        );
                         code.push_str("                    results.push(resp.clone());\n");
                         code.push_str("                }\n");
                         code.push_str("            }\n");
-                        code.push_str(&format!("            output = output.with_update(\"{}\", json!(results));\n", agg_key));
+                        code.push_str(&format!(
+                            "            output = output.with_update(\"{}\", json!(results));\n",
+                            agg_key
+                        ));
                     }
 
                     code.push_str("        } else {\n");
-                    code.push_str(&format!("            output = output.with_update(\"{}\", json!(true));\n", done_key));
+                    code.push_str(&format!(
+                        "            output = output.with_update(\"{}\", json!(true));\n",
+                        done_key
+                    ));
 
                     if config.results.collect {
-                        let agg_key = config.results.aggregation_key.as_deref().unwrap_or("loop_results");
+                        let agg_key =
+                            config.results.aggregation_key.as_deref().unwrap_or("loop_results");
                         code.push_str(&format!("            let mut results = ctx.state.get(\"{}\").and_then(|v| v.as_array()).cloned().unwrap_or_default();\n", agg_key));
-                        code.push_str("            if let Some(resp) = ctx.state.get(\"response\") {\n");
+                        code.push_str(
+                            "            if let Some(resp) = ctx.state.get(\"response\") {\n",
+                        );
                         code.push_str("                results.push(resp.clone());\n");
                         code.push_str("            }\n");
-                        code.push_str(&format!("            output = output.with_update(\"{}\", json!(results));\n", agg_key));
+                        code.push_str(&format!(
+                            "            output = output.with_update(\"{}\", json!(results));\n",
+                            agg_key
+                        ));
                     }
 
                     code.push_str("        }\n");
                 }
                 crate::codegen::action_nodes::LoopType::While => {
-                    let condition_field = config.while_config.as_ref()
+                    let condition_field = config
+                        .while_config
+                        .as_ref()
                         .map(|w| w.condition.as_str())
                         .unwrap_or("should_continue");
                     let counter_key = format!("{}_loop_index", node_id);
                     let done_key = format!("{}_loop_done", node_id);
 
-                    code.push_str(&format!("        // while: loop while '{}' is truthy\n", condition_field));
+                    code.push_str(&format!(
+                        "        // while: loop while '{}' is truthy\n",
+                        condition_field
+                    ));
                     code.push_str(&format!("        let idx = ctx.state.get(\"{}\").and_then(|v| v.as_u64()).unwrap_or(0) as usize;\n", counter_key));
-                    code.push_str(&format!("        let cond_val = ctx.state.get(\"{}\");\n", condition_field));
+                    code.push_str(&format!(
+                        "        let cond_val = ctx.state.get(\"{}\");\n",
+                        condition_field
+                    ));
                     code.push_str("        let should_continue = match cond_val {\n");
-                    code.push_str("            Some(v) if v.is_boolean() => v.as_bool().unwrap_or(false),\n");
+                    code.push_str(
+                        "            Some(v) if v.is_boolean() => v.as_bool().unwrap_or(false),\n",
+                    );
                     code.push_str("            Some(v) if v.is_string() => !v.as_str().unwrap_or(\"\").is_empty() && v.as_str() != Some(\"false\"),\n");
                     code.push_str("            Some(v) if v.is_number() => v.as_f64().unwrap_or(0.0) != 0.0,\n");
                     code.push_str("            Some(v) if v.is_null() => false,\n");
@@ -2162,11 +2271,22 @@ fn generate_action_node_function(
                     code.push_str("            None => false,\n");
                     code.push_str("        };\n");
                     code.push_str("        if should_continue {\n");
-                    code.push_str(&format!("            output = output.with_update(\"index\", json!(idx));\n"));
-                    code.push_str(&format!("            output = output.with_update(\"{}\", json!(idx + 1));\n", counter_key));
-                    code.push_str(&format!("            output = output.with_update(\"{}\", json!(false));\n", done_key));
+                    code.push_str(&format!(
+                        "            output = output.with_update(\"index\", json!(idx));\n"
+                    ));
+                    code.push_str(&format!(
+                        "            output = output.with_update(\"{}\", json!(idx + 1));\n",
+                        counter_key
+                    ));
+                    code.push_str(&format!(
+                        "            output = output.with_update(\"{}\", json!(false));\n",
+                        done_key
+                    ));
                     code.push_str("        } else {\n");
-                    code.push_str(&format!("            output = output.with_update(\"{}\", json!(true));\n", done_key));
+                    code.push_str(&format!(
+                        "            output = output.with_update(\"{}\", json!(true));\n",
+                        done_key
+                    ));
                     code.push_str("        }\n");
                 }
             }
@@ -2191,66 +2311,103 @@ fn generate_action_node_function(
             match config.combine_strategy {
                 crate::codegen::action_nodes::CombineStrategy::Array => {
                     code.push_str("        // Combine strategy: array — collect branch outputs into an array\n");
-                    code.push_str("        let mut results: Vec<serde_json::Value> = Vec::new();\n");
+                    code.push_str(
+                        "        let mut results: Vec<serde_json::Value> = Vec::new();\n",
+                    );
                     if branch_keys.is_empty() {
                         // Collect all non-system state values
                         code.push_str("        for (k, v) in ctx.state.iter() {\n");
-                        code.push_str("            if k != \"message\" && k != \"classification\" {\n");
+                        code.push_str(
+                            "            if k != \"message\" && k != \"classification\" {\n",
+                        );
                         code.push_str("                results.push(v.clone());\n");
                         code.push_str("            }\n");
                         code.push_str("        }\n");
                     } else {
                         for key in branch_keys {
-                            code.push_str(&format!("        if let Some(v) = ctx.state.get(\"{}\") {{\n", key));
+                            code.push_str(&format!(
+                                "        if let Some(v) = ctx.state.get(\"{}\") {{\n",
+                                key
+                            ));
                             code.push_str("            results.push(v.clone());\n");
                             code.push_str("        }\n");
                         }
                     }
-                    code.push_str(&format!("        output = output.with_update(\"{}\", json!(results));\n", output_key));
+                    code.push_str(&format!(
+                        "        output = output.with_update(\"{}\", json!(results));\n",
+                        output_key
+                    ));
                 }
                 crate::codegen::action_nodes::CombineStrategy::Object => {
                     code.push_str("        // Combine strategy: object — merge branch outputs into an object\n");
                     code.push_str("        let mut merged = serde_json::Map::new();\n");
                     if branch_keys.is_empty() {
                         code.push_str("        for (k, v) in ctx.state.iter() {\n");
-                        code.push_str("            if k != \"message\" && k != \"classification\" {\n");
+                        code.push_str(
+                            "            if k != \"message\" && k != \"classification\" {\n",
+                        );
                         code.push_str("                merged.insert(k.clone(), v.clone());\n");
                         code.push_str("            }\n");
                         code.push_str("        }\n");
                     } else {
                         for key in branch_keys {
-                            code.push_str(&format!("        if let Some(v) = ctx.state.get(\"{}\") {{\n", key));
-                            code.push_str(&format!("            merged.insert(\"{}\".to_string(), v.clone());\n", key));
+                            code.push_str(&format!(
+                                "        if let Some(v) = ctx.state.get(\"{}\") {{\n",
+                                key
+                            ));
+                            code.push_str(&format!(
+                                "            merged.insert(\"{}\".to_string(), v.clone());\n",
+                                key
+                            ));
                             code.push_str("        }\n");
                         }
                     }
-                    code.push_str(&format!("        output = output.with_update(\"{}\", json!(merged));\n", output_key));
+                    code.push_str(&format!(
+                        "        output = output.with_update(\"{}\", json!(merged));\n",
+                        output_key
+                    ));
                 }
                 crate::codegen::action_nodes::CombineStrategy::First => {
-                    code.push_str("        // Combine strategy: first — use first available branch output\n");
+                    code.push_str(
+                        "        // Combine strategy: first — use first available branch output\n",
+                    );
                     if branch_keys.is_empty() {
                         code.push_str("        let first_val = ctx.state.get(\"response\").cloned().unwrap_or(json!(null));\n");
                     } else {
                         code.push_str("        let first_val = None\n");
                         for key in branch_keys {
-                            code.push_str(&format!("            .or_else(|| ctx.state.get(\"{}\").cloned())\n", key));
+                            code.push_str(&format!(
+                                "            .or_else(|| ctx.state.get(\"{}\").cloned())\n",
+                                key
+                            ));
                         }
                         code.push_str("            .unwrap_or(json!(null));\n");
                     }
-                    code.push_str(&format!("        output = output.with_update(\"{}\", first_val);\n", output_key));
+                    code.push_str(&format!(
+                        "        output = output.with_update(\"{}\", first_val);\n",
+                        output_key
+                    ));
                 }
                 crate::codegen::action_nodes::CombineStrategy::Last => {
-                    code.push_str("        // Combine strategy: last — use last available branch output\n");
+                    code.push_str(
+                        "        // Combine strategy: last — use last available branch output\n",
+                    );
                     if branch_keys.is_empty() {
                         code.push_str("        let last_val = ctx.state.get(\"response\").cloned().unwrap_or(json!(null));\n");
                     } else {
                         code.push_str("        let last_val = None\n");
                         for key in branch_keys.iter().rev() {
-                            code.push_str(&format!("            .or_else(|| ctx.state.get(\"{}\").cloned())\n", key));
+                            code.push_str(&format!(
+                                "            .or_else(|| ctx.state.get(\"{}\").cloned())\n",
+                                key
+                            ));
                         }
                         code.push_str("            .unwrap_or(json!(null));\n");
                     }
-                    code.push_str(&format!("        output = output.with_update(\"{}\", last_val);\n", output_key));
+                    code.push_str(&format!(
+                        "        output = output.with_update(\"{}\", last_val);\n",
+                        output_key
+                    ));
                 }
             }
 
@@ -2298,10 +2455,10 @@ fn generate_action_node_function(
             };
 
             code.push_str("        let client = reqwest::Client::new();\n");
-            
+
             // Only make req mutable if we'll modify it (headers, auth, or body)
-            let needs_mut = !config.headers.is_empty() 
-                || config.auth.auth_type != "none" 
+            let needs_mut = !config.headers.is_empty()
+                || config.auth.auth_type != "none"
                 || config.body.body_type != "none";
             if needs_mut {
                 code.push_str(&format!("        let mut req = client.{}(&url);\n\n", method_fn));
@@ -2327,10 +2484,15 @@ fn generate_action_node_function(
                     code.push_str("            if let Some(s) = v.as_str() {\n");
                     code.push_str("                hdr_val = hdr_val.replace(&pattern, s);\n");
                     code.push_str("            } else {\n");
-                    code.push_str("                hdr_val = hdr_val.replace(&pattern, &v.to_string());\n");
+                    code.push_str(
+                        "                hdr_val = hdr_val.replace(&pattern, &v.to_string());\n",
+                    );
                     code.push_str("            }\n");
                     code.push_str("        }\n");
-                    code.push_str(&format!("        req = req.header(\"{}\", hdr_val);\n", key.replace('"', "\\\"")));
+                    code.push_str(&format!(
+                        "        req = req.header(\"{}\", hdr_val);\n",
+                        key.replace('"', "\\\"")
+                    ));
                 } else {
                     code.push_str(&format!(
                         "        req = req.header(\"{}\", \"{}\");\n",
@@ -2351,7 +2513,9 @@ fn generate_action_node_function(
                                 token.replace('"', "\\\"")
                             ));
                             code.push_str("        for (k, v) in ctx.state.iter() {\n");
-                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str(
+                                "            let pattern = format!(\"{{{{{}}}}}\", k);\n",
+                            );
                             code.push_str("            if let Some(s) = v.as_str() {\n");
                             code.push_str("                bearer_token = bearer_token.replace(&pattern, s);\n");
                             code.push_str("            }\n");
@@ -2383,9 +2547,13 @@ fn generate_action_node_function(
                                 val.replace('"', "\\\"")
                             ));
                             code.push_str("        for (k, v) in ctx.state.iter() {\n");
-                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str(
+                                "            let pattern = format!(\"{{{{{}}}}}\", k);\n",
+                            );
                             code.push_str("            if let Some(s) = v.as_str() {\n");
-                            code.push_str("                api_key_val = api_key_val.replace(&pattern, s);\n");
+                            code.push_str(
+                                "                api_key_val = api_key_val.replace(&pattern, s);\n",
+                            );
                             code.push_str("            }\n");
                             code.push_str("        }\n");
                             code.push_str(&format!(
@@ -2416,9 +2584,13 @@ fn generate_action_node_function(
                                 body_str.replace('"', "\\\"")
                             ));
                             code.push_str("        for (k, v) in ctx.state.iter() {\n");
-                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str(
+                                "            let pattern = format!(\"{{{{{}}}}}\", k);\n",
+                            );
                             code.push_str("            if let Some(s) = v.as_str() {\n");
-                            code.push_str("                body_str = body_str.replace(&pattern, s);\n");
+                            code.push_str(
+                                "                body_str = body_str.replace(&pattern, s);\n",
+                            );
                             code.push_str("            } else {\n");
                             code.push_str("                body_str = body_str.replace(&pattern, &v.to_string());\n");
                             code.push_str("            }\n");
@@ -2435,15 +2607,15 @@ fn generate_action_node_function(
                 }
                 "form" => {
                     if let Some(content) = &config.body.content {
-                        code.push_str(&format!(
-                            "        req = req.form(&json!({}));\n",
-                            content
-                        ));
+                        code.push_str(&format!("        req = req.form(&json!({}));\n", content));
                     }
                 }
                 "raw" => {
                     if let Some(content) = &config.body.content {
-                        let raw = content.as_str().map(|s| s.to_string()).unwrap_or_else(|| content.to_string());
+                        let raw = content
+                            .as_str()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| content.to_string());
                         code.push_str(&format!(
                             "        req = req.body(\"{}\");\n",
                             raw.replace('"', "\\\"")
@@ -2466,7 +2638,8 @@ fn generate_action_node_function(
                     if parts.len() == 2 {
                         code.push_str(&format!(
                             "                if status < {} || status > {} {{\n",
-                            parts[0].trim(), parts[1].trim()
+                            parts[0].trim(),
+                            parts[1].trim()
                         ));
                         code.push_str("                    let body = response.text().await.unwrap_or_default();\n");
                         code.push_str(&format!(
@@ -2483,7 +2656,9 @@ fn generate_action_node_function(
             // Parse response based on type
             match config.response.response_type.as_str() {
                 "text" => {
-                    code.push_str("                let body = response.text().await.unwrap_or_default();\n");
+                    code.push_str(
+                        "                let body = response.text().await.unwrap_or_default();\n",
+                    );
                     if let Some(json_path) = &config.response.json_path {
                         // Even for text, if jsonPath is set, try to parse and extract
                         code.push_str("                let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!(body));\n");
@@ -2501,7 +2676,9 @@ fn generate_action_node_function(
                 }
                 _ => {
                     // Default: JSON — try JSON first, fall back to text
-                    code.push_str("                let text = response.text().await.unwrap_or_default();\n");
+                    code.push_str(
+                        "                let text = response.text().await.unwrap_or_default();\n",
+                    );
                     code.push_str("                let body: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|_| json!(text));\n");
                     if let Some(json_path) = &config.response.json_path {
                         code.push_str(&format!(
@@ -2548,7 +2725,10 @@ fn generate_action_node_function(
                             "h" => fixed.duration * 60 * 60 * 1000,
                             _ => fixed.duration,
                         };
-                        code.push_str(&format!("        // Fixed wait: {} {}\n", fixed.duration, fixed.unit));
+                        code.push_str(&format!(
+                            "        // Fixed wait: {} {}\n",
+                            fixed.duration, fixed.unit
+                        ));
                         code.push_str(&format!("        tokio::time::sleep(std::time::Duration::from_millis({})).await;\n", ms));
                         code.push_str(&format!("        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"waited\": true, \"duration_ms\": {} }})))\n", output_key, ms));
                     } else {
@@ -2561,8 +2741,13 @@ fn generate_action_node_function(
                 crate::codegen::action_nodes::WaitType::Until => {
                     if let Some(until) = &config.until {
                         code.push_str("        // Wait until timestamp\n");
-                        code.push_str(&format!("        let target = chrono::DateTime::parse_from_rfc3339(\"{}\")\n", until.timestamp));
-                        code.push_str("            .unwrap_or_else(|_| chrono::Utc::now().fixed_offset());\n");
+                        code.push_str(&format!(
+                            "        let target = chrono::DateTime::parse_from_rfc3339(\"{}\")\n",
+                            until.timestamp
+                        ));
+                        code.push_str(
+                            "            .unwrap_or_else(|_| chrono::Utc::now().fixed_offset());\n",
+                        );
                         code.push_str("        let now = chrono::Utc::now();\n");
                         code.push_str("        if target > now {\n");
                         code.push_str("            let duration = (target - now).to_std().unwrap_or_default();\n");
@@ -2576,8 +2761,14 @@ fn generate_action_node_function(
                 crate::codegen::action_nodes::WaitType::Condition => {
                     if let Some(condition) = &config.condition {
                         code.push_str("        // Poll until condition is met\n");
-                        code.push_str(&format!("        let poll_interval = std::time::Duration::from_millis({});\n", condition.poll_interval));
-                        code.push_str(&format!("        let max_wait = std::time::Duration::from_millis({});\n", condition.max_wait));
+                        code.push_str(&format!(
+                            "        let poll_interval = std::time::Duration::from_millis({});\n",
+                            condition.poll_interval
+                        ));
+                        code.push_str(&format!(
+                            "        let max_wait = std::time::Duration::from_millis({});\n",
+                            condition.max_wait
+                        ));
                         code.push_str("        let start = std::time::Instant::now();\n");
                         code.push_str("        loop {\n");
                         code.push_str("            if start.elapsed() >= max_wait {\n");
@@ -2604,7 +2795,10 @@ fn generate_action_node_function(
             code.push_str("    });\n\n");
         }
         ActionNodeConfig::Database(config) => {
-            code.push_str(&format!("    // Action Node: {} (Database - {:?})\n", config.standard.name, config.db_type));
+            code.push_str(&format!(
+                "    // Action Node: {} (Database - {:?})\n",
+                config.standard.name, config.db_type
+            ));
             code.push_str(&format!("    let {}_node = adk_graph::node::FunctionNode::new(\"{}\", |ctx| async move {{\n", node_id, node_id));
 
             let output_key = if config.standard.mapping.output_key.is_empty() {
@@ -2625,7 +2819,9 @@ fn generate_action_node_function(
                 code.push_str("            if let Some(s) = v.as_str() {\n");
                 code.push_str("                conn_str = conn_str.replace(&pattern, s);\n");
                 code.push_str("            } else {\n");
-                code.push_str("                conn_str = conn_str.replace(&pattern, &v.to_string());\n");
+                code.push_str(
+                    "                conn_str = conn_str.replace(&pattern, &v.to_string());\n",
+                );
                 code.push_str("            }\n");
                 code.push_str("        }\n");
             } else {
@@ -2659,9 +2855,13 @@ fn generate_action_node_function(
                                 query.replace('"', "\\\"")
                             ));
                             code.push_str("        for (k, v) in ctx.state.iter() {\n");
-                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str(
+                                "            let pattern = format!(\"{{{{{}}}}}\", k);\n",
+                            );
                             code.push_str("            if let Some(s) = v.as_str() {\n");
-                            code.push_str("                query_str = query_str.replace(&pattern, s);\n");
+                            code.push_str(
+                                "                query_str = query_str.replace(&pattern, s);\n",
+                            );
                             code.push_str("            } else {\n");
                             code.push_str("                query_str = query_str.replace(&pattern, &v.to_string());\n");
                             code.push_str("            }\n");
@@ -2684,7 +2884,9 @@ fn generate_action_node_function(
                             }
                             _ => {
                                 // PostgreSQL (default)
-                                code.push_str("        let pool = sqlx::PgPool::connect(&conn_str).await\n");
+                                code.push_str(
+                                    "        let pool = sqlx::PgPool::connect(&conn_str).await\n",
+                                );
                                 code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"PostgreSQL connection failed: {}\", e) })?;\n");
                             }
                         }
@@ -2699,9 +2901,13 @@ fn generate_action_node_function(
                                 code.push_str("            .fetch_all(&pool).await\n");
                                 code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Query failed: {}\", e) })?;\n");
                                 code.push_str("        let rows: Vec<serde_json::Value> = raw_rows.iter().map(|row| {\n");
-                                code.push_str("            let mut obj = serde_json::Map::new();\n");
+                                code.push_str(
+                                    "            let mut obj = serde_json::Map::new();\n",
+                                );
                                 code.push_str("            for col in row.columns() {\n");
-                                code.push_str("                let name = col.name().to_string();\n");
+                                code.push_str(
+                                    "                let name = col.name().to_string();\n",
+                                );
                                 code.push_str("                let val: serde_json::Value = row.try_get::<String, _>(col.name())\n");
                                 code.push_str("                    .map(|s| json!(s))\n");
                                 code.push_str("                    .or_else(|_| row.try_get::<i64, _>(col.name()).map(|n| json!(n)))\n");
@@ -2738,7 +2944,9 @@ fn generate_action_node_function(
                 }
                 crate::codegen::action_node_types::DatabaseType::Mongodb => {
                     if let Some(mongo) = &config.mongodb {
-                        code.push_str("        let client = mongodb::Client::with_uri_str(&conn_str).await\n");
+                        code.push_str(
+                            "        let client = mongodb::Client::with_uri_str(&conn_str).await\n",
+                        );
                         code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"MongoDB connection failed: {}\", e) })?;\n");
                         // Extract database name from connection string
                         code.push_str("        let db_name = conn_str.rsplit('/').next()\n");
@@ -2751,7 +2959,9 @@ fn generate_action_node_function(
                             mongo.collection.replace('"', "\\\"")
                         ));
 
-                        let filter_str = mongo.filter.as_ref()
+                        let filter_str = mongo
+                            .filter
+                            .as_ref()
                             .map(|f| f.to_string())
                             .unwrap_or_else(|| "{}".to_string());
 
@@ -2763,10 +2973,16 @@ fn generate_action_node_function(
                                 ));
                                 code.push_str("        let filter_doc = mongodb::bson::to_document(&filter_json).unwrap_or_default();\n");
                                 code.push_str("        use futures::TryStreamExt;\n");
-                                code.push_str("        let mut cursor = collection.find(filter_doc).await\n");
+                                code.push_str(
+                                    "        let mut cursor = collection.find(filter_doc).await\n",
+                                );
                                 code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"MongoDB find failed: {}\", e) })?;\n");
-                                code.push_str("        let mut docs: Vec<serde_json::Value> = Vec::new();\n");
-                                code.push_str("        while let Some(doc) = cursor.try_next().await\n");
+                                code.push_str(
+                                    "        let mut docs: Vec<serde_json::Value> = Vec::new();\n",
+                                );
+                                code.push_str(
+                                    "        while let Some(doc) = cursor.try_next().await\n",
+                                );
                                 code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Cursor error: {}\", e) })? {\n");
                                 code.push_str("            if let Ok(json) = mongodb::bson::from_document::<serde_json::Value>(doc) {\n");
                                 code.push_str("                docs.push(json);\n");
@@ -2783,7 +2999,9 @@ fn generate_action_node_function(
                                     filter_str.replace('"', "\\\"")
                                 ));
                                 code.push_str("        let filter_doc = mongodb::bson::to_document(&filter_json).unwrap_or_default();\n");
-                                code.push_str("        let result = collection.find_one(filter_doc).await\n");
+                                code.push_str(
+                                    "        let result = collection.find_one(filter_doc).await\n",
+                                );
                                 code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"MongoDB findOne failed: {}\", e) })?;\n");
                                 code.push_str("        let doc_json = result.map(|d| mongodb::bson::from_document::<serde_json::Value>(d).unwrap_or(json!(null))).unwrap_or(json!(null));\n");
                                 code.push_str(&format!(
@@ -2792,7 +3010,9 @@ fn generate_action_node_function(
                                 ));
                             }
                             "insert" => {
-                                let doc_str = mongo.document.as_ref()
+                                let doc_str = mongo
+                                    .document
+                                    .as_ref()
                                     .map(|d| d.to_string())
                                     .unwrap_or_else(|| "{}".to_string());
                                 code.push_str(&format!(
@@ -2800,7 +3020,9 @@ fn generate_action_node_function(
                                     doc_str.replace('"', "\\\"")
                                 ));
                                 code.push_str("        let doc = mongodb::bson::to_document(&doc_json).unwrap_or_default();\n");
-                                code.push_str("        let result = collection.insert_one(doc).await\n");
+                                code.push_str(
+                                    "        let result = collection.insert_one(doc).await\n",
+                                );
                                 code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"MongoDB insert failed: {}\", e) })?;\n");
                                 code.push_str(&format!(
                                     "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"inserted_id\": result.inserted_id.to_string() }})))\n",
@@ -2813,7 +3035,9 @@ fn generate_action_node_function(
                                     filter_str.replace('"', "\\\"")
                                 ));
                                 code.push_str("        let filter_doc = mongodb::bson::to_document(&filter_json).unwrap_or_default();\n");
-                                let doc_str = mongo.document.as_ref()
+                                let doc_str = mongo
+                                    .document
+                                    .as_ref()
                                     .map(|d| d.to_string())
                                     .unwrap_or_else(|| "{}".to_string());
                                 code.push_str(&format!(
@@ -2857,7 +3081,9 @@ fn generate_action_node_function(
                 }
                 crate::codegen::action_node_types::DatabaseType::Redis => {
                     if let Some(redis_cfg) = &config.redis {
-                        code.push_str("        let client = redis::Client::open(conn_str.as_str())\n");
+                        code.push_str(
+                            "        let client = redis::Client::open(conn_str.as_str())\n",
+                        );
                         code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Redis connection failed: {}\", e) })?;\n");
                         code.push_str("        let mut con = client.get_multiplexed_async_connection().await\n");
                         code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Redis connect failed: {}\", e) })?;\n");
@@ -2870,9 +3096,13 @@ fn generate_action_node_function(
                                 key.replace('"', "\\\"")
                             ));
                             code.push_str("        for (k, v) in ctx.state.iter() {\n");
-                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str(
+                                "            let pattern = format!(\"{{{{{}}}}}\", k);\n",
+                            );
                             code.push_str("            if let Some(s) = v.as_str() {\n");
-                            code.push_str("                redis_key = redis_key.replace(&pattern, s);\n");
+                            code.push_str(
+                                "                redis_key = redis_key.replace(&pattern, s);\n",
+                            );
                             code.push_str("            }\n");
                             code.push_str("        }\n");
                         } else {
@@ -2886,7 +3116,9 @@ fn generate_action_node_function(
 
                         match redis_cfg.operation.as_str() {
                             "get" => {
-                                code.push_str("        let val: Option<String> = con.get(&redis_key).await\n");
+                                code.push_str(
+                                    "        let val: Option<String> = con.get(&redis_key).await\n",
+                                );
                                 code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Redis GET failed: {}\", e) })?;\n");
                                 code.push_str(&format!(
                                     "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"value\": val }})))\n",
@@ -2894,7 +3126,9 @@ fn generate_action_node_function(
                                 ));
                             }
                             "set" => {
-                                let val_str = redis_cfg.value.as_ref()
+                                let val_str = redis_cfg
+                                    .value
+                                    .as_ref()
                                     .map(|v| match v {
                                         serde_json::Value::String(s) => s.clone(),
                                         other => other.to_string(),
@@ -2910,7 +3144,9 @@ fn generate_action_node_function(
                                         ttl
                                     ));
                                 } else {
-                                    code.push_str("        let _: () = con.set(&redis_key, val).await\n");
+                                    code.push_str(
+                                        "        let _: () = con.set(&redis_key, val).await\n",
+                                    );
                                 }
                                 code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Redis SET failed: {}\", e) })?;\n");
                                 code.push_str(&format!(
@@ -2919,7 +3155,9 @@ fn generate_action_node_function(
                                 ));
                             }
                             "del" => {
-                                code.push_str("        let deleted: i64 = con.del(&redis_key).await\n");
+                                code.push_str(
+                                    "        let deleted: i64 = con.del(&redis_key).await\n",
+                                );
                                 code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Redis DEL failed: {}\", e) })?;\n");
                                 code.push_str(&format!(
                                     "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"deleted\": deleted }})))\n",
@@ -2928,7 +3166,9 @@ fn generate_action_node_function(
                             }
                             "hget" => {
                                 // For HGET, use value as field name
-                                let field = redis_cfg.value.as_ref()
+                                let field = redis_cfg
+                                    .value
+                                    .as_ref()
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("field");
                                 code.push_str(&format!(
@@ -2942,7 +3182,9 @@ fn generate_action_node_function(
                                 ));
                             }
                             "hset" => {
-                                let val_str = redis_cfg.value.as_ref()
+                                let val_str = redis_cfg
+                                    .value
+                                    .as_ref()
                                     .map(|v| v.to_string())
                                     .unwrap_or_else(|| "{}".to_string());
                                 code.push_str(&format!(
@@ -2962,7 +3204,9 @@ fn generate_action_node_function(
                                 ));
                             }
                             "lpush" => {
-                                let val_str = redis_cfg.value.as_ref()
+                                let val_str = redis_cfg
+                                    .value
+                                    .as_ref()
                                     .map(|v| match v {
                                         serde_json::Value::String(s) => s.clone(),
                                         other => other.to_string(),
@@ -3005,7 +3249,10 @@ fn generate_action_node_function(
             code.push_str("    });\n\n");
         }
         ActionNodeConfig::Email(config) => {
-            code.push_str(&format!("    // Action Node: {} (Email - {:?})\n", config.standard.name, config.mode));
+            code.push_str(&format!(
+                "    // Action Node: {} (Email - {:?})\n",
+                config.standard.name, config.mode
+            ));
             code.push_str(&format!("    let {}_node = adk_graph::node::FunctionNode::new(\"{}\", |ctx| async move {{\n", node_id, node_id));
 
             let output_key = if config.standard.mapping.output_key.is_empty() {
@@ -3016,9 +3263,13 @@ fn generate_action_node_function(
 
             match config.mode {
                 crate::codegen::action_node_types::EmailMode::Send => {
-                    if let (Some(smtp), Some(recipients), Some(content)) = (&config.smtp, &config.recipients, &config.content) {
+                    if let (Some(smtp), Some(recipients), Some(content)) =
+                        (&config.smtp, &config.recipients, &config.content)
+                    {
                         // Variable interpolation helper for subject and body
-                        code.push_str("        // Build email content with variable interpolation\n");
+                        code.push_str(
+                            "        // Build email content with variable interpolation\n",
+                        );
 
                         // Subject interpolation
                         let subject = &content.subject;
@@ -3028,9 +3279,13 @@ fn generate_action_node_function(
                                 subject.replace('"', "\\\"")
                             ));
                             code.push_str("        for (k, v) in ctx.state.iter() {\n");
-                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str(
+                                "            let pattern = format!(\"{{{{{}}}}}\", k);\n",
+                            );
                             code.push_str("            if let Some(s) = v.as_str() {\n");
-                            code.push_str("                subject = subject.replace(&pattern, s);\n");
+                            code.push_str(
+                                "                subject = subject.replace(&pattern, s);\n",
+                            );
                             code.push_str("            } else {\n");
                             code.push_str("                subject = subject.replace(&pattern, &v.to_string());\n");
                             code.push_str("            }\n");
@@ -3050,11 +3305,15 @@ fn generate_action_node_function(
                                 body.replace('"', "\\\"").replace('\n', "\\n")
                             ));
                             code.push_str("        for (k, v) in ctx.state.iter() {\n");
-                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str(
+                                "            let pattern = format!(\"{{{{{}}}}}\", k);\n",
+                            );
                             code.push_str("            if let Some(s) = v.as_str() {\n");
                             code.push_str("                body = body.replace(&pattern, s);\n");
                             code.push_str("            } else {\n");
-                            code.push_str("                body = body.replace(&pattern, &v.to_string());\n");
+                            code.push_str(
+                                "                body = body.replace(&pattern, &v.to_string());\n",
+                            );
                             code.push_str("            }\n");
                             code.push_str("        }\n");
                         } else {
@@ -3066,7 +3325,11 @@ fn generate_action_node_function(
 
                         // Build the email message
                         let from_addr = if let Some(ref name) = smtp.from_name {
-                            format!("{} <{}>", name.replace('"', "\\\""), smtp.from_email.replace('"', "\\\""))
+                            format!(
+                                "{} <{}>",
+                                name.replace('"', "\\\""),
+                                smtp.from_email.replace('"', "\\\"")
+                            )
                         } else {
                             smtp.from_email.replace('"', "\\\"")
                         };
@@ -3083,7 +3346,9 @@ fn generate_action_node_function(
                             recipients.to.replace('"', "\\\"")
                         ));
 
-                        code.push_str("        let mut email_builder = lettre::Message::builder()\n");
+                        code.push_str(
+                            "        let mut email_builder = lettre::Message::builder()\n",
+                        );
                         code.push_str("            .from(from)\n");
                         code.push_str("            .subject(&subject);\n");
 
@@ -3102,7 +3367,9 @@ fn generate_action_node_function(
                                     cc.replace('"', "\\\"")
                                 ));
                                 code.push_str("            if let Ok(mbox) = addr.parse::<lettre::message::Mailbox>() {\n");
-                                code.push_str("                email_builder = email_builder.cc(mbox);\n");
+                                code.push_str(
+                                    "                email_builder = email_builder.cc(mbox);\n",
+                                );
                                 code.push_str("            }\n");
                                 code.push_str("        }\n");
                             }
@@ -3116,7 +3383,9 @@ fn generate_action_node_function(
                                     bcc.replace('"', "\\\"")
                                 ));
                                 code.push_str("            if let Ok(mbox) = addr.parse::<lettre::message::Mailbox>() {\n");
-                                code.push_str("                email_builder = email_builder.bcc(mbox);\n");
+                                code.push_str(
+                                    "                email_builder = email_builder.bcc(mbox);\n",
+                                );
                                 code.push_str("            }\n");
                                 code.push_str("        }\n");
                             }
@@ -3150,7 +3419,9 @@ fn generate_action_node_function(
                                 password
                             ));
                             code.push_str("        for (k, v) in ctx.state.iter() {\n");
-                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str(
+                                "            let pattern = format!(\"{{{{{}}}}}\", k);\n",
+                            );
                             code.push_str("            if let Some(s) = v.as_str() {\n");
                             code.push_str("                smtp_password = smtp_password.replace(&pattern, s);\n");
                             code.push_str("            }\n");
@@ -3170,10 +3441,7 @@ fn generate_action_node_function(
                                 host
                             ));
                             code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\".into(), message: format!(\"SMTP relay failed: {}\", e) })?\n");
-                            code.push_str(&format!(
-                                "            .port({})\n",
-                                smtp.port
-                            ));
+                            code.push_str(&format!("            .port({})\n", smtp.port));
                             code.push_str(&format!(
                                 "            .credentials(lettre::transport::smtp::authentication::Credentials::new(\"{}\".to_string(), smtp_password))\n",
                                 username
@@ -3184,10 +3452,7 @@ fn generate_action_node_function(
                                 "        let transport = lettre::SmtpTransport::builder_dangerous(\"{}\")\n",
                                 host
                             ));
-                            code.push_str(&format!(
-                                "            .port({})\n",
-                                smtp.port
-                            ));
+                            code.push_str(&format!("            .port({})\n", smtp.port));
                             code.push_str(&format!(
                                 "            .credentials(lettre::transport::smtp::authentication::Credentials::new(\"{}\".to_string(), smtp_password))\n",
                                 username
@@ -3243,7 +3508,9 @@ fn generate_action_node_function(
                                 password
                             ));
                             code.push_str("        for (k, v) in ctx.state.iter() {\n");
-                            code.push_str("            let pattern = format!(\"{{{{{}}}}}\", k);\n");
+                            code.push_str(
+                                "            let pattern = format!(\"{{{{{}}}}}\", k);\n",
+                            );
                             code.push_str("            if let Some(s) = v.as_str() {\n");
                             code.push_str("                imap_password = imap_password.replace(&pattern, s);\n");
                             code.push_str("            }\n");
@@ -3282,10 +3549,7 @@ fn generate_action_node_function(
                         code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\".into(), message: format!(\"IMAP login failed: {:?}\", e.0) })?;\n");
 
                         // Select folder
-                        code.push_str(&format!(
-                            "        session.select(\"{}\")\n",
-                            folder
-                        ));
+                        code.push_str(&format!("        session.select(\"{}\")\n", folder));
                         code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\".into(), message: format!(\"Folder select failed: {}\", e) })?;\n");
 
                         // Build search query from filters
@@ -3296,12 +3560,18 @@ fn generate_action_node_function(
                             }
                             if let Some(ref from) = filters.from {
                                 if !from.is_empty() {
-                                    search_criteria.push(format!("FROM \\\"{}\\\"", from.replace('"', "\\\\\\\"")));
+                                    search_criteria.push(format!(
+                                        "FROM \\\"{}\\\"",
+                                        from.replace('"', "\\\\\\\"")
+                                    ));
                                 }
                             }
                             if let Some(ref subject) = filters.subject {
                                 if !subject.is_empty() {
-                                    search_criteria.push(format!("SUBJECT \\\"{}\\\"", subject.replace('"', "\\\\\\\"")));
+                                    search_criteria.push(format!(
+                                        "SUBJECT \\\"{}\\\"",
+                                        subject.replace('"', "\\\\\\\"")
+                                    ));
                                 }
                             }
                         }
@@ -3318,7 +3588,9 @@ fn generate_action_node_function(
                         code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\".into(), message: format!(\"IMAP search failed: {}\", e) })?;\n");
 
                         // Fetch message details
-                        code.push_str("        let mut emails: Vec<serde_json::Value> = Vec::new();\n");
+                        code.push_str(
+                            "        let mut emails: Vec<serde_json::Value> = Vec::new();\n",
+                        );
                         code.push_str("        if !messages.is_empty() {\n");
                         code.push_str("            let seq_set: Vec<String> = messages.iter().map(|id| id.to_string()).collect();\n");
                         code.push_str("            let fetch_range = seq_set.join(\",\");\n");
@@ -3366,7 +3638,10 @@ fn generate_action_node_function(
             code.push_str("    });\n\n");
         }
         ActionNodeConfig::Code(config) => {
-            code.push_str(&format!("    // Action Node: {} (Code - {:?})\n", config.standard.name, config.language));
+            code.push_str(&format!(
+                "    // Action Node: {} (Code - {:?})\n",
+                config.standard.name, config.language
+            ));
             code.push_str(&format!("    let {}_node = adk_graph::node::FunctionNode::new(\"{}\", |ctx| async move {{\n", node_id, node_id));
 
             let output_key = if config.standard.mapping.output_key.is_empty() {
@@ -3416,18 +3691,21 @@ fn generate_action_node_function(
                 // Inject input state as a global `input` variable
                 code.push_str("            // Inject state as global 'input' variable\n");
                 code.push_str("            let input_str = serde_json::to_string(&input_json).unwrap_or_else(|_| \"{}\".to_string());\n");
-                code.push_str("            let setup_code = format!(\"var input = {};\", input_str);\n");
+                code.push_str(
+                    "            let setup_code = format!(\"var input = {};\", input_str);\n",
+                );
                 code.push_str("            context.eval(Source::from_bytes(&setup_code))\n");
                 code.push_str("                .map_err(|e| format!(\"Failed to inject input: {:?}\", e))?;\n\n");
 
                 // Execute the user's code wrapped in a function that returns a value
-                code.push_str(&format!(
-                    "            let user_code = \"{}\";\n",
-                    escaped_code
-                ));
+                code.push_str(&format!("            let user_code = \"{}\";\n", escaped_code));
                 // Wrap in an IIFE so the last expression is returned
-                code.push_str("            let wrapped = format!(\"(function() {{ {} }})()\", user_code);\n");
-                code.push_str("            let result = context.eval(Source::from_bytes(&wrapped));\n\n");
+                code.push_str(
+                    "            let wrapped = format!(\"(function() {{ {} }})()\", user_code);\n",
+                );
+                code.push_str(
+                    "            let result = context.eval(Source::from_bytes(&wrapped));\n\n",
+                );
 
                 // Check time limit
                 code.push_str("            if start.elapsed() > time_limit {\n");
@@ -3438,7 +3716,9 @@ fn generate_action_node_function(
                 code.push_str("            match result {\n");
                 code.push_str("                Ok(val) => {\n");
                 code.push_str("                    // Convert JsValue to JSON\n");
-                code.push_str("                    let json_val = js_value_to_json(&val, &mut context);\n");
+                code.push_str(
+                    "                    let json_val = js_value_to_json(&val, &mut context);\n",
+                );
                 code.push_str("                    Ok(json_val)\n");
                 code.push_str("                }\n");
                 code.push_str("                Err(e) => {\n");
@@ -3496,7 +3776,7 @@ fn generate_cargo_toml(project: &ProjectSchema) -> String {
     }
 
     // Get ADK version and Rust edition from project settings (with defaults)
-    let adk_version = project.settings.adk_version.as_deref().unwrap_or("0.2.1");
+    let adk_version = project.settings.adk_version.as_deref().unwrap_or("0.3.0");
     let rust_edition = project.settings.rust_edition.as_deref().unwrap_or("2024");
 
     // Check if any function tool code uses specific crates
@@ -3521,8 +3801,8 @@ fn generate_cargo_toml(project: &ProjectSchema) -> String {
 
     // Database dependencies based on action node db_type
     let (needs_sqlx_pg, needs_sqlx_mysql, needs_sqlx_sqlite, needs_mongodb, needs_redis) = {
-        use crate::codegen::action_nodes::ActionNodeConfig;
         use crate::codegen::action_node_types::DatabaseType;
+        use crate::codegen::action_nodes::ActionNodeConfig;
         let mut pg = false;
         let mut mysql = false;
         let mut sqlite = false;
@@ -3613,10 +3893,17 @@ uuid = {{ version = "1", features = ["v4"] }}
     let needs_sqlx = needs_sqlx_pg || needs_sqlx_mysql || needs_sqlx_sqlite;
     if needs_sqlx {
         let mut sqlx_features = vec!["runtime-tokio"];
-        if needs_sqlx_pg { sqlx_features.push("postgres"); }
-        if needs_sqlx_mysql { sqlx_features.push("mysql"); }
-        if needs_sqlx_sqlite { sqlx_features.push("sqlite"); }
-        let features_str = sqlx_features.iter().map(|f| format!("\"{}\"", f)).collect::<Vec<_>>().join(", ");
+        if needs_sqlx_pg {
+            sqlx_features.push("postgres");
+        }
+        if needs_sqlx_mysql {
+            sqlx_features.push("mysql");
+        }
+        if needs_sqlx_sqlite {
+            sqlx_features.push("sqlite");
+        }
+        let features_str =
+            sqlx_features.iter().map(|f| format!("\"{}\"", f)).collect::<Vec<_>>().join(", ");
         deps.push_str(&format!("sqlx = {{ version = \"0.8\", features = [{}] }}\n", features_str));
     }
     if needs_mongodb {

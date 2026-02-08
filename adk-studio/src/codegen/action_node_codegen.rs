@@ -1006,7 +1006,9 @@ impl ActionNodeCodeGen for SwitchNodeConfig {
                 }
                 code.push_str("\n    // All connected branches execute regardless — fan-out via direct edges\n");
                 code.push_str("    // matched_branches is stored for debugging/observability\n");
-                code.push_str("    Ok(serde_json::to_string(&matched_branches).unwrap_or_default())\n");
+                code.push_str(
+                    "    Ok(serde_json::to_string(&matched_branches).unwrap_or_default())\n",
+                );
             }
         }
 

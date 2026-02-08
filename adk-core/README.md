@@ -25,14 +25,14 @@ This crate is model-agnostic and contains no LLM-specific code.
 
 ```toml
 [dependencies]
-adk-core = "0.2"
+adk-core = "0.3"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = "0.2"
+adk-rust = "0.3"
 ```
 
 ## Core Traits
@@ -96,7 +96,7 @@ let content = Content::new("user")
 // Part variants
 enum Part {
     Text { text: String },
-    InlineData { mime_type: String, data: Vec<u8> },
+    InlineData { mime_type: String, data: Vec<u8> },  // Max 10MB (MAX_INLINE_DATA_SIZE)
     FileData { mime_type: String, file_uri: String },
     FunctionCall { name: String, args: Value, id: Option<String> },
     FunctionResponse { function_response: FunctionResponseData, id: Option<String> },
@@ -110,6 +110,9 @@ enum Part {
 let event = Event::new("invocation_123");
 event.content()  // Access response content
 event.actions    // State changes, transfers, escalation
+
+// Provider-specific metadata (replaces GCP-specific fields)
+event.provider_metadata  // HashMap<String, String>
 ```
 
 ### EventActions
@@ -121,8 +124,25 @@ pub struct EventActions {
     pub skip_summarization: bool,
     pub transfer_to_agent: Option<String>,    // Agent transfer
     pub escalate: bool,                       // Escalate to parent
+    pub tool_confirmation: Option<ToolConfirmationRequest>,  // Pending tool confirmation
+    pub tool_confirmation_decision: Option<ToolConfirmationDecision>,
+    pub compaction: Option<EventCompaction>,  // Context compaction summary
 }
 ```
+
+### EventCompaction
+
+When context compaction is enabled, older events are summarized into a single compacted event:
+
+```rust
+pub struct EventCompaction {
+    pub start_timestamp: DateTime<Utc>,   // Earliest compacted event
+    pub end_timestamp: DateTime<Utc>,     // Latest compacted event
+    pub compacted_content: Content,       // The summary replacing original events
+}
+```
+
+See [Context Compaction](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/sessions/context-compaction.md) for usage details.
 
 ## Context Hierarchy
 
@@ -145,6 +165,27 @@ InvocationContext (extends CallbackContext)
     └── end_invocation() / ended()
 ```
 
+## Security
+
+### Inline Data Size Limit
+
+`Content::with_inline_data()` and `Part::inline_data()` enforce a 10 MB limit (`MAX_INLINE_DATA_SIZE`) to prevent oversized payloads.
+
+### State Key Validation
+
+`validate_state_key()` rejects keys that are empty, exceed 256 bytes (`MAX_STATE_KEY_LEN`), contain path separators (`/`, `\`, `..`), or null bytes.
+
+```rust
+use adk_core::context::validate_state_key;
+
+assert!(validate_state_key("user_name").is_ok());
+assert!(validate_state_key("../etc/passwd").is_err());
+```
+
+### Provider Metadata
+
+The `Event` struct uses a generic `provider_metadata: HashMap<String, String>` field for provider-specific data (e.g., GCP Vertex, Azure OpenAI), keeping the core type provider-agnostic.
+
 ## State Management
 
 State uses typed prefixes for organization:
@@ -161,20 +202,41 @@ let value = session.state().get("user:preference");
 session.state().set("temp:counter".to_string(), json!(42));
 ```
 
+State keys are validated with `validate_state_key()` — max length is `MAX_STATE_KEY_LEN` (256 bytes), and keys must be valid UTF-8 with no control characters.
+
 ## Callbacks
 
 ```rust
 // Callback type aliases
-pub type BeforeAgentCallback = Arc<dyn Fn(...) -> ... + Send + Sync>;
-pub type AfterAgentCallback = Arc<dyn Fn(...) -> ... + Send + Sync>;
-pub type BeforeModelCallback = Arc<dyn Fn(...) -> ... + Send + Sync>;
-pub type AfterModelCallback = Arc<dyn Fn(...) -> ... + Send + Sync>;
-pub type BeforeToolCallback = Arc<dyn Fn(...) -> ... + Send + Sync>;
-pub type AfterToolCallback = Arc<dyn Fn(...) -> ... + Send + Sync>;
+pub type BeforeAgentCallback = Box<dyn Fn(...) -> ... + Send + Sync>;
+pub type AfterAgentCallback = Box<dyn Fn(...) -> ... + Send + Sync>;
+pub type BeforeModelCallback = Box<dyn Fn(...) -> ... + Send + Sync>;
+pub type AfterModelCallback = Box<dyn Fn(...) -> ... + Send + Sync>;
+pub type BeforeToolCallback = Box<dyn Fn(...) -> ... + Send + Sync>;
+pub type AfterToolCallback = Box<dyn Fn(...) -> ... + Send + Sync>;
 
 // Instruction providers
-pub type InstructionProvider = Arc<dyn Fn(...) -> ... + Send + Sync>;
-pub type GlobalInstructionProvider = Arc<dyn Fn(...) -> ... + Send + Sync>;
+pub type InstructionProvider = Box<dyn Fn(...) -> ... + Send + Sync>;
+pub type GlobalInstructionProvider = Box<dyn Fn(...) -> ... + Send + Sync>;
+```
+
+## Context Compaction
+
+Types for sliding-window context compaction (summarizing older events to reduce LLM context size):
+
+```rust
+/// Trait for summarizing events during compaction.
+#[async_trait]
+pub trait BaseEventsSummarizer: Send + Sync {
+    async fn summarize_events(&self, events: &[Event]) -> Result<Option<Event>>;
+}
+
+/// Configuration for automatic context compaction.
+pub struct EventsCompactionConfig {
+    pub compaction_interval: u32,  // Invocations between compactions
+    pub overlap_size: u32,         // Events to carry over for continuity
+    pub summarizer: Arc<dyn BaseEventsSummarizer>,
+}
 ```
 
 ## Streaming Modes

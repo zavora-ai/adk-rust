@@ -19,7 +19,7 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 
 ```toml
 [dependencies]
-adk-session = "0.2.0"
+adk-session = "0.3.0"
 ```
 
 Or use the meta-crate:

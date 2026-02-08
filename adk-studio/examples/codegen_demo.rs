@@ -4,7 +4,7 @@
 //! Run: cargo run -p adk-studio --example codegen_demo
 
 use adk_studio::codegen::generate_rust_project;
-use adk_studio::schema::{AgentSchema, AgentType, ProjectSchema, Route};
+use adk_studio::schema::{AgentSchema, AgentType, Edge, ProjectSchema, Route};
 use std::fs;
 
 fn main() {
@@ -80,23 +80,14 @@ fn simple_chat_project() -> ProjectSchema {
             routes: vec![],
         },
     );
-    p.workflow.edges.push(adk_studio::schema::Edge {
-        from: "START".to_string(),
-        to: "chat_agent".to_string(),
-        condition: None,
-    });
-    p.workflow.edges.push(adk_studio::schema::Edge {
-        from: "chat_agent".to_string(),
-        to: "END".to_string(),
-        condition: None,
-    });
+    p.workflow.edges.push(Edge::new("START", "chat_agent"));
+    p.workflow.edges.push(Edge::new("chat_agent", "END"));
     p
 }
 
 fn research_pipeline_project() -> ProjectSchema {
     let mut p = ProjectSchema::new("research_pipeline");
 
-    // Sub-agents
     p.agents.insert(
         "researcher".to_string(),
         AgentSchema {
@@ -126,7 +117,6 @@ fn research_pipeline_project() -> ProjectSchema {
         },
     );
 
-    // Sequential container
     p.agents.insert(
         "pipeline".to_string(),
         AgentSchema {
@@ -141,16 +131,8 @@ fn research_pipeline_project() -> ProjectSchema {
         },
     );
 
-    p.workflow.edges.push(adk_studio::schema::Edge {
-        from: "START".to_string(),
-        to: "pipeline".to_string(),
-        condition: None,
-    });
-    p.workflow.edges.push(adk_studio::schema::Edge {
-        from: "pipeline".to_string(),
-        to: "END".to_string(),
-        condition: None,
-    });
+    p.workflow.edges.push(Edge::new("START", "pipeline"));
+    p.workflow.edges.push(Edge::new("pipeline", "END"));
     p
 }
 
@@ -187,7 +169,6 @@ fn content_refiner_project() -> ProjectSchema {
         },
     );
 
-    // Loop container
     p.agents.insert(
         "refiner".to_string(),
         AgentSchema {
@@ -202,16 +183,8 @@ fn content_refiner_project() -> ProjectSchema {
         },
     );
 
-    p.workflow.edges.push(adk_studio::schema::Edge {
-        from: "START".to_string(),
-        to: "refiner".to_string(),
-        condition: None,
-    });
-    p.workflow.edges.push(adk_studio::schema::Edge {
-        from: "refiner".to_string(),
-        to: "END".to_string(),
-        condition: None,
-    });
+    p.workflow.edges.push(Edge::new("START", "refiner"));
+    p.workflow.edges.push(Edge::new("refiner", "END"));
     p
 }
 
@@ -246,7 +219,6 @@ fn parallel_analyzer_project() -> ProjectSchema {
         },
     );
 
-    // Parallel container
     p.agents.insert(
         "analyzer".to_string(),
         AgentSchema {
@@ -261,23 +233,14 @@ fn parallel_analyzer_project() -> ProjectSchema {
         },
     );
 
-    p.workflow.edges.push(adk_studio::schema::Edge {
-        from: "START".to_string(),
-        to: "analyzer".to_string(),
-        condition: None,
-    });
-    p.workflow.edges.push(adk_studio::schema::Edge {
-        from: "analyzer".to_string(),
-        to: "END".to_string(),
-        condition: None,
-    });
+    p.workflow.edges.push(Edge::new("START", "analyzer"));
+    p.workflow.edges.push(Edge::new("analyzer", "END"));
     p
 }
 
 fn support_router_project() -> ProjectSchema {
     let mut p = ProjectSchema::new("support_router");
 
-    // Router
     p.agents.insert(
         "router".to_string(),
         AgentSchema {
@@ -296,7 +259,6 @@ fn support_router_project() -> ProjectSchema {
         },
     );
 
-    // Target agents
     p.agents.insert(
         "tech_agent".to_string(),
         AgentSchema {
@@ -338,40 +300,30 @@ fn support_router_project() -> ProjectSchema {
         },
     );
 
-    p.workflow.edges.push(adk_studio::schema::Edge {
-        from: "START".to_string(),
-        to: "router".to_string(),
-        condition: None,
-    });
-    p.workflow.edges.push(adk_studio::schema::Edge {
+    p.workflow.edges.push(Edge::new("START", "router"));
+    p.workflow.edges.push(Edge {
         from: "router".to_string(),
         to: "tech_agent".to_string(),
         condition: Some("technical".to_string()),
+        from_port: None,
+        to_port: None,
     });
-    p.workflow.edges.push(adk_studio::schema::Edge {
+    p.workflow.edges.push(Edge {
         from: "router".to_string(),
         to: "billing_agent".to_string(),
         condition: Some("billing".to_string()),
+        from_port: None,
+        to_port: None,
     });
-    p.workflow.edges.push(adk_studio::schema::Edge {
+    p.workflow.edges.push(Edge {
         from: "router".to_string(),
         to: "general_agent".to_string(),
         condition: Some("general".to_string()),
+        from_port: None,
+        to_port: None,
     });
-    p.workflow.edges.push(adk_studio::schema::Edge {
-        from: "tech_agent".to_string(),
-        to: "END".to_string(),
-        condition: None,
-    });
-    p.workflow.edges.push(adk_studio::schema::Edge {
-        from: "billing_agent".to_string(),
-        to: "END".to_string(),
-        condition: None,
-    });
-    p.workflow.edges.push(adk_studio::schema::Edge {
-        from: "general_agent".to_string(),
-        to: "END".to_string(),
-        condition: None,
-    });
+    p.workflow.edges.push(Edge::new("tech_agent", "END"));
+    p.workflow.edges.push(Edge::new("billing_agent", "END"));
+    p.workflow.edges.push(Edge::new("general_agent", "END"));
     p
 }
