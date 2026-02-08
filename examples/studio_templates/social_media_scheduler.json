@@ -1,0 +1,172 @@
+{
+  "id": "tpl-social-media-scheduler",
+  "version": "1.0.0",
+  "name": "Social Media Scheduler",
+  "description": "Generate platform-specific social media posts from a single topic, adapt tone and format for each platform, and schedule via their APIs",
+  "settings": {
+    "default_model": "gemini-2.0-flash",
+    "env_vars": {},
+    "layoutDirection": "LR",
+    "layoutMode": "free",
+    "debugMode": false
+  },
+  "agents": {
+    "content_strategist": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a social media content strategist. Given a topic or announcement, create platform-specific posts optimized for each channel.\n\nPlatform guidelines:\n- Twitter/X: Max 280 chars, punchy, use 1-2 relevant hashtags, conversational\n- LinkedIn: Professional tone, 150-300 words, thought leadership angle, 3-5 hashtags\n- Instagram: Visual-first caption, storytelling, 5-10 hashtags at end, emoji-friendly\n\nOutput JSON:\n{\"topic_summary\": \"one line\", \"posts\": {\"twitter\": {\"text\": \"...\", \"hashtags\": [\"...\"]}, \"linkedin\": {\"text\": \"...\", \"hashtags\": [\"...\"]}, \"instagram\": {\"caption\": \"...\", \"hashtags\": [\"...\"]}}, \"suggested_post_times\": {\"twitter\": \"9:00 AM ET\", \"linkedin\": \"8:00 AM ET\", \"instagram\": \"12:00 PM ET\"}, \"content_pillars\": [\"what themes this touches\"]}",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    }
+  },
+  "tools": {},
+  "tool_configs": {},
+  "actionNodes": {
+    "manual_trigger": {
+      "type": "trigger",
+      "id": "manual_trigger",
+      "name": "New Campaign",
+      "description": "Start a new social media campaign from a topic or announcement",
+      "triggerType": "manual",
+      "manual": {
+        "buttonLabel": "Create Posts",
+        "defaultPrompt": "We just launched ADK Studio v2.0 — a visual workflow builder for AI agents. Key features: drag-and-drop canvas, 10 action node types (HTTP, Switch, Loop, Database, etc.), one-click Rust code generation, and real-time execution visualization. It's open source and built with Rust. Target audience: developers building AI-powered automation.",
+        "showPromptInput": true
+      },
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 30000 },
+      "mapping": { "outputKey": "trigger_input" }
+    },
+    "post_twitter": {
+      "type": "http",
+      "id": "post_twitter",
+      "name": "Post to X/Twitter",
+      "description": "Publish tweet via Twitter API v2",
+      "method": "POST",
+      "url": "https://api.twitter.com/2/tweets",
+      "auth": { "type": "bearer", "bearer": { "token": "{{TWITTER_BEARER_TOKEN}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"text\": \"{{social_posts.posts.twitter.text}}\"}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 3000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "twitter_result" }
+    },
+    "post_linkedin": {
+      "type": "http",
+      "id": "post_linkedin",
+      "name": "Post to LinkedIn",
+      "description": "Publish post via LinkedIn API",
+      "method": "POST",
+      "url": "https://api.linkedin.com/v2/ugcPosts",
+      "auth": { "type": "bearer", "bearer": { "token": "{{LINKEDIN_ACCESS_TOKEN}}" } },
+      "headers": { "Content-Type": "application/json", "X-Restli-Protocol-Version": "2.0.0" },
+      "body": {
+        "type": "json",
+        "content": "{\"author\": \"urn:li:person:{{LINKEDIN_PERSON_ID}}\", \"lifecycleState\": \"PUBLISHED\", \"specificContent\": {\"com.linkedin.ugc.ShareContent\": {\"shareCommentary\": {\"text\": \"{{social_posts.posts.linkedin.text}}\"}, \"shareMediaCategory\": \"NONE\"}}, \"visibility\": {\"com.linkedin.ugc.MemberNetworkVisibility\": \"PUBLIC\"}}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 3000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "linkedin_result" }
+    },
+    "set_instagram_pending": {
+      "type": "set",
+      "id": "set_instagram_pending",
+      "name": "Queue Instagram",
+      "description": "Instagram requires image — queue caption for manual posting with image",
+      "mode": "set",
+      "variables": [
+        { "key": "instagram_caption", "value": "{{social_posts.posts.instagram.caption}}", "valueType": "string", "isSecret": false },
+        { "key": "instagram_hashtags", "value": "{{social_posts.posts.instagram.hashtags}}", "valueType": "string", "isSecret": false },
+        { "key": "instagram_status", "value": "queued_needs_image", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "instagram_result" }
+    },
+    "merge_posts": {
+      "type": "merge",
+      "id": "merge_posts",
+      "name": "Merge Results",
+      "description": "Collect results from all platform posts",
+      "mode": "wait_all",
+      "combineStrategy": "object",
+      "timeout": { "enabled": true, "ms": 30000, "behavior": "continue" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 35000 },
+      "mapping": { "outputKey": "all_post_results" }
+    },
+    "log_campaign": {
+      "type": "database",
+      "id": "log_campaign",
+      "name": "Log Campaign",
+      "description": "Record campaign details for analytics tracking",
+      "dbType": "postgresql",
+      "connection": { "connectionString": "{{DATABASE_URL}}", "poolSize": 3 },
+      "sql": {
+        "operation": "insert",
+        "query": "INSERT INTO social_campaigns (topic, twitter_posted, linkedin_posted, instagram_queued, created_at) VALUES ($1, $2, $3, $4, NOW())",
+        "parameters": ["{{social_posts.topic_summary}}", "true", "true", "true"]
+      },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "db_result" }
+    },
+    "notify_team": {
+      "type": "http",
+      "id": "notify_team",
+      "name": "Notify Marketing",
+      "description": "Post campaign summary to marketing Slack channel",
+      "method": "POST",
+      "url": "https://slack.com/api/chat.postMessage",
+      "auth": { "type": "bearer", "bearer": { "token": "{{SLACK_BOT_TOKEN}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"channel\": \"#marketing-social\", \"text\": \"📱 *Social Campaign Published*\\nTopic: {{social_posts.topic_summary}}\\n✅ Twitter: Posted\\n✅ LinkedIn: Posted\\n📸 Instagram: Queued (needs image)\\n\\nCheck analytics in 24h for engagement metrics.\"}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "slack_result" }
+    }
+  },
+  "workflow": {
+    "type": "graph",
+    "edges": [
+      { "from": "manual_trigger", "to": "START" },
+      { "from": "START", "to": "content_strategist" },
+      { "from": "content_strategist", "to": "post_twitter" },
+      { "from": "content_strategist", "to": "post_linkedin" },
+      { "from": "content_strategist", "to": "set_instagram_pending" },
+      { "from": "post_twitter", "to": "merge_posts" },
+      { "from": "post_linkedin", "to": "merge_posts" },
+      { "from": "set_instagram_pending", "to": "merge_posts" },
+      { "from": "merge_posts", "to": "log_campaign" },
+      { "from": "log_campaign", "to": "notify_team" },
+      { "from": "notify_team", "to": "END" }
+    ],
+    "conditions": []
+  },
+  "created_at": "2026-02-08T00:00:00Z",
+  "updated_at": "2026-02-08T00:00:00Z"
+}

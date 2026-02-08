@@ -1,0 +1,242 @@
+{
+  "id": "tpl-churn-predictor",
+  "version": "1.0.0",
+  "name": "Customer Churn Predictor",
+  "description": "Pull customer usage data, score churn risk with AI, route high-risk customers to retention team, trigger automated win-back campaigns for medium risk",
+  "settings": {
+    "default_model": "gemini-2.0-flash",
+    "env_vars": {},
+    "layoutDirection": "LR",
+    "layoutMode": "free",
+    "debugMode": false
+  },
+  "agents": {
+    "churn_scorer": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a customer success analyst specializing in churn prediction. Given customer usage metrics and account data, assess churn risk.\n\nRisk signals:\n- Login frequency dropped >50% month-over-month: HIGH\n- Feature adoption <20% of available features: MEDIUM\n- Support tickets increased >3x: HIGH\n- No API calls in 14+ days (for API product): HIGH\n- Contract renewal within 60 days + declining usage: CRITICAL\n- NPS score dropped below 6: HIGH\n- Team seats utilized <30%: MEDIUM\n- Billing issues (failed payments): HIGH\n\nOutput JSON:\n{\"churn_risk\": \"critical|high|medium|low\", \"churn_score\": 82, \"risk_signals\": [{\"signal\": \"login_drop\", \"severity\": \"high\", \"detail\": \"Logins dropped 67% from 45/week to 15/week\"}], \"days_to_renewal\": 45, \"recommended_action\": \"executive_outreach|csm_call|automated_campaign|monitor\", \"talking_points\": [\"specific things to discuss with customer\"], \"win_back_offer\": \"suggested discount or feature unlock\"}",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    }
+  },
+  "tools": {},
+  "tool_configs": {},
+  "actionNodes": {
+    "manual_trigger": {
+      "type": "trigger",
+      "id": "manual_trigger",
+      "name": "Analyze Customer",
+      "description": "Triggered by weekly churn scan or manual customer review",
+      "triggerType": "manual",
+      "manual": {
+        "buttonLabel": "Analyze Churn Risk",
+        "defaultPrompt": "Customer: TechStart Inc (ID: CUST-8842)\nPlan: Enterprise ($2,400/mo)\nContract renewal: April 15, 2026 (66 days away)\nAccount age: 18 months\n\nUsage metrics (last 30 days vs prior 30 days):\n- Logins: 15/week → 4/week (-73%)\n- API calls: 12,000/day → 2,100/day (-82%)\n- Features used: 8/24 → 3/24\n- Team seats active: 5/20 (25%)\n- Dashboard views: 340 → 45\n\nSupport: 7 tickets this month (was 1/month avg), 2 marked 'frustrated'\nNPS: Dropped from 8 to 4 in last survey\nBilling: Current, no issues\nLast CSM contact: 6 weeks ago",
+        "showPromptInput": true
+      },
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 30000 },
+      "mapping": { "outputKey": "trigger_input" }
+    },
+    "fetch_usage": {
+      "type": "http",
+      "id": "fetch_usage",
+      "name": "Fetch Usage Data",
+      "description": "Pull detailed usage metrics from analytics API",
+      "method": "GET",
+      "url": "https://api.internal.com/v1/customers/{{customer_id}}/usage?period=60d",
+      "auth": { "type": "bearer", "bearer": { "token": "{{INTERNAL_API_KEY}}" } },
+      "headers": { "Accept": "application/json" },
+      "body": { "type": "none" },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "usage_data" }
+    },
+    "fetch_tickets": {
+      "type": "http",
+      "id": "fetch_tickets",
+      "name": "Fetch Support Tickets",
+      "description": "Pull recent support tickets for sentiment context",
+      "method": "GET",
+      "url": "https://{{ZENDESK_DOMAIN}}.zendesk.com/api/v2/search.json?query=requester:{{customer_email}} created>30daysAgo",
+      "auth": { "type": "basic", "basic": { "username": "{{ZENDESK_EMAIL}}/token", "password": "{{ZENDESK_API_TOKEN}}" } },
+      "headers": { "Accept": "application/json" },
+      "body": { "type": "none" },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "support_tickets" }
+    },
+    "route_action": {
+      "type": "switch",
+      "id": "route_action",
+      "name": "Route by Risk",
+      "description": "Critical/high risk gets personal outreach, medium gets automated campaign, low is monitored",
+      "evaluationMode": "first_match",
+      "conditions": [
+        { "id": "critical", "name": "Critical → Executive", "field": "churn_analysis.churn_risk", "operator": "eq", "value": "critical", "outputPort": "executive" },
+        { "id": "high", "name": "High → CSM Call", "field": "churn_analysis.churn_risk", "operator": "eq", "value": "high", "outputPort": "csm" },
+        { "id": "medium", "name": "Medium → Campaign", "field": "churn_analysis.churn_risk", "operator": "eq", "value": "medium", "outputPort": "campaign" }
+      ],
+      "defaultBranch": "monitor",
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "action_route" }
+    },
+    "set_executive": {
+      "type": "set",
+      "id": "set_executive",
+      "name": "Executive Outreach",
+      "description": "Schedule VP-level call within 48 hours",
+      "mode": "set",
+      "variables": [
+        { "key": "action_type", "value": "executive_outreach", "valueType": "string", "isSecret": false },
+        { "key": "owner", "value": "vp-customer-success@company.com", "valueType": "string", "isSecret": false },
+        { "key": "sla_hours", "value": "48", "valueType": "number", "isSecret": false },
+        { "key": "offer_authority", "value": "up_to_30_percent_discount", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "retention_action" }
+    },
+    "set_csm": {
+      "type": "set",
+      "id": "set_csm",
+      "name": "CSM Call",
+      "description": "Assign to CSM for personal check-in call",
+      "mode": "set",
+      "variables": [
+        { "key": "action_type", "value": "csm_call", "valueType": "string", "isSecret": false },
+        { "key": "owner", "value": "csm-team@company.com", "valueType": "string", "isSecret": false },
+        { "key": "sla_hours", "value": "72", "valueType": "number", "isSecret": false },
+        { "key": "offer_authority", "value": "feature_unlock_or_training", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "retention_action" }
+    },
+    "set_campaign": {
+      "type": "set",
+      "id": "set_campaign",
+      "name": "Win-Back Campaign",
+      "description": "Enroll in automated email win-back sequence",
+      "mode": "set",
+      "variables": [
+        { "key": "action_type", "value": "automated_campaign", "valueType": "string", "isSecret": false },
+        { "key": "campaign_id", "value": "winback_engagement_7day", "valueType": "string", "isSecret": false },
+        { "key": "owner", "value": "marketing-ops@company.com", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "retention_action" }
+    },
+    "set_monitor": {
+      "type": "set",
+      "id": "set_monitor",
+      "name": "Monitor Only",
+      "description": "Low risk — add to watchlist for next weekly scan",
+      "mode": "set",
+      "variables": [
+        { "key": "action_type", "value": "monitor", "valueType": "string", "isSecret": false },
+        { "key": "next_review_days", "value": "7", "valueType": "number", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "retention_action" }
+    },
+    "merge_actions": {
+      "type": "merge",
+      "id": "merge_actions",
+      "name": "Merge Actions",
+      "description": "Rejoin all retention action branches",
+      "mode": "wait_all",
+      "combineStrategy": "object",
+      "timeout": { "enabled": true, "ms": 10000, "behavior": "continue" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "merged_action" }
+    },
+    "save_analysis": {
+      "type": "database",
+      "id": "save_analysis",
+      "name": "Save Analysis",
+      "description": "Record churn analysis for trend tracking",
+      "dbType": "postgresql",
+      "connection": { "connectionString": "{{DATABASE_URL}}", "poolSize": 3 },
+      "sql": {
+        "operation": "insert",
+        "query": "INSERT INTO churn_analyses (customer_id, churn_score, risk_level, action_type, days_to_renewal, analyzed_at) VALUES ($1, $2, $3, $4, $5, NOW())",
+        "parameters": ["{{customer_id}}", "{{churn_analysis.churn_score}}", "{{churn_analysis.churn_risk}}", "{{retention_action.action_type}}", "{{churn_analysis.days_to_renewal}}"]
+      },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 1000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "db_result" }
+    },
+    "notify_team": {
+      "type": "http",
+      "id": "notify_team",
+      "name": "Alert CS Team",
+      "description": "Post churn risk alert to customer success Slack channel",
+      "method": "POST",
+      "url": "https://slack.com/api/chat.postMessage",
+      "auth": { "type": "bearer", "bearer": { "token": "{{SLACK_BOT_TOKEN}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"channel\": \"#customer-success-alerts\", \"text\": \"⚠️ *Churn Risk Alert*\\nCustomer: {{customer_name}} ({{customer_id}})\\nRisk: {{churn_analysis.churn_risk}} (score: {{churn_analysis.churn_score}}/100)\\nRenewal in: {{churn_analysis.days_to_renewal}} days\\nAction: {{retention_action.action_type}}\\nOwner: {{retention_action.owner}}\\n\\nTop signals: {{churn_analysis.risk_signals_summary}}\"}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "slack_result" }
+    }
+  },
+  "workflow": {
+    "type": "graph",
+    "edges": [
+      { "from": "manual_trigger", "to": "START" },
+      { "from": "START", "to": "fetch_usage" },
+      { "from": "START", "to": "fetch_tickets" },
+      { "from": "fetch_usage", "to": "churn_scorer" },
+      { "from": "fetch_tickets", "to": "churn_scorer" },
+      { "from": "churn_scorer", "to": "route_action" },
+      { "from": "route_action", "to": "set_executive", "fromPort": "executive" },
+      { "from": "route_action", "to": "set_csm", "fromPort": "csm" },
+      { "from": "route_action", "to": "set_campaign", "fromPort": "campaign" },
+      { "from": "route_action", "to": "set_monitor", "fromPort": "monitor" },
+      { "from": "set_executive", "to": "merge_actions" },
+      { "from": "set_csm", "to": "merge_actions" },
+      { "from": "set_campaign", "to": "merge_actions" },
+      { "from": "set_monitor", "to": "merge_actions" },
+      { "from": "merge_actions", "to": "save_analysis" },
+      { "from": "save_analysis", "to": "notify_team" },
+      { "from": "notify_team", "to": "END" }
+    ],
+    "conditions": []
+  },
+  "created_at": "2026-02-08T00:00:00Z",
+  "updated_at": "2026-02-08T00:00:00Z"
+}

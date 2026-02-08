@@ -1,0 +1,192 @@
+{
+  "id": "tpl-expense-report",
+  "version": "1.0.0",
+  "name": "Expense Report Processor",
+  "description": "Extract receipt data with AI, validate against company expense policies, auto-approve compliant expenses, flag violations for review",
+  "settings": {
+    "default_model": "gemini-2.0-flash",
+    "env_vars": {},
+    "layoutDirection": "LR",
+    "layoutMode": "free",
+    "debugMode": false
+  },
+  "agents": {
+    "receipt_extractor": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are an expense report processor. Given receipt text or OCR output, extract structured expense data.\n\nExtract:\n- merchant: Business name\n- date: Transaction date (ISO format)\n- category: one of [meals, travel, lodging, office_supplies, software, equipment, conference, client_entertainment, other]\n- amount: Total amount\n- currency: 3-letter code\n- tax: Tax amount if shown\n- tip: Tip amount if applicable\n- payment_method: card ending, cash, etc.\n- attendees: List of people if a meal/entertainment receipt\n- business_purpose: Inferred business justification\n\nOutput JSON only. Use null for missing fields.",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    },
+    "policy_checker": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a corporate expense policy compliance checker. Given extracted expense data, check against these policies:\n\nPolicy rules:\n- Meals: Max $75/person for team meals, $150/person for client entertainment\n- Travel: Economy class required for flights under 6 hours\n- Lodging: Max $250/night domestic, $350/night international\n- Software: Max $500 without pre-approval\n- Equipment: Max $1000 without pre-approval\n- Tips: Max 20% for meals\n- Receipts required for all expenses over $25\n- No alcohol on company card (except client entertainment)\n- Conference registration must be pre-approved\n\nOutput JSON:\n{\"compliant\": true, \"violations\": [{\"rule\": \"meal_limit\", \"detail\": \"$95/person exceeds $75 limit\", \"severity\": \"warning|violation\"}], \"auto_approvable\": true, \"total_risk_score\": 15, \"recommendation\": \"approve|flag_for_review|reject\"}",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    }
+  },
+  "tools": {},
+  "tool_configs": {},
+  "actionNodes": {
+    "manual_trigger": {
+      "type": "trigger",
+      "id": "manual_trigger",
+      "name": "Expense Submitted",
+      "description": "Employee submits an expense receipt for processing",
+      "triggerType": "manual",
+      "manual": {
+        "buttonLabel": "Submit Expense",
+        "defaultPrompt": "Receipt:\nThe Capital Grille\n1301 K Street NW, Washington DC\nDate: 02/05/2026\nServer: Michael\n\nTable for 4\n\n2x Filet Mignon          $98.00\n1x Chilean Sea Bass       $52.00\n1x Lobster Risotto        $44.00\n2x Caesar Salad           $28.00\n1x Bottle Caymus Cab 2022 $185.00\n4x Espresso               $24.00\n\nSubtotal:                 $431.00\nTax (10%):                $43.10\nTip (22%):                $94.82\nTotal:                    $568.92\n\nVisa ending 4829\n\nAttendees: John Smith (employee), Sarah Chen (client, Acme Corp), Mike Johnson (client, Acme Corp), Lisa Park (employee)\nPurpose: Q1 partnership discussion dinner with Acme Corp",
+        "showPromptInput": true
+      },
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 30000 },
+      "mapping": { "outputKey": "trigger_input" }
+    },
+    "route_decision": {
+      "type": "switch",
+      "id": "route_decision",
+      "name": "Route Decision",
+      "description": "Auto-approve compliant expenses, flag violations for review",
+      "evaluationMode": "first_match",
+      "conditions": [
+        { "id": "reject", "name": "Reject", "field": "policy_check.recommendation", "operator": "eq", "value": "reject", "outputPort": "rejected" },
+        { "id": "review", "name": "Needs Review", "field": "policy_check.recommendation", "operator": "eq", "value": "flag_for_review", "outputPort": "review" }
+      ],
+      "defaultBranch": "approved",
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "expense_route" }
+    },
+    "set_rejected": {
+      "type": "set",
+      "id": "set_rejected",
+      "name": "Rejected",
+      "description": "Mark expense as rejected with reason",
+      "mode": "set",
+      "variables": [
+        { "key": "status", "value": "rejected", "valueType": "string", "isSecret": false },
+        { "key": "reviewer", "value": "system", "valueType": "string", "isSecret": false },
+        { "key": "action_required", "value": "Resubmit with corrections or manager override", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "expense_status" }
+    },
+    "set_review": {
+      "type": "set",
+      "id": "set_review",
+      "name": "Manager Review",
+      "description": "Flag for manager review with violation details",
+      "mode": "set",
+      "variables": [
+        { "key": "status", "value": "pending_review", "valueType": "string", "isSecret": false },
+        { "key": "reviewer", "value": "manager@company.com", "valueType": "string", "isSecret": false },
+        { "key": "sla_hours", "value": "48", "valueType": "number", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "expense_status" }
+    },
+    "set_approved": {
+      "type": "set",
+      "id": "set_approved",
+      "name": "Auto-Approved",
+      "description": "Compliant expense auto-approved",
+      "mode": "set",
+      "variables": [
+        { "key": "status", "value": "approved", "valueType": "string", "isSecret": false },
+        { "key": "reviewer", "value": "system", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "expense_status" }
+    },
+    "merge_decisions": {
+      "type": "merge",
+      "id": "merge_decisions",
+      "name": "Merge",
+      "description": "Rejoin all decision branches",
+      "mode": "wait_all",
+      "combineStrategy": "object",
+      "timeout": { "enabled": true, "ms": 10000, "behavior": "continue" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "merged_decision" }
+    },
+    "save_expense": {
+      "type": "database",
+      "id": "save_expense",
+      "name": "Save to Database",
+      "description": "Record expense and decision in the database",
+      "dbType": "postgresql",
+      "connection": { "connectionString": "{{DATABASE_URL}}", "poolSize": 3 },
+      "sql": {
+        "operation": "insert",
+        "query": "INSERT INTO expenses (employee_id, merchant, amount, category, status, violations_count, submitted_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())",
+        "parameters": ["{{employee_id}}", "{{receipt.merchant}}", "{{receipt.amount}}", "{{receipt.category}}", "{{expense_status.status}}", "{{policy_check.violations_count}}"]
+      },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 1000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "db_result" }
+    },
+    "notify_employee": {
+      "type": "http",
+      "id": "notify_employee",
+      "name": "Notify Employee",
+      "description": "Send expense status notification via Slack DM",
+      "method": "POST",
+      "url": "https://slack.com/api/chat.postMessage",
+      "auth": { "type": "bearer", "bearer": { "token": "{{SLACK_BOT_TOKEN}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"channel\": \"{{employee_slack_id}}\", \"text\": \"💰 *Expense Update*\\nMerchant: {{receipt.merchant}}\\nAmount: {{receipt.amount}} {{receipt.currency}}\\nStatus: {{expense_status.status}}\\n{{#if policy_check.violations}}Flags: {{policy_check.violations_summary}}{{/if}}\"}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "notification_result" }
+    }
+  },
+  "workflow": {
+    "type": "graph",
+    "edges": [
+      { "from": "manual_trigger", "to": "START" },
+      { "from": "START", "to": "receipt_extractor" },
+      { "from": "receipt_extractor", "to": "policy_checker" },
+      { "from": "policy_checker", "to": "route_decision" },
+      { "from": "route_decision", "to": "set_rejected", "fromPort": "rejected" },
+      { "from": "route_decision", "to": "set_review", "fromPort": "review" },
+      { "from": "route_decision", "to": "set_approved", "fromPort": "approved" },
+      { "from": "set_rejected", "to": "merge_decisions" },
+      { "from": "set_review", "to": "merge_decisions" },
+      { "from": "set_approved", "to": "merge_decisions" },
+      { "from": "merge_decisions", "to": "save_expense" },
+      { "from": "save_expense", "to": "notify_employee" },
+      { "from": "notify_employee", "to": "END" }
+    ],
+    "conditions": []
+  },
+  "created_at": "2026-02-08T00:00:00Z",
+  "updated_at": "2026-02-08T00:00:00Z"
+}
