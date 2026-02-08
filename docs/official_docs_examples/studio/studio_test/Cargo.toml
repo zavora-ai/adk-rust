@@ -9,5 +9,5 @@ path = "src/basic.rs"
 
 [dependencies]
 adk-studio = { path = "../../../../adk-studio" }
-axum = "0.7"
+axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
