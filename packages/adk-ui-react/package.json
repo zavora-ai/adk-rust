@@ -30,7 +30,7 @@
     "dependencies": {
         "clsx": "^2.0.0",
         "lucide-react": "^0.294.0",
-        "react-markdown": "^9.0.1",
+        "react-markdown": "^10.1.0",
         "recharts": "^2.10.0"
     },
     "devDependencies": {
