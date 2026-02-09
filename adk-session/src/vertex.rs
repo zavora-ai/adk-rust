@@ -48,8 +48,8 @@ impl VertexAiSessionConfig {
             .endpoint
             .clone()
             .unwrap_or_else(|| format!("https://{}-aiplatform.googleapis.com", self.location));
-        // Enforce HTTPS to prevent cleartext transmission of session data
-        if !ep.starts_with("https://") {
+        // Enforce HTTPS for non-localhost endpoints to prevent cleartext transmission
+        if !ep.starts_with("https://") && !ep.contains("://127.0.0.1") && !ep.contains("://localhost") {
             format!("https://{}", ep.trim_start_matches("http://"))
         } else {
             ep
