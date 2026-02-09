@@ -28,7 +28,7 @@ semver = "1.0"
 # CLI and file processing
 clap = { version = "4.5", features = ["derive", "env"] }
 walkdir = "2.5"
-pulldown-cmark = "0.12"
+pulldown-cmark = "0.13"
 syn = { version = "2.0", features = ["full", "parsing", "visit"] }
 quote = "1.0"
 toml = "0.8"
