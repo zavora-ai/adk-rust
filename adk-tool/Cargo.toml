@@ -24,7 +24,7 @@ async-trait.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-schemars = "0.8"
+schemars = "1.2"
 rmcp = { version = "0.14", features = ["client"] }
 tracing.workspace = true
 base64 = "0.21"
