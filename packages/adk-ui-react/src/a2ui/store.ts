@@ -27,8 +27,9 @@ export class A2uiStore {
 
     applyUpdateComponents(surfaceId: string, components: A2uiComponent[]) {
         const surface = this.ensureSurface(surfaceId);
+        const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
         for (const component of components) {
-            if (!component.id) {
+            if (!component.id || FORBIDDEN_KEYS.has(component.id)) {
                 continue;
             }
             surface.components.set(component.id, component);
@@ -54,30 +55,33 @@ export class A2uiStore {
 
         // Reject prototype-polluting keys
         const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+        function isSafeKey(k: string): boolean {
+            return !FORBIDDEN_KEYS.has(k);
+        }
 
         let cursor: Record<string, unknown> = surface.dataModel;
         for (let i = 0; i < tokens.length - 1; i += 1) {
             const key = tokens[i];
-            if (FORBIDDEN_KEYS.has(key)) {
+            if (!isSafeKey(key)) {
                 return;
             }
-            const next = cursor[key];
+            const next = Object.prototype.hasOwnProperty.call(cursor, key) ? cursor[key] : undefined;
             if (typeof next === "object" && next !== null) {
                 cursor = next as Record<string, unknown>;
             } else {
-                const created: Record<string, unknown> = {};
-                cursor[key] = created;
+                const created: Record<string, unknown> = Object.create(null);
+                Object.defineProperty(cursor, key, { value: created, writable: true, enumerable: true, configurable: true });
                 cursor = created;
             }
         }
         const lastKey = tokens[tokens.length - 1];
-        if (FORBIDDEN_KEYS.has(lastKey)) {
+        if (!isSafeKey(lastKey)) {
             return;
         }
         if (typeof value === "undefined") {
             delete cursor[lastKey];
         } else {
-            cursor[lastKey] = value as unknown;
+            Object.defineProperty(cursor, lastKey, { value: value, writable: true, enumerable: true, configurable: true });
         }
     }
 }

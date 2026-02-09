@@ -71,7 +71,7 @@ fn main() -> anyhow::Result<()> {
 
     // Helper methods
     println!("   Helper methods:");
-    println!("   - user_id(): {}", claims.user_id());
+    println!("   - user_id(): [REDACTED]");
     println!("   - all_groups(): {:?}", claims.all_groups());
     println!("   - is_expired(): {}", claims.is_expired());
     println!();

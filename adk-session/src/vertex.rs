@@ -44,9 +44,16 @@ impl VertexAiSessionConfig {
     }
 
     fn endpoint(&self) -> String {
-        self.endpoint
+        let ep = self
+            .endpoint
             .clone()
-            .unwrap_or_else(|| format!("https://{}-aiplatform.googleapis.com", self.location))
+            .unwrap_or_else(|| format!("https://{}-aiplatform.googleapis.com", self.location));
+        // Enforce HTTPS to prevent cleartext transmission of session data
+        if !ep.starts_with("https://") {
+            format!("https://{}", ep.trim_start_matches("http://"))
+        } else {
+            ep
+        }
     }
 }
 
@@ -500,10 +507,9 @@ impl SessionService for VertexAiSessionService {
             || req.user_id.trim().is_empty()
             || req.session_id.trim().is_empty()
         {
-            return Err(Self::session_error(format!(
-                "app_name, user_id, and session_id are required, got app_name: '{}' user_id: '{}' session_id: '{}'",
-                req.app_name, req.user_id, req.session_id,
-            )));
+            return Err(Self::session_error(
+                "app_name, user_id, and session_id are all required and must be non-empty",
+            ));
         }
 
         let session_name = self.session_name_from_app(&req.app_name, &req.session_id)?;

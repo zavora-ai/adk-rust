@@ -1552,8 +1552,9 @@ var A2uiStore = class {
   }
   applyUpdateComponents(surfaceId, components) {
     const surface = this.ensureSurface(surfaceId);
+    const FORBIDDEN_KEYS = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
     for (const component of components) {
-      if (!component.id) {
+      if (!component.id || FORBIDDEN_KEYS.has(component.id)) {
         continue;
       }
       surface.components.set(component.id, component);
@@ -1573,23 +1574,33 @@ var A2uiStore = class {
       surface.dataModel = value ?? {};
       return;
     }
+    const FORBIDDEN_KEYS = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
+    function isSafeKey(k) {
+      return !FORBIDDEN_KEYS.has(k);
+    }
     let cursor = surface.dataModel;
     for (let i = 0; i < tokens.length - 1; i += 1) {
       const key = tokens[i];
-      const next = cursor[key];
+      if (!isSafeKey(key)) {
+        return;
+      }
+      const next = Object.prototype.hasOwnProperty.call(cursor, key) ? cursor[key] : void 0;
       if (typeof next === "object" && next !== null) {
         cursor = next;
       } else {
-        const created = {};
-        cursor[key] = created;
+        const created = /* @__PURE__ */ Object.create(null);
+        Object.defineProperty(cursor, key, { value: created, writable: true, enumerable: true, configurable: true });
         cursor = created;
       }
     }
     const lastKey = tokens[tokens.length - 1];
+    if (!isSafeKey(lastKey)) {
+      return;
+    }
     if (typeof value === "undefined") {
       delete cursor[lastKey];
     } else {
-      cursor[lastKey] = value;
+      Object.defineProperty(cursor, lastKey, { value, writable: true, enumerable: true, configurable: true });
     }
   }
 };
@@ -1693,12 +1704,16 @@ function extractSurfaceFromAgUiEvents(events) {
   return null;
 }
 function extractSurfaceScriptFromHtml(html) {
-  const scriptPattern = /<script[^>]*id=["']adk-ui-surface["'][^>]*>([\s\S]*?)<\/script>/i;
-  const match = html.match(scriptPattern);
-  if (!match || !match[1]) {
-    return null;
-  }
-  return match[1].trim();
+  const openTagStart = html.indexOf("<script");
+  if (openTagStart === -1) return null;
+  const idAttr = html.indexOf("adk-ui-surface", openTagStart);
+  if (idAttr === -1) return null;
+  const openTagEnd = html.indexOf(">", idAttr);
+  if (openTagEnd === -1) return null;
+  const closeTag = html.indexOf("</script>", openTagEnd);
+  if (closeTag === -1) return null;
+  const content = html.substring(openTagEnd + 1, closeTag).trim();
+  return content.length > 0 ? content : null;
 }
 function extractSurfaceFromMcpPayload(payload) {
   const resourceReadResponse = payload.resourceReadResponse;
