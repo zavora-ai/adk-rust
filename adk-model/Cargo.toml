@@ -22,7 +22,7 @@ futures.workspace = true
 async-stream.workspace = true
 serde_json.workspace = true
 serde = { workspace = true }
-async-openai = { version = "0.27", optional = true }
+async-openai = { version = "0.32", optional = true }
 claudius = { version = "0.16", optional = true, default-features = false }
 reqwest = { workspace = true, optional = true }
 anyhow.workspace = true

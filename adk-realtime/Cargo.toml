@@ -45,7 +45,7 @@ uuid.workspace = true
 getrandom = "0.2"
 
 # OpenAI realtime types (optional)
-async-openai = { version = "0.27", optional = true }
+async-openai = { version = "0.32", optional = true }
 
 [dev-dependencies]
 tokio.workspace = true
