@@ -194,7 +194,17 @@ pub async fn create_session_from_path(
             app_name: params.app_name.clone(),
             user_id: params.user_id.clone(),
             session_id: Some(session_id),
-            state: body.map(|b| b.0.state).unwrap_or_default(),
+            state: match body {
+                Some(b) => {
+                    let s = b.0.state;
+                    if s.len() > MAX_STATE_ENTRIES {
+                        s.into_iter().take(MAX_STATE_ENTRIES).collect()
+                    } else {
+                        s
+                    }
+                }
+                None => std::collections::HashMap::new(),
+            },
         })
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
