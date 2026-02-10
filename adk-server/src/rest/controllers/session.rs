@@ -148,9 +148,7 @@ where
     }
 }
 
-fn deserialize_bounded_events<'de, D>(
-    deserializer: D,
-) -> Result<Vec<serde_json::Value>, D::Error>
+fn deserialize_bounded_events<'de, D>(deserializer: D) -> Result<Vec<serde_json::Value>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

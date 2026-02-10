@@ -49,7 +49,10 @@ impl VertexAiSessionConfig {
             .clone()
             .unwrap_or_else(|| format!("https://{}-aiplatform.googleapis.com", self.location));
         // Enforce HTTPS for non-localhost endpoints to prevent cleartext transmission
-        if !ep.starts_with("https://") && !ep.contains("://127.0.0.1") && !ep.contains("://localhost") {
+        if !ep.starts_with("https://")
+            && !ep.contains("://127.0.0.1")
+            && !ep.contains("://localhost")
+        {
             format!("https://{}", ep.trim_start_matches("http://"))
         } else {
             ep
@@ -316,11 +319,8 @@ impl VertexAiSessionService {
         let mut page_token: Option<String> = None;
 
         loop {
-            let url = self.build_url(&format!(
-                "{}/{}/events",
-                SESSION_API_VERSION,
-                session_name,
-            ))?;
+            let url =
+                self.build_url(&format!("{}/{}/events", SESSION_API_VERSION, session_name,))?;
 
             let mut request = self.http_client.get(url);
             if let Some(token) = page_token.as_ref().filter(|token| !token.is_empty()) {
@@ -458,8 +458,7 @@ impl SessionService for VertexAiSessionService {
         let mut page_token: Option<String> = None;
 
         loop {
-            let url =
-                self.build_url(&format!("{}/{}/sessions", SESSION_API_VERSION, parent))?;
+            let url = self.build_url(&format!("{}/{}/sessions", SESSION_API_VERSION, parent))?;
             let mut request = self.http_client.get(url);
 
             if !req.user_id.trim().is_empty() {
@@ -547,11 +546,8 @@ impl SessionService for VertexAiSessionService {
         event.actions.state_delta = sanitize_state_map(event.actions.state_delta);
 
         let session_name = self.resolve_session_name_for_append(session_id)?;
-        let url = self.build_url(&format!(
-            "{}/{}:appendEvent",
-            SESSION_API_VERSION,
-            session_name,
-        ))?;
+        let url =
+            self.build_url(&format!("{}/{}:appendEvent", SESSION_API_VERSION, session_name,))?;
 
         let body = build_append_event_payload(&event);
 
