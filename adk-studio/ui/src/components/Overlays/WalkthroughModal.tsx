@@ -2,13 +2,12 @@
  * WalkthroughModal component for ADK Studio v2.0
  * 
  * Provides a guided onboarding experience for new users.
- * Guides through: create project, add agents, action nodes, connect nodes, run tests.
- * Features an animated progress bar with shimmer effect.
+ * Features an animated progress bar that fills as each section completes.
  * 
  * Requirements: 6.5, 6.6
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, ChevronRight, ChevronLeft, Check, Sparkles } from 'lucide-react';
 
 /**
@@ -20,30 +19,12 @@ interface WalkthroughStep {
   description: string;
   icon: string;
   tips: string[];
+  /** Duration in ms the animated bar takes to fill for this step */
+  duration: number;
 }
 
 /**
- * Action node showcase items for the Action Nodes walkthrough step
- */
-const ACTION_NODE_SHOWCASE = [
-  { icon: '🎯', label: 'Trigger', color: '#6366F1', desc: 'Entry points' },
-  { icon: '🌐', label: 'HTTP', color: '#3B82F6', desc: 'API calls' },
-  { icon: '📝', label: 'Set', color: '#8B5CF6', desc: 'Variables' },
-  { icon: '⚙️', label: 'Transform', color: '#EC4899', desc: 'Data ops' },
-  { icon: '🔀', label: 'Switch', color: '#F59E0B', desc: 'Branching' },
-  { icon: '🔄', label: 'Loop', color: '#10B981', desc: 'Iteration' },
-  { icon: '🔗', label: 'Merge', color: '#06B6D4', desc: 'Combine' },
-  { icon: '⏱️', label: 'Wait', color: '#6B7280', desc: 'Timing' },
-  { icon: '💻', label: 'Code', color: '#EF4444', desc: 'Custom logic' },
-  { icon: '🗄️', label: 'Database', color: '#14B8A6', desc: 'Storage' },
-  { icon: '📧', label: 'Email', color: '#EA580C', desc: 'Messages' },
-  { icon: '🔔', label: 'Notification', color: '#22D3EE', desc: 'Alerts' },
-  { icon: '📡', label: 'RSS', color: '#F97316', desc: 'Feeds' },
-  { icon: '📁', label: 'File', color: '#A855F7', desc: 'File I/O' },
-];
-
-/**
- * Walkthrough steps for new users
+ * Walkthrough steps for new users (8 steps including Action Nodes)
  * Requirements: 6.6
  */
 const WALKTHROUGH_STEPS: WalkthroughStep[] = [
@@ -57,6 +38,7 @@ const WALKTHROUGH_STEPS: WalkthroughStep[] = [
       'Test and debug in real-time',
       'Export production-ready Rust code',
     ],
+    duration: 6000,
   },
   {
     id: 'create-project',
@@ -68,6 +50,7 @@ const WALKTHROUGH_STEPS: WalkthroughStep[] = [
       'Give your project a descriptive name',
       'Or select a template to start quickly',
     ],
+    duration: 5000,
   },
   {
     id: 'add-agents',
@@ -81,18 +64,23 @@ const WALKTHROUGH_STEPS: WalkthroughStep[] = [
       'Loop: Iterate until a condition is met',
       'Router: Route to different agents based on input',
     ],
+    duration: 7000,
   },
   {
     id: 'action-nodes',
     title: 'Action Nodes',
-    description: 'Action Nodes are deterministic, non-LLM building blocks for your workflows. Mix them with AI agents for powerful automations.',
+    description: 'Action nodes handle deterministic, non-AI tasks in your workflow — API calls, data transforms, branching, and more.',
     icon: '⚡',
     tips: [
-      'Drag action nodes from the palette alongside agents',
-      'HTTP, Database, and File nodes connect to external services',
-      'Switch and Loop nodes control workflow logic',
-      'Code nodes let you write custom JavaScript/TypeScript',
+      '🎯 Trigger: Start workflows via webhook, schedule, or event',
+      '🌐 HTTP: Make API calls with auth, headers, and body',
+      '🔀 Switch: Route data based on conditions',
+      '⚙️ Transform: Reshape data with JSONPath or JavaScript',
+      '🗄️ Database: Query PostgreSQL, MySQL, MongoDB, Redis',
+      '📧 Email & 🔔 Notifications: Send alerts via Slack, Discord, Teams',
+      '💻 Code: Run sandboxed JavaScript for custom logic',
     ],
+    duration: 8000,
   },
   {
     id: 'connect-nodes',
@@ -104,6 +92,7 @@ const WALKTHROUGH_STEPS: WalkthroughStep[] = [
       'Double-click an edge to remove it',
       'Use the auto-layout button to organize nodes',
     ],
+    duration: 5000,
   },
   {
     id: 'configure-agents',
@@ -115,6 +104,7 @@ const WALKTHROUGH_STEPS: WalkthroughStep[] = [
       'Add tools like Google Search or Code Execution',
       'Configure model parameters like temperature',
     ],
+    duration: 5000,
   },
   {
     id: 'run-tests',
@@ -127,6 +117,7 @@ const WALKTHROUGH_STEPS: WalkthroughStep[] = [
       'Watch the timeline to debug execution',
       'Inspect state at each node',
     ],
+    duration: 5000,
   },
   {
     id: 'complete',
@@ -138,277 +129,285 @@ const WALKTHROUGH_STEPS: WalkthroughStep[] = [
       'Export your workflow as Rust code',
       'Check the Help menu for keyboard shortcuts',
     ],
+    duration: 4000,
   },
 ];
 
+const TOTAL_STEPS = WALKTHROUGH_STEPS.length;
+
 interface WalkthroughModalProps {
-  /** Callback when walkthrough is completed */
   onComplete: () => void;
-  /** Callback when walkthrough is skipped */
   onSkip: () => void;
-  /** Callback to close the modal */
   onClose: () => void;
 }
 
-/** Auto-advance interval in ms */
-const AUTO_ADVANCE_MS = 6000;
+/**
+ * Animated progress bar segment for a single step.
+ */
+function ProgressSegment({
+  index,
+  currentStep,
+  duration,
+  isPaused,
+  onSegmentComplete,
+}: {
+  index: number;
+  currentStep: number;
+  duration: number;
+  isPaused: boolean;
+  onSegmentComplete: () => void;
+}) {
+  const fillRef = useRef<HTMLDivElement>(null);
+  const animRef = useRef<Animation | null>(null);
+
+  useEffect(() => {
+    const el = fillRef.current;
+    if (!el) return;
+
+    if (index < currentStep) {
+      // Already completed — fill instantly
+      el.style.width = '100%';
+      if (animRef.current) { animRef.current.cancel(); animRef.current = null; }
+      return;
+    }
+
+    if (index > currentStep) {
+      // Future step — empty
+      el.style.width = '0%';
+      if (animRef.current) { animRef.current.cancel(); animRef.current = null; }
+      return;
+    }
+
+    // Current step — animate fill
+    el.style.width = '0%';
+    const anim = el.animate(
+      [{ width: '0%' }, { width: '100%' }],
+      { duration, fill: 'forwards', easing: 'linear' }
+    );
+    animRef.current = anim;
+
+    anim.onfinish = () => {
+      el.style.width = '100%';
+      onSegmentComplete();
+    };
+
+    return () => { anim.cancel(); };
+  }, [index, currentStep, duration, onSegmentComplete]);
+
+  // Pause / resume
+  useEffect(() => {
+    const anim = animRef.current;
+    if (!anim || index !== currentStep) return;
+    if (isPaused) {
+      anim.pause();
+    } else if (anim.playState === 'paused') {
+      anim.play();
+    }
+  }, [isPaused, index, currentStep]);
+
+  return (
+    <div
+      style={{
+        flex: 1,
+        height: '3px',
+        borderRadius: '2px',
+        backgroundColor: 'var(--border-default, #333)',
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        ref={fillRef}
+        style={{
+          height: '100%',
+          width: '0%',
+          borderRadius: '2px',
+          background: 'linear-gradient(90deg, var(--accent-primary, #0F8A8A), var(--accent-secondary, #4fd1c5))',
+        }}
+      />
+    </div>
+  );
+}
+
 
 /**
- * Walkthrough modal for first-run onboarding
+ * WalkthroughModal — guided onboarding with animated progress bar.
+ *
+ * The top bar is split into segments (one per step). The current segment
+ * animates from 0→100% over the step's `duration`. When it finishes the
+ * modal auto-advances. Users can also click Next/Previous at any time.
  */
 export function WalkthroughModal({ onComplete, onSkip, onClose }: WalkthroughModalProps) {
   const [currentStep, setCurrentStep] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isPaused, setIsPaused] = useState(false);
   const step = WALKTHROUGH_STEPS[currentStep];
-  const isFirstStep = currentStep === 0;
-  const isLastStep = currentStep === WALKTHROUGH_STEPS.length - 1;
+  const isFirst = currentStep === 0;
+  const isLast = currentStep === TOTAL_STEPS - 1;
 
-  const clearTimer = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  }, []);
-
-  const startTimer = useCallback(() => {
-    clearTimer();
-    timerRef.current = setTimeout(() => {
-      setCurrentStep((prev) => {
-        if (prev < WALKTHROUGH_STEPS.length - 1) return prev + 1;
-        return prev; // stay on last step
-      });
-    }, AUTO_ADVANCE_MS);
-  }, [clearTimer]);
-
-  // Restart timer whenever step changes
-  useEffect(() => {
-    if (!isLastStep) startTimer();
-    else clearTimer();
-    return clearTimer;
-  }, [currentStep, isLastStep, startTimer, clearTimer]);
-
-  const handleNext = () => {
-    clearTimer();
-    if (isLastStep) {
+  const goNext = useCallback(() => {
+    if (isLast) {
       onComplete();
     } else {
-      setCurrentStep(currentStep + 1);
+      setCurrentStep((s) => Math.min(s + 1, TOTAL_STEPS - 1));
     }
-  };
+  }, [isLast, onComplete]);
 
-  const handlePrevious = () => {
-    clearTimer();
-    if (!isFirstStep) {
-      setCurrentStep(currentStep - 1);
-    }
-  };
+  const goPrev = useCallback(() => {
+    setCurrentStep((s) => Math.max(s - 1, 0));
+  }, []);
 
-  const handleSkip = () => {
-    clearTimer();
-    onSkip();
-  };
+  // Keyboard navigation
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight' || e.key === 'Enter') goNext();
+      else if (e.key === 'ArrowLeft') goPrev();
+      else if (e.key === 'Escape') onClose();
+      else if (e.key === ' ') { e.preventDefault(); setIsPaused((p) => !p); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [goNext, goPrev, onClose]);
 
   return (
-    <div 
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
-      onClick={onClose}
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Getting Started Guide"
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        backgroundColor: 'rgba(0,0,0,0.55)',
+        backdropFilter: 'blur(4px)',
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div 
-        className="w-full max-w-lg rounded-xl shadow-2xl overflow-hidden"
-        style={{ backgroundColor: 'var(--surface-panel)' }}
-        onClick={(e) => e.stopPropagation()}
+      <div
+        style={{
+          width: '100%', maxWidth: 560,
+          borderRadius: 16, overflow: 'hidden',
+          backgroundColor: 'var(--surface-panel, #1e1e2e)',
+          border: '1px solid var(--border-default, #333)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.4)',
+          color: 'var(--text-primary, #e0e0e0)',
+        }}
       >
-        {/* Header */}
-        <div 
-          className="flex items-center justify-between px-6 py-4"
-          style={{ 
-            backgroundColor: 'var(--accent-primary)',
-            color: 'white',
-          }}
-        >
-          <div className="flex items-center gap-2">
-            <Sparkles size={20} />
-            <span className="font-semibold">Getting Started</span>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded hover:bg-white/20 transition-colors"
-          >
-            <X size={20} />
-          </button>
+        {/* ── Animated progress bar ── */}
+        <div style={{ display: 'flex', gap: 4, padding: '12px 16px 0 16px' }}>
+          {WALKTHROUGH_STEPS.map((s, i) => (
+            <ProgressSegment
+              key={s.id}
+              index={i}
+              currentStep={currentStep}
+              duration={s.duration}
+              isPaused={isPaused}
+              onSegmentComplete={goNext}
+            />
+          ))}
         </div>
 
-        {/* Animated progress bar */}
-        <div 
-          className="relative h-1.5 overflow-hidden"
-          style={{ backgroundColor: 'var(--border-default)' }}
-        >
-          {/* Filled portion */}
-          <div
-            className="absolute inset-y-0 left-0 rounded-r-full"
-            style={{
-              width: `${((currentStep + 1) / WALKTHROUGH_STEPS.length) * 100}%`,
-              backgroundColor: 'var(--accent-primary)',
-              transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
-            }}
-          />
-          {/* Shimmer overlay on the filled portion */}
-          <div
-            className="absolute inset-y-0 left-0"
-            style={{
-              width: `${((currentStep + 1) / WALKTHROUGH_STEPS.length) * 100}%`,
-              transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
-              background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%)',
-              backgroundSize: '200% 100%',
-              animation: 'walkthrough-shimmer 2s ease-in-out infinite',
-            }}
-          />
+        {/* ── Header row ── */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px 0' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>
+            {currentStep + 1} / {TOTAL_STEPS}
+          </span>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {isPaused && (
+              <span style={{ fontSize: 11, color: 'var(--text-secondary, #888)', opacity: 0.7 }}>paused</span>
+            )}
+            <button
+              onClick={() => setIsPaused((p) => !p)}
+              title={isPaused ? 'Resume' : 'Pause'}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: 'var(--text-secondary, #888)', fontSize: 16, padding: 2,
+              }}
+            >
+              {isPaused ? '▶' : '⏸'}
+            </button>
+            <button
+              onClick={onClose}
+              title="Close"
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: 'var(--text-secondary, #888)', display: 'flex', padding: 2,
+              }}
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
-        {/* Inline keyframes for shimmer animation */}
-        <style>{`
-          @keyframes walkthrough-shimmer {
-            0% { background-position: 200% 0; }
-            100% { background-position: -200% 0; }
-          }
-          .action-node-grid {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            justify-content: center;
-          }
-          .action-node-chip {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            padding: 4px 10px;
-            border-radius: 6px;
-            font-size: 11px;
-            transition: transform 0.15s ease, box-shadow 0.15s ease;
-          }
-          .action-node-chip:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
-          }
-        `}</style>
-
-        {/* Content */}
-        <div className="px-6 py-6">
-          {/* Step icon and title */}
-          <div className="text-center mb-6">
-            <span className="text-5xl mb-4 block">{step.icon}</span>
-            <h2 
-              className="text-xl font-bold mb-2"
-              style={{ color: 'var(--text-primary)' }}
-            >
-              {step.title}
-            </h2>
-            <p 
-              className="text-sm"
-              style={{ color: 'var(--text-secondary)' }}
-            >
-              {step.description}
-            </p>
-          </div>
-
-          {/* Action Nodes showcase grid (only on action-nodes step) */}
-          {step.id === 'action-nodes' && (
-            <div 
-              className="rounded-lg p-3 mb-4"
-              style={{ backgroundColor: 'var(--bg-secondary)' }}
-            >
-              <div className="action-node-grid">
-                {ACTION_NODE_SHOWCASE.map((node) => (
-                  <div
-                    key={node.label}
-                    className="action-node-chip"
-                    style={{ 
-                      backgroundColor: `${node.color}15`,
-                      border: `1px solid ${node.color}30`,
-                    }}
-                  >
-                    <span style={{ fontSize: '14px', lineHeight: 1 }}>{node.icon}</span>
-                    <span style={{ fontWeight: 600, color: node.color }}>{node.label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+        {/* ── Step content ── */}
+        <div style={{ padding: '20px 24px 8px' }}>
+          <div style={{ fontSize: 40, marginBottom: 8 }}>{step.icon}</div>
+          <h2 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 8px' }}>{step.title}</h2>
+          <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text-secondary, #aaa)', margin: '0 0 16px' }}>
+            {step.description}
+          </p>
 
           {/* Tips */}
-          <div 
-            className="rounded-lg p-4 mb-6"
-            style={{ backgroundColor: 'var(--bg-secondary)' }}
-          >
-            <ul className="space-y-2">
-              {step.tips.map((tip, index) => (
-                <li 
-                  key={index}
-                  className="flex items-start gap-2 text-sm"
-                  style={{ color: 'var(--text-primary)' }}
-                >
-                  <Check 
-                    size={16} 
-                    className="mt-0.5 flex-shrink-0"
-                    style={{ color: 'var(--accent-primary)' }}
-                  />
-                  <span>{tip}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {/* Step counter */}
-          <div 
-            className="text-center text-xs mb-4"
-            style={{ color: 'var(--text-muted)' }}
-          >
-            Step {currentStep + 1} of {WALKTHROUGH_STEPS.length}
-          </div>
-        </div>
-
-        {/* Footer with navigation */}
-        <div 
-          className="flex items-center justify-between px-6 py-4"
-          style={{ 
-            borderTop: '1px solid var(--border-default)',
-            backgroundColor: 'var(--bg-secondary)',
-          }}
-        >
-          <button
-            onClick={handleSkip}
-            className="px-4 py-2 text-sm rounded transition-colors"
-            style={{ color: 'var(--text-secondary)' }}
-          >
-            Skip Tutorial
-          </button>
-
-          <div className="flex items-center gap-2">
-            {!isFirstStep && (
-              <button
-                onClick={handlePrevious}
-                className="flex items-center gap-1 px-4 py-2 text-sm rounded transition-colors"
-                style={{ 
-                  backgroundColor: 'var(--bg-primary)',
-                  color: 'var(--text-primary)',
-                  border: '1px solid var(--border-default)',
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {step.tips.map((tip, i) => (
+              <li
+                key={i}
+                style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 8,
+                  fontSize: 13, lineHeight: 1.5,
+                  color: 'var(--text-primary, #ddd)',
+                  padding: '6px 10px',
+                  borderRadius: 8,
+                  backgroundColor: 'var(--bg-canvas, rgba(255,255,255,0.04))',
                 }}
               >
-                <ChevronLeft size={16} />
-                Back
+                <Sparkles size={14} style={{ marginTop: 3, flexShrink: 0, color: 'var(--accent-primary, #0F8A8A)' }} />
+                <span>{tip}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* ── Footer buttons ── */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px 20px' }}>
+          <button
+            onClick={onSkip}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: 'var(--text-secondary, #888)', fontSize: 13,
+            }}
+          >
+            Skip guide
+          </button>
+
+          <div style={{ display: 'flex', gap: 8 }}>
+            {!isFirst && (
+              <button
+                onClick={goPrev}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer',
+                  backgroundColor: 'transparent',
+                  border: '1px solid var(--border-default, #444)',
+                  color: 'var(--text-primary, #ddd)',
+                }}
+              >
+                <ChevronLeft size={16} /> Back
               </button>
             )}
             <button
-              onClick={handleNext}
-              className="flex items-center gap-1 px-4 py-2 text-sm font-medium rounded transition-colors"
-              style={{ 
-                backgroundColor: 'var(--accent-primary)',
-                color: 'white',
+              onClick={goNext}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 4,
+                padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                cursor: 'pointer', border: 'none',
+                backgroundColor: 'var(--accent-primary, #0F8A8A)',
+                color: '#fff',
               }}
             >
-              {isLastStep ? 'Get Started' : 'Next'}
-              {!isLastStep && <ChevronRight size={16} />}
+              {isLast ? (
+                <><Check size={16} /> Get Started</>
+              ) : (
+                <>Next <ChevronRight size={16} /></>
+              )}
             </button>
           </div>
         </div>
@@ -416,3 +415,5 @@ export function WalkthroughModal({ onComplete, onSkip, onClose }: WalkthroughMod
     </div>
   );
 }
+
+export default WalkthroughModal;
