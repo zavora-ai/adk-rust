@@ -120,11 +120,11 @@ let toolset = McpHttpClientBuilder::new("https://private-mcp.example.com")
 ```toml
 [dependencies]
 # For local MCP servers (stdio)
-adk-tool = "0.2.2"
+adk-tool = "0.3.0"
 rmcp = { version = "0.14", features = ["client", "transport-child-process"] }
 
 # For remote MCP servers (HTTP)
-adk-tool = { version = "0.2.2", features = ["http-transport"] }
+adk-tool = { version = "0.3.0", features = ["http-transport"] }
 ```
 
 ## Related Documentation

@@ -202,10 +202,10 @@ cargo run -- serve --port 8080
 adk-rust = "0.3.0"
 
 # Minimal
-adk-rust = { version = "0.2.1", default-features = false, features = ["minimal"] }
+adk-rust = { version = "0.3.0", default-features = false, features = ["minimal"] }
 
 # Custom
-adk-rust = { version = "0.2.1", default-features = false, features = ["agents", "gemini", "tools"] }
+adk-rust = { version = "0.3.0", default-features = false, features = ["agents", "gemini", "tools"] }
 ```
 
 ## Documentation

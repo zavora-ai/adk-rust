@@ -40,7 +40,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! adk-rust = "0.2"
+//! adk-rust = "0.3"
 //! tokio = { version = "1.40", features = ["full"] }
 //! dotenvy = "0.15"  # For loading .env files
 //! ```
@@ -49,13 +49,13 @@
 //!
 //! ```toml
 //! # Full (default) - Everything included
-//! adk-rust = "0.2"
+//! adk-rust = "0.3"
 //!
 //! # Minimal - Agents + Gemini + Runner only
-//! adk-rust = { version = "0.2", default-features = false, features = ["minimal"] }
+//! adk-rust = { version = "0.3", default-features = false, features = ["minimal"] }
 //!
 //! # Custom - Pick exactly what you need
-//! adk-rust = { version = "0.2", default-features = false, features = [
+//! adk-rust = { version = "0.3", default-features = false, features = [
 //!     "agents", "gemini", "tools", "sessions"
 //! ] }
 //! ```

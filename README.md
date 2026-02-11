@@ -680,22 +680,22 @@ Add to your `Cargo.toml`:
 adk-rust = "0.3.0"
 
 # Or individual crates for finer control
-adk-core = "0.2.1"
-adk-agent = "0.2.1"
-adk-model = { version = "0.2.1", features = ["openai", "anthropic"] }  # Enable providers
-adk-tool = "0.2.1"
-adk-runner = "0.2.1"
+adk-core = "0.3.0"
+adk-agent = "0.3.0"
+adk-model = { version = "0.3.0", features = ["openai", "anthropic"] }  # Enable providers
+adk-tool = "0.3.0"
+adk-runner = "0.3.0"
 
 # Optional dependencies
-adk-session = { version = "0.2.1", optional = true }
-adk-artifact = { version = "0.2.1", optional = true }
-adk-memory = { version = "0.2.1", optional = true }
-adk-server = { version = "0.2.1", optional = true }
-adk-cli = { version = "0.2.1", optional = true }
-adk-realtime = { version = "0.2.1", features = ["openai"], optional = true }
-adk-graph = { version = "0.2.1", features = ["sqlite"], optional = true }
-adk-browser = { version = "0.2.1", optional = true }
-adk-eval = { version = "0.2.1", optional = true }
+adk-session = { version = "0.3.0", optional = true }
+adk-artifact = { version = "0.3.0", optional = true }
+adk-memory = { version = "0.3.0", optional = true }
+adk-server = { version = "0.3.0", optional = true }
+adk-cli = { version = "0.3.0", optional = true }
+adk-realtime = { version = "0.3.0", features = ["openai"], optional = true }
+adk-graph = { version = "0.3.0", features = ["sqlite"], optional = true }
+adk-browser = { version = "0.3.0", optional = true }
+adk-eval = { version = "0.3.0", optional = true }
 ```
 
 ## Examples
