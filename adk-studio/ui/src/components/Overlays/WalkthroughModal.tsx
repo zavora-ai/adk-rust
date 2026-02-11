@@ -2,12 +2,13 @@
  * WalkthroughModal component for ADK Studio v2.0
  * 
  * Provides a guided onboarding experience for new users.
- * Guides through: create project, add agents, connect nodes, run tests.
+ * Guides through: create project, add agents, action nodes, connect nodes, run tests.
+ * Features an animated progress bar with shimmer effect.
  * 
  * Requirements: 6.5, 6.6
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { X, ChevronRight, ChevronLeft, Check, Sparkles } from 'lucide-react';
 
 /**
@@ -20,6 +21,26 @@ interface WalkthroughStep {
   icon: string;
   tips: string[];
 }
+
+/**
+ * Action node showcase items for the Action Nodes walkthrough step
+ */
+const ACTION_NODE_SHOWCASE = [
+  { icon: '🎯', label: 'Trigger', color: '#6366F1', desc: 'Entry points' },
+  { icon: '🌐', label: 'HTTP', color: '#3B82F6', desc: 'API calls' },
+  { icon: '📝', label: 'Set', color: '#8B5CF6', desc: 'Variables' },
+  { icon: '⚙️', label: 'Transform', color: '#EC4899', desc: 'Data ops' },
+  { icon: '🔀', label: 'Switch', color: '#F59E0B', desc: 'Branching' },
+  { icon: '🔄', label: 'Loop', color: '#10B981', desc: 'Iteration' },
+  { icon: '🔗', label: 'Merge', color: '#06B6D4', desc: 'Combine' },
+  { icon: '⏱️', label: 'Wait', color: '#6B7280', desc: 'Timing' },
+  { icon: '💻', label: 'Code', color: '#EF4444', desc: 'Custom logic' },
+  { icon: '🗄️', label: 'Database', color: '#14B8A6', desc: 'Storage' },
+  { icon: '📧', label: 'Email', color: '#EA580C', desc: 'Messages' },
+  { icon: '🔔', label: 'Notification', color: '#22D3EE', desc: 'Alerts' },
+  { icon: '📡', label: 'RSS', color: '#F97316', desc: 'Feeds' },
+  { icon: '📁', label: 'File', color: '#A855F7', desc: 'File I/O' },
+];
 
 /**
  * Walkthrough steps for new users
@@ -62,9 +83,21 @@ const WALKTHROUGH_STEPS: WalkthroughStep[] = [
     ],
   },
   {
+    id: 'action-nodes',
+    title: 'Action Nodes',
+    description: 'Action Nodes are deterministic, non-LLM building blocks for your workflows. Mix them with AI agents for powerful automations.',
+    icon: '⚡',
+    tips: [
+      'Drag action nodes from the palette alongside agents',
+      'HTTP, Database, and File nodes connect to external services',
+      'Switch and Loop nodes control workflow logic',
+      'Code nodes let you write custom JavaScript/TypeScript',
+    ],
+  },
+  {
     id: 'connect-nodes',
     title: 'Connect Nodes',
-    description: 'Connect agents by dragging from one node\'s output handle to another\'s input handle.',
+    description: 'Connect agents and action nodes by dragging from one node\'s output handle to another\'s input handle.',
     icon: '🔗',
     tips: [
       'Drag from the bottom handle to the top handle',
@@ -117,16 +150,45 @@ interface WalkthroughModalProps {
   onClose: () => void;
 }
 
+/** Auto-advance interval in ms */
+const AUTO_ADVANCE_MS = 6000;
+
 /**
  * Walkthrough modal for first-run onboarding
  */
 export function WalkthroughModal({ onComplete, onSkip, onClose }: WalkthroughModalProps) {
   const [currentStep, setCurrentStep] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const step = WALKTHROUGH_STEPS[currentStep];
   const isFirstStep = currentStep === 0;
   const isLastStep = currentStep === WALKTHROUGH_STEPS.length - 1;
 
+  const clearTimer = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const startTimer = useCallback(() => {
+    clearTimer();
+    timerRef.current = setTimeout(() => {
+      setCurrentStep((prev) => {
+        if (prev < WALKTHROUGH_STEPS.length - 1) return prev + 1;
+        return prev; // stay on last step
+      });
+    }, AUTO_ADVANCE_MS);
+  }, [clearTimer]);
+
+  // Restart timer whenever step changes
+  useEffect(() => {
+    if (!isLastStep) startTimer();
+    else clearTimer();
+    return clearTimer;
+  }, [currentStep, isLastStep, startTimer, clearTimer]);
+
   const handleNext = () => {
+    clearTimer();
     if (isLastStep) {
       onComplete();
     } else {
@@ -135,12 +197,14 @@ export function WalkthroughModal({ onComplete, onSkip, onClose }: WalkthroughMod
   };
 
   const handlePrevious = () => {
+    clearTimer();
     if (!isFirstStep) {
       setCurrentStep(currentStep - 1);
     }
   };
 
   const handleSkip = () => {
+    clearTimer();
     onSkip();
   };
 
@@ -175,23 +239,59 @@ export function WalkthroughModal({ onComplete, onSkip, onClose }: WalkthroughMod
           </button>
         </div>
 
-        {/* Progress indicator */}
+        {/* Animated progress bar */}
         <div 
-          className="flex gap-1 px-6 py-3"
-          style={{ backgroundColor: 'var(--bg-secondary)' }}
+          className="relative h-1.5 overflow-hidden"
+          style={{ backgroundColor: 'var(--border-default)' }}
         >
-          {WALKTHROUGH_STEPS.map((_, index) => (
-            <div
-              key={index}
-              className="flex-1 h-1 rounded-full transition-colors"
-              style={{
-                backgroundColor: index <= currentStep 
-                  ? 'var(--accent-primary)' 
-                  : 'var(--border-default)',
-              }}
-            />
-          ))}
+          {/* Filled portion */}
+          <div
+            className="absolute inset-y-0 left-0 rounded-r-full"
+            style={{
+              width: `${((currentStep + 1) / WALKTHROUGH_STEPS.length) * 100}%`,
+              backgroundColor: 'var(--accent-primary)',
+              transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+            }}
+          />
+          {/* Shimmer overlay on the filled portion */}
+          <div
+            className="absolute inset-y-0 left-0"
+            style={{
+              width: `${((currentStep + 1) / WALKTHROUGH_STEPS.length) * 100}%`,
+              transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+              background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%)',
+              backgroundSize: '200% 100%',
+              animation: 'walkthrough-shimmer 2s ease-in-out infinite',
+            }}
+          />
         </div>
+
+        {/* Inline keyframes for shimmer animation */}
+        <style>{`
+          @keyframes walkthrough-shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+          }
+          .action-node-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            justify-content: center;
+          }
+          .action-node-chip {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+          }
+          .action-node-chip:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+          }
+        `}</style>
 
         {/* Content */}
         <div className="px-6 py-6">
@@ -211,6 +311,30 @@ export function WalkthroughModal({ onComplete, onSkip, onClose }: WalkthroughMod
               {step.description}
             </p>
           </div>
+
+          {/* Action Nodes showcase grid (only on action-nodes step) */}
+          {step.id === 'action-nodes' && (
+            <div 
+              className="rounded-lg p-3 mb-4"
+              style={{ backgroundColor: 'var(--bg-secondary)' }}
+            >
+              <div className="action-node-grid">
+                {ACTION_NODE_SHOWCASE.map((node) => (
+                  <div
+                    key={node.label}
+                    className="action-node-chip"
+                    style={{ 
+                      backgroundColor: `${node.color}15`,
+                      border: `1px solid ${node.color}30`,
+                    }}
+                  >
+                    <span style={{ fontSize: '14px', lineHeight: 1 }}>{node.icon}</span>
+                    <span style={{ fontWeight: 600, color: node.color }}>{node.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Tips */}
           <div 
