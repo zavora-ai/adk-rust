@@ -48,7 +48,7 @@ anyhow.workspace = true
 dotenvy = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-lazy_static = "1.4"
+lazy_static = "1.5"
 rust-embed = "8"
 mime_guess = "2"
 
@@ -77,4 +77,4 @@ dirs = "5"
 cron = "0.12"
 
 [dev-dependencies]
-proptest = "1.4"
+proptest = "1.10"

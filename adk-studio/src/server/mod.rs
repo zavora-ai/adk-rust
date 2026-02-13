@@ -1,3 +1,4 @@
+pub mod cors;
 pub mod events;
 pub mod graph_runner;
 mod handlers;
@@ -7,6 +8,7 @@ pub mod scheduler;
 pub mod sse;
 pub mod state;
 
+pub use cors::build_cors_layer;
 pub use events::{ExecutionStateTracker, StateSnapshot, TraceEventV2};
 pub use graph_runner::{
     GraphInterruptHandler, INTERRUPTED_SESSIONS, InterruptData, InterruptedSessionState,

@@ -12,6 +12,7 @@ keywords = ["documentation", "audit", "validation", "rust", "adk"]
 categories = ["development-tools", "command-line-utilities"]
 
 [dependencies]
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
 # Core dependencies
 tokio = { workspace = true }
 async-trait = { workspace = true }
@@ -38,12 +39,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
 
 # Temporary project creation for example validation
-tempfile = "3.12"
-uuid = { version = "1.10", features = ["v4"] }
+tempfile = "3.25"
+uuid = { version = "1.20", features = ["v4"] }
 sha2 = "0.10"
 
 [dev-dependencies]
-proptest = "1.5"
+proptest = "1.10"
 tokio-test = "0.4"
 
 [features]

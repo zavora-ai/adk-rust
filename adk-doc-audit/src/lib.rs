@@ -93,13 +93,6 @@ pub use version::{
     VersionValidationResult, VersionValidator, WorkspaceVersionInfo,
 };
 
-// Placeholder exports for components that will be implemented in later tasks
-// These will be uncommented as the components are implemented
-
-// pub mod orchestrator;
-
-// pub use orchestrator::{AuditOrchestrator};
-
 /// Version information for the crate.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

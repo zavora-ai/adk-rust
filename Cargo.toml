@@ -86,7 +86,7 @@ repository = "https://github.com/zavora-ai/adk-rust"
 
 [workspace.dependencies]
 # External dependencies
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.49", features = ["full"] }
 tokio-stream = "0.1"
 async-trait = "0.1"
 futures = "0.3"
@@ -95,13 +95,15 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 anyhow = "1.0"
-uuid = { version = "1.10", features = ["v4", "serde"] }
+uuid = { version = "1.20", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-regex = "1.10"
+regex = "1.12"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 opentelemetry = "0.21"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+livekit = { version = "0.7.30", default-features = false, features = ["rustls-tls-native-roots", "tokio"] }
+livekit-api = { version = "0.3", default-features = false, features = ["rustls-tls-native-roots"] }
 
 # ADK internal crates (use { workspace = true } in member crates)
 adk-core = { path = "adk-core", version = "0.3.0" }

@@ -47,6 +47,10 @@ getrandom = "0.2"
 # OpenAI realtime types (optional)
 async-openai = { version = "0.27", optional = true }
 
+# LiveKit (optional)
+livekit = { workspace = true, optional = true }
+livekit-api = { workspace = true, optional = true }
+
 [dev-dependencies]
 tokio.workspace = true
 dotenvy = "0.15"
@@ -57,5 +61,9 @@ default = []
 openai = ["dep:async-openai", "dep:tokio-tungstenite"]
 # Enable Gemini Live API support
 gemini = ["dep:tokio-tungstenite"]
+# Enable Vertex AI support
+vertex = ["gemini"]
+# Enable LiveKit support
+livekit = ["dep:livekit", "dep:livekit-api"]
 # Enable all providers
-full = ["openai", "gemini"]
+full = ["openai", "gemini", "vertex", "livekit"]
