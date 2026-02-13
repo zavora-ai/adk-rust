@@ -26,6 +26,55 @@ pub use validation::{
 use crate::schema::{AgentSchema, AgentType, ProjectSchema, ToolConfig};
 use anyhow::{Result, bail};
 
+/// Detect the LLM provider from a model name string.
+/// Mirrors the TypeScript `detectProviderFromModel()` in `ui/src/data/models.ts`.
+fn detect_provider(model: &str) -> &'static str {
+    let m = model.to_lowercase();
+    if m.contains("gemini") || m.contains("gemma") {
+        "gemini"
+    } else if m.contains("gpt") || m.contains("o1") || m.contains("o3") {
+        "openai"
+    } else if m.contains("claude") {
+        "anthropic"
+    } else if m.contains("deepseek") && !m.contains(':') {
+        // DeepSeek API (no colon = not Ollama tag format)
+        "deepseek"
+    } else if m.contains("llama") || m.contains("mixtral") {
+        // Ollama-style tags have colons (e.g. "llama3.2:3b")
+        if m.contains(':') { "ollama" } else { "groq" }
+    } else if m.contains("qwen") || m.contains("mistral") || m.contains("codellama") || m.contains("devstral") {
+        "ollama"
+    } else {
+        "gemini" // default
+    }
+}
+
+/// Collect the set of unique providers used across all agents in a project.
+fn collect_providers(project: &ProjectSchema) -> std::collections::HashSet<&'static str> {
+    let mut providers = std::collections::HashSet::new();
+    for agent in project.agents.values() {
+        let model = agent.model.as_deref().unwrap_or("gemini-2.0-flash");
+        providers.insert(detect_provider(model));
+    }
+    // If project has a default_provider set, include it
+    if let Some(ref dp) = project.settings.default_provider {
+        let p = match dp.as_str() {
+            "gemini" | "openai" | "anthropic" | "deepseek" | "groq" | "ollama" => dp.as_str(),
+            _ => "gemini",
+        };
+        // We need a &'static str, so match again
+        providers.insert(match p {
+            "openai" => "openai",
+            "anthropic" => "anthropic",
+            "deepseek" => "deepseek",
+            "groq" => "groq",
+            "ollama" => "ollama",
+            _ => "gemini",
+        });
+    }
+    providers
+}
+
 /// Generate a Rust project from a project schema
 ///
 /// This function validates the project before generating code. If validation
@@ -344,7 +393,26 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
     code.push_str("    state::State,\n");
     code.push_str("    StreamEvent,\n");
     code.push_str("};\n");
-    code.push_str("use adk_model::gemini::GeminiModel;\n");
+    // Import model providers based on what agents actually use
+    let providers = collect_providers(project);
+    if providers.contains("gemini") {
+        code.push_str("use adk_model::gemini::GeminiModel;\n");
+    }
+    if providers.contains("openai") {
+        code.push_str("use adk_model::openai::{OpenAIClient, OpenAIConfig};\n");
+    }
+    if providers.contains("anthropic") {
+        code.push_str("use adk_model::anthropic::{AnthropicClient, AnthropicConfig};\n");
+    }
+    if providers.contains("deepseek") {
+        code.push_str("use adk_model::deepseek::{DeepSeekClient, DeepSeekConfig};\n");
+    }
+    if providers.contains("groq") {
+        code.push_str("use adk_model::groq::{GroqClient, GroqConfig};\n");
+    }
+    if providers.contains("ollama") {
+        code.push_str("use adk_model::ollama::{OllamaModel, OllamaConfig};\n");
+    }
     code.push_str(
         "use adk_tool::{FunctionTool, GoogleSearchTool, ExitLoopTool, LoadArtifactsTool};\n",
     );
@@ -432,9 +500,32 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
     // Initialize tracing with JSON output
     code.push_str("    // Initialize tracing\n");
     code.push_str("    fmt().with_env_filter(EnvFilter::from_default_env().add_directive(\"adk=info\".parse()?)).json().with_writer(std::io::stderr).init();\n\n");
-    code.push_str("    let api_key = std::env::var(\"GOOGLE_API_KEY\")\n");
-    code.push_str("        .or_else(|_| std::env::var(\"GEMINI_API_KEY\"))\n");
-    code.push_str("        .expect(\"GOOGLE_API_KEY or GEMINI_API_KEY must be set\");\n\n");
+    // Resolve API keys for each provider used
+    if providers.contains("gemini") {
+        code.push_str("    let gemini_api_key = std::env::var(\"GOOGLE_API_KEY\")\n");
+        code.push_str("        .or_else(|_| std::env::var(\"GEMINI_API_KEY\"))\n");
+        code.push_str("        .expect(\"GOOGLE_API_KEY or GEMINI_API_KEY must be set\");\n\n");
+    }
+    if providers.contains("openai") {
+        code.push_str("    let openai_api_key = std::env::var(\"OPENAI_API_KEY\")\n");
+        code.push_str("        .expect(\"OPENAI_API_KEY must be set\");\n\n");
+    }
+    if providers.contains("anthropic") {
+        code.push_str("    let anthropic_api_key = std::env::var(\"ANTHROPIC_API_KEY\")\n");
+        code.push_str("        .expect(\"ANTHROPIC_API_KEY must be set\");\n\n");
+    }
+    if providers.contains("deepseek") {
+        code.push_str("    let deepseek_api_key = std::env::var(\"DEEPSEEK_API_KEY\")\n");
+        code.push_str("        .expect(\"DEEPSEEK_API_KEY must be set\");\n\n");
+    }
+    if providers.contains("groq") {
+        code.push_str("    let groq_api_key = std::env::var(\"GROQ_API_KEY\")\n");
+        code.push_str("        .expect(\"GROQ_API_KEY must be set\");\n\n");
+    }
+    if providers.contains("ollama") {
+        code.push_str("    let _ollama_host = std::env::var(\"OLLAMA_HOST\")\n");
+        code.push_str("        .unwrap_or_else(|_| \"http://localhost:11434\".to_string());\n\n");
+    }
 
     // Initialize browser session if any agent uses browser
     let uses_browser = project.agents.values().any(|a| a.tools.contains(&"browser".to_string()));
@@ -1148,10 +1239,55 @@ fn generate_llm_node_v2(
     }
 
     code.push_str(&format!("    let mut {}_builder = LlmAgentBuilder::new(\"{}\")\n", id, id));
-    code.push_str(&format!(
-        "        .model(Arc::new(GeminiModel::new(&api_key, \"{}\")?));\n",
-        model
-    ));
+
+    // Generate provider-specific model construction
+    let provider = detect_provider(model);
+    match provider {
+        "openai" => {
+            code.push_str(&format!(
+                "        .model(Arc::new(OpenAIClient::new(OpenAIConfig::new(&openai_api_key, \"{}\"))?));\n",
+                model
+            ));
+        }
+        "anthropic" => {
+            code.push_str(&format!(
+                "        .model(Arc::new(AnthropicClient::new(AnthropicConfig::new(&anthropic_api_key, \"{}\"))?));\n",
+                model
+            ));
+        }
+        "deepseek" => {
+            // Use DeepSeekClient convenience constructors for known models
+            let m = model.to_lowercase();
+            if m.contains("reasoner") || m.contains("r1") {
+                code.push_str(
+                    "        .model(Arc::new(DeepSeekClient::reasoner(&deepseek_api_key)?));\n",
+                );
+            } else {
+                code.push_str(
+                    "        .model(Arc::new(DeepSeekClient::chat(&deepseek_api_key)?));\n",
+                );
+            }
+        }
+        "groq" => {
+            code.push_str(&format!(
+                "        .model(Arc::new(GroqClient::new(GroqConfig::new(&groq_api_key, \"{}\"))?));\n",
+                model
+            ));
+        }
+        "ollama" => {
+            code.push_str(&format!(
+                "        .model(Arc::new(OllamaModel::new(OllamaConfig::new(\"{}\"))?));\n",
+                model
+            ));
+        }
+        _ => {
+            // Default: Gemini
+            code.push_str(&format!(
+                "        .model(Arc::new(GeminiModel::new(&gemini_api_key, \"{}\")?));\n",
+                model
+            ));
+        }
+    }
 
     if !agent.instruction.is_empty() {
         // Strip {{var}} template variables from instruction - they'll be injected via input_mapper
@@ -3820,23 +3956,36 @@ fn generate_cargo_toml(project: &ProjectSchema) -> String {
 
     let adk_root = "/data/projects/production/adk/adk-rust";
 
+    // Determine which adk-model features are needed based on providers used
+    let providers = collect_providers(project);
+    let mut model_features: Vec<&str> = Vec::new();
+    if providers.contains("gemini") { model_features.push("gemini"); }
+    if providers.contains("openai") { model_features.push("openai"); }
+    if providers.contains("anthropic") { model_features.push("anthropic"); }
+    if providers.contains("deepseek") { model_features.push("deepseek"); }
+    if providers.contains("groq") { model_features.push("groq"); }
+    if providers.contains("ollama") { model_features.push("ollama"); }
+    // Default to gemini if no providers detected
+    if model_features.is_empty() { model_features.push("gemini"); }
+    let features_str = model_features.iter().map(|f| format!("\"{}\"", f)).collect::<Vec<_>>().join(", ");
+
     let adk_deps = if use_path_deps {
         format!(
             r#"adk-agent = {{ path = "{}/adk-agent" }}
 adk-core = {{ path = "{}/adk-core" }}
-adk-model = {{ path = "{}/adk-model" }}
+adk-model = {{ path = "{}/adk-model", default-features = false, features = [{}] }}
 adk-tool = {{ path = "{}/adk-tool" }}
 adk-graph = {{ path = "{}/adk-graph" }}"#,
-            adk_root, adk_root, adk_root, adk_root, adk_root
+            adk_root, adk_root, adk_root, features_str, adk_root, adk_root
         )
     } else {
         format!(
             r#"adk-agent = "{}"
 adk-core = "{}"
-adk-model = "{}"
+adk-model = {{ version = "{}", default-features = false, features = [{}] }}
 adk-tool = "{}"
 adk-graph = "{}""#,
-            adk_version, adk_version, adk_version, adk_version, adk_version
+            adk_version, adk_version, adk_version, features_str, adk_version, adk_version
         )
     };
 

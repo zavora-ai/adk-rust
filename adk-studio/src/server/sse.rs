@@ -528,12 +528,30 @@ async fn get_or_create_session(
         return Ok(());
     }
 
-    let mut child = Command::new(binary_path)
-        .arg(session_id)
+    // Pass through all known LLM provider API keys from the environment
+    // so the child binary can use whichever provider the project requires.
+    let mut cmd = Command::new(binary_path);
+    cmd.arg(session_id)
         .env("GOOGLE_API_KEY", api_key)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    const PROVIDER_ENV_KEYS: &[&str] = &[
+        "GEMINI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "GROQ_API_KEY",
+        "OLLAMA_HOST",
+    ];
+    for key in PROVIDER_ENV_KEYS {
+        if let Ok(val) = std::env::var(key) {
+            cmd.env(key, val);
+        }
+    }
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to start binary: {}", e))?;
 
@@ -581,8 +599,17 @@ pub async fn stream_handler(
     Query(query): Query<StreamQuery>,
     State(app_state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let api_key =
-        query.api_key.or_else(|| std::env::var("GOOGLE_API_KEY").ok()).unwrap_or_default();
+    let api_key = query.api_key.or_else(|| {
+        // Try all known provider API keys, not just Google
+        std::env::var("GOOGLE_API_KEY")
+            .or_else(|_| std::env::var("GEMINI_API_KEY"))
+            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
+            .or_else(|_| std::env::var("OPENAI_API_KEY"))
+            .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
+            .or_else(|_| std::env::var("GROQ_API_KEY"))
+            .or_else(|_| std::env::var("OLLAMA_HOST"))
+            .ok()
+    }).unwrap_or_default();
     let input = query.input.clone();
     let binary_path = query.binary_path;
     let session_id = query.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -611,6 +638,14 @@ pub async fn stream_handler(
             yield Ok(Event::default().event("error").data("No binary available. Click 'Build' first."));
             return;
         };
+
+        if api_key.is_empty() {
+            yield Ok(Event::default().event("error").data(
+                "No API key found. Set one of: GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, \
+                 DEEPSEEK_API_KEY, GROQ_API_KEY, or OLLAMA_HOST for local models."
+            ));
+            return;
+        }
 
         if let Err(e) = get_or_create_session(&session_id, &bin_path, &api_key).await {
             yield Ok(Event::default().event("error").data(e));

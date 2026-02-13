@@ -596,18 +596,60 @@ mod tests {
 pub fn get_required_env_vars(project: &ProjectSchema) -> Vec<EnvVarRequirement> {
     let mut env_vars = Vec::new();
 
-    // All projects using Gemini models need an API key
-    let uses_gemini = project
-        .agents
-        .values()
-        .any(|a| a.model.as_ref().map(|m| m.contains("gemini")).unwrap_or(true));
+    // Detect which providers are used across all agents
+    let providers = super::collect_providers(project);
 
-    if uses_gemini {
+    if providers.contains("gemini") {
         env_vars.push(EnvVarRequirement {
             name: "GOOGLE_API_KEY".to_string(),
             description: "Google AI API key for Gemini models".to_string(),
             alternatives: vec!["GEMINI_API_KEY".to_string()],
             required: true,
+        });
+    }
+
+    if providers.contains("openai") {
+        env_vars.push(EnvVarRequirement {
+            name: "OPENAI_API_KEY".to_string(),
+            description: "OpenAI API key for GPT models".to_string(),
+            alternatives: vec![],
+            required: true,
+        });
+    }
+
+    if providers.contains("anthropic") {
+        env_vars.push(EnvVarRequirement {
+            name: "ANTHROPIC_API_KEY".to_string(),
+            description: "Anthropic API key for Claude models".to_string(),
+            alternatives: vec![],
+            required: true,
+        });
+    }
+
+    if providers.contains("deepseek") {
+        env_vars.push(EnvVarRequirement {
+            name: "DEEPSEEK_API_KEY".to_string(),
+            description: "DeepSeek API key".to_string(),
+            alternatives: vec![],
+            required: true,
+        });
+    }
+
+    if providers.contains("groq") {
+        env_vars.push(EnvVarRequirement {
+            name: "GROQ_API_KEY".to_string(),
+            description: "Groq API key for fast inference".to_string(),
+            alternatives: vec![],
+            required: true,
+        });
+    }
+
+    if providers.contains("ollama") {
+        env_vars.push(EnvVarRequirement {
+            name: "OLLAMA_HOST".to_string(),
+            description: "Ollama server URL (defaults to http://localhost:11434)".to_string(),
+            alternatives: vec![],
+            required: false, // Ollama defaults to localhost
         });
     }
 
