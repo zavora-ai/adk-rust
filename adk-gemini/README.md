@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Constructor | Description |
 |-------------|-------------|
 | `Gemini::new(api_key)` | Default model (gemini-2.5-flash) via v1beta |
-| `Gemini::pro(api_key)` | Gemini 2.5 Pro | Gemini 3 Pro
+| `Gemini::pro(api_key)` | Gemini 2.5 Pro | Gemini 3 Pro |
 | `Gemini::with_model(api_key, model)` | Specific model |
 | `Gemini::with_v1(api_key)` | Stable v1 API |
 | `Gemini::with_model_v1(api_key, model)` | Specific model on v1 |
@@ -73,6 +73,168 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `Gemini::with_google_cloud_adc(project, location)` | Vertex AI with ADC |
 | `Gemini::with_service_account_json(json)` | Service account (auto-detects project) |
 | `Gemini::with_google_cloud_wif_json(json, project, location, model)` | Workload Identity Federation |
+
+## ✅ Using the stable v1 API
+
+By default the SDK uses the **v1beta** endpoint. Use `with_v1` to target the stable v1 API.
+
+```rust
+use adk_gemini::Gemini;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let client = Gemini::with_v1(api_key)?;
+
+    let response = client
+        .generate_content()
+        .with_user_message("Hello, Gemini!")
+        .execute()
+        .await?;
+
+    println!("{}", response.text());
+    Ok(())
+}
+```
+
+## ☁️ Vertex AI (Google Cloud) via the Google Cloud SDK
+
+When you configure Vertex AI, the client uses the official Google Cloud Rust SDK
+(`google-cloud-aiplatform`) plus `google-cloud-auth` for credentials. This supports
+`generateContent` and `embedContent` requests through Vertex. Other Gemini REST-only
+operations (batch jobs, streaming, files, cache) remain available on the Gemini API
+and are not supported via the Vertex SDK.
+
+### Vertex AI API Keys
+
+For Vertex AI endpoints, you can configure the client with your project and location.
+API key auth is still supported for model inference.
+
+```rust
+use adk_gemini::Gemini;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let client = Gemini::with_google_cloud(api_key, "my-project", "us-central1")?;
+
+    let response = client
+        .generate_content()
+        .with_user_message("Hello from Vertex AI!")
+        .execute()
+        .await?;
+
+    println!("{}", response.text());
+    Ok(())
+}
+```
+
+### Application Default Credentials (ADC)
+
+```rust
+use adk_gemini::Gemini;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Gemini::with_google_cloud_adc("my-project", "us-central1")?;
+
+    let response = client
+        .generate_content()
+        .with_user_message("Hello from Vertex AI!")
+        .execute()
+        .await?;
+
+    println!("{}", response.text());
+    Ok(())
+}
+```
+
+### Service Accounts
+
+Service accounts are supported for Vertex AI. Provide the service account JSON key
+and choose the project/location.
+
+```rust
+use adk_gemini::Gemini;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let service_account_json = std::fs::read_to_string("service-account.json")?;
+    let client = Gemini::with_google_cloud_service_account_json(
+        &service_account_json,
+        "my-project",
+        "us-central1",
+        "gemini-2.5-flash",
+    )?;
+
+    let response = client
+        .generate_content()
+        .with_user_message("Hello from Vertex AI!")
+        .execute()
+        .await?;
+
+    println!("{}", response.text());
+    Ok(())
+}
+```
+
+### Workload Identity Federation (WIF)
+
+```rust
+use adk_gemini::Gemini;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let wif_json = std::fs::read_to_string("wif-credentials.json")?;
+    let client = Gemini::with_google_cloud_wif_json(
+        &wif_json,
+        "my-project",
+        "us-central1",
+        "gemini-2.5-flash",
+    )?;
+
+    let response = client
+        .generate_content()
+        .with_user_message("Hello from Vertex AI!")
+        .execute()
+        .await?;
+
+    println!("{}", response.text());
+    Ok(())
+}
+```
+
+### Google Cloud secrets via environment
+
+When deploying, you can keep credentials in secret managers or CI/CD systems and
+expose them as environment variables. The Google Cloud SDK credentials loader
+supports `GOOGLE_APPLICATION_CREDENTIALS` (service account or WIF JSON), while
+project/location can be provided as `GOOGLE_CLOUD_PROJECT` and
+`GOOGLE_CLOUD_LOCATION`.
+
+```rust
+use adk_gemini::Gemini;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let project = std::env::var("GOOGLE_CLOUD_PROJECT")?;
+    let location = std::env::var("GOOGLE_CLOUD_LOCATION")?;
+
+    // ADC will read GOOGLE_APPLICATION_CREDENTIALS when set.
+    let client = Gemini::with_google_cloud_adc(&project, &location)?;
+
+    let response = client
+        .generate_content()
+        .with_user_message("Hello from secrets-backed Vertex AI!")
+        .execute()
+        .await?;
+
+    println!("{}", response.text());
+    Ok(())
+}
+```
+
+## 🔧 ADK-Specific Extensions
 
 ## Examples
 

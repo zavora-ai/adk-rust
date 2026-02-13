@@ -88,7 +88,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Build and start the batch
-    let batch = batch_generate_content.execute().await?;
+    let batch: Batch = batch_generate_content.execute().await?;
     info!(batch_name = batch.name(), "batch created successfully");
     info!("press ctrl-c to cancel the batch operation");
 

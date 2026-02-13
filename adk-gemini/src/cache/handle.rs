@@ -7,10 +7,10 @@ use crate::client::GeminiClient;
 
 /// Represents a cached content resource, providing methods to manage its lifecycle.
 ///
-/// A `CachedContentHandle` object is a handle to a cached content resource on the Gemini API.
+/// A  object is a handle to a cached content resource on the Gemini API.
 /// It allows you to retrieve, update, or delete the cached content.
 pub struct CachedContentHandle {
-    /// The unique resource name of the cached content, e.g., `cachedContents/cache-xxxxxxxx`.
+    /// The unique resource name of the cached content, e.g., .
     pub name: String,
     client: Arc<GeminiClient>,
 }
@@ -28,7 +28,7 @@ impl CachedContentHandle {
 
     /// Retrieves the cached content configuration by making an API call.
     pub async fn get(&self) -> Result<CachedContent, Error> {
-        self.client.get_cached_content(&self.name).await.map_err(Box::new).context(ClientSnafu)
+        self.client.get_cached_content_raw(&self.name).await.map_err(Box::new).context(ClientSnafu)
     }
 
     /// Updates the cached content configuration (typically the TTL).

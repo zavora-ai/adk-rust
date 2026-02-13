@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize, de};
+use serde::{Deserialize, Serialize};
 
 /// Setting for safety
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,100 +9,37 @@ pub struct SafetySetting {
     pub threshold: HarmBlockThreshold,
 }
 
-/// Category of harmful content
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub enum HarmCategory {
-    /// Category is unspecified.
-    #[serde(rename = "HARM_CATEGORY_UNSPECIFIED")]
-    Unspecified,
-    /// PaLM - Negative or harmful comments targeting identity and/or protected attribute.
-    #[serde(rename = "HARM_CATEGORY_DEROGATORY")]
-    Derogatory,
-    /// PaLM - Content that is rude, disrespectful, or profane.
-    #[serde(rename = "HARM_CATEGORY_TOXICITY")]
-    Toxicity,
-    /// PaLM - Describes scenarios depicting violence against an individual or group, or general descriptions of gore.
-    #[serde(rename = "HARM_CATEGORY_VIOLENCE")]
-    Violence,
-    /// PaLM - Contains references to sexual acts or other lewd content.
-    #[serde(rename = "HARM_CATEGORY_SEXUAL")]
-    Sexual,
-    /// PaLM - Promotes unchecked medical advice.
-    #[serde(rename = "HARM_CATEGORY_MEDICAL")]
-    Medical,
-    /// PaLM - Dangerous content that promotes, facilitates, or encourages harmful acts.
-    #[serde(rename = "HARM_CATEGORY_DANGEROUS")]
-    Dangerous,
-    /// Gemini - Harassment content.
-    #[serde(rename = "HARM_CATEGORY_HARASSMENT")]
-    Harassment,
-    /// Gemini - Hate speech and content.
-    #[serde(rename = "HARM_CATEGORY_HATE_SPEECH")]
-    HateSpeech,
-    /// Gemini - Sexually explicit content.
-    #[serde(rename = "HARM_CATEGORY_SEXUALLY_EXPLICIT")]
-    SexuallyExplicit,
-    /// Gemini - Dangerous content.
-    #[serde(rename = "HARM_CATEGORY_DANGEROUS_CONTENT")]
-    DangerousContent,
-    /// Gemini - Civic integrity content.
-    #[serde(rename = "HARM_CATEGORY_CIVIC_INTEGRITY")]
-    CivicIntegrity,
-    /// Gemini - Jailbreak-related content.
-    #[serde(rename = "HARM_CATEGORY_JAILBREAK")]
-    Jailbreak,
-}
-
-impl HarmCategory {
-    fn from_wire_str(value: &str) -> Self {
-        match value {
-            "HARM_CATEGORY_UNSPECIFIED" => Self::Unspecified,
-            "HARM_CATEGORY_DEROGATORY" => Self::Derogatory,
-            "HARM_CATEGORY_TOXICITY" => Self::Toxicity,
-            "HARM_CATEGORY_VIOLENCE" => Self::Violence,
-            "HARM_CATEGORY_SEXUAL" => Self::Sexual,
-            "HARM_CATEGORY_MEDICAL" => Self::Medical,
-            "HARM_CATEGORY_DANGEROUS" => Self::Dangerous,
-            "HARM_CATEGORY_HARASSMENT" => Self::Harassment,
-            "HARM_CATEGORY_HATE_SPEECH" => Self::HateSpeech,
-            "HARM_CATEGORY_SEXUALLY_EXPLICIT" => Self::SexuallyExplicit,
-            "HARM_CATEGORY_DANGEROUS_CONTENT" => Self::DangerousContent,
-            "HARM_CATEGORY_CIVIC_INTEGRITY" => Self::CivicIntegrity,
-            "HARM_CATEGORY_JAILBREAK" => Self::Jailbreak,
-            _ => Self::Unspecified,
-        }
+hybrid_enum! {
+    /// Category of harmful content
+    pub enum HarmCategory {
+        /// Category is unspecified.
+        Unspecified       => ("HARM_CATEGORY_UNSPECIFIED", 0),
+        /// PaLM - Negative or harmful comments targeting identity and/or protected attribute.
+        Derogatory        => ("HARM_CATEGORY_DEROGATORY", 1),
+        /// PaLM - Content that is rude, disrespectful, or profane.
+        Toxicity          => ("HARM_CATEGORY_TOXICITY", 2),
+        /// PaLM - Describes scenarios depicting violence against an individual or group.
+        Violence          => ("HARM_CATEGORY_VIOLENCE", 3),
+        /// PaLM - Contains references to sexual acts or other lewd content.
+        Sexual            => ("HARM_CATEGORY_SEXUAL", 4),
+        /// PaLM - Promotes unchecked medical advice.
+        Medical           => ("HARM_CATEGORY_MEDICAL", 5),
+        /// PaLM - Dangerous content that promotes harmful acts.
+        Dangerous         => ("HARM_CATEGORY_DANGEROUS", 6),
+        /// Gemini - Harassment content.
+        Harassment        => ("HARM_CATEGORY_HARASSMENT", 7),
+        /// Gemini - Hate speech and content.
+        HateSpeech        => ("HARM_CATEGORY_HATE_SPEECH", 8),
+        /// Gemini - Sexually explicit content.
+        SexuallyExplicit  => ("HARM_CATEGORY_SEXUALLY_EXPLICIT", 9),
+        /// Gemini - Dangerous content.
+        DangerousContent  => ("HARM_CATEGORY_DANGEROUS_CONTENT", 10),
+        /// Gemini - Civic integrity content.
+        CivicIntegrity    => ("HARM_CATEGORY_CIVIC_INTEGRITY", 11),
+        /// Gemini - Jailbreak-related content.
+        Jailbreak         => ("HARM_CATEGORY_JAILBREAK", 12),
     }
-
-    fn from_wire_number(value: i64) -> Self {
-        match value {
-            0 => Self::Unspecified,
-            1 => Self::HateSpeech,
-            2 => Self::DangerousContent,
-            3 => Self::Harassment,
-            4 => Self::SexuallyExplicit,
-            5 => Self::CivicIntegrity,
-            6 => Self::Jailbreak,
-            _ => Self::Unspecified,
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for HarmCategory {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        match value {
-            serde_json::Value::String(s) => Ok(Self::from_wire_str(&s)),
-            serde_json::Value::Number(n) => {
-                n.as_i64().map(Self::from_wire_number).ok_or_else(|| {
-                    de::Error::custom("harm category must be an integer-compatible number")
-                })
-            }
-            _ => Err(de::Error::custom("harm category must be a string or integer")),
-        }
-    }
+    fallback: Unspecified
 }
 
 /// Threshold for blocking harmful content
@@ -124,62 +61,21 @@ pub enum HarmBlockThreshold {
     Off,
 }
 
-/// Probability that content is harmful
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum HarmProbability {
-    /// Probability is unspecified.
-    HarmProbabilityUnspecified,
-    /// Content has a negligible chance of being unsafe.
-    Negligible,
-    /// Content has a low chance of being unsafe.
-    Low,
-    /// Content has a medium chance of being unsafe.
-    Medium,
-    /// Content has a high chance of being unsafe.
-    High,
-}
-
-impl HarmProbability {
-    fn from_wire_str(value: &str) -> Self {
-        match value {
-            "HARM_PROBABILITY_UNSPECIFIED" => Self::HarmProbabilityUnspecified,
-            "NEGLIGIBLE" => Self::Negligible,
-            "LOW" => Self::Low,
-            "MEDIUM" => Self::Medium,
-            "HIGH" => Self::High,
-            _ => Self::HarmProbabilityUnspecified,
-        }
+hybrid_enum! {
+    /// Probability that content is harmful
+    pub enum HarmProbability {
+        /// Probability is unspecified.
+        HarmProbabilityUnspecified => ("HARM_PROBABILITY_UNSPECIFIED", 0),
+        /// Content has a negligible chance of being unsafe.
+        Negligible                => ("NEGLIGIBLE", 1),
+        /// Content has a low chance of being unsafe.
+        Low                       => ("LOW", 2),
+        /// Content has a medium chance of being unsafe.
+        Medium                    => ("MEDIUM", 3),
+        /// Content has a high chance of being unsafe.
+        High                      => ("HIGH", 4),
     }
-
-    fn from_wire_number(value: i64) -> Self {
-        match value {
-            0 => Self::HarmProbabilityUnspecified,
-            1 => Self::Negligible,
-            2 => Self::Low,
-            3 => Self::Medium,
-            4 => Self::High,
-            _ => Self::HarmProbabilityUnspecified,
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for HarmProbability {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        match value {
-            serde_json::Value::String(s) => Ok(Self::from_wire_str(&s)),
-            serde_json::Value::Number(n) => {
-                n.as_i64().map(Self::from_wire_number).ok_or_else(|| {
-                    de::Error::custom("harm probability must be an integer-compatible number")
-                })
-            }
-            _ => Err(de::Error::custom("harm probability must be a string or integer")),
-        }
-    }
+    fallback: HarmProbabilityUnspecified
 }
 
 /// Safety rating for content

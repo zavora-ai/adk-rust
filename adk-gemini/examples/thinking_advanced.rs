@@ -1,4 +1,4 @@
-use adk_gemini::{FunctionDeclaration, Gemini, ThinkingConfig};
+use adk_gemini::{FunctionDeclaration, Gemini, GenerationResponse, ThinkingConfig};
 use display_error_chain::DisplayErrorChain;
 use futures::TryStreamExt;
 use schemars::JsonSchema;
@@ -109,7 +109,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
             .with_parameters::<CalculationRequest>()
             .with_response::<CalculationResponse>();
 
-    let response = client
+    let response: GenerationResponse = client
         .generate_content()
         .with_system_prompt("You are a mathematics assistant. When calculations are needed, use the provided calculator function.")
         .with_user_message("Calculate the result of (15 + 25) * 3 - 8 and explain the calculation steps.")
@@ -146,7 +146,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 3: Complex reasoning task
     info!("example 3: complex reasoning task");
-    let complex_response = client
+    let complex_response: GenerationResponse = client
         .generate_content()
         .with_system_prompt("You are a logical reasoning expert.")
         .with_user_message(

@@ -1,4 +1,4 @@
-use adk_gemini::{Gemini, GenerationConfig, ThinkingConfig};
+use adk_gemini::{Gemini, GenerationConfig, GenerationResponse, ThinkingConfig};
 use display_error_chain::DisplayErrorChain;
 use std::env;
 use std::process::ExitCode;
@@ -35,7 +35,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 1: Using default dynamic thinking
     info!("example 1: dynamic thinking (model automatically determines thinking budget)");
-    let response1 = client
+    let response1: GenerationResponse = client
         .generate_content()
         .with_system_prompt("You are a helpful mathematics assistant.")
         .with_user_message(
@@ -76,7 +76,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 2: Set specific thinking budget
     info!("example 2: set thinking budget (1024 tokens)");
-    let response2 = client
+    let response2: GenerationResponse = client
         .generate_content()
         .with_system_prompt("You are a helpful programming assistant.")
         .with_user_message("List 3 main advantages of using the Rust programming language")
@@ -98,7 +98,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 3: Disable thinking feature
     info!("example 3: disable thinking feature");
-    let response3 = client
+    let response3: GenerationResponse = client
         .generate_content()
         .with_system_prompt("You are a helpful assistant.")
         .with_user_message("What is artificial intelligence?")
@@ -119,7 +119,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
 
-    let response4 = client
+    let response4: GenerationResponse = client
         .generate_content()
         .with_system_prompt("You are a creative writing assistant.")
         .with_user_message(

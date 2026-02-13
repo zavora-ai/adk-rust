@@ -14,12 +14,14 @@ pub struct GeminiModel {
 
 impl GeminiModel {
     pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Result<Self> {
-        let client =
-            Gemini::new(api_key.into()).map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+        let client = adk_gemini::GeminiBuilder::new(api_key.into())
+            .build()
+            .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
 
         Ok(Self { client, model_name: model.into(), retry_config: RetryConfig::default() })
     }
 
+    #[cfg(feature = "vertex")]
     pub fn new_google_cloud(
         api_key: impl Into<String>,
         project_id: impl AsRef<str>,
@@ -27,17 +29,15 @@ impl GeminiModel {
         model: impl Into<String>,
     ) -> Result<Self> {
         let model_name = model.into();
-        let client = Gemini::with_google_cloud_model(
-            api_key.into(),
-            project_id,
-            location,
-            model_name.clone(),
-        )
-        .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+        let client = adk_gemini::GeminiBuilder::new(api_key.into())
+            .with_google_cloud(project_id.as_ref(), location.as_ref())
+            .build()
+            .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
 
         Ok(Self { client, model_name, retry_config: RetryConfig::default() })
     }
 
+    #[cfg(feature = "vertex")]
     pub fn new_google_cloud_service_account(
         service_account_json: &str,
         project_id: impl AsRef<str>,
@@ -45,33 +45,34 @@ impl GeminiModel {
         model: impl Into<String>,
     ) -> Result<Self> {
         let model_name = model.into();
-        let client = Gemini::with_google_cloud_service_account_json(
-            service_account_json,
-            project_id.as_ref(),
-            location.as_ref(),
-            model_name.clone(),
-        )
-        .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+        let client = adk_gemini::GeminiBuilder::new_without_api_key()
+            .with_google_cloud(project_id.as_ref(), location.as_ref())
+            .with_service_account_json(service_account_json)
+            .map_err(|e: adk_gemini::ClientError| adk_core::AdkError::Model(e.to_string()))?
+            .build()
+            .map_err(|e: adk_gemini::ClientError| adk_core::AdkError::Model(e.to_string()))?;
 
         Ok(Self { client, model_name, retry_config: RetryConfig::default() })
     }
 
+    #[cfg(feature = "vertex")]
     pub fn new_google_cloud_adc(
         project_id: impl AsRef<str>,
         location: impl AsRef<str>,
         model: impl Into<String>,
     ) -> Result<Self> {
         let model_name = model.into();
-        let client = Gemini::with_google_cloud_adc_model(
-            project_id.as_ref(),
-            location.as_ref(),
-            model_name.clone(),
-        )
-        .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+        let client = adk_gemini::GeminiBuilder::new_without_api_key()
+            .with_google_cloud(project_id.as_ref(), location.as_ref())
+            .with_google_cloud_adc()
+            .map_err(|e: adk_gemini::ClientError| adk_core::AdkError::Model(e.to_string()))?
+            .build()
+            .map_err(|e: adk_gemini::ClientError| adk_core::AdkError::Model(e.to_string()))?;
 
         Ok(Self { client, model_name, retry_config: RetryConfig::default() })
     }
 
+    #[cfg(feature = "vertex")]
     pub fn new_google_cloud_wif(
         wif_json: &str,
         project_id: impl AsRef<str>,
@@ -79,13 +80,12 @@ impl GeminiModel {
         model: impl Into<String>,
     ) -> Result<Self> {
         let model_name = model.into();
-        let client = Gemini::with_google_cloud_wif_json(
-            wif_json,
-            project_id.as_ref(),
-            location.as_ref(),
-            model_name.clone(),
-        )
-        .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+        let client = adk_gemini::GeminiBuilder::new_without_api_key()
+            .with_google_cloud(project_id.as_ref(), location.as_ref())
+            .with_google_cloud_wif_json(wif_json)
+            .map_err(|e: adk_gemini::ClientError| adk_core::AdkError::Model(e.to_string()))?
+            .build()
+            .map_err(|e: adk_gemini::ClientError| adk_core::AdkError::Model(e.to_string()))?;
 
         Ok(Self { client, model_name, retry_config: RetryConfig::default() })
     }
@@ -131,6 +131,14 @@ impl GeminiModel {
                                     .unwrap_or(serde_json::Value::Null),
                             },
                             id: None,
+                        });
+                    }
+                    adk_gemini::Part::CodeExecutionResult { code_execution_result } => {
+                        converted_parts.push(Part::CodeExecutionResult {
+                            code_execution_result: adk_core::CodeExecutionResultData {
+                                outcome: code_execution_result.outcome.clone(),
+                                output: code_execution_result.output.clone(),
+                            },
                         });
                     }
                     _ => {}
@@ -250,6 +258,14 @@ impl GeminiModel {
                                     },
                                 });
                             }
+                            Part::CodeExecutionResult { code_execution_result } => {
+                                gemini_parts.push(adk_gemini::Part::CodeExecutionResult {
+                                    code_execution_result: adk_gemini::CodeExecutionResultData {
+                                        outcome: code_execution_result.outcome.clone(),
+                                        output: code_execution_result.output.clone(),
+                                    },
+                                });
+                            }
                             _ => {}
                         }
                     }
@@ -284,6 +300,14 @@ impl GeminiModel {
                                         thought_signature: None,
                                     },
                                     thought_signature: None,
+                                });
+                            }
+                            Part::CodeExecutionResult { code_execution_result } => {
+                                gemini_parts.push(adk_gemini::Part::CodeExecutionResult {
+                                    code_execution_result: adk_gemini::CodeExecutionResultData {
+                                        outcome: code_execution_result.outcome.clone(),
+                                        output: code_execution_result.output.clone(),
+                                    },
                                 });
                             }
                             _ => {}

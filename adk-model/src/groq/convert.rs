@@ -171,6 +171,7 @@ pub fn content_to_message(content: &Content) -> Message {
                 text_parts
                     .push(serde_json::to_string(&function_response.response).unwrap_or_default());
             }
+            Part::CodeExecutionResult { .. } => {}
             _ => {}
         }
     }

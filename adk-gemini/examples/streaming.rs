@@ -1,4 +1,4 @@
-use adk_gemini::Gemini;
+use adk_gemini::{Gemini, GenerationResponse};
 use display_error_chain::DisplayErrorChain;
 use futures_util::TryStreamExt;
 use std::env;
@@ -62,7 +62,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
         question = "I'm planning a trip to Japan. What are the best times to visit?",
         "sending first turn"
     );
-    let response1 = client
+    let response1: GenerationResponse = client
         .generate_content()
         .with_system_prompt("You are a helpful travel assistant.")
         .with_user_message("I'm planning a trip to Japan. What are the best times to visit?")
@@ -80,7 +80,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
         question = "What about cherry blossom season? When exactly does that happen?",
         "sending second turn"
     );
-    let response2 = client
+    let response2: GenerationResponse = client
         .generate_content()
         .with_system_prompt("You are a helpful travel assistant.")
         .with_user_message("I'm planning a trip to Japan. What are the best times to visit?")
@@ -97,7 +97,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Third turn (continuing the conversation)
     info!(question = "What are some must-visit places in Tokyo?", "sending third turn");
-    let response3 = client
+    let response3: GenerationResponse = client
         .generate_content()
         .with_system_prompt("You are a helpful travel assistant.")
         .with_user_message("I'm planning a trip to Japan. What are the best times to visit?")

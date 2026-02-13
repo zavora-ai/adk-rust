@@ -9,7 +9,7 @@ pub mod model;
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display("client invocation error"))]
-    Client { source: Box<crate::client::Error> },
+    Client { source: Box<crate::error::Error> },
 
     #[snafu(display(
         "cache display name ('{display_name}') too long ({chars}), must be under 128 characters"

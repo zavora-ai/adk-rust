@@ -1,4 +1,4 @@
-use adk_gemini::{Gemini, Model, TaskType};
+use adk_gemini::{BatchContentEmbeddingResponse, Gemini, Model, TaskType};
 use display_error_chain::DisplayErrorChain;
 use std::process::ExitCode;
 use tracing::info;
@@ -27,13 +27,13 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("GEMINI_API_KEY")?;
 
     // Create client with the default model (gemini-2.0-flash)
-    let client = Gemini::with_model(api_key, Model::TextEmbedding004)
+    let client = Gemini::with_model(api_key, Model::GeminiEmbedding001)
         .expect("unable to create Gemini API client");
 
     info!("sending batch embedding request to gemini api");
 
     // Simple text embedding
-    let response = client
+    let response: BatchContentEmbeddingResponse = client
         .embed_content()
         .with_chunks(vec!["Hello", "World", "Test embedding 3"])
         .with_task_type(TaskType::RetrievalDocument)

@@ -14,7 +14,8 @@
 /// Thought signatures are encrypted representations of the model's internal
 /// thought process that help maintain context across conversation turns.
 use adk_gemini::{
-    FunctionCallingMode, FunctionDeclaration, FunctionResponse, Gemini, ThinkingConfig, Tool,
+    FunctionCallingMode, FunctionDeclaration, FunctionResponse, Gemini, GenerationResponse,
+    ThinkingConfig, Tool,
 };
 use display_error_chain::DisplayErrorChain;
 use schemars::JsonSchema;
@@ -93,7 +94,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     // First request: Ask about weather (expecting function call with thoughtSignature)
     info!("step 1: asking about weather (expecting function call)");
 
-    let response = client
+    let response: GenerationResponse = client
         .generate_content()
         .with_system_instruction("Please respond in Traditional Chinese")
         .with_user_message("What's the weather like in Kaohsiung Zuoying District right now?")
@@ -252,7 +253,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
                     ThinkingConfig::new().with_dynamic_thinking().with_thoughts_included(true),
                 );
 
-            let followup_response = conversation_builder.execute().await?;
+            let followup_response: GenerationResponse = conversation_builder.execute().await?;
 
             info!(
                 "follow-up question: Is this weather suitable for outdoor sports? Please recommend some appropriate activities."

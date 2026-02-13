@@ -1,6 +1,7 @@
 use adk_gemini::tools::Behavior;
 use adk_gemini::{
-    Content, FunctionCall, FunctionCallingMode, FunctionDeclaration, Gemini, Message, Role, Tool,
+    Content, FunctionCall, FunctionCallingMode, FunctionDeclaration, Gemini, GenerationResponse,
+    Message, Role, Tool,
 };
 use display_error_chain::DisplayErrorChain;
 use schemars::JsonSchema;
@@ -139,7 +140,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
                 conversation.with_function_response("schedule_meeting", function_response)?;
 
             // Execute final request
-            let final_response = conversation.execute().await?;
+            let final_response: GenerationResponse = conversation.execute().await?;
 
             info!(response = final_response.text(), "final response received");
         } else {

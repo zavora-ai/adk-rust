@@ -6,7 +6,8 @@ use crate::{
     Content, FunctionCallingMode, FunctionDeclaration, GenerationConfig, GenerationResponse,
     Message, Role, Tool,
     cache::CachedContentHandle,
-    client::{Error as ClientError, GeminiClient},
+    client::GeminiClient,
+    error::Error as ClientError,
     generation::{GenerateContentRequest, SpeakerVoiceConfig, SpeechConfig, ThinkingConfig},
     tools::{FunctionCallingConfig, ToolConfig},
 };

@@ -8,7 +8,7 @@ pub mod model;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    Client { source: crate::client::Error },
+    Client { source: crate::error::Error },
     File { source: crate::files::Error },
     Serialize { source: serde_json::Error },
 }

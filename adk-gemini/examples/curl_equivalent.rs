@@ -1,4 +1,4 @@
-use adk_gemini::{Content, Gemini, Part};
+use adk_gemini::{Content, Gemini, GenerationResponse, Part};
 use display_error_chain::DisplayErrorChain;
 use std::env;
 use std::process::ExitCode;
@@ -74,7 +74,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     // This exactly mirrors the JSON structure in the curl example
     let mut content_builder = client.generate_content();
     content_builder.contents.push(content);
-    let response = content_builder.execute().await?;
+    let response: GenerationResponse = content_builder.execute().await?;
 
     info!(response = response.text(), "response received");
 

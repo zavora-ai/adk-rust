@@ -86,7 +86,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     // Create the batch request
-    let batch = gemini
+    let batch: Batch = gemini
         .batch_generate_content()
         .with_request(request1)
         .with_request(request2)

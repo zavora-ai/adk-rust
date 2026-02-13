@@ -14,7 +14,7 @@
 //! - **`cache`** - Content caching for reusable contexts
 //! - **`safety`** - Content moderation and safety settings
 //! - **`tools`** - Function calling and tool integration
-//! - **`models`** - Core primitive types shared across modules
+//! - **`types`** - Core primitive types shared across modules
 //! - **`prelude`** - Convenient re-exports of commonly used types
 //!
 //! ## Quick Start
@@ -28,8 +28,16 @@
 //! For more specialized types, import them directly from the crate root or their
 //! respective modules.
 
+// Internal macro module — must be declared before any module that uses it
+#[macro_use]
+mod macros;
+
+pub mod backend;
+pub mod builder;
 pub mod client;
-mod models;
+pub mod common;
+pub mod error;
+mod types;
 
 /// Convenient re-exports of commonly used types
 pub mod prelude;
@@ -39,9 +47,6 @@ pub mod batch;
 
 /// Content caching for reusable contexts and system instructions
 pub mod cache;
-
-/// Common utilities and serialization helpers
-pub mod common;
 
 /// Text embedding generation for semantic analysis
 pub mod embedding;
@@ -58,23 +63,30 @@ pub mod safety;
 /// Function calling and tool integration
 pub mod tools;
 
-#[cfg(test)]
-mod tests;
-
 // ========== Core Types ==========
 // These are the fundamental types used throughout the API
 
-/// The main client error type
-pub use client::Error as ClientError;
-/// The main Gemini API client
-pub use client::Gemini;
 /// Builder for creating a new Gemini client
-pub use client::GeminiBuilder;
+pub use builder::GeminiBuilder;
+/// The main Gemini API client
+pub use client::GeminiClient as Gemini;
+/// The main Gemini API client (as GeminiClient)
+pub use client::GeminiClient;
 /// Available Gemini models
-pub use client::Model;
+pub use common::Model;
+/// The main client error type
+pub use error::Error as ClientError;
+/// Re-export google_cloud_auth credentials for downstream crates (VertexADC)
+#[cfg(feature = "vertex")]
+pub use google_cloud_auth::credentials;
+/// Configuration for Gemini Live backend (Public or Vertex)
+pub use types::GeminiLiveBackend;
+/// Context for Vertex AI backend (project_id, location, token)
+#[cfg(feature = "vertex")]
+pub use types::VertexContext;
 
 /// Core primitive types for building requests and parsing responses
-pub use models::{Blob, Content, Message, Modality, Part, Role};
+pub use types::{Blob, CodeExecutionResultData, Content, Message, Modality, Part, Role};
 
 // ========== Content Generation ==========
 // Types for generating text, images, and audio content

@@ -361,6 +361,7 @@ impl MistralRsVisionModel {
                 .iter()
                 .filter_map(|part| match part {
                     Part::Text { text } => Some(text.as_str()),
+                    Part::CodeExecutionResult { .. } => None,
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -378,6 +379,7 @@ impl MistralRsVisionModel {
                             None
                         }
                     }
+                    Part::CodeExecutionResult { .. } => None,
                     _ => None,
                 })
                 .collect();
@@ -394,6 +396,7 @@ impl MistralRsVisionModel {
                             None
                         }
                     }
+                    Part::CodeExecutionResult { .. } => None,
                     _ => None,
                 })
                 .collect();

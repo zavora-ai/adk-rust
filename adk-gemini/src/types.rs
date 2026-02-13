@@ -26,7 +26,7 @@
 
 #![allow(clippy::enum_variant_names)]
 
-use serde::{Deserialize, Serialize, de};
+use serde::{Deserialize, Serialize};
 
 /// Role of a message in a conversation
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -73,6 +73,22 @@ pub enum Part {
         #[serde(rename = "functionResponse")]
         function_response: super::tools::FunctionResponse,
     },
+    /// Code execution result (from Gemini code execution)
+    CodeExecutionResult {
+        /// The code execution result details
+        #[serde(rename = "codeExecutionResult")]
+        code_execution_result: CodeExecutionResultData,
+    },
+}
+
+/// Result from code execution in Gemini
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeExecutionResultData {
+    /// Outcome of the execution (e.g. "OUTCOME_OK", "OUTCOME_DEADLINE_EXCEEDED")
+    pub outcome: String,
+    /// Output from the execution
+    pub output: String,
 }
 
 /// Blob for a message part
@@ -246,65 +262,54 @@ impl Message {
     }
 }
 
-/// Content modality type - specifies the format of model output
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum Modality {
-    /// Default value.
-    ModalityUnspecified,
-    /// Indicates the model should return text.
-    Text,
-    /// Indicates the model should return images.
-    Image,
-    /// Indicates the model should return audio.
-    Audio,
-    /// Indicates the model should return video.
-    Video,
-    /// Indicates document content (PDFs, etc.)
-    Document,
-    /// Unknown or future modality types
-    Unknown,
+hybrid_enum! {
+    /// Content modality type — specifies the format of model output
+    pub enum Modality {
+        /// Default value.
+        ModalityUnspecified => ("MODALITY_UNSPECIFIED", 0),
+        /// Indicates the model should return text.
+        Text                => ("TEXT", 1),
+        /// Indicates the model should return images.
+        Image               => ("IMAGE", 2),
+        /// Indicates the model should return video.
+        Video               => ("VIDEO", 3),
+        /// Indicates the model should return audio.
+        Audio               => ("AUDIO", 4),
+        /// Indicates document content (PDFs, etc.)
+        Document            => ("DOCUMENT", 5),
+        /// Unknown or future modality types.
+        Unknown             => ("UNKNOWN", 99),
+    }
+    fallback: Unknown
 }
 
-impl Modality {
-    fn from_wire_str(value: &str) -> Self {
-        match value {
-            "MODALITY_UNSPECIFIED" => Self::ModalityUnspecified,
-            "TEXT" => Self::Text,
-            "IMAGE" => Self::Image,
-            "AUDIO" => Self::Audio,
-            "VIDEO" => Self::Video,
-            "DOCUMENT" => Self::Document,
-            _ => Self::Unknown,
-        }
-    }
-
-    fn from_wire_number(value: i64) -> Self {
-        match value {
-            0 => Self::ModalityUnspecified,
-            1 => Self::Text,
-            2 => Self::Image,
-            3 => Self::Video,
-            4 => Self::Audio,
-            5 => Self::Document,
-            _ => Self::Unknown,
-        }
-    }
+/// Vertex AI Context (moved from being internal to Public for shared use)
+#[derive(Debug, Clone)]
+#[cfg(feature = "vertex")]
+pub struct VertexContext {
+    pub project: String,
+    pub location: String,
+    pub token: String, // OAuth token
 }
 
-impl<'de> Deserialize<'de> for Modality {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        match value {
-            serde_json::Value::String(s) => Ok(Self::from_wire_str(&s)),
-            serde_json::Value::Number(n) => n
-                .as_i64()
-                .map(Self::from_wire_number)
-                .ok_or_else(|| de::Error::custom("modality must be an integer-compatible number")),
-            _ => Err(de::Error::custom("modality must be a string or integer")),
-        }
-    }
+/// Configuration for Gemini Live backend (Public or Vertex)
+/// This is used by adk-realtime to determine how to connect.
+#[derive(Debug, Clone)]
+pub enum GeminiLiveBackend {
+    /// Public API (Google AI Studio)
+    Studio {
+        /// API Key
+        api_key: String,
+    },
+    /// Vertex AI (Google Cloud) - Pre-authenticated
+    #[cfg(feature = "vertex")]
+    Vertex(VertexContext),
+    /// Vertex AI (Google Cloud) - ADC (Application Default Credentials)
+    #[cfg(feature = "vertex")]
+    VertexADC {
+        /// Google Cloud Project ID
+        project: String,
+        /// Google Cloud Location (e.g., "us-central1")
+        location: String,
+    },
 }

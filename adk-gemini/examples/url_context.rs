@@ -49,7 +49,7 @@ making the content available to the model for analysis and response generation.
 - [`google_search.rs`](google_search.rs) - Google Search tool integration
 */
 
-use adk_gemini::{Gemini, Tool};
+use adk_gemini::{Gemini, GenerationResponse, Tool};
 use display_error_chain::DisplayErrorChain;
 use std::env;
 use std::process::ExitCode;
@@ -89,7 +89,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 1: Analyze a news article
     info!("example 1: analyzing news article content");
-    let response1 = client
+    let response1: GenerationResponse = client
         .generate_content()
         .with_user_message("Please summarize the main points from this article: https://blog.google/technology/ai/google-gemini-ai/")
         .with_tool(url_context_tool.clone())
@@ -100,7 +100,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 2: Extract information from documentation
     info!("example 2: extracting documentation information");
-    let response2 = client
+    let response2: GenerationResponse = client
         .generate_content()
         .with_user_message(
             "What are the key features mentioned on this page: https://docs.rs/tokio/latest/tokio/",
@@ -113,7 +113,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 3: Compare content from multiple URLs
     info!("example 3: comparing content from multiple sources");
-    let response3 = client
+    let response3: GenerationResponse = client
         .generate_content()
         .with_user_message(
             "Compare the features described on these two pages: \
@@ -128,7 +128,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 4: Fact checking with URL context
     info!("example 4: fact checking with url context");
-    let response4 = client
+    let response4: GenerationResponse = client
         .generate_content()
         .with_user_message(
             "Based on the information from https://www.who.int/news-room/fact-sheets, \
@@ -142,7 +142,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 5: Research synthesis
     info!("example 5: research synthesis from academic source");
-    let response5 = client
+    let response5: GenerationResponse = client
         .generate_content()
         .with_user_message(
             "Please read this research paper abstract and methodology section: \

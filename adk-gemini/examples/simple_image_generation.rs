@@ -1,4 +1,4 @@
-use adk_gemini::{Gemini, GenerationConfig};
+use adk_gemini::{Gemini, GenerationConfig, GenerationResponse};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use display_error_chain::DisplayErrorChain;
 use std::env;
@@ -40,7 +40,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     info!("starting image generation example");
 
     // Generate an image from text description
-    let response = client
+    let response: GenerationResponse = client
         .generate_content()
         .with_user_message(
             "Create a photorealistic image of a cute robot sitting in a garden, \

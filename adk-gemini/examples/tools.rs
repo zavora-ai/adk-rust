@@ -1,4 +1,7 @@
-use adk_gemini::{Content, FunctionCallingMode, FunctionDeclaration, Gemini, Message, Role, Tool};
+use adk_gemini::{
+    Content, FunctionCallingMode, FunctionDeclaration, Gemini, GenerationResponse, Message, Role,
+    Tool,
+};
 use display_error_chain::DisplayErrorChain;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -114,7 +117,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     let tool = Tool::with_functions(vec![get_weather, calculate]);
 
     // Create a request with tool functions
-    let response = client
+    let response: GenerationResponse = client
         .generate_content()
         .with_system_prompt(
             "You are a helpful assistant that can check weather and perform calculations.",
@@ -179,7 +182,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
                     conversation.with_function_response("calculate", function_response)?;
 
                 // Execute the request
-                let final_response = conversation.execute().await?;
+                let final_response: GenerationResponse = conversation.execute().await?;
 
                 info!(response = final_response.text(), "final response received");
             }
@@ -228,7 +231,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
                     conversation.with_function_response("get_weather", weather_response)?;
 
                 // Execute the request
-                let final_response = conversation.execute().await?;
+                let final_response: GenerationResponse = conversation.execute().await?;
 
                 info!(response = final_response.text(), "final response received");
             }

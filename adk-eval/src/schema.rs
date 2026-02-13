@@ -159,8 +159,10 @@ impl ContentData {
                 Part::Text { text } => {
                     content = content.with_text(text);
                 }
-                Part::FunctionCall { .. } | Part::FunctionResponse { .. } => {
-                    // Function calls/responses are handled separately in the evaluation
+                Part::FunctionCall { .. }
+                | Part::FunctionResponse { .. }
+                | Part::CodeExecutionResult { .. } => {
+                    // Function calls/responses and code execution are handled separately in the evaluation
                     // The Content type doesn't have direct methods for these
                 }
             }
@@ -179,6 +181,8 @@ pub enum Part {
     FunctionCall { name: String, args: Value },
     /// Function/tool response
     FunctionResponse { name: String, response: Value },
+    /// Code execution result
+    CodeExecutionResult { outcome: String, output: String },
 }
 
 /// Intermediate data during a turn (tool calls, etc.)

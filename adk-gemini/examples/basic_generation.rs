@@ -1,4 +1,4 @@
-use adk_gemini::Gemini;
+use adk_gemini::{Gemini, GenerationResponse};
 use display_error_chain::DisplayErrorChain;
 use std::env;
 use std::process::ExitCode;
@@ -35,7 +35,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     info!("basic content generation example starting");
 
     // Example 1: Simple user message
-    let response =
+    let response: GenerationResponse =
         client.generate_content().with_user_message("Hello, how are you?").execute().await?;
 
     info!(response = response.text(), "simple response received");

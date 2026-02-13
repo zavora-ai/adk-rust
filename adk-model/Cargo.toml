@@ -29,14 +29,15 @@ anyhow.workspace = true
 tracing.workspace = true
 base64 = "0.21"
 ollama-rs = { version = "0.3", optional = true, default-features = false, features = ["stream"] }
-schemars = { version = "1.0", optional = true }
+schemars = { version = "1.2", optional = true }
 
 [features]
 default = ["gemini"]
 gemini = ["dep:adk-gemini"]
+vertex = ["gemini", "adk-gemini/vertex"]
 openai = ["dep:async-openai"]
 anthropic = ["dep:claudius"]
 deepseek = ["dep:reqwest"]
 ollama = ["dep:ollama-rs", "dep:schemars"]
 groq = ["dep:reqwest"]
-all-providers = ["gemini", "openai", "anthropic", "deepseek", "ollama", "groq"]
+all-providers = ["gemini", "openai", "anthropic", "deepseek", "ollama", "groq", "vertex"]

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::models::Content;
+use crate::types::Content;
 use crate::{Model, Tool, ToolConfig};
 
 /// Cached content resource returned by the API (with all server-provided fields).

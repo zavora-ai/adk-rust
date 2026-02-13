@@ -1,4 +1,4 @@
-use adk_gemini::Gemini;
+use adk_gemini::{Gemini, GenerationResponse};
 use display_error_chain::DisplayErrorChain;
 use serde_json::json;
 use std::env;
@@ -66,7 +66,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
         "required": ["name", "year_created", "creator", "key_features", "popularity_score"]
     });
 
-    let response = client
+    let response: GenerationResponse = client
         .generate_content()
         .with_system_prompt("You provide information about programming languages in JSON format.")
         .with_user_message("Tell me about the Rust programming language.")

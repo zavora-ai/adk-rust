@@ -6,6 +6,17 @@ use crate::Model;
 use crate::common::serde::*;
 use crate::generation::{GenerateContentRequest, GenerationResponse};
 
+/// Validation error for batch requests
+#[derive(Debug, Snafu)]
+pub enum ValidationError {
+    /// A request in the batch is invalid
+    #[snafu(display("invalid batch request: {message}"))]
+    InvalidRequest {
+        /// Description of the validation failure
+        message: String,
+    },
+}
+
 /// Batch file request line JSON representation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchRequestFileItem {
@@ -145,6 +156,13 @@ pub struct BatchGenerateContentRequest {
     pub batch: BatchConfig,
 }
 
+impl BatchGenerateContentRequest {
+    /// Validate the batch request
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        self.batch.validate()
+    }
+}
+
 /// Batch configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -153,6 +171,23 @@ pub struct BatchConfig {
     pub display_name: String,
     /// Input configuration
     pub input_config: InputConfig,
+}
+
+impl BatchConfig {
+    /// Validate the batch configuration
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        match &self.input_config {
+            InputConfig::Requests(container) => {
+                if container.requests.is_empty() {
+                    return Err(ValidationError::InvalidRequest {
+                        message: "batch must contain at least one request".to_string(),
+                    });
+                }
+            }
+            InputConfig::FileName(_) => {}
+        }
+        Ok(())
+    }
 }
 
 /// The state of a batch operation.

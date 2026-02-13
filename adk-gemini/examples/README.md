@@ -22,7 +22,6 @@ Get your API key from [Google AI Studio](https://aistudio.google.com/apikey).
 | [`basic_streaming.rs`](basic_streaming.rs) | Simple streaming responses - real-time content display |
 | [`simple.rs`](simple.rs) | Basic text generation and function calling - comprehensive example |
 | [`advanced.rs`](advanced.rs) | Advanced content generation with comprehensive parameter configuration |
-| [`test_api.rs`](test_api.rs) | Simple API connectivity test |
 
 ### 💬 Content Generation
 

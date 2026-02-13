@@ -87,6 +87,11 @@ impl Tool for LoadArtifactsTool {
                                 "size_bytes": data.len(),
                             })
                         }
+                        adk_core::Part::CodeExecutionResult { code_execution_result } => json!({
+                            "type": "code_execution_result",
+                            "outcome": code_execution_result.outcome,
+                            "output": code_execution_result.output,
+                        }),
                         _ => json!({ "type": "unknown" }),
                     };
 

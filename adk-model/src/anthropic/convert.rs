@@ -44,6 +44,7 @@ pub fn content_to_message(content: &Content) -> MessageParam {
                     cache_control: None,
                 }))
             }
+            Part::CodeExecutionResult { .. } => None,
             _ => None,
         })
         .collect();

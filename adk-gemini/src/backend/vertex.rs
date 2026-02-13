@@ -279,8 +279,7 @@ impl GeminiBackend for VertexBackend {
             vertex_request = vertex_request.set_task_type(task_type);
         }
         if let Some(output_dimensionality) = request.output_dimensionality {
-            vertex_request = vertex_request.set_output_dimensionality(output_dimensionality);
-        }
+            vertex_request = vertex_request.set_output_dimensionality(output_dimensionality);        }
 
         let url = Url::parse(&format!(
             "{}/v1/{}:embedContent",

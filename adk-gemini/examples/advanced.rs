@@ -1,4 +1,6 @@
-use adk_gemini::{Content, FunctionCallingMode, FunctionDeclaration, Gemini, Part};
+use adk_gemini::{
+    Content, FunctionCallingMode, FunctionDeclaration, Gemini, GenerationResponse, Part,
+};
 use display_error_chain::DisplayErrorChain;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -87,7 +89,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a request with function calling
     info!("sending function call request");
-    let response = client
+    let response: GenerationResponse = client
         .generate_content()
         .with_user_message("What's the weather like in Tokyo right now?")
         .with_function(get_weather)
@@ -143,7 +145,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     final_request = final_request.with_function_response("get_weather", weather_response)?;
 
     // Execute the request
-    let final_response = final_request.execute().await?;
+    let final_response: GenerationResponse = final_request.execute().await?;
 
     info!(final_response = final_response.text(), "final response");
 

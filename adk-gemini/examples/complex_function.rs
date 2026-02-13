@@ -2,7 +2,7 @@ use std::{collections::VecDeque, env};
 
 use adk_gemini::{
     Content, FunctionCall, FunctionCallingMode, FunctionDeclaration, FunctionResponse, Gemini,
-    Part, Role, ThinkingConfig,
+    GenerationResponse, Part, Role, ThinkingConfig,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -47,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Sending function response...");
 
-    let response = client
+    let response: GenerationResponse = client
         .generate_content()
         .with_thinking_config(ThinkingConfig::dynamic_thinking())
         .with_temperature(0.1)
@@ -120,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Sending function response...",);
 
-    let final_response = reply.execute().await?;
+    let final_response: GenerationResponse = reply.execute().await?;
 
     info!("Final response from model: {}", final_response.text(),);
 

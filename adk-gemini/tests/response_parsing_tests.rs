@@ -1,6 +1,6 @@
-use crate::{
+use adk_gemini::{
     BlockReason, FinishReason, FunctionCall, GenerationResponse, HarmCategory, HarmProbability,
-    Modality, Model, Part,
+    Modality, Model, Part, Role,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -17,7 +17,7 @@ fn test_model_deserialization() {
     let deserialized: Response = serde_json::from_str(&serialized).unwrap();
     assert_eq!(deserialized.model, response.model);
 
-    let response = Response { model: Model::Gemini25Flash };
+    let response = Response { model: Model::Custom("gemini-3-flash-preview".to_string()) };
     let serialized = serde_json::to_string(&response).unwrap();
     let deserialized: Response = serde_json::from_str(&serialized).unwrap();
     assert_eq!(deserialized.model, response.model);
@@ -53,7 +53,7 @@ fn test_thought_signature_deserialization() {
             "totalTokenCount": 255,
             "thoughtsTokenCount": 164
         },
-        "modelVersion": "gemini-2.5-pro",
+        "modelVersion": "gemini-3-pro-preview",
         "responseId": "CCm8aJjzBaWh1MkP_cLEgQo"
     });
 
@@ -88,7 +88,7 @@ fn test_thought_signature_deserialization() {
     let function_calls_with_thoughts = response.function_calls_with_thoughts();
     assert_eq!(function_calls_with_thoughts.len(), 1);
 
-    let (function_call, thought_signature) = &function_calls_with_thoughts[0];
+    let (function_call, thought_signature) = function_calls_with_thoughts[0];
     assert_eq!(function_call.name, "get_current_weather");
     assert!(thought_signature.is_some());
 
@@ -138,7 +138,7 @@ fn test_function_call_without_thought_signature() {
 #[test]
 fn test_multi_turn_content_structure() {
     // Test that we can create proper multi-turn content structure for maintaining thought context
-    use crate::{Content, Part, Role};
+    use adk_gemini::{Content, Part, Role};
 
     // Simulate a function call with thought signature from first turn
     let function_call = FunctionCall::with_thought_signature(
@@ -182,7 +182,7 @@ fn test_multi_turn_content_structure() {
 
 #[test]
 fn test_text_with_thought_signature() {
-    use crate::GenerationResponse;
+    use adk_gemini::GenerationResponse;
 
     // Test JSON similar to the provided API response
     let json_response = json!({
@@ -211,7 +211,7 @@ fn test_text_with_thought_signature() {
             "totalTokenCount": 96,
             "thoughtsTokenCount": 42
         },
-        "modelVersion": "gemini-2.5-flash",
+        "modelVersion": "gemini-3-flash-preview",
         "responseId": "gIC..."
     });
 
@@ -251,13 +251,15 @@ fn test_text_with_thought_signature() {
     let text_with_thoughts = response.text_with_thoughts();
     assert_eq!(text_with_thoughts.len(), 2);
 
-    let (first_text, is_thought, thought_sig) = &text_with_thoughts[0];
-    assert!(*is_thought);
+    let (first_text, is_thought, thought_sig): (String, bool, Option<&String>) =
+        text_with_thoughts[0].clone();
+    assert!(is_thought);
     assert!(thought_sig.is_none());
     assert!(first_text.contains("here's what I'm thinking"));
 
-    let (second_text, is_thought, thought_sig) = &text_with_thoughts[1];
-    assert!(!(*is_thought));
+    let (second_text, is_thought, thought_sig): (String, bool, Option<&String>) =
+        text_with_thoughts[1].clone();
+    assert!(!is_thought);
     assert!(thought_sig.is_some());
     assert_eq!(thought_sig.unwrap(), "Cs4BA.../Yw=");
     assert!(second_text.contains("chat.get_message_count"));
@@ -266,7 +268,7 @@ fn test_text_with_thought_signature() {
 #[test]
 fn test_content_creation_with_thought_signature() {
     // Test creating content with thought signature
-    use crate::Content;
+    use adk_gemini::Content;
     let content = Content::text_with_thought_signature("Test response", "test_signature_123");
 
     let parts = content.parts.as_ref().unwrap();
@@ -313,18 +315,34 @@ fn test_content_creation_with_thought_signature() {
 
 #[test]
 fn test_vertex_numeric_enum_deserialization() {
+    // FinishReason: 1 = Stop (matches proto)
     let finish_reason: FinishReason = serde_json::from_value(json!(1)).unwrap();
     assert_eq!(finish_reason, FinishReason::Stop);
 
-    let block_reason: BlockReason = serde_json::from_value(json!(5)).unwrap();
+    // BlockReason: 1 = Safety, 6 = ModelArmor
+    let block_reason: BlockReason = serde_json::from_value(json!(6)).unwrap();
     assert_eq!(block_reason, BlockReason::ModelArmor);
 
-    let harm_category: HarmCategory = serde_json::from_value(json!(1)).unwrap();
-    assert_eq!(harm_category, HarmCategory::HateSpeech);
+    // HarmCategory: 7 = Harassment (Gemini-era categories start at 7)
+    let harm_category: HarmCategory = serde_json::from_value(json!(7)).unwrap();
+    assert_eq!(harm_category, HarmCategory::Harassment);
 
+    // HarmProbability: 3 = Medium
     let harm_probability: HarmProbability = serde_json::from_value(json!(3)).unwrap();
     assert_eq!(harm_probability, HarmProbability::Medium);
 
+    // Modality: 4 = Audio
     let modality: Modality = serde_json::from_value(json!(4)).unwrap();
     assert_eq!(modality, Modality::Audio);
+
+    // Also verify string deserialization still works
+    let finish_str: FinishReason = serde_json::from_value(json!("STOP")).unwrap();
+    assert_eq!(finish_str, FinishReason::Stop);
+
+    let block_str: BlockReason = serde_json::from_value(json!("MODEL_ARMOR")).unwrap();
+    assert_eq!(block_str, BlockReason::ModelArmor);
+
+    // Unknown values fall back gracefully
+    let unknown: FinishReason = serde_json::from_value(json!(999)).unwrap();
+    assert_eq!(unknown, FinishReason::Other);
 }

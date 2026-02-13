@@ -1,4 +1,4 @@
-use adk_gemini::{Gemini, GenerationConfig};
+use adk_gemini::{Gemini, GenerationConfig, GenerationResponse};
 use display_error_chain::DisplayErrorChain;
 use std::env;
 use std::process::ExitCode;
@@ -38,7 +38,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!(base_url = custom_base_url, "custom base url client created successfully");
 
-    let response = client_custom
+    let response: GenerationResponse = client_custom
         .generate_content()
         .with_system_prompt("You are a helpful assistant.")
         .with_user_message("Hello, can you tell me a joke about programming?")

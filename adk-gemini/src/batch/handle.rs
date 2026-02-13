@@ -33,7 +33,7 @@
 //! # Design Note: Resource Management in Batch Operations
 //!
 //! The Batch API methods that consume the [`BatchHandle`] struct (`cancel`, `delete`)
-//! return `std::result::Result<T, (Self, crate::Error)>` instead of the crate's `Result<T>`.
+//! return `Result<T, (Self, crate::Error)>` instead of the crate's `Result<T>`.
 //! This design follows patterns used in channel libraries (e.g., `std::sync::mpsc::Receiver`)
 //! and provides two key benefits:
 //!
@@ -49,7 +49,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let client = Gemini::new(std::env::var("GEMINI_API_KEY")?)?;
+//!     let client = Gemini::new_with_api_key(std::env::var("GEMINI_API_KEY")?);
 //!     let request = client.generate_content().with_user_message("Why is the sky blue?").build();
 //!     let batch = client.batch_generate_content().with_request(request).execute().await?;
 //!
@@ -69,8 +69,7 @@ use std::{result::Result, sync::Arc};
 
 use super::model::*;
 use crate::{
-    GenerationResponse,
-    client::{Error as ClientError, GeminiClient},
+    GenerationResponse, client::GeminiClient, error::Error as ClientError,
     files::handle::FileHandle,
 };
 
@@ -270,7 +269,7 @@ impl BatchHandle {
     ///
     /// Consumes the batch. If cancellation fails, returns the batch and error information
     /// so it can be retried.
-    pub async fn cancel(self) -> Result<(), (Self, ClientError)> {
+    pub async fn cancel(self) -> std::result::Result<(), (Self, ClientError)> {
         match self.client.cancel_batch_operation(&self.name).await {
             Ok(()) => Ok(()),
             Err(e) => Err((self, e)),
@@ -285,7 +284,7 @@ impl BatchHandle {
     ///
     /// Consumes the batch. If deletion fails, returns the batch and error information
     /// so it can be retried.
-    pub async fn delete(self) -> Result<(), (Self, ClientError)> {
+    pub async fn delete(self) -> std::result::Result<(), (Self, ClientError)> {
         match self.client.delete_batch_operation(&self.name).await {
             Ok(()) => Ok(()),
             Err(e) => Err((self, e)),

@@ -10,7 +10,7 @@ use crate::{client::GeminiClient, generation::GenerateContentRequest};
 /// A builder for creating and executing synchronous batch content generation requests.
 ///
 /// This builder simplifies the process of constructing a batch request, allowing you to
-/// add multiple `GenerateContentRequest` items and then execute them as a single
+/// add multiple  items and then execute them as a single
 /// long-running operation.
 pub struct BatchBuilder {
     client: Arc<GeminiClient>,
@@ -36,13 +36,13 @@ impl BatchBuilder {
         self
     }
 
-    /// Adds a single `GenerateContentRequest` to the batch.
+    /// Adds a single  to the batch.
     pub fn with_request(mut self, request: GenerateContentRequest) -> Self {
         self.requests.push(request);
         self
     }
 
-    /// Constructs the final `BatchGenerateContentRequest` from the builder's configuration.
+    /// Constructs the final  from the builder's configuration.
     ///
     /// This method consumes the builder.
     pub fn build(self) -> BatchGenerateContentRequest {
@@ -61,7 +61,7 @@ impl BatchBuilder {
         }
     }
 
-    /// Submits the batch request to the Gemini API and returns a `Batch` handle.
+    /// Submits the batch request to the Gemini API and returns a  handle.
     ///
     /// This method consumes the builder and initiates the long-running batch operation.
     #[instrument(skip_all, fields(
@@ -71,7 +71,7 @@ impl BatchBuilder {
     pub async fn execute(self) -> Result<BatchHandle, Error> {
         let client = self.client.clone();
         let request = self.build();
-        let response = client.batch_generate_content(request).await.context(ClientSnafu)?;
+        let response = client.batch_generate_content_raw(request).await.context(ClientSnafu)?;
         Ok(BatchHandle::new(response.name, client))
     }
 
@@ -114,7 +114,7 @@ impl BatchBuilder {
         };
 
         let client = self.client.clone();
-        let response = client.batch_generate_content(request).await.context(ClientSnafu)?;
+        let response = client.batch_generate_content_raw(request).await.context(ClientSnafu)?;
 
         Ok(BatchHandle::new(response.name, client))
     }

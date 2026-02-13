@@ -92,4 +92,6 @@ pub use model::{
     LlmResponse, LlmResponseStream, UsageMetadata,
 };
 pub use tool::{Tool, ToolContext, ToolPredicate, Toolset};
-pub use types::{Content, FunctionResponseData, MAX_INLINE_DATA_SIZE, Part};
+pub use types::{
+    CodeExecutionResultData, Content, FunctionResponseData, MAX_INLINE_DATA_SIZE, Part,
+};

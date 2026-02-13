@@ -5,10 +5,7 @@ use super::model::{
     BatchContentEmbeddingResponse, BatchEmbedContentsRequest, ContentEmbeddingResponse,
     EmbedContentRequest, TaskType,
 };
-use crate::{
-    Content, Message,
-    client::{Error as ClientError, GeminiClient},
-};
+use crate::{Content, Message, Model, client::GeminiClient, error::Error as ClientError};
 
 /// Builder for embed generation requests
 pub struct EmbedBuilder {
@@ -75,14 +72,14 @@ impl EmbedBuilder {
     ))]
     pub async fn execute(self) -> Result<ContentEmbeddingResponse, ClientError> {
         let request = EmbedContentRequest {
-            model: self.client.model.clone(),
+            model: Model::from(self.client.model().to_string()),
             content: self.contents.first().expect("No content set").clone(),
             task_type: self.task_type,
             title: self.title,
             output_dimensionality: self.output_dimensionality,
         };
 
-        self.client.embed_content(request).await
+        self.client.embed_content_raw(request).await
     }
 
     /// Execute the request
@@ -97,7 +94,7 @@ impl EmbedBuilder {
 
         for content in self.contents {
             let request = EmbedContentRequest {
-                model: self.client.model.clone(),
+                model: Model::from(self.client.model().to_string()),
                 content: content.clone(),
                 task_type: self.task_type.clone(),
                 title: self.title.clone(),
