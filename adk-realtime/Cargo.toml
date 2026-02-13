@@ -45,7 +45,6 @@ uuid.workspace = true
 bytes = "1"
 
 # OpenAI realtime types (optional)
-<<<<<<< HEAD
 async-openai = { version = "0.27", optional = true, default-features = false, features = ["rustls"] }
 rtc = { version = "0.8.5", optional = true }
 adk-gemini = { workspace = true, optional = true, features = ["studio"] }
@@ -56,9 +55,6 @@ http = { version = "1.4", optional = true }
 reqwest = { workspace = true, optional = true, default-features = false, features = ["json", "rustls-tls"] }
 livekit = { workspace = true, optional = true }
 livekit-api = { workspace = true, optional = true, features = ["access-token"] }
-=======
-async-openai = { version = "0.27", optional = true }
->>>>>>> c003ae6 (refactor(gemini): implement strategy pattern and Vertex AI support)
 
 [dev-dependencies]
 tokio.workspace = true
@@ -84,7 +80,6 @@ openai = ["dep:async-openai", "dep:tokio-tungstenite", "dep:reqwest", "dep:getra
 # Enable pure WebRTC transport (OpenAI/LiveKit)
 webrtc = ["dep:rtc", "dep:audiopus", "dep:rand", "dep:getrandom"]
 # Enable Gemini Live API support
-<<<<<<< HEAD
 gemini = ["dep:tokio-tungstenite", "dep:adk-gemini", "dep:http"]
 # Enable Vertex AI support
 vertex = ["gemini", "adk-gemini/vertex"]
@@ -94,8 +89,3 @@ livekit = ["dep:livekit", "dep:livekit-api"]
 adk = []
 # Enable all providers
 full = ["openai", "gemini", "livekit", "adk"]
-=======
-gemini = ["dep:tokio-tungstenite"]
-# Enable all providers
-full = ["openai", "gemini"]
->>>>>>> c003ae6 (refactor(gemini): implement strategy pattern and Vertex AI support)

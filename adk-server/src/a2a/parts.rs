@@ -150,18 +150,15 @@ pub fn a2a_parts_to_adk(parts: &[crate::a2a::Part]) -> Result<Vec<Part>> {
                         },
                     })
                 } else if let Some(cer) = data.get("code_execution_result") {
-                    let outcome = cer
-                        .get("outcome")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let output = cer
-                        .get("output")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
+                    let outcome =
+                        cer.get("outcome").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                    let output =
+                        cer.get("output").and_then(|v| v.as_str()).unwrap_or_default().to_string();
                     Ok(Part::CodeExecutionResult {
-                        code_execution_result: adk_core::CodeExecutionResultData { outcome, output },
+                        code_execution_result: adk_core::CodeExecutionResultData {
+                            outcome,
+                            output,
+                        },
                     })
                 } else {
                     Err(adk_core::AdkError::Agent("Unknown data part format".to_string()))
