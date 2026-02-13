@@ -117,6 +117,7 @@ path = "roadmap_gemini_compat/main.rs"
 [[example]]
 name = "roadmap_vertex_auth"
 path = "roadmap_vertex_auth/main.rs"
+required-features = ["vertex"]
 
 [[example]]
 name = "roadmap_gemini_sdk"
@@ -560,6 +561,7 @@ realtime-gemini = ["adk-realtime/gemini"]
 browser = ["dep:adk-browser", "dep:reqwest"]
 guardrails = ["adk-agent/guardrails", "dep:adk-guardrail"]
 sso = ["adk-auth/sso"]
+vertex = ["adk-model/vertex", "adk-gemini/vertex"]
 
 [dependencies]
 adk-core.workspace = true
@@ -599,8 +601,8 @@ dotenvy = "0.15"
 rmcp = { version = "0.14", features = ["client", "transport-child-process"] }
 rustyline = "15"
 image = "0.25"
-clap = { version = "4.0", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 
 [dev-dependencies]
-proptest = "1.0"
+proptest = "1.10"
 tokio-test = "0.4"

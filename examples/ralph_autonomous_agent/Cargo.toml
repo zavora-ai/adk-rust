@@ -1,0 +1,23 @@
+[package]
+name = "ralph-autonomous-agent"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "ralph-autonomous-agent"
+path = "main.rs"
+
+[dependencies]
+adk-core.workspace = true
+adk-agent.workspace = true
+adk-model.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+proptest = "1"

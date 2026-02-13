@@ -1,3 +1,4 @@
+#![allow(unused)]
 //! Ralph Autonomous Agent - Main Entry Point
 //!
 //! A fully native ADK-Rust autonomous agent that continuously executes development tasks
@@ -36,7 +37,7 @@ async fn main() -> Result<()> {
     // 3. Create tools (PRD, Git, File, Test)
     // 4. Create Loop Agent with tools
     // 5. Run the autonomous workflow
-    
+
     println!("Ralph system initialization - TODO");
     println!("This is the basic project structure setup");
     println!("Future tasks will implement:");
@@ -45,11 +46,10 @@ async fn main() -> Result<()> {
     println!("- Loop Agent and Worker Agent");
     println!("- Model integration (OpenAI, Anthropic, Gemini)");
     println!("- Quality gate enforcement");
-    
+
     println!("Ralph Autonomous Agent setup completed");
     Ok(())
 }
-
 
 // ============================================================================
 // Property-Based Tests for Agent Framework Compliance
@@ -81,19 +81,19 @@ mod tests {
         fn prop_loop_agent_framework_compliance(_seed in 0u64..1000) {
             // Test that RalphLoopAgent properly implements Agent trait
             let agent = RalphLoopAgent::new();
-            
+
             // Verify Agent trait implementation - name() method
             prop_assert!(!agent.name().is_empty(), "Agent name should not be empty");
             prop_assert_eq!(agent.name(), "Ralph Loop Agent");
-            
+
             // Verify Agent trait implementation - description() method
             prop_assert!(!agent.description().is_empty(), "Agent description should not be empty");
             prop_assert!(agent.description().to_lowercase().contains("orchestrat"), "Description should mention orchestration");
-            
+
             // Verify Agent trait implementation - sub_agents() method
             let sub_agents = agent.sub_agents();
             prop_assert_eq!(sub_agents.len(), 0, "Loop agent should have no sub-agents initially");
-            
+
             // Verify the agent is Send + Sync (required by Agent trait bounds)
             fn assert_send_sync<T: Send + Sync>(_: &T) {}
             assert_send_sync(&agent);
@@ -109,20 +109,20 @@ mod tests {
         ) {
             // Test that RalphWorkerAgent properly implements Agent trait
             let agent = RalphWorkerAgent::new(task_id.clone(), task_description.clone());
-            
+
             // Verify Agent trait implementation - name() method
             prop_assert!(!agent.name().is_empty(), "Agent name should not be empty");
             prop_assert!(agent.name().contains(&task_id), "Agent name should contain task ID");
             prop_assert!(agent.name().contains("Ralph Worker Agent"), "Agent name should identify as Ralph Worker Agent");
-            
+
             // Verify Agent trait implementation - description() method
             prop_assert!(!agent.description().is_empty(), "Agent description should not be empty");
             prop_assert!(agent.description().contains("development tasks"), "Description should mention development tasks");
-            
+
             // Verify Agent trait implementation - sub_agents() method
             let sub_agents = agent.sub_agents();
             prop_assert_eq!(sub_agents.len(), 0, "Worker agent should have no sub-agents initially");
-            
+
             // Verify the agent is Send + Sync (required by Agent trait bounds)
             fn assert_send_sync<T: Send + Sync>(_: &T) {}
             assert_send_sync(&agent);
@@ -138,7 +138,7 @@ mod tests {
         ) {
             // Test that agent state remains consistent across multiple calls
             let agent = RalphWorkerAgent::new(task_id.clone(), task_description.clone());
-            
+
             // Multiple calls to trait methods should return consistent results
             let name1 = agent.name();
             let name2 = agent.name();
@@ -146,11 +146,11 @@ mod tests {
             let desc2 = agent.description();
             let sub1 = agent.sub_agents();
             let sub2 = agent.sub_agents();
-            
+
             prop_assert_eq!(name1, name2, "Agent name should be consistent across calls");
             prop_assert_eq!(desc1, desc2, "Agent description should be consistent across calls");
             prop_assert_eq!(sub1.len(), sub2.len(), "Sub-agents count should be consistent across calls");
-            
+
             // Verify the agent maintains its identity
             prop_assert!(name1.contains("Ralph Worker Agent"), "Name should identify as Ralph Worker Agent");
             prop_assert!(name1.contains(&task_id), "Name should contain the task ID");
@@ -167,25 +167,25 @@ mod tests {
             // Test that agents are constructed properly with valid parameters
             let loop_agent = RalphLoopAgent::new();
             let worker_agent = RalphWorkerAgent::new(task_id.clone(), task_description.clone());
-            
+
             // Loop agent should have expected properties
             prop_assert_eq!(loop_agent.name(), "Ralph Loop Agent");
             prop_assert!(loop_agent.description().len() > 10, "Description should be meaningful");
-            
+
             // Worker agent should incorporate the provided parameters
             prop_assert!(worker_agent.name().contains(&task_id), "Worker name should contain task ID");
-            
+
             // Both agents should be Send + Sync (required by Agent trait)
             fn assert_send_sync<T: Send + Sync>(_: &T) {}
             assert_send_sync(&loop_agent);
             assert_send_sync(&worker_agent);
-            
+
             // Verify both agents implement the Agent trait correctly
             // by checking all required methods are accessible
             let _ = loop_agent.name();
             let _ = loop_agent.description();
             let _ = loop_agent.sub_agents();
-            
+
             let _ = worker_agent.name();
             let _ = worker_agent.description();
             let _ = worker_agent.sub_agents();

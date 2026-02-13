@@ -46,7 +46,7 @@ function AgentUI({ response }: { response: UiResponse }) {
     <div>
       {response.components.map((component, i) => (
         <Renderer 
-          key={i} 
+          key={component.id || i}
           component={component} 
           onAction={handleAction}
           theme={response.theme}  // 'light' | 'dark' | 'system'

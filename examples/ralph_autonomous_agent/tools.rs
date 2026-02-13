@@ -5,10 +5,10 @@
 
 use crate::error::{RalphError, Result};
 use adk_core::{Tool, ToolContext};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
-use async_trait::async_trait;
 
 /// Product Requirements Document structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,12 +48,8 @@ impl PrdTool {
             description: "Placeholder PRD".to_string(),
             user_stories: vec![],
         };
-        
-        Ok(Self {
-            prd: Arc::new(Mutex::new(prd)),
-            prd_path,
-            progress_path,
-        })
+
+        Ok(Self { prd: Arc::new(Mutex::new(prd)), prd_path, progress_path })
     }
 }
 
@@ -62,11 +58,11 @@ impl Tool for PrdTool {
     fn name(&self) -> &str {
         "prd_tool"
     }
-    
+
     fn description(&self) -> &str {
         "Manages Product Requirements Document and tracks task completion progress"
     }
-    
+
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> adk_core::Result<Value> {
         // TODO: Implement tool execution logic - will be implemented in later tasks
         Ok(Value::String("PRD Tool not yet implemented".to_string()))
@@ -90,11 +86,11 @@ impl Tool for GitTool {
     fn name(&self) -> &str {
         "git_tool"
     }
-    
+
     fn description(&self) -> &str {
         "Handles git operations including branch management, staging, committing, and status reporting"
     }
-    
+
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> adk_core::Result<Value> {
         // TODO: Implement tool execution logic - will be implemented in later tasks
         Ok(Value::String("Git Tool not yet implemented".to_string()))
@@ -118,11 +114,11 @@ impl Tool for FileTool {
     fn name(&self) -> &str {
         "file_tool"
     }
-    
+
     fn description(&self) -> &str {
         "Handles file system operations including reading, writing, appending, and listing files"
     }
-    
+
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> adk_core::Result<Value> {
         // TODO: Implement tool execution logic - will be implemented in later tasks
         Ok(Value::String("File Tool not yet implemented".to_string()))
@@ -146,11 +142,11 @@ impl Tool for TestTool {
     fn name(&self) -> &str {
         "test_tool"
     }
-    
+
     fn description(&self) -> &str {
         "Runs quality assurance checks including cargo check, test, and clippy"
     }
-    
+
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> adk_core::Result<Value> {
         // TODO: Implement tool execution logic - will be implemented in later tasks
         Ok(Value::String("Test Tool not yet implemented".to_string()))

@@ -6,5 +6,5 @@ edition = "2024"
 [dependencies]
 # Use local crates instead of published ones
 adk-rust = { path = "../../../adk-rust", features = ["openai", "anthropic", "deepseek", "groq", "ollama"] }
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.49", features = ["full"] }
 dotenvy = "0.15"

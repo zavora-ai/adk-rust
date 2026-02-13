@@ -1,0 +1,10 @@
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=--ld-path=wild"]
+
+[target.'cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))']
+linker = "clang"
+rustflags = ["-C", "link-arg=--ld-path=wild"]
+
+[env]
+WILD_INCREMENTAL = "1"

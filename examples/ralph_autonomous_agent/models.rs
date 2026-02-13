@@ -3,8 +3,8 @@
 //! This module will provide model factory and provider enumeration for
 //! supporting multiple LLM providers (OpenAI, Anthropic, Gemini).
 
-use crate::error::{RalphError, Result};
 use crate::config::RalphConfig;
+use crate::error::{RalphError, Result};
 use adk_core::Llm;
 use std::sync::Arc;
 
@@ -18,15 +18,13 @@ pub enum ModelProvider {
 
 impl std::str::FromStr for ModelProvider {
     type Err = RalphError;
-    
+
     fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
             "openai" => Ok(ModelProvider::OpenAI),
             "anthropic" => Ok(ModelProvider::Anthropic),
             "gemini" => Ok(ModelProvider::Gemini),
-            _ => Err(RalphError::Configuration(
-                format!("Unsupported model provider: {}", s)
-            )),
+            _ => Err(RalphError::Configuration(format!("Unsupported model provider: {}", s))),
         }
     }
 }

@@ -24,4 +24,21 @@
   # Optional: Enable pre-commit hooks
   pre-commit.hooks.rustfmt.enable = true;
   pre-commit.hooks.clippy.enable = true;
+
+  containers."adk-ci" = {
+    name = "zenith-adk-ci";
+    copyToRoot = ./.;
+    command = "devenv tasks run ci:test:adk";
+  };
+
+  tasks = {
+    "ci:test:adk" = {
+      description = "Run ADK-Rust Tests for CI";
+      exec = ''
+        set -e
+        echo "🦀 Running ADK-Rust Tests..."
+        cargo test --workspace
+      '';
+    };
+  };
 }

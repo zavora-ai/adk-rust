@@ -114,6 +114,9 @@ impl StreamPrinter {
             }
             Part::InlineData { mime_type, data } => self.print_inline_data(mime_type, data.len()),
             Part::FileData { mime_type, file_uri } => self.print_file_data(mime_type, file_uri),
+            Part::CodeExecutionResult { .. } => {
+                // Not showing detailed code outcome in console for now
+            }
         }
     }
 

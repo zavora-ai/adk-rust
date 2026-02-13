@@ -88,7 +88,12 @@ docs/ADK-STUDIO-PROGRESS.md
 docs/ADK-STUDIO-FUNCTION-TOOLS.md
 docs/ADK-STUDIO-GRAPH-DESIGN.md
 studio-ui/node_modules/
-studio-ui/node_modules/
 mistral-rs-ref/
 /Users/jameskaranja/Developer/projects/adk-web-reference
 /Users/jameskaranja/Developer/projects/adk-go
+
+# Node.js
+node_modules/
+
+# Audio
+*.pcm

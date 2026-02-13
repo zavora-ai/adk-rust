@@ -30,6 +30,7 @@ members = [
     # Development packages (not published)
     "examples",
     "examples/ralph",
+    "examples/ralph_autonomous_agent",
     "docs/official_docs_examples/quickstart_test", "docs/official_docs_examples/agents/llm_agent_test",
     "docs/official_docs_examples/tools/mcp_test",
     "docs/official_docs_examples/sessions/sessions_test",

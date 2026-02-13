@@ -44,7 +44,7 @@ This client connects to the ADK UI server via SSE and renders UI components that
 ## Key Files
 
 - `src/adk-ui-renderer/types.ts` - TypeScript types matching Rust schema
-- `src/adk-ui-renderer/Renderer.tsx` - Component renderer (23 components)
+- `src/adk-ui-renderer/Renderer.tsx` - High-performance component renderer (28+ components)
 - `src/App.tsx` - Main app with SSE connection
 
 ## Customization
