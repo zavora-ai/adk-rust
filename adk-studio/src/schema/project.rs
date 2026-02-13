@@ -134,7 +134,7 @@ pub struct AutobuildTriggers {
 }
 
 fn default_model() -> String {
-    "gemini-2.0-flash".to_string()
+    "gemini-2.5-flash".to_string()
 }
 
 fn default_adk_version() -> Option<String> {

@@ -18,7 +18,7 @@ async fn main() -> adk_core::Result<()> {
 
     let api_key =
         std::env::var("GOOGLE_API_KEY").expect("GOOGLE_API_KEY environment variable not set");
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
 
     // Create agent to expose via A2A
     let agent = LlmAgentBuilder::new("math_helper")

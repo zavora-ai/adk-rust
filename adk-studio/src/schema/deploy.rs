@@ -449,7 +449,7 @@ mod tests {
         project.workflow.workflow_type = WorkflowType::Sequential;
         project.agents.insert(
             "router".to_string(),
-            AgentSchema::llm("gemini-2.0-flash")
+            AgentSchema::llm("gemini-2.5-flash")
                 .with_instruction("route support tickets")
                 .with_tools(vec!["google_search".to_string()]),
         );

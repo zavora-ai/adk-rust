@@ -11,7 +11,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let api_key = std::env::var("GOOGLE_API_KEY").unwrap_or_default();
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
 
     // Create LLM agents for different tasks
     let translator = Arc::new(

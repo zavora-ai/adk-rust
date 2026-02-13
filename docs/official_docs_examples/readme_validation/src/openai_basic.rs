@@ -7,7 +7,7 @@ use adk_rust::prelude::*;
 async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("OPENAI_API_KEY")?;
-    let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-4o"))?;
+    let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-5-mini"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .instruction("You are a helpful assistant.")

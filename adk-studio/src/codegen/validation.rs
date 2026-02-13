@@ -417,7 +417,7 @@ mod tests {
             "agent1".to_string(),
             AgentSchema {
                 agent_type: AgentType::Llm,
-                model: Some("gemini-2.0-flash".to_string()),
+                model: Some("gemini-2.5-flash".to_string()),
                 instruction: "Test instruction".to_string(),
                 tools: vec![],
                 sub_agents: vec![],
@@ -480,7 +480,7 @@ mod tests {
             "agent2".to_string(),
             AgentSchema {
                 agent_type: AgentType::Llm,
-                model: Some("gemini-2.0-flash".to_string()),
+                model: Some("gemini-2.5-flash".to_string()),
                 instruction: "Disconnected".to_string(),
                 tools: vec![],
                 sub_agents: vec![],
@@ -502,7 +502,7 @@ mod tests {
             "router".to_string(),
             AgentSchema {
                 agent_type: AgentType::Router,
-                model: Some("gemini-2.0-flash".to_string()),
+                model: Some("gemini-2.5-flash".to_string()),
                 instruction: "Route".to_string(),
                 tools: vec![],
                 sub_agents: vec![],
@@ -524,7 +524,7 @@ mod tests {
             "router".to_string(),
             AgentSchema {
                 agent_type: AgentType::Router,
-                model: Some("gemini-2.0-flash".to_string()),
+                model: Some("gemini-2.5-flash".to_string()),
                 instruction: "Route".to_string(),
                 tools: vec![],
                 sub_agents: vec![],
@@ -787,7 +787,7 @@ mod env_var_tests {
             "agent".to_string(),
             AgentSchema {
                 agent_type: AgentType::Llm,
-                model: Some("gemini-2.0-flash".to_string()),
+                model: Some("gemini-2.5-flash".to_string()),
                 instruction: "Test".to_string(),
                 tools: vec![],
                 sub_agents: vec![],
@@ -808,7 +808,7 @@ mod env_var_tests {
             "agent".to_string(),
             AgentSchema {
                 agent_type: AgentType::Llm,
-                model: Some("gemini-2.0-flash".to_string()),
+                model: Some("gemini-2.5-flash".to_string()),
                 instruction: "Test".to_string(),
                 tools: vec!["browser".to_string()],
                 sub_agents: vec![],
@@ -829,7 +829,7 @@ mod env_var_tests {
             "agent".to_string(),
             AgentSchema {
                 agent_type: AgentType::Llm,
-                model: Some("gemini-2.0-flash".to_string()),
+                model: Some("gemini-2.5-flash".to_string()),
                 instruction: "Test".to_string(),
                 tools: vec!["mcp".to_string()],
                 sub_agents: vec![],

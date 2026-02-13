@@ -15,7 +15,7 @@ use std::sync::Arc;
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
 
     println!("🔄 Starting ReAct Pattern Example");
     println!("This demonstrates iterative reasoning with tools\n");

@@ -13,9 +13,9 @@ async fn main() -> anyhow::Result<()> {
     println!("==========================\n");
     
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = GeminiModel::new(&api_key, "gemini-2.0-flash")?;
+    let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
 
-    println!("✅ Model: gemini-2.0-flash");
+    println!("✅ Model: gemini-2.5-flash");
     println!("📝 Key highlights:");
     println!("   • Native multimodal (images, video, audio, PDF)");
     println!("   • Up to 2M token context window");

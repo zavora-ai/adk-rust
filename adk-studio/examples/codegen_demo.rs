@@ -69,7 +69,7 @@ fn simple_chat_project() -> ProjectSchema {
         "chat_agent".to_string(),
         AgentSchema {
             agent_type: AgentType::Llm,
-            model: Some("gemini-2.0-flash".to_string()),
+            model: Some("gemini-2.5-flash".to_string()),
             instruction:
                 "You are a helpful, friendly assistant. Answer questions clearly and concisely."
                     .to_string(),
@@ -92,7 +92,7 @@ fn research_pipeline_project() -> ProjectSchema {
         "researcher".to_string(),
         AgentSchema {
             agent_type: AgentType::Llm,
-            model: Some("gemini-2.0-flash".to_string()),
+            model: Some("gemini-2.5-flash".to_string()),
             instruction:
                 "Research the topic using Google Search. Gather key facts and recent developments."
                     .to_string(),
@@ -107,7 +107,7 @@ fn research_pipeline_project() -> ProjectSchema {
         "summarizer".to_string(),
         AgentSchema {
             agent_type: AgentType::Llm,
-            model: Some("gemini-2.0-flash".to_string()),
+            model: Some("gemini-2.5-flash".to_string()),
             instruction: "Summarize the research into key takeaways and conclusions.".to_string(),
             tools: vec![],
             sub_agents: vec![],
@@ -143,7 +143,7 @@ fn content_refiner_project() -> ProjectSchema {
         "improver".to_string(),
         AgentSchema {
             agent_type: AgentType::Llm,
-            model: Some("gemini-2.0-flash".to_string()),
+            model: Some("gemini-2.5-flash".to_string()),
             instruction: "Improve the content: fix errors, enhance clarity, improve flow."
                 .to_string(),
             tools: vec![],
@@ -157,7 +157,7 @@ fn content_refiner_project() -> ProjectSchema {
         "reviewer".to_string(),
         AgentSchema {
             agent_type: AgentType::Llm,
-            model: Some("gemini-2.0-flash".to_string()),
+            model: Some("gemini-2.5-flash".to_string()),
             instruction:
                 "Review content quality. Call exit_loop when polished, otherwise continue."
                     .to_string(),
@@ -195,7 +195,7 @@ fn parallel_analyzer_project() -> ProjectSchema {
         "sentiment".to_string(),
         AgentSchema {
             agent_type: AgentType::Llm,
-            model: Some("gemini-2.0-flash".to_string()),
+            model: Some("gemini-2.5-flash".to_string()),
             instruction: "Analyze sentiment: positive/negative/neutral with key emotional tones."
                 .to_string(),
             tools: vec![],
@@ -209,7 +209,7 @@ fn parallel_analyzer_project() -> ProjectSchema {
         "entities".to_string(),
         AgentSchema {
             agent_type: AgentType::Llm,
-            model: Some("gemini-2.0-flash".to_string()),
+            model: Some("gemini-2.5-flash".to_string()),
             instruction: "Extract entities: people, organizations, locations, dates.".to_string(),
             tools: vec![],
             sub_agents: vec![],
@@ -245,7 +245,7 @@ fn support_router_project() -> ProjectSchema {
         "router".to_string(),
         AgentSchema {
             agent_type: AgentType::Router,
-            model: Some("gemini-2.0-flash".to_string()),
+            model: Some("gemini-2.5-flash".to_string()),
             instruction: "Classify request as: technical, billing, or general.".to_string(),
             tools: vec![],
             sub_agents: vec![],
@@ -263,7 +263,7 @@ fn support_router_project() -> ProjectSchema {
         "tech_agent".to_string(),
         AgentSchema {
             agent_type: AgentType::Llm,
-            model: Some("gemini-2.0-flash".to_string()),
+            model: Some("gemini-2.5-flash".to_string()),
             instruction: "You are technical support. Help with coding and bugs.".to_string(),
             tools: vec![],
             sub_agents: vec![],
@@ -276,7 +276,7 @@ fn support_router_project() -> ProjectSchema {
         "billing_agent".to_string(),
         AgentSchema {
             agent_type: AgentType::Llm,
-            model: Some("gemini-2.0-flash".to_string()),
+            model: Some("gemini-2.5-flash".to_string()),
             instruction: "You are billing support. Help with payments and subscriptions."
                 .to_string(),
             tools: vec![],
@@ -290,7 +290,7 @@ fn support_router_project() -> ProjectSchema {
         "general_agent".to_string(),
         AgentSchema {
             agent_type: AgentType::Llm,
-            model: Some("gemini-2.0-flash".to_string()),
+            model: Some("gemini-2.5-flash".to_string()),
             instruction: "You are general support. Help with general questions.".to_string(),
             tools: vec![],
             sub_agents: vec![],

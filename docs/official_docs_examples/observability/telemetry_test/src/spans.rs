@@ -32,7 +32,7 @@ async fn main() {
     // 2. Model call span
     println!("\n2. Model call span:");
     {
-        let span = model_call_span("gemini-2.0-flash");
+        let span = model_call_span("gemini-2.5-flash");
         let _enter = span.enter();
 
         info!("Calling LLM");

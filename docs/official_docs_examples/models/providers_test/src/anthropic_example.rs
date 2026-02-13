@@ -13,9 +13,9 @@ async fn main() -> anyhow::Result<()> {
     println!("=============================\n");
     
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-    let model = AnthropicClient::new(AnthropicConfig::new(&api_key, "claude-sonnet-4-20250514"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(&api_key, "claude-sonnet-4.5"))?;
 
-    println!("✅ Model: claude-sonnet-4-20250514");
+    println!("✅ Model: claude-sonnet-4.5");
     println!("📝 Key highlights:");
     println!("   • Exceptional reasoning ability");
     println!("   • Most safety-focused");
