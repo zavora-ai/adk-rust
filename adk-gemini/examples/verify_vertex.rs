@@ -19,7 +19,7 @@ async fn main() {
             "2. Checks for user credentials set up via 'gcloud auth application-default login'."
         );
         println!("3. Checks for metadata server (if running on GCP).");
-        println!("");
+        println!();
 
         // Attempt to instantiate the VertexADC variant to prove it's available
         let backend = GeminiLiveBackend::VertexADC {
