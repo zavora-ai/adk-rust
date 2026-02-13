@@ -10,10 +10,10 @@ LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, Op
 
 `adk-model` provides LLM integrations for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)). Supports all major providers:
 
-- **Gemini** - Google's Gemini models (3.0 Pro, 2.5 Pro, 2.0 Flash, etc.)
-- **OpenAI** - GPT-5.2, GPT-5.1, GPT-5, GPT-4o, GPT-4o-mini, Azure OpenAI
-- **Anthropic** - Claude Opus 4.5, Claude Sonnet 4.5, Claude Sonnet 4, Claude 3.5
-- **DeepSeek** - DeepSeek-Chat, DeepSeek-Reasoner with thinking mode
+- **Gemini** - Google's Gemini models (3 Pro, 3 Flash, 2.5 Pro, 2.5 Flash, etc.)
+- **OpenAI** - GPT-5.1, GPT-5, GPT-5 Mini, GPT-4o (legacy)
+- **Anthropic** - Claude Opus 4.5, Claude Sonnet 4.5, Claude Haiku 4.5, Claude 4
+- **DeepSeek** - DeepSeek R1, DeepSeek V3.1, DeepSeek-Chat with thinking mode
 - **Groq** - Ultra-fast inference (LLaMA 3.3, Mixtral, Gemma)
 - **Ollama** - Local LLMs (LLaMA, Mistral, Qwen, Gemma, etc.)
 - **Streaming** - Real-time response streaming for all providers
@@ -67,7 +67,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("OPENAI_API_KEY")?;
-    let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-4o"))?;
+    let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-5-mini"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .model(Arc::new(model))
@@ -87,7 +87,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-20250514"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4.5"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .model(Arc::new(model))
@@ -168,11 +168,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Model | Description |
 |-------|-------------|
-| `gemini-3-pro-preview` | Most intelligent multimodal model with agentic capabilities |
-| `gemini-2.5-pro` | Advanced reasoning model |
-| `gemini-2.5-flash` | Latest fast model (recommended) |
-| `gemini-2.5-flash-lite` | Lightweight, cost-effective |
-| `gemini-2.0-flash` | Fast and efficient |
+| `gemini-3-pro` | Most intelligent model for complex agentic workflows (2M context) |
+| `gemini-3-flash` | Fast and efficient for most tasks (1M context) |
+| `gemini-2.5-pro` | Advanced reasoning and multimodal understanding |
+| `gemini-2.5-flash` | Balanced speed and capability (recommended) |
+| `gemini-2.5-flash-lite` | Ultra-fast for high-volume tasks |
+| `gemini-2.0-flash` | Previous generation (retiring March 2026) |
 
 See [Gemini models documentation](https://ai.google.dev/gemini-api/docs/models/gemini) for the full list.
 
@@ -180,11 +181,11 @@ See [Gemini models documentation](https://ai.google.dev/gemini-api/docs/models/g
 
 | Model | Description |
 |-------|-------------|
-| `gpt-5.2` | Latest GPT-5 with enhanced reasoning |
-| `gpt-5.1` | GPT-5 with improved tool use |
-| `gpt-5` | GPT-5 base model |
-| `gpt-4o` | Most capable GPT-4 model |
-| `gpt-4o-mini` | Fast, cost-effective GPT-4 |
+| `gpt-5.1` | Latest iteration with improved performance (256K context) |
+| `gpt-5` | State-of-the-art unified model with adaptive thinking |
+| `gpt-5-mini` | Efficient version for most tasks (128K context) |
+| `gpt-4o` | Multimodal model (deprecated August 2025) |
+| `gpt-4o-mini` | Fast and affordable (deprecated August 2025) |
 
 See [OpenAI models documentation](https://platform.openai.com/docs/models) for the full list.
 
@@ -192,10 +193,11 @@ See [OpenAI models documentation](https://platform.openai.com/docs/models) for t
 
 | Model | Description |
 |-------|-------------|
-| `claude-opus-4-20250514` | Claude Opus 4.5 - Most capable |
-| `claude-sonnet-4-20250514` | Claude Sonnet 4.5 - Balanced |
-| `claude-3-5-sonnet-20241022` | Claude 3.5 Sonnet |
-| `claude-3-opus-20240229` | Claude 3 Opus |
+| `claude-opus-4.5` | Most capable model for complex autonomous tasks (200K context) |
+| `claude-sonnet-4.5` | Balanced intelligence and cost for production |
+| `claude-haiku-4.5` | Ultra-efficient for high-volume workloads |
+| `claude-opus-4` | Hybrid model with extended thinking |
+| `claude-sonnet-4` | Balanced model with extended thinking |
 
 See [Anthropic models documentation](https://docs.anthropic.com/claude/docs/models-overview) for the full list.
 
@@ -203,8 +205,11 @@ See [Anthropic models documentation](https://docs.anthropic.com/claude/docs/mode
 
 | Model | Description |
 |-------|-------------|
-| `deepseek-chat` | General-purpose chat model |
-| `deepseek-reasoner` | Reasoning model with chain-of-thought |
+| `deepseek-r1-0528` | Latest reasoning model with enhanced thinking depth (128K context) |
+| `deepseek-r1` | Advanced reasoning comparable to o1 |
+| `deepseek-v3.1` | Latest 671B MoE model for general tasks |
+| `deepseek-chat` | 671B MoE model, excellent for code (V3) |
+| `deepseek-vl2` | Vision-language model (32K context) |
 
 **Features:**
 - **Thinking Mode** - Chain-of-thought reasoning with `<thinking>` tags
@@ -217,10 +222,12 @@ See [DeepSeek API documentation](https://api-docs.deepseek.com/) for the full li
 
 | Model | Description |
 |-------|-------------|
-| `llama-3.3-70b-versatile` | LLaMA 3.3 70B - Most capable |
-| `llama-3.1-8b-instant` | LLaMA 3.1 8B - Ultra fast |
-| `mixtral-8x7b-32768` | Mixtral 8x7B - 32K context |
-| `gemma2-9b-it` | Gemma 2 9B |
+| `llama-4-scout` | Llama 4 Scout (17Bx16E) - Fast via Groq LPU (128K context) |
+| `llama-3.2-90b-text-preview` | Large text model |
+| `llama-3.2-11b-text-preview` | Balanced text model |
+| `llama-3.1-70b-versatile` | Versatile large model |
+| `llama-3.1-8b-instant` | Ultra-fast instruction model |
+| `mixtral-8x7b-32768` | MoE model with 32K context |
 
 **Features:**
 - **Ultra-Fast** - LPU-based inference (fastest in the industry)
@@ -233,10 +240,18 @@ See [Groq documentation](https://console.groq.com/docs/models) for the full list
 
 | Model | Description |
 |-------|-------------|
-| `llama3.2` | LLaMA 3.2 - Fast and capable |
-| `mistral` | Mistral 7B |
-| `qwen2.5:7b` | Qwen 2.5 with excellent tool support (recommended) |
-| `gemma2` | Gemma 2 |
+| `llama3.3:70b` | Llama 3.3 70B - Latest for local deployment (128K context) |
+| `llama3.2:3b` | Efficient small model |
+| `llama3.1:8b` | Popular balanced model |
+| `deepseek-r1:14b` | Distilled reasoning model |
+| `deepseek-r1:32b` | Larger distilled reasoning model |
+| `qwen3:14b` | Strong multilingual and coding |
+| `qwen2.5:7b` | Efficient multilingual model (recommended for tool calling) |
+| `mistral:7b` | Fast and capable |
+| `mistral-nemo:12b` | Enhanced Mistral variant (128K context) |
+| `gemma3:9b` | Google's efficient open model |
+| `devstral:24b` | Optimized for coding tasks |
+| `codellama:13b` | Code-focused Llama variant |
 
 **Features:**
 - **Local Inference** - No API key required

@@ -53,12 +53,12 @@ ADK supports multiple LLM providers with a unified API:
 
 | Provider | Model Examples | Feature Flag |
 |----------|---------------|--------------|
-| Gemini | `gemini-3-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro` | (default) |
-| OpenAI | `gpt-5.2`, `gpt-5`, `gpt-4o`, `gpt-4o-mini` | `openai` |
-| Anthropic | `claude-opus-4-20250514`, `claude-sonnet-4-20250514` | `anthropic` |
-| DeepSeek | `deepseek-chat`, `deepseek-reasoner` | `deepseek` |
-| Groq | `llama-3.3-70b-versatile`, `mixtral-8x7b-32768` | `groq` |
-| Ollama | `llama3.2`, `qwen2.5`, `mistral` | `ollama` |
+| Gemini | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-pro`, `gemini-3-flash` | (default) |
+| OpenAI | `gpt-5-mini`, `gpt-5`, `gpt-5.1` | `openai` |
+| Anthropic | `claude-sonnet-4.5`, `claude-opus-4.5`, `claude-haiku-4.5` | `anthropic` |
+| DeepSeek | `deepseek-chat`, `deepseek-r1`, `deepseek-v3.1` | `deepseek` |
+| Groq | `llama-4-scout`, `llama-3.1-70b-versatile`, `mixtral-8x7b-32768` | `groq` |
+| Ollama | `llama3.2:3b`, `qwen2.5:7b`, `mistral:7b` | `ollama` |
 | mistral.rs | Phi-3, Mistral, Llama, Gemma, LLaVa, FLUX | git dependency |
 
 All providers support streaming, function calling, and multimodal inputs (where available).
@@ -185,7 +185,7 @@ use adk_rust::Launcher;
 async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("OPENAI_API_KEY")?;
-    let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-4o"))?;
+    let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-5-mini"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .instruction("You are a helpful assistant.")
@@ -207,7 +207,7 @@ use adk_rust::Launcher;
 async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-20250514"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4.5"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .instruction("You are a helpful assistant.")
@@ -405,7 +405,7 @@ use adk_model::GeminiModel;
 
 // Create LLM agents for different tasks
 let translator = Arc::new(LlmAgentBuilder::new("translator")
-    .model(Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?))
+    .model(Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?))
     .instruction("Translate the input text to French.")
     .build()?);
 

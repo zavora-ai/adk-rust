@@ -294,7 +294,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
     let api_key = std::env::var("OPENAI_API_KEY")?;
-    let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-4o"))?;
+    let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-5-mini"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .instruction("You are a helpful assistant.")
@@ -319,7 +319,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-20250514"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4.5"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .instruction("You are a helpful assistant.")
@@ -416,12 +416,12 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
 | Provider | Model Examples | Feature Flag |
 |----------|---------------|--------------|
-| Gemini | `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` | (default) |
-| OpenAI | `gpt-5.2`, `gpt-5.2-mini`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `o3-mini`, `gpt-4o`, `gpt-4o-mini` | `openai` |
-| Anthropic | `claude-sonnet-4-5`, `claude-haiku-4-5`, `claude-opus-4-5`, `claude-sonnet-4`, `claude-opus-4`, `claude-haiku-4` | `anthropic` |
-| DeepSeek | `deepseek-chat`, `deepseek-reasoner` | `deepseek` |
-| Groq | `gpt-oss-120b`, `qwen3-32b`, `llama-3.3-70b-versatile`, `mixtral-8x7b-32768` | `groq` |
-| Ollama | `gemma3`, `qwen2.5`, `llama3.2`, `mistral`, `phi4`, `codellama` | `ollama` |
+| Gemini | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-pro`, `gemini-3-flash` | (default) |
+| OpenAI | `gpt-5-mini`, `gpt-5`, `gpt-5.1` | `openai` |
+| Anthropic | `claude-sonnet-4.5`, `claude-opus-4.5`, `claude-haiku-4.5` | `anthropic` |
+| DeepSeek | `deepseek-chat`, `deepseek-r1`, `deepseek-v3.1` | `deepseek` |
+| Groq | `llama-4-scout`, `llama-3.1-70b-versatile`, `llama-3.1-8b-instant`, `mixtral-8x7b-32768` | `groq` |
+| Ollama | `llama3.2:3b`, `qwen2.5:7b`, `mistral:7b`, `deepseek-r1:14b`, `gemma3:9b` | `ollama` |
 
 ## Next Steps
 

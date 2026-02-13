@@ -85,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = GeminiModel::new(&api_key, "gemini-2.0-flash")?;
+    let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
 
     let agent = LlmAgentBuilder::new("gemini_assistant")
         .description("Gemini-powered assistant")
@@ -102,9 +102,12 @@ async fn main() -> anyhow::Result<()> {
 
 | Model | Description | Context |
 |-------|-------------|---------|
-| `gemini-2.0-flash` | Fast, efficient (recommended) | 1M tokens |
-| `gemini-2.5-flash` | Latest flash model | 1M tokens |
-| `gemini-2.5-pro` | Most capable | 2M tokens |
+| `gemini-3-pro` | Most intelligent, complex agentic workflows | 2M tokens |
+| `gemini-3-flash` | Fast and efficient for most tasks | 1M tokens |
+| `gemini-2.5-pro` | Advanced reasoning and multimodal | 1M tokens |
+| `gemini-2.5-flash` | Balanced speed and capability (recommended) | 1M tokens |
+| `gemini-2.5-flash-lite` | Ultra-fast for high-volume | 1M tokens |
+| `gemini-2.0-flash` | Previous generation (retiring March 2026) | 1M tokens |
 
 ### Example Output
 
@@ -118,7 +121,7 @@ It has green eyes and distinctive striped markings typical of tabby cats.
 
 ---
 
-## OpenAI (GPT-4o) 🔥 Popular
+## OpenAI (GPT-5) 🔥 Popular
 
 > **Best for**: Production apps, reliable performance, broad capabilities
 > 
@@ -141,11 +144,11 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     
     let api_key = std::env::var("OPENAI_API_KEY")?;
-    let model = OpenAIClient::new(OpenAIConfig::new(&api_key, "gpt-4o"))?;
+    let model = OpenAIClient::new(OpenAIConfig::new(&api_key, "gpt-5-mini"))?;
 
     let agent = LlmAgentBuilder::new("openai_assistant")
         .description("OpenAI-powered assistant")
-        .instruction("You are a helpful assistant powered by OpenAI GPT-4o. Be concise.")
+        .instruction("You are a helpful assistant powered by OpenAI GPT-5. Be concise.")
         .model(Arc::new(model))
         .build()?;
 
@@ -163,7 +166,7 @@ use adk_rust::prelude::*;
 use serde_json::json;
 use std::sync::Arc;
 
-let model = OpenAIClient::new(OpenAIConfig::new(&api_key, "gpt-4o"))?;
+let model = OpenAIClient::new(OpenAIConfig::new(&api_key, "gpt-5-mini"))?;
 
 let agent = LlmAgentBuilder::new("data_extractor")
     .model(Arc::new(model))
@@ -224,17 +227,18 @@ let model = OpenAIClient::new(config)?;
 
 | Model | Description | Context |
 |-------|-------------|---------|
-| `gpt-4o` | Most capable, multimodal | 128K tokens |
-| `gpt-4o-mini` | Fast, cost-effective | 128K tokens |
-| `gpt-4-turbo` | Previous flagship | 128K tokens |
-| `o1` | Reasoning model | 128K tokens |
+| `gpt-5.1` | Latest iteration with improved performance | 256K tokens |
+| `gpt-5` | State-of-the-art unified model with adaptive thinking | 256K tokens |
+| `gpt-5-mini` | Efficient version for most tasks (recommended) | 128K tokens |
+| `gpt-4o` | Multimodal model (deprecated August 2025) | 128K tokens |
+| `gpt-4o-mini` | Fast and affordable (deprecated August 2025) | 128K tokens |
 
 ### Example Output
 
 ```
 👤 User: Write a haiku about Rust programming
 
-🤖 GPT-4o: Memory so safe,
+🤖 GPT-5: Memory so safe,
 Ownership guards every byte—
 Compiler, my friend.
 ```
@@ -263,7 +267,7 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-    let model = AnthropicClient::new(AnthropicConfig::new(&api_key, "claude-sonnet-4-20250514"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(&api_key, "claude-sonnet-4.5"))?;
 
     let agent = LlmAgentBuilder::new("anthropic_assistant")
         .description("Anthropic-powered assistant")
@@ -280,9 +284,11 @@ async fn main() -> anyhow::Result<()> {
 
 | Model | Description | Context |
 |-------|-------------|---------|
-| `claude-sonnet-4-20250514` | Latest Claude 4 Sonnet | 200K tokens |
-| `claude-opus-4-20250514` | Most capable Claude 4 | 200K tokens |
-| `claude-3-5-sonnet-20241022` | Claude 3.5 Sonnet | 200K tokens |
+| `claude-opus-4.5` | Most capable for complex autonomous tasks | 200K tokens |
+| `claude-sonnet-4.5` | Balanced intelligence and cost (recommended) | 200K tokens |
+| `claude-haiku-4.5` | Ultra-efficient for high-volume workloads | 200K tokens |
+| `claude-opus-4` | Hybrid model with extended thinking | 200K tokens |
+| `claude-sonnet-4` | Balanced model with extended thinking | 200K tokens |
 
 ### Example Output
 
@@ -342,8 +348,11 @@ async fn main() -> anyhow::Result<()> {
 
 | Model | Description | Special Feature |
 |-------|-------------|-----------------|
-| `deepseek-chat` | Fast chat model | General purpose |
-| `deepseek-reasoner` | Reasoning model | Shows thinking process |
+| `deepseek-r1-0528` | Latest reasoning model | Enhanced thinking depth |
+| `deepseek-r1` | Advanced reasoning | Comparable to o1 |
+| `deepseek-v3.1` | Latest 671B MoE model | General tasks |
+| `deepseek-chat` | 671B MoE model (V3) | General purpose, cheap |
+| `deepseek-vl2` | Vision-language model | Multimodal |
 
 ### Example Output (Reasoner with Thinking Mode)
 
@@ -402,9 +411,12 @@ async fn main() -> anyhow::Result<()> {
 
 | Model | Method | Description |
 |-------|--------|-------------|
-| `llama-3.3-70b-versatile` | `GroqClient::llama70b()` | Most capable |
+| `llama-4-scout` | `GroqClient::new(GroqConfig::new(key, "llama-4-scout"))` | Llama 4 Scout (17Bx16E) |
+| `llama-3.2-90b-text-preview` | `GroqClient::new(GroqConfig::new(key, "llama-3.2-90b-text-preview"))` | Large text model |
+| `llama-3.1-70b-versatile` | `GroqClient::llama70b()` | Versatile large model |
 | `llama-3.1-8b-instant` | `GroqClient::llama8b()` | Fastest |
-| `mixtral-8x7b-32768` | Custom config | Good balance |
+| `mixtral-8x7b-32768` | `GroqClient::mixtral()` | Good balance |
+| Any model | `GroqClient::new(GroqConfig::new(key, "model"))` | Custom model |
 
 ### Example Output
 
@@ -432,9 +444,9 @@ use std::sync::Arc;
 // Just change the model - everything else stays the same!
 let model: Arc<dyn adk_core::Llm> = Arc::new(
     // Pick one:
-    // GeminiModel::new(&api_key, "gemini-2.0-flash")?
-    // OpenAIClient::new(OpenAIConfig::new(&api_key, "gpt-4o"))?
-    // AnthropicClient::new(AnthropicConfig::new(&api_key, "claude-sonnet-4-20250514"))?
+    // GeminiModel::new(&api_key, "gemini-2.5-flash")?
+    // OpenAIClient::new(OpenAIConfig::new(&api_key, "gpt-5-mini"))?
+    // AnthropicClient::new(AnthropicConfig::new(&api_key, "claude-sonnet-4.5"))?
     // DeepSeekClient::chat(&api_key)?
     // GroqClient::llama70b(&api_key)?
 );

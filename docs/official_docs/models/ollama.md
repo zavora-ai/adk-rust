@@ -79,13 +79,16 @@ In a new terminal:
 
 ```bash
 # Recommended starter model (3B parameters, fast)
-ollama pull llama3.2
+ollama pull llama3.2:3b
 
 # Other popular models
-ollama pull qwen2.5:7b    # Excellent tool calling
-ollama pull mistral       # Good for code
-ollama pull codellama     # Code generation
-ollama pull gemma2        # Google's efficient model
+ollama pull qwen2.5:7b       # Excellent tool calling
+ollama pull qwen3:14b         # Strong multilingual and coding
+ollama pull mistral:7b        # Good for code
+ollama pull deepseek-r1:14b   # Reasoning model
+ollama pull devstral:24b      # Optimized for coding
+ollama pull gemma3:9b         # Google's efficient model
+ollama pull codellama:13b     # Code generation
 ```
 
 ---
@@ -181,20 +184,26 @@ let model = OllamaModel::new(config)?;
 
 | Model | Size | RAM Needed | Best For |
 |-------|------|------------|----------|
-| `llama3.2` | 3B | 4GB | Fast, general purpose |
-| `llama3.2:7b` | 7B | 8GB | Better quality |
+| `llama3.2:3b` | 3B | 4GB | Fast, general purpose |
+| `llama3.1:8b` | 8B | 8GB | Popular balanced model |
 | `qwen2.5:7b` | 7B | 8GB | **Best tool calling** |
-| `mistral` | 7B | 8GB | Code and reasoning |
-| `codellama` | 7B | 8GB | Code generation |
-| `gemma2` | 9B | 10GB | Balanced performance |
-| `llama3.1:70b` | 70B | 48GB | Highest quality |
+| `qwen3:14b` | 14B | 16GB | Strong multilingual and coding |
+| `mistral:7b` | 7B | 8GB | Code and reasoning |
+| `mistral-nemo:12b` | 12B | 12GB | Enhanced Mistral (128K context) |
+| `deepseek-r1:14b` | 14B | 16GB | Distilled reasoning |
+| `deepseek-r1:32b` | 32B | 32GB | Larger reasoning model |
+| `gemma3:9b` | 9B | 10GB | Google's efficient open model |
+| `devstral:24b` | 24B | 24GB | Optimized for coding |
+| `codellama:13b` | 13B | 16GB | Code generation |
+| `llama3.3:70b` | 70B | 48GB | Highest quality |
 
 ### Choosing a Model
 
-- **Limited RAM (8GB)?** → `llama3.2` (3B)
-- **Need tool calling?** → `qwen2.5:7b`
-- **Writing code?** → `codellama` or `mistral`
-- **Best quality?** → `llama3.1:70b` (needs 48GB+ RAM)
+- **Limited RAM (8GB)?** → `llama3.2:3b`
+- **Need tool calling?** → `qwen2.5:7b` or `qwen3:14b`
+- **Writing code?** → `devstral:24b` or `codellama:13b`
+- **Need reasoning?** → `deepseek-r1:14b` or `deepseek-r1:32b`
+- **Best quality?** → `llama3.3:70b` (needs 48GB+ RAM)
 
 ---
 

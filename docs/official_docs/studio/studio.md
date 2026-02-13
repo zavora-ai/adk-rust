@@ -295,10 +295,17 @@ All action nodes support `{{variable}}` interpolation and receive predecessor no
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `GOOGLE_API_KEY` | Gemini API key | Yes (for Gemini) |
-| `OPENAI_API_KEY` | OpenAI API key | Yes (for OpenAI) |
+| `GOOGLE_API_KEY` | Gemini API key | For Gemini models |
+| `GEMINI_API_KEY` | Gemini API key (alternative) | For Gemini models |
+| `OPENAI_API_KEY` | OpenAI API key | For OpenAI models |
+| `ANTHROPIC_API_KEY` | Anthropic API key | For Claude models |
+| `DEEPSEEK_API_KEY` | DeepSeek API key | For DeepSeek models |
+| `GROQ_API_KEY` | Groq API key | For Groq models |
+| `OLLAMA_HOST` | Ollama server URL (default: `http://localhost:11434`) | For Ollama models |
 | `ADK_DEV_MODE` | Use local workspace deps | No |
 | `RUST_LOG` | Log level | No (default: info) |
+
+> **Note**: You only need the API key for the provider(s) your agents use. ADK Studio auto-detects the provider from the model name and generates the correct code.
 
 ## Generated Code Structure
 
@@ -309,27 +316,53 @@ my-project/
     └── main.rs
 ```
 
-Example generated `main.rs`:
+The generated code adapts to the provider(s) used in your project. ADK Studio detects the provider from each agent's model name and generates the correct imports, API key resolution, and model constructors.
+
+Example generated `main.rs` (Gemini):
 
 ```rust
-use adk_rust::prelude::*;
-use adk_rust::Launcher;
+use adk_model::gemini::GeminiModel;
+// ...
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    dotenvy::dotenv().ok();
-    let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = GeminiModel::new(&api_key, "gemini-2.0-flash")?;
+let gemini_api_key = std::env::var("GOOGLE_API_KEY")
+    .or_else(|_| std::env::var("GEMINI_API_KEY"))
+    .expect("GOOGLE_API_KEY or GEMINI_API_KEY must be set");
 
-    let agent = LlmAgentBuilder::new("assistant")
-        .description("Helpful AI assistant")
-        .instruction("You are a helpful assistant.")
-        .model(Arc::new(model))
-        .build()?;
+let model = Arc::new(GeminiModel::new(&gemini_api_key, "gemini-2.5-flash")?);
+```
 
-    Launcher::new(Arc::new(agent)).run().await?;
-    Ok(())
-}
+Example with OpenAI:
+
+```rust
+use adk_model::openai::{OpenAIClient, OpenAIConfig};
+// ...
+
+let openai_api_key = std::env::var("OPENAI_API_KEY")
+    .expect("OPENAI_API_KEY must be set");
+
+let model = Arc::new(OpenAIClient::new(OpenAIConfig::new(&openai_api_key, "gpt-5-mini"))?);
+```
+
+Example with Ollama (local, no API key):
+
+```rust
+use adk_model::ollama::{OllamaModel, OllamaConfig};
+// ...
+
+let model = Arc::new(OllamaModel::new(OllamaConfig::new("llama3.2"))?);
+```
+
+The generated `Cargo.toml` automatically includes the correct `adk-model` feature flags:
+
+```toml
+# Only Gemini
+adk-model = { version = "0.3.0", default-features = false, features = ["gemini"] }
+
+# Mixed providers (e.g., Gemini + Anthropic)
+adk-model = { version = "0.3.0", default-features = false, features = ["gemini", "anthropic"] }
+
+# Ollama only (no API key needed)
+adk-model = { version = "0.3.0", default-features = false, features = ["ollama"] }
 ```
 
 ### Generated Code with Action Nodes

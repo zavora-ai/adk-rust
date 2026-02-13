@@ -580,7 +580,7 @@ The trait that all LLM providers implement:
 ```rust
 #[async_trait]
 pub trait Llm: Send + Sync {
-    /// Model identifier (e.g., "gemini-2.0-flash", "gpt-4o")
+    /// Model identifier (e.g., "gemini-2.5-flash", "gpt-5-mini")
     fn name(&self) -> &str;
     
     /// Generate content (streaming or non-streaming)
