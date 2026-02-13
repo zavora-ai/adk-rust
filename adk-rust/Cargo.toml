@@ -67,6 +67,7 @@ ollama = ["models", "adk-model/ollama"]
 
 # Real-time features
 realtime = ["dep:adk-realtime"]
+livekit = ["realtime", "adk-realtime/livekit"]
 
 
 [dependencies]

@@ -27,7 +27,8 @@ serde.workspace = true
 serde_json.workspace = true
 
 # WebSocket
-tokio-tungstenite = { version = "0.26", default-features = false, features = ["rustls-tls-native-roots", "connect"], optional = true }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"], optional = true }
+bytemuck = "1.25"
 
 # Error handling
 thiserror.workspace = true
@@ -41,21 +42,50 @@ base64 = "0.22"
 # UUID for session IDs
 uuid.workspace = true
 
-# Random number generation
-getrandom = "0.2"
+bytes = "1"
 
 # OpenAI realtime types (optional)
-async-openai = { version = "0.27", optional = true }
+async-openai = { version = "0.27", optional = true, default-features = false, features = ["rustls"] }
+rtc = { version = "0.8.5", optional = true }
+adk-gemini = { workspace = true, optional = true, features = ["studio"] }
+audiopus = { version = "0.3.0-rc.0", optional = true }
+rand = { version = "0.8", optional = true }
+getrandom = { version = "0.2", optional = true }
+http = { version = "1.4", optional = true }
+reqwest = { workspace = true, optional = true, default-features = false, features = ["json", "rustls-tls"] }
+livekit = { workspace = true, optional = true }
+livekit-api = { workspace = true, optional = true, features = ["access-token"] }
 
 [dev-dependencies]
 tokio.workspace = true
 dotenvy = "0.15"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[example]]
+name = "realtime_voice"
+required-features = ["gemini"]
+
+[[example]]
+name = "openai_webrtc"
+required-features = ["openai", "webrtc"]
+
+[[example]]
+name = "livekit_gemini"
+required-features = ["livekit", "gemini"]
 
 [features]
 default = []
 # Enable OpenAI Realtime API support
-openai = ["dep:async-openai", "dep:tokio-tungstenite"]
+openai = ["dep:async-openai", "dep:tokio-tungstenite", "dep:reqwest", "dep:getrandom"]
+# Enable pure WebRTC transport (OpenAI/LiveKit)
+webrtc = ["dep:rtc", "dep:audiopus", "dep:rand", "dep:getrandom"]
 # Enable Gemini Live API support
-gemini = ["dep:tokio-tungstenite"]
+gemini = ["dep:tokio-tungstenite", "dep:adk-gemini", "dep:http"]
+# Enable Vertex AI support
+vertex = ["gemini", "adk-gemini/vertex"]
+# Enable LiveKit transport support
+livekit = ["dep:livekit", "dep:livekit-api"]
+# Integration with ADK ecosystem
+adk = []
 # Enable all providers
-full = ["openai", "gemini"]
+full = ["openai", "gemini", "livekit", "adk"]

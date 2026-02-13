@@ -44,7 +44,7 @@
 //!     let model = OpenAIRealtimeModel::new(api_key, "gpt-4o-realtime-preview-2024-12-17");
 //!
 //!     let agent = RealtimeAgent::builder("voice_assistant")
-//!         .model(Box::new(model))
+//!         .model(std::sync::Arc::new(model))
 //!         .instruction("You are a helpful voice assistant.")
 //!         .voice("alloy")
 //!         .server_vad()
@@ -92,6 +92,19 @@ pub mod openai;
 
 #[cfg(feature = "gemini")]
 pub mod gemini;
+
+#[cfg(feature = "livekit")]
+pub mod livekit_ext;
+
+#[cfg(feature = "livekit")]
+pub mod livekit {
+    pub use crate::livekit_ext::*;
+    pub use ::livekit::*;
+    pub use ::livekit_api as api;
+}
+
+#[cfg(feature = "livekit")]
+pub use livekit_api;
 
 // Re-exports
 pub use agent::{RealtimeAgent, RealtimeAgentBuilder};

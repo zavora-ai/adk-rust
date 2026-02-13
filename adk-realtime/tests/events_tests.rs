@@ -1,6 +1,7 @@
 //! Tests for the events module.
 
 use adk_realtime::{ClientEvent, ServerEvent, ToolCall, ToolResponse};
+use base64::Engine;
 
 #[test]
 fn test_tool_call_creation() {
@@ -40,30 +41,34 @@ fn test_tool_response_from_string() {
 
 #[test]
 fn test_client_event_audio_input_serialization() {
-    let event = ClientEvent::AudioInput { audio: "base64audio==".to_string() };
+    let event = ClientEvent::AudioDelta {
+        event_id: None,
+        audio: b"base64audio==".to_vec().into(),
+        format: adk_realtime::AudioFormat::default(),
+    };
 
     let json = serde_json::to_string(&event).unwrap();
     assert!(json.contains("input_audio_buffer.append"));
-    assert!(json.contains("base64audio=="));
+    assert!(json.contains("YmFzZTY0YXVkaW89PQ==")); // "base64audio==" encoded in base64
 }
 
 #[test]
 fn test_client_event_audio_commit_serialization() {
-    let event = ClientEvent::AudioCommit;
+    let event = ClientEvent::InputAudioBufferCommit;
     let json = serde_json::to_string(&event).unwrap();
     assert!(json.contains("input_audio_buffer.commit"));
 }
 
 #[test]
 fn test_client_event_create_response_serialization() {
-    let event = ClientEvent::CreateResponse { response: None };
+    let event = ClientEvent::ResponseCreate { config: None };
     let json = serde_json::to_string(&event).unwrap();
     assert!(json.contains("response.create"));
 }
 
 #[test]
 fn test_client_event_cancel_response_serialization() {
-    let event = ClientEvent::CancelResponse;
+    let event = ClientEvent::ResponseCancel;
     let json = serde_json::to_string(&event).unwrap();
     assert!(json.contains("response.cancel"));
 }
@@ -77,14 +82,17 @@ fn test_server_event_audio_delta_deserialization() {
         "item_id": "item_789",
         "output_index": 0,
         "content_index": 0,
-        "delta": "base64audio=="
+        "delta": "YmFzZTY0YXVkaW8="
     }"#;
 
     let event: ServerEvent = serde_json::from_str(json).unwrap();
     match event {
         ServerEvent::AudioDelta { event_id, delta, item_id, .. } => {
             assert_eq!(event_id, "evt_123");
-            assert_eq!(delta, "base64audio==");
+            assert_eq!(
+                delta,
+                base64::engine::general_purpose::STANDARD.decode("YmFzZTY0YXVkaW8=").unwrap()
+            );
             assert_eq!(item_id, "item_789");
         }
         _ => panic!("Expected AudioDelta event"),

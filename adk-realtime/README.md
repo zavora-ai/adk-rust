@@ -8,8 +8,9 @@ Real-time bidirectional audio streaming for Rust Agent Development Kit (ADK-Rust
 
 ## Features
 
-- **RealtimeAgent**: Implements `adk_core::Agent` with full callback/tool/instruction support
-- **Multiple Providers**: Support for OpenAI Realtime API and Gemini Live API
+- **RealtimeAgent**: Implemented `adk_core::Agent` with full callback/tool/instruction support
+- **Multiple Providers**: Unified interface for OpenAI Realtime and Gemini Live API
+- **LiveKit Integration**: Direct bridge for using AI agents in LiveKit real-time audio rooms
 - **Audio Streaming**: Bidirectional audio with PCM16, G711, and other formats
 - **Voice Activity Detection**: Server-side VAD for natural conversation flow
 - **Tool Calling**: Real-time function/tool execution during voice conversations
@@ -43,7 +44,7 @@ Real-time bidirectional audio streaming for Rust Agent Development Kit (ADK-Rust
 |----------|-------|--------------|-------------|
 | OpenAI | `gpt-4o-realtime-preview-2024-12-17` | `openai` | Stable realtime model |
 | OpenAI | `gpt-realtime` | `openai` | Latest model with improved speech & function calling |
-| Google | `gemini-2.0-flash-live-preview-04-09` | `gemini` | Gemini Live API |
+| Google | `gemini-live-2.5-flash-native-audio` | `gemini` | Gemini Live API (Latest) |
 
 ## Quick Start
 
@@ -78,6 +79,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Using Gemini Live
+
+```rust
+use adk_realtime::{RealtimeAgent, gemini::GeminiRealtimeModel};
+use adk_gemini::GeminiLiveBackend;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 1. Public API (API Key)
+    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    let backend = GeminiLiveBackend::Public { api_key };
+    
+    // 2. Vertex AI (OAuth)
+    // let backend = GeminiLiveBackend::Vertex(vertex_context);
+
+    let model = Arc::new(GeminiRealtimeModel::new(
+        backend, 
+        "models/gemini-live-2.5-flash-native-audio"
+    ));
+
+    let agent = RealtimeAgent::builder("gemini_voice")
+        .model(model)
+        .instruction("You are a helpful assistant.")
+        // Gemini voice names: "Puck", "Charon", "Kore", "Fenrir", "Aoede"
+        .voice("Puck") 
+        .build()?;
+
+    Ok(())
+}
+```
+
 ### Using Low-Level Session API
 
 ```rust
@@ -105,7 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(event) = session.next_event().await {
         match event? {
             ServerEvent::AudioDelta { delta, .. } => {
-                // Play audio (delta is base64-encoded PCM)
+                // Play audio (delta is 24kHz PCM bytes)
             }
             ServerEvent::TextDelta { delta, .. } => {
                 print!("{}", delta);
@@ -150,7 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `server_vad()` | Enable server-side VAD with defaults |
 | `vad(VadConfig)` | Custom VAD configuration |
 | `modalities(vec)` | Output modalities (["text", "audio"]) |
-| `on_audio(callback)` | Callback for audio output events |
+| `on_audio(callback)` | Callback for audio output events (`Fn(&[u8], &str)`) |
 | `on_transcript(callback)` | Callback for transcript events |
 | `on_speech_started(callback)` | Callback when speech detected |
 | `on_speech_stopped(callback)` | Callback when speech ends |
@@ -162,7 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Event | Description |
 |-------|-------------|
 | `SessionCreated` | Connection established |
-| `AudioDelta` | Audio chunk (base64 PCM) |
+| `AudioDelta` | Audio chunk (Vec<u8> PCM) |
 | `TextDelta` | Text response chunk |
 | `TranscriptDelta` | Input audio transcript |
 | `FunctionCallDone` | Tool call request |
@@ -181,8 +214,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `ResponseCreate` | Request a response |
 | `ResponseCancel` | Interrupt response |
 | `SessionUpdate` | Update configuration |
+| `InputAudioBufferAppend` | Send audio (via `bytes::Bytes`) |
 
-## Audio Formats
+## Audio Transport Architecture
+
+### Zero-Copy Performance
+The entire `adk-realtime` framework uses `bytes::Bytes` for audio transport. This ensures that large audio buffers are shared rather than copied as they flow from the AI provider through the agent loop to the transport layers (e.g., LiveKit or WebRTC).
+
+### OpenAI WebRTC (Sans-IO)
+The OpenAI WebRTC implementation utilizes the `rtc` crate (v0.8.5) and follows a **Sans-IO** pattern for maximum reliability and control. It is engineered for **production stability**:
+
+- **Stable SSRC Latching**: Locks onto a single SSRC at startup to prevent decoder resets and audio glitches on the server side.
+- **Zero-Allocation Hot Loop**: Uses pre-allocated byte buffers for the critical 20ms audio path, eliminating heap allocation jitter.
+- **Bounded Message Queues**: Enforces strict capacity limits (50 items) on pending DataChannel messages to prevent memory leaks during network interruptions.
+- **Robust Connection Monitoring**: Immediate termination and error reporting on `RTCPeerConnectionState::Failed`, enabling rapid application-level recovery.
+- **RFC 7587 Compliance**: Strictly follows the Opus RTP clock rate (48kHz) regardless of input sample rate.
+- **DataChannel Integration**: Securely routes JSON control events (`oai-events`) alongside the high-priority audio media track.
+
+### Gemini Live Optimization
+The Gemini Live implementation is optimized for the `gemini-live-2.5-flash-native-audio` model:
+- **Native Audio Support**: Direct streaming of 24kHz PCM16 bytes.
+- **Fast Turnaround**: Leveraging the model's native SAD (Server-side Activity Detection) for sub-second conversational latency.
+
 
 | Format | Sample Rate | Bits | Channels | Provider |
 |--------|-------------|------|----------|----------|
@@ -264,13 +317,58 @@ cargo run --example realtime_handoff --features realtime-openai
 | `realtime_tools` | Real-time tool calling (weather lookup) during conversations |
 | `realtime_handoff` | Multi-agent system with receptionist routing to booking, support, and sales agents |
 
+## LiveKit Integration
+
+The `adk-realtime` crate includes first-class support for **LiveKit**, allowing you to bridge your AI agents into real-time audio rooms.
+
+### The Bridge Pattern
+
+We use a "Facade" architecture where the LiveKit transport is completely decoupled from the AI provider. This allows you to "plug" any `RealtimeModel` (Gemini or OpenAI) into a LiveKit room without changing your integration logic.
+
+- **Hearing**: `bridge_input` subscribes to a LiveKit `RemoteAudioTrack` and feeds it to the AI.
+- **Speaking**: `LiveKitEventHandler` receives AI audio and pushes it to a LiveKit `NativeAudioSource`.
+
+### Usage Example
+
+```rust
+use adk_realtime::RealtimeRunner;
+use adk_realtime::livekit::{LiveKitEventHandler, bridge_input};
+use livekit::native::audio_source::NativeAudioSource;
+
+// 1. Setup LiveKit source for the AI's voice
+let source = NativeAudioSource::new(AudioSourceOptions::default());
+
+// 2. Setup your handler (can wrap any custom logic)
+let lk_handler = Arc::new(LiveKitEventHandler::new(source, inner_handler));
+
+// 3. Connect to ANY AI provider (Gemini or OpenAI)
+let model = Arc::new(GeminiRealtimeModel::new(backend, "models/gemini-live-2.5-flash-native-audio"));
+// OR: let model = Arc::new(OpenAIRealtimeModel::new(api_key, "gpt-4o-realtime"));
+
+// 4. Build the runner
+let runner = RealtimeRunner::builder()
+    .model(model)
+    .event_handler(lk_handler)
+    .build()?;
+
+// 5. Connect the room's audio to the AI
+bridge_input(remote_audio_track, runner.clone());
+```
+
+### Technical Benefits
+
+- **Backend Agnostic**: Swap between OpenAI and Gemini with a single line change.
+- **Unified Audio**: Automatically handles conversion to **24kHz Mono PCM** for optimal performance.
+- **Zero-Copy Intent**: Optimized for streaming raw PCM frames directly to the transport layer.
+
 ## Feature Flags
 
 | Flag | Description |
 |------|-------------|
 | `openai` | Enable OpenAI Realtime API |
 | `gemini` | Enable Gemini Live API |
-| `full` | Enable all providers |
+| `livekit` | Enable LiveKit transport support |
+| `full` | Enable all providers and integrations |
 
 ## License
 

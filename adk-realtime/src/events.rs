@@ -3,8 +3,11 @@
 //! These events follow a unified model inspired by the OpenAI Agents SDK,
 //! abstracting over provider-specific event formats.
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use bytes::Bytes;
 
 /// Events sent from the client to the realtime server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,39 +20,66 @@ pub enum ClientEvent {
         session: Value,
     },
 
-    /// Send audio input from microphone.
+    /// Append audio to the buffer.
     #[serde(rename = "input_audio_buffer.append")]
-    AudioInput {
-        /// Base64-encoded audio data.
-        audio: String,
+    AudioDelta {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        event_id: Option<String>,
+        #[serde(
+            serialize_with = "serialize_audio_delta",
+            deserialize_with = "deserialize_audio_delta"
+        )]
+        audio: Bytes,
+        #[serde(skip)]
+        format: crate::audio::AudioFormat,
     },
 
-    /// Commit the current audio buffer (manual mode).
+    /// Commit the audio buffer.
     #[serde(rename = "input_audio_buffer.commit")]
-    AudioCommit,
+    InputAudioBufferCommit,
 
-    /// Clear the audio input buffer.
+    /// Clear the audio buffer.
     #[serde(rename = "input_audio_buffer.clear")]
-    AudioClear,
+    InputAudioBufferClear,
 
     /// Send a text message or tool response.
     #[serde(rename = "conversation.item.create")]
-    ItemCreate {
+    ConversationItemCreate {
         /// The conversation item to create.
-        item: ConversationItem,
+        item: serde_json::Value,
     },
 
     /// Trigger a response from the model.
     #[serde(rename = "response.create")]
-    CreateResponse {
-        /// Optional response configuration.
+    ResponseCreate {
+        /// Optional config in JSON.
         #[serde(skip_serializing_if = "Option::is_none")]
-        response: Option<Value>,
+        config: Option<serde_json::Value>,
     },
 
-    /// Cancel/interrupt the current response.
+    /// Cancel a response.
     #[serde(rename = "response.cancel")]
-    CancelResponse,
+    ResponseCancel,
+}
+
+/// Custom deserializer for base64-encoded audio.
+fn deserialize_audio_delta<'de, D>(deserializer: D) -> Result<Bytes, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let decoded =
+        base64::engine::general_purpose::STANDARD.decode(&s).map_err(serde::de::Error::custom)?;
+    Ok(Bytes::from(decoded))
+}
+
+/// Custom serializer for base64-encoded audio.
+fn serialize_audio_delta<S>(bytes: &Bytes, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let s = base64::engine::general_purpose::STANDARD.encode(bytes);
+    serializer.serialize_str(&s)
 }
 
 /// A conversation item for text or tool responses.
@@ -256,8 +286,12 @@ pub enum ServerEvent {
         output_index: u32,
         /// Content index.
         content_index: u32,
-        /// Base64-encoded audio data.
-        delta: String,
+        /// Audio data (bytes).
+        #[serde(
+            serialize_with = "serialize_audio_delta",
+            deserialize_with = "deserialize_audio_delta"
+        )]
+        delta: Bytes,
     },
 
     /// Audio output completed.

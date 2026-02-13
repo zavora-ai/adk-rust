@@ -20,7 +20,7 @@ serde_json.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 reqwest = { workspace = true, optional = true }
-google-cloud-auth = { version = "1.4", optional = true }
+google-cloud-auth = { version = "1.5", optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"], optional = true }
 
 [dev-dependencies]

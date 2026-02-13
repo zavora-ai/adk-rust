@@ -1,19 +1,23 @@
-//! Gemini Live session implementation.
-
 use crate::audio::AudioChunk;
-use crate::config::RealtimeConfig;
+use crate::config::{RealtimeConfig, ToolDefinition};
 use crate::error::{RealtimeError, Result};
 use crate::events::{ClientEvent, ServerEvent, ToolResponse};
 use crate::session::RealtimeSession;
+use adk_gemini::GeminiLiveBackend;
 use async_trait::async_trait;
+use base64::prelude::*;
+use bytes::Bytes;
 use futures::stream::Stream;
 use futures::{SinkExt, StreamExt};
+#[cfg(feature = "vertex")]
+use http::HeaderValue;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 type WsStream =
@@ -31,6 +35,22 @@ struct GeminiClientMessage {
     realtime_input: Option<GeminiRealtimeInput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_response: Option<GeminiToolResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_content: Option<GeminiClientContent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiClientContent {
+    turns: Vec<GeminiTurn>,
+    turn_complete: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiTurn {
+    role: String,
+    parts: Vec<GeminiPart>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,13 +126,97 @@ pub struct GeminiRealtimeSession {
 
 impl GeminiRealtimeSession {
     /// Connect to Gemini Live API.
-    pub async fn connect(url: &str, model: &str, config: RealtimeConfig) -> Result<Self> {
-        // Connect WebSocket
-        let (ws_stream, _response) = connect_async(url)
-            .await
-            .map_err(|e| RealtimeError::connection(format!("WebSocket connect error: {}", e)))?;
+    pub async fn connect(
+        backend: GeminiLiveBackend,
+        model: &str,
+        config: RealtimeConfig,
+    ) -> Result<Self> {
+        let (request, _response) = match backend {
+            GeminiLiveBackend::Studio { api_key } => {
+                let url = format!(
+                    "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={}",
+                    api_key
+                );
+                let request = url.into_client_request().map_err(|e| {
+                    RealtimeError::connection(format!("Failed to create client request: {}", e))
+                })?;
+                connect_async(request).await.map_err(|e| {
+                    RealtimeError::connection(format!("WebSocket connect error: {}", e))
+                })?
+            }
+            #[cfg(feature = "vertex")]
+            GeminiLiveBackend::Vertex(context) => {
+                let url = format!(
+                    "wss://{}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmInferenceService.BidiGenerateContent",
+                    context.location
+                );
+                let mut request = url.into_client_request().map_err(|e| {
+                    RealtimeError::connection(format!("Failed to create client request: {}", e))
+                })?;
 
-        let (sink, source) = ws_stream.split();
+                request.headers_mut().insert(
+                    "Authorization",
+                    HeaderValue::from_str(&format!("Bearer {}", context.token)).map_err(|e| {
+                        RealtimeError::connection(format!("Invalid auth token header: {}", e))
+                    })?,
+                );
+
+                connect_async(request).await.map_err(|e| {
+                    RealtimeError::connection(format!("WebSocket connect error: {}", e))
+                })?
+            }
+            #[cfg(feature = "vertex")]
+            GeminiLiveBackend::VertexADC { project: _, location } => {
+                use adk_gemini::credentials::{Builder, CacheableResource};
+
+                // Fetch token from ADC
+                let credentials = Builder::default().build().map_err(|e| {
+                    RealtimeError::connection(format!("Failed to load ADC credentials: {}", e))
+                })?;
+
+                let headers = credentials.headers(Default::default()).await.map_err(|e| {
+                    RealtimeError::connection(format!("Failed to fetch auth headers: {}", e))
+                })?;
+
+                let auth_headers = match headers {
+                    CacheableResource::New { data, .. } => data,
+                    CacheableResource::NotModified => {
+                        return Err(RealtimeError::connection(
+                            "Credentials returned NotModified unexpectedly".to_string(),
+                        ));
+                    }
+                };
+
+                let token = auth_headers
+                    .get(tokio_tungstenite::tungstenite::http::header::AUTHORIZATION)
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|s| s.strip_prefix("Bearer "))
+                    .ok_or_else(|| {
+                        RealtimeError::connection("No Bearer token in ADC headers".to_string())
+                    })?;
+
+                let url = format!(
+                    "wss://{}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmInferenceService.BidiGenerateContent",
+                    location
+                );
+                let mut request = url.into_client_request().map_err(|e| {
+                    RealtimeError::connection(format!("Failed to create client request: {}", e))
+                })?;
+
+                request.headers_mut().insert(
+                    "Authorization",
+                    HeaderValue::from_str(&format!("Bearer {}", token)).map_err(|e| {
+                        RealtimeError::connection(format!("Invalid auth token header: {}", e))
+                    })?,
+                );
+
+                connect_async(request).await.map_err(|e| {
+                    RealtimeError::connection(format!("WebSocket connect error: {}", e))
+                })?
+            }
+        };
+
+        let (sink, source) = request.split();
 
         // Generate session ID
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -132,10 +236,6 @@ impl GeminiRealtimeSession {
 
     /// Send initial setup message.
     async fn send_setup(&self, model: &str, config: RealtimeConfig) -> Result<()> {
-        let system_instruction = config.instruction.map(|text| GeminiContent {
-            parts: vec![GeminiPart { text: Some(text), inline_data: None }],
-        });
-
         let mut generation_config = json!({
             "responseModalities": config.modalities.unwrap_or_else(|| vec!["AUDIO".to_string()]),
         });
@@ -154,22 +254,11 @@ impl GeminiRealtimeSession {
             generation_config["temperature"] = json!(temp);
         }
 
-        let tools = config.tools.map(|tools| {
-            vec![json!({
-                "functionDeclarations": tools.iter().map(|t| {
-                    let mut decl = json!({
-                        "name": t.name,
-                    });
-                    if let Some(desc) = &t.description {
-                        decl["description"] = json!(desc);
-                    }
-                    if let Some(params) = &t.parameters {
-                        decl["parameters"] = params.clone();
-                    }
-                    decl
-                }).collect::<Vec<_>>()
-            })]
+        let system_instruction = config.instruction.map(|text| GeminiContent {
+            parts: vec![GeminiPart { text: Some(text), inline_data: None }],
         });
+
+        let tools = convert_tools(config.tools);
 
         let setup = GeminiClientMessage {
             setup: Some(GeminiSetup {
@@ -180,8 +269,14 @@ impl GeminiRealtimeSession {
             }),
             realtime_input: None,
             tool_response: None,
+            client_content: None,
         };
 
+        let msg = serde_json::to_string(&setup)
+            .map_err(|e| RealtimeError::protocol(format!("Serialize error: {}", e)))?;
+
+        tracing::info!(model_id = %model, "Sending setup message");
+        tracing::debug!(raw_setup = %msg, "Raw setup message");
         self.send_raw(&setup).await
     }
 
@@ -211,6 +306,16 @@ impl GeminiRealtimeSession {
                     Err(e) => Some(Err(e)),
                 }
             }
+            Some(Ok(Message::Binary(bytes))) => match String::from_utf8(bytes) {
+                Ok(text) => match self.translate_gemini_event(&text) {
+                    Ok(event) => Some(Ok(event)),
+                    Err(e) => Some(Err(e)),
+                },
+                Err(e) => Some(Err(RealtimeError::protocol(format!(
+                    "Invalid UTF-8 in binary message: {}",
+                    e
+                )))),
+            },
             Some(Ok(Message::Close(_))) => {
                 self.connected.store(false, Ordering::SeqCst);
                 None
@@ -229,8 +334,9 @@ impl GeminiRealtimeSession {
 
     /// Translate Gemini-specific events to unified format.
     fn translate_gemini_event(&self, raw: &str) -> Result<ServerEvent> {
+        tracing::debug!(%raw, "Translating Gemini event");
         let value: Value = serde_json::from_str(raw)
-            .map_err(|e| RealtimeError::protocol(format!("Parse error: {}", e)))?;
+            .map_err(|e| RealtimeError::protocol(format!("Parse error: {}, raw: {}", e, raw)))?;
 
         // Check for setup completion
         if value.get("setupComplete").is_some() {
@@ -257,13 +363,16 @@ impl GeminiRealtimeSession {
                         // Audio output
                         if let Some(inline_data) = part.get("inlineData") {
                             if let Some(data) = inline_data.get("data").and_then(|d| d.as_str()) {
+                                let decoded = base64::engine::general_purpose::STANDARD
+                                    .decode(data)
+                                    .unwrap_or_default();
                                 return Ok(ServerEvent::AudioDelta {
                                     event_id: uuid::Uuid::new_v4().to_string(),
                                     response_id: String::new(),
                                     item_id: String::new(),
                                     output_index: 0,
                                     content_index: 0,
-                                    delta: data.to_string(),
+                                    delta: Bytes::from(decoded),
                                 });
                             }
                         }
@@ -333,6 +442,7 @@ impl RealtimeSession for GeminiRealtimeSession {
                 text: None,
             }),
             tool_response: None,
+            client_content: None,
         };
         self.send_raw(&msg).await
     }
@@ -340,11 +450,15 @@ impl RealtimeSession for GeminiRealtimeSession {
     async fn send_text(&self, text: &str) -> Result<()> {
         let msg = GeminiClientMessage {
             setup: None,
-            realtime_input: Some(GeminiRealtimeInput {
-                media_chunks: None,
-                text: Some(text.to_string()),
-            }),
+            realtime_input: None,
             tool_response: None,
+            client_content: Some(GeminiClientContent {
+                turns: vec![GeminiTurn {
+                    role: "user".to_string(),
+                    parts: vec![GeminiPart { text: Some(text.to_string()), inline_data: None }],
+                }],
+                turn_complete: true,
+            }),
         };
         self.send_raw(&msg).await
     }
@@ -364,6 +478,7 @@ impl RealtimeSession for GeminiRealtimeSession {
                     response: output,
                 }],
             }),
+            client_content: None,
         };
         self.send_raw(&msg).await
     }
@@ -423,5 +538,77 @@ impl std::fmt::Debug for GeminiRealtimeSession {
             .field("session_id", &self.session_id)
             .field("connected", &self.connected.load(Ordering::SeqCst))
             .finish()
+    }
+}
+
+fn convert_tools(tools: Option<Vec<ToolDefinition>>) -> Option<Vec<Value>> {
+    tools.filter(|t| !t.is_empty()).map(|t_vec| {
+        let function_declarations: Vec<Value> = t_vec
+            .into_iter()
+            .map(|t| {
+                json!({
+                    "name": t.name,
+                    "description": t.description.unwrap_or_default(),
+                    "parameters": t.parameters.unwrap_or_else(|| json!({ "type": "object", "properties": {} }))
+                })
+            })
+            .collect();
+
+        vec![json!({
+            "functionDeclarations": function_declarations
+        })]
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_convert_tools() {
+        let tools = vec![
+            ToolDefinition {
+                name: "get_weather".to_string(),
+                description: Some("Get current weather".to_string()),
+                parameters: Some(json!({
+                    "type": "object",
+                    "properties": {
+                        "location": { "type": "string" }
+                    }
+                })),
+            },
+            ToolDefinition { name: "no_params".to_string(), description: None, parameters: None },
+        ];
+
+        let result = convert_tools(Some(tools));
+        assert!(result.is_some());
+
+        let tool_config = &result.unwrap()[0];
+        let decls = tool_config.get("functionDeclarations").unwrap().as_array().unwrap();
+
+        assert_eq!(decls.len(), 2);
+
+        // Check first tool
+        assert_eq!(decls[0]["name"], "get_weather");
+        assert_eq!(decls[0]["description"], "Get current weather");
+        assert!(decls[0]["parameters"].get("properties").is_some());
+
+        // Check second tool defaults
+        assert_eq!(decls[1]["name"], "no_params");
+        assert_eq!(decls[1]["description"], "");
+        assert_eq!(decls[1]["parameters"]["type"], "object");
+        assert!(decls[1]["parameters"]["properties"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_convert_tools_none() {
+        let result = convert_tools(None);
+        assert!(result.is_none());
+    }
+    #[test]
+    fn test_convert_tools_empty() {
+        let result = convert_tools(Some(vec![]));
+        assert!(result.is_none());
     }
 }

@@ -73,7 +73,8 @@ where
 #[async_trait]
 pub trait EventHandler: Send + Sync {
     /// Called when an audio delta is received.
-    async fn on_audio(&self, _audio_base64: &str, _item_id: &str) -> Result<()> {
+    /// Called when an audio delta is received.
+    async fn on_audio(&self, _audio: &[u8], _item_id: &str) -> Result<()> {
         Ok(())
     }
 
@@ -252,7 +253,7 @@ impl RealtimeRunnerBuilder {
 ///     let model = OpenAIRealtimeModel::new(api_key, "gpt-4o-realtime-preview-2024-12-17");
 ///
 ///     let runner = RealtimeRunner::builder()
-///         .model(Box::new(model))
+///         .model(std::sync::Arc::new(model))
 ///         .instruction("You are a helpful voice assistant.")
 ///         .voice("alloy")
 ///         .tool_fn(

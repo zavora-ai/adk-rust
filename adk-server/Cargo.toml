@@ -37,14 +37,14 @@ tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace", "cors", "timeout", "set-header", "limit"] }
 tracing = "0.1"
 base64 = "0.22"
-rust-embed = "8.9.0"
+rust-embed = "8.11.0"
 mime_guess = "2.0.5"
 reqwest.workspace = true
 
 [dev-dependencies]
 async-stream.workspace = true
 tracing-subscriber = "0.3"
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { version = "1.20", features = ["v4"] }
 async-trait = "0.1"
 chrono = "0.4"
 hyper = "1.8.1"

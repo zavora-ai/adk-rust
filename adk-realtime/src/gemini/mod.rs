@@ -18,12 +18,17 @@
 //! ```rust,ignore
 //! use adk_realtime::gemini::GeminiRealtimeModel;
 //! use adk_realtime::{RealtimeModel, RealtimeConfig};
+//! use adk_gemini::GeminiLiveBackend;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let backend = GeminiLiveBackend::Studio {
+//!         api_key: std::env::var("GOOGLE_API_KEY")?
+//!     };
+//!     
 //!     let model = GeminiRealtimeModel::new(
-//!         std::env::var("GOOGLE_API_KEY")?,
-//!         "models/gemini-2.0-flash-live-preview-04-09",
+//!         backend,
+//!         "models/gemini-live-2.5-flash-native-audio",
 //!     );
 //!
 //!     let config = RealtimeConfig::default()
@@ -47,7 +52,7 @@ pub use session::GeminiRealtimeSession;
 pub const GEMINI_LIVE_URL: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 
 /// Default model for Gemini Live.
-pub const DEFAULT_MODEL: &str = "models/gemini-2.0-flash-live-preview-04-09";
+pub const DEFAULT_MODEL: &str = "models/gemini-live-2.5-flash-native-audio";
 
 /// Available voices for Gemini Live (varies by model).
 pub const GEMINI_VOICES: &[&str] = &["Puck", "Charon", "Kore", "Fenrir", "Aoede"];
