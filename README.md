@@ -378,7 +378,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 |----------|-------|-------------|
 | OpenAI | `gpt-4o-realtime-preview-2024-12-17` | Stable realtime model |
 | OpenAI | `gpt-realtime` | Latest model with improved speech quality and function calling |
-| Google | `gemini-2.0-flash-live-preview-04-09` | Gemini Live API |
+| Google | `gemini-live-2.5-flash-native-audio` | Gemini Live API |
 
 **Features**:
 - OpenAI Realtime API and Gemini Live API support

@@ -665,7 +665,7 @@ All providers (Gemini, OpenAI, Anthropic, Ollama, etc.) implement this trait, ma
 
 ```rust
 // Switch providers by changing one line
-let model: Arc<dyn Llm> = Arc::new(GeminiModel::new(&key, "gemini-2.0-flash")?);
+let model: Arc<dyn Llm> = Arc::new(GeminiModel::new(&key, "gemini-2.5-flash")?);
 // let model: Arc<dyn Llm> = Arc::new(OpenAIClient::new(config)?);
 // let model: Arc<dyn Llm> = Arc::new(AnthropicClient::new(config)?);
 

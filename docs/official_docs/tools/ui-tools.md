@@ -130,7 +130,7 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model = Arc::new(GeminiModel::from_env("gemini-2.0-flash")?);
+    let model = Arc::new(GeminiModel::from_env("gemini-2.5-flash")?);
 
     // Get all 10 UI tools
     let ui_tools = UiToolset::all_tools();

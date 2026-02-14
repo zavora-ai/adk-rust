@@ -250,7 +250,7 @@ event: trace
 data: {"type":"node_start","node":"researcher","step":1,"state_snapshot":{"input":{"query":"test"},"output":{}},"state_keys":["query"]}
 
 event: log
-data: {"message":"Calling gemini-2.0-flash (tools: 2)"}
+data: {"message":"Calling gemini-2.5-flash (tools: 2)"}
 
 event: tool_call
 data: {"name":"search","args":{"query":"test"}}

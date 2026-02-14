@@ -42,7 +42,7 @@ Add the providers you need to your `Cargo.toml`:
 [dependencies]
 # Pick one or more providers:
 adk-model = { version = "0.3.0", features = ["gemini"] }        # Google Gemini (default)
-adk-model = { version = "0.3.0", features = ["openai"] }        # OpenAI GPT-4o
+adk-model = { version = "0.3.0", features = ["openai"] }        # OpenAI GPT-5
 adk-model = { version = "0.3.0", features = ["anthropic"] }     # Anthropic Claude
 adk-model = { version = "0.3.0", features = ["deepseek"] }      # DeepSeek
 adk-model = { version = "0.3.0", features = ["groq"] }          # Groq (ultra-fast)

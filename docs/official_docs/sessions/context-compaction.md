@@ -110,4 +110,4 @@ After invocation 6, the agent sees: `[Summary B, event 6 overlap events, event 7
 - Compaction failure is non-fatal — the runner logs a warning and continues
 - Compaction runs after the invocation stream completes, not during
 - The compaction event is persisted to the session service for durability
-- Use a fast, inexpensive model for summarization (e.g., `gemini-2.0-flash`)
+- Use a fast, inexpensive model for summarization (e.g., `gemini-2.5-flash`)

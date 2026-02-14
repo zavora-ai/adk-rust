@@ -676,7 +676,7 @@ export function useNodeActions() {
     const defaults: Record<string, Partial<AgentSchema>> = {
       llm: {
         type: 'llm',
-        model: 'gemini-2.0-flash',
+        model: 'gemini-2.5-flash',
         instruction: 'You are a helpful assistant.',
         tools: [],
       },
@@ -695,7 +695,7 @@ export function useNodeActions() {
       },
       router: {
         type: 'router',
-        model: 'gemini-2.0-flash',
+        model: 'gemini-2.5-flash',
         instruction: 'Classify the request.',
         routes: [],
       },
