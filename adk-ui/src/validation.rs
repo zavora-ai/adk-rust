@@ -43,137 +43,205 @@ impl Validate for UiResponse {
     }
 }
 
-impl Validate for Component {
+impl Validate for Text {
     fn validate(&self, path: &str) -> Vec<ValidationError> {
         let mut errors = Vec::new();
-
-        match self {
-            Component::Text(t) => {
-                if t.content.is_empty() {
-                    errors.push(ValidationError {
-                        path: format!("{}.content", path),
-                        message: "Text content cannot be empty".to_string(),
-                    });
-                }
-            }
-            Component::Button(b) => {
-                if b.label.is_empty() {
-                    errors.push(ValidationError {
-                        path: format!("{}.label", path),
-                        message: "Button label cannot be empty".to_string(),
-                    });
-                }
-                if b.action_id.is_empty() {
-                    errors.push(ValidationError {
-                        path: format!("{}.action_id", path),
-                        message: "Button action_id cannot be empty".to_string(),
-                    });
-                }
-            }
-            Component::TextInput(t) => {
-                if t.name.is_empty() {
-                    errors.push(ValidationError {
-                        path: format!("{}.name", path),
-                        message: "TextInput name cannot be empty".to_string(),
-                    });
-                }
-                if let (Some(min), Some(max)) = (t.min_length, t.max_length) {
-                    if min > max {
-                        errors.push(ValidationError {
-                            path: format!("{}.min_length", path),
-                            message: "min_length cannot be greater than max_length".to_string(),
-                        });
-                    }
-                }
-            }
-            Component::NumberInput(n) => {
-                if n.name.is_empty() {
-                    errors.push(ValidationError {
-                        path: format!("{}.name", path),
-                        message: "NumberInput name cannot be empty".to_string(),
-                    });
-                }
-                if n.min > n.max {
-                    errors.push(ValidationError {
-                        path: format!("{}.min", path),
-                        message: "min cannot be greater than max".to_string(),
-                    });
-                }
-            }
-            Component::Select(s) => {
-                if s.name.is_empty() {
-                    errors.push(ValidationError {
-                        path: format!("{}.name", path),
-                        message: "Select name cannot be empty".to_string(),
-                    });
-                }
-                if s.options.is_empty() {
-                    errors.push(ValidationError {
-                        path: format!("{}.options", path),
-                        message: "Select must have at least one option".to_string(),
-                    });
-                }
-            }
-            Component::Table(t) => {
-                if t.columns.is_empty() {
-                    errors.push(ValidationError {
-                        path: format!("{}.columns", path),
-                        message: "Table must have at least one column".to_string(),
-                    });
-                }
-            }
-            Component::Chart(c) => {
-                if c.data.is_empty() {
-                    errors.push(ValidationError {
-                        path: format!("{}.data", path),
-                        message: "Chart must have data".to_string(),
-                    });
-                }
-                if c.y_keys.is_empty() {
-                    errors.push(ValidationError {
-                        path: format!("{}.y_keys", path),
-                        message: "Chart must have at least one y_key".to_string(),
-                    });
-                }
-            }
-            Component::Card(c) => {
-                for (i, child) in c.content.iter().enumerate() {
-                    errors.extend(child.validate(&format!("{}.content[{}]", path, i)));
-                }
-                if let Some(footer) = &c.footer {
-                    for (i, child) in footer.iter().enumerate() {
-                        errors.extend(child.validate(&format!("{}.footer[{}]", path, i)));
-                    }
-                }
-            }
-            Component::Modal(m) => {
-                for (i, child) in m.content.iter().enumerate() {
-                    errors.extend(child.validate(&format!("{}.content[{}]", path, i)));
-                }
-            }
-            Component::Stack(s) => {
-                for (i, child) in s.children.iter().enumerate() {
-                    errors.extend(child.validate(&format!("{}.children[{}]", path, i)));
-                }
-            }
-            Component::Grid(g) => {
-                for (i, child) in g.children.iter().enumerate() {
-                    errors.extend(child.validate(&format!("{}.children[{}]", path, i)));
-                }
-            }
-            Component::Tabs(t) => {
-                if t.tabs.is_empty() {
-                    errors.push(ValidationError {
-                        path: format!("{}.tabs", path),
-                        message: "Tabs must have at least one tab".to_string(),
-                    });
-                }
-            }
-            // Other components with minimal validation
-            _ => {}
+        if self.content.is_empty() {
+            errors.push(ValidationError {
+                path: format!("{}.content", path),
+                message: "Text content cannot be empty".to_string(),
+            });
         }
-
         errors
+    }
+}
+
+impl Validate for Button {
+    fn validate(&self, path: &str) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
+        if self.label.is_empty() {
+            errors.push(ValidationError {
+                path: format!("{}.label", path),
+                message: "Button label cannot be empty".to_string(),
+            });
+        }
+        if self.action_id.is_empty() {
+            errors.push(ValidationError {
+                path: format!("{}.action_id", path),
+                message: "Button action_id cannot be empty".to_string(),
+            });
+        }
+        errors
+    }
+}
+
+impl Validate for TextInput {
+    fn validate(&self, path: &str) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
+        if self.name.is_empty() {
+            errors.push(ValidationError {
+                path: format!("{}.name", path),
+                message: "TextInput name cannot be empty".to_string(),
+            });
+        }
+        if let (Some(min), Some(max)) = (self.min_length, self.max_length) {
+            if min > max {
+                errors.push(ValidationError {
+                    path: format!("{}.min_length", path),
+                    message: "min_length cannot be greater than max_length".to_string(),
+                });
+            }
+        }
+        errors
+    }
+}
+
+impl Validate for NumberInput {
+    fn validate(&self, path: &str) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
+        if self.name.is_empty() {
+            errors.push(ValidationError {
+                path: format!("{}.name", path),
+                message: "NumberInput name cannot be empty".to_string(),
+            });
+        }
+        if self.min > self.max {
+            errors.push(ValidationError {
+                path: format!("{}.min", path),
+                message: "min cannot be greater than max".to_string(),
+            });
+        }
+        errors
+    }
+}
+
+impl Validate for Select {
+    fn validate(&self, path: &str) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
+        if self.name.is_empty() {
+            errors.push(ValidationError {
+                path: format!("{}.name", path),
+                message: "Select name cannot be empty".to_string(),
+            });
+        }
+        if self.options.is_empty() {
+            errors.push(ValidationError {
+                path: format!("{}.options", path),
+                message: "Select must have at least one option".to_string(),
+            });
+        }
+        errors
+    }
+}
+
+impl Validate for Table {
+    fn validate(&self, path: &str) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
+        if self.columns.is_empty() {
+            errors.push(ValidationError {
+                path: format!("{}.columns", path),
+                message: "Table must have at least one column".to_string(),
+            });
+        }
+        errors
+    }
+}
+
+impl Validate for Chart {
+    fn validate(&self, path: &str) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
+        if self.data.is_empty() {
+            errors.push(ValidationError {
+                path: format!("{}.data", path),
+                message: "Chart must have data".to_string(),
+            });
+        }
+        if self.y_keys.is_empty() {
+            errors.push(ValidationError {
+                path: format!("{}.y_keys", path),
+                message: "Chart must have at least one y_key".to_string(),
+            });
+        }
+        errors
+    }
+}
+
+impl Validate for Card {
+    fn validate(&self, path: &str) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
+        for (i, child) in self.content.iter().enumerate() {
+            errors.extend(child.validate(&format!("{}.content[{}]", path, i)));
+        }
+        if let Some(footer) = &self.footer {
+            for (i, child) in footer.iter().enumerate() {
+                errors.extend(child.validate(&format!("{}.footer[{}]", path, i)));
+            }
+        }
+        errors
+    }
+}
+
+impl Validate for Modal {
+    fn validate(&self, path: &str) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
+        for (i, child) in self.content.iter().enumerate() {
+            errors.extend(child.validate(&format!("{}.content[{}]", path, i)));
+        }
+        errors
+    }
+}
+
+impl Validate for Stack {
+    fn validate(&self, path: &str) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
+        for (i, child) in self.children.iter().enumerate() {
+            errors.extend(child.validate(&format!("{}.children[{}]", path, i)));
+        }
+        errors
+    }
+}
+
+impl Validate for Grid {
+    fn validate(&self, path: &str) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
+        for (i, child) in self.children.iter().enumerate() {
+            errors.extend(child.validate(&format!("{}.children[{}]", path, i)));
+        }
+        errors
+    }
+}
+
+impl Validate for Tabs {
+    fn validate(&self, path: &str) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
+        if self.tabs.is_empty() {
+            errors.push(ValidationError {
+                path: format!("{}.tabs", path),
+                message: "Tabs must have at least one tab".to_string(),
+            });
+        }
+        errors
+    }
+}
+
+impl Validate for Component {
+    fn validate(&self, path: &str) -> Vec<ValidationError> {
+        match self {
+            Component::Text(t) => t.validate(path),
+            Component::Button(b) => b.validate(path),
+            Component::TextInput(t) => t.validate(path),
+            Component::NumberInput(n) => n.validate(path),
+            Component::Select(s) => s.validate(path),
+            Component::Table(t) => t.validate(path),
+            Component::Chart(c) => c.validate(path),
+            Component::Card(c) => c.validate(path),
+            Component::Modal(m) => m.validate(path),
+            Component::Stack(s) => s.validate(path),
+            Component::Grid(g) => g.validate(path),
+            Component::Tabs(t) => t.validate(path),
+            // Components with no additional validation constraints
+            _ => Vec::new(),
+        }
     }
 }
 

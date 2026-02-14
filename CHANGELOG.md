@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-02-14
+
+### ⭐ Highlights
+- **Vertex AI Streaming**: `adk-gemini` refactored with `GeminiBackend` trait — pluggable `StudioBackend` (REST) and `VertexBackend` (REST SSE streaming + gRPC fallback)
+- **Multi-Provider Codegen**: ADK Studio code generation now supports Gemini, OpenAI, Anthropic, DeepSeek, Groq, and Ollama (was hardcoded to Gemini)
+- **2026 Model Names**: All docs, examples, and source defaults updated to current model names (gemini-2.5-flash, gpt-5-mini, claude-sonnet-4.5, etc.)
+- **Response Parsing Tests**: 25 rigorous tests covering Gemini response edge cases (safety ratings, streaming chunks, function calls, grounding metadata, citations)
+- **Code Health**: Span-based line numbers in doc-audit analyzer, validation refactor in adk-ui, dead code cleanup
+
+### Added
+
+#### adk-gemini
+- `GeminiBackend` trait with `send_request()` and `send_streaming_request()` methods
+- `StudioBackend` — AI Studio REST implementation (default)
+- `VertexBackend` — Vertex AI REST SSE streaming with gRPC fallback, ADC/service account/WIF auth
+- `GeminiBuilder` for constructing clients with explicit backend selection
+- 25 response parsing tests: basic text, multi-candidate, safety ratings (string + numeric), blocked prompts, streaming chunks, function calls, inline data, grounding metadata, citations, usage metadata with thinking tokens, all FinishReason variants, unknown enum graceful degradation, round-trip serialization
+
+#### adk-studio
+- Multi-provider LLM support in code generation (Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama)
+- Provider-specific environment variable detection and validation
+- Ollama local model support with configurable base URL
+
+#### Examples
+- `verify_backend_selection` — validates Studio backend (default, with_model, builder, streaming, embedding, v1 API)
+- `verify_vertex_streaming` — validates Vertex AI backend (non-streaming, REST SSE streaming, embedding)
+
+### Fixed
+- **adk-model**: `GeminiModel::new()` now uses `Gemini::with_model(api_key, model_name)` instead of ignoring the provided model name (bug #77)
+- **adk-studio**: CORS restricted to localhost origins only (was allowing all origins)
+- **adk-doc-audit**: Line numbers now use `syn::Span::start().line` instead of hardcoded `0`
+- **adk-doc-audit**: `suggest_similar_crate_names` and `suggest_similar_api_names` made static (removed dead `_static` variants)
+- **adk-doc-audit**: Deleted stale `test.md` artifact
+- **adk-ui**: Validation refactored from monolithic match into per-type `Validate` trait impls (Text, Button, TextInput, NumberInput, Select, Table, Chart, Card, Modal, Stack, Grid, Tabs)
+
+### Changed
+- All model name defaults updated to 2026 versions across 95+ files:
+  - `gemini-2.0-flash` → `gemini-2.5-flash`
+  - `gpt-4o` / `gpt-4o-mini` → `gpt-5-mini`
+  - `claude-sonnet-4-20250514` → `claude-sonnet-4.5`
+  - `gemini-2.0-flash-live-preview-04-09` → `gemini-live-2.5-flash-native-audio`
+- `adk-doc-audit` now depends on `proc-macro2` with `span-locations` feature for accurate line numbers
+
+### Documentation
+- Updated all example model names to 2026 versions (PRs #79-#82)
+- Updated source code default model names across all provider crates
+
 ## [0.3.0] - 2026-02-08
 
 ### ⭐ Highlights

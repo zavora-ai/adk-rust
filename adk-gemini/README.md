@@ -393,6 +393,33 @@ let response = client
     .await?;
 ```
 
+## Backend Architecture
+
+`adk-gemini` uses a pluggable backend trait to support both AI Studio and Vertex AI:
+
+| Backend | Transport | Auth | Use Case |
+|---------|-----------|------|----------|
+| `StudioBackend` | REST | API key | Default — Google AI Studio |
+| `VertexBackend` | REST SSE + gRPC fallback | ADC / Service Account / WIF | Google Cloud Vertex AI |
+
+The `GeminiBackend` trait defines `send_request()` and `send_streaming_request()` methods. All `Gemini::new()` / `Gemini::with_model()` constructors use `StudioBackend` by default. Vertex AI constructors (`with_google_cloud`, `with_google_cloud_adc`, etc.) use `VertexBackend`.
+
+```rust
+use adk_gemini::{Gemini, GeminiBuilder};
+
+// Studio backend (default)
+let client = Gemini::new(api_key)?;
+
+// Vertex AI backend
+let client = Gemini::with_google_cloud_adc("my-project", "us-central1")?;
+
+// Explicit backend via builder
+let client = GeminiBuilder::new()
+    .with_api_key(api_key)
+    .with_model("gemini-2.5-flash")
+    .build()?;
+```
+
 ## API Modules
 
 | Module | Description |
@@ -405,6 +432,7 @@ let response = client
 | `safety` | Content moderation and safety settings |
 | `tools` | Function calling and tool integration |
 | `models` | Core primitive types (Content, Part, Role, Blob) |
+| `backend` | Pluggable backend trait (StudioBackend, VertexBackend) |
 | `prelude` | Convenient re-exports of commonly used types |
 
 ## Environment Variables

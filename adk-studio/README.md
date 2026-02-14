@@ -17,7 +17,7 @@ Visual development environment for AI agents built with Rust Agent Development K
 - **Action Nodes** - 10 non-LLM programmatic nodes for automation workflows
 - **Tool Integration** - Function, MCP, Browser, Google Search tools
 - **Real-Time Chat** - Test agents with live SSE streaming
-- **Code Generation** - Compile visual designs to production Rust code
+- **Code Generation** - Compile visual designs to production Rust code (Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama)
 - **Build System** - Compile and run executables directly from Studio
 
 ## Installation

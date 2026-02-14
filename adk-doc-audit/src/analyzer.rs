@@ -8,6 +8,7 @@ use crate::error::{AuditError, Result};
 use crate::parser::{ApiItemType, ApiReference};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use syn::spanned::Spanned;
 use syn::{
     Attribute, Expr, Item, ItemConst, ItemEnum, ItemFn, ItemImpl, ItemStatic, ItemStruct,
     ItemTrait, ItemType, Lit, Meta, Visibility,
@@ -153,11 +154,10 @@ impl CodeAnalyzer {
         let crate_info = match registry.crates.get(&api_ref.crate_name) {
             Some(info) => info,
             None => {
-                // Create suggestion without borrowing self
-                let available_crates: Vec<String> = registry.crates.keys().cloned().collect();
-                let suggestion = Self::suggest_similar_crate_names_static(
+                // Create suggestion using helper method
+                let suggestion = Self::suggest_similar_crate_names(
                     &api_ref.crate_name,
-                    &available_crates,
+                    registry,
                 );
                 return Ok(ValidationResult {
                     success: false,
@@ -180,9 +180,9 @@ impl CodeAnalyzer {
 
         match matching_apis.len() {
             0 => {
-                let suggestion = Self::suggest_similar_api_names_static(
+                let suggestion = Self::suggest_similar_api_names(
                     &api_ref.item_path,
-                    &crate_info.public_apis,
+                    crate_info,
                 );
                 Ok(ValidationResult {
                     success: false,
@@ -365,10 +365,8 @@ impl CodeAnalyzer {
                 match registry.crates.get(parts[0]) {
                     Some(info) => info,
                     None => {
-                        let available_crates: Vec<String> =
-                            registry.crates.keys().cloned().collect();
                         let suggestion =
-                            Self::suggest_similar_crate_names_static(parts[0], &available_crates);
+                            Self::suggest_similar_crate_names(parts[0], registry);
                         return Ok(ValidationResult {
                             success: false,
                             errors: vec![format!("Crate '{}' not found in workspace", parts[0])],
@@ -399,7 +397,7 @@ impl CodeAnalyzer {
 
         if matching_apis.is_empty() {
             let suggestion =
-                Self::suggest_similar_api_names_static(&item_path, &crate_info.public_apis);
+                Self::suggest_similar_api_names(&item_path, crate_info);
             Ok(ValidationResult {
                 success: false,
                 errors: vec![format!("Item '{}' not found in crate '{}'", item_path, crate_name)],
@@ -788,7 +786,7 @@ impl CodeAnalyzer {
             documentation,
             deprecated,
             source_file: file_path.to_path_buf(),
-            line_number: 0, // TODO: Extract actual line number
+            line_number: item_fn.span().start().line,
         }
     }
 
@@ -811,7 +809,7 @@ impl CodeAnalyzer {
             documentation,
             deprecated,
             source_file: file_path.to_path_buf(),
-            line_number: 0,
+            line_number: item_struct.span().start().line,
         }
     }
 
@@ -834,7 +832,7 @@ impl CodeAnalyzer {
             documentation,
             deprecated,
             source_file: file_path.to_path_buf(),
-            line_number: 0,
+            line_number: item_enum.span().start().line,
         }
     }
 
@@ -857,7 +855,7 @@ impl CodeAnalyzer {
             documentation,
             deprecated,
             source_file: file_path.to_path_buf(),
-            line_number: 0,
+            line_number: item_trait.span().start().line,
         }
     }
 
@@ -880,7 +878,7 @@ impl CodeAnalyzer {
             documentation,
             deprecated,
             source_file: file_path.to_path_buf(),
-            line_number: 0,
+            line_number: item_type.span().start().line,
         }
     }
 
@@ -903,7 +901,7 @@ impl CodeAnalyzer {
             documentation,
             deprecated,
             source_file: file_path.to_path_buf(),
-            line_number: 0,
+            line_number: item_const.span().start().line,
         }
     }
 
@@ -926,7 +924,7 @@ impl CodeAnalyzer {
             documentation,
             deprecated,
             source_file: file_path.to_path_buf(),
-            line_number: 0,
+            line_number: item_static.span().start().line,
         }
     }
 
@@ -965,7 +963,7 @@ impl CodeAnalyzer {
                         documentation,
                         deprecated,
                         source_file: file_path.to_path_buf(),
-                        line_number: 0,
+                        line_number: method.span().start().line,
                     });
                 }
             }
@@ -997,8 +995,7 @@ impl CodeAnalyzer {
     }
 
     /// Suggest similar crate names when a crate is not found.
-    #[allow(dead_code)]
-    fn suggest_similar_crate_names(&self, target: &str, registry: &CrateRegistry) -> String {
+    fn suggest_similar_crate_names(target: &str, registry: &CrateRegistry) -> String {
         Self::suggest_similar_crate_names_static(
             target,
             &registry.crates.keys().cloned().collect::<Vec<_>>(),
@@ -1023,8 +1020,7 @@ impl CodeAnalyzer {
     }
 
     /// Suggest similar API names when an API is not found.
-    #[allow(dead_code)]
-    fn suggest_similar_api_names(&self, target: &str, crate_info: &CrateInfo) -> String {
+    fn suggest_similar_api_names(target: &str, crate_info: &CrateInfo) -> String {
         Self::suggest_similar_api_names_static(target, &crate_info.public_apis)
     }
 

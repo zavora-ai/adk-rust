@@ -138,6 +138,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
+ "proc-macro2",
  "proptest",
  "pulldown-cmark",
  "quote",
