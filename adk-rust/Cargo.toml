@@ -74,6 +74,11 @@ deepseek = ["models", "adk-model/deepseek"]
 groq = ["models", "adk-model/groq"]
 ollama = ["models", "adk-model/ollama"]
 
+# Realtime transport features (forwarded to adk-realtime)
+vertex-live = ["realtime", "adk-realtime/vertex-live"]
+livekit = ["realtime", "adk-realtime/livekit"]
+openai-webrtc = ["realtime", "adk-realtime/openai-webrtc"]
+
 [dependencies]
 # Core is always included
 adk-core.workspace = true

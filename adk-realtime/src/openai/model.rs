@@ -8,7 +8,7 @@ use crate::session::BoxedSession;
 use async_trait::async_trait;
 
 use super::session::OpenAIRealtimeSession;
-use super::{DEFAULT_MODEL, OPENAI_REALTIME_URL, OPENAI_VOICES};
+use super::{OpenAITransport, DEFAULT_MODEL, OPENAI_REALTIME_URL, OPENAI_VOICES};
 
 /// OpenAI Realtime model for creating realtime sessions.
 ///
@@ -26,6 +26,7 @@ pub struct OpenAIRealtimeModel {
     api_key: String,
     model_id: String,
     base_url: Option<String>,
+    transport: OpenAITransport,
 }
 
 impl OpenAIRealtimeModel {
@@ -36,7 +37,12 @@ impl OpenAIRealtimeModel {
     /// * `api_key` - Your OpenAI API key
     /// * `model_id` - The model ID (e.g., "gpt-4o-realtime-preview-2024-12-17")
     pub fn new(api_key: impl Into<String>, model_id: impl Into<String>) -> Self {
-        Self { api_key: api_key.into(), model_id: model_id.into(), base_url: None }
+        Self {
+            api_key: api_key.into(),
+            model_id: model_id.into(),
+            base_url: None,
+            transport: OpenAITransport::default(),
+        }
     }
 
     /// Create with the default realtime model.
@@ -47,6 +53,24 @@ impl OpenAIRealtimeModel {
     /// Set a custom base URL (for proxies or alternative endpoints).
     pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
         self.base_url = Some(url.into());
+        self
+    }
+
+    /// Set the transport type (WebSocket or WebRTC).
+    ///
+    /// By default, WebSocket transport is used. When the `openai-webrtc` feature
+    /// is enabled, you can select `OpenAITransport::WebRTC` for lower-latency audio.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_realtime::openai::{OpenAIRealtimeModel, OpenAITransport};
+    ///
+    /// let model = OpenAIRealtimeModel::new("sk-...", "gpt-4o-realtime-preview-2024-12-17")
+    ///     .with_transport(OpenAITransport::WebRTC);
+    /// ```
+    pub fn with_transport(mut self, transport: OpenAITransport) -> Self {
+        self.transport = transport;
         self
     }
 
@@ -85,15 +109,37 @@ impl RealtimeModel for OpenAIRealtimeModel {
     }
 
     async fn connect(&self, config: RealtimeConfig) -> Result<BoxedSession> {
-        let session =
-            OpenAIRealtimeSession::connect(&self.websocket_url(), &self.api_key, config).await?;
-
-        Ok(Box::new(session))
+        match self.transport {
+            OpenAITransport::WebSocket => {
+                let session = OpenAIRealtimeSession::connect(
+                    &self.websocket_url(),
+                    &self.api_key,
+                    config,
+                )
+                .await?;
+                Ok(Box::new(session))
+            }
+            #[cfg(feature = "openai-webrtc")]
+            OpenAITransport::WebRTC => {
+                let session = super::webrtc::OpenAIWebRTCSession::connect(
+                    &self.api_key,
+                    &self.model_id,
+                    config,
+                )
+                .await?;
+                Ok(Box::new(session))
+            }
+        }
     }
 }
 
 impl Default for OpenAIRealtimeModel {
     fn default() -> Self {
-        Self { api_key: String::new(), model_id: DEFAULT_MODEL.to_string(), base_url: None }
+        Self {
+            api_key: String::new(),
+            model_id: DEFAULT_MODEL.to_string(),
+            base_url: None,
+            transport: OpenAITransport::default(),
+        }
     }
 }

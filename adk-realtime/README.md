@@ -4,46 +4,61 @@ Real-time bidirectional audio streaming for Rust Agent Development Kit (ADK-Rust
 
 ## Overview
 
-`adk-realtime` provides a unified interface for building voice-enabled AI agents using real-time streaming APIs from various providers. It follows the **OpenAI Agents SDK pattern** with a separate, decoupled implementation that integrates seamlessly with the ADK agent ecosystem.
+`adk-realtime` provides a unified interface for building voice-enabled AI agents using real-time streaming APIs. It follows the **OpenAI Agents SDK pattern** with a separate, decoupled implementation that integrates seamlessly with the ADK agent ecosystem.
 
 ## Features
 
-- **RealtimeAgent**: Implements `adk_core::Agent` with full callback/tool/instruction support
-- **Multiple Providers**: Support for OpenAI Realtime API and Gemini Live API
-- **Audio Streaming**: Bidirectional audio with PCM16, G711, and other formats
-- **Voice Activity Detection**: Server-side VAD for natural conversation flow
-- **Tool Calling**: Real-time function/tool execution during voice conversations
-- **Agent Handoff**: Transfer between agents using `sub_agents`
+- **RealtimeAgent** — Implements `adk_core::Agent` with full callback/tool/instruction support
+- **Multiple Providers** — OpenAI Realtime API, Gemini Live API, Vertex AI Live API
+- **Multiple Transports** — WebSocket, WebRTC (OpenAI), LiveKit bridge
+- **Audio Streaming** — Bidirectional audio with PCM16, G711, Opus formats
+- **Voice Activity Detection** — Server-side VAD for natural conversation flow
+- **Tool Calling** — Real-time function/tool execution during voice conversations
+- **Agent Handoff** — Transfer between agents using `sub_agents`
+- **Feature Flags** — Pay only for what you use; all transports are opt-in
 
 ## Architecture
 
 ```
               ┌─────────────────────────────────────────┐
-              │              Agent Trait                │
-              │  (name, description, run, sub_agents)   │
+              │              Agent Trait                 │
+              │  (name, description, run, sub_agents)    │
               └────────────────┬────────────────────────┘
                                │
        ┌───────────────────────┼───────────────────────┐
        │                       │                       │
 ┌──────▼──────┐      ┌─────────▼─────────┐   ┌─────────▼─────────┐
 │  LlmAgent   │      │  RealtimeAgent    │   │  SequentialAgent  │
-│ (text-based)│      │  (voice-based)    │   │   (workflow)      │
+│ (text-based) │      │  (voice-based)    │   │   (workflow)      │
 └─────────────┘      └───────────────────┘   └───────────────────┘
 ```
 
-`RealtimeAgent` shares the same features as `LlmAgent`:
-- Static and dynamic instructions (`instruction`, `instruction_provider`)
-- Tool registration and execution
-- Callbacks (`before_agent`, `after_agent`, `before_tool`, `after_tool`)
-- Sub-agent handoffs via `transfer_to_agent`
+### Transport Layer
 
-## Supported Providers
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    RealtimeSession trait                      │
+├──────────────┬──────────────┬──────────────┬─────────────────┤
+│ OpenAI WS    │ OpenAI WebRTC│ Gemini Live  │ Vertex AI Live  │
+│ (openai)     │ (openai-     │ (gemini)     │ (vertex-live)   │
+│              │  webrtc)     │              │                 │
+└──────────────┴──────────────┴──────────────┴─────────────────┘
 
-| Provider | Model | Feature Flag | Description |
-|----------|-------|--------------|-------------|
-| OpenAI | `gpt-4o-realtime-preview-2024-12-17` | `openai` | Stable realtime model |
-| OpenAI | `gpt-realtime` | `openai` | Latest model with improved speech & function calling |
-| Google | `gemini-live-2.5-flash-native-audio` | `gemini` | Gemini Live API |
+┌──────────────────────────────────────────────────────────────┐
+│              LiveKit WebRTC Bridge (livekit)                  │
+│  LiveKitEventHandler · bridge_input · bridge_gemini_input    │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## Supported Providers & Transports
+
+| Provider | Transport | Feature Flag | Description |
+|----------|-----------|--------------|-------------|
+| OpenAI | WebSocket | `openai` | Stable realtime model via WebSocket |
+| OpenAI | WebRTC | `openai-webrtc` | Lower-latency audio via Sans-IO WebRTC + Opus |
+| Google AI Studio | WebSocket | `gemini` | Gemini Live API with API key auth |
+| Google Vertex AI | WebSocket | `vertex-live` | Vertex AI Live API with OAuth2/ADC auth |
+| LiveKit | WebRTC bridge | `livekit` | Provider-agnostic bridge for LiveKit rooms |
 
 ## Quick Start
 
@@ -51,7 +66,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-realtime = { version = "0.3.0", features = ["openai"] }
+adk-realtime = { version = "0.3", features = ["openai"] }
 ```
 
 ### Using RealtimeAgent (Recommended)
@@ -69,11 +84,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .model(model)
         .instruction("You are a helpful voice assistant.")
         .voice("alloy")
-        .server_vad()  // Enable server-side voice activity detection
+        .server_vad()
         .build()?;
 
-    // RealtimeAgent implements the Agent trait
-    // Use with ADK runner or directly via agent.run(ctx)
+    // RealtimeAgent implements the Agent trait — use with ADK runner
     Ok(())
 }
 ```
@@ -96,34 +110,110 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_voice("alloy");
 
     let session = model.connect(config).await?;
-
-    // Send text or audio
     session.send_text("Hello!").await?;
     session.create_response().await?;
 
-    // Process events
     while let Some(event) = session.next_event().await {
         match event? {
-            ServerEvent::AudioDelta { delta, .. } => {
-                // Play audio (delta is base64-encoded PCM)
-            }
-            ServerEvent::TextDelta { delta, .. } => {
-                print!("{}", delta);
-            }
-            ServerEvent::FunctionCallDone { name, arguments, call_id, .. } => {
-                // Execute tool and send response
-                let result = execute_tool(&name, &arguments);
-                session.send_tool_response(ToolResponse {
-                    call_id,
-                    output: result,
-                }).await?;
-            }
+            ServerEvent::AudioDelta { delta, .. } => { /* play audio */ }
+            ServerEvent::TextDelta { delta, .. } => print!("{}", delta),
             _ => {}
         }
     }
-
     Ok(())
 }
+```
+
+## Transport Guides
+
+### Vertex AI Live
+
+Connect to Gemini Live API via Vertex AI with Application Default Credentials:
+
+```toml
+adk-realtime = { version = "0.3", features = ["vertex-live"] }
+```
+
+```rust
+use adk_realtime::gemini::{GeminiLiveBackend, GeminiRealtimeModel};
+
+let credentials = google_cloud_auth::credentials::Credentials::default().await?;
+let backend = GeminiLiveBackend::Vertex {
+    credentials,
+    region: "us-central1".into(),
+    project_id: std::env::var("GOOGLE_CLOUD_PROJECT")?,
+};
+let model = GeminiRealtimeModel::new(backend, "models/gemini-live-2.5-flash-native-audio");
+let session = model.connect(config).await?;
+```
+
+Prerequisites:
+- Google Cloud project with Vertex AI API enabled
+- ADC configured (`gcloud auth application-default login`)
+
+### OpenAI WebRTC
+
+Lower-latency audio transport using Sans-IO WebRTC with Opus codec:
+
+```toml
+adk-realtime = { version = "0.3", features = ["openai-webrtc"] }
+```
+
+```rust
+use adk_realtime::openai::{OpenAIRealtimeModel, OpenAITransport};
+
+let model = OpenAIRealtimeModel::new(api_key, "gpt-4o-realtime-preview-2024-12-17")
+    .with_transport(OpenAITransport::WebRTC);
+let session = model.connect(config).await?;
+```
+
+Build requirement: `cmake` must be installed (the `audiopus` crate builds the Opus C library from source). With cmake >= 4.0, set the environment variable:
+
+```bash
+export CMAKE_POLICY_VERSION_MINIMUM=3.5
+```
+
+### LiveKit WebRTC Bridge
+
+Bridge any `EventHandler` to a LiveKit room for production voice apps:
+
+```toml
+adk-realtime = { version = "0.3", features = ["livekit", "openai"] }
+```
+
+```rust
+use adk_realtime::livekit::{LiveKitEventHandler, bridge_input};
+
+// Wrap your event handler to publish model audio to LiveKit
+let lk_handler = LiveKitEventHandler::new(inner_handler, audio_source, 24000, 1);
+
+// Bridge participant audio from LiveKit into the RealtimeRunner
+tokio::spawn(bridge_input(remote_track, runner));
+```
+
+For Gemini's 16 kHz format, use `bridge_gemini_input` instead.
+
+## Feature Flags
+
+| Flag | Dependencies | Description |
+|------|-------------|-------------|
+| `openai` | `async-openai`, `tokio-tungstenite` | OpenAI Realtime API (WebSocket) |
+| `gemini` | `tokio-tungstenite`, `adk-gemini` | Gemini Live API (AI Studio) |
+| `vertex-live` | `gemini` + `google-cloud-auth` | Vertex AI Live API (OAuth2/ADC) |
+| `livekit` | `livekit`, `livekit-api` | LiveKit WebRTC bridge |
+| `openai-webrtc` | `openai` + `str0m`, `audiopus`, `reqwest` | OpenAI WebRTC transport (requires cmake) |
+| `full` | all of the above | Everything |
+
+Default features: none. You opt in to exactly what you need.
+
+
+### Feature Flag Dependency Graph
+
+```
+vertex-live  ──► gemini + google-cloud-auth
+openai-webrtc ──► openai + str0m + audiopus + reqwest
+livekit      ──► livekit + livekit-api
+full         ──► openai + gemini + vertex-live + livekit + openai-webrtc
 ```
 
 ## RealtimeAgent Features
@@ -162,7 +252,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Event | Description |
 |-------|-------------|
 | `SessionCreated` | Connection established |
-| `AudioDelta` | Audio chunk (base64 PCM) |
+| `AudioDelta` | Audio chunk (base64 PCM or Opus) |
 | `TextDelta` | Text response chunk |
 | `TranscriptDelta` | Input audio transcript |
 | `FunctionCallDone` | Tool call request |
@@ -189,88 +279,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | PCM16 | 24000 Hz | 16 | Mono | OpenAI |
 | PCM16 | 16000 Hz | 16 | Mono | Gemini (input) |
 | PCM16 | 24000 Hz | 16 | Mono | Gemini (output) |
+| Opus | 24000 Hz | — | Mono | OpenAI WebRTC |
 | G711 u-law | 8000 Hz | 8 | Mono | OpenAI |
 | G711 A-law | 8000 Hz | 8 | Mono | OpenAI |
 
-## Voice Activity Detection
+## Error Types
 
-### Server VAD (Recommended)
+Transport-specific error variants with actionable context:
 
-```rust
-let agent = RealtimeAgent::builder("assistant")
-    .model(model)
-    .server_vad()  // Uses default settings
-    .build()?;
-```
-
-### Custom VAD
-
-```rust
-use adk_realtime::{VadConfig, VadMode};
-
-let agent = RealtimeAgent::builder("assistant")
-    .model(model)
-    .vad(VadConfig {
-        mode: VadMode::ServerVad,
-        threshold: Some(0.5),
-        prefix_padding_ms: Some(300),
-        silence_duration_ms: Some(500),
-        interrupt_response: Some(true),
-        eagerness: None,
-    })
-    .build()?;
-```
-
-## Agent Handoffs
-
-```rust
-let booking_agent = Arc::new(/* ... */);
-let support_agent = Arc::new(/* ... */);
-
-let agent = RealtimeAgent::builder("receptionist")
-    .model(model)
-    .instruction("You are a receptionist. Transfer to booking_agent for reservations.")
-    .sub_agent(booking_agent)
-    .sub_agent(support_agent)
-    .build()?;
-
-// Agent can now call transfer_to_agent("booking_agent") during conversation
-```
+| Variant | Feature | Description |
+|---------|---------|-------------|
+| `OpusCodecError` | `openai-webrtc` | Opus encoding/decoding failures |
+| `WebRTCError` | `openai-webrtc` | WebRTC connection and signaling failures |
+| `LiveKitError` | `livekit` | LiveKit bridge failures |
+| `AuthError` | `vertex-live` | OAuth2/ADC credential failures |
+| `ConfigError` | all | Missing or invalid configuration |
+| `ConnectionError` | all | Transport connection failures |
 
 ## Examples
 
-Run the included examples to see realtime agents in action:
-
 ```bash
-# Basic text-only realtime session
-cargo run --example realtime_basic --features realtime-openai
+# Vertex AI Live voice assistant (requires ADC + GCP project)
+cargo run --example vertex_live_voice --features vertex-live
 
-# Voice assistant with server-side VAD
-cargo run --example realtime_vad --features realtime-openai
+# LiveKit bridge with OpenAI model (requires LiveKit server)
+cargo run --example livekit_bridge --features "livekit,openai"
 
-# Tool calling during voice conversations
-cargo run --example realtime_tools --features realtime-openai
-
-# Multi-agent handoffs (receptionist routing to specialists)
-cargo run --example realtime_handoff --features realtime-openai
+# OpenAI WebRTC low-latency session (requires cmake + API key)
+CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo run --example openai_webrtc --features openai-webrtc
 ```
 
-### Example Descriptions
+## Testing
 
-| Example | Description |
-|---------|-------------|
-| `realtime_basic` | Simple text-based realtime session demonstrating connection and streaming |
-| `realtime_vad` | Voice assistant with Voice Activity Detection for natural conversations |
-| `realtime_tools` | Real-time tool calling (weather lookup) during conversations |
-| `realtime_handoff` | Multi-agent system with receptionist routing to booking, support, and sales agents |
+```bash
+# Property tests (no credentials needed)
+cargo test -p adk-realtime --test error_context_tests
+cargo test -p adk-realtime --features vertex-live --test vertex_url_property_tests
+cargo test -p adk-realtime --features livekit --test livekit_delegation_tests
+CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo test -p adk-realtime --features openai-webrtc --test opus_roundtrip_tests
+CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo test -p adk-realtime --features openai-webrtc --test sdp_offer_tests
 
-## Feature Flags
+# All features
+CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo test -p adk-realtime --features full
 
-| Flag | Description |
-|------|-------------|
-| `openai` | Enable OpenAI Realtime API |
-| `gemini` | Enable Gemini Live API |
-| `full` | Enable all providers |
+# Integration tests (require real credentials, marked #[ignore])
+cargo test -p adk-realtime --features vertex-live -- --ignored
+```
+
+## Compilation Verification
+
+```bash
+cargo check -p adk-realtime                          # default (no deps)
+cargo check -p adk-realtime --features openai        # OpenAI WebSocket
+cargo check -p adk-realtime --features gemini        # Gemini Live
+cargo check -p adk-realtime --features vertex-live   # Vertex AI Live
+cargo check -p adk-realtime --features livekit       # LiveKit bridge
+CMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  cargo check -p adk-realtime --features openai-webrtc  # OpenAI WebRTC
+CMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  cargo check -p adk-realtime --features full            # everything
+```
 
 ## License
 
@@ -278,4 +346,4 @@ Apache-2.0
 
 ## Part of ADK-Rust
 
-This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.
+This crate is part of the [ADK-Rust](https://github.com/zavora-ai/adk-rust) framework for building AI agents in Rust.

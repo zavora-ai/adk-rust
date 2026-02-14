@@ -54,9 +54,38 @@ getrandom = { version = "0.2", optional = true }
 # Gemini backend (optional)
 adk-gemini = { workspace = true, optional = true }
 
+# Vertex AI Live (optional)
+google-cloud-auth = { version = "1.4", optional = true, default-features = false }
+
+# LiveKit bridge (optional)
+livekit = { version = "0.7", optional = true }
+livekit-api = { version = "0.4", optional = true }
+
+# OpenAI WebRTC (optional)
+# NOTE: `audiopus` builds the Opus C library from source and requires `cmake`.
+# With cmake >= 4.0, set CMAKE_POLICY_VERSION_MINIMUM=3.5 in your environment
+# to work around the bundled Opus CMakeLists.txt using an older cmake_minimum_required.
+str0m = { version = "0.16", optional = true }
+audiopus = { version = "0.3.0-rc.0", optional = true }
+reqwest = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls", "json"] }
+
 [dev-dependencies]
 tokio.workspace = true
 dotenvy = "0.15"
+proptest = "1.5"
+url = "2.5"
+
+[[example]]
+name = "vertex_live_voice"
+required-features = ["vertex-live"]
+
+[[example]]
+name = "livekit_bridge"
+required-features = ["livekit", "openai"]
+
+[[example]]
+name = "openai_webrtc"
+required-features = ["openai-webrtc"]
 
 [features]
 default = []
@@ -64,5 +93,11 @@ default = []
 openai = ["dep:async-openai", "dep:tokio-tungstenite", "dep:getrandom"]
 # Enable Gemini Live API support
 gemini = ["dep:tokio-tungstenite", "dep:adk-gemini"]
-# Enable all providers
-full = ["openai", "gemini"]
+# Enable Vertex AI Live API support (requires gemini + OAuth2/ADC auth)
+vertex-live = ["gemini", "dep:google-cloud-auth"]
+# Enable LiveKit WebRTC bridge
+livekit = ["dep:livekit", "dep:livekit-api"]
+# Enable OpenAI WebRTC transport (requires openai + Sans-IO WebRTC + Opus codec)
+openai-webrtc = ["openai", "dep:str0m", "dep:audiopus", "dep:reqwest"]
+# Enable all providers and transports
+full = ["openai", "gemini", "vertex-live", "livekit", "openai-webrtc"]

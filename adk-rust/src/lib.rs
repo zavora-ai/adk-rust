@@ -837,6 +837,13 @@ pub mod prelude {
     #[cfg(feature = "ui")]
     pub use crate::ui::UiToolset;
 
+    // Realtime
+    #[cfg(feature = "realtime")]
+    pub use crate::realtime::{
+        RealtimeAgent, RealtimeAgentBuilder, RealtimeConfig, RealtimeModel, RealtimeRunner,
+        RealtimeSession,
+    };
+
     // Common re-exports
     pub use crate::anyhow::Result as AnyhowResult;
     pub use crate::async_trait;

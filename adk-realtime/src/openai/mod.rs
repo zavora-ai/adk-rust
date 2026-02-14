@@ -30,9 +30,16 @@
 
 mod model;
 mod session;
+#[cfg(feature = "openai-webrtc")]
+pub mod webrtc;
 
 pub use model::OpenAIRealtimeModel;
 pub use session::OpenAIRealtimeSession;
+
+#[cfg(feature = "openai-webrtc")]
+pub use webrtc::OpenAIWebRTCSession;
+#[cfg(feature = "openai-webrtc")]
+pub use webrtc::OpusCodec;
 
 /// OpenAI Realtime API WebSocket URL.
 pub const OPENAI_REALTIME_URL: &str = "wss://api.openai.com/v1/realtime";
@@ -43,3 +50,18 @@ pub const OPENAI_VOICES: &[&str] =
 
 /// Default model for OpenAI Realtime.
 pub const DEFAULT_MODEL: &str = "gpt-4o-realtime-preview-2024-12-17";
+
+/// Transport type for OpenAI Realtime connections.
+///
+/// By default, connections use WebSocket. When the `openai-webrtc` feature is
+/// enabled, WebRTC transport is also available for lower-latency audio.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OpenAITransport {
+    /// WebSocket transport (default).
+    #[default]
+    WebSocket,
+    /// WebRTC transport for lower-latency audio.
+    #[cfg(feature = "openai-webrtc")]
+    WebRTC,
+}
+

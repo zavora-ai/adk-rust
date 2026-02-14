@@ -64,6 +64,18 @@ pub enum RealtimeError {
     /// Generic IO error.
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+
+    /// Opus codec error.
+    #[error("Opus codec error: {0}")]
+    OpusCodecError(String),
+
+    /// WebRTC error.
+    #[error("WebRTC error: {0}")]
+    WebRTCError(String),
+
+    /// LiveKit bridge error.
+    #[error("LiveKit error: {0}")]
+    LiveKitError(String),
 }
 
 impl RealtimeError {
@@ -95,5 +107,20 @@ impl RealtimeError {
     /// Create a new audio format error.
     pub fn audio<S: Into<String>>(msg: S) -> Self {
         Self::AudioFormatError(msg.into())
+    }
+
+    /// Create a new Opus codec error.
+    pub fn opus(msg: impl Into<String>) -> Self {
+        Self::OpusCodecError(msg.into())
+    }
+
+    /// Create a new WebRTC error.
+    pub fn webrtc(msg: impl Into<String>) -> Self {
+        Self::WebRTCError(msg.into())
+    }
+
+    /// Create a new LiveKit error.
+    pub fn livekit(msg: impl Into<String>) -> Self {
+        Self::LiveKitError(msg.into())
     }
 }
