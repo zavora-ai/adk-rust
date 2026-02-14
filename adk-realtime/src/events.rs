@@ -2,9 +2,33 @@
 //!
 //! These events follow a unified model inspired by the OpenAI Agents SDK,
 //! abstracting over provider-specific event formats.
+//!
+//! Audio data is transported as raw bytes (`Vec<u8>`) internally but serialized
+//! as base64 on the wire for JSON compatibility.
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+// ── Custom serde for base64-encoded audio ───────────────────────────────
+
+fn deserialize_audio_bytes<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    base64::engine::general_purpose::STANDARD.decode(&s).map_err(serde::de::Error::custom)
+}
+
+fn serialize_audio_bytes<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let s = base64::engine::general_purpose::STANDARD.encode(bytes);
+    serializer.serialize_str(&s)
+}
+
+// ── Client Events ───────────────────────────────────────────────────────
 
 /// Events sent from the client to the realtime server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,39 +41,46 @@ pub enum ClientEvent {
         session: Value,
     },
 
-    /// Send audio input from microphone.
+    /// Append audio to the input buffer.
     #[serde(rename = "input_audio_buffer.append")]
-    AudioInput {
-        /// Base64-encoded audio data.
-        audio: String,
+    AudioDelta {
+        /// Optional event ID.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        event_id: Option<String>,
+        /// Audio data (raw bytes, serialized as base64 on the wire).
+        #[serde(
+            serialize_with = "serialize_audio_bytes",
+            deserialize_with = "deserialize_audio_bytes"
+        )]
+        audio: Vec<u8>,
     },
 
     /// Commit the current audio buffer (manual mode).
     #[serde(rename = "input_audio_buffer.commit")]
-    AudioCommit,
+    InputAudioBufferCommit,
 
     /// Clear the audio input buffer.
     #[serde(rename = "input_audio_buffer.clear")]
-    AudioClear,
+    InputAudioBufferClear,
 
     /// Send a text message or tool response.
     #[serde(rename = "conversation.item.create")]
-    ItemCreate {
-        /// The conversation item to create.
-        item: ConversationItem,
+    ConversationItemCreate {
+        /// The conversation item (flexible JSON for provider compatibility).
+        item: Value,
     },
 
     /// Trigger a response from the model.
     #[serde(rename = "response.create")]
-    CreateResponse {
+    ResponseCreate {
         /// Optional response configuration.
         #[serde(skip_serializing_if = "Option::is_none")]
-        response: Option<Value>,
+        config: Option<Value>,
     },
 
     /// Cancel/interrupt the current response.
     #[serde(rename = "response.cancel")]
-    CancelResponse,
+    ResponseCancel,
 }
 
 /// A conversation item for text or tool responses.
@@ -123,9 +154,13 @@ impl ConversationItem {
     }
 }
 
+// ── Server Events ───────────────────────────────────────────────────────
+
 /// Events received from the realtime server.
 ///
 /// This is a unified event type that abstracts over provider-specific formats.
+/// Audio data is stored as raw bytes (`Vec<u8>`) — decoded from base64 at the
+/// transport boundary so consumers never need to deal with encoding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ServerEvent {
@@ -243,7 +278,7 @@ pub enum ServerEvent {
         item: Value,
     },
 
-    /// Audio delta (chunk of output audio).
+    /// Audio delta (chunk of output audio as raw bytes).
     #[serde(rename = "response.audio.delta")]
     AudioDelta {
         /// Unique event ID.
@@ -256,8 +291,12 @@ pub enum ServerEvent {
         output_index: u32,
         /// Content index.
         content_index: u32,
-        /// Base64-encoded audio data.
-        delta: String,
+        /// Audio data (raw bytes, serialized as base64 on the wire).
+        #[serde(
+            serialize_with = "serialize_audio_bytes",
+            deserialize_with = "deserialize_audio_bytes"
+        )]
+        delta: Vec<u8>,
     },
 
     /// Audio output completed.

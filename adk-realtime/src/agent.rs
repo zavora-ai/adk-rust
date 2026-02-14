@@ -54,7 +54,6 @@
 
 use crate::config::{RealtimeConfig, ToolDefinition, VadConfig, VadMode};
 use crate::events::{ServerEvent, ToolResponse};
-use crate::model::RealtimeModel;
 use adk_core::{
     AdkError, AfterAgentCallback, AfterToolCallback, Agent, BeforeAgentCallback,
     BeforeToolCallback, CallbackContext, Content, Event, EventActions, EventStream,
@@ -63,11 +62,11 @@ use adk_core::{
 };
 use async_stream::stream;
 use async_trait::async_trait;
-use base64::Engine;
+
 use std::sync::{Arc, Mutex};
 
-/// Boxed realtime model type.
-pub type BoxedRealtimeModel = Arc<dyn RealtimeModel>;
+/// Shared realtime model type (thread-safe for async usage).
+pub type BoxedRealtimeModel = Arc<dyn crate::model::RealtimeModel>;
 
 /// A real-time voice agent that implements the ADK Agent trait.
 ///
@@ -107,9 +106,9 @@ pub struct RealtimeAgent {
     on_speech_stopped: Option<SpeechCallback>,
 }
 
-/// Callback for audio output events.
+/// Callback for audio output events (receives raw PCM bytes).
 pub type AudioCallback = Arc<
-    dyn Fn(&str, &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+    dyn Fn(&[u8], &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
         + Send
         + Sync,
 >;
@@ -612,17 +611,14 @@ impl Agent for RealtimeAgent {
                                     cb(&delta, &item_id).await;
                                 }
 
-                                // Yield audio event (convert base64 to bytes)
-                                let audio_bytes = base64::engine::general_purpose::STANDARD
-                                    .decode(&delta)
-                                    .unwrap_or_default();
+                                // Yield audio event (delta is already raw bytes)
                                 let mut audio_event = Event::new(&invocation_id);
                                 audio_event.author = agent_name.clone();
                                 audio_event.llm_response.content = Some(Content {
                                     role: "model".to_string(),
                                     parts: vec![Part::InlineData {
                                         mime_type: "audio/pcm".to_string(),
-                                        data: audio_bytes,
+                                        data: delta,
                                     }],
                                 });
                                 yield Ok(audio_event);

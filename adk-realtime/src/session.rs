@@ -122,8 +122,8 @@ pub trait RealtimeSessionExt: RealtimeSession {
         Ok(events)
     }
 
-    /// Collect all audio chunks from a response.
-    async fn collect_audio(&self) -> Result<Vec<String>> {
+    /// Collect all audio chunks from a response (as raw bytes).
+    async fn collect_audio(&self) -> Result<Vec<Vec<u8>>> {
         let mut audio_chunks = Vec::new();
         while let Some(event) = self.next_event().await {
             match event? {

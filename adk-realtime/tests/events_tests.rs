@@ -39,37 +39,39 @@ fn test_tool_response_from_string() {
 }
 
 #[test]
-fn test_client_event_audio_input_serialization() {
-    let event = ClientEvent::AudioInput { audio: "base64audio==".to_string() };
+fn test_client_event_audio_delta_serialization() {
+    let event = ClientEvent::AudioDelta { event_id: None, audio: b"hello".to_vec() };
 
     let json = serde_json::to_string(&event).unwrap();
     assert!(json.contains("input_audio_buffer.append"));
-    assert!(json.contains("base64audio=="));
+    // Audio should be base64-encoded on the wire
+    assert!(json.contains("aGVsbG8=")); // base64("hello")
 }
 
 #[test]
 fn test_client_event_audio_commit_serialization() {
-    let event = ClientEvent::AudioCommit;
+    let event = ClientEvent::InputAudioBufferCommit;
     let json = serde_json::to_string(&event).unwrap();
     assert!(json.contains("input_audio_buffer.commit"));
 }
 
 #[test]
 fn test_client_event_create_response_serialization() {
-    let event = ClientEvent::CreateResponse { response: None };
+    let event = ClientEvent::ResponseCreate { config: None };
     let json = serde_json::to_string(&event).unwrap();
     assert!(json.contains("response.create"));
 }
 
 #[test]
 fn test_client_event_cancel_response_serialization() {
-    let event = ClientEvent::CancelResponse;
+    let event = ClientEvent::ResponseCancel;
     let json = serde_json::to_string(&event).unwrap();
     assert!(json.contains("response.cancel"));
 }
 
 #[test]
 fn test_server_event_audio_delta_deserialization() {
+    // "base64audio==" decodes to bytes [0x6d, 0xab, 0x6d, 0xb6, 0xa9, 0xb6, 0xab, 0x6e]
     let json = r#"{
         "type": "response.audio.delta",
         "event_id": "evt_123",
@@ -77,17 +79,39 @@ fn test_server_event_audio_delta_deserialization() {
         "item_id": "item_789",
         "output_index": 0,
         "content_index": 0,
-        "delta": "base64audio=="
+        "delta": "aGVsbG8="
     }"#;
 
     let event: ServerEvent = serde_json::from_str(json).unwrap();
     match event {
         ServerEvent::AudioDelta { event_id, delta, item_id, .. } => {
             assert_eq!(event_id, "evt_123");
-            assert_eq!(delta, "base64audio==");
+            assert_eq!(delta, b"hello"); // decoded from base64
             assert_eq!(item_id, "item_789");
         }
         _ => panic!("Expected AudioDelta event"),
+    }
+}
+
+#[test]
+fn test_server_event_audio_delta_roundtrip() {
+    let original = ServerEvent::AudioDelta {
+        event_id: "evt_1".to_string(),
+        response_id: "resp_1".to_string(),
+        item_id: "item_1".to_string(),
+        output_index: 0,
+        content_index: 0,
+        delta: vec![0x00, 0x01, 0x02, 0xFF],
+    };
+
+    let json = serde_json::to_string(&original).unwrap();
+    let deserialized: ServerEvent = serde_json::from_str(&json).unwrap();
+
+    match deserialized {
+        ServerEvent::AudioDelta { delta, .. } => {
+            assert_eq!(delta, vec![0x00, 0x01, 0x02, 0xFF]);
+        }
+        _ => panic!("Expected AudioDelta"),
     }
 }
 

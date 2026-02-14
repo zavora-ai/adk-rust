@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADK Rust Eval Observability Guardrails"
+  short_description: "Harden ADK systems with eval and telemetry"
+  default_prompt: "Use $adk-rust-eval-observability-guardrails to harden an ADK-Rust workflow with evals, telemetry, and guardrails."

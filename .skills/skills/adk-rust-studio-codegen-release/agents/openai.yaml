@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADK Rust Studio Codegen Release"
+  short_description: "Validate studio codegen and release gates"
+  default_prompt: "Use $adk-rust-studio-codegen-release to verify ADK Studio codegen output and release readiness."

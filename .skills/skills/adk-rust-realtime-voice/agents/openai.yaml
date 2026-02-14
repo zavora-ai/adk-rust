@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADK Rust Realtime Voice"
+  short_description: "Implement robust ADK realtime voice flows"
+  default_prompt: "Use $adk-rust-realtime-voice to design or debug a realtime voice workflow in ADK-Rust."

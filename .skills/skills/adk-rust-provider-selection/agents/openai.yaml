@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADK Rust Provider Selection"
+  short_description: "Choose and configure ADK model providers"
+  default_prompt: "Use $adk-rust-provider-selection to pick and validate the right ADK-Rust provider and model setup."

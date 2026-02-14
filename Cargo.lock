@@ -340,10 +340,13 @@ name = "adk-realtime"
 version = "0.3.0"
 dependencies = [
  "adk-core",
+ "adk-gemini",
  "async-openai",
  "async-stream",
  "async-trait",
  "base64 0.22.1",
+ "bytemuck",
+ "bytes",
  "dotenvy",
  "futures",
  "getrandom 0.2.17",

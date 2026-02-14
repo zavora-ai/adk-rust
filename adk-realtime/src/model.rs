@@ -62,5 +62,5 @@ pub trait RealtimeModel: Send + Sync {
     async fn connect(&self, config: RealtimeConfig) -> Result<BoxedSession>;
 }
 
-/// A boxed model type for dynamic dispatch.
-pub type BoxedModel = Box<dyn RealtimeModel>;
+/// A shared model type for thread-safe dynamic dispatch.
+pub type BoxedModel = std::sync::Arc<dyn RealtimeModel>;

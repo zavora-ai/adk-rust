@@ -91,4 +91,9 @@ impl RealtimeError {
     pub fn protocol<S: Into<String>>(msg: S) -> Self {
         Self::MessageError(msg.into())
     }
+
+    /// Create a new audio format error.
+    pub fn audio<S: Into<String>>(msg: S) -> Self {
+        Self::AudioFormatError(msg.into())
+    }
 }

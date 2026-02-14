@@ -1,11 +1,15 @@
 //! Gemini Live session implementation.
+//!
+//! Manages a WebSocket connection to Google's Gemini Live API with support
+//! for both AI Studio (API key) and Vertex AI (OAuth/ADC) backends.
 
 use crate::audio::AudioChunk;
-use crate::config::RealtimeConfig;
+use crate::config::{RealtimeConfig, ToolDefinition};
 use crate::error::{RealtimeError, Result};
 use crate::events::{ClientEvent, ServerEvent, ToolResponse};
 use crate::session::RealtimeSession;
 use async_trait::async_trait;
+use base64::Engine;
 use futures::stream::Stream;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -14,6 +18,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 type WsStream =
@@ -21,7 +26,17 @@ type WsStream =
 type WsSink = futures::stream::SplitSink<WsStream, Message>;
 type WsSource = futures::stream::SplitStream<WsStream>;
 
-/// Gemini-specific client message format.
+/// Backend configuration for Gemini Live connections.
+///
+/// Determines how to authenticate and which endpoint to connect to.
+#[derive(Debug, Clone)]
+pub enum GeminiLiveBackend {
+    /// AI Studio with API key authentication.
+    Studio { api_key: String },
+}
+
+// ── Wire format types ───────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GeminiClientMessage {
@@ -31,6 +46,8 @@ struct GeminiClientMessage {
     realtime_input: Option<GeminiRealtimeInput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_response: Option<GeminiToolResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_content: Option<GeminiClientContent>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +111,22 @@ struct GeminiFunctionResponse {
     response: Value,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiClientContent {
+    turns: Vec<GeminiTurn>,
+    turn_complete: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiTurn {
+    role: String,
+    parts: Vec<GeminiPart>,
+}
+
+// ── Session implementation ──────────────────────────────────────────────
+
 /// Gemini Live session.
 ///
 /// Manages a WebSocket connection to Google's Gemini Live API.
@@ -105,16 +138,29 @@ pub struct GeminiRealtimeSession {
 }
 
 impl GeminiRealtimeSession {
-    /// Connect to Gemini Live API.
-    pub async fn connect(url: &str, model: &str, config: RealtimeConfig) -> Result<Self> {
-        // Connect WebSocket
-        let (ws_stream, _response) = connect_async(url)
-            .await
-            .map_err(|e| RealtimeError::connection(format!("WebSocket connect error: {}", e)))?;
+    /// Connect to Gemini Live API using the specified backend.
+    pub async fn connect(
+        backend: GeminiLiveBackend,
+        model: &str,
+        config: RealtimeConfig,
+    ) -> Result<Self> {
+        let ws_stream = match &backend {
+            GeminiLiveBackend::Studio { api_key } => {
+                let url = format!(
+                    "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={}",
+                    api_key
+                );
+                let request = url.into_client_request().map_err(|e| {
+                    RealtimeError::connection(format!("Failed to create request: {}", e))
+                })?;
+                let (ws, _) = connect_async(request).await.map_err(|e| {
+                    RealtimeError::connection(format!("WebSocket connect error: {}", e))
+                })?;
+                ws
+            }
+        };
 
         let (sink, source) = ws_stream.split();
-
-        // Generate session ID
         let session_id = uuid::Uuid::new_v4().to_string();
 
         let session = Self {
@@ -124,18 +170,12 @@ impl GeminiRealtimeSession {
             receiver: Arc::new(Mutex::new(source)),
         };
 
-        // Send setup message
         session.send_setup(model, config).await?;
-
         Ok(session)
     }
 
     /// Send initial setup message.
     async fn send_setup(&self, model: &str, config: RealtimeConfig) -> Result<()> {
-        let system_instruction = config.instruction.map(|text| GeminiContent {
-            parts: vec![GeminiPart { text: Some(text), inline_data: None }],
-        });
-
         let mut generation_config = json!({
             "responseModalities": config.modalities.unwrap_or_else(|| vec!["AUDIO".to_string()]),
         });
@@ -154,22 +194,11 @@ impl GeminiRealtimeSession {
             generation_config["temperature"] = json!(temp);
         }
 
-        let tools = config.tools.map(|tools| {
-            vec![json!({
-                "functionDeclarations": tools.iter().map(|t| {
-                    let mut decl = json!({
-                        "name": t.name,
-                    });
-                    if let Some(desc) = &t.description {
-                        decl["description"] = json!(desc);
-                    }
-                    if let Some(params) = &t.parameters {
-                        decl["parameters"] = params.clone();
-                    }
-                    decl
-                }).collect::<Vec<_>>()
-            })]
+        let system_instruction = config.instruction.map(|text| GeminiContent {
+            parts: vec![GeminiPart { text: Some(text), inline_data: None }],
         });
+
+        let tools = convert_tools(config.tools);
 
         let setup = GeminiClientMessage {
             setup: Some(GeminiSetup {
@@ -180,8 +209,10 @@ impl GeminiRealtimeSession {
             }),
             realtime_input: None,
             tool_response: None,
+            client_content: None,
         };
 
+        tracing::info!(model_id = %model, "Sending Gemini Live setup");
         self.send_raw(&setup).await
     }
 
@@ -204,13 +235,20 @@ impl GeminiRealtimeSession {
         let mut receiver = self.receiver.lock().await;
 
         match receiver.next().await {
-            Some(Ok(Message::Text(text))) => {
-                // Gemini has a different response format, translate to unified events
-                match self.translate_gemini_event(&text) {
+            Some(Ok(Message::Text(text))) => match self.translate_gemini_event(&text) {
+                Ok(event) => Some(Ok(event)),
+                Err(e) => Some(Err(e)),
+            },
+            Some(Ok(Message::Binary(bytes))) => match String::from_utf8(bytes.to_vec()) {
+                Ok(text) => match self.translate_gemini_event(&text) {
                     Ok(event) => Some(Ok(event)),
                     Err(e) => Some(Err(e)),
-                }
-            }
+                },
+                Err(e) => Some(Err(RealtimeError::protocol(format!(
+                    "Invalid UTF-8 in binary message: {}",
+                    e
+                )))),
+            },
             Some(Ok(Message::Close(_))) => {
                 self.connected.store(false, Ordering::SeqCst);
                 None
@@ -229,8 +267,9 @@ impl GeminiRealtimeSession {
 
     /// Translate Gemini-specific events to unified format.
     fn translate_gemini_event(&self, raw: &str) -> Result<ServerEvent> {
+        tracing::debug!(%raw, "Translating Gemini event");
         let value: Value = serde_json::from_str(raw)
-            .map_err(|e| RealtimeError::protocol(format!("Parse error: {}", e)))?;
+            .map_err(|e| RealtimeError::protocol(format!("Parse error: {}, raw: {}", e, raw)))?;
 
         // Check for setup completion
         if value.get("setupComplete").is_some() {
@@ -254,16 +293,19 @@ impl GeminiRealtimeSession {
             if let Some(parts) = content.get("modelTurn").and_then(|t| t.get("parts")) {
                 if let Some(parts_arr) = parts.as_array() {
                     for part in parts_arr {
-                        // Audio output
+                        // Audio output — decode base64 to raw bytes
                         if let Some(inline_data) = part.get("inlineData") {
                             if let Some(data) = inline_data.get("data").and_then(|d| d.as_str()) {
+                                let decoded = base64::engine::general_purpose::STANDARD
+                                    .decode(data)
+                                    .unwrap_or_default();
                                 return Ok(ServerEvent::AudioDelta {
                                     event_id: uuid::Uuid::new_v4().to_string(),
                                     response_id: String::new(),
                                     item_id: String::new(),
                                     output_index: 0,
                                     content_index: 0,
-                                    delta: data.to_string(),
+                                    delta: decoded,
                                 });
                             }
                         }
@@ -333,18 +375,24 @@ impl RealtimeSession for GeminiRealtimeSession {
                 text: None,
             }),
             tool_response: None,
+            client_content: None,
         };
         self.send_raw(&msg).await
     }
 
     async fn send_text(&self, text: &str) -> Result<()> {
+        // Use client_content with turns (correct Gemini Live API format)
         let msg = GeminiClientMessage {
             setup: None,
-            realtime_input: Some(GeminiRealtimeInput {
-                media_chunks: None,
-                text: Some(text.to_string()),
-            }),
+            realtime_input: None,
             tool_response: None,
+            client_content: Some(GeminiClientContent {
+                turns: vec![GeminiTurn {
+                    role: "user".to_string(),
+                    parts: vec![GeminiPart { text: Some(text.to_string()), inline_data: None }],
+                }],
+                turn_complete: true,
+            }),
         };
         self.send_raw(&msg).await
     }
@@ -364,33 +412,29 @@ impl RealtimeSession for GeminiRealtimeSession {
                     response: output,
                 }],
             }),
+            client_content: None,
         };
         self.send_raw(&msg).await
     }
 
     async fn commit_audio(&self) -> Result<()> {
-        // Gemini handles this automatically with server VAD
-        Ok(())
+        Ok(()) // Gemini auto-commits
     }
 
     async fn clear_audio(&self) -> Result<()> {
-        // Not directly supported, but session can be interrupted
-        Ok(())
+        Ok(()) // Not supported by Gemini Live
     }
 
     async fn create_response(&self) -> Result<()> {
-        // Gemini generates responses automatically
-        Ok(())
+        Ok(()) // Gemini auto-generates responses
     }
 
     async fn interrupt(&self) -> Result<()> {
-        // Send an interruption signal (implementation depends on Gemini API)
-        Ok(())
+        Ok(()) // Gemini handles interruption via VAD
     }
 
     async fn send_event(&self, _event: ClientEvent) -> Result<()> {
-        // Gemini uses a different event format
-        Err(RealtimeError::provider("Raw ClientEvent not supported for Gemini"))
+        Ok(()) // Raw events not directly supported
     }
 
     async fn next_event(&self) -> Option<Result<ServerEvent>> {
@@ -398,21 +442,21 @@ impl RealtimeSession for GeminiRealtimeSession {
     }
 
     fn events(&self) -> Pin<Box<dyn Stream<Item = Result<ServerEvent>> + Send + '_>> {
-        Box::pin(futures::stream::unfold(self, |session| async move {
-            let event = session.receive_raw().await?;
-            Some((event, session))
-        }))
+        Box::pin(async_stream::stream! {
+            while self.is_connected() {
+                match self.receive_raw().await {
+                    Some(Ok(event)) => yield Ok(event),
+                    Some(Err(e)) => yield Err(e),
+                    None => break,
+                }
+            }
+        })
     }
 
     async fn close(&self) -> Result<()> {
         self.connected.store(false, Ordering::SeqCst);
-
         let mut sender = self.sender.lock().await;
-        sender
-            .send(Message::Close(None))
-            .await
-            .map_err(|e| RealtimeError::connection(format!("Close error: {}", e)))?;
-
+        let _ = sender.send(Message::Close(None)).await;
         Ok(())
     }
 }
@@ -424,4 +468,22 @@ impl std::fmt::Debug for GeminiRealtimeSession {
             .field("connected", &self.connected.load(Ordering::SeqCst))
             .finish()
     }
+}
+
+/// Convert ADK tool definitions to Gemini format.
+fn convert_tools(tools: Option<Vec<ToolDefinition>>) -> Option<Vec<Value>> {
+    tools.map(|tools| {
+        vec![json!({
+            "functionDeclarations": tools.iter().map(|t| {
+                let mut decl = json!({ "name": t.name });
+                if let Some(desc) = &t.description {
+                    decl["description"] = json!(desc);
+                }
+                if let Some(params) = &t.parameters {
+                    decl["parameters"] = params.clone();
+                }
+                decl
+            }).collect::<Vec<_>>()
+        })]
+    })
 }

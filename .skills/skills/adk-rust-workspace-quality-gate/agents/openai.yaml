@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADK Rust Quality Gate"
+  short_description: "Run ADK-Rust checks and summarize risks"
+  default_prompt: "Use $adk-rust-workspace-quality-gate to run workspace checks and produce a findings-first report."

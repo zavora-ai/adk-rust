@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADK Rust App Bootstrap"
+  short_description: "Scaffold a reliable ADK-Rust starter app"
+  default_prompt: "Use $adk-rust-app-bootstrap to set up a new ADK-Rust application with correct dependencies and checks."

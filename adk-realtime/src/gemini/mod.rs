@@ -16,13 +16,17 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use adk_realtime::gemini::GeminiRealtimeModel;
+//! use adk_realtime::gemini::{GeminiRealtimeModel, GeminiLiveBackend};
 //! use adk_realtime::{RealtimeModel, RealtimeConfig};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let backend = GeminiLiveBackend::Studio {
+//!         api_key: std::env::var("GOOGLE_API_KEY")?
+//!     };
+//!
 //!     let model = GeminiRealtimeModel::new(
-//!         std::env::var("GOOGLE_API_KEY")?,
+//!         backend,
 //!         "models/gemini-live-2.5-flash-native-audio",
 //!     );
 //!
@@ -41,7 +45,7 @@ mod model;
 mod session;
 
 pub use model::GeminiRealtimeModel;
-pub use session::GeminiRealtimeSession;
+pub use session::{GeminiLiveBackend, GeminiRealtimeSession};
 
 /// Gemini Live API WebSocket URL template.
 pub const GEMINI_LIVE_URL: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";

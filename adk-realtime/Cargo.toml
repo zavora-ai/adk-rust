@@ -27,7 +27,11 @@ serde.workspace = true
 serde_json.workspace = true
 
 # WebSocket
-tokio-tungstenite = { version = "0.26", default-features = false, features = ["rustls-tls-native-roots", "connect"], optional = true }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"], optional = true }
+
+# Zero-copy bytes
+bytes = "1"
+bytemuck = "1.25"
 
 # Error handling
 thiserror.workspace = true
@@ -41,11 +45,14 @@ base64 = "0.22"
 # UUID for session IDs
 uuid.workspace = true
 
-# Random number generation
-getrandom = "0.2"
-
 # OpenAI realtime types (optional)
-async-openai = { version = "0.27", optional = true }
+async-openai = { version = "0.27", optional = true, default-features = false, features = ["rustls"] }
+
+# Random bytes for WebSocket key generation (optional)
+getrandom = { version = "0.2", optional = true }
+
+# Gemini backend (optional)
+adk-gemini = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio.workspace = true
@@ -54,8 +61,8 @@ dotenvy = "0.15"
 [features]
 default = []
 # Enable OpenAI Realtime API support
-openai = ["dep:async-openai", "dep:tokio-tungstenite"]
+openai = ["dep:async-openai", "dep:tokio-tungstenite", "dep:getrandom"]
 # Enable Gemini Live API support
-gemini = ["dep:tokio-tungstenite"]
+gemini = ["dep:tokio-tungstenite", "dep:adk-gemini"]
 # Enable all providers
 full = ["openai", "gemini"]

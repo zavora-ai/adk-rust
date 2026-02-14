@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADK Studio"
+  short_description: "Build and debug ADK Studio workflows"
+  default_prompt: "Use $adk-studio to implement or troubleshoot ADK Studio schema, codegen, and graph runner behavior."

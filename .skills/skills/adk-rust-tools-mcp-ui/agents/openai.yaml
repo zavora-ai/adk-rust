@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADK Rust Tools MCP UI"
+  short_description: "Build tools with MCP and UI protocols"
+  default_prompt: "Use $adk-rust-tools-mcp-ui to implement ADK tools with robust MCP and UI protocol behavior."

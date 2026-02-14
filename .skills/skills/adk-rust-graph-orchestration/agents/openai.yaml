@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADK Rust Graph Orchestration"
+  short_description: "Implement stateful ADK graph workflows"
+  default_prompt: "Use $adk-rust-graph-orchestration to design and debug an ADK graph with correct state flow."

@@ -72,8 +72,8 @@ where
 /// Event handler for processing realtime events.
 #[async_trait]
 pub trait EventHandler: Send + Sync {
-    /// Called when an audio delta is received.
-    async fn on_audio(&self, _audio_base64: &str, _item_id: &str) -> Result<()> {
+    /// Called when an audio delta is received (raw PCM bytes).
+    async fn on_audio(&self, _audio: &[u8], _item_id: &str) -> Result<()> {
         Ok(())
     }
 

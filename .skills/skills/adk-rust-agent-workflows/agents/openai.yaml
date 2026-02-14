@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADK Rust Agent Workflows"
+  short_description: "Build robust ADK agent workflow topologies"
+  default_prompt: "Use $adk-rust-agent-workflows to design the right agent workflow pattern and implement it safely."
