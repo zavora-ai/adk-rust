@@ -43,7 +43,7 @@ Real-time bidirectional audio streaming for Rust Agent Development Kit (ADK-Rust
 |----------|-------|--------------|-------------|
 | OpenAI | `gpt-4o-realtime-preview-2024-12-17` | `openai` | Stable realtime model |
 | OpenAI | `gpt-realtime` | `openai` | Latest model with improved speech & function calling |
-| Google | `gemini-2.0-flash-live-preview-04-09` | `gemini` | Gemini Live API |
+| Google | `gemini-live-2.5-flash-native-audio` | `gemini` | Gemini Live API |
 
 ## Quick Start
 

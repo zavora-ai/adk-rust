@@ -416,7 +416,7 @@ use adk_agent::LlmAgent;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = OpenAIClient::new(OpenAIProvider {
         api_key: std::env::var("OPENAI_API_KEY")?,
-        model: "gpt-4o-mini".to_string(),
+        model: "gpt-5-mini".to_string(),
         organization_id: None,
         project_id: None,
     })?;
@@ -441,7 +441,7 @@ let model = AzureOpenAIClient::new(AzureOpenAIProvider {
     api_key: std::env::var("AZURE_OPENAI_API_KEY")?,
     api_base: "https://my-resource.openai.azure.com".to_string(),
     api_version: "2024-02-15-preview".to_string(),
-    deployment_id: "gpt-4o-deployment".to_string(),
+    deployment_id: "gpt-5-deployment".to_string(),
 })?;
 ```
 

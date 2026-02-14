@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tools = toolset.all_tools();
 
     // Create AI agent with browser tools
-    let model = Arc::new(GeminiModel::from_env("gemini-2.0-flash")?);
+    let model = Arc::new(GeminiModel::from_env("gemini-2.5-flash")?);
 
     let mut builder = LlmAgentBuilder::new("web_agent")
         .model(model)

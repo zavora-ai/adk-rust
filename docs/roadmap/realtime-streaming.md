@@ -584,7 +584,7 @@ async fn main() -> Result<()> {
     let api_key = std::env::var("GOOGLE_API_KEY")?;
 
     // Create realtime model
-    let model = GeminiLiveModel::new(&api_key, "gemini-2.0-flash-live")?;
+    let model = GeminiLiveModel::new(&api_key, "gemini-live-2.5-flash-native-audio")?;
 
     // Configure session
     let config = RealtimeConfig {

@@ -143,7 +143,7 @@ use adk_eval::{Evaluator, EvaluationConfig, EvaluationCriteria, LlmJudge};
 use adk_model::GeminiModel;
 
 // Create evaluator with LLM judge
-let judge_model = Arc::new(GeminiModel::new(&api_key, "gemini-2.0-flash")?);
+let judge_model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
 let config = EvaluationConfig::with_criteria(
     EvaluationCriteria::semantic_match(0.85)
 );

@@ -189,7 +189,7 @@ let _enter = span.enter();
 ```rust
 use adk_telemetry::model_call_span;
 
-let span = model_call_span("gemini-2.0-flash");
+let span = model_call_span("gemini-2.5-flash");
 let _enter = span.enter();
 
 // Model API call here

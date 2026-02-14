@@ -107,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 |----------|-------|--------------|--------------|
 | OpenAI | `gpt-4o-realtime-preview-2024-12-17` | `openai` | PCM16 24kHz |
 | OpenAI | `gpt-realtime` | `openai` | PCM16 24kHz |
-| Google | `gemini-2.0-flash-live-preview-04-09` | `gemini` | PCM16 16kHz/24kHz |
+| Google | `gemini-live-2.5-flash-native-audio` | `gemini` | PCM16 16kHz/24kHz |
 
 > **Note**: `gpt-realtime` is OpenAI's latest realtime model with improved speech quality, emotion, and function calling capabilities.
 
