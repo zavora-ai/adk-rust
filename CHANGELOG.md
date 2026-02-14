@@ -9,10 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ⭐ Highlights
 - **Vertex AI Streaming**: `adk-gemini` refactored with `GeminiBackend` trait — pluggable `StudioBackend` (REST) and `VertexBackend` (REST SSE streaming + gRPC fallback)
+- **Realtime Stabilization**: `adk-realtime` audio transport rewritten with raw bytes, Gemini Live session corrected, event types renamed for OpenAI SDK alignment
 - **Multi-Provider Codegen**: ADK Studio code generation now supports Gemini, OpenAI, Anthropic, DeepSeek, Groq, and Ollama (was hardcoded to Gemini)
 - **2026 Model Names**: All docs, examples, and source defaults updated to current model names (gemini-2.5-flash, gpt-5-mini, claude-sonnet-4.5, etc.)
 - **Response Parsing Tests**: 25 rigorous tests covering Gemini response edge cases (safety ratings, streaming chunks, function calls, grounding metadata, citations)
-- **Code Health**: Span-based line numbers in doc-audit analyzer, validation refactor in adk-ui, dead code cleanup
+- **Code Health**: Span-based line numbers in doc-audit analyzer, validation refactor in adk-ui, dead code cleanup, CONTRIBUTING.md rewrite
 
 ### Added
 
@@ -24,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Model::GeminiEmbedding001` variant for `gemini-embedding-001` (3072 dimensions, replaces `text-embedding-004`)
 - `Model::TextEmbedding004` marked `#[deprecated]` with compiler warning
 - 25 response parsing tests: basic text, multi-candidate, safety ratings (string + numeric), blocked prompts, streaming chunks, function calls, inline data, grounding metadata, citations, usage metadata with thinking tokens, all FinishReason variants, unknown enum graceful degradation, round-trip serialization
+
+#### adk-realtime
+- Audio transport changed from `String` (base64) to `Vec<u8>` (raw bytes) with custom serde for base64 wire format
+- `BoxedModel` changed from `Box<dyn RealtimeModel>` to `Arc<dyn RealtimeModel>` for thread-safe sharing
+- ClientEvent renames: `AudioInput`→`AudioDelta`, `AudioCommit`→`InputAudioBufferCommit`, `AudioClear`→`InputAudioBufferClear`, `ItemCreate`→`ConversationItemCreate`, `CreateResponse`→`ResponseCreate`, `CancelResponse`→`ResponseCancel`
+- `EventHandler::on_audio` and `AudioCallback` changed from `&str` (base64) to `&[u8]` (raw bytes)
+- Gemini Live session rewrite: `send_text` uses `client_content` (correct Gemini API), handles binary WebSocket messages, `GeminiLiveBackend` enum for backend selection
+- `GeminiRealtimeModel` now accepts `GeminiLiveBackend` instead of raw API key string
+- `RealtimeError::audio()` convenience constructor
+- Added `bytes`, `bytemuck` dependencies; optional `adk-gemini` dep behind `gemini` feature flag
+- Feature flags: `openai`, `gemini`, `full`
 
 #### adk-studio
 - Multi-provider LLM support in code generation (Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama)
@@ -51,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `claude-sonnet-4-20250514` → `claude-sonnet-4.5`
   - `gemini-2.0-flash-live-preview-04-09` → `gemini-live-2.5-flash-native-audio`
 - `adk-doc-audit` now depends on `proc-macro2` with `span-locations` feature for accurate line numbers
+- `CONTRIBUTING.md` rewritten with full 25+ crate inventory, build commands, architecture notes
+- `.kiro/` and `.vite/` excluded from git tracking
+- `.gitignore` cleaned up (removed absolute paths, duplicate entries)
+- Added `.skills/` with Kiro skill definitions for agent workflows
 
 ### Documentation
 - Updated all example model names to 2026 versions (PRs #79-#82)
