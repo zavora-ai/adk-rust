@@ -452,6 +452,14 @@ name = "streaming_demo"
 path = "streaming_demo/main.rs"
 
 [[example]]
+name = "verify_backend_selection"
+path = "verify_backend_selection/main.rs"
+
+[[example]]
+name = "verify_vertex_streaming"
+path = "verify_vertex_streaming/main.rs"
+
+[[example]]
 name = "guardrail_basic"
 path = "guardrail_basic/main.rs"
 required-features = ["guardrails"]
@@ -592,6 +600,7 @@ serde.workspace = true
 serde_json.workspace = true
 schemars = "0.8"
 chrono.workspace = true
+tracing.workspace = true
 tracing-subscriber.workspace = true
 axum = "0.8"
 async-trait.workspace = true
