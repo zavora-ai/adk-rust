@@ -27,7 +27,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("GEMINI_API_KEY")?;
 
     // Create client with the default model (gemini-2.5-flash)
-    let client = Gemini::with_model(api_key, Model::TextEmbedding004)
+    let client = Gemini::with_model(api_key, Model::GeminiEmbedding001)
         .expect("unable to create Gemini API client");
 
     info!("sending embedding request to gemini api");

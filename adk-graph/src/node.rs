@@ -383,7 +383,7 @@ impl Node for AgentNode {
         let content = (input_mapper)(&ctx.state);
 
         Box::pin(async_stream::stream! {
-            eprintln!("DEBUG: AgentNode::execute_stream called for {}", name);
+            tracing::debug!("AgentNode::execute_stream called for {}", name);
             let invocation_ctx = Arc::new(GraphInvocationContext::new(
                 thread_id,
                 content,

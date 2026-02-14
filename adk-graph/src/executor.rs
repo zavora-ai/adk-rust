@@ -382,7 +382,7 @@ impl CompiledGraph {
         config: ExecutionConfig,
         mode: StreamMode,
     ) -> impl futures::Stream<Item = Result<StreamEvent>> + '_ {
-        eprintln!("DEBUG: CompiledGraph::stream called with mode {:?}", mode);
+        tracing::debug!("CompiledGraph::stream called with mode {:?}", mode);
         let executor = PregelExecutor::new(self, config);
         executor.run_stream(input, mode)
     }

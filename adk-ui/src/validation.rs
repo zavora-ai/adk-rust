@@ -105,11 +105,13 @@ impl Validate for NumberInput {
                 message: "NumberInput name cannot be empty".to_string(),
             });
         }
-        if self.min > self.max {
-            errors.push(ValidationError {
-                path: format!("{}.min", path),
-                message: "min cannot be greater than max".to_string(),
-            });
+        if let (Some(min), Some(max)) = (self.min, self.max) {
+            if min > max {
+                errors.push(ValidationError {
+                    path: format!("{}.min", path),
+                    message: "min cannot be greater than max".to_string(),
+                });
+            }
         }
         errors
     }

@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `StudioBackend` — AI Studio REST implementation (default)
 - `VertexBackend` — Vertex AI REST SSE streaming with gRPC fallback, ADC/service account/WIF auth
 - `GeminiBuilder` for constructing clients with explicit backend selection
+- `Model::GeminiEmbedding001` variant for `gemini-embedding-001` (3072 dimensions, replaces `text-embedding-004`)
+- `Model::TextEmbedding004` marked `#[deprecated]` with compiler warning
 - 25 response parsing tests: basic text, multi-candidate, safety ratings (string + numeric), blocked prompts, streaming chunks, function calls, inline data, grounding metadata, citations, usage metadata with thinking tokens, all FinishReason variants, unknown enum graceful degradation, round-trip serialization
 
 #### adk-studio
@@ -35,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **adk-model**: `GeminiModel::new()` now uses `Gemini::with_model(api_key, model_name)` instead of ignoring the provided model name (bug #77)
 - **adk-studio**: CORS restricted to localhost origins only (was allowing all origins)
+- **adk-ui**: `NumberInput` validation no longer false-fails when only `min` is set (`Some(min) > None` was always true)
+- **adk-graph**: Replaced `eprintln!("DEBUG: ...")` with `tracing::debug!()` in `AgentNode::execute_stream` and `CompiledGraph::stream` (stderr leakage in library code)
 - **adk-doc-audit**: Line numbers now use `syn::Span::start().line` instead of hardcoded `0`
 - **adk-doc-audit**: `suggest_similar_crate_names` and `suggest_similar_api_names` made static (removed dead `_static` variants)
 - **adk-doc-audit**: Deleted stale `test.md` artifact
