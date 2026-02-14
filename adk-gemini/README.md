@@ -220,7 +220,7 @@ let parsed: serde_json::Value = serde_json::from_str(&response.text())?;
 ```rust
 use adk_gemini::{Gemini, Model, TaskType};
 
-let client = Gemini::with_model(api_key, Model::TextEmbedding004)?;
+let client = Gemini::with_model(api_key, Model::GeminiEmbedding001)?;
 
 let response = client
     .embed_content()

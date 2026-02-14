@@ -96,7 +96,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Test 5: Studio embedding ────────────────────────────────────
     info!("━━━ Test 5: Studio embedding ━━━");
-    let embed_client = Gemini::with_model(&api_key, Model::Custom("models/gemini-embedding-001".to_string()))?;
+    let embed_client = Gemini::with_model(&api_key, Model::GeminiEmbedding001)?;
     let embedding = embed_client
         .embed_content()
         .with_text("backend trait refactor validation")

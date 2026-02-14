@@ -55,6 +55,11 @@ pub enum Model {
     Gemini25FlashLite,
     #[serde(rename = "models/gemini-2.5-pro")]
     Gemini25Pro,
+    /// Gemini Embedding 001 (3072 dimensions). Replaces text-embedding-004.
+    #[serde(rename = "models/gemini-embedding-001")]
+    GeminiEmbedding001,
+    /// Deprecated: use `GeminiEmbedding001` instead.
+    #[deprecated(note = "Use Model::GeminiEmbedding001 (gemini-embedding-001) instead")]
     #[serde(rename = "models/text-embedding-004")]
     TextEmbedding004,
     #[serde(untagged)]
@@ -63,20 +68,24 @@ pub enum Model {
 
 impl Model {
     pub fn as_str(&self) -> &str {
+        #[allow(deprecated)]
         match self {
             Model::Gemini25Flash => "models/gemini-2.5-flash",
             Model::Gemini25FlashLite => "models/gemini-2.5-flash-lite",
             Model::Gemini25Pro => "models/gemini-2.5-pro",
+            Model::GeminiEmbedding001 => "models/gemini-embedding-001",
             Model::TextEmbedding004 => "models/text-embedding-004",
             Model::Custom(model) => model,
         }
     }
 
     pub fn vertex_model_path(&self, project_id: &str, location: &str) -> String {
+        #[allow(deprecated)]
         let model_id = match self {
             Model::Gemini25Flash => "gemini-2.5-flash",
             Model::Gemini25FlashLite => "gemini-2.5-flash-lite",
             Model::Gemini25Pro => "gemini-2.5-pro",
+            Model::GeminiEmbedding001 => "gemini-embedding-001",
             Model::TextEmbedding004 => "text-embedding-004",
             Model::Custom(model) => {
                 if model.starts_with("projects/") {
@@ -100,10 +109,12 @@ impl From<String> for Model {
 
 impl fmt::Display for Model {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        #[allow(deprecated)]
         match self {
             Model::Gemini25Flash => write!(f, "models/gemini-2.5-flash"),
             Model::Gemini25FlashLite => write!(f, "models/gemini-2.5-flash-lite"),
             Model::Gemini25Pro => write!(f, "models/gemini-2.5-pro"),
+            Model::GeminiEmbedding001 => write!(f, "models/gemini-embedding-001"),
             Model::TextEmbedding004 => write!(f, "models/text-embedding-004"),
             Model::Custom(model) => write!(f, "{}", model),
         }

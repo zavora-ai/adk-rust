@@ -108,7 +108,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     let embed_client = build_vertex_client_with_model(
         &project,
         &location,
-        Model::Custom("models/gemini-embedding-001".to_string()),
+        Model::GeminiEmbedding001,
     )?;
 
     let embedding = embed_client
