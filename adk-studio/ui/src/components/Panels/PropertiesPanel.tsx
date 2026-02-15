@@ -365,6 +365,56 @@ function LlmProperties({ nodeId, agent, toolConfigs, onUpdate, onSelectTool, onR
                 placeholder='{"type": "object", "properties": {...}}'
               />
             </Field>
+            <Field label="Temperature" hint="Controls randomness (0.0 = deterministic, 2.0 = creative)">
+              <input
+                type="number"
+                className="w-full px-2 py-1 border rounded text-xs"
+                style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-default)', color: 'var(--text-primary)' }}
+                value={agent.temperature ?? ''}
+                onChange={(e) => onUpdate(nodeId, { temperature: e.target.value ? parseFloat(e.target.value) : undefined })}
+                placeholder="Default (provider-specific)"
+                min="0"
+                max="2"
+                step="0.1"
+              />
+            </Field>
+            <Field label="Max Output Tokens" hint="Maximum tokens in the response">
+              <input
+                type="number"
+                className="w-full px-2 py-1 border rounded text-xs"
+                style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-default)', color: 'var(--text-primary)' }}
+                value={agent.max_output_tokens ?? ''}
+                onChange={(e) => onUpdate(nodeId, { max_output_tokens: e.target.value ? parseInt(e.target.value) : undefined })}
+                placeholder="Default (provider-specific)"
+                min="1"
+                step="1"
+              />
+            </Field>
+            <Field label="Top P" hint="Nucleus sampling threshold (0.0 - 1.0)">
+              <input
+                type="number"
+                className="w-full px-2 py-1 border rounded text-xs"
+                style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-default)', color: 'var(--text-primary)' }}
+                value={agent.top_p ?? ''}
+                onChange={(e) => onUpdate(nodeId, { top_p: e.target.value ? parseFloat(e.target.value) : undefined })}
+                placeholder="Default (provider-specific)"
+                min="0"
+                max="1"
+                step="0.05"
+              />
+            </Field>
+            <Field label="Top K" hint="Limits token selection to top K candidates">
+              <input
+                type="number"
+                className="w-full px-2 py-1 border rounded text-xs"
+                style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-default)', color: 'var(--text-primary)' }}
+                value={agent.top_k ?? ''}
+                onChange={(e) => onUpdate(nodeId, { top_k: e.target.value ? parseInt(e.target.value) : undefined })}
+                placeholder="Default (provider-specific)"
+                min="1"
+                step="1"
+              />
+            </Field>
             <Field label="Include Contents">
               <select
                 className="w-full px-2 py-1 border rounded text-xs"

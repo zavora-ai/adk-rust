@@ -17,6 +17,18 @@ pub struct AgentSchema {
     pub position: Position,
     #[serde(default)]
     pub max_iterations: Option<u32>,
+    /// Generation config: temperature (0.0 - 2.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    /// Generation config: top_p (0.0 - 1.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    /// Generation config: top_k
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<i32>,
+    /// Generation config: max output tokens
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<i32>,
     /// For router agents: condition -> target agent mapping
     #[serde(default)]
     pub routes: Vec<Route>,
@@ -39,6 +51,10 @@ impl AgentSchema {
             sub_agents: Vec::new(),
             position: Position::default(),
             max_iterations: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_output_tokens: None,
             routes: Vec::new(),
         }
     }

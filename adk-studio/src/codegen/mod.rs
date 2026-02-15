@@ -1352,6 +1352,23 @@ fn generate_llm_node_v2(
         }
     }
 
+    // Add generation config if set
+    if let Some(temp) = agent.temperature {
+        code.push_str(&format!("    {}_builder = {}_builder.temperature({:.1});\n", id, id, temp));
+    }
+    if let Some(top_p) = agent.top_p {
+        code.push_str(&format!("    {}_builder = {}_builder.top_p({:.2});\n", id, id, top_p));
+    }
+    if let Some(top_k) = agent.top_k {
+        code.push_str(&format!("    {}_builder = {}_builder.top_k({});\n", id, id, top_k));
+    }
+    if let Some(max_tokens) = agent.max_output_tokens {
+        code.push_str(&format!(
+            "    {}_builder = {}_builder.max_output_tokens({});\n",
+            id, id, max_tokens
+        ));
+    }
+
     code.push_str(&format!("    let {}_llm = Arc::new({}_builder.build()?);\n\n", id, id));
 
     code.push_str(&format!("    let {}_node = AgentNode::new({}_llm)\n", id, id));
@@ -1618,6 +1635,32 @@ fn generate_container_node(id: &str, agent: &AgentSchema, project: &ProjectSchem
                         sub_id, sub_id
                     ));
                 }
+            }
+
+            // Add generation config if set
+            if let Some(temp) = sub.temperature {
+                code.push_str(&format!(
+                    "    {}_builder = {}_builder.temperature({:.1});\n",
+                    sub_id, sub_id, temp
+                ));
+            }
+            if let Some(top_p) = sub.top_p {
+                code.push_str(&format!(
+                    "    {}_builder = {}_builder.top_p({:.2});\n",
+                    sub_id, sub_id, top_p
+                ));
+            }
+            if let Some(top_k) = sub.top_k {
+                code.push_str(&format!(
+                    "    {}_builder = {}_builder.top_k({});\n",
+                    sub_id, sub_id, top_k
+                ));
+            }
+            if let Some(max_tokens) = sub.max_output_tokens {
+                code.push_str(&format!(
+                    "    {}_builder = {}_builder.max_output_tokens({});\n",
+                    sub_id, sub_id, max_tokens
+                ));
             }
 
             code.push_str(&format!("    let {}_agent = {}_builder.build()?;\n\n", sub_id, sub_id));
