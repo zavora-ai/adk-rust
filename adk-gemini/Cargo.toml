@@ -227,7 +227,7 @@ version = "^0.3.1"
 version = "^0.3"
 
 [dependencies.google-cloud-aiplatform-v1]
-version = "1.5.0"
+version = "1.7.0"
 features = ["prediction-service"]
 
 [dependencies.google-cloud-auth]
