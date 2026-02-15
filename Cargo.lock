@@ -29,7 +29,7 @@ dependencies = [
 
 [[package]]
 name = "adk-agent"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "adk-guardrail",
@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "adk-artifact"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "adk-auth"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -77,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "adk-browser"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "adk-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-agent",
  "adk-artifact",
@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "adk-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "adk-doc-audit"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "adk-eval"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "adk-model",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "adk-examples"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-agent",
  "adk-artifact",
@@ -228,7 +228,7 @@ dependencies = [
 
 [[package]]
 name = "adk-gemini"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "adk-graph"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "async-stream",
@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "adk-guardrail"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "adk-memory"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -302,7 +302,7 @@ dependencies = [
 
 [[package]]
 name = "adk-model"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "adk-gemini",
@@ -325,7 +325,7 @@ dependencies = [
 
 [[package]]
 name = "adk-plugin"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "adk-realtime"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "adk-gemini",
@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "adk-runner"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-artifact",
  "adk-core",
@@ -389,7 +389,7 @@ dependencies = [
 
 [[package]]
 name = "adk-rust"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-agent",
  "adk-artifact",
@@ -422,7 +422,7 @@ dependencies = [
 
 [[package]]
 name = "adk-server"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-agent",
  "adk-artifact",
@@ -457,7 +457,7 @@ dependencies = [
 
 [[package]]
 name = "adk-session"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -474,7 +474,7 @@ dependencies = [
 
 [[package]]
 name = "adk-skill"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "adk-plugin",
@@ -490,7 +490,7 @@ dependencies = [
 
 [[package]]
 name = "adk-studio"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-agent",
  "adk-core",
@@ -533,7 +533,7 @@ dependencies = [
 
 [[package]]
 name = "adk-telemetry"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "adk-tool"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "adk-telemetry",
@@ -568,7 +568,7 @@ dependencies = [
 
 [[package]]
 name = "adk-ui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -5614,7 +5614,7 @@ dependencies = [
 
 [[package]]
 name = "ralph"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "adk-agent",
  "adk-cli",
