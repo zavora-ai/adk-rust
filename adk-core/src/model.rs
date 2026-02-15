@@ -22,7 +22,7 @@ pub struct LlmRequest {
     pub tools: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GenerateContentConfig {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,

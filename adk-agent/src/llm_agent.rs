@@ -41,6 +41,8 @@ pub struct LlmAgent {
     tools: Vec<Arc<dyn Tool>>,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
+    /// Default generation config (temperature, top_p, etc.) applied to every LLM request.
+    generate_content_config: Option<adk_core::GenerateContentConfig>,
     /// Maximum number of LLM round-trips before stopping
     max_iterations: u32,
     /// Timeout for individual tool executions
@@ -90,6 +92,7 @@ pub struct LlmAgentBuilder {
     tools: Vec<Arc<dyn Tool>>,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
+    generate_content_config: Option<adk_core::GenerateContentConfig>,
     max_iterations: u32,
     tool_timeout: std::time::Duration,
     before_callbacks: Vec<BeforeAgentCallback>,
@@ -124,6 +127,7 @@ impl LlmAgentBuilder {
             tools: Vec::new(),
             sub_agents: Vec::new(),
             output_key: None,
+            generate_content_config: None,
             max_iterations: DEFAULT_MAX_ITERATIONS,
             tool_timeout: DEFAULT_TOOL_TIMEOUT,
             before_callbacks: Vec::new(),
@@ -225,6 +229,90 @@ impl LlmAgentBuilder {
 
     pub fn output_key(mut self, key: impl Into<String>) -> Self {
         self.output_key = Some(key.into());
+        self
+    }
+
+    /// Set default generation parameters (temperature, top_p, top_k, max_output_tokens)
+    /// applied to every LLM request made by this agent.
+    ///
+    /// These defaults are merged with any per-request config. If `output_schema` is also
+    /// set, the schema is preserved alongside these generation parameters.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_core::GenerateContentConfig;
+    ///
+    /// let agent = LlmAgentBuilder::new("my-agent")
+    ///     .model(model)
+    ///     .generate_content_config(GenerateContentConfig {
+    ///         temperature: Some(0.7),
+    ///         max_output_tokens: Some(2048),
+    ///         top_p: None,
+    ///         top_k: None,
+    ///         response_schema: None,
+    ///     })
+    ///     .build()?;
+    /// ```
+    pub fn generate_content_config(mut self, config: adk_core::GenerateContentConfig) -> Self {
+        self.generate_content_config = Some(config);
+        self
+    }
+
+    /// Set the default temperature for LLM requests.
+    /// Shorthand for setting just temperature without a full `GenerateContentConfig`.
+    pub fn temperature(mut self, temperature: f32) -> Self {
+        self.generate_content_config
+            .get_or_insert(adk_core::GenerateContentConfig {
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_output_tokens: None,
+                response_schema: None,
+            })
+            .temperature = Some(temperature);
+        self
+    }
+
+    /// Set the default top_p for LLM requests.
+    pub fn top_p(mut self, top_p: f32) -> Self {
+        self.generate_content_config
+            .get_or_insert(adk_core::GenerateContentConfig {
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_output_tokens: None,
+                response_schema: None,
+            })
+            .top_p = Some(top_p);
+        self
+    }
+
+    /// Set the default top_k for LLM requests.
+    pub fn top_k(mut self, top_k: i32) -> Self {
+        self.generate_content_config
+            .get_or_insert(adk_core::GenerateContentConfig {
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_output_tokens: None,
+                response_schema: None,
+            })
+            .top_k = Some(top_k);
+        self
+    }
+
+    /// Set the default max output tokens for LLM requests.
+    pub fn max_output_tokens(mut self, max_tokens: i32) -> Self {
+        self.generate_content_config
+            .get_or_insert(adk_core::GenerateContentConfig {
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_output_tokens: None,
+                response_schema: None,
+            })
+            .max_output_tokens = Some(max_tokens);
         self
     }
 
@@ -349,6 +437,7 @@ impl LlmAgentBuilder {
             tools: self.tools,
             sub_agents: self.sub_agents,
             output_key: self.output_key,
+            generate_content_config: self.generate_content_config,
             max_iterations: self.max_iterations,
             tool_timeout: self.tool_timeout,
             before_callbacks: Arc::new(self.before_callbacks),
@@ -486,6 +575,7 @@ impl Agent for LlmAgent {
         let max_skill_chars = self.max_skill_chars;
         let output_key = self.output_key.clone();
         let output_schema = self.output_schema.clone();
+        let generate_content_config = self.generate_content_config.clone();
         let include_contents = self.include_contents;
         let max_iterations = self.max_iterations;
         let tool_timeout = self.tool_timeout;
@@ -739,15 +829,25 @@ impl Agent for LlmAgent {
                 }
 
                 // Build request with conversation history
-                let config = output_schema.as_ref().map(|schema| {
-                    adk_core::GenerateContentConfig {
+                // Merge agent-level generate_content_config with output_schema.
+                // Agent-level config provides defaults (temperature, top_p, etc.),
+                // output_schema is layered on top as response_schema.
+                let config = match (&generate_content_config, &output_schema) {
+                    (Some(base), Some(schema)) => {
+                        let mut merged = base.clone();
+                        merged.response_schema = Some(schema.clone());
+                        Some(merged)
+                    }
+                    (Some(base), None) => Some(base.clone()),
+                    (None, Some(schema)) => Some(adk_core::GenerateContentConfig {
                         temperature: None,
                         top_p: None,
                         top_k: None,
                         max_output_tokens: None,
                         response_schema: Some(schema.clone()),
-                    }
-                });
+                    }),
+                    (None, None) => None,
+                };
 
                 let request = LlmRequest {
                     model: model.name().to_string(),
