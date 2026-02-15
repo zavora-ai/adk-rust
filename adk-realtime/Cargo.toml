@@ -27,7 +27,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 # WebSocket
-tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"], optional = true }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"], optional = true }
 
 # Zero-copy bytes
 bytes = "1"
