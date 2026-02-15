@@ -423,6 +423,10 @@ mod tests {
                 sub_agents: vec![],
                 position: Position::default(),
                 max_iterations: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_output_tokens: None,
                 routes: vec![],
             },
         );
@@ -486,6 +490,10 @@ mod tests {
                 sub_agents: vec![],
                 position: Position::default(),
                 max_iterations: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_output_tokens: None,
                 routes: vec![],
             },
         );
@@ -508,6 +516,10 @@ mod tests {
                 sub_agents: vec![],
                 position: Position::default(),
                 max_iterations: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_output_tokens: None,
                 routes: vec![], // No routes!
             },
         );
@@ -530,6 +542,10 @@ mod tests {
                 sub_agents: vec![],
                 position: Position::default(),
                 max_iterations: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_output_tokens: None,
                 routes: vec![Route {
                     condition: "test".to_string(),
                     target: "nonexistent".to_string(), // Invalid target
@@ -555,6 +571,10 @@ mod tests {
                 sub_agents: vec![], // No sub-agents!
                 position: Position::default(),
                 max_iterations: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_output_tokens: None,
                 routes: vec![],
             },
         );
@@ -577,6 +597,10 @@ mod tests {
                 sub_agents: vec!["nonexistent".to_string()], // Invalid sub-agent
                 position: Position::default(),
                 max_iterations: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_output_tokens: None,
                 routes: vec![],
             },
         );
@@ -793,6 +817,10 @@ mod env_var_tests {
                 sub_agents: vec![],
                 position: Position::default(),
                 max_iterations: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_output_tokens: None,
                 routes: vec![],
             },
         );
@@ -814,6 +842,10 @@ mod env_var_tests {
                 sub_agents: vec![],
                 position: Position::default(),
                 max_iterations: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_output_tokens: None,
                 routes: vec![],
             },
         );
@@ -835,6 +867,10 @@ mod env_var_tests {
                 sub_agents: vec![],
                 position: Position::default(),
                 max_iterations: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                max_output_tokens: None,
                 routes: vec![],
             },
         );

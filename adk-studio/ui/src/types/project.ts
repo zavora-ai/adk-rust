@@ -54,6 +54,11 @@ export interface AgentSchema {
   model?: string;
   instruction: string;
   description?: string;
+  // Generation Config
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  max_output_tokens?: number;
   // Advanced
   global_instruction?: string;
   output_key?: string;
