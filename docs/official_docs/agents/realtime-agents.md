@@ -44,7 +44,16 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-realtime = { version = "0.3.0", features = ["openai"] }
+adk-realtime = { version = "0.3.1", features = ["openai"] }
+
+# For Vertex AI Live (Google Cloud with ADC auth)
+# adk-realtime = { version = "0.3.1", features = ["vertex-live"] }
+
+# For LiveKit WebRTC bridge
+# adk-realtime = { version = "0.3.1", features = ["livekit"] }
+
+# For all transports (except WebRTC which needs cmake)
+# adk-realtime = { version = "0.3.1", features = ["full"] }
 ```
 
 ### Basic Usage
@@ -339,22 +348,127 @@ let decoded = AudioChunk::from_base64(&base64, format)?;
 | `CancelResponse` | Cancel current response |
 | `SessionUpdate` | Update configuration |
 
+## Vertex AI Live (Google Cloud)
+
+Connect to Gemini Live via Vertex AI with enterprise authentication (ADC, service accounts, WIF):
+
+```rust
+use adk_realtime::gemini::{GeminiLiveBackend, GeminiRealtimeModel};
+use adk_realtime::{RealtimeConfig, RealtimeModel};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let project_id = std::env::var("GOOGLE_CLOUD_PROJECT")?;
+    let region = std::env::var("GOOGLE_CLOUD_REGION")
+        .unwrap_or_else(|_| "us-central1".to_string());
+
+    // Use Application Default Credentials
+    let credentials = google_cloud_auth::credentials::Builder::default()
+        .build()
+        .await?;
+
+    let backend = GeminiLiveBackend::Vertex { credentials, region, project_id };
+    let model = GeminiRealtimeModel::new(backend, "models/gemini-live-2.5-flash-native-audio");
+
+    let config = RealtimeConfig::default()
+        .with_instruction("You are a helpful voice assistant.");
+
+    let session = model.connect(config).await?;
+    session.send_text("Hello from Vertex AI!").await?;
+    session.create_response().await?;
+
+    // Process events...
+    Ok(())
+}
+```
+
+There's also a convenience constructor for ADC:
+
+```rust
+let model = GeminiRealtimeModel::vertex_adc(
+    "us-central1",
+    "my-project-id",
+    "models/gemini-live-2.5-flash-native-audio",
+).await?;
+```
+
+### Vertex AI Live with Tool Calling
+
+The `vertex_live_tools` example demonstrates function calling over a Vertex AI Live session:
+
+```rust
+use adk_realtime::config::ToolDefinition;
+use adk_realtime::events::ToolResponse;
+use serde_json::json;
+
+// Declare tools
+let tools = vec![
+    ToolDefinition {
+        name: "get_weather".to_string(),
+        description: Some("Get current weather for a city".to_string()),
+        parameters: Some(json!({
+            "type": "object",
+            "properties": {
+                "city": { "type": "string" }
+            },
+            "required": ["city"]
+        })),
+    },
+];
+
+let config = RealtimeConfig::default()
+    .with_tools(tools)
+    .with_instruction("Use tools to answer questions about weather.");
+
+let session = model.connect(config).await?;
+
+// Handle FunctionCallDone events and send ToolResponse back
+while let Some(event) = session.next_event().await {
+    match event? {
+        ServerEvent::FunctionCallDone { call_id, name, arguments, .. } => {
+            let result = match name.as_str() {
+                "get_weather" => json!({"temperature": "22°C", "condition": "sunny"}),
+                _ => json!({"error": "unknown tool"}),
+            };
+            session.send_tool_response(ToolResponse::new(&call_id, result)).await?;
+        }
+        ServerEvent::TextDelta { delta, .. } => print!("{delta}"),
+        ServerEvent::ResponseDone { .. } => break,
+        _ => {}
+    }
+}
+```
+
+### Feature Flags
+
+| Feature | Dependencies | Use Case |
+|---------|-------------|----------|
+| `vertex-live` | `gemini` + `google-cloud-auth` | Vertex AI Live with ADC/service account auth |
+| `livekit` | `livekit` + `livekit-api` | LiveKit WebRTC bridge |
+| `openai-webrtc` | `openai` + `str0m` + `audiopus` | OpenAI WebRTC with Opus (requires cmake) |
+| `full` | `openai` + `gemini` + `vertex-live` + `livekit` | All transports except WebRTC |
+| `full-webrtc` | `full` + `openai-webrtc` | Everything (requires cmake) |
+
 ## Examples
 
 Run the included examples:
 
 ```bash
-# Basic text-only session
+# OpenAI Realtime (WebSocket)
 cargo run --example realtime_basic --features realtime-openai
-
-# Voice assistant with VAD
 cargo run --example realtime_vad --features realtime-openai
-
-# Tool calling
 cargo run --example realtime_tools --features realtime-openai
-
-# Multi-agent handoffs
 cargo run --example realtime_handoff --features realtime-openai
+
+# Vertex AI Live (requires gcloud auth application-default login)
+cargo run -p adk-realtime --example vertex_live_voice --features vertex-live
+cargo run -p adk-realtime --example vertex_live_tools --features vertex-live
+
+# LiveKit Bridge (requires LiveKit server)
+cargo run -p adk-realtime --example livekit_bridge --features livekit,openai
+
+# OpenAI WebRTC (requires cmake)
+cargo run -p adk-realtime --example openai_webrtc --features openai-webrtc
 ```
 
 ## Best Practices

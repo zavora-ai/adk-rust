@@ -39,7 +39,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-adk-rust = "0.3.0"
+adk-rust = "0.3.1"
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 ```
@@ -261,7 +261,7 @@ ADK-Rust supports multiple LLM providers out of the box. Enable them via feature
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.3.0", features = ["openai", "anthropic", "deepseek", "groq", "ollama"] }
+adk-rust = { version = "0.3.1", features = ["openai", "anthropic", "deepseek", "groq", "ollama"] }
 ```
 
 Set the appropriate API key for your provider:

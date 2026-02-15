@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 
-> **🎉 v0.3.0 Released!** ADK Studio action nodes & debugger, ADK UI support for A2UI, AG UI and MCP Apps, Skills.md augmentation, and Vertex AI integration....including an all new ADK-Rust VS Code Extension! [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
+> **🎉 v0.3.1 Released!** Vertex AI Live streaming, LiveKit WebRTC bridge, OpenAI WebRTC transport, multi-provider Studio codegen, 2026 model names, and response parsing hardening. [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 
 A comprehensive and production-ready Rust framework for building AI agents. Create powerful and high-performance AI agent systems with a flexible, modular architecture. Model-agnostic. Type-safe. Blazingly fast.
 
@@ -116,14 +116,14 @@ Requires Rust 1.85 or later (Rust 2024 edition). Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.3.0"
+adk-rust = "0.3.1"
 
 # Or individual crates
-adk-core = "0.3.0"
-adk-agent = "0.3.0"
-adk-model = "0.3.0"  # Add features for providers: features = ["openai", "anthropic"]
-adk-tool = "0.3.0"
-adk-runner = "0.3.0"
+adk-core = "0.3.1"
+adk-agent = "0.3.1"
+adk-model = "0.3.1"  # Add features for providers: features = ["openai", "anthropic"]
+adk-tool = "0.3.1"
+adk-runner = "0.3.1"
 ```
 
 **Nightly (latest features):**
@@ -395,9 +395,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 **Run realtime examples**:
 ```bash
+# OpenAI Realtime (WebSocket)
 cargo run --example realtime_basic --features realtime-openai
 cargo run --example realtime_tools --features realtime-openai
 cargo run --example realtime_handoff --features realtime-openai
+
+# Vertex AI Live (requires gcloud auth application-default login)
+cargo run -p adk-realtime --example vertex_live_voice --features vertex-live
+cargo run -p adk-realtime --example vertex_live_tools --features vertex-live
+
+# LiveKit Bridge (requires LiveKit server)
+cargo run -p adk-realtime --example livekit_bridge --features livekit,openai
+
+# OpenAI WebRTC (requires cmake)
+cargo run -p adk-realtime --example openai_webrtc --features openai-webrtc
 ```
 
 ### Graph-Based Workflows
@@ -696,25 +707,25 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 # All-in-one crate
-adk-rust = "0.3.0"
+adk-rust = "0.3.1"
 
 # Or individual crates for finer control
-adk-core = "0.3.0"
-adk-agent = "0.3.0"
-adk-model = { version = "0.3.0", features = ["openai", "anthropic"] }  # Enable providers
-adk-tool = "0.3.0"
-adk-runner = "0.3.0"
+adk-core = "0.3.1"
+adk-agent = "0.3.1"
+adk-model = { version = "0.3.1", features = ["openai", "anthropic"] }  # Enable providers
+adk-tool = "0.3.1"
+adk-runner = "0.3.1"
 
 # Optional dependencies
-adk-session = { version = "0.3.0", optional = true }
-adk-artifact = { version = "0.3.0", optional = true }
-adk-memory = { version = "0.3.0", optional = true }
-adk-server = { version = "0.3.0", optional = true }
-adk-cli = { version = "0.3.0", optional = true }
-adk-realtime = { version = "0.3.0", features = ["openai"], optional = true }
-adk-graph = { version = "0.3.0", features = ["sqlite"], optional = true }
-adk-browser = { version = "0.3.0", optional = true }
-adk-eval = { version = "0.3.0", optional = true }
+adk-session = { version = "0.3.1", optional = true }
+adk-artifact = { version = "0.3.1", optional = true }
+adk-memory = { version = "0.3.1", optional = true }
+adk-server = { version = "0.3.1", optional = true }
+adk-cli = { version = "0.3.1", optional = true }
+adk-realtime = { version = "0.3.1", features = ["openai"], optional = true }
+adk-graph = { version = "0.3.1", features = ["sqlite"], optional = true }
+adk-browser = { version = "0.3.1", optional = true }
+adk-eval = { version = "0.3.1", optional = true }
 ```
 
 ## Examples
@@ -750,6 +761,14 @@ See [examples/](examples/) directory for complete, runnable examples:
 - `realtime_vad/` - Voice assistant with VAD
 - `realtime_tools/` - Tool calling in realtime sessions
 - `realtime_handoff/` - Multi-agent handoffs
+
+**Vertex AI Live** (requires `--features vertex-live`)
+- `vertex_live_voice/` - Vertex AI Live voice session with ADC auth
+- `vertex_live_tools/` - Vertex AI Live with function calling (weather + time tools)
+
+**LiveKit & WebRTC**
+- `livekit_bridge/` - LiveKit WebRTC bridge to OpenAI Realtime (requires `--features livekit,openai`)
+- `openai_webrtc/` - OpenAI WebRTC transport with Opus codec (requires `--features openai-webrtc`)
 
 **Graph Workflows**
 - `graph_agent/` - GraphAgent with parallel LLM agents and callbacks
@@ -866,6 +885,14 @@ Apache 2.0 (same as Google's ADK)
 Contributions welcome! Please open an issue or pull request on GitHub.
 
 ## Roadmap
+
+**Implemented** (v0.3.1):
+- **Vertex AI Live streaming** — `adk-gemini` refactored with `GeminiBackend` trait, pluggable `StudioBackend` (REST) and `VertexBackend` (REST SSE + gRPC fallback)
+- **Realtime audio transports** — Vertex AI Live with ADC auth, LiveKit WebRTC bridge, OpenAI WebRTC with Opus codec
+- **Realtime stabilization** — raw bytes audio transport, Gemini Live session rewrite, OpenAI SDK event alignment
+- **Multi-provider Studio codegen** — Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama support in code generation
+- **2026 model names** — all docs, examples, and defaults updated (gemini-2.5-flash, gpt-5-mini, claude-sonnet-4.5)
+- **Response parsing hardening** — 25 tests covering Gemini edge cases (safety ratings, streaming, function calls, grounding)
 
 **Implemented** (v0.3.0):
 - **adk-gemini overhaul** — Vertex AI support (ADC, Service Accounts, WIF), v1 stable API, image generation, speech generation, thinking mode, content caching, batch processing, URL context
