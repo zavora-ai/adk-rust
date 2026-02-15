@@ -385,12 +385,18 @@ version = "0.3.0"
 dependencies = [
  "adk-agent",
  "adk-artifact",
+ "adk-auth",
+ "adk-browser",
  "adk-cli",
  "adk-core",
  "adk-doc-audit",
+ "adk-eval",
  "adk-graph",
+ "adk-guardrail",
  "adk-memory",
  "adk-model",
+ "adk-plugin",
+ "adk-realtime",
  "adk-runner",
  "adk-server",
  "adk-session",
@@ -4242,9 +4248,9 @@ dependencies = [
 
 [[package]]
 name = "ollama-rs"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db28711700d24a94bf78ce6a9df3bf55dc07c1bf68376574706ce2653ee3f5fc"
+checksum = "f647d8676b95a6b6205e11453c9fac338d73c9cdcc011c94d1ba9c9bfea582cd"
 dependencies = [
  "async-stream",
  "log",
