@@ -605,7 +605,7 @@ tracing-subscriber.workspace = true
 axum = "0.8"
 async-trait.workspace = true
 dotenvy = "0.15"
-rmcp = { version = "0.14", features = ["client", "transport-child-process"] }
+rmcp = { version = "0.15", features = ["client", "transport-child-process"] }
 rustyline = "15"
 image = "0.25"
 clap = { version = "4.0", features = ["derive"] }

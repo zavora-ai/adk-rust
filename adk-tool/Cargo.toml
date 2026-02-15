@@ -25,7 +25,7 @@ tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars = "0.8"
-rmcp = { version = "0.14", features = ["client"] }
+rmcp = { version = "0.15", features = ["client"] }
 tracing.workspace = true
 base64 = "0.21"
 uuid.workspace = true

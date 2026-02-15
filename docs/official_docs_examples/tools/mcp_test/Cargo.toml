@@ -10,7 +10,7 @@ adk-rust = { path = "../../../../adk-rust" }
 adk-tool = { path = "../../../../adk-tool" }
 adk-core = { path = "../../../../adk-core" }
 adk-cli = { path = "../../../../adk-cli" }
-rmcp = { version = "0.14", features = ["client", "transport-child-process"] }
+rmcp = { version = "0.15", features = ["client", "transport-child-process"] }
 tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 anyhow = "1.0"
