@@ -234,7 +234,7 @@ features = ["prediction-service"]
 version = "1.4.0"
 
 [dependencies.google-cloud-gax]
-version = "1.5.0"
+version = "1.7.0"
 
 [dependencies.mime]
 version = "0.3"
