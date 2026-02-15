@@ -7,6 +7,7 @@ import { ThemeProvider, ThemeToggle } from './components/Theme';
 import { WalkthroughModal, GlobalSettingsModal, TemplateWalkthroughModal } from './components/Overlays';
 import { useWalkthrough } from './hooks/useWalkthrough';
 import { useTheme } from './hooks/useTheme';
+import { useVSCodeThemeSync } from './hooks/useVSCodeThemeSync';
 import { loadGlobalSettings } from './types/settings';
 import { api } from './api/client';
 
@@ -33,6 +34,9 @@ export default function App() {
   const [showGlobalSettings, setShowGlobalSettings] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [deployMessage, setDeployMessage] = useState<string | null>(null);
+
+  // Listen for live VS Code theme changes via postMessage
+  useVSCodeThemeSync();
   const { 
     isVisible: showWalkthrough, 
     complete: completeWalkthrough, 
