@@ -19,14 +19,14 @@ Semantic memory and search for Rust Agent Development Kit (ADK-Rust) agents.
 
 ```toml
 [dependencies]
-adk-memory = "0.3.0"
+adk-memory = "0.3.1"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.3.0", features = ["memory"] }
+adk-rust = { version = "0.3.1", features = ["memory"] }
 ```
 
 ## Quick Start

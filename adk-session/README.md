@@ -19,14 +19,14 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 
 ```toml
 [dependencies]
-adk-session = "0.3.0"
+adk-session = "0.3.1"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.3.0", features = ["sessions"] }
+adk-rust = { version = "0.3.1", features = ["sessions"] }
 ```
 
 ## Quick Start
@@ -86,7 +86,7 @@ let theme = session.state().get("user:theme");
 
 ```toml
 [dependencies]
-adk-session = { version = "0.3.0", features = ["database"] }
+adk-session = { version = "0.3.1", features = ["database"] }
 ```
 
 - `database` - Enable SQLite-backed sessions

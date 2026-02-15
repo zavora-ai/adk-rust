@@ -2,6 +2,10 @@
 
 Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) agents, inspired by LangGraph.
 
+[![Crates.io](https://img.shields.io/crates/v/adk-graph.svg)](https://crates.io/crates/adk-graph)
+[![Documentation](https://docs.rs/adk-graph/badge.svg)](https://docs.rs/adk-graph)
+[![License](https://img.shields.io/crates/l/adk-graph.svg)](LICENSE)
+
 ## Overview
 
 `adk-graph` provides a powerful way to build complex, stateful agent workflows using a graph-based approach. It brings LangGraph-style capabilities to the Rust ADK ecosystem while maintaining full compatibility with ADK's agent system, callbacks, and streaming infrastructure.
@@ -40,10 +44,10 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-graph = { version = "0.3.0", features = ["sqlite"] }
-adk-agent = "0.3.0"
-adk-model = "0.3.0"
-adk-core = "0.3.0"
+adk-graph = { version = "0.3.1", features = ["sqlite"] }
+adk-agent = "0.3.1"
+adk-model = "0.3.1"
+adk-core = "0.3.1"
 ```
 
 ### Basic Graph with AgentNode

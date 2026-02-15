@@ -2,6 +2,10 @@
 
 Documentation audit system for ADK-Rust that validates documentation against actual crate implementations.
 
+[![Crates.io](https://img.shields.io/crates/v/adk-doc-audit.svg)](https://crates.io/crates/adk-doc-audit)
+[![Documentation](https://docs.rs/adk-doc-audit/badge.svg)](https://docs.rs/adk-doc-audit)
+[![License](https://img.shields.io/crates/l/adk-doc-audit.svg)](LICENSE)
+
 ## Overview
 
 The `adk-doc-audit` crate provides a comprehensive system for ensuring that ADK-Rust's documentation stays accurate and up-to-date with the actual crate implementations. It performs static analysis of documentation files, validates code examples, and cross-references API signatures with actual implementations.

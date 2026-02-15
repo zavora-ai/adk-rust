@@ -2,6 +2,10 @@
 
 Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 
+[![Crates.io](https://img.shields.io/crates/v/adk-eval.svg)](https://crates.io/crates/adk-eval)
+[![Documentation](https://docs.rs/adk-eval/badge.svg)](https://docs.rs/adk-eval)
+[![License](https://img.shields.io/crates/l/adk-eval.svg)](LICENSE)
+
 ## Overview
 
 `adk-eval` provides comprehensive tools for testing and validating agent behavior, enabling developers to ensure their agents perform correctly and consistently. Unlike traditional software testing, agent evaluation must account for the probabilistic nature of LLMs while still providing meaningful quality signals.

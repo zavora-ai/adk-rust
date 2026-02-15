@@ -2,6 +2,10 @@
 
 Real-time bidirectional audio streaming for Rust Agent Development Kit (ADK-Rust) agents.
 
+[![Crates.io](https://img.shields.io/crates/v/adk-realtime.svg)](https://crates.io/crates/adk-realtime)
+[![Documentation](https://docs.rs/adk-realtime/badge.svg)](https://docs.rs/adk-realtime)
+[![License](https://img.shields.io/crates/l/adk-realtime.svg)](LICENSE)
+
 ## Overview
 
 `adk-realtime` provides a unified interface for building voice-enabled AI agents using real-time streaming APIs. It follows the **OpenAI Agents SDK pattern** with a separate, decoupled implementation that integrates seamlessly with the ADK agent ecosystem.

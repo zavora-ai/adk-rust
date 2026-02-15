@@ -2,6 +2,10 @@
 
 Browser automation tools for Rust Agent Development Kit (ADK-Rust) agents using WebDriver.
 
+[![Crates.io](https://img.shields.io/crates/v/adk-browser.svg)](https://crates.io/crates/adk-browser)
+[![Documentation](https://docs.rs/adk-browser/badge.svg)](https://docs.rs/adk-browser)
+[![License](https://img.shields.io/crates/l/adk-browser.svg)](LICENSE)
+
 ## Overview
 
 `adk-browser` provides 46 comprehensive browser automation tools that enable AI agents to interact with web pages, extract information, fill forms, take screenshots, and more. Built on the WebDriver protocol (Selenium), it works with any WebDriver-compatible browser.
@@ -20,9 +24,9 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-browser = "0.3.0"
-adk-agent = "0.3.0"
-adk-model = "0.3.0"
+adk-browser = "0.3.1"
+adk-agent = "0.3.1"
+adk-model = "0.3.1"
 ```
 
 ### Prerequisites

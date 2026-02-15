@@ -25,14 +25,14 @@ The crate implements the `Llm` trait from `adk-core`, allowing models to be used
 
 ```toml
 [dependencies]
-adk-model = "0.3.0"
+adk-model = "0.3.1"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.3.0", features = ["models"] }
+adk-rust = { version = "0.3.1", features = ["models"] }
 ```
 
 ## Quick Start
@@ -298,15 +298,15 @@ Enable specific providers with feature flags:
 ```toml
 [dependencies]
 # All providers (default)
-adk-model = { version = "0.3.0", features = ["all-providers"] }
+adk-model = { version = "0.3.1", features = ["all-providers"] }
 
 # Individual providers
-adk-model = { version = "0.3.0", features = ["gemini"] }
-adk-model = { version = "0.3.0", features = ["openai"] }
-adk-model = { version = "0.3.0", features = ["anthropic"] }
-adk-model = { version = "0.3.0", features = ["deepseek"] }
-adk-model = { version = "0.3.0", features = ["groq"] }
-adk-model = { version = "0.3.0", features = ["ollama"] }
+adk-model = { version = "0.3.1", features = ["gemini"] }
+adk-model = { version = "0.3.1", features = ["openai"] }
+adk-model = { version = "0.3.1", features = ["anthropic"] }
+adk-model = { version = "0.3.1", features = ["deepseek"] }
+adk-model = { version = "0.3.1", features = ["groq"] }
+adk-model = { version = "0.3.1", features = ["ollama"] }
 ```
 
 ## Related Crates

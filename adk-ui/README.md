@@ -2,6 +2,10 @@
 
 Dynamic UI generation for AI agents. Enables agents to render rich user interfaces through tool calls.
 
+[![Crates.io](https://img.shields.io/crates/v/adk-ui.svg)](https://crates.io/crates/adk-ui)
+[![Documentation](https://docs.rs/adk-ui/badge.svg)](https://docs.rs/adk-ui)
+[![License](https://img.shields.io/crates/l/adk-ui.svg)](LICENSE)
+
 ## Features
 
 - **30 Component Types**: Text, buttons, forms, tables, charts, modals, toasts, and more
@@ -17,7 +21,7 @@ Dynamic UI generation for AI agents. Enables agents to render rich user interfac
 
 ```toml
 [dependencies]
-adk-ui = "0.3.0"
+adk-ui = "0.3.1"
 ```
 
 ```rust
