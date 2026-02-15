@@ -22,7 +22,7 @@
 #![cfg(feature = "openai-webrtc")]
 
 use adk_realtime::openai::{OpenAIRealtimeModel, OpenAITransport};
-use adk_realtime::{RealtimeConfig, RealtimeModel, RealtimeSession, ServerEvent};
+use adk_realtime::{RealtimeConfig, RealtimeModel, ServerEvent};
 
 /// Integration test: connect to OpenAI via WebRTC, send text, and verify
 /// a response event is received on the data channel.
