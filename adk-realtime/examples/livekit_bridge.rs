@@ -98,10 +98,8 @@ async fn connect_to_livekit()
     // --- Wait for a remote participant's audio track ---
     println!("Waiting for a remote participant's audio track...");
     let remote_track = loop {
-        if let Some(RoomEvent::TrackSubscribed {
-            track: RemoteTrack::Audio(audio_track),
-            ..
-        }) = room_events.recv().await
+        if let Some(RoomEvent::TrackSubscribed { track: RemoteTrack::Audio(audio_track), .. }) =
+            room_events.recv().await
         {
             println!("Subscribed to remote audio track.");
             break audio_track;
