@@ -39,7 +39,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
 
 # Temporary project creation for example validation
-tempfile = "3.12"
+tempfile = "3.25"
 uuid = { version = "1.10", features = ["v4"] }
 sha2 = "0.10"
 
