@@ -34,7 +34,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y mold cmake libglib2.0-dev
+        sudo apt-get install -y mold cmake libglib2.0-dev libva-dev
 
     - name: Setup sccache
       uses: mozilla-actions/sccache-action@v0.0.9
