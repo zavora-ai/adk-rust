@@ -26,15 +26,9 @@ const DEFAULT_NUM_CHANNELS: i32 = 1;
 ///
 /// * `track` — The LiveKit remote audio track to read from.
 /// * `runner` — The realtime runner to send audio to.
-pub async fn bridge_input(
-    track: RemoteAudioTrack,
-    runner: &RealtimeRunner,
-) -> Result<()> {
-    let mut stream = NativeAudioStream::new(
-        track.rtc_track(),
-        DEFAULT_SAMPLE_RATE,
-        DEFAULT_NUM_CHANNELS,
-    );
+pub async fn bridge_input(track: RemoteAudioTrack, runner: &RealtimeRunner) -> Result<()> {
+    let mut stream =
+        NativeAudioStream::new(track.rtc_track(), DEFAULT_SAMPLE_RATE, DEFAULT_NUM_CHANNELS);
 
     while let Some(frame) = stream.next().await {
         // Convert i16 samples to little-endian PCM16 bytes
@@ -56,16 +50,10 @@ pub async fn bridge_input(
 ///
 /// * `track` — The LiveKit remote audio track to read from.
 /// * `runner` — The realtime runner to send audio to.
-pub async fn bridge_gemini_input(
-    track: RemoteAudioTrack,
-    runner: &RealtimeRunner,
-) -> Result<()> {
+pub async fn bridge_gemini_input(track: RemoteAudioTrack, runner: &RealtimeRunner) -> Result<()> {
     // Request 16kHz mono from LiveKit — it handles resampling for us.
-    let mut stream = NativeAudioStream::new(
-        track.rtc_track(),
-        GEMINI_SAMPLE_RATE,
-        DEFAULT_NUM_CHANNELS,
-    );
+    let mut stream =
+        NativeAudioStream::new(track.rtc_track(), GEMINI_SAMPLE_RATE, DEFAULT_NUM_CHANNELS);
 
     while let Some(frame) = stream.next().await {
         let chunk = AudioChunk::from_i16_samples(&frame.data, AudioFormat::pcm16_16khz());

@@ -16,8 +16,8 @@ use adk_realtime::error::RealtimeError;
 use adk_realtime::livekit::LiveKitEventHandler;
 use adk_realtime::runner::EventHandler;
 use async_trait::async_trait;
-use livekit::webrtc::audio_source::native::NativeAudioSource;
 use livekit::webrtc::audio_source::AudioSourceOptions;
+use livekit::webrtc::audio_source::native::NativeAudioSource;
 use proptest::prelude::*;
 use tokio::sync::Mutex;
 
@@ -40,9 +40,7 @@ struct RecordingHandler {
 
 impl RecordingHandler {
     fn new() -> Self {
-        Self {
-            calls: Arc::new(Mutex::new(Vec::new())),
-        }
+        Self { calls: Arc::new(Mutex::new(Vec::new())) }
     }
 
     async fn recorded_calls(&self) -> Vec<RecordedCall> {
@@ -58,56 +56,38 @@ impl EventHandler for RecordingHandler {
     }
 
     async fn on_text(&self, text: &str, item_id: &str) -> adk_realtime::Result<()> {
-        self.calls.lock().await.push(RecordedCall::OnText {
-            text: text.to_string(),
+        self.calls
+            .lock()
+            .await
+            .push(RecordedCall::OnText { text: text.to_string(), item_id: item_id.to_string() });
+        Ok(())
+    }
+
+    async fn on_transcript(&self, transcript: &str, item_id: &str) -> adk_realtime::Result<()> {
+        self.calls.lock().await.push(RecordedCall::OnTranscript {
+            transcript: transcript.to_string(),
             item_id: item_id.to_string(),
         });
         Ok(())
     }
 
-    async fn on_transcript(
-        &self,
-        transcript: &str,
-        item_id: &str,
-    ) -> adk_realtime::Result<()> {
-        self.calls
-            .lock()
-            .await
-            .push(RecordedCall::OnTranscript {
-                transcript: transcript.to_string(),
-                item_id: item_id.to_string(),
-            });
-        Ok(())
-    }
-
     async fn on_speech_started(&self, audio_start_ms: u64) -> adk_realtime::Result<()> {
-        self.calls
-            .lock()
-            .await
-            .push(RecordedCall::OnSpeechStarted { audio_start_ms });
+        self.calls.lock().await.push(RecordedCall::OnSpeechStarted { audio_start_ms });
         Ok(())
     }
 
     async fn on_speech_stopped(&self, audio_end_ms: u64) -> adk_realtime::Result<()> {
-        self.calls
-            .lock()
-            .await
-            .push(RecordedCall::OnSpeechStopped { audio_end_ms });
+        self.calls.lock().await.push(RecordedCall::OnSpeechStopped { audio_end_ms });
         Ok(())
     }
 
     async fn on_response_done(&self) -> adk_realtime::Result<()> {
-        self.calls
-            .lock()
-            .await
-            .push(RecordedCall::OnResponseDone);
+        self.calls.lock().await.push(RecordedCall::OnResponseDone);
         Ok(())
     }
 
     async fn on_error(&self, error: &RealtimeError) -> adk_realtime::Result<()> {
-        self.calls.lock().await.push(RecordedCall::OnError {
-            message: error.to_string(),
-        });
+        self.calls.lock().await.push(RecordedCall::OnError { message: error.to_string() });
         Ok(())
     }
 }
@@ -143,11 +123,7 @@ fn arb_timestamp() -> impl Strategy<Value = u64> {
 
 /// Helper to run an async block in a tokio runtime for proptest.
 fn run_async<F: std::future::Future<Output = ()>>(f: F) {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(f);
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(f);
 }
 
 proptest! {

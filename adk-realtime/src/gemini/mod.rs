@@ -56,8 +56,7 @@ pub const GEMINI_LIVE_URL: &str = "wss://generativelanguage.googleapis.com/ws/go
 /// URL template for Vertex AI Live WebSocket endpoint.
 /// Use `build_vertex_live_url()` to construct the full URL with region and project ID.
 #[cfg(feature = "vertex-live")]
-pub const VERTEX_LIVE_URL_TEMPLATE: &str =
-    "wss://{region}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent?project_id={project_id}";
+pub const VERTEX_LIVE_URL_TEMPLATE: &str = "wss://{region}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent?project_id={project_id}";
 
 /// Default model for Gemini Live.
 pub const DEFAULT_MODEL: &str = "models/gemini-live-2.5-flash-native-audio";

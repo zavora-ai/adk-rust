@@ -104,12 +104,7 @@ impl OpusCodec {
         let decoder = Decoder::new(sample_rate, channels)
             .map_err(|e| RealtimeError::opus(format!("Failed to create Opus decoder: {e}")))?;
 
-        Ok(Self {
-            encoder,
-            decoder,
-            sample_rate,
-            channels,
-        })
+        Ok(Self { encoder, decoder, sample_rate, channels })
     }
 
     /// Encodes PCM16 audio samples to an Opus frame.
@@ -297,11 +292,7 @@ impl OpenAIWebRTCSession {
     /// Returns `RealtimeError::ConnectionError` if SDP signaling fails.
     /// Returns `RealtimeError::AuthError` if the ephemeral token request fails.
     /// Returns `RealtimeError::WebRTCError` if the Rtc instance cannot be configured.
-    pub async fn connect(
-        api_key: &str,
-        model_id: &str,
-        _config: RealtimeConfig,
-    ) -> Result<Self> {
+    pub async fn connect(api_key: &str, model_id: &str, _config: RealtimeConfig) -> Result<Self> {
         // Step 1: Create str0m Rtc instance
         let mut rtc = Rtc::new(Instant::now());
 
@@ -336,32 +327,22 @@ impl OpenAIWebRTCSession {
         // Step 4: Obtain ephemeral token from OpenAI
         let http_client = reqwest::Client::new();
 
-        let ephemeral_token = Self::request_ephemeral_token(
-            &http_client,
-            api_key,
-            model_id,
-        )
-        .await?;
+        let ephemeral_token =
+            Self::request_ephemeral_token(&http_client, api_key, model_id).await?;
 
         tracing::debug!("Obtained ephemeral token for WebRTC signaling");
 
         // Step 5: Exchange SDP offer with OpenAI endpoint
-        let answer_sdp = Self::exchange_sdp(
-            &http_client,
-            &ephemeral_token,
-            model_id,
-            &offer_sdp,
-        )
-        .await?;
+        let answer_sdp =
+            Self::exchange_sdp(&http_client, &ephemeral_token, model_id, &offer_sdp).await?;
 
         // Step 6: Parse and apply SDP answer
-        let answer = SdpAnswer::from_sdp_string(&answer_sdp).map_err(|e| {
-            RealtimeError::webrtc(format!("Failed to parse SDP answer: {e}"))
-        })?;
+        let answer = SdpAnswer::from_sdp_string(&answer_sdp)
+            .map_err(|e| RealtimeError::webrtc(format!("Failed to parse SDP answer: {e}")))?;
 
-        rtc.sdp_api().accept_answer(pending, answer).map_err(|e| {
-            RealtimeError::webrtc(format!("Failed to apply SDP answer: {e}"))
-        })?;
+        rtc.sdp_api()
+            .accept_answer(pending, answer)
+            .map_err(|e| RealtimeError::webrtc(format!("Failed to apply SDP answer: {e}")))?;
 
         tracing::info!(
             audio_mid = %audio_track_id,
@@ -378,14 +359,11 @@ impl OpenAIWebRTCSession {
             let writer = rtc.writer(audio_track_id).ok_or_else(|| {
                 RealtimeError::webrtc("Audio track writer not available after SDP answer")
             })?;
-            let params = writer
-                .payload_params()
-                .next()
-                .ok_or_else(|| {
-                    RealtimeError::webrtc(
-                        "No payload type negotiated for audio track — SDP answer may be invalid",
-                    )
-                })?;
+            let params = writer.payload_params().next().ok_or_else(|| {
+                RealtimeError::webrtc(
+                    "No payload type negotiated for audio track — SDP answer may be invalid",
+                )
+            })?;
             (params.pt(), params.spec().clock_rate)
         };
 
@@ -433,9 +411,7 @@ impl OpenAIWebRTCSession {
             .send()
             .await
             .map_err(|e| {
-                RealtimeError::AuthError(format!(
-                    "Failed to request ephemeral token: {e}"
-                ))
+                RealtimeError::AuthError(format!("Failed to request ephemeral token: {e}"))
             })?;
 
         let status = response.status();
@@ -447,9 +423,7 @@ impl OpenAIWebRTCSession {
         }
 
         let token_response: EphemeralTokenResponse = response.json().await.map_err(|e| {
-            RealtimeError::AuthError(format!(
-                "Failed to parse ephemeral token response: {e}"
-            ))
+            RealtimeError::AuthError(format!("Failed to parse ephemeral token response: {e}"))
         })?;
 
         Ok(token_response.client_secret.value)
@@ -465,10 +439,7 @@ impl OpenAIWebRTCSession {
         model_id: &str,
         offer_sdp: &str,
     ) -> Result<String> {
-        let url = format!(
-            "{}/realtime?model={}",
-            OPENAI_API_BASE, model_id
-        );
+        let url = format!("{}/realtime?model={}", OPENAI_API_BASE, model_id);
 
         let response = client
             .post(&url)
@@ -477,11 +448,7 @@ impl OpenAIWebRTCSession {
             .body(offer_sdp.to_string())
             .send()
             .await
-            .map_err(|e| {
-                RealtimeError::connection(format!(
-                    "SDP exchange request failed: {e}"
-                ))
-            })?;
+            .map_err(|e| RealtimeError::connection(format!("SDP exchange request failed: {e}")))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -576,14 +543,17 @@ impl OpenAIWebRTCSession {
                 ));
             }
             pending.push(json_bytes);
-            tracing::debug!("Data channel not open yet, queued message ({} pending)", pending.len());
+            tracing::debug!(
+                "Data channel not open yet, queued message ({} pending)",
+                pending.len()
+            );
             return Ok(());
         }
 
         let mut rtc = self.rtc.lock().await;
-        let mut channel = rtc.channel(self.data_channel_id).ok_or_else(|| {
-            RealtimeError::webrtc("Data channel 'oai-events' not available")
-        })?;
+        let mut channel = rtc
+            .channel(self.data_channel_id)
+            .ok_or_else(|| RealtimeError::webrtc("Data channel 'oai-events' not available"))?;
         channel
             .write(true, json_bytes.as_slice())
             .map_err(|e| RealtimeError::webrtc(format!("Data channel write failed: {e}")))?;
@@ -638,17 +608,15 @@ impl OpenAIWebRTCSession {
         // scaled from the codec sample rate (24 kHz) to the negotiated clock rate.
         let clock_hz = self.clock_rate.get() as u64;
         let samples_at_clock = (pcm_samples.len() as u64) * clock_hz / 24000;
-        let rtp_offset = self
-            .rtp_sample_offset
-            .fetch_add(samples_at_clock, Ordering::Relaxed);
+        let rtp_offset = self.rtp_sample_offset.fetch_add(samples_at_clock, Ordering::Relaxed);
 
         // Write Opus frame to the str0m audio track.
         // str0m is Sans-IO: `writer(mid).write(...)` queues the media for the
         // next `poll_output()` cycle driven by the external I/O loop.
         let mut rtc = self.rtc.lock().await;
-        let writer = rtc.writer(self.audio_track_id).ok_or_else(|| {
-            RealtimeError::webrtc("Audio track writer not available")
-        })?;
+        let writer = rtc
+            .writer(self.audio_track_id)
+            .ok_or_else(|| RealtimeError::webrtc("Audio track writer not available"))?;
 
         let now = Instant::now();
         let rtp_time = MediaTime::new(rtp_offset, self.clock_rate);
@@ -680,9 +648,9 @@ impl RealtimeSession for OpenAIWebRTCSession {
             return Err(RealtimeError::NotConnected);
         }
 
-        let pcm_samples = audio.to_i16_samples().map_err(|e| {
-            RealtimeError::opus(format!("Invalid PCM16 audio data: {e}"))
-        })?;
+        let pcm_samples = audio
+            .to_i16_samples()
+            .map_err(|e| RealtimeError::opus(format!("Invalid PCM16 audio data: {e}")))?;
 
         self.write_audio_to_track(&pcm_samples).await
     }
@@ -708,10 +676,8 @@ impl RealtimeSession for OpenAIWebRTCSession {
             )));
         }
 
-        let pcm_samples: Vec<i16> = raw_bytes
-            .chunks_exact(2)
-            .map(|c| i16::from_le_bytes([c[0], c[1]]))
-            .collect();
+        let pcm_samples: Vec<i16> =
+            raw_bytes.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
 
         self.write_audio_to_track(&pcm_samples).await
     }

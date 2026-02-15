@@ -37,12 +37,7 @@ impl<H: EventHandler> LiveKitEventHandler<H> {
         sample_rate: u32,
         num_channels: u32,
     ) -> Self {
-        Self {
-            inner,
-            audio_source,
-            sample_rate,
-            num_channels,
-        }
+        Self { inner, audio_source, sample_rate, num_channels }
     }
 }
 

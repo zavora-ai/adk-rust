@@ -18,8 +18,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: "sccache"
 
 jobs:
   mistralrs-check:
@@ -44,7 +42,18 @@ jobs:
         sudo apt-get install -y mold
 
     - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.7
+      uses: mozilla-actions/sccache-action@v0.0.9
+      continue-on-error: true
+
+    - name: Configure sccache
+      run: |
+        if sccache --show-stats > /dev/null 2>&1; then
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          echo "sccache is available — enabling"
+        else
+          echo "sccache unavailable — building without cache"
+        fi
 
     - name: Run clippy
       env:
@@ -61,4 +70,5 @@ jobs:
         cargo test --doc
 
     - name: Show sccache stats
+      if: env.RUSTC_WRAPPER == 'sccache'
       run: sccache --show-stats

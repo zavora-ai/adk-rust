@@ -66,22 +66,14 @@ impl GeminiLiveBackend {
     /// let model = GeminiRealtimeModel::new(backend, "models/gemini-live-2.5-flash-native-audio");
     /// ```
     #[cfg(feature = "vertex-live")]
-    pub fn vertex_adc(
-        project_id: impl Into<String>,
-        region: impl Into<String>,
-    ) -> Result<Self> {
-        let credentials = google_cloud_auth::credentials::Builder::default()
-            .build()
-            .map_err(|e| {
+    pub fn vertex_adc(project_id: impl Into<String>, region: impl Into<String>) -> Result<Self> {
+        let credentials =
+            google_cloud_auth::credentials::Builder::default().build().map_err(|e| {
                 RealtimeError::AuthError(format!(
                     "Failed to discover Application Default Credentials: {e}"
                 ))
             })?;
-        Ok(Self::Vertex {
-            credentials,
-            region: region.into(),
-            project_id: project_id.into(),
-        })
+        Ok(Self::Vertex { credentials, region: region.into(), project_id: project_id.into() })
     }
 }
 
@@ -213,24 +205,20 @@ impl GeminiRealtimeSession {
                 let url = build_vertex_live_url(region, project_id)?;
 
                 // Obtain OAuth2 bearer token from ADC credentials
-                let header_map = match credentials
-                    .headers(Default::default())
-                    .await
-                    .map_err(|e| {
+                let header_map =
+                    match credentials.headers(Default::default()).await.map_err(|e| {
                         RealtimeError::AuthError(format!(
                             "Failed to obtain OAuth2 token from ADC credentials: {e}"
                         ))
                     })? {
-                    google_cloud_auth::credentials::CacheableResource::New {
-                        data, ..
-                    } => data,
-                    google_cloud_auth::credentials::CacheableResource::NotModified => {
-                        return Err(RealtimeError::AuthError(
+                        google_cloud_auth::credentials::CacheableResource::New { data, .. } => data,
+                        google_cloud_auth::credentials::CacheableResource::NotModified => {
+                            return Err(RealtimeError::AuthError(
                             "ADC credentials returned NotModified with no cached token available"
                                 .to_string(),
                         ));
-                    }
-                };
+                        }
+                    };
 
                 // Extract the Authorization header value
                 let auth_value = header_map
@@ -254,15 +242,19 @@ impl GeminiRealtimeSession {
                 })?;
                 request.headers_mut().insert(
                     "Authorization",
-                    auth_value.parse().map_err(|e: tokio_tungstenite::tungstenite::http::header::InvalidHeaderValue| {
-                        RealtimeError::AuthError(format!(
-                            "Failed to parse Authorization header value: {e}"
-                        ))
-                    })?,
+                    auth_value.parse().map_err(
+                        |e: tokio_tungstenite::tungstenite::http::header::InvalidHeaderValue| {
+                            RealtimeError::AuthError(format!(
+                                "Failed to parse Authorization header value: {e}"
+                            ))
+                        },
+                    )?,
                 );
 
                 let (ws, _) = connect_async(request).await.map_err(|e| {
-                    RealtimeError::connection(format!("Vertex AI Live WebSocket connect error: {e}"))
+                    RealtimeError::connection(format!(
+                        "Vertex AI Live WebSocket connect error: {e}"
+                    ))
                 })?;
                 ws
             }
@@ -584,14 +576,10 @@ impl std::fmt::Debug for GeminiRealtimeSession {
 #[cfg(feature = "vertex-live")]
 pub fn build_vertex_live_url(region: &str, project_id: &str) -> Result<String> {
     if region.is_empty() {
-        return Err(RealtimeError::config(
-            "Vertex AI Live requires a non-empty region",
-        ));
+        return Err(RealtimeError::config("Vertex AI Live requires a non-empty region"));
     }
     if project_id.is_empty() {
-        return Err(RealtimeError::config(
-            "Vertex AI Live requires a non-empty project_id",
-        ));
+        return Err(RealtimeError::config("Vertex AI Live requires a non-empty project_id"));
     }
     Ok(format!(
         "wss://{region}-aiplatform.googleapis.com/ws/\

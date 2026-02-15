@@ -36,14 +36,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- 2. Build the Vertex AI Live backend ---
     let region = std::env::var("GOOGLE_CLOUD_REGION").unwrap_or_else(|_| "us-central1".into());
-    let project_id = std::env::var("GOOGLE_CLOUD_PROJECT")
-        .expect("GOOGLE_CLOUD_PROJECT env var is required");
+    let project_id =
+        std::env::var("GOOGLE_CLOUD_PROJECT").expect("GOOGLE_CLOUD_PROJECT env var is required");
 
-    let backend = GeminiLiveBackend::Vertex {
-        credentials,
-        region,
-        project_id,
-    };
+    let backend = GeminiLiveBackend::Vertex { credentials, region, project_id };
 
     // --- 3. Create the model and session configuration ---
     let model = GeminiRealtimeModel::new(backend, "models/gemini-live-2.5-flash-native-audio");

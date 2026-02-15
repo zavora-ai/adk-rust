@@ -32,9 +32,7 @@ fn arb_frame_size() -> impl Strategy<Value = usize> {
 
 /// Generator for PCM16 audio samples of a valid Opus frame size at 24kHz mono.
 fn arb_pcm16_frame() -> impl Strategy<Value = Vec<i16>> {
-    arb_frame_size().prop_flat_map(|size| {
-        proptest::collection::vec(any::<i16>(), size..=size)
-    })
+    arb_frame_size().prop_flat_map(|size| proptest::collection::vec(any::<i16>(), size..=size))
 }
 
 proptest! {
@@ -112,8 +110,7 @@ proptest! {
 /// **Validates: Requirements 11.2**
 #[test]
 fn test_sample_rate_matches_configured() {
-    let codec = OpusCodec::new(24000, 1)
-        .expect("Failed to create OpusCodec at 24kHz mono");
+    let codec = OpusCodec::new(24000, 1).expect("Failed to create OpusCodec at 24kHz mono");
 
     assert_eq!(
         codec.sample_rate(),
@@ -127,12 +124,7 @@ fn test_sample_rate_matches_configured() {
 /// **Validates: Requirements 11.3**
 #[test]
 fn test_channel_count_matches_configured() {
-    let codec = OpusCodec::new(24000, 1)
-        .expect("Failed to create OpusCodec at 24kHz mono");
+    let codec = OpusCodec::new(24000, 1).expect("Failed to create OpusCodec at 24kHz mono");
 
-    assert_eq!(
-        codec.channels(),
-        Channels::Mono,
-        "Codec channels do not match configured mono"
-    );
+    assert_eq!(codec.channels(), Channels::Mono, "Codec channels do not match configured mono");
 }

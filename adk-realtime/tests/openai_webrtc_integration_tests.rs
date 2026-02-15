@@ -37,8 +37,7 @@ use adk_realtime::{RealtimeConfig, RealtimeModel, RealtimeSession, ServerEvent};
 async fn test_openai_webrtc_text_exchange() {
     let timeout = tokio::time::Duration::from_secs(30);
     tokio::time::timeout(timeout, async {
-        let api_key =
-            std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY env var is required");
+        let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY env var is required");
 
         let model = OpenAIRealtimeModel::new(api_key, "gpt-4o-realtime-preview-2024-12-17")
             .with_transport(OpenAITransport::WebRTC);
@@ -48,10 +47,7 @@ async fn test_openai_webrtc_text_exchange() {
             .with_voice("alloy");
 
         // Connect via WebRTC (SDP signaling happens internally)
-        let session = model
-            .connect(config)
-            .await
-            .expect("Failed to connect via OpenAI WebRTC");
+        let session = model.connect(config).await.expect("Failed to connect via OpenAI WebRTC");
 
         assert!(
             session.is_connected(),
@@ -82,10 +78,7 @@ async fn test_openai_webrtc_text_exchange() {
             }
         }
 
-        assert!(
-            received_event,
-            "Should have received at least one response event via WebRTC"
-        );
+        assert!(received_event, "Should have received at least one response event via WebRTC");
 
         session.close().await.expect("Failed to close WebRTC session");
     })
@@ -105,8 +98,7 @@ async fn test_openai_webrtc_text_exchange() {
 async fn test_openai_webrtc_audio_roundtrip() {
     let timeout = tokio::time::Duration::from_secs(30);
     tokio::time::timeout(timeout, async {
-        let api_key =
-            std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY env var is required");
+        let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY env var is required");
 
         let model = OpenAIRealtimeModel::new(api_key, "gpt-4o-realtime-preview-2024-12-17")
             .with_transport(OpenAITransport::WebRTC);
@@ -115,17 +107,11 @@ async fn test_openai_webrtc_audio_roundtrip() {
             .with_instruction("You are a helpful assistant.")
             .with_voice("alloy");
 
-        let session = model
-            .connect(config)
-            .await
-            .expect("Failed to connect via OpenAI WebRTC");
+        let session = model.connect(config).await.expect("Failed to connect via OpenAI WebRTC");
 
         // Create a short PCM16 audio chunk (480 samples of silence at 24kHz = 20ms)
         let silence_pcm: Vec<i16> = vec![0i16; 480];
-        let pcm_bytes: Vec<u8> = silence_pcm
-            .iter()
-            .flat_map(|s| s.to_le_bytes())
-            .collect();
+        let pcm_bytes: Vec<u8> = silence_pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
         let audio_chunk = adk_realtime::audio::AudioChunk::pcm16_24khz(pcm_bytes);
 
         // Send audio and commit to trigger processing
@@ -134,17 +120,11 @@ async fn test_openai_webrtc_audio_roundtrip() {
             .await
             .expect("Failed to send audio over WebRTC media track");
 
-        session
-            .commit_audio()
-            .await
-            .expect("Failed to commit audio buffer");
+        session.commit_audio().await.expect("Failed to commit audio buffer");
 
         // We may or may not get a meaningful response from silence,
         // but the session should remain connected and not error out.
-        assert!(
-            session.is_connected(),
-            "Session should remain connected after sending audio"
-        );
+        assert!(session.is_connected(), "Session should remain connected after sending audio");
 
         session.close().await.expect("Failed to close WebRTC session");
     })
@@ -160,18 +140,14 @@ async fn test_openai_webrtc_audio_roundtrip() {
 async fn test_openai_webrtc_session_id() {
     let timeout = tokio::time::Duration::from_secs(30);
     tokio::time::timeout(timeout, async {
-        let api_key =
-            std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY env var is required");
+        let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY env var is required");
 
         let model = OpenAIRealtimeModel::new(api_key, "gpt-4o-realtime-preview-2024-12-17")
             .with_transport(OpenAITransport::WebRTC);
 
         let config = RealtimeConfig::default();
 
-        let session = model
-            .connect(config)
-            .await
-            .expect("Failed to connect via OpenAI WebRTC");
+        let session = model.connect(config).await.expect("Failed to connect via OpenAI WebRTC");
 
         assert!(
             !session.session_id().is_empty(),

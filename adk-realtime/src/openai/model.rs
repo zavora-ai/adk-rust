@@ -8,7 +8,7 @@ use crate::session::BoxedSession;
 use async_trait::async_trait;
 
 use super::session::OpenAIRealtimeSession;
-use super::{OpenAITransport, DEFAULT_MODEL, OPENAI_REALTIME_URL, OPENAI_VOICES};
+use super::{DEFAULT_MODEL, OPENAI_REALTIME_URL, OPENAI_VOICES, OpenAITransport};
 
 /// OpenAI Realtime model for creating realtime sessions.
 ///
@@ -111,12 +111,9 @@ impl RealtimeModel for OpenAIRealtimeModel {
     async fn connect(&self, config: RealtimeConfig) -> Result<BoxedSession> {
         match self.transport {
             OpenAITransport::WebSocket => {
-                let session = OpenAIRealtimeSession::connect(
-                    &self.websocket_url(),
-                    &self.api_key,
-                    config,
-                )
-                .await?;
+                let session =
+                    OpenAIRealtimeSession::connect(&self.websocket_url(), &self.api_key, config)
+                        .await?;
                 Ok(Box::new(session))
             }
             #[cfg(feature = "openai-webrtc")]

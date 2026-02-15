@@ -57,10 +57,10 @@
 
 use std::sync::Arc;
 
-use adk_realtime::livekit::{bridge_input, LiveKitEventHandler};
+use adk_realtime::RealtimeConfig;
+use adk_realtime::livekit::{LiveKitEventHandler, bridge_input};
 use adk_realtime::openai::OpenAIRealtimeModel;
 use adk_realtime::runner::{EventHandler, RealtimeRunner};
-use adk_realtime::RealtimeConfig;
 
 use livekit::options::TrackPublishOptions;
 use livekit::prelude::*;
@@ -71,10 +71,8 @@ use livekit::webrtc::audio_source::{AudioSourceOptions, RtcAudioSource};
 /// for publishing model audio, and the first remote audio track from a participant.
 ///
 /// In a production app you'd handle track subscriptions more robustly.
-async fn connect_to_livekit() -> Result<
-    (Room, NativeAudioSource, livekit::track::RemoteAudioTrack),
-    Box<dyn std::error::Error>,
-> {
+async fn connect_to_livekit()
+-> Result<(Room, NativeAudioSource, livekit::track::RemoteAudioTrack), Box<dyn std::error::Error>> {
     let url = std::env::var("LIVEKIT_URL").expect("LIVEKIT_URL env var is required");
     let token = std::env::var("LIVEKIT_TOKEN").expect("LIVEKIT_TOKEN env var is required");
 
@@ -94,9 +92,7 @@ async fn connect_to_livekit() -> Result<
     let rtc_source = RtcAudioSource::Native(audio_source.clone());
     let local_track = LocalAudioTrack::create_audio_track("ai-agent-audio", rtc_source);
     let publish_options = TrackPublishOptions::default();
-    room.local_participant()
-        .publish_track(LocalTrack::Audio(local_track), publish_options)
-        .await?;
+    room.local_participant().publish_track(LocalTrack::Audio(local_track), publish_options).await?;
     println!("Published AI agent audio track to room.");
 
     // --- Wait for a remote participant's audio track ---

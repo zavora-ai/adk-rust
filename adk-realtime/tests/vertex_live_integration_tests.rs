@@ -40,44 +40,28 @@ async fn test_vertex_live_text_exchange() {
         // Read required environment variables
         let project_id = std::env::var("GOOGLE_CLOUD_PROJECT")
             .expect("GOOGLE_CLOUD_PROJECT env var is required");
-        let region = std::env::var("GOOGLE_CLOUD_REGION")
-            .unwrap_or_else(|_| "us-central1".to_string());
+        let region =
+            std::env::var("GOOGLE_CLOUD_REGION").unwrap_or_else(|_| "us-central1".to_string());
 
         // Obtain ADC credentials via Builder (synchronous build, no .await)
         let credentials = google_cloud_auth::credentials::Builder::default()
             .build()
             .expect("Failed to obtain Application Default Credentials");
 
-        let backend = GeminiLiveBackend::Vertex {
-            credentials,
-            region,
-            project_id,
-        };
+        let backend = GeminiLiveBackend::Vertex { credentials, region, project_id };
 
-        let model = GeminiRealtimeModel::new(
-            backend,
-            "models/gemini-live-2.5-flash-native-audio",
-        );
+        let model = GeminiRealtimeModel::new(backend, "models/gemini-live-2.5-flash-native-audio");
 
         let config = RealtimeConfig::default()
             .with_instruction("You are a helpful assistant. Respond briefly.");
 
         // Connect to Vertex AI Live
-        let session = model
-            .connect(config)
-            .await
-            .expect("Failed to connect to Vertex AI Live");
+        let session = model.connect(config).await.expect("Failed to connect to Vertex AI Live");
 
-        assert!(
-            session.is_connected(),
-            "Session should be connected after successful connect"
-        );
+        assert!(session.is_connected(), "Session should be connected after successful connect");
 
         // Send a text message
-        session
-            .send_text("Hello, say one word.")
-            .await
-            .expect("Failed to send text");
+        session.send_text("Hello, say one word.").await.expect("Failed to send text");
 
         // Verify we receive at least one ServerEvent response
         let mut received_event = false;
@@ -119,30 +103,20 @@ async fn test_vertex_live_session_id() {
     tokio::time::timeout(timeout, async {
         let project_id = std::env::var("GOOGLE_CLOUD_PROJECT")
             .expect("GOOGLE_CLOUD_PROJECT env var is required");
-        let region = std::env::var("GOOGLE_CLOUD_REGION")
-            .unwrap_or_else(|_| "us-central1".to_string());
+        let region =
+            std::env::var("GOOGLE_CLOUD_REGION").unwrap_or_else(|_| "us-central1".to_string());
 
         let credentials = google_cloud_auth::credentials::Builder::default()
             .build()
             .expect("Failed to obtain Application Default Credentials");
 
-        let backend = GeminiLiveBackend::Vertex {
-            credentials,
-            region,
-            project_id,
-        };
+        let backend = GeminiLiveBackend::Vertex { credentials, region, project_id };
 
-        let model = GeminiRealtimeModel::new(
-            backend,
-            "models/gemini-live-2.5-flash-native-audio",
-        );
+        let model = GeminiRealtimeModel::new(backend, "models/gemini-live-2.5-flash-native-audio");
 
         let config = RealtimeConfig::default();
 
-        let session = model
-            .connect(config)
-            .await
-            .expect("Failed to connect to Vertex AI Live");
+        let session = model.connect(config).await.expect("Failed to connect to Vertex AI Live");
 
         // Session ID should be non-empty after connection
         assert!(

@@ -64,4 +64,3 @@ pub enum OpenAITransport {
     #[cfg(feature = "openai-webrtc")]
     WebRTC,
 }
-
