@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("✅ Database created and migrated");
 
-    let session = service
+    let _session = service
         .create(CreateRequest {
             app_name: "test_app".to_string(),
             user_id: "user1".to_string(),
@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   User: user1");
 
     // Retrieve the session
-    let retrieved = service
+    let _retrieved = service
         .get(GetRequest {
             app_name: "test_app".to_string(),
             user_id: "user1".to_string(),
