@@ -255,6 +255,48 @@ test(eval): add trajectory property tests
 - The root `Cargo.toml` `[workspace.dependencies]` section pins all internal crate versions.
 - `adk-plugin` has a hardcoded `adk-core` dep (not workspace ref) — keep it in sync manually.
 
+## Publishing to crates.io
+
+Always verify builds during publish — never use `--no-verify`. Verification ensures the packaged crate compiles correctly for consumers.
+
+### Publish order
+
+Crates must be published in dependency order. Wait for each crate to be indexed before publishing dependents.
+
+```
+Tier 1: adk-core
+Tier 2: adk-telemetry, adk-memory, adk-artifact, adk-plugin, adk-skill, adk-auth, adk-guardrail, adk-gemini
+Tier 3: adk-session
+Tier 4: adk-tool, adk-model, adk-ui, adk-browser
+Tier 5: adk-agent, adk-graph
+Tier 6: adk-runner, adk-realtime, adk-eval
+Tier 7: adk-server, adk-cli, adk-studio, adk-doc-audit
+Tier 8: adk-rust (umbrella — always last)
+```
+
+### Publish workflow
+
+1. Ensure all quality gates pass and the version is bumped in `[workspace.package]` and all `[workspace.dependencies]` entries.
+2. Bump `adk-plugin/Cargo.toml` manually — it has a hardcoded `adk-core` dep.
+3. Tag the release: `git tag v<version> && git push origin v<version>`.
+4. Publish one crate at a time with verification:
+
+```bash
+cargo publish -p <crate-name>
+```
+
+5. Cargo waits for crates.io indexing automatically after upload. If a dependent crate fails with "failed to select a version", wait a minute and retry.
+6. Skip `adk-mistralrs` — it is `publish = false`.
+
+### Version checklist
+
+- [ ] `[workspace.package] version` in root `Cargo.toml`
+- [ ] All 23 `adk-*` entries in `[workspace.dependencies]`
+- [ ] `adk-plugin/Cargo.toml` hardcoded `adk-core` version
+- [ ] `CHANGELOG.md` updated
+- [ ] Git tag created and pushed
+- [ ] GitHub release created with release notes
+
 ## Crate-specific guides
 
 - `adk-gemini/AGENTS.md` — Gemini client tracing conventions and instrumentation patterns
