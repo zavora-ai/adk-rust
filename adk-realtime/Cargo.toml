@@ -80,6 +80,10 @@ name = "vertex_live_voice"
 required-features = ["vertex-live"]
 
 [[example]]
+name = "vertex_live_tools"
+required-features = ["vertex-live"]
+
+[[example]]
 name = "livekit_bridge"
 required-features = ["livekit", "openai"]
 
