@@ -24,12 +24,12 @@ use tokio::sync::Mutex;
 /// Represents a recorded call to the inner EventHandler.
 #[derive(Debug, Clone, PartialEq)]
 enum RecordedCall {
-    OnText { text: String, item_id: String },
-    OnTranscript { transcript: String, item_id: String },
-    OnSpeechStarted { audio_start_ms: u64 },
-    OnSpeechStopped { audio_end_ms: u64 },
-    OnResponseDone,
-    OnError { message: String },
+    Text { text: String, item_id: String },
+    Transcript { transcript: String, item_id: String },
+    SpeechStarted { audio_start_ms: u64 },
+    SpeechStopped { audio_end_ms: u64 },
+    ResponseDone,
+    Error { message: String },
 }
 
 /// A recording EventHandler that stores all calls for later inspection.
@@ -59,12 +59,12 @@ impl EventHandler for RecordingHandler {
         self.calls
             .lock()
             .await
-            .push(RecordedCall::OnText { text: text.to_string(), item_id: item_id.to_string() });
+            .push(RecordedCall::Text { text: text.to_string(), item_id: item_id.to_string() });
         Ok(())
     }
 
     async fn on_transcript(&self, transcript: &str, item_id: &str) -> adk_realtime::Result<()> {
-        self.calls.lock().await.push(RecordedCall::OnTranscript {
+        self.calls.lock().await.push(RecordedCall::Transcript {
             transcript: transcript.to_string(),
             item_id: item_id.to_string(),
         });
@@ -72,22 +72,22 @@ impl EventHandler for RecordingHandler {
     }
 
     async fn on_speech_started(&self, audio_start_ms: u64) -> adk_realtime::Result<()> {
-        self.calls.lock().await.push(RecordedCall::OnSpeechStarted { audio_start_ms });
+        self.calls.lock().await.push(RecordedCall::SpeechStarted { audio_start_ms });
         Ok(())
     }
 
     async fn on_speech_stopped(&self, audio_end_ms: u64) -> adk_realtime::Result<()> {
-        self.calls.lock().await.push(RecordedCall::OnSpeechStopped { audio_end_ms });
+        self.calls.lock().await.push(RecordedCall::SpeechStopped { audio_end_ms });
         Ok(())
     }
 
     async fn on_response_done(&self) -> adk_realtime::Result<()> {
-        self.calls.lock().await.push(RecordedCall::OnResponseDone);
+        self.calls.lock().await.push(RecordedCall::ResponseDone);
         Ok(())
     }
 
     async fn on_error(&self, error: &RealtimeError) -> adk_realtime::Result<()> {
-        self.calls.lock().await.push(RecordedCall::OnError { message: error.to_string() });
+        self.calls.lock().await.push(RecordedCall::Error { message: error.to_string() });
         Ok(())
     }
 }
