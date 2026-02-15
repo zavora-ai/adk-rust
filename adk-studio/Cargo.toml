@@ -74,7 +74,7 @@ redis = { version = "0.27", features = ["tokio-comp"] }
 dirs = "5"
 
 # Cron expression parsing for schedule triggers
-cron = "0.12"
+cron = "0.15"
 
 [dev-dependencies]
 proptest = "1.4"
