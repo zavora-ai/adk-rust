@@ -14,10 +14,10 @@ Summary of the approach taken.
 
 ### Quality Gates (all required)
 
-- [ ] `cargo fmt --all` — code is formatted
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` — zero warnings
-- [ ] `cargo test --workspace` — all tests pass
-- [ ] Builds clean: `cargo build --workspace`
+- [ ] `devenv shell fmt` — code is formatted (Edition 2024)
+- [ ] `devenv shell clippy` — zero warnings (-D warnings)
+- [ ] `devenv shell test` — all non-ignored tests pass
+- [ ] `devenv shell check` — fast workspace compilation check
 
 ### Code Quality
 
@@ -30,6 +30,7 @@ Summary of the approach taken.
 
 - [ ] No local development artifacts (`.env`, `.DS_Store`, IDE configs, build dirs)
 - [ ] No unrelated changes mixed in (formatting, refactoring, other features)
+- [ ] Branch naming follows convention (`feat/`, `fix/`, `docs/`, etc.)
 - [ ] Commit messages follow conventional format (`feat:`, `fix:`, `docs:`, etc.)
 - [ ] PR targets `main` branch
 

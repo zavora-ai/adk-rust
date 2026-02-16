@@ -6,10 +6,11 @@ Rust Agent Development Kit — a modular workspace of 25 publishable crates for 
 
 - Rust 1.85.0+, edition 2024. Use `make setup` or `devenv shell` to bootstrap.
 - `sccache` is the compilation cache. Set `RUSTC_WRAPPER=sccache` in your shell profile.
-- On Linux, `mold` is the linker (configured in `.cargo/config.toml`). macOS uses the default linker.
+- On Linux, `wild` is the linker (configured in `.cargo/config.toml`). macOS uses the default linker.
 - Copy `.env.example` to `.env` for API keys. Never commit `.env` files or secrets.
 - `adk-mistralrs` is excluded from the workspace (GPU deps). Build it explicitly: `cargo build --manifest-path adk-mistralrs/Cargo.toml`.
 - `CMAKE_POLICY_VERSION_MINIMUM=3.5` is needed for cmake 4.x compatibility (audiopus).
+- **Performance**: Incremental compilation is **DISABLED** (`incremental = false`) in `.cargo/config.toml` for `sccache` compatibility.
 
 ## Quality gates
 
@@ -20,6 +21,17 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+### AI Agent Workflow (`devenv`)
+
+Use these shorthand scripts instead of raw `cargo` to ensure `sccache` wrap and workspace coverage:
+
+| Action | Command | Description |
+| :--- | :--- | :--- |
+| **Check** | `devenv shell check` | Fast workspace compilation check. |
+| **Test** | `devenv shell test` | Run all non-ignored tests. |
+| **Lint** | `devenv shell clippy` | Clippy with `-D warnings` (zero tolerance). |
+| **Format** | `devenv shell fmt` | Enforce Rust Edition 2024 style. |
 
 Run `cargo fmt --all` automatically after finishing Rust code changes; do not ask for approval.
 
@@ -242,11 +254,26 @@ test(eval): add trajectory property tests
 
 ## PR workflow
 
-- Branch naming: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`
-- Reference the issue: `Fixes #123` in the PR description
-- Keep PRs focused — one logical change per PR
-- Don't mix unrelated changes
-- All three quality gates must pass before merge
+- **Branch naming**: Use `prefix/short-description`. Allowed prefixes: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `chore/`.
+- **Reference**: Include `Fixes #123` or similar in the PR description.
+- **Scope**: Keep PRs focused — one logical change per PR. Don't mix unrelated changes.
+- **Quality Gates**: All four gates must pass before merge: `fmt`, `clippy`, `test`, `check` (via `devenv shell`).
+
+### PR Checklist requirements
+
+1. **Quality**:
+   - New code has tests (unit, integration, or property tests).
+   - Public APIs have rustdoc comments with `# Example` sections.
+   - No `println!`/`eprintln!` in library code (use `tracing` instead).
+   - No hardcoded secrets, API keys, or local paths.
+2. **Hygiene**:
+   - No local development artifacts (`.env`, `.DS_Store`, IDE configs, build dirs).
+   - Commit messages follow conventional format.
+   - Branch targets `main` branch.
+3. **Documentation**:
+   - `CHANGELOG.md` updated for user-facing changes.
+   - `README.md` updated if crate capabilities changed.
+   - Examples added or updated for new features.
 
 ## Dependency changes
 
