@@ -120,13 +120,13 @@ impl adk_core::Session for MutableSession {
             }
 
             if let Some(content) = &event.llm_response.content {
-                let role = match event.author.as_str() {
-                    "user" => "user".to_string(),
-                    _ => "model".to_string(),
-                };
-
                 let mut mapped_content = content.clone();
-                mapped_content.role = role;
+                mapped_content.role = match (event.author.as_str(), content.role.as_str()) {
+                    ("user", _) => "user",
+                    (_, "function" | "tool") => content.role.as_str(),
+                    _ => "model",
+                }
+                .to_string();
                 history.push(mapped_content);
             }
         }

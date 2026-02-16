@@ -1,6 +1,7 @@
 use adk_core::{
-    Agent, CallbackContext, Content, Event, InvocationContext as InvocationContextTrait, Part,
-    ReadonlyContext, RunConfig, Session as CoreSession, StreamingMode,
+    Agent, CallbackContext, Content, Event, FunctionResponseData,
+    InvocationContext as InvocationContextTrait, Part, ReadonlyContext, RunConfig,
+    Session as CoreSession, StreamingMode,
 };
 use adk_runner::{InvocationContext, MutableSession};
 use adk_session::{Events, Session, State};
@@ -378,4 +379,72 @@ fn test_mutable_session_state_all() {
     assert_eq!(all_state.len(), 2);
     assert_eq!(all_state.get("key1"), Some(&serde_json::json!("value1")));
     assert_eq!(all_state.get("key2"), Some(&serde_json::json!("value2")));
+}
+
+#[test]
+fn conversation_history_preserves_tool_role() {
+    // Tool response events with role "function" should NOT be overwritten to "model"
+    let session = Arc::new(MockSessionWithState::new());
+    let mutable = MutableSession::new(session);
+
+    // Simulate: user message
+    let mut user_event = Event::new("inv-1");
+    user_event.author = "user".to_string();
+    user_event.llm_response.content = Some(Content {
+        role: "user".to_string(),
+        parts: vec![Part::Text { text: "hello".into() }],
+    });
+    mutable.append_event(user_event);
+
+    // Simulate: assistant with tool call
+    let mut assistant_event = Event::new("inv-1");
+    assistant_event.author = "my_agent".to_string();
+    assistant_event.llm_response.content = Some(Content {
+        role: "model".to_string(),
+        parts: vec![Part::FunctionCall {
+            name: "browser_navigate".into(),
+            args: serde_json::json!({"url": "https://example.com"}),
+            id: Some("call_1".into()),
+        }],
+    });
+    mutable.append_event(assistant_event);
+
+    // Simulate: tool response
+    let mut tool_event = Event::new("inv-1");
+    tool_event.author = "my_agent".to_string();
+    tool_event.llm_response.content = Some(Content {
+        role: "function".to_string(),
+        parts: vec![Part::FunctionResponse {
+            function_response: FunctionResponseData {
+                name: "browser_navigate".into(),
+                response: serde_json::json!({"success": true}),
+            },
+            id: Some("call_1".into()),
+        }],
+    });
+    mutable.append_event(tool_event);
+
+    let history = mutable.conversation_history();
+    assert_eq!(history.len(), 3);
+    assert_eq!(history[0].role, "user");
+    assert_eq!(history[1].role, "model");
+    assert_eq!(history[2].role, "function"); // NOT "model"
+}
+
+#[test]
+fn conversation_history_maps_agent_events_to_model() {
+    // Non-tool agent events should still map to "model"
+    let session = Arc::new(MockSessionWithState::new());
+    let mutable = MutableSession::new(session);
+
+    let mut event = Event::new("inv-1");
+    event.author = "my_agent".to_string();
+    event.llm_response.content = Some(Content {
+        role: "model".to_string(),
+        parts: vec![Part::Text { text: "here are the results".into() }],
+    });
+    mutable.append_event(event);
+
+    let history = mutable.conversation_history();
+    assert_eq!(history[0].role, "model");
 }
