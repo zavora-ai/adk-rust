@@ -14,6 +14,7 @@ env:
   CARGO_INCREMENTAL: 0
   # cmake 4.x compat for audiopus
   CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+  PROTOC: protoc
 
 jobs:
   check:
@@ -27,42 +28,43 @@ jobs:
         sudo rm -rf /usr/share/dotnet
         df -h
 
-    - uses: dtolnay/rust-toolchain@stable
+    # 1. Install Nix
+    - uses: cachix/install-nix-action@v30
       with:
-        components: rustfmt, clippy
+        nix_path: nixpkgs=channel:nixos-unstable
 
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y mold cmake libglib2.0-dev libva-dev
+    # 2. Use the 'devenv' cache (Crucial for devenv-nixpkgs)
+    - uses: cachix/cachix-action@v15
+      with:
+        name: devenv
 
-    - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.9
-      continue-on-error: true
+    # 3. Install devenv CLI
+    - name: Install devenv.sh
+      run: nix profile install nixpkgs#devenv
 
-    - name: Configure sccache
-      run: |
-        if sccache --show-stats > /dev/null 2>&1; then
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-          echo "sccache is available — enabling"
-        else
-          echo "sccache unavailable — building without cache"
-        fi
+    - name: Cache Devenv/Cargo artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/sccache
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: devenv-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          devenv-${{ runner.os }}-cargo-
 
     - name: Check formatting
-      run: cargo fmt --all -- --check
+      run: |
+        echo "🎨 Starting formatting check..."
+        devenv shell fmt
 
     - name: Run clippy
-      env:
-        RUSTFLAGS: "-C link-arg=-fuse-ld=mold -C debuginfo=0"
-      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      run: |
+        echo "🔍 Starting clippy lints..."
+        devenv shell clippy
 
     - name: Run tests
-      env:
-        RUSTFLAGS: "-C link-arg=-fuse-ld=mold -C debuginfo=0"
-      run: cargo test --workspace --all-features
-
-    - name: Show sccache stats
-      if: env.RUSTC_WRAPPER == 'sccache'
-      run: sccache --show-stats
+      run: |
+        echo "🧪 Starting workspace tests..."
+        devenv shell test

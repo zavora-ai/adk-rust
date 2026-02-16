@@ -4,40 +4,67 @@
 # Platform-specific build optimizations for faster dev builds.
 # These settings are automatically applied by Cargo.
 
+[build]
+# WHY INCREMENTAL = FALSE:
+# sccache (our compilation cache) is incompatible with Cargo's incremental 
+# compilation. Incremental builds produce highly volatile, developer-specific 
+# artifacts that cannot be reliably cached or shared. Disabling it ensures 
+# object files are cacheable, leading to faster clean builds and better CI performance.
+incremental = false
+
 # ---------------------------------------------------------------------------
 # Faster linker per platform
 # ---------------------------------------------------------------------------
-# Linux: use mold (fastest) or lld as fallback
-# macOS: use Apple's default linker (already fast on arm64)
-# Windows: use lld via rust-lld
+# We use 'clang' as the compiler driver because it supports advanced linkers 
+# like 'mold' and 'wild' natively.
+#
+# -fuse-ld=mold: 
+#   Instructs clang to use a linker named 'mold'. It searches the system PATH 
+#   for a binary matching 'ld.mold'.
+#
+# --ld-path=wild: 
+#   Provides the direct filesystem path or specific binary name for the 'wild' 
+#   linker. This is more explicit than -fuse-ld and useful when multiple 
+#   versions exist or when using specialized linkers like 'wild'.
+#
+# mold is the general-purpose king of speed. 
+# wild is used in this workspace for specific performance characteristics 
+# in massive monorepo structures.
 
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
-rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+rustflags = [
+  "-C", "link-arg=--ld-path=wild"
+]
+
+[target.'cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))']
+linker = "clang"
+rustflags = [
+  "-C", "link-arg=--ld-path=wild"
+]
 
 [target.aarch64-unknown-linux-gnu]
 linker = "clang"
-rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+rustflags = [
+  "-C", "link-arg=--ld-path=wild"
+]
 
 # macOS arm64 — the default ld is already fast; no override needed.
-# Uncomment if you install a custom linker:
-# [target.aarch64-apple-darwin]
-# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+[target.aarch64-apple-darwin]
+rustflags = []
+
+# macOS x86 — the default ld is already fast; no override needed.
+[target.x86_64-apple-darwin]
+rustflags = []
 
 # Windows MSVC — use rust-lld (ships with rustup)
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld"
 
 # ---------------------------------------------------------------------------
-# sccache — shared compilation cache (opt-in)
+# sccache — shared compilation cache
 # ---------------------------------------------------------------------------
-# If sccache is installed, Cargo will use it automatically.
-# Install: cargo install sccache --locked
-# Or:      brew install sccache  /  apt install sccache  /  scoop install sccache
-#
-# Uncomment to force-enable (errors if sccache is not installed):
-# [build]
-# rustc-wrapper = "sccache"
+# sccache is managed by the devenv shell environment variables.
 
 # ---------------------------------------------------------------------------
 # Network & registry
@@ -47,3 +74,9 @@ git-fetch-with-cli = true
 
 [registries.crates-io]
 protocol = "sparse"
+
+[env]
+# Enable incremental support for the 'wild' linker specifically (if it supports it)
+WILD_INCREMENTAL = "1"
+# We do NOT set CARGO_INCREMENTAL = "0" here because sccache pre-commit 
+# checks often require it to be UNSET completely rather than set to 0.
