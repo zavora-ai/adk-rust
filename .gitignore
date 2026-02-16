@@ -11,7 +11,7 @@ adk-mistralrs/Cargo.lock
 /output/
 **/output/
 
-# IDE
+# IDEs
 .idea/
 .vscode/
 *.swp
@@ -19,21 +19,25 @@ adk-mistralrs/Cargo.lock
 *~
 .DS_Store
 
-# Kiro IDE
+# Hidden configuration
 .kiro/
+.claude/
 .vite/
 
-# devenv
+# Devenv / Direnv
 .devenv/
 .devenv.flake.nix
 devenv.lock
+.direnv/
+.envrc
+.envrc.local
 
-# Environment
+# Environment / Secrets
 .env
 .env.local
 .env.*.local
 
-# Testing
+# Testing & Coverage
 *.profraw
 *.profdata
 *.proptest-regressions
@@ -41,17 +45,15 @@ devenv.lock
 # Documentation
 /target/doc/
 
-# Build artifacts
+# Build & Logs
 *.o
 *.so
 *.dylib
 *.dll
 *.exe
-
-# Logs
 *.log
 
-# Database
+# Databases
 *.db
 *.sqlite
 *.sqlite3
@@ -60,35 +62,23 @@ devenv.lock
 tmp/
 temp/
 *.tmp
-*.txt
 node_modules/
+**/node_modules/
 
-# OS
+# OS Specific
 Thumbs.db
 .Spotlight-V100
 .Trashes
 
-# Reference materials (not part of main crate)
+# Project Specific Exclusions
 /reference/
-
-# Learning materials (not part of main crate)
 /learning/
-
-# Development tooling
-/.claude/
 
 # Internal working documents
 PUBLISHING.md
 docs/CRATES_IO_PUBLICATION_PLAN.md
+docs/ADK-STUDIO-*.md
 
-# Vendor (patched dependencies)
-# Note: vendor/ IS tracked for gemini-rust patch
+# Vendor / Patches
 CLAUDE.md
-packages/adk-ui-react/node_modules/
-adk-studio/ui/node_modules/
-docs/ADK-STUDIO-PLAN.md
-docs/ADK-STUDIO-PROGRESS.md
-docs/ADK-STUDIO-FUNCTION-TOOLS.md
-docs/ADK-STUDIO-GRAPH-DESIGN.md
-studio-ui/node_modules/
 mistral-rs-ref/
