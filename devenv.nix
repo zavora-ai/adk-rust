@@ -111,10 +111,56 @@
   };
 
   scripts = {
-    ws-fmt.exec = "cargo fmt --all";
-    ws-check.exec = "RUSTC_WRAPPER=sccache cargo check --workspace";
-    ws-test.exec = "RUSTC_WRAPPER=sccache cargo test --workspace";
-    ws-clippy.exec = "RUSTC_WRAPPER=sccache cargo clippy --workspace -- -D warnings";
+    ws-fmt.exec = "cargo fmt --all $@";
+    ws-check.exec = "RUSTC_WRAPPER=sccache cargo check --workspace $@";
+    ws-test.exec = "RUSTC_WRAPPER=sccache cargo test --workspace $@";
+    ws-clippy.exec = "RUSTC_WRAPPER=sccache cargo clippy --workspace $@ -- -D warnings";
+    ws-summary.exec = ''
+      if [ -n "$GITHUB_STEP_SUMMARY" ]; then
+        echo "## 🚀 CI Summary" >> "$GITHUB_STEP_SUMMARY"
+
+        # 1. Sccache Stats
+        echo "### 🏎️ Sccache Performance" >> "$GITHUB_STEP_SUMMARY"
+        if command -v sccache >/dev/null; then
+          STATS=$(sccache --show-stats --stats-format=json)
+          HITS=$(echo "$STATS" | jq -r '.stats.cache_hits.counts | to_entries | map(.value) | add // 0')
+          MISSES=$(echo "$STATS" | jq -r '.stats.cache_misses.counts | to_entries | map(.value) | add // 0')
+          TOTAL=$((HITS + MISSES))
+          if [ "$TOTAL" -gt 0 ]; then
+            HIT_RATE=$(awk "BEGIN {printf \"%.2f\", $HITS * 100 / $TOTAL}")
+            echo "- **Cache Hit Rate:** $HIT_RATE%" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Hits:** $HITS" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Misses:** $MISSES" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No cache activity recorded or sccache not initialized." >> "$GITHUB_STEP_SUMMARY"
+          fi
+        fi
+
+        # 2. Clippy Warnings
+        if [ -f "clippy.json" ]; then
+          echo "### 🔍 Clippy Lints" >> "$GITHUB_STEP_SUMMARY"
+          WARNINGS=$(grep -c '"level":"warning"' clippy.json || echo 0)
+          ERRORS=$(grep -c '"level":"error"' clippy.json || echo 0)
+          echo "- **Errors:** $ERRORS" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Warnings:** $WARNINGS" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "💡 To include clippy stats, run: devenv shell ws-clippy --message-format=json | tee clippy.json"
+        fi
+
+        # 3. Test Results
+        if [ -f "test.log" ]; then
+          echo "### 🧪 Test Results" >> "$GITHUB_STEP_SUMMARY"
+          PASSED=$(grep -oP "\d+(?= passed)" test.log | awk '{sum += $1} END {print sum}')
+          FAILED=$(grep -oP "\d+(?= failed)" test.log | awk '{sum += $1} END {print sum}')
+          echo "- **Passed:** ''${PASSED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Failed:** ''${FAILED:-0}" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "💡 To include test stats, run: devenv shell ws-test | tee test.log"
+        fi
+      else
+        echo "GITHUB_STEP_SUMMARY not set, skipping summary generation."
+      fi
+    '';
   };
 
   # --------------------------------------------------------------------------

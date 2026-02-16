@@ -62,9 +62,15 @@ jobs:
     - name: Run clippy
       run: |
         echo "🔍 Starting clippy lints..."
-        devenv shell ws-clippy
+        devenv shell ws-clippy --message-format=json | tee clippy.json
 
     - name: Run tests
       run: |
         echo "🧪 Starting workspace tests..."
-        devenv shell ws-test
+        devenv shell ws-test | tee test.log
+
+    - name: Generate Summary
+      if: always()
+      run: |
+        echo "📊 Generating CI summary..."
+        devenv shell ws-summary

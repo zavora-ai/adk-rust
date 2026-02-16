@@ -48,7 +48,13 @@ jobs:
       - name: Run tests
         run: |
           echo "🧪 Starting nightly workspace tests..."
-          devenv shell "cargo test --workspace --exclude adk-mistralrs"
+          devenv shell ws-test --exclude adk-mistralrs | tee test.log
+
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo "📊 Generating CI summary..."
+          devenv shell ws-summary
 
       - name: Create nightly tag
         run: |
