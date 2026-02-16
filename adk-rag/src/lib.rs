@@ -13,14 +13,15 @@
 //! All external backends are feature-gated. The default feature set includes
 //! only core traits, the in-memory vector store, and chunking implementations.
 //!
-//! | Feature    | What it enables                          |
-//! |------------|------------------------------------------|
-//! | `gemini`   | `GeminiEmbeddingProvider` via adk-gemini  |
-//! | `openai`   | `OpenAIEmbeddingProvider` via reqwest     |
-//! | `qdrant`   | `QdrantVectorStore` via qdrant-client     |
-//! | `lancedb`  | `LanceDBVectorStore` via lancedb          |
-//! | `pgvector` | `PgVectorStore` via sqlx                  |
-//! | `full`     | All of the above                          |
+//! | Feature      | What it enables                          |
+//! |--------------|------------------------------------------|
+//! | `gemini`     | `GeminiEmbeddingProvider` via adk-gemini  |
+//! | `openai`     | `OpenAIEmbeddingProvider` via reqwest     |
+//! | `qdrant`     | `QdrantVectorStore` via qdrant-client     |
+//! | `lancedb`    | `LanceDBVectorStore` via lancedb          |
+//! | `pgvector`   | `PgVectorStore` via sqlx                  |
+//! | `surrealdb`  | `SurrealVectorStore` via surrealdb        |
+//! | `full`       | All of the above                          |
 
 pub mod chunking;
 pub mod config;
@@ -43,6 +44,8 @@ pub mod openai;
 pub mod pgvector;
 #[cfg(feature = "qdrant")]
 pub mod qdrant;
+#[cfg(feature = "surrealdb")]
+pub mod surrealdb;
 
 pub use chunking::{Chunker, FixedSizeChunker, MarkdownChunker, RecursiveChunker};
 pub use config::{RagConfig, RagConfigBuilder};
@@ -65,3 +68,5 @@ pub use openai::OpenAIEmbeddingProvider;
 pub use pgvector::PgVectorStore;
 #[cfg(feature = "qdrant")]
 pub use qdrant::QdrantVectorStore;
+#[cfg(feature = "surrealdb")]
+pub use surrealdb::SurrealVectorStore;

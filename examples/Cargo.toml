@@ -577,6 +577,11 @@ name = "rag_agent"
 path = "rag_agent/main.rs"
 required-features = ["rag-gemini"]
 
+[[example]]
+name = "rag_surrealdb"
+path = "rag_surrealdb/main.rs"
+required-features = ["rag-surrealdb"]
+
 # Note: mistralrs examples are part of the adk-mistralrs crate (excluded from workspace)
 # Build them explicitly: cargo build -p adk-mistralrs --examples
 
@@ -600,6 +605,7 @@ guardrails = ["adk-agent/guardrails", "dep:adk-guardrail"]
 sso = ["adk-auth/sso"]
 rag = ["dep:adk-rag"]
 rag-gemini = ["rag", "adk-rag/gemini"]
+rag-surrealdb = ["rag", "adk-rag/surrealdb"]
 
 [dependencies]
 adk-core.workspace = true

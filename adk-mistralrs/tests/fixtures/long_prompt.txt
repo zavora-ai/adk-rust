@@ -1,0 +1,32 @@
+You are an expert software architect. Please analyze the following system design and provide detailed feedback on its scalability, maintainability, and security aspects.
+
+The system is a distributed e-commerce platform with the following components:
+
+1. API Gateway: Handles all incoming requests, performs authentication, rate limiting, and routes requests to appropriate microservices.
+
+2. User Service: Manages user accounts, authentication, and authorization. Uses JWT tokens for session management.
+
+3. Product Catalog Service: Stores and retrieves product information. Uses Elasticsearch for full-text search capabilities.
+
+4. Inventory Service: Tracks product availability across multiple warehouses. Uses event sourcing for audit trails.
+
+5. Order Service: Processes customer orders, manages order lifecycle, and coordinates with payment and shipping services.
+
+6. Payment Service: Integrates with multiple payment providers (Stripe, PayPal, etc.) and handles payment processing.
+
+7. Notification Service: Sends emails, SMS, and push notifications to users about order updates and promotions.
+
+8. Analytics Service: Collects and processes user behavior data for business intelligence and personalization.
+
+The services communicate via:
+- Synchronous REST APIs for real-time operations
+- Apache Kafka for asynchronous event-driven communication
+- Redis for caching and session storage
+- PostgreSQL for persistent data storage
+
+Please provide your analysis focusing on:
+1. Potential bottlenecks and how to address them
+2. Data consistency challenges in a distributed system
+3. Security vulnerabilities and mitigation strategies
+4. Recommendations for improving system resilience
+5. Cost optimization opportunities

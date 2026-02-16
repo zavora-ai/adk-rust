@@ -6,6 +6,9 @@ Give your AI agents a knowledge base. `adk-rag` adds Retrieval-Augmented Generat
 [![Documentation](https://docs.rs/adk-rag/badge.svg)](https://docs.rs/adk-rag)
 [![License](https://img.shields.io/crates/l/adk-rag.svg)](LICENSE)
 
+## ADK RAG
+The `adk-rag` crate provides Retrieval-Augmented Generation capabilities for the ADK-Rust workspace. It offers a modular, trait-based architecture for document chunking, embedding generation, vector storage, similarity search, reranking, and agentic retrieval. The crate follows the ADK-Rust conventions of feature-gated backends, async-trait interfaces, and builder-pattern configuration. It integrates with existing ADK crates (`adk-gemini` for embeddings, `adk-core` for the Tool trait) and supports multiple vector store backends (in-memory, Qdrant, LanceDB, pgvector, SurrealDB).
+
 ## What is RAG?
 
 RAG stands for Retrieval-Augmented Generation. Instead of relying only on what an LLM was trained on, RAG lets your agent look up relevant information from your documents before answering. The flow is:
@@ -150,10 +153,10 @@ Query → [EmbeddingProvider] → [VectorStore search] → [Reranker] → Result
 |-----------|-------------|-----------------|
 | **Chunker** | Splits documents into smaller pieces | `FixedSizeChunker`, `RecursiveChunker`, `MarkdownChunker` |
 | **EmbeddingProvider** | Converts text to vector embeddings | `GeminiEmbeddingProvider`¹, `OpenAIEmbeddingProvider`² |
-| **VectorStore** | Stores and searches embeddings | `InMemoryVectorStore`, `QdrantVectorStore`³, `LanceDBVectorStore`⁴, `PgVectorStore`⁵ |
+| **VectorStore** | Stores and searches embeddings | `InMemoryVectorStore`, `QdrantVectorStore`³, `LanceDBVectorStore`⁴, `PgVectorStore`⁵, `SurrealVectorStore`⁶ |
 | **Reranker** | Re-scores results after search | `NoOpReranker` (or write your own) |
 
-¹ requires `gemini` feature  ² requires `openai` feature  ³ requires `qdrant` feature  ⁴ requires `lancedb` feature  ⁵ requires `pgvector` feature
+¹ requires `gemini` feature  ² requires `openai` feature  ³ requires `qdrant` feature  ⁴ requires `lancedb` feature  ⁵ requires `pgvector` feature  ⁶ requires `surrealdb` feature
 
 The `RagPipeline` wires these together. The `RagTool` wraps the pipeline as an `adk_core::Tool` so any ADK agent can call it.
 
@@ -209,6 +212,9 @@ adk-rag = { version = "0.3", features = ["openai"] }
 # With Qdrant vector store
 adk-rag = { version = "0.3", features = ["qdrant"] }
 
+# With SurrealDB vector store (embedded or remote)
+adk-rag = { version = "0.3", features = ["surrealdb"] }
+
 # Everything
 adk-rag = { version = "0.3", features = ["full"] }
 ```
@@ -221,6 +227,7 @@ adk-rag = { version = "0.3", features = ["full"] }
 | `qdrant` | `QdrantVectorStore` | `qdrant-client` |
 | `lancedb` | `LanceDBVectorStore` | `lancedb`, `arrow` |
 | `pgvector` | `PgVectorStore` | `sqlx` |
+| `surrealdb` | `SurrealVectorStore` | `surrealdb` |
 | `full` | All of the above | all |
 
 > **Note:** The `lancedb` feature requires `protoc` (Protocol Buffers compiler) installed on your system. Install with `brew install protobuf` (macOS), `apt install protobuf-compiler` (Ubuntu), or `choco install protoc` (Windows).
