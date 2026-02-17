@@ -20,6 +20,7 @@ default = ["full"]
 full = [
     "agents",
     "models",
+    "gemini",
     "tools",
     "skills",
     "sessions",
@@ -70,6 +71,7 @@ rag = ["dep:adk-rag"]
 minimal = ["agents", "models", "runner"]
 
 # Model provider features (forwarded to adk-model)
+gemini = ["models", "adk-model/gemini"]
 openai = ["models", "adk-model/openai"]
 anthropic = ["models", "adk-model/anthropic"]
 deepseek = ["models", "adk-model/deepseek"]

@@ -57,7 +57,7 @@ adk-realtime = { path = "../../../adk-realtime", features = ["openai"] }
 adk-eval = { path = "../../../adk-eval" }
 adk-browser = { path = "../../../adk-browser" }
 adk-agent = { path = "../../../adk-agent" }
-adk-model = { path = "../../../adk-model" }
+adk-model = { path = "../../../adk-model", features = ["gemini"] }
 adk-graph = { path = "../../../adk-graph" }
 adk-core = { path = "../../../adk-core" }
 adk-ui = { path = "../../../adk-ui" }

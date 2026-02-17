@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 adk-core.workspace = true
 adk-agent.workspace = true
-adk-model.workspace = true
+adk-model = { workspace = true, features = ["gemini"] }
 adk-tool.workspace = true
 adk-cli.workspace = true
 adk-runner.workspace = true

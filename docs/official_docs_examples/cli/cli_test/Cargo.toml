@@ -11,7 +11,7 @@ path = "src/basic.rs"
 [dependencies]
 adk-cli = { path = "../../../../adk-cli" }
 adk-agent = { path = "../../../../adk-agent" }
-adk-model = { path = "../../../../adk-model" }
+adk-model = { path = "../../../../adk-model", features = ["gemini"] }
 adk-artifact = { path = "../../../../adk-artifact" }
 adk-core = { path = "../../../../adk-core" }
 tokio = { version = "1", features = ["full"] }

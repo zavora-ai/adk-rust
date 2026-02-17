@@ -18,4 +18,4 @@ mod config;
 mod convert;
 
 pub use client::AnthropicClient;
-pub use config::AnthropicConfig;
+pub use config::{AnthropicConfig, ThinkingConfig};

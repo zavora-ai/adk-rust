@@ -29,6 +29,7 @@ tracing = { workspace = true }
 
 [features]
 default = []
+gemini = ["adk-model/gemini"]
 guardrails = ["adk-guardrail"]
 
 [dev-dependencies]

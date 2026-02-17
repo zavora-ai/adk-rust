@@ -13,6 +13,6 @@ adk-session = { path = "../../../../adk-session" }
 adk-artifact = { path = "../../../../adk-artifact" }
 adk-core = { path = "../../../../adk-core" }
 adk-agent = { path = "../../../../adk-agent" }
-adk-model = { path = "../../../../adk-model" }
+adk-model = { path = "../../../../adk-model", features = ["gemini"] }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"

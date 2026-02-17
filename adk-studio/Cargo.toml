@@ -19,7 +19,7 @@ path = "src/main.rs"
 # ADK crates
 adk-core.workspace = true
 adk-agent.workspace = true
-adk-model.workspace = true
+adk-model = { workspace = true, features = ["gemini"] }
 adk-tool.workspace = true
 adk-runner.workspace = true
 adk-session.workspace = true

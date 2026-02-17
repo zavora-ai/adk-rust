@@ -614,7 +614,7 @@ rag-surrealdb = ["rag", "adk-rag/surrealdb"]
 [dependencies]
 adk-core.workspace = true
 adk-agent.workspace = true
-adk-model.workspace = true
+adk-model = { workspace = true, features = ["gemini"] }
 adk-gemini.workspace = true
 adk-tool.workspace = true
 adk-cli.workspace = true

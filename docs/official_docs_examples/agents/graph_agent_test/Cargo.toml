@@ -33,7 +33,7 @@ path = "src/checkpointing.rs"
 [dependencies]
 adk-graph = { path = "../../../../adk-graph", features = ["sqlite"] }
 adk-agent = { path = "../../../../adk-agent" }
-adk-model = { path = "../../../../adk-model" }
+adk-model = { path = "../../../../adk-model", features = ["gemini"] }
 adk-core = { path = "../../../../adk-core" }
 adk-tool = { path = "../../../../adk-tool" }
 tokio = { version = "1", features = ["full"] }
