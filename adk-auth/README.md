@@ -10,8 +10,8 @@ Access control and authentication for Rust Agent Development Kit (ADK-Rust).
 
 `adk-auth` provides enterprise-grade access control for AI agents:
 
-- **Role-Based Access** - Define roles with tool/agent permissions
-- **Permission Scopes** - Fine-grained allow/deny rules (deny precedence)
+- **Declarative Scope-Based Security** - Tools declare required scopes, framework enforces automatically
+- **Role-Based Access** - Define roles with tool/agent permissions (allow/deny, deny precedence)
 - **Audit Logging** - Log all access attempts to JSONL files
 - **SSO/OAuth** - JWT validation with Google, Azure AD, Okta, Auth0 providers
 
@@ -19,10 +19,46 @@ Access control and authentication for Rust Agent Development Kit (ADK-Rust).
 
 | Feature | Description |
 |---------|-------------|
-| `default` | Core RBAC + audit logging |
+| `default` | Core RBAC + scope-based security + audit logging |
 | `sso` | JWT/OIDC providers (Google, Azure AD, Okta, Auth0) |
 
-## Quick Start
+## Declarative Scope-Based Security
+
+Tools declare what scopes they need. The framework enforces before execution — no imperative checks in your handlers:
+
+```rust
+use adk_tool::FunctionTool;
+use adk_auth::{ScopeGuard, ContextScopeResolver, StaticScopeResolver};
+
+// Tool declares its required scopes
+let transfer = FunctionTool::new("transfer", "Transfer funds", handler)
+    .with_scopes(&["finance:write", "verified"]);
+
+// ScopeGuard enforces automatically
+let guard = ScopeGuard::new(ContextScopeResolver);
+let protected = guard.protect(transfer);
+
+// Or wrap all tools at once
+let protected_tools = guard.protect_all(tools);
+```
+
+With audit logging:
+
+```rust
+let guard = ScopeGuard::with_audit(ContextScopeResolver, audit_sink);
+let protected = guard.protect(transfer);
+// All scope checks (allowed + denied) are logged
+```
+
+Pluggable resolvers:
+
+| Resolver | Source |
+|----------|--------|
+| `ContextScopeResolver` | Delegates to `ToolContext::user_scopes()` (JWT claims, session state) |
+| `StaticScopeResolver` | Fixed scopes — useful for testing |
+| Custom `impl ScopeResolver` | Any async source (database, external IdP, etc.) |
+
+## Role-Based Access Control
 
 ```rust
 use adk_auth::{Permission, Role, AccessControl, AuthMiddleware};

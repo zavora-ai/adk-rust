@@ -21,14 +21,14 @@ Artifacts are useful for storing images, documents, audio, and other binary data
 
 ```toml
 [dependencies]
-adk-artifact = "0.3.1"
+adk-artifact = "0.3.2"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.3.1", features = ["artifacts"] }
+adk-rust = { version = "0.3.2", features = ["artifacts"] }
 ```
 
 ## Quick Start

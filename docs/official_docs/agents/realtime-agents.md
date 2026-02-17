@@ -44,16 +44,16 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-realtime = { version = "0.3.1", features = ["openai"] }
+adk-realtime = { version = "0.3.2", features = ["openai"] }
 
 # For Vertex AI Live (Google Cloud with ADC auth)
-# adk-realtime = { version = "0.3.1", features = ["vertex-live"] }
+# adk-realtime = { version = "0.3.2", features = ["vertex-live"] }
 
 # For LiveKit WebRTC bridge
-# adk-realtime = { version = "0.3.1", features = ["livekit"] }
+# adk-realtime = { version = "0.3.2", features = ["livekit"] }
 
 # For all transports (except WebRTC which needs cmake)
-# adk-realtime = { version = "0.3.1", features = ["full"] }
+# adk-realtime = { version = "0.3.2", features = ["full"] }
 ```
 
 ### Basic Usage

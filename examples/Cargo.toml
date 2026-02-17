@@ -582,6 +582,10 @@ name = "rag_surrealdb"
 path = "rag_surrealdb/main.rs"
 required-features = ["rag-surrealdb"]
 
+[[example]]
+name = "multi_turn_tool"
+path = "multi_turn_tool/main.rs"
+
 # Note: mistralrs examples are part of the adk-mistralrs crate (excluded from workspace)
 # Build them explicitly: cargo build -p adk-mistralrs --examples
 

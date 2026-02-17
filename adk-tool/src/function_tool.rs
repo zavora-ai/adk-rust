@@ -20,6 +20,7 @@ pub struct FunctionTool {
     long_running: bool,
     parameters_schema: Option<Value>,
     response_schema: Option<Value>,
+    scopes: Vec<&'static str>,
 }
 
 impl FunctionTool {
@@ -35,6 +36,7 @@ impl FunctionTool {
             long_running: false,
             parameters_schema: None,
             response_schema: None,
+            scopes: Vec::new(),
         }
     }
 
@@ -56,6 +58,22 @@ impl FunctionTool {
         T: JsonSchema + Serialize,
     {
         self.response_schema = Some(generate_schema::<T>());
+        self
+    }
+
+    /// Declare the scopes required to execute this tool.
+    ///
+    /// When set, the framework will enforce that the calling user possesses
+    /// **all** listed scopes before dispatching `execute()`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let tool = FunctionTool::new("transfer", "Transfer funds", handler)
+    ///     .with_scopes(&["finance:write", "verified"]);
+    /// ```
+    pub fn with_scopes(mut self, scopes: &[&'static str]) -> Self {
+        self.scopes = scopes.to_vec();
         self
     }
 
@@ -105,6 +123,10 @@ impl Tool for FunctionTool {
 
     fn response_schema(&self) -> Option<Value> {
         self.response_schema.clone()
+    }
+
+    fn required_scopes(&self) -> &[&str] {
+        &self.scopes
     }
 
     #[adk_telemetry::instrument(

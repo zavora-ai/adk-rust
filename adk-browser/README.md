@@ -24,9 +24,9 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-browser = "0.3.1"
-adk-agent = "0.3.1"
-adk-model = "0.3.1"
+adk-browser = "0.3.2"
+adk-agent = "0.3.2"
+adk-model = "0.3.2"
 ```
 
 ### Prerequisites

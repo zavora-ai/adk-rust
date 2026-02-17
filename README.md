@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 
-> **🎉 v0.3.1 Released!** Vertex AI Live streaming, LiveKit WebRTC bridge, OpenAI WebRTC transport, multi-provider Studio codegen, 2026 model names, and response parsing hardening. [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
+> **🎉 v0.3.2 Released!** RAG pipeline with 6 vector store backends, declarative scope-based security, Models Discovery API, Gemini 3 model support, and multi-turn tool fix. [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 
 A comprehensive and production-ready Rust framework for building AI agents. Create powerful and high-performance AI agent systems with a flexible, modular architecture. Model-agnostic. Type-safe. Blazingly fast.
 
@@ -19,8 +19,10 @@ ADK-Rust provides a comprehensive framework for building AI agents in Rust, feat
 - **Multiple agent types**: LLM agents, workflow agents (sequential, parallel, loop), and custom agents
 - **Realtime voice agents**: Bidirectional audio streaming with OpenAI Realtime API and Gemini Live API
 - **Tool ecosystem**: Function tools, Google Search, MCP (Model Context Protocol) integration
+- **RAG pipeline**: Document chunking, vector embeddings, semantic search with 6 vector store backends
+- **Security**: Role-based access control, declarative scope-based tool security, SSO/OAuth, audit logging
 - **Production features**: Session management, artifact storage, memory systems, REST/A2A APIs
-- **Developer experience**: Interactive CLI, 80+ working examples, comprehensive documentation
+- **Developer experience**: Interactive CLI, 120+ working examples, comprehensive documentation
 
 **Status**: Production-ready, actively maintained
 
@@ -95,6 +97,7 @@ Built-in tools:
 | `adk-session` | Session and state management | SQLite/in-memory backends, conversation history, state persistence |
 | `adk-artifact` | Artifact storage system | File-based storage, MIME type handling, image/PDF/video support |
 | `adk-memory` | Long-term memory | Vector embeddings, semantic search, Qdrant integration |
+| `adk-rag` | RAG pipeline | Document chunking, embeddings, vector search, reranking, 6 backends |
 | `adk-runner` | Agent execution runtime | Context management, event streaming, session lifecycle, callbacks |
 | `adk-server` | Production API servers | REST API, A2A protocol, middleware, health checks |
 | `adk-cli` | Command-line interface | Interactive REPL, session management, MCP server integration |
@@ -103,7 +106,7 @@ Built-in tools:
 | `adk-browser` | Browser automation | 46 WebDriver tools, navigation, forms, screenshots, PDF generation |
 | `adk-eval` | Agent evaluation | Test definitions, trajectory validation, LLM-judged scoring, rubrics |
 | `adk-guardrail` | Input/output validation | PII redaction, content filtering, JSON schema validation |
-| `adk-auth` | Access control | Role-based permissions, SSO/OAuth, audit logging |
+| `adk-auth` | Access control | Role-based permissions, declarative scope-based security, SSO/OAuth, audit logging |
 | `adk-telemetry` | Observability | Structured logging, OpenTelemetry tracing, span helpers |
 | `adk-ui` | Dynamic UI generation | 28 components, 10 templates, React client, streaming updates |
 | `adk-studio` | Visual development | Drag-and-drop agent builder, code generation, live testing |
@@ -116,14 +119,14 @@ Requires Rust 1.85 or later (Rust 2024 edition). Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.3.1"
+adk-rust = "0.3.2"
 
 # Or individual crates
-adk-core = "0.3.1"
-adk-agent = "0.3.1"
-adk-model = "0.3.1"  # Add features for providers: features = ["openai", "anthropic"]
-adk-tool = "0.3.1"
-adk-runner = "0.3.1"
+adk-core = "0.3.2"
+adk-agent = "0.3.2"
+adk-model = "0.3.2"  # Add features for providers: features = ["openai", "anthropic"]
+adk-tool = "0.3.2"
+adk-runner = "0.3.2"
 ```
 
 **Nightly (latest features):**
@@ -707,25 +710,25 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 # All-in-one crate
-adk-rust = "0.3.1"
+adk-rust = "0.3.2"
 
 # Or individual crates for finer control
-adk-core = "0.3.1"
-adk-agent = "0.3.1"
-adk-model = { version = "0.3.1", features = ["openai", "anthropic"] }  # Enable providers
-adk-tool = "0.3.1"
-adk-runner = "0.3.1"
+adk-core = "0.3.2"
+adk-agent = "0.3.2"
+adk-model = { version = "0.3.2", features = ["openai", "anthropic"] }  # Enable providers
+adk-tool = "0.3.2"
+adk-runner = "0.3.2"
 
 # Optional dependencies
-adk-session = { version = "0.3.1", optional = true }
-adk-artifact = { version = "0.3.1", optional = true }
-adk-memory = { version = "0.3.1", optional = true }
-adk-server = { version = "0.3.1", optional = true }
-adk-cli = { version = "0.3.1", optional = true }
-adk-realtime = { version = "0.3.1", features = ["openai"], optional = true }
-adk-graph = { version = "0.3.1", features = ["sqlite"], optional = true }
-adk-browser = { version = "0.3.1", optional = true }
-adk-eval = { version = "0.3.1", optional = true }
+adk-session = { version = "0.3.2", optional = true }
+adk-artifact = { version = "0.3.2", optional = true }
+adk-memory = { version = "0.3.2", optional = true }
+adk-server = { version = "0.3.2", optional = true }
+adk-cli = { version = "0.3.2", optional = true }
+adk-realtime = { version = "0.3.2", features = ["openai"], optional = true }
+adk-graph = { version = "0.3.2", features = ["sqlite"], optional = true }
+adk-browser = { version = "0.3.2", optional = true }
+adk-eval = { version = "0.3.2", optional = true }
 ```
 
 ## Examples
@@ -816,6 +819,10 @@ See [examples/](examples/) directory for complete, runnable examples:
 - `a2a/` - Agent-to-Agent communication
 - `web/` - Web UI with streaming
 - `research_paper/` - Complex multi-agent workflow
+- `multi_turn_tool/` - Multi-turn tool conversations
+- `auth_basic/` - Role-based access control
+- `auth_audit/` - Access control with audit logging
+- `rag_surrealdb/` - RAG pipeline with SurrealDB vector store
 
 ## Development
 
@@ -859,7 +866,7 @@ cargo build --release
 
 - **Wiki**: [GitHub Wiki](https://github.com/zavora-ai/adk-rust/wiki) - Comprehensive guides and tutorials
 - **API Reference**: [docs.rs/adk-rust](https://docs.rs/adk-rust) - Full API documentation
-- **Examples**: [examples/README.md](examples/README.md) - 80+ working examples with detailed explanations
+- **Examples**: [examples/README.md](examples/README.md) - 120+ working examples with detailed explanations
 
 ## Performance
 
@@ -886,10 +893,15 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 
 ## Roadmap
 
-**Implemented** (v0.3.1):
+**Implemented** (v0.3.2):
+- **adk-rag** — Full RAG pipeline with document chunking (fixed-size, recursive, markdown), embedding providers, vector search, reranking, and 6 vector store backends (in-memory, Qdrant, Milvus, Weaviate, Pinecone, SurrealDB)
+- **Declarative scope-based security** — Tools declare required scopes via `required_scopes()`, framework enforces automatically via `ScopeGuard` with pluggable resolvers and audit logging
+- **Models Discovery API** — `list_models()` and `get_model()` on `Gemini` client for runtime model enumeration
+- **Gemini model expansion** — 22+ model variants including Gemini 3 Pro/Flash, 2.5 Pro/Flash, embedding models, with proper `From<String>` matching
+- **Generation config on agents** — `temperature()`, `top_p()`, `top_k()`, `max_output_tokens()` convenience methods on `LlmAgentBuilder`
+- **Multi-turn tool fix** — Tool context role preservation in `adk-runner` (#139)
 - **Vertex AI Live streaming** — `adk-gemini` refactored with `GeminiBackend` trait, pluggable `StudioBackend` (REST) and `VertexBackend` (REST SSE + gRPC fallback)
 - **Realtime audio transports** — Vertex AI Live with ADC auth, LiveKit WebRTC bridge, OpenAI WebRTC with Opus codec
-- **Realtime stabilization** — raw bytes audio transport, Gemini Live session rewrite, OpenAI SDK event alignment
 - **Multi-provider Studio codegen** — Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama support in code generation
 - **2026 model names** — all docs, examples, and defaults updated (gemini-2.5-flash, gpt-5-mini, claude-sonnet-4.5)
 - **Response parsing hardening** — 25 tests covering Gemini edge cases (safety ratings, streaming, function calls, grounding)

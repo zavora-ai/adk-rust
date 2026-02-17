@@ -43,6 +43,7 @@ mod error;
 mod middleware;
 mod permission;
 mod role;
+pub mod scope;
 
 // SSO module (feature-gated)
 #[cfg(feature = "sso")]
@@ -54,3 +55,7 @@ pub use error::{AccessDenied, AuthError};
 pub use middleware::{AuthMiddleware, ProtectedTool, ProtectedToolDyn, ToolExt};
 pub use permission::Permission;
 pub use role::Role;
+pub use scope::{
+    ContextScopeResolver, ScopeDenied, ScopeGuard, ScopeResolver, ScopeToolExt, ScopedTool,
+    ScopedToolDyn, StaticScopeResolver, check_scopes,
+};

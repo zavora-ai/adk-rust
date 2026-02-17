@@ -28,6 +28,24 @@ pub trait Tool: Send + Sync {
     fn response_schema(&self) -> Option<Value> {
         None
     }
+
+    /// Returns the scopes required to execute this tool.
+    ///
+    /// When non-empty, the framework can enforce that the calling user
+    /// possesses **all** listed scopes before dispatching `execute()`.
+    /// The default implementation returns an empty slice (no scopes required).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn required_scopes(&self) -> &[&str] {
+    ///     &["finance:write", "verified"]
+    /// }
+    /// ```
+    fn required_scopes(&self) -> &[&str] {
+        &[]
+    }
+
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
 }
 
@@ -39,6 +57,16 @@ pub trait ToolContext: CallbackContext {
     /// Set the event actions (e.g., to trigger escalation or skip summarization).
     fn set_actions(&self, actions: EventActions);
     async fn search_memory(&self, query: &str) -> Result<Vec<MemoryEntry>>;
+
+    /// Returns the scopes granted to the current user for this invocation.
+    ///
+    /// Implementations may resolve scopes from session state, JWT claims,
+    /// or an external identity provider. The default returns an empty set
+    /// (no scopes granted), which means scope-protected tools will be denied
+    /// unless the implementation is overridden.
+    fn user_scopes(&self) -> Vec<String> {
+        vec![]
+    }
 }
 
 #[async_trait]

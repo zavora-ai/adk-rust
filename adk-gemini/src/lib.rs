@@ -30,6 +30,7 @@
 
 pub mod backend;
 pub mod client;
+pub mod model_info;
 mod models;
 
 /// Convenient re-exports of commonly used types

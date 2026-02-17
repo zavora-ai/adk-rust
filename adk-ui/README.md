@@ -21,7 +21,7 @@ Dynamic UI generation for AI agents. Enables agents to render rich user interfac
 
 ```toml
 [dependencies]
-adk-ui = "0.3.1"
+adk-ui = "0.3.2"
 ```
 
 ```rust
