@@ -1,12 +1,12 @@
 # ADK-Rust
 
-**Rust Agent Development Kit (ADK-Rust)** - Build AI agents in Rust with modular components for models, tools, memory, realtime voice, and more.
+**Rust Agent Development Kit (ADK-Rust)** - Build AI agents in Rust with modular components for models, tools, memory, RAG, security, realtime voice, and more.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-rust.svg)](https://crates.io/crates/adk-rust)
 [![Documentation](https://docs.rs/adk-rust/badge.svg)](https://docs.rs/adk-rust)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-A flexible framework for developing AI agents with simplicity and power. Model-agnostic, deployment-agnostic, optimized for frontier AI models. Includes support for realtime voice agents with OpenAI Realtime API and Gemini Live API.
+A flexible framework for developing AI agents with simplicity and power. Model-agnostic, deployment-agnostic, optimized for frontier AI models. Includes support for realtime voice agents, RAG pipelines, graph workflows, declarative security, and 120+ working examples.
 
 ## Quick Start
 
@@ -20,7 +20,7 @@ cargo new my_agent && cd my_agent
 
 ```toml
 [dependencies]
-adk-rust = "0.3.1"
+adk-rust = "0.3.2"
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 ```
@@ -116,7 +116,9 @@ let agent = RealtimeAgent::builder("voice_assistant")
 
 Features:
 - OpenAI Realtime API & Gemini Live API
-- Bidirectional audio (PCM16, G711)
+- Vertex AI Live with Application Default Credentials
+- LiveKit WebRTC bridge for production audio routing
+- Bidirectional audio (PCM16, G711, Opus)
 - Server-side VAD
 - Real-time tool calling
 - Multi-agent handoffs
@@ -185,6 +187,56 @@ let report = evaluator.evaluate_file(agent, "tests/agent.test.json").await?;
 assert!(report.all_passed());
 ```
 
+## RAG Pipeline
+
+Build retrieval-augmented generation pipelines with `adk-rag`:
+
+```rust
+use adk_rag::{RagPipelineBuilder, InMemoryVectorStore, FixedSizeChunker};
+
+let pipeline = RagPipelineBuilder::new()
+    .chunker(FixedSizeChunker::new(512, 50))
+    .vector_store(InMemoryVectorStore::new())
+    .embedding_provider(embedding_model)
+    .build()?;
+
+// Ingest documents
+pipeline.ingest("doc1", "Your document text here...").await?;
+
+// Search
+let results = pipeline.search("query", 5).await?;
+```
+
+Features:
+- 3 chunking strategies (fixed-size, recursive, markdown-aware)
+- 6 vector store backends (in-memory, Qdrant, Milvus, Weaviate, Pinecone, SurrealDB)
+- Pluggable embedding providers and rerankers
+- Ready-made `RagTool` for agent integration
+
+## Declarative Security
+
+Tools declare their required scopes — the framework enforces automatically:
+
+```rust
+use adk_tool::FunctionTool;
+use adk_auth::{ScopeGuard, ContextScopeResolver};
+
+// Tool declares what scopes it needs
+let transfer = FunctionTool::new("transfer", "Transfer funds", handler)
+    .with_scopes(&["finance:write", "verified"]);
+
+// Framework enforces before execution — no imperative checks in handlers
+let guard = ScopeGuard::new(ContextScopeResolver);
+let protected = guard.protect(transfer);
+```
+
+Features:
+- Declarative `required_scopes()` on the `Tool` trait
+- `ScopeGuard` with pluggable resolvers (context, static, custom)
+- Role-based access control with allow/deny rules
+- SSO/OAuth integration (Auth0, Okta, Azure AD, Google OIDC)
+- Audit logging for all access decisions
+
 ## Deployment
 
 ```bash
@@ -199,20 +251,21 @@ cargo run -- serve --port 8080
 
 ```toml
 # Full (default)
-adk-rust = "0.3.1"
+adk-rust = "0.3.2"
 
 # Minimal
-adk-rust = { version = "0.3.1", default-features = false, features = ["minimal"] }
+adk-rust = { version = "0.3.2", default-features = false, features = ["minimal"] }
 
 # Custom
-adk-rust = { version = "0.3.1", default-features = false, features = ["agents", "gemini", "tools"] }
+adk-rust = { version = "0.3.2", default-features = false, features = ["agents", "gemini", "tools"] }
 ```
 
 ## Documentation
 
 - [API Reference](https://docs.rs/adk-rust)
 - [Official Guides](https://github.com/zavora-ai/adk-rust/tree/main/docs/official_docs)
-- [Examples](https://github.com/zavora-ai/adk-rust/tree/main/examples)
+- [Examples](https://github.com/zavora-ai/adk-rust/tree/main/examples) — 120+ working examples
+- [Wiki](https://github.com/zavora-ai/adk-rust/wiki) — Comprehensive guides and tutorials
 
 ## License
 

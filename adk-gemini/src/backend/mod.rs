@@ -24,6 +24,7 @@ use crate::{
     },
     files::model::{File, ListFilesResponse},
     generation::{GenerateContentRequest, GenerationResponse},
+    model_info::{ListModelsResponse, ModelInfo},
 };
 use async_trait::async_trait;
 use futures::Stream;
@@ -160,5 +161,21 @@ pub trait GeminiBackend: Send + Sync + std::fmt::Debug {
 
     async fn delete_cached_content(&self, _name: &str) -> Result<(), Error> {
         Err(Error::GoogleCloudUnsupported { operation: "deleteCachedContent" })
+    }
+
+    // ── Model discovery ─────────────────────────────────────────────
+
+    /// List available models. Returns a paginated list of model metadata.
+    async fn list_models(
+        &self,
+        _page_size: Option<u32>,
+        _page_token: Option<String>,
+    ) -> Result<ListModelsResponse, Error> {
+        Err(Error::GoogleCloudUnsupported { operation: "listModels" })
+    }
+
+    /// Get metadata for a specific model.
+    async fn get_model(&self, _name: &str) -> Result<ModelInfo, Error> {
+        Err(Error::GoogleCloudUnsupported { operation: "getModel" })
     }
 }

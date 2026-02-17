@@ -5,6 +5,83 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-02-17
+
+### ⭐ Highlights
+- **adk-rag**: New RAG crate with modular pipeline, 6 vector store backends (InMemory, Qdrant, LanceDB, pgvector, SurrealDB), 3 chunking strategies, and agentic retrieval via `RagTool`
+- **Generation Config on Agents**: `LlmAgentBuilder` now supports `temperature()`, `top_p()`, `top_k()`, `max_output_tokens()` convenience methods and full `generate_content_config()` for agent-level LLM tuning
+- **Gemini Model URL Fix**: `Model::Custom` variant now correctly prefixes `models/` in API URLs, fixing `PerformRequestNew` errors for all Gemini tool-calling examples
+- **Gemini Models Discovery API**: New `list_models()` and `get_model()` methods on `Gemini` client for runtime model discovery
+- **Expanded Model Enum**: `Model` enum expanded from 5 to 22 variants covering Gemini 3, 2.5, 2.0, and embedding models
+
+### Added
+
+#### adk-rag (NEW CRATE)
+- New `adk-rag` crate: modular Retrieval-Augmented Generation for ADK-Rust agents
+- Core traits: `EmbeddingProvider`, `VectorStore`, `Chunker`, `Reranker`
+- `InMemoryVectorStore` with cosine similarity search (no external deps)
+- Three chunking strategies: `FixedSizeChunker`, `RecursiveChunker`, `MarkdownChunker`
+- `RagPipeline` orchestrator for ingest (chunk → embed → store) and query (embed → search → rerank → filter) workflows
+- `RagPipelineBuilder` with builder-pattern configuration
+- `RagTool` implementing `adk_core::Tool` for agentic retrieval — agents call `rag_search` on demand
+- Feature-gated embedding providers: `GeminiEmbeddingProvider` (`gemini`), `OpenAIEmbeddingProvider` (`openai`)
+- Feature-gated vector stores: `QdrantVectorStore` (`qdrant`), `LanceDBVectorStore` (`lancedb`), `PgVectorStore` (`pgvector`)
+- `SurrealVectorStore` (`surrealdb`) with HNSW cosine indexing — supports in-memory, RocksDB, and remote server modes
+- `rag` feature flag added to `adk-rust` umbrella crate (included in `full`)
+- 7 examples: `rag_basic`, `rag_markdown`, `rag_agent`, `rag_recursive`, `rag_reranker`, `rag_multi_collection`, `rag_surrealdb`
+- Official documentation page at `docs/official_docs/tools/rag.md` with validated code samples
+
+#### adk-agent
+- `LlmAgentBuilder::generate_content_config()` — set full `GenerateContentConfig` at the agent level
+- `LlmAgentBuilder::temperature()` — convenience method for setting default temperature
+- `LlmAgentBuilder::top_p()` — convenience method for setting default top-p
+- `LlmAgentBuilder::top_k()` — convenience method for setting default top-k
+- `LlmAgentBuilder::max_output_tokens()` — convenience method for setting default max output tokens
+- Agent-level generation config is merged with `output_schema` in the LLM request loop
+
+#### adk-core
+- `GenerateContentConfig` now derives `Default`
+
+#### adk-gemini
+- `Model` enum expanded with 17 new variants:
+  - Gemini 3: `Gemini3ProPreview`, `Gemini3ProImagePreview`, `Gemini3FlashPreview`
+  - Gemini 2.5: `Gemini25Pro`, `Gemini25ProPreviewTts`, `Gemini25FlashPreview092025`, `Gemini25FlashImage`, `Gemini25FlashLive122025`, `Gemini25FlashLive092025`, `Gemini25FlashPreviewTts`, `Gemini25FlashLite`, `Gemini25FlashLitePreview092025`
+  - Gemini 2.0 (deprecated): `Gemini20Flash`, `Gemini20Flash001`, `Gemini20FlashExp`, `Gemini20FlashLite`, `Gemini20FlashLite001`
+- `Model::Gemini25FlashImagePreview` marked `#[deprecated]` (use `Gemini25FlashImage`)
+- `Model::Gemini20Flash*` variants marked `#[deprecated]` (shutting down March 31, 2026)
+- `model_info` module with `ModelInfo` and `ListModelsResponse` types for the Models API
+- `Gemini::list_models(page_size)` — paginated stream of available model metadata
+- `Gemini::get_model(name)` — fetch metadata for a specific model (token limits, supported methods, etc.)
+- `GeminiBackend::list_models()` and `GeminiBackend::get_model()` trait methods with default unsupported impls
+- `StudioBackend` implementation of `list_models` and `get_model` via REST
+- `ModelInfo` and `ListModelsResponse` re-exported from `prelude`
+
+#### adk-studio
+- Generation config parameters (`temperature`, `top_p`, `top_k`, `max_output_tokens`) added to `AgentSchema`
+- Advanced Settings section in LlmProperties panel for configuring generation parameters
+- Code generation emits `.temperature()`, `.top_p()`, `.top_k()`, `.max_output_tokens()` builder calls
+
+#### Examples
+- `multi_turn_tool` — inventory management scenario demonstrating multi-turn tool conversations with both Gemini (default) and OpenAI (`--features openai`)
+- `rag_surrealdb` — SurrealDB vector store with embedded in-memory mode
+
+### Fixed
+- **adk-runner**: `conversation_history()` now preserves `function`/`tool` content roles instead of overwriting them to `model`, fixing multi-turn tool conversations (#139)
+- **adk-gemini**: `PerformRequestNew` error variant now displays the underlying reqwest error instead of swallowing it
+- **adk-gemini**: `From<String> for Model` now correctly maps known model names (e.g. `"gemini-2.5-flash"`) to proper enum variants instead of always creating `Custom`
+- **adk-gemini**: `Model::Custom` `Display` impl now adds `models/` prefix when missing, fixing broken API URLs like `gemini-2.5-flash:streamGenerateContent` → `models/gemini-2.5-flash:streamGenerateContent`
+
+### Changed
+- CI: sccache stats, test results, and clippy summary now appear in GitHub Actions step summary
+- CI: devenv scripts renamed to `ws-*` prefix to avoid collisions with Cargo binaries
+- `AGENTS.md` consolidated with crates.io publishing guide and PR template improvements
+- Removed broken `.pre-commit-config.yaml` symlink
+
+### Contributors
+Thanks to the following people for their contributions to this release:
+- **@rohanpanickar** — fix for tool context role preservation in multi-turn conversations (#139)
+- **@mikefaille** — CI improvements (sccache summaries, devenv script fixes), environment sync, documentation consolidation, and PR template (#134, #136, #137)
+
 ## [0.3.1] - 2026-02-14
 
 ### ⭐ Highlights

@@ -423,4 +423,26 @@ impl GeminiBackend for StudioBackend {
         Self::check_response(response).await?;
         Ok(())
     }
+
+    async fn list_models(
+        &self,
+        page_size: Option<u32>,
+        page_token: Option<String>,
+    ) -> Result<crate::model_info::ListModelsResponse, Error> {
+        let mut url = self.build_url_with_suffix("models")?;
+        if let Some(size) = page_size {
+            url.query_pairs_mut().append_pair("pageSize", &size.to_string());
+        }
+        if let Some(token) = page_token {
+            url.query_pairs_mut().append_pair("pageToken", &token);
+        }
+        self.get_json(url).await
+    }
+
+    async fn get_model(&self, name: &str) -> Result<crate::model_info::ModelInfo, Error> {
+        let qualified =
+            if name.starts_with("models/") { name.to_string() } else { format!("models/{name}") };
+        let url = self.build_url_with_suffix(&qualified)?;
+        self.get_json(url).await
+    }
 }

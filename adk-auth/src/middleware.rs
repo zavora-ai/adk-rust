@@ -74,6 +74,10 @@ impl<T: Tool + Send + Sync> Tool for ProtectedTool<T> {
         self.inner.response_schema()
     }
 
+    fn required_scopes(&self) -> &[&str] {
+        self.inner.required_scopes()
+    }
+
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let user_id = ctx.user_id();
         let tool_name = self.name();
@@ -216,6 +220,10 @@ impl Tool for ProtectedToolDyn {
 
     fn response_schema(&self) -> Option<Value> {
         self.inner.response_schema()
+    }
+
+    fn required_scopes(&self) -> &[&str] {
+        self.inner.required_scopes()
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {

@@ -45,13 +45,59 @@ static V1_BASE_URL: LazyLock<Url> = LazyLock::new(|| {
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum Model {
+    // ── Gemini 3 (newest generation) ──────────────────────────────
+    #[serde(rename = "models/gemini-3-pro-preview")]
+    Gemini3ProPreview,
+    #[serde(rename = "models/gemini-3-pro-image-preview")]
+    Gemini3ProImagePreview,
+    #[serde(rename = "models/gemini-3-flash-preview")]
+    Gemini3FlashPreview,
+
+    // ── Gemini 2.5 ───────────────────────────────────────────────
+    #[serde(rename = "models/gemini-2.5-pro")]
+    Gemini25Pro,
+    #[serde(rename = "models/gemini-2.5-pro-preview-tts")]
+    Gemini25ProPreviewTts,
     #[default]
     #[serde(rename = "models/gemini-2.5-flash")]
     Gemini25Flash,
+    #[serde(rename = "models/gemini-2.5-flash-preview-09-2025")]
+    Gemini25FlashPreview092025,
+    #[serde(rename = "models/gemini-2.5-flash-image")]
+    Gemini25FlashImage,
+    /// Deprecated: use `Gemini25FlashImage` instead.
+    #[deprecated(note = "Use Model::Gemini25FlashImage instead")]
+    #[serde(rename = "models/gemini-2.5-flash-image-preview")]
+    Gemini25FlashImagePreview,
+    #[serde(rename = "models/gemini-2.5-flash-native-audio-preview-12-2025")]
+    Gemini25FlashLive122025,
+    #[serde(rename = "models/gemini-2.5-flash-native-audio-preview-09-2025")]
+    Gemini25FlashLive092025,
+    #[serde(rename = "models/gemini-2.5-flash-preview-tts")]
+    Gemini25FlashPreviewTts,
     #[serde(rename = "models/gemini-2.5-flash-lite")]
     Gemini25FlashLite,
-    #[serde(rename = "models/gemini-2.5-pro")]
-    Gemini25Pro,
+    #[serde(rename = "models/gemini-2.5-flash-lite-preview-09-2025")]
+    Gemini25FlashLitePreview092025,
+
+    // ── Gemini 2.0 (deprecated, shutting down March 31, 2026) ────
+    #[deprecated(note = "Gemini 2.0 models shut down March 31, 2026")]
+    #[serde(rename = "models/gemini-2.0-flash")]
+    Gemini20Flash,
+    #[deprecated(note = "Gemini 2.0 models shut down March 31, 2026")]
+    #[serde(rename = "models/gemini-2.0-flash-001")]
+    Gemini20Flash001,
+    #[deprecated(note = "Gemini 2.0 models shut down March 31, 2026")]
+    #[serde(rename = "models/gemini-2.0-flash-exp")]
+    Gemini20FlashExp,
+    #[deprecated(note = "Gemini 2.0 models shut down March 31, 2026")]
+    #[serde(rename = "models/gemini-2.0-flash-lite")]
+    Gemini20FlashLite,
+    #[deprecated(note = "Gemini 2.0 models shut down March 31, 2026")]
+    #[serde(rename = "models/gemini-2.0-flash-lite-001")]
+    Gemini20FlashLite001,
+
+    // ── Embedding models ─────────────────────────────────────────
     /// Gemini Embedding 001 (3072 dimensions). Replaces text-embedding-004.
     #[serde(rename = "models/gemini-embedding-001")]
     GeminiEmbedding001,
@@ -59,6 +105,8 @@ pub enum Model {
     #[deprecated(note = "Use Model::GeminiEmbedding001 (gemini-embedding-001) instead")]
     #[serde(rename = "models/text-embedding-004")]
     TextEmbedding004,
+
+    // ── Custom ───────────────────────────────────────────────────
     #[serde(untagged)]
     Custom(String),
 }
@@ -67,9 +115,29 @@ impl Model {
     pub fn as_str(&self) -> &str {
         #[allow(deprecated)]
         match self {
-            Model::Gemini25Flash => "models/gemini-2.5-flash",
-            Model::Gemini25FlashLite => "models/gemini-2.5-flash-lite",
+            Model::Gemini3ProPreview => "models/gemini-3-pro-preview",
+            Model::Gemini3ProImagePreview => "models/gemini-3-pro-image-preview",
+            Model::Gemini3FlashPreview => "models/gemini-3-flash-preview",
             Model::Gemini25Pro => "models/gemini-2.5-pro",
+            Model::Gemini25ProPreviewTts => "models/gemini-2.5-pro-preview-tts",
+            Model::Gemini25Flash => "models/gemini-2.5-flash",
+            Model::Gemini25FlashPreview092025 => "models/gemini-2.5-flash-preview-09-2025",
+            Model::Gemini25FlashImage => "models/gemini-2.5-flash-image",
+            Model::Gemini25FlashImagePreview => "models/gemini-2.5-flash-image-preview",
+            Model::Gemini25FlashLive122025 => {
+                "models/gemini-2.5-flash-native-audio-preview-12-2025"
+            }
+            Model::Gemini25FlashLive092025 => {
+                "models/gemini-2.5-flash-native-audio-preview-09-2025"
+            }
+            Model::Gemini25FlashPreviewTts => "models/gemini-2.5-flash-preview-tts",
+            Model::Gemini25FlashLite => "models/gemini-2.5-flash-lite",
+            Model::Gemini25FlashLitePreview092025 => "models/gemini-2.5-flash-lite-preview-09-2025",
+            Model::Gemini20Flash => "models/gemini-2.0-flash",
+            Model::Gemini20Flash001 => "models/gemini-2.0-flash-001",
+            Model::Gemini20FlashExp => "models/gemini-2.0-flash-exp",
+            Model::Gemini20FlashLite => "models/gemini-2.0-flash-lite",
+            Model::Gemini20FlashLite001 => "models/gemini-2.0-flash-lite-001",
             Model::GeminiEmbedding001 => "models/gemini-embedding-001",
             Model::TextEmbedding004 => "models/text-embedding-004",
             Model::Custom(model) => model,
@@ -79,9 +147,25 @@ impl Model {
     pub fn vertex_model_path(&self, project_id: &str, location: &str) -> String {
         #[allow(deprecated)]
         let model_id = match self {
-            Model::Gemini25Flash => "gemini-2.5-flash",
-            Model::Gemini25FlashLite => "gemini-2.5-flash-lite",
+            Model::Gemini3ProPreview => "gemini-3-pro-preview",
+            Model::Gemini3ProImagePreview => "gemini-3-pro-image-preview",
+            Model::Gemini3FlashPreview => "gemini-3-flash-preview",
             Model::Gemini25Pro => "gemini-2.5-pro",
+            Model::Gemini25ProPreviewTts => "gemini-2.5-pro-preview-tts",
+            Model::Gemini25Flash => "gemini-2.5-flash",
+            Model::Gemini25FlashPreview092025 => "gemini-2.5-flash-preview-09-2025",
+            Model::Gemini25FlashImage => "gemini-2.5-flash-image",
+            Model::Gemini25FlashImagePreview => "gemini-2.5-flash-image-preview",
+            Model::Gemini25FlashLive122025 => "gemini-2.5-flash-native-audio-preview-12-2025",
+            Model::Gemini25FlashLive092025 => "gemini-2.5-flash-native-audio-preview-09-2025",
+            Model::Gemini25FlashPreviewTts => "gemini-2.5-flash-preview-tts",
+            Model::Gemini25FlashLite => "gemini-2.5-flash-lite",
+            Model::Gemini25FlashLitePreview092025 => "gemini-2.5-flash-lite-preview-09-2025",
+            Model::Gemini20Flash => "gemini-2.0-flash",
+            Model::Gemini20Flash001 => "gemini-2.0-flash-001",
+            Model::Gemini20FlashExp => "gemini-2.0-flash-exp",
+            Model::Gemini20FlashLite => "gemini-2.0-flash-lite",
+            Model::Gemini20FlashLite001 => "gemini-2.0-flash-lite-001",
             Model::GeminiEmbedding001 => "gemini-embedding-001",
             Model::TextEmbedding004 => "text-embedding-004",
             Model::Custom(model) => {
@@ -99,8 +183,38 @@ impl Model {
 }
 
 impl From<String> for Model {
+    #[allow(deprecated)]
     fn from(model: String) -> Self {
-        Self::Custom(model)
+        // Match known model names (with or without "models/" prefix) to proper variants.
+        let bare = model.strip_prefix("models/").unwrap_or(&model);
+        match bare {
+            // Gemini 3 models (newest generation)
+            "gemini-3-pro-preview" => Self::Gemini3ProPreview,
+            "gemini-3-pro-image-preview" => Self::Gemini3ProImagePreview,
+            "gemini-3-flash-preview" => Self::Gemini3FlashPreview,
+            // Gemini 2.5 models
+            "gemini-2.5-pro" => Self::Gemini25Pro,
+            "gemini-2.5-pro-preview-tts" => Self::Gemini25ProPreviewTts,
+            "gemini-2.5-flash" => Self::Gemini25Flash,
+            "gemini-2.5-flash-preview-09-2025" => Self::Gemini25FlashPreview092025,
+            "gemini-2.5-flash-image" => Self::Gemini25FlashImage,
+            "gemini-2.5-flash-image-preview" => Self::Gemini25FlashImagePreview,
+            "gemini-2.5-flash-native-audio-preview-12-2025" => Self::Gemini25FlashLive122025,
+            "gemini-2.5-flash-native-audio-preview-09-2025" => Self::Gemini25FlashLive092025,
+            "gemini-2.5-flash-preview-tts" => Self::Gemini25FlashPreviewTts,
+            "gemini-2.5-flash-lite" => Self::Gemini25FlashLite,
+            "gemini-2.5-flash-lite-preview-09-2025" => Self::Gemini25FlashLitePreview092025,
+            // Gemini 2.0 models (deprecated, shutting down March 31, 2026)
+            "gemini-2.0-flash" => Self::Gemini20Flash,
+            "gemini-2.0-flash-001" => Self::Gemini20Flash001,
+            "gemini-2.0-flash-exp" => Self::Gemini20FlashExp,
+            "gemini-2.0-flash-lite" => Self::Gemini20FlashLite,
+            "gemini-2.0-flash-lite-001" => Self::Gemini20FlashLite001,
+            // Embedding models
+            "gemini-embedding-001" => Self::GeminiEmbedding001,
+            "text-embedding-004" => Self::TextEmbedding004,
+            _ => Self::Custom(model),
+        }
     }
 }
 
@@ -108,12 +222,18 @@ impl fmt::Display for Model {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         #[allow(deprecated)]
         match self {
-            Model::Gemini25Flash => write!(f, "models/gemini-2.5-flash"),
-            Model::Gemini25FlashLite => write!(f, "models/gemini-2.5-flash-lite"),
-            Model::Gemini25Pro => write!(f, "models/gemini-2.5-pro"),
-            Model::GeminiEmbedding001 => write!(f, "models/gemini-embedding-001"),
-            Model::TextEmbedding004 => write!(f, "models/text-embedding-004"),
-            Model::Custom(model) => write!(f, "{}", model),
+            Model::Custom(model) => {
+                // Ensure custom models always have the "models/" prefix for API URLs
+                if model.starts_with("models/")
+                    || model.starts_with("projects/")
+                    || model.starts_with("publishers/")
+                {
+                    write!(f, "{model}")
+                } else {
+                    write!(f, "models/{model}")
+                }
+            }
+            other => write!(f, "{}", other.as_str()),
         }
     }
 }
@@ -136,6 +256,7 @@ pub enum Error {
         suffix: String,
     },
 
+    #[snafu(display("failed to perform request: {source}"))]
     PerformRequestNew {
         source: reqwest::Error,
     },
@@ -468,6 +589,25 @@ impl GeminiClient {
         page_token: Option<String>,
     ) -> Result<ListCachedContentsResponse, Error> {
         self.backend.list_cached_contents(page_size, page_token).await
+    }
+
+    // ── Model discovery ─────────────────────────────────────────────────
+
+    #[instrument(skip_all, fields(page.size = page_size, page.token.present = page_token.is_some()))]
+    pub(crate) async fn list_models(
+        &self,
+        page_size: Option<u32>,
+        page_token: Option<String>,
+    ) -> Result<crate::model_info::ListModelsResponse, Error> {
+        self.backend.list_models(page_size, page_token).await
+    }
+
+    #[instrument(skip_all, fields(model.name = name))]
+    pub(crate) async fn get_model(
+        &self,
+        name: &str,
+    ) -> Result<crate::model_info::ModelInfo, Error> {
+        self.backend.get_model(name).await
     }
 }
 
@@ -950,6 +1090,69 @@ impl Gemini {
                 }
             }
         }
+    }
+
+    // ── Model discovery ─────────────────────────────────────────────────
+
+    /// Lists available Gemini models with pagination.
+    ///
+    /// Returns a stream of [`ModelInfo`](crate::model_info::ModelInfo) items.
+    /// This is useful for discovering which models are available and their
+    /// capabilities (token limits, supported methods, etc.).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use futures::StreamExt;
+    ///
+    /// let gemini = Gemini::new("YOUR_API_KEY")?;
+    /// let mut models = gemini.list_models(None);
+    /// while let Some(model) = models.next().await {
+    ///     let model = model?;
+    ///     println!("{}: {}", model.name, model.display_name);
+    /// }
+    /// ```
+    pub fn list_models(
+        &self,
+        page_size: impl Into<Option<u32>>,
+    ) -> impl Stream<Item = Result<crate::model_info::ModelInfo, Error>> + Send {
+        let client = self.client.clone();
+        let page_size = page_size.into();
+        async_stream::try_stream! {
+            let mut page_token: Option<String> = None;
+            loop {
+                let response = client
+                    .list_models(page_size, page_token.clone())
+                    .await?;
+
+                for model in response.models {
+                    yield model;
+                }
+
+                if let Some(next_page_token) = response.next_page_token {
+                    page_token = Some(next_page_token);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Get metadata for a specific model by name.
+    ///
+    /// The name can be provided with or without the `models/` prefix
+    /// (e.g. both `"gemini-2.5-flash"` and `"models/gemini-2.5-flash"` work).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let gemini = Gemini::new("YOUR_API_KEY")?;
+    /// let info = gemini.get_model("gemini-2.5-flash").await?;
+    /// println!("Input limit: {} tokens", info.input_token_limit);
+    /// println!("Output limit: {} tokens", info.output_token_limit);
+    /// ```
+    pub async fn get_model(&self, name: &str) -> Result<crate::model_info::ModelInfo, Error> {
+        self.client.get_model(name).await
     }
 }
 

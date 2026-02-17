@@ -219,3 +219,39 @@ async fn test_function_tool_error() {
     let result = tool.execute(ctx, json!({})).await;
     assert!(result.is_err());
 }
+
+// =============================================================================
+// FunctionTool::with_scopes() tests
+// =============================================================================
+
+#[test]
+fn test_function_tool_with_scopes() {
+    let tool = FunctionTool::new("transfer", "Transfer funds", |_ctx, _args| async move {
+        Ok(json!({"status": "ok"}))
+    })
+    .with_scopes(&["finance:write", "verified"]);
+
+    assert_eq!(tool.required_scopes(), &["finance:write", "verified"]);
+}
+
+#[test]
+fn test_function_tool_no_scopes_by_default() {
+    let tool =
+        FunctionTool::new(
+            "search",
+            "Search",
+            |_ctx, _args| async move { Ok(json!({"results": []})) },
+        );
+
+    assert!(tool.required_scopes().is_empty());
+}
+
+#[test]
+fn test_function_tool_scopes_chainable() {
+    let tool = FunctionTool::new("admin", "Admin tool", |_ctx, _args| async move { Ok(json!({})) })
+        .with_scopes(&["admin"])
+        .with_long_running(true);
+
+    assert_eq!(tool.required_scopes(), &["admin"]);
+    assert!(tool.is_long_running());
+}

@@ -34,3 +34,6 @@ pub use crate::{FunctionDeclaration, FunctionResponse, Tool};
 
 // Batch and file handles (commonly used for async operations)
 pub use crate::{Batch, FileHandle};
+
+// Model discovery
+pub use crate::model_info::{ListModelsResponse, ModelInfo};
