@@ -29,11 +29,22 @@ impl RuntimeController {
     }
 }
 
+/// Attachment structure for the legacy /run endpoint
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Attachment {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub mime_type: String,
+    pub base64: String,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct RunRequest {
     pub new_message: String,
     #[serde(default, alias = "uiProtocol")]
     pub ui_protocol: Option<String>,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
 }
 
 /// Request format for /run_sse (adk-go compatible)
@@ -168,6 +179,69 @@ fn log_profile_deprecation(profile: UiProfile) {
     );
 }
 
+/// Build Content from message text and attachments
+fn build_content_with_attachments(
+    text: &str,
+    attachments: &[Attachment],
+) -> Result<adk_core::Content, RuntimeError> {
+    let mut content = adk_core::Content::new("user");
+
+    // Add the text part
+    content.parts.push(adk_core::Part::Text { text: text.to_string() });
+
+    // Add attachment parts
+    for attachment in attachments {
+        match base64::decode(&attachment.base64) {
+            Ok(data) => {
+                content.parts.push(adk_core::Part::InlineData {
+                    mime_type: attachment.mime_type.clone(),
+                    data,
+                });
+            }
+            Err(e) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid base64 data for attachment '{}': {}", attachment.name, e),
+                ));
+            }
+        }
+    }
+
+    Ok(content)
+}
+
+/// Build Content from message parts (for /run_sse endpoint)
+fn build_content_from_parts(parts: &[MessagePart]) -> Result<adk_core::Content, RuntimeError> {
+    let mut content = adk_core::Content::new("user");
+
+    for part in parts {
+        // Add text part if present
+        if let Some(text) = &part.text {
+            content.parts.push(adk_core::Part::Text { text: text.clone() });
+        }
+
+        // Add inline data part if present
+        if let Some(inline_data) = &part.inline_data {
+            match base64::decode(&inline_data.data) {
+                Ok(data) => {
+                    content.parts.push(adk_core::Part::InlineData {
+                        mime_type: inline_data.mime_type.clone(),
+                        data,
+                    });
+                }
+                Err(e) => {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!("Invalid base64 data in inline_data: {}", e),
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(content)
+}
+
 pub async fn run_sse(
     State(controller): State<RuntimeController>,
     Path((app_name, user_id, session_id)): Path<(String, String, String)>,
@@ -217,9 +291,17 @@ pub async fn run_sse(
         })
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create runner".to_string()))?;
 
+        // Build content with attachments
+        let content = build_content_with_attachments(&req.new_message, &req.attachments)?;
+
+        // Log attachment info
+        if !req.attachments.is_empty() {
+            info!(attachment_count = req.attachments.len(), "processing request with attachments");
+        }
+
         // Run agent
         let event_stream = runner
-            .run(user_id, session_id, adk_core::Content::new("user").with_text(&req.new_message))
+            .run(user_id, session_id, content)
             .await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to run agent".to_string()))?;
 
@@ -263,15 +345,20 @@ pub async fn run_sse_compat(
     );
     log_profile_deprecation(ui_profile);
 
-    // Extract text from message parts
-    let message_text = req
-        .new_message
-        .parts
-        .iter()
-        .filter_map(|p| p.text.as_ref())
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(" ");
+    // Build content from message parts (includes both text and inline_data)
+    let content = build_content_from_parts(&req.new_message.parts)?;
+
+    // Log part info
+    let text_parts: Vec<_> = req.new_message.parts.iter().filter(|p| p.text.is_some()).collect();
+    let data_parts: Vec<_> =
+        req.new_message.parts.iter().filter(|p| p.inline_data.is_some()).collect();
+    if !data_parts.is_empty() {
+        info!(
+            text_parts = text_parts.len(),
+            inline_data_parts = data_parts.len(),
+            "processing request with inline data"
+        );
+    }
 
     // Validate session exists or create it
     let session_result = controller
@@ -327,9 +414,9 @@ pub async fn run_sse_compat(
     })
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create runner".to_string()))?;
 
-    // Run agent
+    // Run agent with full content (text + inline data)
     let event_stream = runner
-        .run(user_id, session_id, adk_core::Content::new("user").with_text(&message_text))
+        .run(user_id, session_id, content)
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to run agent".to_string()))?;
 
