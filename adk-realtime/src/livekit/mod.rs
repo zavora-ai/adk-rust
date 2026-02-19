@@ -23,3 +23,11 @@ mod handler;
 
 pub use bridge::{bridge_gemini_input, bridge_input};
 pub use handler::LiveKitEventHandler;
+
+// Re-export core LiveKit types so downstream crates only need `adk-realtime`
+pub use livekit::options::TrackPublishOptions;
+pub use livekit::prelude::*;
+pub use livekit::webrtc::audio_source::{
+    AudioSourceOptions, RtcAudioSource, native::NativeAudioSource,
+};
+pub use livekit_api::access_token::{AccessToken, VideoGrants};
