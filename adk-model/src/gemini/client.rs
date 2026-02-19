@@ -1,3 +1,4 @@
+use crate::attachment;
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
     CitationMetadata, CitationSource, Content, FinishReason, Llm, LlmRequest, LlmResponse,
@@ -5,6 +6,8 @@ use adk_core::{
 };
 use adk_gemini::Gemini;
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use futures::TryStreamExt;
 
 pub struct GeminiModel {
     client: Gemini,
@@ -115,6 +118,18 @@ impl GeminiModel {
                     adk_gemini::Part::Text { text, .. } => {
                         converted_parts.push(Part::Text { text: text.clone() });
                     }
+                    adk_gemini::Part::InlineData { inline_data } => {
+                        let decoded =
+                            BASE64_STANDARD.decode(&inline_data.data).map_err(|error| {
+                                adk_core::AdkError::Model(format!(
+                                    "failed to decode inline data from gemini response: {error}"
+                                ))
+                            })?;
+                        converted_parts.push(Part::InlineData {
+                            mime_type: inline_data.mime_type.clone(),
+                            data: decoded,
+                        });
+                    }
                     adk_gemini::Part::FunctionCall { function_call, .. } => {
                         converted_parts.push(Part::FunctionCall {
                             name: function_call.name.clone(),
@@ -134,7 +149,6 @@ impl GeminiModel {
                             id: None,
                         });
                     }
-                    _ => {}
                 }
             }
         }
@@ -242,13 +256,19 @@ impl GeminiModel {
                                 });
                             }
                             Part::InlineData { data, mime_type } => {
-                                use base64::{Engine as _, engine::general_purpose::STANDARD};
-                                let encoded = STANDARD.encode(data);
+                                let encoded = attachment::encode_base64(data);
                                 gemini_parts.push(adk_gemini::Part::InlineData {
                                     inline_data: adk_gemini::Blob {
                                         mime_type: mime_type.clone(),
                                         data: encoded,
                                     },
+                                });
+                            }
+                            Part::FileData { mime_type, file_uri } => {
+                                gemini_parts.push(adk_gemini::Part::Text {
+                                    text: attachment::file_attachment_to_text(mime_type, file_uri),
+                                    thought: None,
+                                    thought_signature: None,
                                 });
                             }
                             _ => {}
@@ -376,7 +396,6 @@ impl GeminiModel {
             })?;
 
             let mapped_stream = async_stream::stream! {
-                use futures::TryStreamExt;
                 let mut stream = response_stream;
                 while let Some(result) = stream.try_next().await.transpose() {
                     match result {
@@ -578,5 +597,58 @@ mod tests {
         assert_eq!(metadata.citation_sources[0].uri.as_deref(), Some("https://example.com"));
         assert_eq!(metadata.citation_sources[0].start_index, Some(0));
         assert_eq!(metadata.citation_sources[0].end_index, Some(5));
+    }
+
+    #[test]
+    fn convert_response_handles_inline_data_from_model() {
+        let image_bytes = vec![0x89, 0x50, 0x4E, 0x47];
+        let encoded = crate::attachment::encode_base64(&image_bytes);
+
+        let response = adk_gemini::GenerationResponse {
+            candidates: vec![adk_gemini::Candidate {
+                content: adk_gemini::Content {
+                    role: Some(adk_gemini::Role::Model),
+                    parts: Some(vec![
+                        adk_gemini::Part::Text {
+                            text: "Here is the image".to_string(),
+                            thought: None,
+                            thought_signature: None,
+                        },
+                        adk_gemini::Part::InlineData {
+                            inline_data: adk_gemini::Blob {
+                                mime_type: "image/png".to_string(),
+                                data: encoded,
+                            },
+                        },
+                    ]),
+                },
+                safety_ratings: None,
+                citation_metadata: None,
+                grounding_metadata: None,
+                finish_reason: Some(adk_gemini::FinishReason::Stop),
+                index: Some(0),
+            }],
+            prompt_feedback: None,
+            usage_metadata: None,
+            model_version: None,
+            response_id: None,
+        };
+
+        let converted =
+            GeminiModel::convert_response(&response).expect("conversion should succeed");
+        let content = converted.content.expect("should have content");
+        assert!(
+            content
+                .parts
+                .iter()
+                .any(|part| matches!(part, Part::Text { text } if text == "Here is the image"))
+        );
+        assert!(content.parts.iter().any(|part| {
+            matches!(
+                part,
+                Part::InlineData { mime_type, data }
+                    if mime_type == "image/png" && data.as_slice() == image_bytes.as_slice()
+            )
+        }));
     }
 }

@@ -2,6 +2,7 @@
 //!
 //! Groq uses OpenAI-compatible API format, so we can reuse most types from DeepSeek.
 
+use crate::attachment;
 use adk_core::{Content, FinishReason, LlmResponse, Part, UsageMetadata};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -171,7 +172,12 @@ pub fn content_to_message(content: &Content) -> Message {
                 text_parts
                     .push(serde_json::to_string(&function_response.response).unwrap_or_default());
             }
-            _ => {}
+            Part::InlineData { mime_type, data } => {
+                text_parts.push(attachment::inline_attachment_to_text(mime_type, data));
+            }
+            Part::FileData { mime_type, file_uri } => {
+                text_parts.push(attachment::file_attachment_to_text(mime_type, file_uri));
+            }
         }
     }
 
@@ -298,5 +304,40 @@ pub fn create_tool_call_response(
         interrupted: false,
         error_code: None,
         error_message: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_to_message_keeps_inline_attachment_payload() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::InlineData {
+                mime_type: "application/octet-stream".to_string(),
+                data: vec![0xCA, 0xFE],
+            }],
+        };
+        let message = content_to_message(&content);
+        let payload = message.content.unwrap_or_default();
+        assert!(payload.contains("application/octet-stream"));
+        assert!(payload.contains("encoding=\"base64\""));
+    }
+
+    #[test]
+    fn content_to_message_keeps_file_attachment_payload() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::FileData {
+                mime_type: "application/pdf".to_string(),
+                file_uri: "https://example.com/report.pdf".to_string(),
+            }],
+        };
+        let message = content_to_message(&content);
+        let payload = message.content.unwrap_or_default();
+        assert!(payload.contains("application/pdf"));
+        assert!(payload.contains("https://example.com/report.pdf"));
     }
 }

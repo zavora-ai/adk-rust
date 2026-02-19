@@ -6,7 +6,11 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::sse::{Event, KeepAlive, Sse},
 };
-use futures::stream::{self, Stream};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use futures::{
+    StreamExt,
+    stream::{self, Stream},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::convert::Infallible;
@@ -191,8 +195,18 @@ fn build_content_with_attachments(
 
     // Add attachment parts
     for attachment in attachments {
-        match base64::decode(&attachment.base64) {
+        match BASE64_STANDARD.decode(&attachment.base64) {
             Ok(data) => {
+                if data.len() > adk_core::MAX_INLINE_DATA_SIZE {
+                    return Err((
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        format!(
+                            "Attachment '{}' exceeds max inline size of {} bytes",
+                            attachment.name,
+                            adk_core::MAX_INLINE_DATA_SIZE
+                        ),
+                    ));
+                }
                 content.parts.push(adk_core::Part::InlineData {
                     mime_type: attachment.mime_type.clone(),
                     data,
@@ -222,8 +236,17 @@ fn build_content_from_parts(parts: &[MessagePart]) -> Result<adk_core::Content, 
 
         // Add inline data part if present
         if let Some(inline_data) = &part.inline_data {
-            match base64::decode(&inline_data.data) {
+            match BASE64_STANDARD.decode(&inline_data.data) {
                 Ok(data) => {
+                    if data.len() > adk_core::MAX_INLINE_DATA_SIZE {
+                        return Err((
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            format!(
+                                "inline_data exceeds max inline size of {} bytes",
+                                adk_core::MAX_INLINE_DATA_SIZE
+                            ),
+                        ));
+                    }
                     content.parts.push(adk_core::Part::InlineData {
                         mime_type: inline_data.mime_type.clone(),
                         data,
@@ -308,7 +331,6 @@ pub async fn run_sse(
         // Convert to SSE stream
         let selected_profile = ui_profile;
         let sse_stream = stream::unfold(event_stream, move |mut stream| async move {
-            use futures::StreamExt;
             match stream.next().await {
                 Some(Ok(event)) => {
                     let json = serialize_runtime_event(&event, selected_profile)?;
@@ -423,7 +445,6 @@ pub async fn run_sse_compat(
     // Convert to SSE stream
     let selected_profile = ui_profile;
     let sse_stream = stream::unfold(event_stream, move |mut stream| async move {
-        use futures::StreamExt;
         match stream.next().await {
             Some(Ok(event)) => {
                 let json = serialize_runtime_event(&event, selected_profile)?;

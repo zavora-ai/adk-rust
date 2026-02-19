@@ -1,10 +1,13 @@
 //! Type conversions between ADK and Claudius types.
 
+use crate::attachment;
 use adk_core::{Content, FinishReason, LlmResponse, Part, UsageMetadata};
+use claudius::ImageMediaType;
 use claudius::{
-    ContentBlock, Message, MessageCreateParams, MessageParam, MessageRole, Model, StopReason,
+    Base64ImageSource, Base64PdfSource, ContentBlock, DocumentBlock, ImageBlock, Message,
+    MessageCreateParams, MessageParam, MessageRole, Model, PlainTextSource, StopReason,
     SystemPrompt, TextBlock, ToolParam, ToolResultBlock, ToolResultBlockContent, ToolUnionParam,
-    ToolUseBlock,
+    ToolUseBlock, UrlPdfSource,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -44,7 +47,50 @@ pub fn content_to_message(content: &Content) -> MessageParam {
                     cache_control: None,
                 }))
             }
-            _ => None,
+            Part::InlineData { mime_type, data } => {
+                let media_type = match mime_type.as_str() {
+                    "image/jpeg" => Some(ImageMediaType::Jpeg),
+                    "image/png" => Some(ImageMediaType::Png),
+                    "image/gif" => Some(ImageMediaType::Gif),
+                    "image/webp" => Some(ImageMediaType::Webp),
+                    _ => None,
+                };
+                if let Some(media_type) = media_type {
+                    let encoded = attachment::encode_base64(data);
+                    Some(ContentBlock::Image(ImageBlock::new_with_base64(Base64ImageSource::new(
+                        encoded, media_type,
+                    ))))
+                } else if mime_type == "application/pdf" {
+                    let encoded = attachment::encode_base64(data);
+                    Some(ContentBlock::Document(DocumentBlock::new_with_base64_pdf(
+                        Base64PdfSource::new(encoded),
+                    )))
+                } else if mime_type.starts_with("text/") {
+                    match String::from_utf8(data.clone()) {
+                        Ok(text) => Some(ContentBlock::Document(
+                            DocumentBlock::new_with_plain_text(PlainTextSource::new(text)),
+                        )),
+                        Err(_) => Some(ContentBlock::Text(TextBlock::new(
+                            attachment::inline_attachment_to_text(mime_type, data),
+                        ))),
+                    }
+                } else {
+                    Some(ContentBlock::Text(TextBlock::new(attachment::inline_attachment_to_text(
+                        mime_type, data,
+                    ))))
+                }
+            }
+            Part::FileData { mime_type, file_uri } => {
+                if mime_type == "application/pdf" {
+                    Some(ContentBlock::Document(DocumentBlock::new_with_url_pdf(
+                        UrlPdfSource::new(file_uri.clone()),
+                    )))
+                } else {
+                    Some(ContentBlock::Text(TextBlock::new(attachment::file_attachment_to_text(
+                        mime_type, file_uri,
+                    ))))
+                }
+            }
         })
         .collect();
 
@@ -235,6 +281,114 @@ mod tests {
         };
         let msg = content_to_message(&content);
         assert!(matches!(msg.role, MessageRole::Assistant));
+    }
+
+    #[test]
+    fn test_content_to_message_with_inline_image() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![
+                Part::Text { text: "What is in this image?".to_string() },
+                Part::InlineData {
+                    mime_type: "image/png".to_string(),
+                    data: vec![0x89, 0x50, 0x4E, 0x47],
+                },
+            ],
+        };
+        let msg = content_to_message(&content);
+        assert!(matches!(msg.role, MessageRole::User));
+
+        // Should have 2 blocks: text + image
+        let json = serde_json::to_value(&msg).unwrap();
+        let content_blocks = json["content"].as_array().unwrap();
+        assert_eq!(content_blocks.len(), 2);
+        assert_eq!(content_blocks[0]["type"], "text");
+        assert_eq!(content_blocks[0]["text"], "What is in this image?");
+        assert_eq!(content_blocks[1]["type"], "image");
+        assert_eq!(content_blocks[1]["source"]["type"], "base64");
+        assert_eq!(content_blocks[1]["source"]["media_type"], "image/png");
+        // Verify base64 data is present and non-empty
+        assert!(!content_blocks[1]["source"]["data"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_content_to_message_unsupported_mime_type_falls_back_to_text() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![
+                Part::Text { text: "Check this".to_string() },
+                Part::InlineData {
+                    mime_type: "audio/wav".to_string(), // Not supported by Anthropic images
+                    data: vec![0x52, 0x49, 0x46, 0x46],
+                },
+            ],
+        };
+        let msg = content_to_message(&content);
+
+        // Audio part should be preserved as textual attachment fallback.
+        let json = serde_json::to_value(&msg).unwrap();
+        let content_blocks = json["content"].as_array().unwrap();
+        assert_eq!(content_blocks.len(), 2);
+        assert_eq!(content_blocks[0]["type"], "text");
+        assert_eq!(content_blocks[1]["type"], "text");
+        assert!(content_blocks[1]["text"].as_str().unwrap_or_default().contains("audio/wav"));
+    }
+
+    #[test]
+    fn test_content_to_message_multiple_images() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![
+                Part::Text { text: "Compare".to_string() },
+                Part::InlineData { mime_type: "image/jpeg".to_string(), data: vec![0xFF, 0xD8] },
+                Part::InlineData { mime_type: "image/webp".to_string(), data: vec![0x52, 0x49] },
+            ],
+        };
+        let msg = content_to_message(&content);
+
+        let json = serde_json::to_value(&msg).unwrap();
+        let content_blocks = json["content"].as_array().unwrap();
+        assert_eq!(content_blocks.len(), 3); // 1 text + 2 images
+        assert_eq!(content_blocks[1]["source"]["media_type"], "image/jpeg");
+        assert_eq!(content_blocks[2]["source"]["media_type"], "image/webp");
+    }
+
+    #[test]
+    fn test_content_to_message_pdf_inline_data_maps_to_document_block() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::InlineData {
+                mime_type: "application/pdf".to_string(),
+                data: b"%PDF-1.4".to_vec(),
+            }],
+        };
+        let msg = content_to_message(&content);
+
+        let json = serde_json::to_value(&msg).unwrap();
+        let content_blocks = json["content"].as_array().unwrap();
+        assert_eq!(content_blocks.len(), 1);
+        assert_eq!(content_blocks[0]["type"], "document");
+        assert_eq!(content_blocks[0]["source"]["type"], "base64");
+        assert_eq!(content_blocks[0]["source"]["media_type"], "application/pdf");
+    }
+
+    #[test]
+    fn test_content_to_message_pdf_file_uri_maps_to_document_block() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::FileData {
+                mime_type: "application/pdf".to_string(),
+                file_uri: "https://example.com/test.pdf".to_string(),
+            }],
+        };
+        let msg = content_to_message(&content);
+
+        let json = serde_json::to_value(&msg).unwrap();
+        let content_blocks = json["content"].as_array().unwrap();
+        assert_eq!(content_blocks.len(), 1);
+        assert_eq!(content_blocks[0]["type"], "document");
+        assert_eq!(content_blocks[0]["source"]["type"], "url");
+        assert_eq!(content_blocks[0]["source"]["url"], "https://example.com/test.pdf");
     }
 
     #[test]
