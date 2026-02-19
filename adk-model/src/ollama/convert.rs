@@ -1,5 +1,6 @@
 //! Type conversions between ADK core types and ollama-rs types.
 
+use crate::attachment;
 use adk_core::{Content, FinishReason, LlmResponse, Part, UsageMetadata};
 use ollama_rs::generation::chat::{ChatMessage, ChatMessageResponse};
 
@@ -11,6 +12,12 @@ pub fn content_to_chat_message(content: &Content) -> Option<ChatMessage> {
         .iter()
         .filter_map(|p| match p {
             Part::Text { text } => Some(text.clone()),
+            Part::InlineData { mime_type, data } => {
+                Some(attachment::inline_attachment_to_text(mime_type, data))
+            }
+            Part::FileData { mime_type, file_uri } => {
+                Some(attachment::file_attachment_to_text(mime_type, file_uri))
+            }
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -102,5 +109,38 @@ pub fn text_delta_response(text: &str) -> LlmResponse {
         interrupted: false,
         error_code: None,
         error_message: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_to_chat_message_keeps_inline_attachment_payload() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::InlineData {
+                mime_type: "application/pdf".to_string(),
+                data: b"%PDF".to_vec(),
+            }],
+        };
+        let message = content_to_chat_message(&content).expect("message should be created");
+        assert!(message.content.contains("application/pdf"));
+        assert!(message.content.contains("encoding=\"base64\""));
+    }
+
+    #[test]
+    fn content_to_chat_message_keeps_file_attachment_payload() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::FileData {
+                mime_type: "text/csv".to_string(),
+                file_uri: "https://example.com/data.csv".to_string(),
+            }],
+        };
+        let message = content_to_chat_message(&content).expect("message should be created");
+        assert!(message.content.contains("text/csv"));
+        assert!(message.content.contains("https://example.com/data.csv"));
     }
 }
