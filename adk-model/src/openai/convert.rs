@@ -18,10 +18,12 @@ use std::collections::HashMap;
 pub fn content_to_message(content: &Content) -> ChatCompletionRequestMessage {
     match content.role.as_str() {
         "user" => {
-            let has_attachments = content
-                .parts
-                .iter()
-                .any(|part| matches!(part, Part::InlineData { .. } | Part::FileData { .. }));
+            let has_attachments = content.parts.iter().any(|part| {
+                matches!(
+                    part,
+                    Part::InlineData { .. } | Part::InlineDataBase64 { .. } | Part::FileData { .. }
+                )
+            });
             if has_attachments {
                 let content_parts: Vec<ChatCompletionRequestUserMessageContentPart> = content
                     .parts
@@ -34,6 +36,9 @@ pub fn content_to_message(content: &Content) -> ChatCompletionRequestMessage {
                         }
                         Part::InlineData { mime_type, data } => {
                             Some(inline_data_part_to_openai(mime_type, data))
+                        }
+                        Part::InlineDataBase64 { mime_type, data_base64 } => {
+                            Some(inline_data_base64_part_to_openai(mime_type, data_base64))
                         }
                         Part::FileData { mime_type, file_uri } => {
                             Some(ChatCompletionRequestUserMessageContentPart::Text(
@@ -152,6 +157,34 @@ fn inline_data_part_to_openai(
 
     ChatCompletionRequestUserMessageContentPart::Text(ChatCompletionRequestMessageContentPartText {
         text: attachment::inline_attachment_to_text(mime_type, data),
+    })
+}
+
+fn inline_data_base64_part_to_openai(
+    mime_type: &str,
+    data_base64: &str,
+) -> ChatCompletionRequestUserMessageContentPart {
+    if mime_type.starts_with("image/") {
+        // Avoid decode/re-encode and forward canonical base64 payload.
+        let data_uri = format!("data:{mime_type};base64,{data_base64}");
+        return ChatCompletionRequestUserMessageContentPart::ImageUrl(
+            ChatCompletionRequestMessageContentPartImage {
+                image_url: ImageUrl { url: data_uri, detail: None },
+            },
+        );
+    }
+
+    if let Some(audio_format) = input_audio_format(mime_type) {
+        // Avoid decode/re-encode and forward canonical base64 payload.
+        return ChatCompletionRequestUserMessageContentPart::InputAudio(
+            ChatCompletionRequestMessageContentPartAudio {
+                input_audio: InputAudio { data: data_base64.to_string(), format: audio_format },
+            },
+        );
+    }
+
+    ChatCompletionRequestUserMessageContentPart::Text(ChatCompletionRequestMessageContentPartText {
+        text: attachment::inline_attachment_base64_to_text(mime_type, data_base64),
     })
 }
 
@@ -462,6 +495,59 @@ mod tests {
                     assert!(text_part.text.contains("encoding=\"base64\""));
                 } else {
                     panic!("Expected fallback text part for pdf inline data");
+                }
+            } else {
+                panic!("Expected Array content");
+            }
+        } else {
+            panic!("Expected User message");
+        }
+    }
+
+    #[test]
+    fn test_user_message_with_inline_data_base64_passthrough_image() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::InlineDataBase64 {
+                mime_type: "image/png".to_string(),
+                data_base64: "iVBORw0KGgo=".to_string(),
+            }],
+        };
+        let msg = content_to_message(&content);
+
+        if let ChatCompletionRequestMessage::User(user_msg) = &msg {
+            if let ChatCompletionRequestUserMessageContent::Array(parts) = &user_msg.content {
+                if let ChatCompletionRequestUserMessageContentPart::ImageUrl(img) = &parts[0] {
+                    assert_eq!(img.image_url.url, "data:image/png;base64,iVBORw0KGgo=");
+                } else {
+                    panic!("Expected image url part");
+                }
+            } else {
+                panic!("Expected Array content");
+            }
+        } else {
+            panic!("Expected User message");
+        }
+    }
+
+    #[test]
+    fn test_user_message_with_inline_data_base64_passthrough_audio() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::InlineDataBase64 {
+                mime_type: "audio/wav".to_string(),
+                data_base64: "UklGRg==".to_string(),
+            }],
+        };
+        let msg = content_to_message(&content);
+
+        if let ChatCompletionRequestMessage::User(user_msg) = &msg {
+            if let ChatCompletionRequestUserMessageContent::Array(parts) = &user_msg.content {
+                if let ChatCompletionRequestUserMessageContentPart::InputAudio(audio) = &parts[0] {
+                    assert_eq!(audio.input_audio.data, "UklGRg==");
+                    assert_eq!(audio.input_audio.format, InputAudioFormat::Wav);
+                } else {
+                    panic!("Expected input audio part");
                 }
             } else {
                 panic!("Expected Array content");

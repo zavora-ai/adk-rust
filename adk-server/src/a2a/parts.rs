@@ -19,6 +19,15 @@ pub fn adk_parts_to_a2a(
                     uri: None,
                 }))
             }
+            Part::InlineDataBase64 { mime_type, data_base64 } => {
+                // Preserve canonical base64 payload and avoid decode/re-encode.
+                Ok(crate::a2a::Part::file(crate::a2a::FileContent {
+                    name: None,
+                    mime_type: Some(mime_type.clone()),
+                    bytes: Some(data_base64.clone()),
+                    uri: None,
+                }))
+            }
             Part::FileData { mime_type, file_uri } => {
                 // FileData contains a URI reference to a file
                 Ok(crate::a2a::Part::file(crate::a2a::FileContent {
@@ -70,9 +79,15 @@ pub fn a2a_parts_to_adk(parts: &[crate::a2a::Part]) -> Result<Vec<Part>> {
                     let data = general_purpose::STANDARD.decode(bytes).map_err(|e| {
                         adk_core::AdkError::Agent(format!("Base64 decode error: {}", e))
                     })?;
-                    Ok(Part::InlineData {
+                    if data.len() > adk_core::MAX_INLINE_DATA_SIZE {
+                        return Err(adk_core::AdkError::Agent(format!(
+                            "Inline data exceeds max inline size of {} bytes",
+                            adk_core::MAX_INLINE_DATA_SIZE
+                        )));
+                    }
+                    Ok(Part::InlineDataBase64 {
                         mime_type: file.mime_type.clone().unwrap_or_default(),
-                        data,
+                        data_base64: bytes.clone(),
                     })
                 } else {
                     Err(adk_core::AdkError::Agent("File part with URI not supported".to_string()))
@@ -140,5 +155,42 @@ mod tests {
 
         let back = a2a_parts_to_adk(&a2a_parts).unwrap();
         assert_eq!(back.len(), 1);
+    }
+
+    #[test]
+    fn test_inline_data_base64_passthrough_to_a2a() {
+        let adk_parts = vec![Part::InlineDataBase64 {
+            mime_type: "application/pdf".to_string(),
+            data_base64: "JVBERi0=".to_string(),
+        }];
+        let a2a_parts = adk_parts_to_a2a(&adk_parts, &[]).unwrap();
+        assert_eq!(a2a_parts.len(), 1);
+
+        match &a2a_parts[0] {
+            crate::a2a::Part::File { file, .. } => {
+                assert_eq!(file.mime_type.as_deref(), Some("application/pdf"));
+                assert_eq!(file.bytes.as_deref(), Some("JVBERi0="));
+            }
+            _ => panic!("Expected file part"),
+        }
+    }
+
+    #[test]
+    fn test_a2a_file_bytes_to_inline_data_base64() {
+        let a2a_parts = vec![crate::a2a::Part::file(crate::a2a::FileContent {
+            name: Some("doc.pdf".to_string()),
+            mime_type: Some("application/pdf".to_string()),
+            bytes: Some("JVBERi0=".to_string()),
+            uri: None,
+        })];
+        let adk_parts = a2a_parts_to_adk(&a2a_parts).unwrap();
+        assert_eq!(adk_parts.len(), 1);
+        assert!(matches!(
+            &adk_parts[0],
+            Part::InlineDataBase64 {
+                mime_type,
+                data_base64
+            } if mime_type == "application/pdf" && data_base64 == "JVBERi0="
+        ));
     }
 }

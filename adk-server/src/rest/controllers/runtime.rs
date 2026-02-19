@@ -14,7 +14,7 @@ use futures::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::convert::Infallible;
-use tracing::{Instrument, info, warn};
+use tracing::{Instrument, debug, info, warn};
 
 fn default_streaming_true() -> bool {
     true
@@ -39,7 +39,10 @@ pub struct Attachment {
     pub name: String,
     #[serde(rename = "type")]
     pub mime_type: String,
-    pub base64: String,
+    #[serde(default)]
+    pub base64: Option<String>,
+    #[serde(default, alias = "fileUri", alias = "file_uri")]
+    pub url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -79,6 +82,8 @@ pub struct MessagePart {
     pub text: Option<String>,
     #[serde(default, rename = "inlineData")]
     pub inline_data: Option<InlineData>,
+    #[serde(default, rename = "fileData")]
+    pub file_data: Option<FileData>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -86,6 +91,14 @@ pub struct MessagePart {
 pub struct InlineData {
     pub display_name: Option<String>,
     pub data: String,
+    pub mime_type: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FileData {
+    pub display_name: Option<String>,
+    pub file_uri: String,
     pub mime_type: String,
 }
 
@@ -109,6 +122,11 @@ impl UiProfile {
 }
 
 type RuntimeError = (StatusCode, String);
+
+enum InlineBase64ValidationError {
+    Invalid,
+    TooLarge,
+}
 
 fn parse_ui_profile(raw: &str) -> Option<UiProfile> {
     match normalize_runtime_ui_protocol(raw)? {
@@ -183,43 +201,93 @@ fn log_profile_deprecation(profile: UiProfile) {
     );
 }
 
+fn validate_inline_base64(data_base64: &str) -> Result<(), InlineBase64ValidationError> {
+    let data =
+        BASE64_STANDARD.decode(data_base64).map_err(|_| InlineBase64ValidationError::Invalid)?;
+    if data.len() > adk_core::MAX_INLINE_DATA_SIZE {
+        return Err(InlineBase64ValidationError::TooLarge);
+    }
+    Ok(())
+}
+
+fn validate_file_uri(file_uri: &str, name_or_field: &str) -> Result<(), RuntimeError> {
+    if file_uri.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, format!("Missing file URL for {name_or_field}")));
+    }
+    if reqwest::Url::parse(file_uri).is_err() {
+        return Err((StatusCode::BAD_REQUEST, format!("Invalid file URL for {name_or_field}")));
+    }
+    Ok(())
+}
+
 /// Build Content from message text and attachments
 fn build_content_with_attachments(
     text: &str,
     attachments: &[Attachment],
 ) -> Result<adk_core::Content, RuntimeError> {
     let mut content = adk_core::Content::new("user");
+    let mut inline_data_base64_parts = 0usize;
+    let mut file_data_parts = 0usize;
 
     // Add the text part
     content.parts.push(adk_core::Part::Text { text: text.to_string() });
 
     // Add attachment parts
     for attachment in attachments {
-        match BASE64_STANDARD.decode(&attachment.base64) {
-            Ok(data) => {
-                if data.len() > adk_core::MAX_INLINE_DATA_SIZE {
-                    return Err((
-                        StatusCode::PAYLOAD_TOO_LARGE,
-                        format!(
-                            "Attachment '{}' exceeds max inline size of {} bytes",
-                            attachment.name,
-                            adk_core::MAX_INLINE_DATA_SIZE
-                        ),
-                    ));
+        match (attachment.base64.as_ref(), attachment.url.as_ref()) {
+            (Some(data_base64), None) => {
+                match validate_inline_base64(data_base64) {
+                    Ok(()) => {}
+                    Err(InlineBase64ValidationError::Invalid) => {
+                        return Err((
+                            StatusCode::BAD_REQUEST,
+                            format!("Invalid base64 data for attachment '{}'", attachment.name),
+                        ));
+                    }
+                    Err(InlineBase64ValidationError::TooLarge) => {
+                        return Err((
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            format!(
+                                "Attachment '{}' exceeds max inline size of {} bytes",
+                                attachment.name,
+                                adk_core::MAX_INLINE_DATA_SIZE
+                            ),
+                        ));
+                    }
                 }
-                content.parts.push(adk_core::Part::InlineData {
+                // Keep canonical base64 payload to avoid decode/re-encode in provider adapters.
+                content.parts.push(adk_core::Part::InlineDataBase64 {
                     mime_type: attachment.mime_type.clone(),
-                    data,
+                    data_base64: data_base64.clone(),
                 });
+                inline_data_base64_parts += 1;
             }
-            Err(e) => {
+            (None, Some(file_uri)) => {
+                validate_file_uri(file_uri, &format!("attachment '{}'", attachment.name))?;
+                content.parts.push(adk_core::Part::FileData {
+                    mime_type: attachment.mime_type.clone(),
+                    file_uri: file_uri.clone(),
+                });
+                file_data_parts += 1;
+            }
+            _ => {
                 return Err((
                     StatusCode::BAD_REQUEST,
-                    format!("Invalid base64 data for attachment '{}': {}", attachment.name, e),
+                    format!(
+                        "Attachment '{}' must contain exactly one of 'base64' or 'url'",
+                        attachment.name
+                    ),
                 ));
             }
         }
     }
+
+    debug!(
+        inline_data_base64_parts,
+        inline_data_bytes_parts = 0usize,
+        file_data_parts,
+        "built content with attachment parts"
+    );
 
     Ok(content)
 }
@@ -227,8 +295,10 @@ fn build_content_with_attachments(
 /// Build Content from message parts (for /run_sse endpoint)
 fn build_content_from_parts(parts: &[MessagePart]) -> Result<adk_core::Content, RuntimeError> {
     let mut content = adk_core::Content::new("user");
+    let mut inline_data_base64_parts = 0usize;
+    let mut file_data_parts = 0usize;
 
-    for part in parts {
+    for (index, part) in parts.iter().enumerate() {
         // Add text part if present
         if let Some(text) = &part.text {
             content.parts.push(adk_core::Part::Text { text: text.clone() });
@@ -236,31 +306,50 @@ fn build_content_from_parts(parts: &[MessagePart]) -> Result<adk_core::Content, 
 
         // Add inline data part if present
         if let Some(inline_data) = &part.inline_data {
-            match BASE64_STANDARD.decode(&inline_data.data) {
-                Ok(data) => {
-                    if data.len() > adk_core::MAX_INLINE_DATA_SIZE {
-                        return Err((
-                            StatusCode::PAYLOAD_TOO_LARGE,
-                            format!(
-                                "inline_data exceeds max inline size of {} bytes",
-                                adk_core::MAX_INLINE_DATA_SIZE
-                            ),
-                        ));
-                    }
-                    content.parts.push(adk_core::Part::InlineData {
+            match validate_inline_base64(&inline_data.data) {
+                Ok(()) => {
+                    // Keep canonical base64 payload to avoid decode/re-encode in provider adapters.
+                    content.parts.push(adk_core::Part::InlineDataBase64 {
                         mime_type: inline_data.mime_type.clone(),
-                        data,
+                        data_base64: inline_data.data.clone(),
                     });
+                    inline_data_base64_parts += 1;
                 }
-                Err(e) => {
+                Err(InlineBase64ValidationError::Invalid) => {
                     return Err((
                         StatusCode::BAD_REQUEST,
-                        format!("Invalid base64 data in inline_data: {}", e),
+                        "Invalid base64 data in inline_data".to_string(),
+                    ));
+                }
+                Err(InlineBase64ValidationError::TooLarge) => {
+                    return Err((
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        format!(
+                            "inline_data exceeds max inline size of {} bytes",
+                            adk_core::MAX_INLINE_DATA_SIZE
+                        ),
                     ));
                 }
             }
         }
+
+        if let Some(file_data) = &part.file_data {
+            let field_name = format!("file_data at part index {index}");
+            validate_file_uri(&file_data.file_uri, &field_name)?;
+            content.parts.push(adk_core::Part::FileData {
+                mime_type: file_data.mime_type.clone(),
+                file_uri: file_data.file_uri.clone(),
+            });
+            file_data_parts += 1;
+        }
     }
+
+    debug!(
+        inline_data_base64_parts,
+        inline_data_bytes_parts = 0usize,
+        file_data_parts,
+        "built content from message parts"
+    );
 
     Ok(content)
 }
@@ -367,18 +456,21 @@ pub async fn run_sse_compat(
     );
     log_profile_deprecation(ui_profile);
 
-    // Build content from message parts (includes both text and inline_data)
+    // Build content from message parts (includes text, inline_data, and file_data)
     let content = build_content_from_parts(&req.new_message.parts)?;
 
     // Log part info
     let text_parts: Vec<_> = req.new_message.parts.iter().filter(|p| p.text.is_some()).collect();
     let data_parts: Vec<_> =
         req.new_message.parts.iter().filter(|p| p.inline_data.is_some()).collect();
-    if !data_parts.is_empty() {
+    let file_parts: Vec<_> =
+        req.new_message.parts.iter().filter(|p| p.file_data.is_some()).collect();
+    if !data_parts.is_empty() || !file_parts.is_empty() {
         info!(
             text_parts = text_parts.len(),
             inline_data_parts = data_parts.len(),
-            "processing request with inline data"
+            file_data_parts = file_parts.len(),
+            "processing request with non-text parts"
         );
     }
 
@@ -455,4 +547,104 @@ pub async fn run_sse_compat(
     });
 
     Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn png_base64() -> String {
+        base64::engine::general_purpose::STANDARD.encode([0x89, 0x50, 0x4E, 0x47])
+    }
+
+    #[test]
+    fn build_content_with_attachments_keeps_base64_variant() {
+        let attachments = vec![Attachment {
+            name: "image.png".to_string(),
+            mime_type: "image/png".to_string(),
+            base64: Some(png_base64()),
+            url: None,
+        }];
+
+        let content =
+            build_content_with_attachments("describe", &attachments).expect("content should build");
+
+        assert!(matches!(content.parts[1], adk_core::Part::InlineDataBase64 { .. }));
+    }
+
+    #[test]
+    fn build_content_with_attachments_accepts_url_variant() {
+        let attachments = vec![Attachment {
+            name: "doc.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+            base64: None,
+            url: Some("https://example.com/doc.pdf".to_string()),
+        }];
+
+        let content = build_content_with_attachments("summarize", &attachments)
+            .expect("content should build");
+
+        assert!(matches!(content.parts[1], adk_core::Part::FileData { .. }));
+    }
+
+    #[test]
+    fn build_content_with_attachments_accepts_any_url_scheme() {
+        let attachments = vec![Attachment {
+            name: "doc.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+            base64: None,
+            url: Some("gs://bucket/doc.pdf".to_string()),
+        }];
+
+        let content = build_content_with_attachments("summarize", &attachments)
+            .expect("content should build");
+
+        assert!(matches!(content.parts[1], adk_core::Part::FileData { .. }));
+    }
+
+    #[test]
+    fn build_content_with_attachments_rejects_invalid_base64() {
+        let attachments = vec![Attachment {
+            name: "invalid.png".to_string(),
+            mime_type: "image/png".to_string(),
+            base64: Some("not-valid-base64!!!".to_string()),
+            url: None,
+        }];
+
+        let err =
+            build_content_with_attachments("describe", &attachments).expect_err("should fail");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn build_content_from_parts_keeps_inline_data_base64_variant() {
+        let parts = vec![MessagePart {
+            text: Some("describe".to_string()),
+            inline_data: Some(InlineData {
+                display_name: None,
+                data: png_base64(),
+                mime_type: "image/png".to_string(),
+            }),
+            file_data: None,
+        }];
+
+        let content = build_content_from_parts(&parts).expect("content should build");
+        assert!(matches!(content.parts[1], adk_core::Part::InlineDataBase64 { .. }));
+    }
+
+    #[test]
+    fn build_content_from_parts_accepts_file_data() {
+        let parts = vec![MessagePart {
+            text: Some("summarize".to_string()),
+            inline_data: None,
+            file_data: Some(FileData {
+                display_name: None,
+                file_uri: "https://example.com/doc.pdf".to_string(),
+                mime_type: "application/pdf".to_string(),
+            }),
+        }];
+
+        let content = build_content_from_parts(&parts).expect("content should build");
+        assert!(matches!(content.parts[1], adk_core::Part::FileData { .. }));
+    }
 }

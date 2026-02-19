@@ -213,6 +213,36 @@ async fn test_run_sse_with_single_attachment() {
 }
 
 #[tokio::test]
+async fn test_run_sse_with_url_attachment() {
+    let app = create_test_app();
+
+    let body = serde_json::json!({
+        "new_message": "Describe this file",
+        "attachments": [
+            {
+                "name": "test.pdf",
+                "type": "application/pdf",
+                "url": "gs://bucket/test.pdf"
+            }
+        ]
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/run/test-app/user123/session456")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn test_run_sse_with_multiple_attachments() {
     let app = create_test_app();
 
@@ -325,6 +355,44 @@ async fn test_run_sse_compat_with_inline_data() {
                     "inlineData": {
                         "mimeType": "image/png",
                         "data": test_png_base64()
+                    }
+                }
+            ]
+        },
+        "streaming": true
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/run_sse")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_run_sse_compat_with_file_data() {
+    let app = create_test_app();
+
+    let body = serde_json::json!({
+        "appName": "test-app",
+        "userId": "user123",
+        "sessionId": "session456",
+        "newMessage": {
+            "role": "user",
+            "parts": [
+                {"text": "Summarize this PDF"},
+                {
+                    "fileData": {
+                        "mimeType": "application/pdf",
+                        "fileUri": "s3://bucket/file.pdf"
                     }
                 }
             ]

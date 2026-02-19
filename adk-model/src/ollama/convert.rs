@@ -15,6 +15,9 @@ pub fn content_to_chat_message(content: &Content) -> Option<ChatMessage> {
             Part::InlineData { mime_type, data } => {
                 Some(attachment::inline_attachment_to_text(mime_type, data))
             }
+            Part::InlineDataBase64 { mime_type, data_base64 } => {
+                Some(attachment::inline_attachment_base64_to_text(mime_type, data_base64))
+            }
             Part::FileData { mime_type, file_uri } => {
                 Some(attachment::file_attachment_to_text(mime_type, file_uri))
             }
@@ -128,6 +131,20 @@ mod tests {
         let message = content_to_chat_message(&content).expect("message should be created");
         assert!(message.content.contains("application/pdf"));
         assert!(message.content.contains("encoding=\"base64\""));
+    }
+
+    #[test]
+    fn content_to_chat_message_keeps_inline_attachment_base64_payload() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::InlineDataBase64 {
+                mime_type: "application/pdf".to_string(),
+                data_base64: "JVBERi0=".to_string(),
+            }],
+        };
+        let message = content_to_chat_message(&content).expect("message should be created");
+        assert!(message.content.contains("application/pdf"));
+        assert!(message.content.contains("JVBERi0="));
     }
 
     #[test]

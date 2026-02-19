@@ -19,6 +19,19 @@ pub(crate) fn inline_attachment_to_text(mime_type: &str, data: &[u8]) -> String 
     format!("<attachment mime_type=\"{mime_type}\" encoding=\"base64\">{encoded}</attachment>")
 }
 
+/// Convert inline attachment base64 into a text payload for providers that don't support
+/// the attachment MIME type natively.
+#[cfg(any(
+    feature = "openai",
+    feature = "anthropic",
+    feature = "deepseek",
+    feature = "groq",
+    feature = "ollama"
+))]
+pub(crate) fn inline_attachment_base64_to_text(mime_type: &str, data_base64: &str) -> String {
+    format!("<attachment mime_type=\"{mime_type}\" encoding=\"base64\">{data_base64}</attachment>")
+}
+
 /// Convert file URI attachments into a text payload for providers without URI-native attachment
 /// support.
 pub(crate) fn file_attachment_to_text(mime_type: &str, file_uri: &str) -> String {

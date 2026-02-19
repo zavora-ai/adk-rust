@@ -7,6 +7,7 @@ use axum::{
     http::{StatusCode, header},
     response::IntoResponse,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
 #[derive(Clone)]
 pub struct ArtifactsController {
@@ -56,6 +57,13 @@ pub async fn get_artifact(
 
         match resp.part {
             adk_core::Part::InlineData { data, .. } => {
+                Ok(([(header::CONTENT_TYPE, mime_header)], Body::from(data)))
+            }
+            adk_core::Part::InlineDataBase64 { data_base64, .. } => {
+                // Decode on demand only for byte-oriented artifact responses.
+                let data = BASE64_STANDARD
+                    .decode(data_base64)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
                 Ok(([(header::CONTENT_TYPE, mime_header)], Body::from(data)))
             }
             adk_core::Part::Text { text } => {

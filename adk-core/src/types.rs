@@ -26,6 +26,14 @@ pub enum Part {
         mime_type: String,
         data: Vec<u8>,
     },
+    /// Base64-encoded inline data.
+    ///
+    /// This keeps canonical base64 payloads intact through request processing so
+    /// provider adapters can forward them without decode/re-encode overhead.
+    InlineDataBase64 {
+        mime_type: String,
+        data_base64: String,
+    },
     /// File data referenced by URI (URL or cloud storage path).
     ///
     /// This allows referencing external files without embedding the data inline.
@@ -112,6 +120,7 @@ impl Part {
     pub fn mime_type(&self) -> Option<&str> {
         match self {
             Part::InlineData { mime_type, .. } => Some(mime_type.as_str()),
+            Part::InlineDataBase64 { mime_type, .. } => Some(mime_type.as_str()),
             Part::FileData { mime_type, .. } => Some(mime_type.as_str()),
             _ => None,
         }
@@ -127,7 +136,31 @@ impl Part {
 
     /// Returns true if this part contains media (image, audio, video)
     pub fn is_media(&self) -> bool {
-        matches!(self, Part::InlineData { .. } | Part::FileData { .. })
+        matches!(
+            self,
+            Part::InlineData { .. } | Part::InlineDataBase64 { .. } | Part::FileData { .. }
+        )
+    }
+
+    /// Returns base64 payload for inline data parts when available.
+    ///
+    /// `InlineDataBase64` is returned as-is to preserve passthrough payloads.
+    pub fn inline_base64(&self) -> Option<&str> {
+        match self {
+            Part::InlineDataBase64 { data_base64, .. } => Some(data_base64.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Returns raw bytes for inline data parts when available.
+    ///
+    /// Consumers that need bytes can use this and only decode base64 in their own
+    /// path when they receive `InlineDataBase64`.
+    pub fn inline_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Part::InlineData { data, .. } => Some(data.as_slice()),
+            _ => None,
+        }
     }
 
     /// Create a new text part
@@ -147,6 +180,14 @@ impl Part {
             MAX_INLINE_DATA_SIZE
         );
         Part::InlineData { mime_type: mime_type.into(), data }
+    }
+
+    /// Create a new base64 inline data part.
+    pub fn inline_data_base64(
+        mime_type: impl Into<String>,
+        data_base64: impl Into<String>,
+    ) -> Self {
+        Part::InlineDataBase64 { mime_type: mime_type.into(), data_base64: data_base64.into() }
     }
 
     /// Create a new file data part from URI
@@ -228,6 +269,12 @@ mod tests {
             file_uri: "https://example.com".to_string(),
         };
         assert_eq!(file_part.mime_type(), Some("image/jpeg"));
+
+        let inline_base64_part = Part::InlineDataBase64 {
+            mime_type: "application/pdf".to_string(),
+            data_base64: "JVBERi0=".to_string(),
+        };
+        assert_eq!(inline_base64_part.mime_type(), Some("application/pdf"));
     }
 
     #[test]
@@ -255,6 +302,27 @@ mod tests {
             file_uri: "https://example.com".to_string(),
         };
         assert!(file_part.is_media());
+
+        let inline_base64_part = Part::InlineDataBase64 {
+            mime_type: "application/pdf".to_string(),
+            data_base64: "JVBERi0=".to_string(),
+        };
+        assert!(inline_base64_part.is_media());
+    }
+
+    #[test]
+    fn test_part_inline_base64_accessor() {
+        let inline_base64_part = Part::InlineDataBase64 {
+            mime_type: "application/pdf".to_string(),
+            data_base64: "JVBERi0=".to_string(),
+        };
+        assert_eq!(inline_base64_part.inline_base64(), Some("JVBERi0="));
+        assert_eq!(inline_base64_part.inline_bytes(), None);
+
+        let inline_part =
+            Part::InlineData { mime_type: "image/png".to_string(), data: vec![0x89, 0x50] };
+        assert_eq!(inline_part.inline_base64(), None);
+        assert_eq!(inline_part.inline_bytes(), Some([0x89, 0x50].as_slice()));
     }
 
     #[test]
@@ -270,6 +338,11 @@ mod tests {
         let file = Part::file_data("image/jpeg", "https://example.com/img.jpg");
         assert!(
             matches!(file, Part::FileData { mime_type, file_uri } if mime_type == "image/jpeg" && file_uri == "https://example.com/img.jpg")
+        );
+
+        let inline_base64 = Part::inline_data_base64("application/pdf", "JVBERi0=");
+        assert!(
+            matches!(inline_base64, Part::InlineDataBase64 { mime_type, data_base64 } if mime_type == "application/pdf" && data_base64 == "JVBERi0=")
         );
     }
 

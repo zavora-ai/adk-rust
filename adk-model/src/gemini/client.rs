@@ -264,6 +264,15 @@ impl GeminiModel {
                                     },
                                 });
                             }
+                            Part::InlineDataBase64 { data_base64, mime_type } => {
+                                // Avoid decode/re-encode and forward canonical base64 payload.
+                                gemini_parts.push(adk_gemini::Part::InlineData {
+                                    inline_data: adk_gemini::Blob {
+                                        mime_type: mime_type.clone(),
+                                        data: data_base64.clone(),
+                                    },
+                                });
+                            }
                             Part::FileData { mime_type, file_uri } => {
                                 gemini_parts.push(adk_gemini::Part::Text {
                                     text: attachment::file_attachment_to_text(mime_type, file_uri),

@@ -113,6 +113,11 @@ impl StreamPrinter {
                 self.print_tool_response(&function_response.name, &function_response.response)
             }
             Part::InlineData { mime_type, data } => self.print_inline_data(mime_type, data.len()),
+            Part::InlineDataBase64 { mime_type, data_base64 } => {
+                // Decode size metadata on demand for CLI display.
+                let size = decoded_base64_size(data_base64).unwrap_or(0);
+                self.print_inline_data(mime_type, size);
+            }
             Part::FileData { mime_type, file_uri } => self.print_file_data(mime_type, file_uri),
         }
     }
@@ -194,4 +199,16 @@ impl StreamPrinter {
         print!("\n[file-data] mime={} uri={}\n", mime_type, file_uri);
         let _ = io::stdout().flush();
     }
+}
+
+fn decoded_base64_size(data_base64: &str) -> Option<usize> {
+    let len = data_base64.len();
+    if len == 0 {
+        return Some(0);
+    }
+    if len % 4 != 0 {
+        return None;
+    }
+    let padding = data_base64.chars().rev().take_while(|c| *c == '=').count();
+    Some((len / 4) * 3 - padding)
 }

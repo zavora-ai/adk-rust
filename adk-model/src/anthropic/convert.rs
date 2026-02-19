@@ -80,6 +80,31 @@ pub fn content_to_message(content: &Content) -> MessageParam {
                     ))))
                 }
             }
+            Part::InlineDataBase64 { mime_type, data_base64 } => {
+                let media_type = match mime_type.as_str() {
+                    "image/jpeg" => Some(ImageMediaType::Jpeg),
+                    "image/png" => Some(ImageMediaType::Png),
+                    "image/gif" => Some(ImageMediaType::Gif),
+                    "image/webp" => Some(ImageMediaType::Webp),
+                    _ => None,
+                };
+                if let Some(media_type) = media_type {
+                    // Avoid decode/re-encode and forward canonical base64 payload.
+                    Some(ContentBlock::Image(ImageBlock::new_with_base64(Base64ImageSource::new(
+                        data_base64.clone(),
+                        media_type,
+                    ))))
+                } else if mime_type == "application/pdf" {
+                    // Avoid decode/re-encode and forward canonical base64 payload.
+                    Some(ContentBlock::Document(DocumentBlock::new_with_base64_pdf(
+                        Base64PdfSource::new(data_base64.clone()),
+                    )))
+                } else {
+                    Some(ContentBlock::Text(TextBlock::new(
+                        attachment::inline_attachment_base64_to_text(mime_type, data_base64),
+                    )))
+                }
+            }
             Part::FileData { mime_type, file_uri } => {
                 if mime_type == "application/pdf" {
                     Some(ContentBlock::Document(DocumentBlock::new_with_url_pdf(
@@ -370,6 +395,40 @@ mod tests {
         assert_eq!(content_blocks[0]["type"], "document");
         assert_eq!(content_blocks[0]["source"]["type"], "base64");
         assert_eq!(content_blocks[0]["source"]["media_type"], "application/pdf");
+    }
+
+    #[test]
+    fn test_content_to_message_inline_data_base64_image_passthrough() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::InlineDataBase64 {
+                mime_type: "image/png".to_string(),
+                data_base64: "iVBORw0KGgo=".to_string(),
+            }],
+        };
+        let msg = content_to_message(&content);
+
+        let json = serde_json::to_value(&msg).unwrap();
+        let content_blocks = json["content"].as_array().unwrap();
+        assert_eq!(content_blocks[0]["type"], "image");
+        assert_eq!(content_blocks[0]["source"]["data"], "iVBORw0KGgo=");
+    }
+
+    #[test]
+    fn test_content_to_message_inline_data_base64_pdf_passthrough() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::InlineDataBase64 {
+                mime_type: "application/pdf".to_string(),
+                data_base64: "JVBERi0=".to_string(),
+            }],
+        };
+        let msg = content_to_message(&content);
+
+        let json = serde_json::to_value(&msg).unwrap();
+        let content_blocks = json["content"].as_array().unwrap();
+        assert_eq!(content_blocks[0]["type"], "document");
+        assert_eq!(content_blocks[0]["source"]["data"], "JVBERi0=");
     }
 
     #[test]
