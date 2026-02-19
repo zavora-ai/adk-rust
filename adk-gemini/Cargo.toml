@@ -21,6 +21,11 @@ categories = ["api-bindings"]
 license = "Apache-2.0"
 repository = "https://github.com/zavora-ai/adk-rust"
 
+[features]
+default = ["studio"]
+studio = []
+vertex = []
+
 [lib]
 name = "adk_gemini"
 path = "src/lib.rs"
