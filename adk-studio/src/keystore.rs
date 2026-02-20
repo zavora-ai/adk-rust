@@ -127,10 +127,21 @@ impl Keystore {
     /// user-managed passwords.
     ///
     /// The keystore file is stored as `{project_id}.keys` inside `base_dir`.
+    /// The path is validated to remain within `base_dir` to prevent path traversal.
     pub fn new(base_dir: &Path, project_id: uuid::Uuid) -> Result<Self> {
         let machine_id = get_machine_id()?;
         let cipher = derive_cipher(&machine_id)?;
-        let path = base_dir.join(format!("{project_id}.keys"));
+        let filename = format!("{project_id}.keys");
+
+        // Validate the filename contains no path separators or traversal sequences.
+        // uuid::Uuid formatting is inherently safe, but we verify defensively.
+        if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+            return Err(KeystoreError::KeyDerivation(
+                "invalid project ID produced unsafe filename".to_string(),
+            ));
+        }
+
+        let path = base_dir.join(&filename);
         Ok(Self { path, cipher })
     }
 
