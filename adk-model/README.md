@@ -1,6 +1,6 @@
 # adk-model
 
-LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, OpenAI, Anthropic, and DeepSeek.
+LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, OpenAI, xAI, Anthropic, and DeepSeek.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-model.svg)](https://crates.io/crates/adk-model)
 [![Documentation](https://docs.rs/adk-model/badge.svg)](https://docs.rs/adk-model)
@@ -12,6 +12,7 @@ LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, Op
 
 - **Gemini** - Google's Gemini models (3 Pro, 3 Flash, 2.5 Pro, 2.5 Flash, etc.)
 - **OpenAI** - GPT-5.1, GPT-5, GPT-5 Mini, GPT-4o (legacy)
+- **xAI** - Grok models through the OpenAI-compatible API
 - **Anthropic** - Claude Opus 4.5, Claude Sonnet 4.5, Claude Haiku 4.5, Claude 4
 - **DeepSeek** - DeepSeek R1, DeepSeek V3.1, DeepSeek-Chat with thinking mode
 - **Groq** - Ultra-fast inference (LLaMA 3.3, Mixtral, Gemma)
@@ -278,6 +279,9 @@ GOOGLE_API_KEY=your-google-api-key
 # OpenAI
 OPENAI_API_KEY=your-openai-api-key
 
+# xAI
+XAI_API_KEY=your-xai-api-key
+
 # Anthropic
 ANTHROPIC_API_KEY=your-anthropic-api-key
 
@@ -303,6 +307,7 @@ adk-model = { version = "0.3.2", features = ["all-providers"] }
 # Individual providers
 adk-model = { version = "0.3.2", features = ["gemini"] }
 adk-model = { version = "0.3.2", features = ["openai"] }
+adk-model = { version = "0.3.2", features = ["xai"] }
 adk-model = { version = "0.3.2", features = ["anthropic"] }
 adk-model = { version = "0.3.2", features = ["deepseek"] }
 adk-model = { version = "0.3.2", features = ["groq"] }

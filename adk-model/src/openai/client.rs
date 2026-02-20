@@ -2,11 +2,12 @@
 
 use super::config::{AzureConfig, OpenAIConfig};
 use super::convert;
+use crate::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig, Provider};
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
-use adk_core::{AdkError, Llm, LlmRequest};
+use adk_core::{AdkError, Llm, LlmRequest, LlmResponseStream};
 use async_openai::{
     Client,
-    config::{AzureConfig as AsyncAzureConfig, OpenAIConfig as AsyncOpenAIConfig},
+    config::AzureConfig as AsyncAzureConfig,
     types::{CreateChatCompletionRequestArgs, ResponseFormat, ResponseFormatJsonSchema},
 };
 use async_stream::try_stream;
@@ -15,29 +16,28 @@ use futures::StreamExt;
 
 /// OpenAI client for standard OpenAI API and OpenAI-compatible APIs.
 pub struct OpenAIClient {
-    client: Client<AsyncOpenAIConfig>,
-    model: String,
-    retry_config: RetryConfig,
+    inner: OpenAICompatible,
 }
 
 impl OpenAIClient {
     /// Create a new OpenAI client.
     pub fn new(config: OpenAIConfig) -> Result<Self, AdkError> {
-        let mut openai_config = AsyncOpenAIConfig::new().with_api_key(&config.api_key);
+        let OpenAIConfig { api_key, model, organization_id, project_id, base_url } = config;
+        let provider = if let Some(base_url) = base_url {
+            Provider::custom("openai-compatible", base_url)
+        } else {
+            Provider::openai()
+        };
 
-        if let Some(org_id) = &config.organization_id {
-            openai_config = openai_config.with_org_id(org_id);
+        let mut config = OpenAICompatibleConfig::new(provider, api_key, model);
+        if let Some(org_id) = organization_id {
+            config = config.with_organization(org_id);
+        }
+        if let Some(project_id) = project_id {
+            config = config.with_project(project_id);
         }
 
-        if let Some(base_url) = &config.base_url {
-            openai_config = openai_config.with_api_base(base_url);
-        }
-
-        Ok(Self {
-            client: Client::with_config(openai_config),
-            model: config.model,
-            retry_config: RetryConfig::default(),
-        })
+        Ok(Self { inner: OpenAICompatible::new(config)? })
     }
 
     /// Create a client for an OpenAI-compatible API.
@@ -46,235 +46,41 @@ impl OpenAIClient {
         base_url: impl Into<String>,
         model: impl Into<String>,
     ) -> Result<Self, AdkError> {
-        let config = OpenAIConfig::compatible(api_key.into(), base_url.into(), model.into());
-        Self::new(config)
+        let config = OpenAICompatibleConfig::new(
+            Provider::custom("openai-compatible", base_url),
+            api_key,
+            model,
+        );
+        Ok(Self { inner: OpenAICompatible::new(config)? })
     }
 
     #[must_use]
     pub fn with_retry_config(mut self, retry_config: RetryConfig) -> Self {
-        self.retry_config = retry_config;
+        self.inner = self.inner.with_retry_config(retry_config);
         self
     }
 
     pub fn set_retry_config(&mut self, retry_config: RetryConfig) {
-        self.retry_config = retry_config;
+        self.inner.set_retry_config(retry_config);
     }
 
     pub fn retry_config(&self) -> &RetryConfig {
-        &self.retry_config
+        self.inner.retry_config()
     }
 }
 
 #[async_trait]
 impl Llm for OpenAIClient {
     fn name(&self) -> &str {
-        &self.model
+        self.inner.name()
     }
 
     async fn generate_content(
         &self,
         request: LlmRequest,
-        _stream: bool, // OpenAI always uses streaming internally
-    ) -> Result<adk_core::LlmResponseStream, AdkError> {
-        let model = self.model.clone();
-        let client = self.client.clone();
-        let retry_config = self.retry_config.clone();
-        let request_for_retry = request.clone();
-
-        let stream = try_stream! {
-            // Retries only cover request setup/execution. Stream failures after start are surfaced
-            // directly and are not auto-replayed.
-            let mut stream = execute_with_retry(&retry_config, is_retryable_model_error, || {
-                let model = model.clone();
-                let client = client.clone();
-                let request = request_for_retry.clone();
-                async move {
-                    let messages: Vec<_> = request
-                        .contents
-                        .iter()
-                        .map(convert::content_to_message)
-                        .collect();
-
-                    let mut request_builder = CreateChatCompletionRequestArgs::default();
-                    request_builder.model(&model).messages(messages);
-
-                    if !request.tools.is_empty() {
-                        let tools = convert::convert_tools(&request.tools);
-                        request_builder.tools(tools);
-                    }
-
-                    if let Some(config) = &request.config {
-                        if let Some(temp) = config.temperature {
-                            request_builder.temperature(temp);
-                        }
-                        if let Some(top_p) = config.top_p {
-                            request_builder.top_p(top_p);
-                        }
-                        if let Some(max_tokens) = config.max_output_tokens {
-                            request_builder.max_tokens(max_tokens as u32);
-                        }
-
-                        if let Some(schema) = &config.response_schema {
-                            let mut schema_with_strict = schema.clone();
-                            if let Some(obj) = schema_with_strict.as_object_mut() {
-                                obj.insert(
-                                    "additionalProperties".to_string(),
-                                    serde_json::json!(false),
-                                );
-                            }
-                            let json_schema = ResponseFormatJsonSchema {
-                                name: request.model.replace(['-', '.', '/'], "_"),
-                                description: None,
-                                schema: Some(schema_with_strict),
-                                strict: Some(true),
-                            };
-                            request_builder
-                                .response_format(ResponseFormat::JsonSchema { json_schema });
-                        }
-                    }
-
-                    let openai_request = request_builder
-                        .build()
-                        .map_err(|e| AdkError::Model(format!("Failed to build request: {}", e)))?;
-
-                    client
-                        .chat()
-                        .create_stream(openai_request)
-                        .await
-                        .map_err(|e| AdkError::Model(format!("OpenAI API error: {}", e)))
-                }
-            })
-            .await?;
-
-            // For tool calls, we need to accumulate arguments across chunks
-            // OpenAI streams tool call arguments incrementally
-            // Key is index (u32), value is (call_id, name, args_string)
-            let mut tool_call_accumulators: std::collections::HashMap<u32, (String, String, String)> = std::collections::HashMap::new();
-
-            // Process stream chunks
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(chunk) => {
-                        // Handle tool call accumulation
-                        if let Some(choice) = chunk.choices.first() {
-                            if let Some(tool_calls) = &choice.delta.tool_calls {
-                                for tc in tool_calls {
-                                    let index = tc.index;
-
-                                    // Get or create entry for this tool call index
-                                    let entry = tool_call_accumulators.entry(index).or_insert_with(|| {
-                                        let call_id = tc.id.clone().unwrap_or_else(|| format!("call_{}", index));
-                                        (call_id, String::new(), String::new())
-                                    });
-
-                                    // Update call_id if present (first chunk has it)
-                                    if let Some(id) = &tc.id {
-                                        entry.0 = id.clone();
-                                    }
-
-                                    if let Some(func) = &tc.function {
-                                        // Update name if present (first chunk has it)
-                                        if let Some(name) = &func.name {
-                                            entry.1 = name.clone();
-                                        }
-
-                                        // Accumulate arguments
-                                        if let Some(args_chunk) = &func.arguments {
-                                            entry.2.push_str(args_chunk);
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Check if this is the final chunk (has finish_reason)
-                            if choice.finish_reason.is_some() {
-                                // Emit accumulated tool calls
-                                if !tool_call_accumulators.is_empty() {
-                                    let mut parts = Vec::new();
-
-                                    // Add text content if any
-                                    if let Some(text) = &choice.delta.content {
-                                        if !text.is_empty() {
-                                            parts.push(adk_core::Part::Text { text: text.clone() });
-                                        }
-                                    }
-
-                                    // Add completed tool calls (sorted by index for consistent ordering)
-                                    let mut sorted_calls: Vec<_> = tool_call_accumulators.iter().collect();
-                                    sorted_calls.sort_by_key(|(idx, _)| *idx);
-
-                                    for (_idx, (call_id, name, args_str)) in sorted_calls {
-                                        let args: serde_json::Value = serde_json::from_str(args_str)
-                                            .unwrap_or(serde_json::json!({}));
-                                        parts.push(adk_core::Part::FunctionCall {
-                                            name: name.clone(),
-                                            args,
-                                            id: Some(call_id.clone()),
-                                        });
-                                    }
-
-                                    let finish_reason = choice.finish_reason.map(|fr| match fr {
-                                        async_openai::types::FinishReason::Stop => adk_core::FinishReason::Stop,
-                                        async_openai::types::FinishReason::Length => adk_core::FinishReason::MaxTokens,
-                                        async_openai::types::FinishReason::ToolCalls => adk_core::FinishReason::Stop,
-                                        async_openai::types::FinishReason::ContentFilter => adk_core::FinishReason::Safety,
-                                        async_openai::types::FinishReason::FunctionCall => adk_core::FinishReason::Stop,
-                                    });
-
-                                    yield adk_core::LlmResponse {
-                                        content: Some(adk_core::Content {
-                                            role: "model".to_string(),
-                                            parts,
-                                        }),
-                                        usage_metadata: None,
-                                        finish_reason,
-                                        citation_metadata: None,
-                                        partial: false,
-                                        turn_complete: true,
-                                        interrupted: false,
-                                        error_code: None,
-                                        error_message: None,
-                                    };
-                                    continue;
-                                }
-                            }
-                        }
-
-                        // For non-tool-call chunks, emit normally
-                        // Skip if we're accumulating tool calls (don't emit partial tool calls)
-                        if tool_call_accumulators.is_empty() {
-                            let response = convert::from_openai_chunk(&chunk);
-                            yield response;
-                        } else if let Some(choice) = chunk.choices.first() {
-                            // While accumulating tool calls, still emit text content
-                            if let Some(text) = &choice.delta.content {
-                                if !text.is_empty() {
-                                    yield adk_core::LlmResponse {
-                                        content: Some(adk_core::Content {
-                                            role: "model".to_string(),
-                                            parts: vec![adk_core::Part::Text { text: text.clone() }],
-                                        }),
-                                        usage_metadata: None,
-                                        finish_reason: None,
-                                        citation_metadata: None,
-                                        partial: true,
-                                        turn_complete: false,
-                                        interrupted: false,
-                                        error_code: None,
-                                        error_message: None,
-                                    };
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        yield Err(AdkError::Model(format!("Stream error: {}", e)))?;
-                    }
-                }
-            }
-        };
-
-        Ok(Box::pin(stream))
+        stream: bool,
+    ) -> Result<LlmResponseStream, AdkError> {
+        self.inner.generate_content(request, stream).await
     }
 }
 

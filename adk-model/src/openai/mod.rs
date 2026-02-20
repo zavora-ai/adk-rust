@@ -16,7 +16,8 @@
 
 mod client;
 mod config;
-mod convert;
+pub(crate) mod convert;
 
+pub use crate::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig, Provider};
 pub use client::{AzureOpenAIClient, OpenAIClient};
 pub use config::{AzureConfig, OpenAIConfig};

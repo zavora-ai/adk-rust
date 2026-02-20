@@ -219,6 +219,40 @@ impl GeminiModel {
         })
     }
 
+    fn stream_chunks_from_response(
+        mut response: LlmResponse,
+        saw_partial_chunk: bool,
+    ) -> (Vec<LlmResponse>, bool) {
+        let is_final = response.finish_reason.is_some();
+
+        if !is_final {
+            response.partial = true;
+            response.turn_complete = false;
+            return (vec![response], true);
+        }
+
+        response.partial = false;
+        response.turn_complete = true;
+
+        if saw_partial_chunk {
+            return (vec![response], true);
+        }
+
+        let synthetic_partial = LlmResponse {
+            content: None,
+            usage_metadata: None,
+            finish_reason: None,
+            citation_metadata: None,
+            partial: true,
+            turn_complete: false,
+            interrupted: false,
+            error_code: None,
+            error_message: None,
+        };
+
+        (vec![synthetic_partial, response], true)
+    }
+
     async fn generate_content_internal(
         &self,
         req: LlmRequest,
@@ -378,16 +412,18 @@ impl GeminiModel {
             let mapped_stream = async_stream::stream! {
                 use futures::TryStreamExt;
                 let mut stream = response_stream;
+                let mut saw_partial_chunk = false;
                 while let Some(result) = stream.try_next().await.transpose() {
                     match result {
                         Ok(resp) => {
                             match Self::convert_response(&resp) {
-                                Ok(mut llm_resp) => {
-                                    // Check if this is the final chunk (has finish_reason)
-                                    let is_final = llm_resp.finish_reason.is_some();
-                                    llm_resp.partial = !is_final;
-                                    llm_resp.turn_complete = is_final;
-                                    yield Ok(llm_resp);
+                                Ok(llm_resp) => {
+                                    let (chunks, next_saw_partial) =
+                                        Self::stream_chunks_from_response(llm_resp, saw_partial_chunk);
+                                    saw_partial_chunk = next_saw_partial;
+                                    for chunk in chunks {
+                                        yield Ok(chunk);
+                                    }
                                 }
                                 Err(e) => {
                                     adk_telemetry::error!(error = %e, "Failed to convert response");
@@ -470,6 +506,51 @@ mod tests {
         }
 
         accepts_sync_constructor(|api_key, model| GeminiModel::new(api_key, model));
+    }
+
+    #[test]
+    fn stream_chunks_from_response_injects_partial_before_lone_final_chunk() {
+        let response = LlmResponse {
+            content: Some(Content::new("model").with_text("hello")),
+            usage_metadata: None,
+            finish_reason: Some(FinishReason::Stop),
+            citation_metadata: None,
+            partial: false,
+            turn_complete: true,
+            interrupted: false,
+            error_code: None,
+            error_message: None,
+        };
+
+        let (chunks, saw_partial) = GeminiModel::stream_chunks_from_response(response, false);
+        assert!(saw_partial);
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks[0].partial);
+        assert!(!chunks[0].turn_complete);
+        assert!(chunks[0].content.is_none());
+        assert!(!chunks[1].partial);
+        assert!(chunks[1].turn_complete);
+    }
+
+    #[test]
+    fn stream_chunks_from_response_keeps_final_only_when_partial_already_seen() {
+        let response = LlmResponse {
+            content: Some(Content::new("model").with_text("done")),
+            usage_metadata: None,
+            finish_reason: Some(FinishReason::Stop),
+            citation_metadata: None,
+            partial: false,
+            turn_complete: true,
+            interrupted: false,
+            error_code: None,
+            error_message: None,
+        };
+
+        let (chunks, saw_partial) = GeminiModel::stream_chunks_from_response(response, true);
+        assert!(saw_partial);
+        assert_eq!(chunks.len(), 1);
+        assert!(!chunks[0].partial);
+        assert!(chunks[0].turn_complete);
     }
 
     #[tokio::test]
