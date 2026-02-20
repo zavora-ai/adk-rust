@@ -102,6 +102,8 @@ struct GeminiSetup {
     generation_config: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cached_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,6 +179,7 @@ pub struct GeminiRealtimeSession {
     connected: Arc<AtomicBool>,
     sender: Arc<Mutex<WsSink>>,
     receiver: Arc<Mutex<WsSource>>,
+    audio_buffer: Arc<Mutex<Vec<u8>>>,
 }
 
 impl GeminiRealtimeSession {
@@ -268,10 +271,25 @@ impl GeminiRealtimeSession {
             connected: Arc::new(AtomicBool::new(true)),
             sender: Arc::new(Mutex::new(sink)),
             receiver: Arc::new(Mutex::new(source)),
+            audio_buffer: Arc::new(Mutex::new(Vec::new())),
         };
 
         session.send_setup(model, config).await?;
         Ok(session)
+    }
+
+    /// Flush any buffered audio to the server.
+    async fn flush_audio(&self) -> Result<()> {
+        let mut buffer = self.audio_buffer.lock().await;
+        if !buffer.is_empty() {
+            let data = buffer.drain(..).collect::<Vec<u8>>();
+            drop(buffer);
+
+            // Assume standard Gemini format (16kHz PCM)
+            let chunk = AudioChunk::pcm16_16khz(data);
+            self.send_audio_base64(&chunk.to_base64()).await?;
+        }
+        Ok(())
     }
 
     /// Send initial setup message.
@@ -306,6 +324,7 @@ impl GeminiRealtimeSession {
                 system_instruction,
                 generation_config: Some(generation_config),
                 tools,
+                cached_content: config.cached_content,
             }),
             realtime_input: None,
             tool_response: None,
@@ -461,7 +480,20 @@ impl RealtimeSession for GeminiRealtimeSession {
     }
 
     async fn send_audio(&self, audio: &AudioChunk) -> Result<()> {
-        self.send_audio_base64(&audio.to_base64()).await
+        // Smart Audio Buffering: buffer small chunks to avoid overhead
+        let mut buffer = self.audio_buffer.lock().await;
+        buffer.extend_from_slice(&audio.data);
+
+        // 3200 bytes = 100ms at 16kHz 16-bit mono
+        if buffer.len() >= 3200 {
+            let data = buffer.drain(..).collect::<Vec<u8>>();
+            drop(buffer); // Release lock before sending
+
+            // We use the format from the current chunk, assuming consistency
+            let chunk = AudioChunk::new(data, audio.format.clone());
+            self.send_audio_base64(&chunk.to_base64()).await?;
+        }
+        Ok(())
     }
 
     async fn send_audio_base64(&self, audio_base64: &str) -> Result<()> {
@@ -518,11 +550,13 @@ impl RealtimeSession for GeminiRealtimeSession {
     }
 
     async fn commit_audio(&self) -> Result<()> {
-        Ok(()) // Gemini auto-commits
+        self.flush_audio().await
     }
 
     async fn clear_audio(&self) -> Result<()> {
-        Ok(()) // Not supported by Gemini Live
+        let mut buffer = self.audio_buffer.lock().await;
+        buffer.clear();
+        Ok(())
     }
 
     async fn create_response(&self) -> Result<()> {
@@ -530,6 +564,8 @@ impl RealtimeSession for GeminiRealtimeSession {
     }
 
     async fn interrupt(&self) -> Result<()> {
+        // Strategic flush: clear any buffered audio that hasn't been sent
+        self.clear_audio().await?;
         Ok(()) // Gemini handles interruption via VAD
     }
 

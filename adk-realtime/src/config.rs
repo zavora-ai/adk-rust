@@ -165,6 +165,10 @@ pub struct RealtimeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_response_output_tokens: Option<u32>,
 
+    /// Cached content resource name (e.g. `cachedContents/1234`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_content: Option<String>,
+
     /// Provider-specific options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra: Option<Value>,
@@ -271,6 +275,12 @@ impl RealtimeConfig {
         self.temperature = Some(temp);
         self
     }
+
+    /// Set cached content resource.
+    pub fn with_cached_content(mut self, content: impl Into<String>) -> Self {
+        self.cached_content = Some(content.into());
+        self
+    }
 }
 
 /// Builder for RealtimeConfig.
@@ -328,6 +338,12 @@ impl RealtimeConfigBuilder {
     /// Set temperature.
     pub fn temperature(mut self, temp: f32) -> Self {
         self.config.temperature = Some(temp);
+        self
+    }
+
+    /// Set cached content resource.
+    pub fn cached_content(mut self, content: impl Into<String>) -> Self {
+        self.config.cached_content = Some(content.into());
         self
     }
 
