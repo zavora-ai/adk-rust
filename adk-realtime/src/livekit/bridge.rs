@@ -4,7 +4,7 @@ use futures::StreamExt;
 use livekit::track::RemoteAudioTrack;
 use livekit::webrtc::audio_stream::native::NativeAudioStream;
 
-use crate::audio::{AudioChunk, AudioFormat};
+use crate::audio::{AudioChunk, AudioFormat, SmartAudioBuffer};
 use crate::error::Result;
 use crate::runner::RealtimeRunner;
 
@@ -14,6 +14,8 @@ const DEFAULT_SAMPLE_RATE: i32 = 24000;
 const GEMINI_SAMPLE_RATE: i32 = 16000;
 /// Default number of audio channels (mono).
 const DEFAULT_NUM_CHANNELS: i32 = 1;
+/// Target duration for smart audio buffering (200ms).
+const BUFFER_DURATION_MS: u32 = 200;
 
 /// Reads audio frames from a LiveKit [`RemoteAudioTrack`] and sends them as
 /// base64-encoded PCM16 audio (24kHz) to the given [`RealtimeRunner`].
@@ -29,10 +31,19 @@ const DEFAULT_NUM_CHANNELS: i32 = 1;
 pub async fn bridge_input(track: RemoteAudioTrack, runner: &RealtimeRunner) -> Result<()> {
     let mut stream =
         NativeAudioStream::new(track.rtc_track(), DEFAULT_SAMPLE_RATE, DEFAULT_NUM_CHANNELS);
+    let mut buffer = SmartAudioBuffer::new(DEFAULT_SAMPLE_RATE as u32, BUFFER_DURATION_MS);
 
     while let Some(frame) = stream.next().await {
-        // Convert i16 samples to little-endian PCM16 bytes
-        let chunk = AudioChunk::from_i16_samples(&frame.data, AudioFormat::pcm16_24khz());
+        buffer.push(&frame.data);
+        if let Some(samples) = buffer.flush() {
+            // Convert i16 samples to little-endian PCM16 bytes
+            let chunk = AudioChunk::from_i16_samples(&samples, AudioFormat::pcm16_24khz());
+            runner.send_audio(&chunk.to_base64()).await?;
+        }
+    }
+
+    if let Some(samples) = buffer.flush_remaining() {
+        let chunk = AudioChunk::from_i16_samples(&samples, AudioFormat::pcm16_24khz());
         runner.send_audio(&chunk.to_base64()).await?;
     }
 
@@ -54,9 +65,18 @@ pub async fn bridge_gemini_input(track: RemoteAudioTrack, runner: &RealtimeRunne
     // Request 16kHz mono from LiveKit — it handles resampling for us.
     let mut stream =
         NativeAudioStream::new(track.rtc_track(), GEMINI_SAMPLE_RATE, DEFAULT_NUM_CHANNELS);
+    let mut buffer = SmartAudioBuffer::new(GEMINI_SAMPLE_RATE as u32, BUFFER_DURATION_MS);
 
     while let Some(frame) = stream.next().await {
-        let chunk = AudioChunk::from_i16_samples(&frame.data, AudioFormat::pcm16_16khz());
+        buffer.push(&frame.data);
+        if let Some(samples) = buffer.flush() {
+            let chunk = AudioChunk::from_i16_samples(&samples, AudioFormat::pcm16_16khz());
+            runner.send_audio(&chunk.to_base64()).await?;
+        }
+    }
+
+    if let Some(samples) = buffer.flush_remaining() {
+        let chunk = AudioChunk::from_i16_samples(&samples, AudioFormat::pcm16_16khz());
         runner.send_audio(&chunk.to_base64()).await?;
     }
 

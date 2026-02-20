@@ -183,9 +183,112 @@ impl AudioChunk {
     }
 }
 
+/// Buffers audio samples until a target duration is reached.
+///
+/// Smart buffering (e.g., 200ms) is essential for AI voice services to:
+/// 1. **Reduce Network Overhead**: Aggregating small frames into larger chunks
+///    drastically reduces packet rate, lowering CPU usage and bandwidth overhead.
+/// 2. **Improve Model Performance**: Provides sufficient context for Voice Activity
+///    Detection (VAD) to distinguish speech from noise.
+/// 3. **Resist Jitter**: Smooths out network jitter common in mobile networks.
+/// 4. **Latency Trade-off**: Maintains a real-time feel while gaining stability.
+#[derive(Debug, Clone)]
+pub struct SmartAudioBuffer {
+    buffer: Vec<i16>,
+    sample_rate: u32,
+    target_duration_ms: u32,
+}
+
+impl SmartAudioBuffer {
+    /// Create a new smart audio buffer.
+    pub fn new(sample_rate: u32, target_duration_ms: u32) -> Self {
+        Self {
+            buffer: Vec::new(),
+            sample_rate,
+            target_duration_ms,
+        }
+    }
+
+    /// Push new samples into the buffer.
+    pub fn push(&mut self, samples: &[i16]) {
+        self.buffer.extend_from_slice(samples);
+    }
+
+    fn should_flush(&self) -> bool {
+        let duration_ms = (self.buffer.len() as f64 / self.sample_rate as f64) * 1000.0;
+
+        duration_ms >= self.target_duration_ms as u64
+    }
+
+    /// Flush the buffer if the target duration has been reached.
+    pub fn flush(&mut self) -> Option<Vec<i16>> {
+        if self.should_flush() {
+            Some(std::mem::take(&mut self.buffer))
+        } else {
+            None
+        }
+    }
+
+    /// Flush any remaining samples in the buffer.
+    pub fn flush_remaining(&mut self) -> Option<Vec<i16>> {
+        if self.buffer.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.buffer))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_smart_audio_buffer_flush_threshold() {
+        let sample_rate = 1000;
+        let target_ms = 100;
+        // 1000 samples/sec -> 1 sample = 1ms.
+        // target 100ms -> 100 samples.
+
+        let mut buffer = SmartAudioBuffer::new(sample_rate, target_ms);
+
+        // Push 50 samples (50ms)
+        buffer.push(&vec![0; 50]);
+        assert!(buffer.flush().is_none());
+
+        // Push 49 samples (total 99ms)
+        buffer.push(&vec![0; 49]);
+        assert!(buffer.flush().is_none());
+
+        // Push 1 sample (total 100ms)
+        buffer.push(&vec![0; 1]);
+        let flushed = buffer.flush();
+        assert!(flushed.is_some());
+        assert_eq!(flushed.unwrap().len(), 100);
+        assert!(buffer.buffer.is_empty());
+    }
+
+    #[test]
+    fn test_smart_audio_buffer_flush_remaining() {
+        let sample_rate = 1000;
+        let target_ms = 100;
+        let mut buffer = SmartAudioBuffer::new(sample_rate, target_ms);
+
+        buffer.push(&vec![0; 50]);
+        assert!(buffer.flush().is_none());
+
+        let remaining = buffer.flush_remaining();
+        assert!(remaining.is_some());
+        assert_eq!(remaining.unwrap().len(), 50);
+        assert!(buffer.buffer.is_empty());
+    }
+
+    #[test]
+    fn test_smart_audio_buffer_empty_flush() {
+        let mut buffer = SmartAudioBuffer::new(1000, 100);
+        assert!(buffer.flush().is_none());
+        assert!(buffer.flush_remaining().is_none());
+    }
 
     #[test]
     fn test_audio_format_bytes_per_second() {
