@@ -19,7 +19,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set");
 
     // Create the Anthropic client with Claude Sonnet
-    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4.5"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-5-20250929"))?;
 
     // Create an agent using the Claude model
     let agent = LlmAgentBuilder::new("claude_assistant")
@@ -32,7 +32,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     println!("Anthropic Claude Agent created: {}", agent.name());
-    println!("Model: claude-sonnet-4.5");
+    println!("Model: claude-sonnet-4-5-20250929");
     println!("\nTry asking Claude a question!\n");
 
     // Run with the default launcher

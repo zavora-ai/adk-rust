@@ -51,6 +51,26 @@ export interface DeployResponse {
   openUrl: string | null;
 }
 
+export interface DetectedKeyEntry {
+  name: string;
+  status: 'detected' | 'not_set';
+  masked: string | null;
+}
+
+export interface DetectedKeysResponse {
+  keys: DetectedKeyEntry[];
+}
+
+export interface ProjectKeyEntry {
+  name: string;
+  source: 'environment' | 'project' | 'not_set';
+  masked: string | null;
+}
+
+export interface ProjectKeysResponse {
+  keys: ProjectKeyEntry[];
+}
+
 export const api = {
   projects: {
     list: () => request<ProjectMeta[]>('/projects'),
@@ -76,5 +96,23 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
+  },
+  settings: {
+    getDetectedKeys: () =>
+      request<DetectedKeysResponse>('/settings/detected-keys'),
+  },
+  keys: {
+    getProjectKeys: (id: string) =>
+      request<ProjectKeysResponse>(`/projects/${id}/keys`),
+    saveProjectKeys: (id: string, keys: Record<string, string>) =>
+      request<ProjectKeysResponse>(`/projects/${id}/keys`, {
+        method: 'POST',
+        body: JSON.stringify({ keys }),
+      }),
+    deleteProjectKey: (id: string, name: string) =>
+      request<ProjectKeysResponse>(
+        `/projects/${id}/keys/${encodeURIComponent(name)}`,
+        { method: 'DELETE' },
+      ),
   },
 };

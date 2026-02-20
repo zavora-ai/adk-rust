@@ -7,7 +7,7 @@ pub mod scheduler;
 pub mod sse;
 pub mod state;
 
-pub use events::{ExecutionStateTracker, StateSnapshot, TraceEventV2};
+pub use events::{DebugEvent, ExecutionStateTracker, StateSnapshot, TraceEventV2};
 pub use graph_runner::{
     GraphInterruptHandler, INTERRUPTED_SESSIONS, InterruptData, InterruptedSessionState,
     InterruptedSessionStore,

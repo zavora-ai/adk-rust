@@ -43,15 +43,20 @@ export function useAgentActions() {
     const horizontalSpacing = 200;  // Space between agents horizontally
     const containerSpacing = 250;   // Wider spacing for container agents
 
+    // Only include google_search for Gemini provider
+    const provider = currentProject.settings.defaultProvider || 'gemini';
+    const model = currentProject.settings.default_model || 'gemini-2.0-flash';
+    const defaultTools = provider === 'gemini' ? ['google_search'] : [];
+
     if (['sequential', 'loop', 'parallel'].includes(agentType)) {
       const sub1 = `${id}_agent_1`, sub2 = `${id}_agent_2`, isLoop = agentType === 'loop';
-      addAgent(sub1, { type: 'llm', model: 'gemini-2.0-flash', instruction: isLoop ? 'Process and refine.' : 'Agent 1.', tools: ['google_search'], sub_agents: [], position: { x: 0, y: 0 } });
-      addAgent(sub2, { type: 'llm', model: 'gemini-2.0-flash', instruction: isLoop ? 'Review. Call exit_loop when done.' : 'Agent 2.', tools: isLoop ? ['exit_loop', 'google_search'] : ['google_search'], sub_agents: [], position: { x: 0, y: 0 } });
+      addAgent(sub1, { type: 'llm', model, instruction: isLoop ? 'Process and refine.' : 'Agent 1.', tools: [...defaultTools], sub_agents: [], position: { x: 0, y: 0 } });
+      addAgent(sub2, { type: 'llm', model, instruction: isLoop ? 'Review. Call exit_loop when done.' : 'Agent 2.', tools: isLoop ? ['exit_loop', ...defaultTools] : [...defaultTools], sub_agents: [], position: { x: 0, y: 0 } });
       addAgent(id, { type: agentType as AgentSchema['type'], instruction: '', tools: [], sub_agents: [sub1, sub2], position: { x: baseX + agentCount * containerSpacing, y: baseY }, max_iterations: isLoop ? 3 : undefined });
     } else if (agentType === 'router') {
-      addAgent(id, { type: 'router', model: 'gemini-2.0-flash', instruction: 'Route based on intent.', tools: ['google_search'], sub_agents: [], position: { x: baseX + agentCount * horizontalSpacing, y: baseY }, routes: [{ condition: 'default', target: 'END' }] });
+      addAgent(id, { type: 'router', model, instruction: 'Route based on intent.', tools: [...defaultTools], sub_agents: [], position: { x: baseX + agentCount * horizontalSpacing, y: baseY }, routes: [{ condition: 'default', target: 'END' }] });
     } else {
-      addAgent(id, { type: 'llm', model: 'gemini-2.0-flash', instruction: 'You are a helpful assistant.', tools: ['google_search'], sub_agents: [], position: { x: baseX + agentCount * horizontalSpacing, y: baseY } });
+      addAgent(id, { type: 'llm', model, instruction: 'You are a helpful assistant.', tools: [...defaultTools], sub_agents: [], position: { x: baseX + agentCount * horizontalSpacing, y: baseY } });
     }
 
     // Re-read current project to get the latest edges after adding agents

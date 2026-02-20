@@ -87,7 +87,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4.5"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-5-20250929"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .model(Arc::new(model))
@@ -95,6 +95,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+```
+
+#### Anthropic Advanced Features
+
+```rust
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+
+// Extended thinking with token budget
+let config = AnthropicConfig::new(api_key, "claude-sonnet-4-5-20250929")
+    .with_thinking(8192)
+    .with_prompt_caching(true)
+    .with_beta_feature("prompt-caching-2024-07-31");
+let client = AnthropicClient::new(config)?;
+
+// Token counting
+let count = client.count_tokens(&request).await?;
+
+// Model discovery
+let models = client.list_models().await?;
+let info = client.get_model("claude-sonnet-4-5-20250929").await?;
+
+// Rate limit inspection
+let rate_info = client.latest_rate_limit_info().await;
 ```
 
 ### DeepSeek
@@ -193,11 +216,11 @@ See [OpenAI models documentation](https://platform.openai.com/docs/models) for t
 
 | Model | Description |
 |-------|-------------|
-| `claude-opus-4.5` | Most capable model for complex autonomous tasks (200K context) |
-| `claude-sonnet-4.5` | Balanced intelligence and cost for production |
-| `claude-haiku-4.5` | Ultra-efficient for high-volume workloads |
-| `claude-opus-4` | Hybrid model with extended thinking |
-| `claude-sonnet-4` | Balanced model with extended thinking |
+| `claude-opus-4-5-20251101` | Most capable model for complex autonomous tasks (200K context) |
+| `claude-sonnet-4-5-20250929` | Balanced intelligence and cost for production (1M context) |
+| `claude-haiku-4-5-20251001` | Ultra-efficient for high-volume workloads |
+| `claude-opus-4-20250514` | Hybrid model with extended thinking |
+| `claude-sonnet-4-20250514` | Balanced model with extended thinking |
 
 See [Anthropic models documentation](https://docs.anthropic.com/claude/docs/models-overview) for the full list.
 

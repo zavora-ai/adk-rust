@@ -1,5 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import type { InterruptData, StateSnapshot, TraceEventPayload } from '../types/execution';
+import type { DebugEntry } from '../types/debug';
+import { MAX_DEBUG_ENTRIES } from '../types/debug';
 
 /**
  * Flow phase for edge animations.
@@ -82,6 +84,11 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
   // v2.0: State keys for data flow overlays (edge ID -> state keys)
   const [stateKeys, setStateKeys] = useState<Map<string, string[]>>(new Map());
   
+  // Debug console: debug entries from SSE debug events
+  // @see debug-console-tab Requirements 10.1, 10.2, 10.3
+  const [debugEntries, setDebugEntries] = useState<DebugEntry[]>([]);
+  const debugIdCounter = useRef(0);
+
   // HITL: Flow phase for edge animations
   // @see trigger-input-flow Requirements 2.2, 2.3, 3.1, 3.2
   const [flowPhase, setFlowPhase] = useState<FlowPhase>('idle');
@@ -379,6 +386,36 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
         } catch (err) { console.warn('Failed to parse resume event:', err); }
       });
 
+      /**
+       * Handle debug SSE events for the Debug Console tab.
+       * Parses the event payload into a DebugEntry and appends to the store,
+       * capping at MAX_DEBUG_ENTRIES (500) by discarding oldest entries.
+       * @see debug-console-tab Requirements 10.1, 10.2
+       */
+      es.addEventListener('debug', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          const entry: DebugEntry = {
+            id: `debug-${++debugIdCounter.current}`,
+            timestamp: data.timestamp ?? Date.now(),
+            level: data.level ?? 'debug',
+            category: data.category ?? 'lifecycle',
+            agent: data.agent ?? '',
+            summary: data.summary ?? '',
+            detail: data.detail ?? null,
+          };
+          setDebugEntries(prev => {
+            const next = [...prev, entry];
+            if (next.length > MAX_DEBUG_ENTRIES) {
+              return next.slice(next.length - MAX_DEBUG_ENTRIES);
+            }
+            return next;
+          });
+        } catch (err) {
+          console.warn('Failed to parse debug event:', err);
+        }
+      });
+
       es.addEventListener('end', () => {
         ended = true;
         const finalText = textRef.current;
@@ -426,6 +463,8 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
 
   const clearEvents = useCallback(() => setEvents([]), []);
 
+  const clearDebugEntries = useCallback(() => setDebugEntries([]), []);
+
   const newSession = useCallback(async () => {
     // Kill the old session process on the server
     if (sessionRef.current) {
@@ -438,6 +477,9 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
     setSnapshots([]);
     setCurrentSnapshotIndex(-1);
     setStateKeys(new Map());
+    // Debug console: Clear debug entries on new session
+    // @see debug-console-tab Requirement 10.3
+    setDebugEntries([]);
     // HITL: Clear interrupt state and flow phase
     setInterrupt(null);
     setFlowPhase('idle');
@@ -466,6 +508,10 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
     setFlowPhase,
     interrupt,
     setInterrupt,
+    // Debug console: debug entries and clear callback
+    // @see debug-console-tab Requirements 10.1, 10.2, 10.3
+    debugEntries,
+    clearDebugEntries,
     // Edge animation: queue of node_start events (preserves rapid-fire action nodes)
     nodeStartQueueRef,
     nodeStartTick,

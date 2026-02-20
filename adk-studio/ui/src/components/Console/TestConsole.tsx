@@ -6,6 +6,8 @@ import { useWebhookEvents, WebhookNotification } from '../../hooks/useWebhookEve
 import type { StateSnapshot, InterruptData } from '../../types/execution';
 import type { Project } from '../../types/project';
 import { ConsoleFilters, EventFilter } from './ConsoleFilters';
+import { DebugPanel } from './DebugPanel';
+import type { DebugEntry } from '../../types/debug';
 import { DEFAULT_MANUAL_TRIGGER_CONFIG, type TriggerNodeConfig, type TriggerType } from '../../types/actionNodes';
 
 interface Message {
@@ -21,7 +23,7 @@ interface Message {
  * @see trigger-input-flow Requirements 2.2, 2.3
  * Note: The actual FlowPhase type is now imported from useSSE hook
  */
-type Tab = 'chat' | 'events';
+type Tab = 'chat' | 'events' | 'debug';
 
 /** Build status for summary line */
 export type BuildStatus = 'none' | 'building' | 'success' | 'error';
@@ -210,6 +212,12 @@ interface Props {
   onBinaryPathDetected?: (path: string) => void;
   /** Callback to trigger a build from the console (Send→Build button) */
   onBuild?: () => void;
+  /** Debug console: whether debug mode is enabled (controls Debug tab visibility) */
+  debugMode?: boolean;
+  /** Debug console: debug entries from useSSE hook */
+  debugEntries?: DebugEntry[];
+  /** Debug console: callback to clear debug entries */
+  clearDebugEntries?: () => void;
 }
 
 /** Validate workflow and return current state */
@@ -258,6 +266,9 @@ export function TestConsole({
   onCancelReady,
   onBinaryPathDetected,
   onBuild,
+  debugMode = false,
+  debugEntries: debugEntriesProp,
+  clearDebugEntries: clearDebugEntriesProp,
 }: Props) {
   const { currentProject, updateActionNode } = useStore();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -287,6 +298,9 @@ export function TestConsole({
     // Edge animation: queue of node_start events
     nodeStartQueueRef,
     nodeStartTick,
+    // Debug console: debug entries and clear callback
+    debugEntries: hookDebugEntries,
+    clearDebugEntries: hookClearDebugEntries,
   } = useSSE(currentProject?.id ?? null, binaryPath);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const eventsEndRef = useRef<HTMLDivElement>(null);
@@ -420,6 +434,20 @@ export function TestConsole({
   // v2.0: Run status tracking
   const [runStatus, setRunStatus] = useState<RunStatus>('idle');
   const [lastError, setLastError] = useState<string | null>(null);
+
+  // Debug console: resolve debug entries and clear callback (prefer props, fall back to hook)
+  const debugEntries = debugEntriesProp ?? hookDebugEntries;
+  const clearDebugEntries = clearDebugEntriesProp ?? hookClearDebugEntries;
+
+  // Debug console: auto-switch tab when debugMode toggles
+  // @see debug-console-tab Requirements 1.5, 1.6
+  useEffect(() => {
+    if (debugMode) {
+      setActiveTab('debug');
+    } else {
+      setActiveTab((prev) => (prev === 'debug' ? 'chat' : prev));
+    }
+  }, [debugMode]);
 
   /**
    * Update the manual trigger's default prompt with the latest user input.
@@ -728,6 +756,7 @@ export function TestConsole({
   const handleClearHistory = () => {
     setMessages([]);
     clearEvents();
+    clearDebugEntries();
     setRunStatus('idle');
     setLastError(null);
   };
@@ -885,6 +914,20 @@ export function TestConsole({
           >
             📋 Events {events.length > 0 && `(${events.length})`}
           </button>
+          {/* Debug console: Debug tab button, only visible when debugMode is enabled */}
+          {/* @see debug-console-tab Requirements 1.1, 1.2, 1.4 */}
+          {debugMode && (
+            <button 
+              onClick={() => setActiveTab('debug')}
+              className="px-3 py-1 rounded text-xs"
+              style={{ 
+                backgroundColor: activeTab === 'debug' ? 'var(--accent-primary)' : 'transparent',
+                color: activeTab === 'debug' ? 'white' : 'var(--text-primary)'
+              }}
+            >
+              🐛 Debug {debugEntries.length > 0 && `(${debugEntries.length})`}
+            </button>
+          )}
           {sessionId && (
             <span className="ml-2 text-xs" style={{ color: 'var(--text-muted)' }} title={sessionId}>
               Session: {sessionId.slice(0, 8)}...
@@ -1114,6 +1157,19 @@ export function TestConsole({
             ))}
             <div ref={eventsEndRef} />
           </div>
+        </div>
+      )}
+
+      {/* Debug console: DebugPanel rendered when debug tab is active */}
+      {/* @see debug-console-tab Requirements 1.3 */}
+      {activeTab === 'debug' && (
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <DebugPanel
+            debugEntries={debugEntries}
+            clearDebugEntries={clearDebugEntries}
+            autoScroll={autoScroll}
+            onAutoScrollChange={setAutoScroll}
+          />
         </div>
       )}
 

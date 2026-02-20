@@ -101,7 +101,7 @@ async fn calculator(_ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value, ad
 async fn main() -> Result<()> {
     let api_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set");
 
-    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4.5"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-5-20250929"))?;
 
     // Create weather tool with schema
     let weather_tool =
@@ -130,7 +130,7 @@ async fn main() -> Result<()> {
         .build()?;
 
     println!("=== Anthropic Claude Tools Example ===");
-    println!("Model: claude-sonnet-4.5");
+    println!("Model: claude-sonnet-4-5-20250929");
     println!();
     println!("Available tools:");
     println!("  - get_weather: Get weather for a city");

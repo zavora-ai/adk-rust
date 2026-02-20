@@ -56,6 +56,10 @@ function getStructureHash(project: Project | null): string {
   
   const agentKeys = Object.keys(project.agents).sort().join(',');
   const actionNodeKeys = Object.keys(project.actionNodes || {}).sort().join(',');
+  const modelsHash = Object.entries(project.agents)
+    .map(([id, a]) => `${id}:${a.model || ''}`)
+    .sort()
+    .join('|');
   const toolsHash = Object.entries(project.agents)
     .map(([id, a]) => `${id}:${(a.tools || []).join('+')}`)
     .sort()
@@ -65,7 +69,7 @@ function getStructureHash(project: Project | null): string {
     .sort()
     .join(',');
   
-  return `${agentKeys}|${actionNodeKeys}|${toolsHash}|${edgesHash}`;
+  return `${agentKeys}|${actionNodeKeys}|${modelsHash}|${toolsHash}|${edgesHash}`;
 }
 
 export function useCanvasNodes(project: Project | null, execution: ExecutionState) {

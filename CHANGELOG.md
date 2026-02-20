@@ -88,7 +88,7 @@ Thanks to the following people for their contributions to this release:
 - **Vertex AI Streaming**: `adk-gemini` refactored with `GeminiBackend` trait — pluggable `StudioBackend` (REST) and `VertexBackend` (REST SSE streaming + gRPC fallback)
 - **Realtime Stabilization**: `adk-realtime` audio transport rewritten with raw bytes, Gemini Live session corrected, event types renamed for OpenAI SDK alignment
 - **Multi-Provider Codegen**: ADK Studio code generation now supports Gemini, OpenAI, Anthropic, DeepSeek, Groq, and Ollama (was hardcoded to Gemini)
-- **2026 Model Names**: All docs, examples, and source defaults updated to current model names (gemini-2.5-flash, gpt-5-mini, claude-sonnet-4.5, etc.)
+- **2026 Model Names**: All docs, examples, and source defaults updated to current model names (gemini-2.5-flash, gpt-5-mini, claude-sonnet-4-5-20250929, etc.)
 - **Response Parsing Tests**: 25 rigorous tests covering Gemini response edge cases (safety ratings, streaming chunks, function calls, grounding metadata, citations)
 - **Code Health**: Span-based line numbers in doc-audit analyzer, validation refactor in adk-ui, dead code cleanup, CONTRIBUTING.md rewrite
 
@@ -151,7 +151,7 @@ Thanks to the following people for their contributions to this release:
 - All model name defaults updated to 2026 versions across 95+ files:
   - `gemini-2.0-flash` → `gemini-2.5-flash`
   - `gpt-4o` / `gpt-4o-mini` → `gpt-5-mini`
-  - `claude-sonnet-4-20250514` → `claude-sonnet-4.5`
+  - `claude-sonnet-4-20250514` → `claude-sonnet-4-5-20250929`
   - `gemini-2.0-flash-live-preview-04-09` → `gemini-live-2.5-flash-native-audio`
 - `adk-doc-audit` now depends on `proc-macro2` with `span-locations` feature for accurate line numbers
 - `CONTRIBUTING.md` rewritten with full 25+ crate inventory, build commands, architecture notes

@@ -27,9 +27,12 @@ export interface CanvasModalsProps {
 
   // SettingsModal
   showSettingsModal: boolean;
+  projectId?: string;
   projectSettings: ProjectSettings | undefined;
   projectName: string;
   projectDescription: string;
+  settingsInitialTab?: 'general' | 'codegen' | 'ui' | 'env';
+  showApiKeyBanner?: boolean;
   onSaveSettings: (settings: ProjectSettings, name: string, description: string) => void;
   onCloseSettingsModal: () => void;
 }
@@ -50,9 +53,12 @@ export function CanvasModals({
   onNewProjectConfirm,
   onCloseNewProjectModal,
   showSettingsModal,
+  projectId,
   projectSettings,
   projectName,
   projectDescription,
+  settingsInitialTab,
+  showApiKeyBanner,
   onSaveSettings,
   onCloseSettingsModal,
 }: CanvasModalsProps) {
@@ -89,6 +95,9 @@ export function CanvasModals({
           settings={projectSettings}
           projectName={projectName}
           projectDescription={projectDescription}
+          projectId={projectId}
+          initialTab={settingsInitialTab}
+          showApiKeyBanner={showApiKeyBanner}
           onSave={onSaveSettings}
           onClose={onCloseSettingsModal}
         />

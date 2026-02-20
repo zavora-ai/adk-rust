@@ -37,7 +37,7 @@ proptest! {
         betas in arb_beta_features(),
         version in arb_api_version(),
     ) {
-        let mut config = AnthropicConfig::new("test-key", "claude-sonnet-4.5")
+        let mut config = AnthropicConfig::new("test-key", "claude-sonnet-4-5-20250929")
             .with_prompt_caching(caching);
 
         if let Some(b) = budget {

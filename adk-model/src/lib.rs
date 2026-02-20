@@ -45,7 +45,7 @@
 //!
 //! let model = AnthropicClient::new(AnthropicConfig::new(
 //!     std::env::var("ANTHROPIC_API_KEY").unwrap(),
-//!     "claude-sonnet-4.5",
+//!     "claude-sonnet-4-5-20250929",
 //! )).unwrap();
 //! ```
 //!
@@ -80,7 +80,7 @@
 //! ### Anthropic
 //! | Model | Description |
 //! |-------|-------------|
-//! | `claude-sonnet-4.5` | Latest Claude 4 Sonnet |
+//! | `claude-sonnet-4-5-20250929` | Latest Claude 4.5 Sonnet |
 //! | `claude-3-5-sonnet-20241022` | Claude 3.5 Sonnet |
 //! | `claude-3-opus-20240229` | Most capable Claude 3 |
 //!
@@ -136,3 +136,4 @@ pub use ollama::{OllamaConfig, OllamaModel};
 #[cfg(feature = "openai")]
 pub use openai::{AzureConfig, AzureOpenAIClient, OpenAIClient, OpenAIConfig};
 pub use retry::RetryConfig;
+pub use retry::ServerRetryHint;

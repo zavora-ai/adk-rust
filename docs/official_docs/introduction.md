@@ -131,7 +131,7 @@ The underlying LLM that powers LlmAgents. ADK-Rust is optimized for Gemini but s
 
 - **Gemini**: Google's Gemini models (`gemini-3-pro`, `gemini-3-flash`, `gemini-2.5-flash`, `gemini-2.5-pro`)
 - **OpenAI**: `gpt-5.1`, `gpt-5`, `gpt-5-mini`, Azure OpenAI
-- **Anthropic**: `claude-opus-4.5`, `claude-sonnet-4.5`, `claude-haiku-4.5`
+- **Anthropic**: `claude-opus-4-5-20251101`, `claude-sonnet-4-5-20250929`, `claude-haiku-4-5-20251001`
 - **DeepSeek**: `deepseek-r1`, `deepseek-v3.1`, `deepseek-chat` with thinking mode
 - **Groq**: Ultra-fast inference with `llama-4-scout`, `llama-3.1-70b-versatile`, `mixtral-8x7b-32768`
 - **Ollama**: Local inference with `llama3.2:3b`, `qwen2.5:7b`, `mistral:7b`, `deepseek-r1:14b`

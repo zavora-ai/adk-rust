@@ -1,4 +1,6 @@
 export { useAgentActions } from './useAgentActions';
+export { useApiKeys } from './useApiKeys';
+export type { ProviderKeyStatus } from './useApiKeys';
 export { useBuild } from './useBuild';
 export { useCanvasNodes } from './useCanvasNodes';
 export { useCanvasState } from './useCanvasState';

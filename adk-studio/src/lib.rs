@@ -4,6 +4,7 @@
 
 pub mod codegen;
 pub mod embedded;
+pub mod keystore;
 pub mod schema;
 pub mod server;
 pub mod storage;

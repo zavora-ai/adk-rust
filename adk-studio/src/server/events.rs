@@ -335,6 +335,78 @@ fn current_timestamp_ms() -> u64 {
         .unwrap_or(0)
 }
 
+// ============================================
+// Debug Console Event Types
+// ============================================
+// These event types support the Debug Console Tab (Requirement 9.1):
+// - `debug`: Enriched debug trace events with level, category, and detail payload
+
+/// Debug event emitted via SSE for the Debug Console Tab.
+/// Carries enriched trace data including log level, category, agent name,
+/// summary text, and a full detail payload.
+///
+/// ## SSE Event Format
+/// ```json
+/// {
+///   "level": "debug",
+///   "category": "request",
+///   "agent": "weather_agent",
+///   "summary": "LLM request to gemini-2.0-flash",
+///   "detail": { "model": "gemini-2.0-flash", "messages": [] },
+///   "timestamp": 1706400000000
+/// }
+/// ```
+///
+/// ## Requirements
+/// Validates: Requirement 9.1 - Backend debug SSE event structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebugEvent {
+    /// Log level: "error", "warn", "info", "debug", "trace"
+    pub level: String,
+    /// Trace category: "request", "response", "error", "state_change", "tool_call", "tool_result", "lifecycle"
+    pub category: String,
+    /// Agent or node name that produced this event
+    pub agent: String,
+    /// Human-readable summary of the event
+    pub summary: String,
+    /// Full detail payload (request body, response body, state diff, etc.)
+    pub detail: serde_json::Value,
+    /// Timestamp in milliseconds since Unix epoch
+    pub timestamp: u64,
+}
+
+impl DebugEvent {
+    /// Create a new debug event with the current timestamp.
+    ///
+    /// ## Arguments
+    /// * `level` - Log level ("error", "warn", "info", "debug", "trace")
+    /// * `category` - Trace category ("request", "response", "error", "state_change", "tool_call", "tool_result", "lifecycle")
+    /// * `agent` - Agent or node name
+    /// * `summary` - Human-readable summary
+    /// * `detail` - Full detail payload as JSON value
+    pub fn new(
+        level: &str,
+        category: &str,
+        agent: &str,
+        summary: impl Into<String>,
+        detail: serde_json::Value,
+    ) -> Self {
+        Self {
+            level: level.to_string(),
+            category: category.to_string(),
+            agent: agent.to_string(),
+            summary: summary.into(),
+            detail,
+            timestamp: current_timestamp_ms(),
+        }
+    }
+
+    /// Convert to JSON string for SSE emission.
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
 /// Enhanced trace event for SSE v2.0.
 /// Extends the existing trace event format with state snapshot support.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -686,5 +758,82 @@ mod tests {
         assert!(parsed["message"].is_string());
         assert!(parsed["data"].is_object());
         assert!(parsed["timestamp"].is_number());
+    }
+
+    // ============================================
+    // Debug Event Tests
+    // ============================================
+
+    #[test]
+    fn test_debug_event_new() {
+        let detail = serde_json::json!({
+            "model": "gemini-2.0-flash",
+            "messages": [{"role": "user", "content": "Hello"}]
+        });
+        let event = DebugEvent::new(
+            "debug",
+            "request",
+            "weather_agent",
+            "LLM request to gemini-2.0-flash",
+            detail.clone(),
+        );
+
+        assert_eq!(event.level, "debug");
+        assert_eq!(event.category, "request");
+        assert_eq!(event.agent, "weather_agent");
+        assert_eq!(event.summary, "LLM request to gemini-2.0-flash");
+        assert_eq!(event.detail, detail);
+        assert!(event.timestamp > 0);
+    }
+
+    #[test]
+    fn test_debug_event_to_json() {
+        let event = DebugEvent::new(
+            "error",
+            "error",
+            "tool_agent",
+            "Tool execution failed",
+            serde_json::json!({"error": "timeout"}),
+        );
+
+        let json = event.to_json();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["level"], "error");
+        assert_eq!(parsed["category"], "error");
+        assert_eq!(parsed["agent"], "tool_agent");
+        assert_eq!(parsed["summary"], "Tool execution failed");
+        assert_eq!(parsed["detail"]["error"], "timeout");
+        assert!(parsed["timestamp"].is_number());
+    }
+
+    #[test]
+    fn test_debug_event_all_categories() {
+        let categories = [
+            "request",
+            "response",
+            "error",
+            "state_change",
+            "tool_call",
+            "tool_result",
+            "lifecycle",
+        ];
+        for category in categories {
+            let event = DebugEvent::new("info", category, "agent", "test", serde_json::json!({}));
+            assert_eq!(event.category, category);
+            let json = event.to_json();
+            assert!(json.contains(&format!("\"category\":\"{category}\"")));
+        }
+    }
+
+    #[test]
+    fn test_debug_event_all_levels() {
+        let levels = ["error", "warn", "info", "debug", "trace"];
+        for level in levels {
+            let event = DebugEvent::new(level, "lifecycle", "agent", "test", serde_json::json!({}));
+            assert_eq!(event.level, level);
+            let json = event.to_json();
+            assert!(json.contains(&format!("\"level\":\"{level}\"")));
+        }
     }
 }

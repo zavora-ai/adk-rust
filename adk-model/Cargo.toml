@@ -32,7 +32,7 @@ ollama-rs = { version = "0.3.4", optional = true, default-features = false, feat
 schemars = { version = "1.0", optional = true }
 
 [features]
-default = []
+default = ["gemini"]
 gemini = ["dep:adk-gemini"]
 openai = ["dep:async-openai"]
 anthropic = ["dep:claudius"]

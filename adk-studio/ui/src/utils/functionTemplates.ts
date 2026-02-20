@@ -224,5 +224,5 @@ export function extractUserCode(fullCode: string, config: FunctionToolConfig): s
   const startIdx = config.parameters.length + 1;
   const endIdx = lines.length - 1;
   if (startIdx >= endIdx) return config.code || '';
-  return lines.slice(startIdx, endIdx).map(l => l.replace(/^    /, '')).join('\n');
+  return lines.slice(startIdx, endIdx).map(l => l.replace(/^ {4}/, '')).join('\n');
 }

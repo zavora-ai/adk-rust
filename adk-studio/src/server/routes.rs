@@ -37,4 +37,9 @@ pub fn api_routes() -> Router<AppState> {
         // Event trigger endpoint - external systems send events to trigger workflows
         // POST /api/projects/{id}/events - Trigger workflow via event (matches source + eventType)
         .route("/projects/:id/events", post(handlers::event_trigger))
+        // API Key Management endpoints
+        .route("/settings/detected-keys", get(handlers::detected_keys))
+        .route("/projects/:id/keys", get(handlers::get_project_keys))
+        .route("/projects/:id/keys", post(handlers::save_project_keys))
+        .route("/projects/:id/keys/:key_name", delete(handlers::delete_project_key))
 }

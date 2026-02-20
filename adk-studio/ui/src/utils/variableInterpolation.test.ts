@@ -179,7 +179,7 @@ describe('Variable Interpolation', () => {
             const template = `{{${path}}}`;
 
             // Build nested state object
-            let state: Record<string, unknown> = {};
+            const state: Record<string, unknown> = {};
             let current = state;
             for (let i = 0; i < pathParts.length - 1; i++) {
               current[pathParts[i]] = {};

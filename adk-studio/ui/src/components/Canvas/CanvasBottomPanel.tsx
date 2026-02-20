@@ -121,6 +121,7 @@ export function CanvasBottomPanel({
             onCancelReady={onCancelReady}
             onBinaryPathDetected={onBinaryPathDetected}
             onBuild={onBuild}
+            debugMode={debugMode}
           />
         </div>
       )}

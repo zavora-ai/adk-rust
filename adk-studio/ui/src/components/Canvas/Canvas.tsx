@@ -1,4 +1,4 @@
-import { useCallback, useState, useRef } from 'react';
+import { useCallback, useState, useRef, useEffect } from 'react';
 import { ReactFlow, Background, Controls, MiniMap } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useStore } from '../../store';
@@ -35,6 +35,7 @@ export function Canvas() {
     addAgent, addActionNode, selectedActionNodeId, selectActionNode, selectNode,
     showDataFlowOverlay, setShowDataFlowOverlay, debugMode, setDebugMode,
     updateProjectMeta, updateProjectSettings, snapToGrid, gridSize,
+    showApiKeySetup, clearApiKeySetup,
   } = useStore();
 
   const handleUISettingChange = useCallback((key: string, value: boolean) => {
@@ -65,6 +66,18 @@ export function Canvas() {
   const [showCodeEditor, setShowCodeEditor] = useState(false);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'codegen' | 'ui' | 'env' | undefined>(undefined);
+  const [showApiKeyBanner, setShowApiKeyBanner] = useState(false);
+
+  // Auto-open Settings modal on Environment tab when API key setup is needed (new project flow)
+  useEffect(() => {
+    if (showApiKeySetup) {
+      setSettingsInitialTab('env');
+      setShowApiKeyBanner(true);
+      setShowSettingsModal(true);
+      clearApiKeySetup();
+    }
+  }, [showApiKeySetup, clearApiKeySetup]);
 
   const execution = useCanvasExecution({ showDataFlowOverlay, setShowDataFlowOverlay });
   const { applyLayout, fitToView, zoomIn, zoomOut } = useLayout();
@@ -179,6 +192,8 @@ export function Canvas() {
     updateProjectMeta(name, description);
     updateProjectSettings(settings);
     setShowSettingsModal(false);
+    setSettingsInitialTab(undefined);
+    setShowApiKeyBanner(false);
   }, [updateProjectMeta, updateProjectSettings]);
 
   // Theme-aware colors for ReactFlow components
@@ -378,11 +393,18 @@ export function Canvas() {
         onNewProjectConfirm={handleNewProjectConfirm}
         onCloseNewProjectModal={() => setShowNewProjectModal(false)}
         showSettingsModal={showSettingsModal}
+        projectId={currentProject.id}
         projectSettings={currentProject.settings}
         projectName={currentProject.name}
         projectDescription={currentProject.description}
+        settingsInitialTab={settingsInitialTab}
+        showApiKeyBanner={showApiKeyBanner}
         onSaveSettings={handleSaveSettings}
-        onCloseSettingsModal={() => setShowSettingsModal(false)}
+        onCloseSettingsModal={() => {
+          setShowSettingsModal(false);
+          setSettingsInitialTab(undefined);
+          setShowApiKeyBanner(false);
+        }}
       />
     </div>
   );

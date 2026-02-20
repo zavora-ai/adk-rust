@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../../store';
 import { SettingsModal } from '../Overlays/SettingsModal';
-import { GlobalSettingsModal } from '../Overlays/GlobalSettingsModal';
 import type { ProjectSettings } from '../../types/project';
 import { TEMPLATES } from '../MenuBar/templates';
 
@@ -150,6 +149,7 @@ export function ProjectList() {
           settings={settingsProject.settings}
           projectName={settingsProject.name}
           projectDescription={settingsProject.description}
+          projectId={settingsProjectId ?? undefined}
           onSave={handleSaveSettings}
           onClose={() => {
             setSettingsProjectId(null);
@@ -160,7 +160,7 @@ export function ProjectList() {
 
       {/* Global Settings Modal */}
       {showGlobalSettings && (
-        <GlobalSettingsModal
+        <SettingsModal
           onClose={() => setShowGlobalSettings(false)}
         />
       )}

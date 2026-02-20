@@ -237,6 +237,36 @@ path = "anthropic_tools/main.rs"
 required-features = ["anthropic"]
 
 [[example]]
+name = "anthropic_thinking"
+path = "anthropic_thinking/main.rs"
+required-features = ["anthropic"]
+
+[[example]]
+name = "anthropic_models"
+path = "anthropic_models/main.rs"
+required-features = ["anthropic"]
+
+[[example]]
+name = "anthropic_streaming"
+path = "anthropic_streaming/main.rs"
+required-features = ["anthropic"]
+
+[[example]]
+name = "anthropic_quickstart"
+path = "anthropic_quickstart/main.rs"
+required-features = ["anthropic"]
+
+[[example]]
+name = "anthropic_multimodal"
+path = "anthropic_multimodal/main.rs"
+required-features = ["anthropic"]
+
+[[example]]
+name = "anthropic_retry"
+path = "anthropic_retry/main.rs"
+required-features = ["anthropic"]
+
+[[example]]
 name = "deepseek_basic"
 path = "deepseek_basic/main.rs"
 required-features = ["deepseek"]

@@ -319,7 +319,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4.5"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-5-20250929"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .instruction("You are a helpful assistant.")
@@ -416,11 +416,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
 | Provider | Model Examples | Feature Flag |
 |----------|---------------|--------------|
-| Gemini | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-pro`, `gemini-3-flash` | (default) |
-| OpenAI | `gpt-5-mini`, `gpt-5`, `gpt-5.1` | `openai` |
-| Anthropic | `claude-sonnet-4.5`, `claude-opus-4.5`, `claude-haiku-4.5` | `anthropic` |
-| DeepSeek | `deepseek-chat`, `deepseek-r1`, `deepseek-v3.1` | `deepseek` |
-| Groq | `llama-4-scout`, `llama-3.1-70b-versatile`, `llama-3.1-8b-instant`, `mixtral-8x7b-32768` | `groq` |
+| Gemini | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-pro-preview`, `gemini-3-flash-preview` | (default) |
+| OpenAI | `gpt-5`, `gpt-5-mini`, `gpt-5-nano` | `openai` |
+| Anthropic | `claude-sonnet-4-5-20250929`, `claude-opus-4-5-20251101`, `claude-haiku-4-5-20251001` | `anthropic` |
+| DeepSeek | `deepseek-chat`, `deepseek-reasoner` | `deepseek` |
+| Groq | `meta-llama/llama-4-scout-17b-16e-instruct`, `llama-3.3-70b-versatile`, `llama-3.1-8b-instant` | `groq` |
 | Ollama | `llama3.2:3b`, `qwen2.5:7b`, `mistral:7b`, `deepseek-r1:14b`, `gemma3:9b` | `ollama` |
 
 ## Next Steps

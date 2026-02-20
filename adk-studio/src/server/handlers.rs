@@ -1,3 +1,6 @@
+use crate::keystore::{
+    KNOWN_PROVIDER_KEYS, Keystore, is_sensitive_key, mask_value, migrate_project_keys,
+};
 use crate::schema::{DeployManifest, ProjectMeta, ProjectSchema};
 use crate::server::events::ResumeEvent;
 use crate::server::graph_runner::{INTERRUPTED_SESSIONS, deserialize_interrupt_response};
@@ -71,7 +74,16 @@ pub async fn get_project(
     Path(id): Path<Uuid>,
 ) -> ApiResult<ProjectSchema> {
     let storage = state.storage.read().await;
-    storage.get(id).await.map(Json).map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))
+    let mut project =
+        storage.get(id).await.map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
+
+    // Trigger migration so sensitive keys are moved from env_vars to the
+    // encrypted keystore before the project JSON is returned (Req 10.5).
+    if let Ok(keystore) = Keystore::new(storage.base_dir(), id) {
+        let _ = migrate_project_keys(&storage, &keystore, &mut project).await;
+    }
+
+    Ok(Json(project))
 }
 
 /// Update project
@@ -88,6 +100,10 @@ pub async fn update_project(
 
     project.id = id;
     project.updated_at = chrono::Utc::now();
+
+    // Strip any sensitive keys from env_vars before persisting (Req 10.5).
+    // They belong in the encrypted keystore, not the project JSON.
+    project.settings.env_vars.retain(|name, _| !is_sensitive_key(name));
 
     storage
         .save(&project)
@@ -1596,4 +1612,278 @@ pub async fn event_trigger(
         stream_url,
         binary_path: if binary_exists { Some(binary_path) } else { None },
     }))
+}
+
+// ---------------------------------------------------------------------------
+// API Key Management
+// ---------------------------------------------------------------------------
+
+/// A single provider key entry in the detected-keys response.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedKeyEntry {
+    /// Provider key name (e.g. `GOOGLE_API_KEY`).
+    pub name: String,
+    /// `"detected"` when the key is present in the process environment,
+    /// `"not_set"` otherwise.
+    pub status: String,
+    /// Last 4 characters masked representation, or `null` when not set.
+    pub masked: Option<String>,
+}
+
+/// Response body for `GET /api/settings/detected-keys`.
+#[derive(Serialize)]
+pub struct DetectedKeysResponse {
+    pub keys: Vec<DetectedKeyEntry>,
+}
+
+/// Scan the process environment for known provider keys and return their
+/// detection status with masked values.
+///
+/// - **Requirements:** 1.1, 1.2, 1.3
+/// - **Design:** D3.2
+pub async fn detected_keys() -> ApiResult<DetectedKeysResponse> {
+    let keys = KNOWN_PROVIDER_KEYS
+        .iter()
+        .map(|&name| {
+            let (status, masked) = match std::env::var(name) {
+                Ok(val) if !val.is_empty() => ("detected".to_string(), Some(mask_value(&val))),
+                _ => ("not_set".to_string(), None),
+            };
+            DetectedKeyEntry { name: name.to_string(), status, masked }
+        })
+        .collect();
+
+    Ok(Json(DetectedKeysResponse { keys }))
+}
+
+/// A single provider key entry in the project-keys response.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectKeyEntry {
+    /// Provider key name (e.g. `GOOGLE_API_KEY`).
+    pub name: String,
+    /// Where the key comes from: `"project"`, `"environment"`, or `"not_set"`.
+    pub source: String,
+    /// Last 4 characters masked representation, or `null` when not set.
+    pub masked: Option<String>,
+}
+
+/// Response body for `GET /api/projects/{id}/keys`.
+#[derive(Serialize)]
+pub struct ProjectKeysResponse {
+    pub keys: Vec<ProjectKeyEntry>,
+}
+
+/// Load project keystore (triggering migration if needed), merge with
+/// environment detection, and return per-provider status with masked values.
+///
+/// - **Requirements:** 4.2, 9.1
+/// - **Design:** D3.2
+pub async fn get_project_keys(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<ProjectKeysResponse> {
+    // 1. Load the project
+    let storage = state.storage.read().await;
+    let mut project =
+        storage.get(id).await.map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
+
+    // 2. Create keystore for this project
+    let keystore = Keystore::new(storage.base_dir(), id)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // 3. Trigger migration of any plain-text keys from env_vars (Req 9.1)
+    let _ = migrate_project_keys(&storage, &keystore, &mut project).await;
+
+    // 4. Load keystore keys
+    let stored_keys =
+        keystore.load().await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // 5. Build per-provider status: keystore > environment > not_set
+    let keys = KNOWN_PROVIDER_KEYS
+        .iter()
+        .map(|&name| {
+            if let Some(val) = stored_keys.get(name) {
+                ProjectKeyEntry {
+                    name: name.to_string(),
+                    source: "project".to_string(),
+                    masked: Some(mask_value(val)),
+                }
+            } else if let Ok(val) = std::env::var(name) {
+                if !val.is_empty() {
+                    ProjectKeyEntry {
+                        name: name.to_string(),
+                        source: "environment".to_string(),
+                        masked: Some(mask_value(&val)),
+                    }
+                } else {
+                    ProjectKeyEntry {
+                        name: name.to_string(),
+                        source: "not_set".to_string(),
+                        masked: None,
+                    }
+                }
+            } else {
+                ProjectKeyEntry {
+                    name: name.to_string(),
+                    source: "not_set".to_string(),
+                    masked: None,
+                }
+            }
+        })
+        .collect();
+
+    Ok(Json(ProjectKeysResponse { keys }))
+}
+
+/// Request body for `POST /api/projects/{id}/keys`.
+#[derive(Deserialize)]
+pub struct SaveProjectKeysRequest {
+    /// Map of provider key names to raw values.
+    pub keys: HashMap<String, String>,
+}
+
+/// Validate key names against known provider patterns, encrypt and store them
+/// in the project keystore, then return the updated masked key list.
+///
+/// - **Requirements:** 4.1, 4.4
+/// - **Design:** D3.2
+pub async fn save_project_keys(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SaveProjectKeysRequest>,
+) -> ApiResult<ProjectKeysResponse> {
+    // 1. Validate all key names match known provider patterns (Req 4.4)
+    let invalid_names: Vec<&String> =
+        body.keys.keys().filter(|name| !is_sensitive_key(name)).collect();
+
+    if !invalid_names.is_empty() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Unknown key names: {}. Only known provider key patterns are accepted.",
+                invalid_names.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+        ));
+    }
+
+    // 2. Load storage and create keystore
+    let storage = state.storage.read().await;
+    let _project = storage.get(id).await.map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
+
+    let keystore = Keystore::new(storage.base_dir(), id)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // 3. Load existing keys, merge new ones, save (Req 4.1)
+    let mut stored_keys =
+        keystore.load().await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    for (name, value) in &body.keys {
+        stored_keys.insert(name.clone(), value.clone());
+    }
+
+    keystore
+        .save(&stored_keys)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // 4. Return updated masked key list (same format as GET)
+    let keys = KNOWN_PROVIDER_KEYS
+        .iter()
+        .map(|&name| {
+            if let Some(val) = stored_keys.get(name) {
+                ProjectKeyEntry {
+                    name: name.to_string(),
+                    source: "project".to_string(),
+                    masked: Some(mask_value(val)),
+                }
+            } else if let Ok(val) = std::env::var(name) {
+                if !val.is_empty() {
+                    ProjectKeyEntry {
+                        name: name.to_string(),
+                        source: "environment".to_string(),
+                        masked: Some(mask_value(&val)),
+                    }
+                } else {
+                    ProjectKeyEntry {
+                        name: name.to_string(),
+                        source: "not_set".to_string(),
+                        masked: None,
+                    }
+                }
+            } else {
+                ProjectKeyEntry {
+                    name: name.to_string(),
+                    source: "not_set".to_string(),
+                    masked: None,
+                }
+            }
+        })
+        .collect();
+
+    Ok(Json(ProjectKeysResponse { keys }))
+}
+
+/// Remove a single key from the project keystore and return the updated
+/// masked key list.
+///
+/// - **Requirements:** 4.3
+/// - **Design:** D3.2
+pub async fn delete_project_key(
+    State(state): State<AppState>,
+    Path((id, key_name)): Path<(Uuid, String)>,
+) -> ApiResult<ProjectKeysResponse> {
+    // 1. Verify the project exists
+    let storage = state.storage.read().await;
+    let _project = storage.get(id).await.map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
+
+    // 2. Create keystore and remove the specified key
+    let keystore = Keystore::new(storage.base_dir(), id)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    keystore
+        .remove(&key_name)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // 3. Load updated keys to build response
+    let stored_keys =
+        keystore.load().await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // 4. Return updated masked key list (same format as GET)
+    let keys = KNOWN_PROVIDER_KEYS
+        .iter()
+        .map(|&name| {
+            if let Some(val) = stored_keys.get(name) {
+                ProjectKeyEntry {
+                    name: name.to_string(),
+                    source: "project".to_string(),
+                    masked: Some(mask_value(val)),
+                }
+            } else if let Ok(val) = std::env::var(name) {
+                if !val.is_empty() {
+                    ProjectKeyEntry {
+                        name: name.to_string(),
+                        source: "environment".to_string(),
+                        masked: Some(mask_value(&val)),
+                    }
+                } else {
+                    ProjectKeyEntry {
+                        name: name.to_string(),
+                        source: "not_set".to_string(),
+                        masked: None,
+                    }
+                }
+            } else {
+                ProjectKeyEntry {
+                    name: name.to_string(),
+                    source: "not_set".to_string(),
+                    masked: None,
+                }
+            }
+        })
+        .collect();
+
+    Ok(Json(ProjectKeysResponse { keys }))
 }

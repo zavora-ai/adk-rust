@@ -1117,10 +1117,54 @@ fn generate_router_node(id: &str, agent: &AgentSchema) -> String {
     code.push_str(&format!("    // Router: {}\n", id));
     code.push_str(&format!("    let {}_llm = Arc::new(\n", id));
     code.push_str(&format!("        LlmAgentBuilder::new(\"{}\")\n", id));
-    code.push_str(&format!(
-        "            .model(Arc::new(GeminiModel::new(&api_key, \"{}\")?))\n",
-        model
-    ));
+
+    // Generate provider-specific model construction
+    let provider = detect_provider(model);
+    match provider {
+        "openai" => {
+            code.push_str(&format!(
+                "            .model(Arc::new(OpenAIClient::new(OpenAIConfig::new(&openai_api_key, \"{}\"))?))\n",
+                model
+            ));
+        }
+        "anthropic" => {
+            code.push_str(&format!(
+                "            .model(Arc::new(AnthropicClient::new(AnthropicConfig::new(&anthropic_api_key, \"{}\"))?))\n",
+                model
+            ));
+        }
+        "deepseek" => {
+            let m = model.to_lowercase();
+            if m.contains("reasoner") || m.contains("r1") {
+                code.push_str(
+                    "            .model(Arc::new(DeepSeekClient::reasoner(&deepseek_api_key)?))\n",
+                );
+            } else {
+                code.push_str(
+                    "            .model(Arc::new(DeepSeekClient::chat(&deepseek_api_key)?))\n",
+                );
+            }
+        }
+        "groq" => {
+            code.push_str(&format!(
+                "            .model(Arc::new(GroqClient::new(GroqConfig::new(&groq_api_key, \"{}\"))?))\n",
+                model
+            ));
+        }
+        "ollama" => {
+            code.push_str(&format!(
+                "            .model(Arc::new(OllamaModel::new(OllamaConfig::new(\"{}\"))?))\n",
+                model
+            ));
+        }
+        _ => {
+            // Default: Gemini
+            code.push_str(&format!(
+                "            .model(Arc::new(GeminiModel::new(&gemini_api_key, \"{}\")?))\n",
+                model
+            ));
+        }
+    }
 
     let route_options: Vec<&str> = agent.routes.iter().map(|r| r.condition.as_str()).collect();
     let instruction = if agent.instruction.is_empty() {
@@ -1578,11 +1622,55 @@ fn generate_container_node(id: &str, agent: &AgentSchema, project: &ProjectSchem
                 "    let {}{}_builder = LlmAgentBuilder::new(\"{}\")\n",
                 mut_kw, sub_id, sub_id
             ));
-            code.push_str(&format!(
-                "        .model(Arc::new(GeminiModel::new(&api_key, \"{}\")?))",
-                model
-            ));
-            code.push_str(";\n");
+
+            // Generate provider-specific model construction
+            let provider = detect_provider(model);
+            match provider {
+                "openai" => {
+                    code.push_str(&format!(
+                        "        .model(Arc::new(OpenAIClient::new(OpenAIConfig::new(&openai_api_key, \"{}\"))?));\n",
+                        model
+                    ));
+                }
+                "anthropic" => {
+                    code.push_str(&format!(
+                        "        .model(Arc::new(AnthropicClient::new(AnthropicConfig::new(&anthropic_api_key, \"{}\"))?));\n",
+                        model
+                    ));
+                }
+                "deepseek" => {
+                    let m = model.to_lowercase();
+                    if m.contains("reasoner") || m.contains("r1") {
+                        code.push_str(
+                            "        .model(Arc::new(DeepSeekClient::reasoner(&deepseek_api_key)?));\n",
+                        );
+                    } else {
+                        code.push_str(
+                            "        .model(Arc::new(DeepSeekClient::chat(&deepseek_api_key)?));\n",
+                        );
+                    }
+                }
+                "groq" => {
+                    code.push_str(&format!(
+                        "        .model(Arc::new(GroqClient::new(GroqConfig::new(&groq_api_key, \"{}\"))?));\n",
+                        model
+                    ));
+                }
+                "ollama" => {
+                    code.push_str(&format!(
+                        "        .model(Arc::new(OllamaModel::new(OllamaConfig::new(\"{}\"))?));\n",
+                        model
+                    ));
+                }
+                _ => {
+                    // Default: Gemini
+                    code.push_str(&format!(
+                        "        .model(Arc::new(GeminiModel::new(&gemini_api_key, \"{}\")?))",
+                        model
+                    ));
+                    code.push_str(";\n");
+                }
+            }
 
             // Add instruction separately (matching working pattern)
             if !sub.instruction.is_empty() {
@@ -3952,7 +4040,7 @@ fn generate_cargo_toml(project: &ProjectSchema) -> String {
     }
 
     // Get ADK version and Rust edition from project settings (with defaults)
-    let adk_version = project.settings.adk_version.as_deref().unwrap_or("0.3.0");
+    let adk_version = project.settings.adk_version.as_deref().unwrap_or("0.3.2");
     let rust_edition = project.settings.rust_edition.as_deref().unwrap_or("2024");
 
     // Check if any function tool code uses specific crates
@@ -3998,10 +4086,21 @@ fn generate_cargo_toml(project: &ProjectSchema) -> String {
         (pg, mysql, sqlite, mongo, redis)
     };
 
-    // Use path dependencies in dev mode, version dependencies in prod
-    let use_path_deps = std::env::var("ADK_DEV_MODE").is_ok();
-
-    let adk_root = "/data/projects/production/adk/adk-rust";
+    // Use path dependencies when running from a development workspace.
+    // The workspace root is detected at compile time via CARGO_MANIFEST_DIR (adk-studio's parent).
+    // At runtime, ADK_WORKSPACE_ROOT env var can override it.
+    // Falls back to crates.io version deps if neither is available.
+    let compile_time_root: Option<&str> = option_env!("CARGO_MANIFEST_DIR");
+    let workspace_root: Option<String> = std::env::var("ADK_WORKSPACE_ROOT").ok().or_else(|| {
+        compile_time_root.and_then(|manifest_dir| {
+            std::path::Path::new(manifest_dir)
+                .parent() // adk-studio -> workspace root
+                .filter(|root| root.join("Cargo.toml").exists())
+                .map(|p| p.to_string_lossy().to_string())
+        })
+    });
+    let use_path_deps = workspace_root.is_some();
+    let adk_root = workspace_root.unwrap_or_default();
 
     // Determine which adk-model features are needed based on providers used
     let providers = collect_providers(project);

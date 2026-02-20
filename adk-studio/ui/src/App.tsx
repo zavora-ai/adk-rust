@@ -4,12 +4,13 @@ import { useStore } from './store';
 import { ProjectList } from './components/Projects/ProjectList';
 import { Canvas } from './components/Canvas/Canvas';
 import { ThemeProvider, ThemeToggle } from './components/Theme';
-import { WalkthroughModal, GlobalSettingsModal, TemplateWalkthroughModal } from './components/Overlays';
+import { WalkthroughModal, SettingsModal, TemplateWalkthroughModal } from './components/Overlays';
 import { useWalkthrough } from './hooks/useWalkthrough';
 import { useTheme } from './hooks/useTheme';
 import { useVSCodeThemeSync } from './hooks/useVSCodeThemeSync';
 import { loadGlobalSettings } from './types/settings';
 import { api } from './api/client';
+import type { ProjectSettings } from './types/project';
 
 // Component to apply theme from global settings
 function ThemeInitializer() {
@@ -122,7 +123,7 @@ export default function App() {
               onClick={() => setShowGlobalSettings(true)}
               className="p-1.5 rounded hover:opacity-80 transition-opacity"
               style={{ color: 'var(--text-secondary)' }}
-              title="Global Settings"
+              title={currentProject ? 'Project Settings' : 'Settings'}
             >
               ⚙️
             </button>
@@ -160,9 +161,20 @@ export default function App() {
           />
         )}
         
-        {/* Global Settings Modal */}
+        {/* Settings Modal */}
         {showGlobalSettings && (
-          <GlobalSettingsModal onClose={() => setShowGlobalSettings(false)} />
+          <SettingsModal
+            settings={currentProject?.settings}
+            projectName={currentProject?.name}
+            projectDescription={currentProject?.description}
+            projectId={currentProject?.id}
+            onSave={currentProject ? (settings: ProjectSettings, name: string, description: string) => {
+              const { updateProjectSettings, updateProjectMeta } = useStore.getState();
+              updateProjectMeta(name, description);
+              updateProjectSettings(settings);
+            } : undefined}
+            onClose={() => setShowGlobalSettings(false)}
+          />
         )}
         
         {/* Template Walkthrough Modal - shows after loading a template */}

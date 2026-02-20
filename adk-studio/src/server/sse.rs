@@ -1,4 +1,5 @@
-use crate::server::events::TraceEventV2;
+use crate::keystore::{KNOWN_PROVIDER_KEYS, Keystore};
+use crate::server::events::{DebugEvent, TraceEventV2};
 use crate::server::graph_runner::{GraphInterruptHandler, INTERRUPTED_SESSIONS};
 use crate::server::state::AppState;
 use axum::{
@@ -13,6 +14,16 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+
+/// Tuple of (action node output keys, project env vars, action node types, storage base dir, project uuid)
+/// extracted from a project for use in the SSE stream handler.
+type ProjectStreamContext = (
+    HashMap<String, Vec<String>>,
+    HashMap<String, String>,
+    HashMap<String, String>,
+    Option<std::path::PathBuf>,
+    Option<uuid::Uuid>,
+);
 
 lazy_static::lazy_static! {
     static ref SESSIONS: Arc<Mutex<HashMap<String, SessionProcess>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -87,6 +98,9 @@ struct ExecutionContext {
     /// Populated from the project's action node configuration so we can
     /// reconstruct per-node output snapshots from the final state.
     action_node_output_keys: HashMap<String, Vec<String>>,
+    /// Action node types (node_id → type string like "trigger", "set", "transform").
+    /// Used to emit debug events with the correct category (trigger vs action).
+    action_node_types: HashMap<String, String>,
 }
 
 impl ExecutionContext {
@@ -98,6 +112,7 @@ impl ExecutionContext {
             completed_outputs: HashMap::new(),
             recorded_durations: HashMap::new(),
             action_node_output_keys: HashMap::new(),
+            action_node_types: HashMap::new(),
         }
     }
 
@@ -505,6 +520,26 @@ impl ExecutionContext {
     fn has_pending_agents(&self) -> bool {
         !self.pending_agents.is_empty()
     }
+
+    /// Return the name of the most recently started agent, if any.
+    fn current_agent(&self) -> Option<&str> {
+        self.pending_agents.last().map(|pa| pa.name.as_str())
+    }
+
+    /// Return the debug event category for a node.
+    /// Trigger nodes → "trigger", other action nodes → "action", LLM agents → "lifecycle".
+    fn debug_category_for_node(&self, node: &str) -> &'static str {
+        match self.action_node_types.get(node).map(|s| s.as_str()) {
+            Some("trigger") => "trigger",
+            Some(_) => "action",
+            None => "lifecycle",
+        }
+    }
+
+    /// Return the action node type string for a node (e.g. "set", "transform"), or None.
+    fn action_type_for_node(&self, node: &str) -> Option<&str> {
+        self.action_node_types.get(node).map(|s| s.as_str())
+    }
 }
 
 #[derive(Deserialize)]
@@ -521,34 +556,24 @@ pub struct StreamQuery {
 async fn get_or_create_session(
     session_id: &str,
     binary_path: &str,
-    api_key: &str,
+    merged_env: &HashMap<String, String>,
 ) -> Result<(), String> {
     let mut sessions = SESSIONS.lock().await;
     if sessions.contains_key(session_id) {
         return Ok(());
     }
 
-    // Pass through all known LLM provider API keys from the environment
-    // so the child binary can use whichever provider the project requires.
+    // Launch the child binary with the pre-merged environment variables.
+    // The caller (stream_handler) has already merged keys from process env,
+    // project env_vars, and the encrypted keystore in priority order.
     let mut cmd = Command::new(binary_path);
     cmd.arg(session_id)
-        .env("GOOGLE_API_KEY", api_key)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    const PROVIDER_ENV_KEYS: &[&str] = &[
-        "GEMINI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "OPENAI_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "GROQ_API_KEY",
-        "OLLAMA_HOST",
-    ];
-    for key in PROVIDER_ENV_KEYS {
-        if let Ok(val) = std::env::var(key) {
-            cmd.env(key, val);
-        }
+    for (key, val) in merged_env {
+        cmd.env(key, val);
     }
 
     let mut child = cmd.spawn().map_err(|e| format!("Failed to start binary: {}", e))?;
@@ -597,58 +622,105 @@ pub async fn stream_handler(
     Query(query): Query<StreamQuery>,
     State(app_state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let api_key = query
-        .api_key
-        .or_else(|| {
-            // Try all known provider API keys, not just Google
-            std::env::var("GOOGLE_API_KEY")
-                .or_else(|_| std::env::var("GEMINI_API_KEY"))
-                .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-                .or_else(|_| std::env::var("OPENAI_API_KEY"))
-                .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
-                .or_else(|_| std::env::var("GROQ_API_KEY"))
-                .or_else(|_| std::env::var("OLLAMA_HOST"))
-                .ok()
-        })
-        .unwrap_or_default();
     let input = query.input.clone();
     let binary_path = query.binary_path;
     let session_id = query.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     // Load the project's action node output key mappings so we can
     // reconstruct per-node output snapshots from the final state.
-    let action_node_output_keys: HashMap<String, Vec<String>> = {
+    // Also load project-level env_vars to pass to the subprocess.
+    // Additionally load action node types for debug event categorization.
+    let (
+        action_node_output_keys,
+        project_env_vars,
+        action_node_types,
+        storage_base_dir,
+        project_uuid,
+    ): ProjectStreamContext = {
         if let Ok(project_id) = uuid::Uuid::parse_str(&_id) {
             let storage = app_state.storage.read().await;
             if let Ok(project) = storage.get(project_id).await {
-                project
+                let output_keys = project
                     .action_nodes
                     .iter()
                     .map(|(id, cfg)| (id.clone(), cfg.expected_output_keys()))
-                    .collect()
+                    .collect();
+                let node_types = project
+                    .action_nodes
+                    .iter()
+                    .map(|(id, cfg)| (id.clone(), cfg.node_type().to_string()))
+                    .collect();
+                let env_vars = project.settings.env_vars.clone();
+                let base_dir = storage.base_dir().to_path_buf();
+                (output_keys, env_vars, node_types, Some(base_dir), Some(project_id))
             } else {
-                HashMap::new()
+                (HashMap::new(), HashMap::new(), HashMap::new(), None, None)
             }
         } else {
-            HashMap::new()
+            (HashMap::new(), HashMap::new(), HashMap::new(), None, None)
         }
+    };
+
+    // Merge API keys from three sources in priority order:
+    // 1. Process environment variables (lowest priority)
+    // 2. Project env_vars from settings
+    // 3. Encrypted keystore keys (highest priority)
+    let merged_env = {
+        let mut keys = HashMap::new();
+
+        // Layer 1 (lowest priority): process environment
+        for key in KNOWN_PROVIDER_KEYS {
+            if let Ok(val) = std::env::var(key) {
+                keys.insert(key.to_string(), val);
+            }
+        }
+
+        // Layer 2: project env_vars (non-sensitive settings + any remaining keys)
+        for (key, val) in &project_env_vars {
+            keys.insert(key.clone(), val.clone());
+        }
+
+        // Layer 3 (highest priority): encrypted keystore
+        if let (Some(base_dir), Some(pid)) = (&storage_base_dir, project_uuid) {
+            if let Ok(keystore) = Keystore::new(base_dir, pid) {
+                if let Ok(stored_keys) = keystore.load().await {
+                    for (key, val) in stored_keys {
+                        keys.insert(key, val);
+                    }
+                }
+            }
+        }
+
+        keys
     };
 
     let stream = async_stream::stream! {
         let Some(bin_path) = binary_path else {
-            yield Ok(Event::default().event("error").data("No binary available. Click 'Build' first."));
+            let err_msg = "No binary available. Click 'Build' first.";
+            yield Ok(Event::default().event("error").data(err_msg));
+            let debug_evt = DebugEvent::new("error", "error", "system", err_msg, serde_json::json!({ "error": err_msg }));
+            yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
             return;
         };
 
-        if api_key.is_empty() {
-            yield Ok(Event::default().event("error").data(
-                "No API key found. Set one of: GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, \
-                 DEEPSEEK_API_KEY, GROQ_API_KEY, or OLLAMA_HOST for local models."
-            ));
+        // Check if any provider API key is available from the merged sources
+        let has_api_key = query.api_key.is_some()
+            || KNOWN_PROVIDER_KEYS
+                .iter()
+                .any(|k| merged_env.contains_key(*k));
+
+        if !has_api_key {
+            let err_msg = "No API key found. Set one of: GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, \
+                 DEEPSEEK_API_KEY, GROQ_API_KEY, or OLLAMA_HOST for local models.";
+            yield Ok(Event::default().event("error").data(err_msg));
+            let debug_evt = DebugEvent::new("error", "error", "system", err_msg, serde_json::json!({ "error": err_msg }));
+            yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
             return;
         }
 
-        if let Err(e) = get_or_create_session(&session_id, &bin_path, &api_key).await {
+        if let Err(e) = get_or_create_session(&session_id, &bin_path, &merged_env).await {
+            let debug_evt = DebugEvent::new("error", "error", "system", &e, serde_json::json!({ "error": &e }));
+            yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
             yield Ok(Event::default().event("error").data(e));
             return;
         }
@@ -661,6 +733,7 @@ pub async fn stream_handler(
         // from TRACE events (specifically StreamEvent::Done which has final state)
         let mut exec_ctx = ExecutionContext::new();
         exec_ctx.action_node_output_keys = action_node_output_keys;
+        exec_ctx.action_node_types = action_node_types;
 
         // Check if this is a webhook trigger (special input marker)
         let actual_input = if input == "__webhook__" {
@@ -690,7 +763,10 @@ pub async fn stream_handler(
             if let Some(session) = sessions.get_mut(&session_id) {
                 if session.stdin.write_all(format!("{}\n", actual_input).as_bytes()).await.is_err()
                     || session.stdin.flush().await.is_err() {
-                    yield Ok(Event::default().event("error").data("Failed to send input"));
+                    let err_msg = "Failed to send input";
+                    yield Ok(Event::default().event("error").data(err_msg));
+                    let debug_evt = DebugEvent::new("error", "error", "system", err_msg, serde_json::json!({ "error": err_msg }));
+                    yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
                     return;
                 }
             }
@@ -729,8 +805,25 @@ pub async fn stream_handler(
                                     // This belongs to the new execution — process it and continue to main loop
                                     let trace = trimmed.trim_start_matches("TRACE:");
                                     let (enriched_events, _is_done, suppress_raw) = exec_ctx.process_stream_event(trace);
-                                    for event_json in enriched_events {
-                                        yield Ok(Event::default().event("trace").data(event_json));
+                                    for event_json in &enriched_events {
+                                        // Emit debug events for the first node_start (drain loop)
+                                        if let Ok(ev) = serde_json::from_str::<serde_json::Value>(event_json) {
+                                            let ev_type = ev.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                                            let node = ev.get("node").and_then(|v| v.as_str()).unwrap_or("");
+                                            let step = ev.get("step").and_then(|v| v.as_u64()).unwrap_or(0);
+                                            let category = exec_ctx.debug_category_for_node(node);
+                                            let action_type = exec_ctx.action_type_for_node(node);
+                                            if ev_type == "node_start" {
+                                                let summary = match action_type {
+                                                    Some("trigger") => format!("Trigger fired: {node}, step {step}"),
+                                                    Some(atype) => format!("{} node started: {node}, step {step}", capitalize(atype)),
+                                                    None => format!("Agent started: {node}, step {step}"),
+                                                };
+                                                let debug_evt = DebugEvent::new("debug", category, node, summary, ev.clone());
+                                                yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
+                                            }
+                                        }
+                                        yield Ok(Event::default().event("trace").data(event_json.clone()));
                                     }
                                     if !suppress_raw {
                                         yield Ok(Event::default().event("trace").data(trace));
@@ -759,7 +852,10 @@ pub async fn stream_handler(
 
         loop {
             if start.elapsed() > timeout {
-                yield Ok(Event::default().event("error").data("Timeout"));
+                let err_msg = "Timeout";
+                yield Ok(Event::default().event("error").data(err_msg));
+                let debug_evt = DebugEvent::new("error", "error", "system", err_msg, serde_json::json!({ "error": err_msg, "timeout_secs": timeout_secs }));
+                yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
                 break;
             }
 
@@ -768,7 +864,10 @@ pub async fn stream_handler(
                 match sessions.get_mut(&session_id) {
                     Some(s) => (s.stdout_rx.try_recv().ok(), s.stderr_rx.try_recv().ok()),
                     None => {
-                        yield Ok(Event::default().event("error").data("Session lost"));
+                        let err_msg = "Session lost";
+                        yield Ok(Event::default().event("error").data(err_msg));
+                        let debug_evt = DebugEvent::new("error", "error", "system", err_msg, serde_json::json!({ "error": err_msg, "session_id": &session_id }));
+                        yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
                         break;
                     }
                 }
@@ -824,14 +923,67 @@ pub async fn stream_handler(
                     // Emit the enriched events (node_start/node_end with state_snapshot)
                     // In loop iterations, this may include a node_end for the previous
                     // iteration followed by a node_start for the new iteration.
-                    for event_json in enriched_events {
-                        yield Ok(Event::default().event("trace").data(event_json));
+                    for event_json in &enriched_events {
+                        // Emit debug events alongside trace events with category
+                        // based on node type: trigger → "trigger", action → "action", agent → "lifecycle"
+                        if let Ok(ev) = serde_json::from_str::<serde_json::Value>(event_json) {
+                            let ev_type = ev.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            let node = ev.get("node").and_then(|v| v.as_str()).unwrap_or("");
+                            let step = ev.get("step").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let category = exec_ctx.debug_category_for_node(node);
+                            let action_type = exec_ctx.action_type_for_node(node);
+                            if ev_type == "node_start" {
+                                let summary = match action_type {
+                                    Some("trigger") => format!("Trigger fired: {node}, step {step}"),
+                                    Some(atype) => format!("{} node started: {node}, step {step}", capitalize(atype)),
+                                    None => format!("Agent started: {node}, step {step}"),
+                                };
+                                let mut detail = ev.clone();
+                                if let Some(atype) = action_type {
+                                    detail.as_object_mut().map(|m| m.insert("action_type".to_string(), serde_json::Value::String(atype.to_string())));
+                                }
+                                let debug_evt = DebugEvent::new("debug", category, node, summary, detail);
+                                yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
+                            } else if ev_type == "node_end" {
+                                let duration = ev.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let summary = match action_type {
+                                    Some("trigger") => format!("Trigger completed: {node}, {duration}ms"),
+                                    Some(atype) => format!("{} node completed: {node}, {duration}ms", capitalize(atype)),
+                                    None => format!("Agent completed: {node}, {duration}ms"),
+                                };
+                                let mut detail = ev.clone();
+                                if let Some(atype) = action_type {
+                                    detail.as_object_mut().map(|m| m.insert("action_type".to_string(), serde_json::Value::String(atype.to_string())));
+                                }
+                                let debug_evt = DebugEvent::new("debug", category, node, summary, detail);
+                                yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
+                            }
+                        }
+                        yield Ok(Event::default().event("trace").data(event_json.clone()));
                     }
 
                     // If this is a Done event, emit all pending node_end events
                     // with the correct output state (now that we have it)
                     if is_done {
                         for event_json in exec_ctx.emit_pending_node_ends() {
+                            // Emit debug event for deferred node_end with correct category (Requirement 9.7)
+                            if let Ok(ev) = serde_json::from_str::<serde_json::Value>(&event_json) {
+                                let node = ev.get("node").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let duration = ev.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let category = exec_ctx.debug_category_for_node(&node);
+                                let action_type = exec_ctx.action_type_for_node(&node).map(|s| s.to_string());
+                                let summary = match action_type.as_deref() {
+                                    Some("trigger") => format!("Trigger completed: {node}, {duration}ms"),
+                                    Some(atype) => format!("{} node completed: {node}, {duration}ms", capitalize(atype)),
+                                    None => format!("Agent completed: {node}, {duration}ms"),
+                                };
+                                let mut detail = ev.clone();
+                                if let Some(atype) = &action_type {
+                                    detail.as_object_mut().map(|m| m.insert("action_type".to_string(), serde_json::Value::String(atype.clone())));
+                                }
+                                let debug_evt = DebugEvent::new("debug", category, &node, summary, detail);
+                                yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
+                            }
                             yield Ok(Event::default().event("trace").data(event_json));
                         }
 
@@ -844,8 +996,53 @@ pub async fn stream_handler(
                     // Pass through the raw trace for backward compatibility,
                     // unless we already emitted an enriched version (suppress_raw)
                     if !suppress_raw {
+                        // Emit debug state_change events for state updates (Requirement 9.7)
+                        if let Ok(ev) = serde_json::from_str::<serde_json::Value>(trace) {
+                            let ev_type = ev.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            if ev_type == "state" || ev_type == "updates" {
+                                let node = ev.get("node").and_then(|v| v.as_str()).unwrap_or("system").to_string();
+                                let keys: Vec<String> = if ev_type == "state" {
+                                    ev.get("state").and_then(|v| v.as_object())
+                                        .map(|m| m.keys().cloned().collect())
+                                        .unwrap_or_default()
+                                } else {
+                                    ev.get("updates").and_then(|v| v.as_object())
+                                        .map(|m| m.keys().cloned().collect())
+                                        .unwrap_or_default()
+                                };
+                                if !keys.is_empty() {
+                                    let debug_evt = DebugEvent::new(
+                                        "debug", "state_change", &node,
+                                        format!("State updated: {}", keys.join(", ")),
+                                        ev,
+                                    );
+                                    yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
+                                }
+                            }
+                        }
                         yield Ok(Event::default().event("trace").data(trace));
                     }
+                } else if let Some(err_msg) = line.strip_prefix("Error: ").or_else(|| line.strip_prefix("Error:")) {
+                    // Binary reported an execution error (e.g. model failure, node error)
+                    // Emit as error + debug event and terminate the stream
+                    let err_text = err_msg.trim().to_string();
+                    let debug_evt = DebugEvent::new(
+                        "error", "error",
+                        exec_ctx.current_agent().unwrap_or("system"),
+                        &err_text,
+                        serde_json::json!({ "error": &err_text }),
+                    );
+                    yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
+
+                    // Emit pending node_ends so the frontend sees completion
+                    for event_json in exec_ctx.emit_pending_node_ends() {
+                        yield Ok(Event::default().event("trace").data(event_json));
+                    }
+
+                    yield Ok(Event::default().event("error").data(&err_text));
+                    yield Ok(Event::default().event("trace").data(exec_ctx.done()));
+                    yield Ok(Event::default().event("end").data(""));
+                    break;
                 } else if let Some(chunk) = line.strip_prefix("CHUNK:") {
                     // Streaming chunk - emit immediately
                     let decoded = serde_json::from_str::<String>(chunk).unwrap_or_else(|_| chunk.to_string());
@@ -854,12 +1051,38 @@ pub async fn stream_handler(
                     let decoded = serde_json::from_str::<String>(response).unwrap_or_else(|_| response.to_string());
                     // Update execution state with the response
                     exec_ctx.update_state("response", serde_json::Value::String(decoded.clone()));
-                    yield Ok(Event::default().event("chunk").data(decoded));
+                    yield Ok(Event::default().event("chunk").data(decoded.clone()));
+
+                    // Emit debug response event (Requirement 9.3)
+                    let debug_evt = DebugEvent::new(
+                        "debug", "response", "system",
+                        "LLM response received",
+                        serde_json::json!({ "response": decoded }),
+                    );
+                    yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
 
                     // Emit any remaining pending node_end events with final state
                     // This handles the case where RESPONSE comes before/without Done event
                     if exec_ctx.has_pending_agents() {
                         for event_json in exec_ctx.emit_pending_node_ends() {
+                            // Emit debug event for deferred node_end with correct category (Requirement 9.7)
+                            if let Ok(ev) = serde_json::from_str::<serde_json::Value>(&event_json) {
+                                let node = ev.get("node").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let duration = ev.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let category = exec_ctx.debug_category_for_node(&node);
+                                let action_type = exec_ctx.action_type_for_node(&node).map(|s| s.to_string());
+                                let summary = match action_type.as_deref() {
+                                    Some("trigger") => format!("Trigger completed: {node}, {duration}ms"),
+                                    Some(atype) => format!("{} node completed: {node}, {duration}ms", capitalize(atype)),
+                                    None => format!("Agent completed: {node}, {duration}ms"),
+                                };
+                                let mut detail = ev.clone();
+                                if let Some(atype) = &action_type {
+                                    detail.as_object_mut().map(|m| m.insert("action_type".to_string(), serde_json::Value::String(atype.clone())));
+                                }
+                                let debug_evt = DebugEvent::new("debug", category, &node, summary, detail);
+                                yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
+                            }
                             yield Ok(Event::default().event("trace").data(event_json));
                         }
                     }
@@ -880,13 +1103,29 @@ pub async fn stream_handler(
                     if msg == "tool_call" {
                         let name = fields.and_then(|f| f.get("tool.name")).and_then(|v| v.as_str()).unwrap_or("");
                         let args = fields.and_then(|f| f.get("tool.args")).and_then(|v| v.as_str()).unwrap_or("{}");
-                        yield Ok(Event::default().event("tool_call").data(serde_json::json!({"name": name, "args": args}).to_string()));
+                        let tool_data = serde_json::json!({"name": name, "args": args});
+                        yield Ok(Event::default().event("tool_call").data(tool_data.to_string()));
+                        // Emit debug tool_call event (Requirement 9.4)
+                        let debug_evt = DebugEvent::new(
+                            "debug", "tool_call", name,
+                            format!("Tool call: {name}"),
+                            tool_data,
+                        );
+                        yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
                     } else if msg == "tool_result" {
                         let name = fields.and_then(|f| f.get("tool.name")).and_then(|v| v.as_str()).unwrap_or("");
                         let result = fields.and_then(|f| f.get("tool.result")).and_then(|v| v.as_str()).unwrap_or("");
                         // Update execution state with tool result (v2.0)
-                        exec_ctx.update_state(&format!("tool_{}", name), serde_json::Value::String(result.to_string()));
-                        yield Ok(Event::default().event("tool_result").data(serde_json::json!({"name": name, "result": result}).to_string()));
+                        exec_ctx.update_state(&format!("tool_{name}"), serde_json::Value::String(result.to_string()));
+                        let result_data = serde_json::json!({"name": name, "result": result});
+                        yield Ok(Event::default().event("tool_result").data(result_data.to_string()));
+                        // Emit debug tool_result event (Requirement 9.5)
+                        let debug_evt = DebugEvent::new(
+                            "debug", "tool_result", name,
+                            format!("Tool result: {name}"),
+                            result_data,
+                        );
+                        yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
                     } else if msg == "Starting agent execution" {
                         // Don't emit node_start here — the TRACE node_start event
                         // from stdout will handle it in the correct execution order.
@@ -904,7 +1143,56 @@ pub async fn stream_handler(
                         let span = json.get("span");
                         let model = span.and_then(|s| s.get("model.name")).and_then(|v| v.as_str()).unwrap_or("");
                         let tools = span.and_then(|s| s.get("request.tools_count")).and_then(|v| v.as_str()).unwrap_or("0");
-                        yield Ok(Event::default().event("log").data(serde_json::json!({"message": format!("Calling {} (tools: {})", model, tools)}).to_string()));
+                        yield Ok(Event::default().event("log").data(serde_json::json!({"message": format!("Calling {model} (tools: {tools})")}).to_string()));
+                        // Emit debug request event for model interaction (Requirement 9.2)
+                        let debug_evt = DebugEvent::new(
+                            "debug", "request", model,
+                            format!("LLM request to {model} (tools: {tools})"),
+                            serde_json::json!({ "model": model, "tools_count": tools }),
+                        );
+                        yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
+                    } else {
+                        // Capture all other structured log messages as debug entries.
+                        // This catches ERROR/WARN level logs from the runtime (model
+                        // failures, connection errors, etc.) that were previously dropped.
+                        let level_str = json.get("level").and_then(|v| v.as_str()).unwrap_or("DEBUG");
+                        let target = json.get("target").and_then(|v| v.as_str()).unwrap_or("");
+                        let error_field = fields.and_then(|f| f.get("error")).and_then(|v| v.as_str()).unwrap_or("");
+                        let span_info = json.get("span").cloned().unwrap_or(serde_json::Value::Null);
+                        let agent_name = span_info.as_object()
+                            .and_then(|s| s.get("agent.name"))
+                            .and_then(|v| v.as_str())
+                            .or_else(|| exec_ctx.current_agent())
+                            .unwrap_or("system");
+
+                        let (debug_level, debug_category) = match level_str {
+                            "ERROR" => ("error", "error"),
+                            "WARN" => ("warn", "error"),
+                            _ => ("debug", "lifecycle"),
+                        };
+
+                        // Build a meaningful summary from the message and error fields
+                        let summary = if !error_field.is_empty() {
+                            if msg.is_empty() {
+                                format!("{target}: {error_field}")
+                            } else {
+                                format!("{msg}: {error_field}")
+                            }
+                        } else if !msg.is_empty() {
+                            msg.to_string()
+                        } else {
+                            format!("{target} log")
+                        };
+
+                        // Only emit ERROR and WARN level, skip noisy DEBUG/INFO/TRACE
+                        if debug_level == "error" || debug_level == "warn" {
+                            let debug_evt = DebugEvent::new(
+                                debug_level, debug_category, agent_name,
+                                &summary,
+                                json.clone(),
+                            );
+                            yield Ok(Event::default().event("debug").data(debug_evt.to_json()));
+                        }
                     }
                 }
             }
@@ -916,6 +1204,14 @@ pub async fn stream_handler(
     };
 
     Sse::new(stream)
+}
+/// Capitalize the first character of a string.
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+    }
 }
 
 pub async fn kill_session(Path(session_id): Path<String>) -> &'static str {

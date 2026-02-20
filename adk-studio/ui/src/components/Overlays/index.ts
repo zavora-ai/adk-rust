@@ -11,6 +11,7 @@ export type { NodeStatus } from './StatusIndicator';
 export { WalkthroughModal } from './WalkthroughModal';
 export { TemplateWalkthroughModal } from './TemplateWalkthroughModal';
 export { SettingsModal } from './SettingsModal';
-export { GlobalSettingsModal } from './GlobalSettingsModal';
+export { ApiKeyRow } from './ApiKeyRow';
+export type { ApiKeyRowProps } from './ApiKeyRow';
 export { Tooltip, ACTION_NODE_TOOLTIPS } from './Tooltip';
 export type { TooltipProps, TooltipPosition } from './Tooltip';

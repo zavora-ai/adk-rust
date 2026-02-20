@@ -49,6 +49,7 @@ export interface RouterNodeData extends BaseNodeData {
 /**
  * Data for Start/End nodes.
  */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface StartEndNodeData {
   // Start/End nodes have no configurable data
 }
