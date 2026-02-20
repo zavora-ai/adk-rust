@@ -22,14 +22,19 @@
     "react-markdown": "^10.1.0",
     "zustand": "^4.5.0"
   },
+  "pnpm": {
+    "overrides": {
+      "minimatch@<10.2.1": "^10.2.1"
+    }
+  },
   "devDependencies": {
-    "@eslint/js": "^9.39.2",
+    "@eslint/js": "^9.39.3",
     "@types/dagre": "^0.7.53",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^5.1.4",
     "autoprefixer": "^10.4.0",
-    "eslint": "^9.39.2",
+    "eslint": "^9.39.3",
     "fast-check": "^3.22.0",
     "globals": "^17.3.0",
     "jsdom": "^25.0.1",
