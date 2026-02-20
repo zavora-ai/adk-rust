@@ -66,6 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `rag_surrealdb` — SurrealDB vector store with embedded in-memory mode
 
 ### Fixed
+- **adk-server**: Runtime endpoints (`run_sse`, `run_sse_compat`) now process attachments and `inlineData` instead of silently dropping them — base64 validation, size limits, and per-provider content conversion (#142, #143)
+- **adk-model**: All providers now handle `InlineData` and `FileData` parts — native image/audio/PDF blocks for Anthropic and OpenAI, text fallback for DeepSeek/Groq/Ollama, Gemini response `InlineData` no longer silently dropped (#142, #143)
 - **adk-runner**: `conversation_history()` now preserves `function`/`tool` content roles instead of overwriting them to `model`, fixing multi-turn tool conversations (#139)
 - **adk-gemini**: `PerformRequestNew` error variant now displays the underlying reqwest error instead of swallowing it
 - **adk-gemini**: `From<String> for Model` now correctly maps known model names (e.g. `"gemini-2.5-flash"`) to proper enum variants instead of always creating `Custom`
@@ -79,7 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Contributors
 Thanks to the following people for their contributions to this release:
-- **@rohanpanickar** — fix for tool context role preservation in multi-turn conversations (#139)
+- **@rohan-panickar** — attachment support for runtime endpoints and multi-provider content conversion (#142, #143), fix for tool context role preservation (#139)
 - **@mikefaille** — CI improvements (sccache summaries, devenv script fixes), environment sync, documentation consolidation, and PR template (#134, #136, #137)
 
 ## [0.3.1] - 2026-02-14

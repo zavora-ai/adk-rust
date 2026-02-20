@@ -109,6 +109,7 @@
 
 #[cfg(feature = "anthropic")]
 pub mod anthropic;
+pub(crate) mod attachment;
 #[cfg(feature = "deepseek")]
 pub mod deepseek;
 #[cfg(feature = "gemini")]
