@@ -13,48 +13,18 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
-/// OpenAI-compatible provider metadata.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Provider {
-    /// Provider display name used in error messages.
-    pub name: String,
-    /// Optional API base URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_url: Option<String>,
-}
-
-impl Provider {
-    /// Create provider metadata with no custom base URL.
-    pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), base_url: None }
-    }
-
-    /// Create metadata for OpenAI.
-    pub fn openai() -> Self {
-        Self::new("openai")
-    }
-
-    /// Create metadata for a custom OpenAI-compatible endpoint.
-    pub fn custom(name: impl Into<String>, base_url: impl Into<String>) -> Self {
-        Self::new(name).with_base_url(base_url)
-    }
-
-    /// Set a custom API base URL.
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = Some(base_url.into());
-        self
-    }
-}
-
 /// Configuration for OpenAI-compatible providers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenAICompatibleConfig {
-    /// Provider metadata.
-    pub provider: Provider,
+    /// Provider display name used in error messages.
+    pub provider_name: String,
     /// API key.
     pub api_key: String,
     /// Model name.
     pub model: String,
+    /// Optional API base URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
     /// Optional organization ID.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub organization_id: Option<String>,
@@ -65,14 +35,27 @@ pub struct OpenAICompatibleConfig {
 
 impl OpenAICompatibleConfig {
     /// Create config for an OpenAI-compatible provider.
-    pub fn new(provider: Provider, api_key: impl Into<String>, model: impl Into<String>) -> Self {
+    pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
-            provider,
+            provider_name: "openai-compatible".to_string(),
             api_key: api_key.into(),
             model: model.into(),
+            base_url: None,
             organization_id: None,
             project_id: None,
         }
+    }
+
+    /// Set provider display name used in errors.
+    pub fn with_provider_name(mut self, provider_name: impl Into<String>) -> Self {
+        self.provider_name = provider_name.into();
+        self
+    }
+
+    /// Set a custom API base URL.
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
+        self
     }
 
     /// Set organization ID.
@@ -105,14 +88,14 @@ impl OpenAICompatible {
             openai_config = openai_config.with_org_id(org_id);
         }
 
-        if let Some(base_url) = &config.provider.base_url {
+        if let Some(base_url) = &config.base_url {
             openai_config = openai_config.with_api_base(base_url);
         }
 
         Ok(Self {
             client: Client::with_config(openai_config),
             model: config.model,
-            provider_name: config.provider.name,
+            provider_name: config.provider_name,
             retry_config: RetryConfig::default(),
         })
     }

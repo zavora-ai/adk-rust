@@ -142,7 +142,7 @@ pub use ollama::{OllamaConfig, OllamaModel};
 #[cfg(feature = "openai")]
 pub use openai::{AzureConfig, AzureOpenAIClient, OpenAIClient, OpenAIConfig};
 #[cfg(feature = "openai")]
-pub use openai_compatible::{OpenAICompatible, OpenAICompatibleConfig, Provider};
+pub use openai_compatible::{OpenAICompatible, OpenAICompatibleConfig};
 pub use retry::RetryConfig;
 #[cfg(feature = "xai")]
 pub use xai::{XAIClient, XAIConfig};

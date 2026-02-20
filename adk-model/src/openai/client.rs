@@ -2,7 +2,7 @@
 
 use super::config::{AzureConfig, OpenAIConfig};
 use super::convert;
-use crate::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig, Provider};
+use crate::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig};
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{AdkError, Llm, LlmRequest, LlmResponseStream};
 use async_openai::{
@@ -23,13 +23,11 @@ impl OpenAIClient {
     /// Create a new OpenAI client.
     pub fn new(config: OpenAIConfig) -> Result<Self, AdkError> {
         let OpenAIConfig { api_key, model, organization_id, project_id, base_url } = config;
-        let provider = if let Some(base_url) = base_url {
-            Provider::custom("openai-compatible", base_url)
-        } else {
-            Provider::openai()
-        };
 
-        let mut config = OpenAICompatibleConfig::new(provider, api_key, model);
+        let mut config = OpenAICompatibleConfig::new(api_key, model).with_provider_name("openai");
+        if let Some(base_url) = base_url {
+            config = config.with_base_url(base_url);
+        }
         if let Some(org_id) = organization_id {
             config = config.with_organization(org_id);
         }
@@ -46,11 +44,9 @@ impl OpenAIClient {
         base_url: impl Into<String>,
         model: impl Into<String>,
     ) -> Result<Self, AdkError> {
-        let config = OpenAICompatibleConfig::new(
-            Provider::custom("openai-compatible", base_url),
-            api_key,
-            model,
-        );
+        let config = OpenAICompatibleConfig::new(api_key, model)
+            .with_provider_name("openai-compatible")
+            .with_base_url(base_url);
         Ok(Self { inner: OpenAICompatible::new(config)? })
     }
 
