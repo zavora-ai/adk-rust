@@ -15,7 +15,12 @@ use thiserror::Error;
 use tokio::fs;
 
 /// Salt used for HKDF key derivation — must remain constant across versions.
+/// This is a domain-separation salt for HKDF, NOT a secret key.
 const HKDF_SALT: &[u8] = b"adk-studio-keystore-v1";
+
+/// HKDF info string for domain separation — identifies the derived key's purpose.
+/// This is a public parameter per RFC 5869, NOT a secret key.
+const HKDF_INFO: &[u8] = b"aes-256-gcm-key";
 
 /// AES-GCM nonce size in bytes.
 const NONCE_SIZE: usize = 12;
@@ -226,10 +231,14 @@ impl Keystore {
 }
 
 /// Derive an AES-256-GCM cipher from the machine ID using HKDF-SHA256.
+///
+/// The machine ID is the secret input keying material (IKM). `HKDF_SALT` and
+/// `HKDF_INFO` are public domain-separation parameters per RFC 5869 — they are
+/// intentionally constant and NOT secret keys.
 fn derive_cipher(machine_id: &str) -> Result<Aes256Gcm> {
     let hk = Hkdf::<Sha256>::new(Some(HKDF_SALT), machine_id.as_bytes());
     let mut okm = [0u8; 32]; // 256 bits for AES-256
-    hk.expand(b"aes-256-gcm-key", &mut okm)
+    hk.expand(HKDF_INFO, &mut okm) // lgtm[rust/hard-coded-cryptographic-value]
         .map_err(|e| KeystoreError::KeyDerivation(e.to_string()))?;
     Aes256Gcm::new_from_slice(&okm).map_err(|e| KeystoreError::KeyDerivation(e.to_string()))
 }
