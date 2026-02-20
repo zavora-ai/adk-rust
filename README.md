@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 
-> **🎉 v0.3.2 Released!** RAG pipeline with 6 vector store backends, declarative scope-based security, Models Discovery API, Gemini 3 model support, and multi-turn tool fix. [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
+> **🎉 v0.3.2 Released!** RAG pipeline with 6 vector store backends, multimodal support across all providers, Models Discovery API, Gemini 3 model support, generation config on agents, and multi-turn tool fix. [@mikefaille](https://github.com/mikefaille) — realtime audio transport & LiveKit bridge, [@rohan-panickar](https://github.com/rohan-panickar) — attachment support & multi-provider content, [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 
 A comprehensive and production-ready Rust framework for building AI agents. Create powerful and high-performance AI agent systems with a flexible, modular architecture. Model-agnostic. Type-safe. Blazingly fast.
 
@@ -312,6 +312,10 @@ cargo run --example groq_basic --features groq
 
 # Ollama examples (requires --features ollama)
 cargo run --example ollama_basic --features ollama
+
+# Multimodal examples (image analysis)
+cargo run --example gemini_multimodal
+cargo run --example anthropic_multimodal --features anthropic
 
 # REST API server
 cargo run --example server
@@ -740,6 +744,10 @@ See [examples/](examples/) directory for complete, runnable examples:
 - `function_tool/` - Custom tool implementation
 - `multiple_tools/` - Agent with multiple tools
 - `agent_tool/` - Use agents as callable tools
+
+**Multimodal (Image/Audio/PDF)**
+- `gemini_multimodal/` - Inline image analysis, multi-image comparison, vision agent
+- `anthropic_multimodal/` - Image analysis with Claude (requires `--features anthropic`)
 
 **OpenAI Integration** (requires `--features openai`)
 - `openai_basic/` - Simple OpenAI GPT agent

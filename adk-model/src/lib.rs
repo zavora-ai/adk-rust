@@ -1,18 +1,18 @@
 //! # adk-model
 //!
-//! LLM model integrations for ADK (Gemini, OpenAI, Anthropic, DeepSeek, etc.).
+//! LLM model integrations for ADK (Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama).
 //!
 //! ## Overview
 //!
 //! This crate provides LLM implementations for ADK agents. Currently supports:
 //!
-//! - [`GeminiModel`] - Google's Gemini models (2.0 Flash, Pro, etc.)
-//! - `OpenAIClient` - OpenAI models (GPT-4o, GPT-4o-mini, etc.) - requires `openai` feature
+//! - [`GeminiModel`] - Google's Gemini models (3 Pro, 2.5 Flash, etc.)
+//! - `OpenAIClient` - OpenAI models (GPT-5, GPT-5-mini, o3, etc.) - requires `openai` feature
 //! - `AzureOpenAIClient` - Azure OpenAI Service - requires `openai` feature
-//! - `AnthropicClient` - Anthropic Claude models (Claude 4, Claude 3.5, etc.) - requires `anthropic` feature
+//! - `AnthropicClient` - Anthropic Claude models (Opus 4.6, Sonnet 4.5, etc.) - requires `anthropic` feature
 //! - `DeepSeekClient` - DeepSeek models (deepseek-chat, deepseek-reasoner) - requires `deepseek` feature
+//! - `GroqClient` - Groq ultra-fast inference (Llama 4, Llama 3.3, Mixtral) - requires `groq` feature
 //! - `OllamaModel` - Local LLMs via Ollama (LLaMA, Mistral, Qwen, etc.) - requires `ollama` feature
-//! - `GroqClient` - Groq ultra-fast inference (LLaMA, Mixtral, Gemma) - requires `groq` feature
 //! - [`MockLlm`] - Mock LLM for testing
 //!
 //! ## Quick Start
@@ -34,7 +34,7 @@
 //!
 //! let model = OpenAIClient::new(OpenAIConfig::new(
 //!     std::env::var("OPENAI_API_KEY").unwrap(),
-//!     "gpt-4o-mini",
+//!     "gpt-5-mini",
 //! )).unwrap();
 //! ```
 //!
@@ -66,29 +66,42 @@
 //! ### Gemini
 //! | Model | Description |
 //! |-------|-------------|
-//! | `gemini-2.5-flash` | Fast, efficient model (recommended) |
-//! | `gemini-1.5-pro` | Most capable model |
-//! | `gemini-1.5-flash` | Balanced speed/capability |
+//! | `gemini-3-pro-preview` | Most intelligent, complex agentic workflows (1M context) |
+//! | `gemini-3-flash-preview` | Frontier intelligence at Flash speed (1M context) |
+//! | `gemini-2.5-pro` | Advanced reasoning and multimodal (1M context) |
+//! | `gemini-2.5-flash` | Balanced speed and capability, recommended (1M context) |
+//! | `gemini-2.5-flash-lite` | Ultra-fast for high-volume tasks (1M context) |
 //!
 //! ### OpenAI
 //! | Model | Description |
 //! |-------|-------------|
-//! | `gpt-4o` | Most capable model |
-//! | `gpt-4o-mini` | Fast, cost-effective |
-//! | `gpt-4-turbo` | Previous generation flagship |
+//! | `gpt-5` | Strongest coding and agentic model with adaptive reasoning |
+//! | `gpt-5-mini` | Efficient variant for most tasks |
+//! | `o3` | Advanced reasoning model for complex problem solving |
+//! | `o4-mini` | Efficient reasoning model (200K context) |
+//! | `gpt-4.1` | General purpose model with 1M context |
 //!
 //! ### Anthropic
 //! | Model | Description |
 //! |-------|-------------|
-//! | `claude-sonnet-4-5-20250929` | Latest Claude 4.5 Sonnet |
-//! | `claude-3-5-sonnet-20241022` | Claude 3.5 Sonnet |
-//! | `claude-3-opus-20240229` | Most capable Claude 3 |
+//! | `claude-opus-4-5-20251101` | Most capable for complex autonomous tasks |
+//! | `claude-sonnet-4-5-20250929` | Best balance of intelligence, speed, and cost |
+//! | `claude-haiku-4-5-20251001` | Ultra-efficient for high-volume workloads |
+//! | `claude-opus-4-20250514` | Hybrid model with extended thinking |
+//! | `claude-sonnet-4-20250514` | Balanced model with extended thinking |
 //!
 //! ### DeepSeek
 //! | Model | Description |
 //! |-------|-------------|
-//! | `deepseek-chat` | Fast, capable chat model |
-//! | `deepseek-reasoner` | Reasoning model with thinking mode |
+//! | `deepseek-chat` | V3.2 non-thinking mode for fast general-purpose tasks |
+//! | `deepseek-reasoner` | V3.2 thinking mode with chain-of-thought reasoning |
+//!
+//! ### Groq
+//! | Model | Description |
+//! |-------|-------------|
+//! | `meta-llama/llama-4-scout-17b-16e-instruct` | Llama 4 Scout via Groq LPU |
+//! | `llama-3.3-70b-versatile` | Versatile large model |
+//! | `llama-3.1-8b-instant` | Ultra-fast at 560 T/s |
 //!
 //! ## Features
 //!

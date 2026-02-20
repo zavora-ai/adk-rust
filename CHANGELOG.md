@@ -62,6 +62,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code generation emits `.temperature()`, `.top_p()`, `.top_k()`, `.max_output_tokens()` builder calls
 
 #### Examples
+- `gemini_multimodal` — inline image analysis, multi-image comparison, and vision agent pattern using `Part::InlineData` with Gemini
+- `anthropic_multimodal` — image analysis with Claude using `Part::InlineData` (requires `--features anthropic`)
 - `multi_turn_tool` — inventory management scenario demonstrating multi-turn tool conversations with both Gemini (default) and OpenAI (`--features openai`)
 - `rag_surrealdb` — SurrealDB vector store with embedded in-memory mode
 
@@ -81,8 +83,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Contributors
 Thanks to the following people for their contributions to this release:
+- **@mikefaille** — major contributions to `adk-realtime` (tokio-tungstenite upgrade, rustls migration), LiveKit WebRTC bridge groundwork, CI improvements (sccache summaries, devenv script fixes), environment sync, documentation consolidation, and PR template (#134, #136, #137)
 - **@rohan-panickar** — attachment support for runtime endpoints and multi-provider content conversion (#142, #143), fix for tool context role preservation (#139)
-- **@mikefaille** — CI improvements (sccache summaries, devenv script fixes), environment sync, documentation consolidation, and PR template (#134, #136, #137)
+- **@dhruv-pant** — Gemini service account auth and configurable retry logic
 
 ## [0.3.1] - 2026-02-14
 

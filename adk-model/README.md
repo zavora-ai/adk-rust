@@ -47,7 +47,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
+    let model = GeminiModel::new(&api_key, "gemini-3.1-pro-preview")?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .model(Arc::new(model))
@@ -191,7 +191,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Model | Description |
 |-------|-------------|
-| `gemini-3-pro` | Most intelligent model for complex agentic workflows (2M context) |
+| `gemini-3.1-pro` | Most intelligent AI model, enhancing reasoning and multimodal capabilities. (1M context) |
+| `gemini-3-pro` | Intelligent model for complex agentic workflows (1M context) |
 | `gemini-3-flash` | Fast and efficient for most tasks (1M context) |
 | `gemini-2.5-pro` | Advanced reasoning and multimodal understanding |
 | `gemini-2.5-flash` | Balanced speed and capability (recommended) |
