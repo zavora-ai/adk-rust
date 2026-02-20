@@ -191,17 +191,20 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
 
     let cache_meta = extract_cache_usage(&message.usage);
 
-    (LlmResponse {
-        content,
-        usage_metadata,
-        finish_reason,
-        citation_metadata: None,
-        partial: false,
-        turn_complete: true,
-        interrupted: false,
-        error_code: None,
-        error_message: None,
-    }, cache_meta)
+    (
+        LlmResponse {
+            content,
+            usage_metadata,
+            finish_reason,
+            citation_metadata: None,
+            partial: false,
+            turn_complete: true,
+            interrupted: false,
+            error_code: None,
+            error_message: None,
+        },
+        cache_meta,
+    )
 }
 
 /// Convert streaming text delta to ADK LlmResponse.

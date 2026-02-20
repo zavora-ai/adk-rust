@@ -262,6 +262,10 @@ path = "anthropic_multimodal/main.rs"
 required-features = ["anthropic"]
 
 [[example]]
+name = "gemini_multimodal"
+path = "gemini_multimodal/main.rs"
+
+[[example]]
 name = "anthropic_retry"
 path = "anthropic_retry/main.rs"
 required-features = ["anthropic"]
