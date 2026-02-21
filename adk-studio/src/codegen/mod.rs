@@ -32,16 +32,52 @@ fn detect_provider(model: &str) -> &'static str {
     let m = model.to_lowercase();
     if m.contains("gemini") || m.contains("gemma") {
         "gemini"
-    } else if m.contains("gpt") || m.contains("o1") || m.contains("o3") {
+    } else if m.contains("gpt")
+        || m.contains("o1")
+        || m.contains("o3")
+        || m.contains("o4")
+        || m.contains("codex")
+    {
         "openai"
-    } else if m.contains("claude") {
+    } else if m.contains("claude")
+        && !m.starts_with("us.")
+        && !m.starts_with("eu.")
+        && !m.starts_with("ap.")
+    {
         "anthropic"
+    } else if m.starts_with("us.") || m.starts_with("eu.") || m.starts_with("ap.") {
+        // Bedrock inference profile IDs (e.g. "us.anthropic.claude-sonnet-4-6")
+        "bedrock"
     } else if m.contains("deepseek") && !m.contains(':') {
         // DeepSeek API (no colon = not Ollama tag format)
         "deepseek"
+    } else if m.contains("sonar") {
+        "perplexity"
+    } else if (m.contains("mistral-large")
+        || m.contains("mistral-small")
+        || m.contains("codestral"))
+        && !m.contains(':')
+    {
+        "mistral"
+    } else if m.contains("accounts/fireworks/") {
+        "fireworks"
+    } else if m.contains("-turbo") && m.contains('/') {
+        "together"
+    } else if m.contains("cohere-command") || (m.contains("mistral") && m.contains("2024")) {
+        "azure-ai"
     } else if m.contains("llama") || m.contains("mixtral") {
         // Ollama-style tags have colons (e.g. "llama3.2:3b")
-        if m.contains(':') { "ollama" } else { "groq" }
+        if m.contains(':') {
+            "ollama"
+        } else if model.starts_with("Meta-Llama") {
+            "sambanova"
+        } else if m.starts_with("llama-")
+            && m.chars().nth(6).map(|c| c.is_ascii_digit()).unwrap_or(false)
+        {
+            "cerebras"
+        } else {
+            "groq"
+        }
     } else if m.contains("qwen")
         || m.contains("mistral")
         || m.contains("codellama")
@@ -63,16 +99,25 @@ fn collect_providers(project: &ProjectSchema) -> std::collections::HashSet<&'sta
     // If project has a default_provider set, include it
     if let Some(ref dp) = project.settings.default_provider {
         let p = match dp.as_str() {
-            "gemini" | "openai" | "anthropic" | "deepseek" | "groq" | "ollama" => dp.as_str(),
+            "gemini" | "openai" | "anthropic" | "deepseek" | "groq" | "ollama" | "fireworks"
+            | "together" | "mistral" | "perplexity" | "cerebras" | "sambanova" | "bedrock"
+            | "azure-ai" => dp.as_str(),
             _ => "gemini",
         };
-        // We need a &'static str, so match again
         providers.insert(match p {
             "openai" => "openai",
             "anthropic" => "anthropic",
             "deepseek" => "deepseek",
             "groq" => "groq",
             "ollama" => "ollama",
+            "fireworks" => "fireworks",
+            "together" => "together",
+            "mistral" => "mistral",
+            "perplexity" => "perplexity",
+            "cerebras" => "cerebras",
+            "sambanova" => "sambanova",
+            "bedrock" => "bedrock",
+            "azure-ai" => "azure-ai",
             _ => "gemini",
         });
     }
@@ -417,6 +462,30 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
     if providers.contains("ollama") {
         code.push_str("use adk_model::ollama::{OllamaModel, OllamaConfig};\n");
     }
+    if providers.contains("fireworks") {
+        code.push_str("use adk_model::fireworks::{FireworksClient, FireworksConfig};\n");
+    }
+    if providers.contains("together") {
+        code.push_str("use adk_model::together::{TogetherClient, TogetherConfig};\n");
+    }
+    if providers.contains("mistral") {
+        code.push_str("use adk_model::mistral::{MistralClient, MistralConfig};\n");
+    }
+    if providers.contains("perplexity") {
+        code.push_str("use adk_model::perplexity::{PerplexityClient, PerplexityConfig};\n");
+    }
+    if providers.contains("cerebras") {
+        code.push_str("use adk_model::cerebras::{CerebrasClient, CerebrasConfig};\n");
+    }
+    if providers.contains("sambanova") {
+        code.push_str("use adk_model::sambanova::{SambaNovaClient, SambaNovaConfig};\n");
+    }
+    if providers.contains("bedrock") {
+        code.push_str("use adk_model::bedrock::{BedrockClient, BedrockConfig};\n");
+    }
+    if providers.contains("azure-ai") {
+        code.push_str("use adk_model::azure_ai::{AzureAIClient, AzureAIConfig};\n");
+    }
     code.push_str(
         "use adk_tool::{FunctionTool, GoogleSearchTool, ExitLoopTool, LoadArtifactsTool};\n",
     );
@@ -529,6 +598,40 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
     if providers.contains("ollama") {
         code.push_str("    let _ollama_host = std::env::var(\"OLLAMA_HOST\")\n");
         code.push_str("        .unwrap_or_else(|_| \"http://localhost:11434\".to_string());\n\n");
+    }
+    if providers.contains("fireworks") {
+        code.push_str("    let fireworks_api_key = std::env::var(\"FIREWORKS_API_KEY\")\n");
+        code.push_str("        .expect(\"FIREWORKS_API_KEY must be set\");\n\n");
+    }
+    if providers.contains("together") {
+        code.push_str("    let together_api_key = std::env::var(\"TOGETHER_API_KEY\")\n");
+        code.push_str("        .expect(\"TOGETHER_API_KEY must be set\");\n\n");
+    }
+    if providers.contains("mistral") {
+        code.push_str("    let mistral_api_key = std::env::var(\"MISTRAL_API_KEY\")\n");
+        code.push_str("        .expect(\"MISTRAL_API_KEY must be set\");\n\n");
+    }
+    if providers.contains("perplexity") {
+        code.push_str("    let perplexity_api_key = std::env::var(\"PERPLEXITY_API_KEY\")\n");
+        code.push_str("        .expect(\"PERPLEXITY_API_KEY must be set\");\n\n");
+    }
+    if providers.contains("cerebras") {
+        code.push_str("    let cerebras_api_key = std::env::var(\"CEREBRAS_API_KEY\")\n");
+        code.push_str("        .expect(\"CEREBRAS_API_KEY must be set\");\n\n");
+    }
+    if providers.contains("sambanova") {
+        code.push_str("    let sambanova_api_key = std::env::var(\"SAMBANOVA_API_KEY\")\n");
+        code.push_str("        .expect(\"SAMBANOVA_API_KEY must be set\");\n\n");
+    }
+    if providers.contains("bedrock") {
+        code.push_str("    let bedrock_region = std::env::var(\"AWS_DEFAULT_REGION\")\n");
+        code.push_str("        .unwrap_or_else(|_| \"us-east-1\".to_string());\n\n");
+    }
+    if providers.contains("azure-ai") {
+        code.push_str("    let azure_ai_endpoint = std::env::var(\"AZURE_AI_ENDPOINT\")\n");
+        code.push_str("        .expect(\"AZURE_AI_ENDPOINT must be set\");\n");
+        code.push_str("    let azure_ai_api_key = std::env::var(\"AZURE_AI_API_KEY\")\n");
+        code.push_str("        .expect(\"AZURE_AI_API_KEY must be set\");\n\n");
     }
 
     // Initialize browser session if any agent uses browser
@@ -1325,6 +1428,54 @@ fn generate_llm_node_v2(
         "ollama" => {
             code.push_str(&format!(
                 "        .model(Arc::new(OllamaModel::new(OllamaConfig::new(\"{}\"))?));\n",
+                model
+            ));
+        }
+        "fireworks" => {
+            code.push_str(&format!(
+                "        .model(Arc::new(FireworksClient::new(FireworksConfig::new(&fireworks_api_key, \"{}\"))?));\n",
+                model
+            ));
+        }
+        "together" => {
+            code.push_str(&format!(
+                "        .model(Arc::new(TogetherClient::new(TogetherConfig::new(&together_api_key, \"{}\"))?));\n",
+                model
+            ));
+        }
+        "mistral" => {
+            code.push_str(&format!(
+                "        .model(Arc::new(MistralClient::new(MistralConfig::new(&mistral_api_key, \"{}\"))?));\n",
+                model
+            ));
+        }
+        "perplexity" => {
+            code.push_str(&format!(
+                "        .model(Arc::new(PerplexityClient::new(PerplexityConfig::new(&perplexity_api_key, \"{}\"))?));\n",
+                model
+            ));
+        }
+        "cerebras" => {
+            code.push_str(&format!(
+                "        .model(Arc::new(CerebrasClient::new(CerebrasConfig::new(&cerebras_api_key, \"{}\"))?));\n",
+                model
+            ));
+        }
+        "sambanova" => {
+            code.push_str(&format!(
+                "        .model(Arc::new(SambaNovaClient::new(SambaNovaConfig::new(&sambanova_api_key, \"{}\"))?));\n",
+                model
+            ));
+        }
+        "bedrock" => {
+            code.push_str(&format!(
+                "        .model(Arc::new(BedrockClient::new(BedrockConfig::new(&bedrock_region, \"{}\")).await?));\n",
+                model
+            ));
+        }
+        "azure-ai" => {
+            code.push_str(&format!(
+                "        .model(Arc::new(AzureAIClient::new(AzureAIConfig::new(&azure_ai_endpoint, &azure_ai_api_key, \"{}\"))?));\n",
                 model
             ));
         }
@@ -4122,6 +4273,30 @@ fn generate_cargo_toml(project: &ProjectSchema) -> String {
     }
     if providers.contains("ollama") {
         model_features.push("ollama");
+    }
+    if providers.contains("fireworks") {
+        model_features.push("fireworks");
+    }
+    if providers.contains("together") {
+        model_features.push("together");
+    }
+    if providers.contains("mistral") {
+        model_features.push("mistral");
+    }
+    if providers.contains("perplexity") {
+        model_features.push("perplexity");
+    }
+    if providers.contains("cerebras") {
+        model_features.push("cerebras");
+    }
+    if providers.contains("sambanova") {
+        model_features.push("sambanova");
+    }
+    if providers.contains("bedrock") {
+        model_features.push("bedrock");
+    }
+    if providers.contains("azure-ai") {
+        model_features.push("azure-ai");
     }
     // Default to gemini if no providers detected
     if model_features.is_empty() {

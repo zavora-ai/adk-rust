@@ -30,6 +30,9 @@ tracing.workspace = true
 base64 = "0.21"
 ollama-rs = { version = "0.3.4", optional = true, default-features = false, features = ["stream"] }
 schemars = { version = "1.0", optional = true }
+aws-sdk-bedrockruntime = { version = "1", optional = true }
+aws-config = { version = "1", optional = true, features = ["behavior-version-latest"] }
+aws-smithy-types = { version = "1", optional = true }
 
 [features]
 default = ["gemini"]
@@ -40,7 +43,15 @@ anthropic = ["dep:claudius"]
 deepseek = ["dep:reqwest"]
 ollama = ["dep:ollama-rs", "dep:schemars"]
 groq = ["dep:reqwest"]
-all-providers = ["gemini", "openai", "xai", "anthropic", "deepseek", "ollama", "groq"]
+fireworks = ["openai"]
+together = ["openai"]
+mistral = ["openai"]
+perplexity = ["openai"]
+cerebras = ["openai"]
+sambanova = ["openai"]
+bedrock = ["dep:aws-sdk-bedrockruntime", "dep:aws-config", "dep:aws-smithy-types"]
+azure-ai = ["dep:reqwest"]
+all-providers = ["gemini", "openai", "xai", "anthropic", "deepseek", "ollama", "groq", "fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova", "bedrock", "azure-ai"]
 
 [dev-dependencies]
 proptest = "1.5"

@@ -47,7 +47,9 @@ Crate names are prefixed with `adk-`. The Rust module name uses underscores (`ad
 adk-core/        Core traits and types: Agent, Tool, Llm, Session, Event, Content, State
 adk-agent/       Agent implementations: LlmAgent, CustomAgent, SequentialAgent, ParallelAgent,
                  LoopAgent, ConditionalAgent, LlmConditionalAgent
-adk-model/       LLM provider facade: Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama (feature-gated)
+adk-model/       LLM provider facade: Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama,
+                 Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, Bedrock, Azure AI
+                 (feature-gated)
 adk-gemini/      Dedicated Gemini client with GeminiBackend trait (Studio + Vertex AI)
 adk-tool/        Tool system: FunctionTool, MCP integration (rmcp 0.14), Google Search
 adk-runner/      Agent execution runtime with event streaming
@@ -96,7 +98,10 @@ docs/official_docs_examples/  Compilable code snippets validating every doc page
 `gemini` is the default. All others are opt-in:
 
 - `gemini` (default), `openai`, `anthropic`, `deepseek`, `ollama`, `groq`
-- `all-providers` — enables all six
+- `fireworks`, `together`, `mistral`, `perplexity`, `cerebras`, `sambanova` — OpenAI-compatible providers
+- `bedrock` — Amazon Bedrock via AWS SDK Converse API
+- `azure-ai` — Azure AI Inference endpoints
+- `all-providers` — enables all fourteen
 
 ### adk-realtime
 

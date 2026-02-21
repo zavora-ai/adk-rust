@@ -2,7 +2,8 @@
  * LLM Provider and Model definitions for ADK Studio
  *
  * Updated: February 2026
- * Sources: Official documentation and pricing pages from Google, OpenAI, Anthropic, DeepSeek, Groq, Ollama
+ * Sources: Official documentation and pricing pages from Google, OpenAI, Anthropic, DeepSeek, Groq, Ollama,
+ *          Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, AWS Bedrock, Azure AI
  *
  * IMPORTANT: Model IDs must match the exact API identifiers accepted by each provider.
  * - Anthropic uses dated suffixes: claude-sonnet-4-5-20250929
@@ -11,6 +12,9 @@
  * - DeepSeek uses mode names: deepseek-chat, deepseek-reasoner
  * - Groq uses full model paths: meta-llama/llama-4-scout-17b-16e-instruct
  * - Ollama uses tag format: llama3.3:70b
+ * - Bedrock uses inference profile IDs: us.anthropic.claude-sonnet-4-6
+ * - Azure AI uses deployment names or model IDs
+ * - Fireworks/Together/Mistral/Perplexity/Cerebras/SambaNova use OpenAI-compatible APIs
  */
 
 export interface ModelInfo {
@@ -520,6 +524,272 @@ export const PROVIDERS: ProviderInfo[] = [
       },
     ],
   },
+  {
+    id: 'fireworks',
+    name: 'Fireworks AI',
+    icon: '🎆',
+    envVar: 'FIREWORKS_API_KEY',
+    docsUrl: 'https://docs.fireworks.ai/getting-started/introduction',
+    models: [
+      {
+        id: 'accounts/fireworks/models/llama-v3p3-70b-instruct',
+        name: 'Llama 3.3 70B Instruct',
+        description: 'High-quality open model via Fireworks inference',
+        contextWindow: 131072,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'standard',
+      },
+      {
+        id: 'accounts/fireworks/models/llama-v3p1-8b-instruct',
+        name: 'Llama 3.1 8B Instruct',
+        description: 'Fast and affordable via Fireworks',
+        contextWindow: 131072,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'free',
+      },
+      {
+        id: 'accounts/fireworks/models/qwen2p5-72b-instruct',
+        name: 'Qwen 2.5 72B Instruct',
+        description: 'Large multilingual model via Fireworks',
+        contextWindow: 32768,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'standard',
+      },
+    ],
+  },
+  {
+    id: 'together',
+    name: 'Together AI',
+    icon: '🤝',
+    envVar: 'TOGETHER_API_KEY',
+    docsUrl: 'https://docs.together.ai/docs/introduction',
+    models: [
+      {
+        id: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+        name: 'Llama 3.3 70B Turbo',
+        description: 'Optimized Llama 3.3 via Together inference',
+        contextWindow: 131072,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'standard',
+      },
+      {
+        id: 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo',
+        name: 'Llama 3.1 8B Turbo',
+        description: 'Fast and cost-effective via Together',
+        contextWindow: 131072,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'free',
+      },
+      {
+        id: 'Qwen/Qwen2.5-72B-Instruct-Turbo',
+        name: 'Qwen 2.5 72B Turbo',
+        description: 'Large multilingual model via Together',
+        contextWindow: 32768,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'standard',
+      },
+    ],
+  },
+  {
+    id: 'mistral',
+    name: 'Mistral AI',
+    icon: '🌬️',
+    envVar: 'MISTRAL_API_KEY',
+    docsUrl: 'https://docs.mistral.ai',
+    models: [
+      {
+        id: 'mistral-large-latest',
+        name: 'Mistral Large',
+        description: 'Flagship model for complex reasoning and coding',
+        contextWindow: 128000,
+        capabilities: ['text', 'code', 'reasoning', 'tools'],
+        tier: 'premium',
+      },
+      {
+        id: 'mistral-small-latest',
+        name: 'Mistral Small',
+        description: 'Efficient model for everyday tasks',
+        contextWindow: 128000,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'standard',
+      },
+      {
+        id: 'codestral-latest',
+        name: 'Codestral',
+        description: 'Specialized for code generation and completion',
+        contextWindow: 32000,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'standard',
+      },
+    ],
+  },
+  {
+    id: 'perplexity',
+    name: 'Perplexity',
+    icon: '🔮',
+    envVar: 'PERPLEXITY_API_KEY',
+    docsUrl: 'https://docs.perplexity.ai',
+    models: [
+      {
+        id: 'sonar-pro',
+        name: 'Sonar Pro',
+        description: 'Advanced search-augmented model with citations',
+        contextWindow: 200000,
+        capabilities: ['text', 'code', 'reasoning', 'tools'],
+        tier: 'premium',
+      },
+      {
+        id: 'sonar',
+        name: 'Sonar',
+        description: 'Fast search-augmented model',
+        contextWindow: 128000,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'standard',
+      },
+      {
+        id: 'sonar-reasoning-pro',
+        name: 'Sonar Reasoning Pro',
+        description: 'Deep reasoning with real-time search',
+        contextWindow: 128000,
+        capabilities: ['text', 'code', 'reasoning'],
+        tier: 'premium',
+      },
+    ],
+  },
+  {
+    id: 'cerebras',
+    name: 'Cerebras',
+    icon: '🧪',
+    envVar: 'CEREBRAS_API_KEY',
+    docsUrl: 'https://inference-docs.cerebras.ai',
+    models: [
+      {
+        id: 'llama-3.3-70b',
+        name: 'Llama 3.3 70B',
+        description: 'Ultra-fast inference on Cerebras wafer-scale hardware',
+        contextWindow: 131072,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'standard',
+      },
+      {
+        id: 'llama-3.1-8b',
+        name: 'Llama 3.1 8B',
+        description: 'Fastest small model inference available',
+        contextWindow: 131072,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'free',
+      },
+    ],
+  },
+  {
+    id: 'sambanova',
+    name: 'SambaNova',
+    icon: '⚙️',
+    envVar: 'SAMBANOVA_API_KEY',
+    docsUrl: 'https://community.sambanova.ai/docs',
+    models: [
+      {
+        id: 'Meta-Llama-3.3-70B-Instruct',
+        name: 'Llama 3.3 70B Instruct',
+        description: 'High-throughput inference on SambaNova RDU',
+        contextWindow: 131072,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'standard',
+      },
+      {
+        id: 'Meta-Llama-3.1-8B-Instruct',
+        name: 'Llama 3.1 8B Instruct',
+        description: 'Fast and efficient on SambaNova hardware',
+        contextWindow: 131072,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'free',
+      },
+    ],
+  },
+  {
+    id: 'bedrock',
+    name: 'Amazon Bedrock',
+    icon: '🪨',
+    envVar: 'AWS_ACCESS_KEY_ID',
+    envVarAlt: 'AWS_DEFAULT_REGION',
+    docsUrl: 'https://docs.aws.amazon.com/bedrock/latest/userguide/',
+    models: [
+      {
+        id: 'us.anthropic.claude-sonnet-4-6',
+        name: 'Claude Sonnet 4.6 (Bedrock)',
+        description: 'Claude Sonnet 4.6 via Amazon Bedrock',
+        contextWindow: 200000,
+        capabilities: ['text', 'vision', 'code', 'reasoning', 'tools'],
+        tier: 'standard',
+      },
+      {
+        id: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
+        name: 'Claude Sonnet 4 (Bedrock)',
+        description: 'Claude Sonnet 4 via Amazon Bedrock',
+        contextWindow: 200000,
+        capabilities: ['text', 'vision', 'code', 'reasoning', 'tools'],
+        tier: 'standard',
+      },
+      {
+        id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+        name: 'Claude Haiku 4.5 (Bedrock)',
+        description: 'Fast and affordable Claude via Bedrock',
+        contextWindow: 200000,
+        capabilities: ['text', 'vision', 'code', 'tools'],
+        tier: 'free',
+      },
+      {
+        id: 'us.amazon.nova-pro-v1:0',
+        name: 'Amazon Nova Pro',
+        description: 'Amazon\'s multimodal model for complex tasks',
+        contextWindow: 300000,
+        capabilities: ['text', 'vision', 'code', 'tools'],
+        tier: 'standard',
+      },
+      {
+        id: 'us.amazon.nova-lite-v1:0',
+        name: 'Amazon Nova Lite',
+        description: 'Cost-effective multimodal model',
+        contextWindow: 300000,
+        capabilities: ['text', 'vision', 'code', 'tools'],
+        tier: 'free',
+      },
+    ],
+  },
+  {
+    id: 'azure-ai',
+    name: 'Azure AI',
+    icon: '☁️',
+    envVar: 'AZURE_AI_ENDPOINT',
+    envVarAlt: 'AZURE_AI_API_KEY',
+    docsUrl: 'https://learn.microsoft.com/en-us/azure/ai-studio/',
+    models: [
+      {
+        id: 'Mistral-large-2411',
+        name: 'Mistral Large (Azure)',
+        description: 'Mistral Large via Azure AI Inference',
+        contextWindow: 128000,
+        capabilities: ['text', 'code', 'reasoning', 'tools'],
+        tier: 'premium',
+      },
+      {
+        id: 'Meta-Llama-3.3-70B-Instruct',
+        name: 'Llama 3.3 70B (Azure)',
+        description: 'Llama 3.3 via Azure AI serverless',
+        contextWindow: 131072,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'standard',
+      },
+      {
+        id: 'Cohere-command-r-plus-08-2024',
+        name: 'Cohere Command R+ (Azure)',
+        description: 'Cohere\'s RAG-optimized model via Azure',
+        contextWindow: 128000,
+        capabilities: ['text', 'code', 'tools'],
+        tier: 'standard',
+      },
+    ],
+  },
 ];
 
 // Helper functions
@@ -540,10 +810,26 @@ export function detectProviderFromModel(modelId: string): string {
   if (lowerModel.includes('gemini') || lowerModel.includes('gemma')) return 'gemini';
   if (lowerModel.includes('gpt') || lowerModel.includes('o1') || lowerModel.includes('o3') || lowerModel.includes('o4') || lowerModel.includes('codex')) return 'openai';
   if (lowerModel.includes('claude')) return 'anthropic';
-  if (lowerModel.includes('deepseek')) return 'deepseek';
+  // Bedrock uses inference profile IDs like "us.anthropic.claude-*" or "us.amazon.nova-*"
+  if (lowerModel.startsWith('us.') || lowerModel.startsWith('eu.') || lowerModel.startsWith('ap.')) return 'bedrock';
+  if (lowerModel.includes('deepseek') && !lowerModel.includes(':')) return 'deepseek';
+  // Perplexity sonar models
+  if (lowerModel.includes('sonar')) return 'perplexity';
+  // Mistral API models (not Ollama tags)
+  if ((lowerModel.includes('mistral-large') || lowerModel.includes('mistral-small') || lowerModel.includes('codestral')) && !lowerModel.includes(':')) return 'mistral';
+  // Fireworks uses "accounts/fireworks/models/" prefix
+  if (lowerModel.includes('accounts/fireworks/')) return 'fireworks';
+  // Together uses org/model format with Turbo suffix
+  if (lowerModel.includes('-turbo') && lowerModel.includes('/')) return 'together';
+  // Azure AI models (deployment names)
+  if (lowerModel.includes('cohere-command') || (lowerModel.includes('mistral') && lowerModel.includes('2024'))) return 'azure-ai';
   if (lowerModel.includes('llama') || lowerModel.includes('mixtral')) {
     // Could be Groq or Ollama - check for Ollama-style tags
     if (lowerModel.includes(':')) return 'ollama';
+    // SambaNova uses Meta-Llama prefix
+    if (modelId.startsWith('Meta-Llama')) return 'sambanova';
+    // Cerebras uses plain llama-X.X-Xb format
+    if (/^llama-\d/.test(lowerModel)) return 'cerebras';
     return 'groq';
   }
   if (lowerModel.includes('qwen') || lowerModel.includes('mistral') || lowerModel.includes('codellama') || lowerModel.includes('devstral')) {

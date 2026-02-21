@@ -1,6 +1,6 @@
 # adk-model
 
-LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, OpenAI, xAI, Anthropic, and DeepSeek.
+LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, OpenAI, xAI, Anthropic, DeepSeek, Groq, Ollama, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, Amazon Bedrock, and Azure AI Inference.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-model.svg)](https://crates.io/crates/adk-model)
 [![Documentation](https://docs.rs/adk-model/badge.svg)](https://docs.rs/adk-model)
@@ -17,6 +17,14 @@ LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, Op
 - **DeepSeek** - DeepSeek R1, DeepSeek V3.1, DeepSeek-Chat with thinking mode
 - **Groq** - Ultra-fast inference (LLaMA 3.3, Mixtral, Gemma)
 - **Ollama** - Local LLMs (LLaMA, Mistral, Qwen, Gemma, etc.)
+- **Fireworks AI** - Fast open-model inference (Llama, Mixtral, etc.)
+- **Together AI** - Hosted open models (Llama, CodeLlama, etc.)
+- **Mistral AI** - Mistral cloud models (Mistral Small, Large, etc.)
+- **Perplexity** - Search-augmented LLM (Sonar, etc.)
+- **Cerebras** - Ultra-fast inference (Llama 3.3, etc.)
+- **SambaNova** - Fast inference (Llama 3.3, etc.)
+- **Amazon Bedrock** - AWS-hosted models via IAM auth (Claude, Llama, Mistral, etc.)
+- **Azure AI Inference** - Azure-hosted models (Cohere, Llama, Mistral, etc.)
 - **Streaming** - Real-time response streaming for all providers
 - **Multimodal** - Text, images, audio, video, and PDF input
 
@@ -186,6 +194,176 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Fireworks AI
+
+```rust
+use adk_model::fireworks::{FireworksClient, FireworksConfig};
+use adk_agent::LlmAgentBuilder;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("FIREWORKS_API_KEY")?;
+    let model = FireworksClient::new(FireworksConfig::new(
+        api_key, "accounts/fireworks/models/llama-v3p1-8b-instruct",
+    ))?;
+
+    let agent = LlmAgentBuilder::new("assistant")
+        .model(Arc::new(model))
+        .build()?;
+
+    Ok(())
+}
+```
+
+### Together AI
+
+```rust
+use adk_model::together::{TogetherClient, TogetherConfig};
+use adk_agent::LlmAgentBuilder;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("TOGETHER_API_KEY")?;
+    let model = TogetherClient::new(TogetherConfig::new(
+        api_key, "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    ))?;
+
+    let agent = LlmAgentBuilder::new("assistant")
+        .model(Arc::new(model))
+        .build()?;
+
+    Ok(())
+}
+```
+
+### Mistral AI
+
+```rust
+use adk_model::mistral::{MistralClient, MistralConfig};
+use adk_agent::LlmAgentBuilder;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("MISTRAL_API_KEY")?;
+    let model = MistralClient::new(MistralConfig::new(api_key, "mistral-small-latest"))?;
+
+    let agent = LlmAgentBuilder::new("assistant")
+        .model(Arc::new(model))
+        .build()?;
+
+    Ok(())
+}
+```
+
+### Perplexity
+
+```rust
+use adk_model::perplexity::{PerplexityClient, PerplexityConfig};
+use adk_agent::LlmAgentBuilder;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("PERPLEXITY_API_KEY")?;
+    let model = PerplexityClient::new(PerplexityConfig::new(api_key, "sonar"))?;
+
+    let agent = LlmAgentBuilder::new("assistant")
+        .model(Arc::new(model))
+        .build()?;
+
+    Ok(())
+}
+```
+
+### Cerebras
+
+```rust
+use adk_model::cerebras::{CerebrasClient, CerebrasConfig};
+use adk_agent::LlmAgentBuilder;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("CEREBRAS_API_KEY")?;
+    let model = CerebrasClient::new(CerebrasConfig::new(api_key, "llama-3.3-70b"))?;
+
+    let agent = LlmAgentBuilder::new("assistant")
+        .model(Arc::new(model))
+        .build()?;
+
+    Ok(())
+}
+```
+
+### SambaNova
+
+```rust
+use adk_model::sambanova::{SambaNovaClient, SambaNovaConfig};
+use adk_agent::LlmAgentBuilder;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("SAMBANOVA_API_KEY")?;
+    let model = SambaNovaClient::new(SambaNovaConfig::new(api_key, "Meta-Llama-3.3-70B-Instruct"))?;
+
+    let agent = LlmAgentBuilder::new("assistant")
+        .model(Arc::new(model))
+        .build()?;
+
+    Ok(())
+}
+```
+
+### Amazon Bedrock
+
+```rust
+use adk_model::bedrock::{BedrockClient, BedrockConfig};
+use adk_agent::LlmAgentBuilder;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Uses AWS IAM credentials from the environment (no API key needed)
+    let config = BedrockConfig::new("us-east-1", "anthropic.claude-sonnet-4-20250514-v1:0");
+    let model = BedrockClient::new(config).await?;
+
+    let agent = LlmAgentBuilder::new("assistant")
+        .model(Arc::new(model))
+        .build()?;
+
+    Ok(())
+}
+```
+
+### Azure AI Inference
+
+```rust
+use adk_model::azure_ai::{AzureAIClient, AzureAIConfig};
+use adk_agent::LlmAgentBuilder;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("AZURE_AI_API_KEY")?;
+    let config = AzureAIConfig::new(
+        "https://my-endpoint.eastus.inference.ai.azure.com",
+        api_key,
+        "meta-llama-3.1-8b-instruct",
+    );
+    let model = AzureAIClient::new(config)?;
+
+    let agent = LlmAgentBuilder::new("assistant")
+        .model(Arc::new(model))
+        .build()?;
+
+    Ok(())
+}
+```
+
 ## Supported Models
 
 ### Google Gemini
@@ -286,6 +464,19 @@ See [Groq documentation](https://console.groq.com/docs/models) for the full list
 
 See [Ollama library](https://ollama.com/library) for all available models.
 
+### New Providers
+
+| Provider | Feature Flag | Default Model | API Key Env Var |
+|----------|-------------|---------------|-----------------|
+| Fireworks AI | `fireworks` | `accounts/fireworks/models/llama-v3p1-8b-instruct` | `FIREWORKS_API_KEY` |
+| Together AI | `together` | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | `TOGETHER_API_KEY` |
+| Mistral AI | `mistral` | `mistral-small-latest` | `MISTRAL_API_KEY` |
+| Perplexity | `perplexity` | `sonar` | `PERPLEXITY_API_KEY` |
+| Cerebras | `cerebras` | `llama-3.3-70b` | `CEREBRAS_API_KEY` |
+| SambaNova | `sambanova` | `Meta-Llama-3.3-70B-Instruct` | `SAMBANOVA_API_KEY` |
+| Amazon Bedrock | `bedrock` | `anthropic.claude-sonnet-4-20250514-v1:0` | AWS IAM credentials |
+| Azure AI Inference | `azure-ai` | (endpoint-specific) | `AZURE_AI_API_KEY` |
+
 ## Features
 
 - **Streaming** - Real-time response streaming for all providers
@@ -315,6 +506,32 @@ DEEPSEEK_API_KEY=your-deepseek-api-key
 # Groq
 GROQ_API_KEY=your-groq-api-key
 
+# Fireworks AI
+FIREWORKS_API_KEY=your-fireworks-api-key
+
+# Together AI
+TOGETHER_API_KEY=your-together-api-key
+
+# Mistral AI
+MISTRAL_API_KEY=your-mistral-api-key
+
+# Perplexity
+PERPLEXITY_API_KEY=your-perplexity-api-key
+
+# Cerebras
+CEREBRAS_API_KEY=your-cerebras-api-key
+
+# SambaNova
+SAMBANOVA_API_KEY=your-sambanova-api-key
+
+# Azure AI Inference
+AZURE_AI_API_KEY=your-azure-ai-api-key
+
+# Amazon Bedrock (uses AWS IAM credentials)
+AWS_ACCESS_KEY_ID=your-access-key
+AWS_SECRET_ACCESS_KEY=your-secret-key
+AWS_REGION=us-east-1
+
 # Ollama (no key needed, just start the server)
 # ollama serve
 ```
@@ -336,6 +553,14 @@ adk-model = { version = "0.3.2", features = ["anthropic"] }
 adk-model = { version = "0.3.2", features = ["deepseek"] }
 adk-model = { version = "0.3.2", features = ["groq"] }
 adk-model = { version = "0.3.2", features = ["ollama"] }
+adk-model = { version = "0.3.2", features = ["fireworks"] }
+adk-model = { version = "0.3.2", features = ["together"] }
+adk-model = { version = "0.3.2", features = ["mistral"] }
+adk-model = { version = "0.3.2", features = ["perplexity"] }
+adk-model = { version = "0.3.2", features = ["cerebras"] }
+adk-model = { version = "0.3.2", features = ["sambanova"] }
+adk-model = { version = "0.3.2", features = ["bedrock"] }
+adk-model = { version = "0.3.2", features = ["azure-ai"] }
 ```
 
 ## Related Crates

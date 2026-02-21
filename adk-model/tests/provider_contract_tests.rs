@@ -16,9 +16,26 @@ use adk_model::groq::{GroqClient, GroqConfig};
 #[cfg(feature = "ollama")]
 use adk_model::ollama::{OllamaConfig, OllamaModel};
 #[cfg(feature = "openai")]
-use adk_model::openai::{OpenAIClient, OpenAIConfig};
+use adk_model::openai::{AzureConfig, AzureOpenAIClient, OpenAIClient, OpenAIConfig};
 #[cfg(feature = "xai")]
 use adk_model::xai::{XAIClient, XAIConfig};
+
+#[cfg(feature = "azure-ai")]
+use adk_model::azure_ai::{AzureAIClient, AzureAIConfig};
+#[cfg(feature = "bedrock")]
+use adk_model::bedrock::{BedrockClient, BedrockConfig};
+#[cfg(feature = "cerebras")]
+use adk_model::cerebras::{CerebrasClient, CerebrasConfig};
+#[cfg(feature = "fireworks")]
+use adk_model::fireworks::{FireworksClient, FireworksConfig};
+#[cfg(feature = "mistral")]
+use adk_model::mistral::{MistralClient, MistralConfig};
+#[cfg(feature = "perplexity")]
+use adk_model::perplexity::{PerplexityClient, PerplexityConfig};
+#[cfg(feature = "sambanova")]
+use adk_model::sambanova::{SambaNovaClient, SambaNovaConfig};
+#[cfg(feature = "together")]
+use adk_model::together::{TogetherClient, TogetherConfig};
 
 type BuildModelFn = fn(&str) -> Result<Box<dyn Llm>>;
 
@@ -302,19 +319,19 @@ macro_rules! provider_contract_tests {
         mod $module {
             use super::*;
 
-            #[tokio::test]
+            #[tokio::test(flavor = "multi_thread")]
             #[ignore = "integration test; requires provider credentials"]
             async fn non_streaming_contract() {
                 run_non_streaming_contract($spec_fn()).await;
             }
 
-            #[tokio::test]
+            #[tokio::test(flavor = "multi_thread")]
             #[ignore = "integration test; requires provider credentials"]
             async fn streaming_contract() {
                 run_streaming_contract($spec_fn()).await;
             }
 
-            #[tokio::test]
+            #[tokio::test(flavor = "multi_thread")]
             #[ignore = "integration test; requires provider credentials"]
             async fn tool_declaration_contract() {
                 run_tools_contract($spec_fn()).await;
@@ -432,6 +449,28 @@ fn ollama_cheapest_spec() -> ProviderSpec {
 provider_contract_tests!(gemini_cheapest_provider, gemini_cheapest_spec);
 #[cfg(feature = "openai")]
 provider_contract_tests!(openai_cheapest_provider, openai_cheapest_spec);
+
+#[cfg(feature = "openai")]
+fn azure_openai_spec() -> ProviderSpec {
+    ProviderSpec {
+        name: "azure-openai",
+        model_env_candidates: &["AZURE_OPENAI_DEPLOYMENT"],
+        default_model: "mistral-small-2503",
+        required_envs: &["AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_DEPLOYMENT"],
+        supports_tools: true,
+        build_model: |model_name| {
+            let api_key = required_env("AZURE_OPENAI_API_KEY")?;
+            let endpoint = required_env("AZURE_OPENAI_ENDPOINT")?;
+            let api_version = env::var("AZURE_OPENAI_API_VERSION")
+                .unwrap_or_else(|_| "2024-12-01-preview".to_string());
+            let config = AzureConfig::new(api_key, endpoint, api_version, model_name);
+            Ok(Box::new(AzureOpenAIClient::new(config)?))
+        },
+    }
+}
+
+#[cfg(feature = "openai")]
+provider_contract_tests!(azure_openai_provider, azure_openai_spec);
 #[cfg(feature = "xai")]
 provider_contract_tests!(xai_cheapest_provider, xai_cheapest_spec);
 #[cfg(feature = "anthropic")]
@@ -442,6 +481,149 @@ provider_contract_tests!(deepseek_cheapest_provider, deepseek_cheapest_spec);
 provider_contract_tests!(groq_cheapest_provider, groq_cheapest_spec);
 #[cfg(feature = "ollama")]
 provider_contract_tests!(ollama_cheapest_provider, ollama_cheapest_spec);
+
+#[cfg(feature = "fireworks")]
+fn fireworks_cheapest_spec() -> ProviderSpec {
+    ProviderSpec {
+        name: "fireworks-cheapest",
+        model_env_candidates: &["FIREWORKS_CHEAPEST_MODEL", "FIREWORKS_MODEL"],
+        default_model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
+        required_envs: &["FIREWORKS_API_KEY"],
+        supports_tools: true,
+        build_model: |model_name| {
+            let api_key = required_env("FIREWORKS_API_KEY")?;
+            Ok(Box::new(FireworksClient::new(FireworksConfig::new(api_key, model_name))?))
+        },
+    }
+}
+
+#[cfg(feature = "together")]
+fn together_cheapest_spec() -> ProviderSpec {
+    ProviderSpec {
+        name: "together-cheapest",
+        model_env_candidates: &["TOGETHER_CHEAPEST_MODEL", "TOGETHER_MODEL"],
+        default_model: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        required_envs: &["TOGETHER_API_KEY"],
+        supports_tools: true,
+        build_model: |model_name| {
+            let api_key = required_env("TOGETHER_API_KEY")?;
+            Ok(Box::new(TogetherClient::new(TogetherConfig::new(api_key, model_name))?))
+        },
+    }
+}
+
+#[cfg(feature = "mistral")]
+fn mistral_cheapest_spec() -> ProviderSpec {
+    ProviderSpec {
+        name: "mistral-cheapest",
+        model_env_candidates: &["MISTRAL_CHEAPEST_MODEL", "MISTRAL_MODEL"],
+        default_model: "mistral-small-latest",
+        required_envs: &["MISTRAL_API_KEY"],
+        supports_tools: true,
+        build_model: |model_name| {
+            let api_key = required_env("MISTRAL_API_KEY")?;
+            Ok(Box::new(MistralClient::new(MistralConfig::new(api_key, model_name))?))
+        },
+    }
+}
+
+#[cfg(feature = "perplexity")]
+fn perplexity_cheapest_spec() -> ProviderSpec {
+    ProviderSpec {
+        name: "perplexity-cheapest",
+        model_env_candidates: &["PERPLEXITY_CHEAPEST_MODEL", "PERPLEXITY_MODEL"],
+        default_model: "sonar",
+        required_envs: &["PERPLEXITY_API_KEY"],
+        supports_tools: false,
+        build_model: |model_name| {
+            let api_key = required_env("PERPLEXITY_API_KEY")?;
+            Ok(Box::new(PerplexityClient::new(PerplexityConfig::new(api_key, model_name))?))
+        },
+    }
+}
+
+#[cfg(feature = "cerebras")]
+fn cerebras_cheapest_spec() -> ProviderSpec {
+    ProviderSpec {
+        name: "cerebras-cheapest",
+        model_env_candidates: &["CEREBRAS_CHEAPEST_MODEL", "CEREBRAS_MODEL"],
+        default_model: "llama-3.3-70b",
+        required_envs: &["CEREBRAS_API_KEY"],
+        supports_tools: true,
+        build_model: |model_name| {
+            let api_key = required_env("CEREBRAS_API_KEY")?;
+            Ok(Box::new(CerebrasClient::new(CerebrasConfig::new(api_key, model_name))?))
+        },
+    }
+}
+
+#[cfg(feature = "sambanova")]
+fn sambanova_cheapest_spec() -> ProviderSpec {
+    ProviderSpec {
+        name: "sambanova-cheapest",
+        model_env_candidates: &["SAMBANOVA_CHEAPEST_MODEL", "SAMBANOVA_MODEL"],
+        default_model: "Meta-Llama-3.3-70B-Instruct",
+        required_envs: &["SAMBANOVA_API_KEY"],
+        supports_tools: true,
+        build_model: |model_name| {
+            let api_key = required_env("SAMBANOVA_API_KEY")?;
+            Ok(Box::new(SambaNovaClient::new(SambaNovaConfig::new(api_key, model_name))?))
+        },
+    }
+}
+
+#[cfg(feature = "fireworks")]
+provider_contract_tests!(fireworks_cheapest_provider, fireworks_cheapest_spec);
+#[cfg(feature = "together")]
+provider_contract_tests!(together_cheapest_provider, together_cheapest_spec);
+#[cfg(feature = "mistral")]
+provider_contract_tests!(mistral_cheapest_provider, mistral_cheapest_spec);
+#[cfg(feature = "perplexity")]
+provider_contract_tests!(perplexity_cheapest_provider, perplexity_cheapest_spec);
+#[cfg(feature = "cerebras")]
+provider_contract_tests!(cerebras_cheapest_provider, cerebras_cheapest_spec);
+#[cfg(feature = "sambanova")]
+provider_contract_tests!(sambanova_cheapest_provider, sambanova_cheapest_spec);
+
+#[cfg(feature = "bedrock")]
+fn bedrock_cheapest_spec() -> ProviderSpec {
+    ProviderSpec {
+        name: "bedrock-cheapest",
+        model_env_candidates: &["BEDROCK_CHEAPEST_MODEL", "BEDROCK_MODEL"],
+        default_model: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        required_envs: &["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
+        supports_tools: true,
+        build_model: |model_name| {
+            let region = env::var("AWS_DEFAULT_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+            let config = BedrockConfig::new(region, model_name);
+            let client = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(BedrockClient::new(config))
+            })?;
+            Ok(Box::new(client))
+        },
+    }
+}
+
+#[cfg(feature = "azure-ai")]
+fn azure_ai_cheapest_spec() -> ProviderSpec {
+    ProviderSpec {
+        name: "azure-ai-cheapest",
+        model_env_candidates: &["AZURE_AI_CHEAPEST_MODEL", "AZURE_AI_MODEL"],
+        default_model: "meta-llama-3.1-8b-instruct",
+        required_envs: &["AZURE_AI_ENDPOINT", "AZURE_AI_API_KEY"],
+        supports_tools: true,
+        build_model: |model_name| {
+            let endpoint = required_env("AZURE_AI_ENDPOINT")?;
+            let api_key = required_env("AZURE_AI_API_KEY")?;
+            Ok(Box::new(AzureAIClient::new(AzureAIConfig::new(endpoint, api_key, model_name))?))
+        },
+    }
+}
+
+#[cfg(feature = "bedrock")]
+provider_contract_tests!(bedrock_cheapest_provider, bedrock_cheapest_spec);
+#[cfg(feature = "azure-ai")]
+provider_contract_tests!(azure_ai_cheapest_provider, azure_ai_cheapest_spec);
 
 #[test]
 fn llm_request_creation_is_provider_agnostic() {

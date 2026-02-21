@@ -1,4 +1,5 @@
 //! Property tests for Anthropic structured error types.
+#![cfg(feature = "anthropic")]
 
 use adk_core::AdkError;
 use adk_model::anthropic::AnthropicApiError;

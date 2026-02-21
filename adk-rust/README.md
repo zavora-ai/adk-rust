@@ -8,6 +8,25 @@
 
 A flexible framework for developing AI agents with simplicity and power. Model-agnostic, deployment-agnostic, optimized for frontier AI models. Includes support for realtime voice agents, RAG pipelines, graph workflows, declarative security, and 120+ working examples.
 
+## Supported Providers
+
+| Provider | Feature Flag | Default Model |
+|----------|-------------|---------------|
+| Gemini | `gemini` (default) | `gemini-2.5-flash` |
+| OpenAI | `openai` | `gpt-5-mini` |
+| Anthropic | `anthropic` | `claude-sonnet-4-5-20250929` |
+| DeepSeek | `deepseek` | `deepseek-chat` |
+| Groq | `groq` | `llama-3.3-70b-versatile` |
+| Ollama | `ollama` | `llama3.2` |
+| Fireworks AI | `fireworks` | `accounts/fireworks/models/llama-v3p1-8b-instruct` |
+| Together AI | `together` | `meta-llama/Llama-3.3-70B-Instruct-Turbo` |
+| Mistral AI | `mistral` | `mistral-small-latest` |
+| Perplexity | `perplexity` | `sonar` |
+| Cerebras | `cerebras` | `llama-3.3-70b` |
+| SambaNova | `sambanova` | `Meta-Llama-3.3-70B-Instruct` |
+| Amazon Bedrock | `bedrock` | `anthropic.claude-sonnet-4-20250514-v1:0` |
+| Azure AI Inference | `azure-ai` | (endpoint-specific) |
+
 ## Quick Start
 
 **1. Create a new project:**
@@ -258,6 +277,9 @@ adk-rust = { version = "0.3.2", default-features = false, features = ["minimal"]
 
 # Custom
 adk-rust = { version = "0.3.2", default-features = false, features = ["agents", "gemini", "tools"] }
+
+# With new providers (forwarded to adk-model)
+adk-model = { version = "0.3.2", features = ["fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova", "bedrock", "azure-ai"] }
 ```
 
 ## Documentation

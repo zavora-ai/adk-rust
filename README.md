@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 
-> **🎉 v0.3.2 Released!** RAG pipeline with 6 vector store backends, multimodal support across all providers, Models Discovery API, Gemini 3 model support, generation config on agents, and multi-turn tool fix. [@mikefaille](https://github.com/mikefaille) — realtime audio transport & LiveKit bridge, [@rohan-panickar](https://github.com/rohan-panickar) — attachment support & multi-provider content, [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
+> **🎉 v0.3.2 Released!** 9 new LLM providers (xAI,Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, Bedrock, Azure AI), RAG pipeline with 6 vector store backends, multimodal support across all providers, Models Discovery API, Gemini 3 model support, generation config on agents, and multi-turn tool fix. [@mikefaille](https://github.com/mikefaille) — realtime audio transport & LiveKit bridge, [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI compatible providers, xAI, attachment support & multi-provider content, [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 
 A comprehensive and production-ready Rust framework for building AI agents. Create powerful and high-performance AI agent systems with a flexible, modular architecture. Model-agnostic. Type-safe. Blazingly fast.
 
@@ -61,6 +61,14 @@ ADK supports multiple LLM providers with a unified API:
 | DeepSeek | `deepseek-chat`, `deepseek-reasoner` | `deepseek` |
 | Groq | `meta-llama/llama-4-scout-17b-16e-instruct`, `llama-3.3-70b-versatile` | `groq` |
 | Ollama | `llama3.2:3b`, `qwen2.5:7b`, `mistral:7b` | `ollama` |
+| Fireworks AI | `accounts/fireworks/models/llama-v3p1-8b-instruct` | `fireworks` |
+| Together AI | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | `together` |
+| Mistral AI | `mistral-small-latest` | `mistral` |
+| Perplexity | `sonar` | `perplexity` |
+| Cerebras | `llama-3.3-70b` | `cerebras` |
+| SambaNova | `Meta-Llama-3.3-70B-Instruct` | `sambanova` |
+| Amazon Bedrock | `anthropic.claude-sonnet-4-20250514-v1:0` | `bedrock` |
+| Azure AI Inference | (endpoint-specific) | `azure-ai` |
 | mistral.rs | Phi-3, Mistral, Llama, Gemma, LLaVa, FLUX | git dependency |
 
 All providers support streaming, function calling, and multimodal inputs (where available).
@@ -90,7 +98,7 @@ Built-in tools:
 | `adk-core` | Foundational traits and types | `Agent` trait, `Content`, `Part`, error types, streaming primitives |
 | `adk-agent` | Agent implementations | `LlmAgent`, `SequentialAgent`, `ParallelAgent`, `LoopAgent`, builder patterns |
 | `adk-skill` | AgentSkills parsing and selection | Skill markdown parser, `.skills` discovery/indexing, lexical matching, prompt injection helpers |
-| `adk-model` | LLM integrations | Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama clients, streaming, function calling |
+| `adk-model` | LLM integrations | Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, Amazon Bedrock, Azure AI Inference clients, streaming, function calling |
 | `adk-gemini` | Gemini client | Google Gemini API client with streaming and multimodal support |
 | `adk-mistralrs` | Native local inference | mistral.rs integration, ISQ quantization, LoRA adapters (git-only) |
 | `adk-tool` | Tool system and extensibility | `FunctionTool`, Google Search, MCP protocol, schema validation |
@@ -151,6 +159,30 @@ export DEEPSEEK_API_KEY="your-api-key"
 
 # For Groq
 export GROQ_API_KEY="your-api-key"
+
+# For Fireworks AI
+export FIREWORKS_API_KEY="your-api-key"
+
+# For Together AI
+export TOGETHER_API_KEY="your-api-key"
+
+# For Mistral AI
+export MISTRAL_API_KEY="your-api-key"
+
+# For Perplexity
+export PERPLEXITY_API_KEY="your-api-key"
+
+# For Cerebras
+export CEREBRAS_API_KEY="your-api-key"
+
+# For SambaNova
+export SAMBANOVA_API_KEY="your-api-key"
+
+# For Azure AI Inference
+export AZURE_AI_API_KEY="your-api-key"
+
+# For Amazon Bedrock (uses AWS IAM credentials)
+# Configure via: aws configure
 
 # For Ollama (no key, just run: ollama serve)
 ```
@@ -902,6 +934,7 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 ## Roadmap
 
 **Implemented** (v0.3.2):
+- **8 new LLM providers** — Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova (OpenAI-compatible), Amazon Bedrock (AWS SDK), Azure AI Inference (reqwest) — all feature-gated with contract tests
 - **adk-rag** — Full RAG pipeline with document chunking (fixed-size, recursive, markdown), embedding providers, vector search, reranking, and 6 vector store backends (in-memory, Qdrant, Milvus, Weaviate, Pinecone, SurrealDB)
 - **Declarative scope-based security** — Tools declare required scopes via `required_scopes()`, framework enforces automatically via `ScopeGuard` with pluggable resolvers and audit logging
 - **Models Discovery API** — `list_models()` and `get_model()` on `Gemini` client for runtime model enumeration
