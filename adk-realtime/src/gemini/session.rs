@@ -282,7 +282,7 @@ impl GeminiRealtimeSession {
     async fn flush_audio(&self) -> Result<()> {
         let mut buffer = self.audio_buffer.lock().await;
         if !buffer.is_empty() {
-            let data = buffer.drain(..).collect::<Vec<u8>>();
+            let data = std::mem::take(&mut *buffer);
             drop(buffer);
 
             // Assume standard Gemini format (16kHz PCM)
@@ -486,7 +486,7 @@ impl RealtimeSession for GeminiRealtimeSession {
 
         // 3200 bytes = 100ms at 16kHz 16-bit mono
         if buffer.len() >= 3200 {
-            let data = buffer.drain(..).collect::<Vec<u8>>();
+            let data = std::mem::take(&mut *buffer);
             drop(buffer); // Release lock before sending
 
             // We use the format from the current chunk, assuming consistency

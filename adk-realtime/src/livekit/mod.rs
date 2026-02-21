@@ -24,10 +24,15 @@ mod handler;
 pub use bridge::{bridge_gemini_input, bridge_input};
 pub use handler::LiveKitEventHandler;
 
-// Re-export core LiveKit types so downstream crates only need `adk-realtime`
-pub use livekit::options::TrackPublishOptions;
-pub use livekit::prelude::*;
-pub use livekit::webrtc::audio_source::{
-    AudioSourceOptions, RtcAudioSource, native::NativeAudioSource,
-};
-pub use livekit_api::access_token::{AccessToken, VideoGrants};
+// Re-export common types at the module level for basic ergonomics
+pub use livekit_api::access_token::AccessToken;
+
+/// A prelude for common LiveKit types and bridges.
+///
+/// This simplifies imports for downstream crates that want to use `adk-realtime`
+/// as their primary entry point for LiveKit integration.
+pub mod prelude {
+    pub use crate::livekit::{LiveKitEventHandler, bridge_gemini_input, bridge_input};
+    pub use livekit::prelude::*;
+    pub use livekit_api::access_token::{AccessToken, VideoGrants};
+}

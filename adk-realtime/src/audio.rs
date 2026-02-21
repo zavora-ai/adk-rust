@@ -202,11 +202,7 @@ pub struct SmartAudioBuffer {
 impl SmartAudioBuffer {
     /// Create a new smart audio buffer.
     pub fn new(sample_rate: u32, target_duration_ms: u32) -> Self {
-        Self {
-            buffer: Vec::new(),
-            sample_rate,
-            target_duration_ms,
-        }
+        Self { buffer: Vec::new(), sample_rate, target_duration_ms }
     }
 
     /// Push new samples into the buffer.
@@ -217,25 +213,17 @@ impl SmartAudioBuffer {
     fn should_flush(&self) -> bool {
         let duration_ms = (self.buffer.len() as f64 / self.sample_rate as f64) * 1000.0;
 
-        duration_ms >= self.target_duration_ms as u64
+        duration_ms >= self.target_duration_ms as f64
     }
 
     /// Flush the buffer if the target duration has been reached.
     pub fn flush(&mut self) -> Option<Vec<i16>> {
-        if self.should_flush() {
-            Some(std::mem::take(&mut self.buffer))
-        } else {
-            None
-        }
+        if self.should_flush() { Some(std::mem::take(&mut self.buffer)) } else { None }
     }
 
     /// Flush any remaining samples in the buffer.
     pub fn flush_remaining(&mut self) -> Option<Vec<i16>> {
-        if self.buffer.is_empty() {
-            None
-        } else {
-            Some(std::mem::take(&mut self.buffer))
-        }
+        if self.buffer.is_empty() { None } else { Some(std::mem::take(&mut self.buffer)) }
     }
 }
 
