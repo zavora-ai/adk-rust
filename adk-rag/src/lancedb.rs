@@ -92,7 +92,7 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn delete_collection(&self, name: &str) -> Result<()> {
-        self.connection.drop_table(name).await.map_err(Self::map_err)?;
+        self.connection.drop_table(name, &[]).await.map_err(Self::map_err)?;
         debug!(collection = name, "deleted lancedb table");
         Ok(())
     }
