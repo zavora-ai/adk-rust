@@ -677,6 +677,90 @@ pub fn get_required_env_vars(project: &ProjectSchema) -> Vec<EnvVarRequirement> 
         });
     }
 
+    if providers.contains("fireworks") {
+        env_vars.push(EnvVarRequirement {
+            name: "FIREWORKS_API_KEY".to_string(),
+            description: "Fireworks AI API key".to_string(),
+            alternatives: vec![],
+            required: true,
+        });
+    }
+
+    if providers.contains("together") {
+        env_vars.push(EnvVarRequirement {
+            name: "TOGETHER_API_KEY".to_string(),
+            description: "Together AI API key".to_string(),
+            alternatives: vec![],
+            required: true,
+        });
+    }
+
+    if providers.contains("mistral") {
+        env_vars.push(EnvVarRequirement {
+            name: "MISTRAL_API_KEY".to_string(),
+            description: "Mistral AI API key".to_string(),
+            alternatives: vec![],
+            required: true,
+        });
+    }
+
+    if providers.contains("perplexity") {
+        env_vars.push(EnvVarRequirement {
+            name: "PERPLEXITY_API_KEY".to_string(),
+            description: "Perplexity API key for Sonar models".to_string(),
+            alternatives: vec![],
+            required: true,
+        });
+    }
+
+    if providers.contains("cerebras") {
+        env_vars.push(EnvVarRequirement {
+            name: "CEREBRAS_API_KEY".to_string(),
+            description: "Cerebras API key for ultra-fast inference".to_string(),
+            alternatives: vec![],
+            required: true,
+        });
+    }
+
+    if providers.contains("sambanova") {
+        env_vars.push(EnvVarRequirement {
+            name: "SAMBANOVA_API_KEY".to_string(),
+            description: "SambaNova API key".to_string(),
+            alternatives: vec![],
+            required: true,
+        });
+    }
+
+    if providers.contains("bedrock") {
+        env_vars.push(EnvVarRequirement {
+            name: "AWS_ACCESS_KEY_ID".to_string(),
+            description: "AWS credentials for Amazon Bedrock (or use IAM roles/SSO)".to_string(),
+            alternatives: vec!["AWS_PROFILE".to_string()],
+            required: true,
+        });
+        env_vars.push(EnvVarRequirement {
+            name: "AWS_DEFAULT_REGION".to_string(),
+            description: "AWS region for Bedrock (defaults to us-east-1)".to_string(),
+            alternatives: vec!["AWS_REGION".to_string()],
+            required: false,
+        });
+    }
+
+    if providers.contains("azure-ai") {
+        env_vars.push(EnvVarRequirement {
+            name: "AZURE_AI_ENDPOINT".to_string(),
+            description: "Azure AI Inference endpoint URL".to_string(),
+            alternatives: vec![],
+            required: true,
+        });
+        env_vars.push(EnvVarRequirement {
+            name: "AZURE_AI_API_KEY".to_string(),
+            description: "Azure AI API key".to_string(),
+            alternatives: vec![],
+            required: true,
+        });
+    }
+
     // Check for MCP tools that might need specific env vars
     for (tool_id, config) in &project.tool_configs {
         if let ToolConfig::Mcp(mcp) = config {

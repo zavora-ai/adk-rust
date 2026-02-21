@@ -3,6 +3,7 @@
 //! **Feature: anthropic-deep-integration, Property 14: Config builder round-trip**
 //! **Feature: anthropic-deep-integration, Property 15: Backward compatibility**
 //! **Validates: Requirements 13.1, 13.3**
+#![cfg(feature = "anthropic")]
 
 use adk_model::anthropic::AnthropicConfig;
 use proptest::prelude::*;

@@ -1,4 +1,5 @@
 //! Property tests for Anthropic retry and rate-limit handling.
+#![cfg(feature = "anthropic")]
 
 use std::collections::HashMap;
 use std::sync::Arc;

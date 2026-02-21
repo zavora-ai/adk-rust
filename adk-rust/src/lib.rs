@@ -819,6 +819,30 @@ pub mod prelude {
     #[cfg(feature = "ollama")]
     pub use crate::model::ollama::{OllamaConfig, OllamaModel};
 
+    #[cfg(feature = "fireworks")]
+    pub use crate::model::fireworks::{FireworksClient, FireworksConfig};
+
+    #[cfg(feature = "together")]
+    pub use crate::model::together::{TogetherClient, TogetherConfig};
+
+    #[cfg(feature = "mistral")]
+    pub use crate::model::mistral::{MistralClient, MistralConfig};
+
+    #[cfg(feature = "perplexity")]
+    pub use crate::model::perplexity::{PerplexityClient, PerplexityConfig};
+
+    #[cfg(feature = "cerebras")]
+    pub use crate::model::cerebras::{CerebrasClient, CerebrasConfig};
+
+    #[cfg(feature = "sambanova")]
+    pub use crate::model::sambanova::{SambaNovaClient, SambaNovaConfig};
+
+    #[cfg(feature = "bedrock")]
+    pub use crate::model::bedrock::{BedrockClient, BedrockConfig};
+
+    #[cfg(feature = "azure-ai")]
+    pub use crate::model::azure_ai::{AzureAIClient, AzureAIConfig};
+
     // Tools
     #[cfg(feature = "tools")]
     pub use crate::tool::{

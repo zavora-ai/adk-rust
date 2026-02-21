@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.2] - 2026-02-17
 
 ### ⭐ Highlights
+- **8 New LLM Providers**: Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova (OpenAI-compatible), Amazon Bedrock (AWS SDK), and Azure AI Inference (reqwest) — all feature-gated with contract tests
 - **adk-rag**: New RAG crate with modular pipeline, 6 vector store backends (InMemory, Qdrant, LanceDB, pgvector, SurrealDB), 3 chunking strategies, and agentic retrieval via `RagTool`
 - **Generation Config on Agents**: `LlmAgentBuilder` now supports `temperature()`, `top_p()`, `top_k()`, `max_output_tokens()` convenience methods and full `generate_content_config()` for agent-level LLM tuning
 - **Gemini Model URL Fix**: `Model::Custom` variant now correctly prefixes `models/` in API URLs, fixing `PerformRequestNew` errors for all Gemini tool-calling examples
@@ -60,6 +61,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generation config parameters (`temperature`, `top_p`, `top_k`, `max_output_tokens`) added to `AgentSchema`
 - Advanced Settings section in LlmProperties panel for configuring generation parameters
 - Code generation emits `.temperature()`, `.top_p()`, `.top_k()`, `.max_output_tokens()` builder calls
+
+#### adk-model — New Providers
+- **Fireworks AI** (`fireworks` feature) — OpenAI-compatible provider for fast open-model inference. Default model: `accounts/fireworks/models/llama-v3p1-8b-instruct`. Env: `FIREWORKS_API_KEY`
+- **Together AI** (`together` feature) — OpenAI-compatible provider for hosted open models. Default model: `meta-llama/Llama-3.3-70B-Instruct-Turbo`. Env: `TOGETHER_API_KEY`
+- **Mistral AI** (`mistral` feature) — OpenAI-compatible provider for Mistral cloud models. Default model: `mistral-small-latest`. Env: `MISTRAL_API_KEY`
+- **Perplexity** (`perplexity` feature) — OpenAI-compatible provider for search-augmented LLM. Default model: `sonar`. Env: `PERPLEXITY_API_KEY`
+- **Cerebras** (`cerebras` feature) — OpenAI-compatible provider for ultra-fast inference. Default model: `llama-3.3-70b`. Env: `CEREBRAS_API_KEY`
+- **SambaNova** (`sambanova` feature) — OpenAI-compatible provider for fast inference. Default model: `Meta-Llama-3.3-70B-Instruct`. Env: `SAMBANOVA_API_KEY`
+- **Amazon Bedrock** (`bedrock` feature) — AWS SDK Converse API with IAM/STS authentication, streaming and non-streaming support. Default model: `anthropic.claude-sonnet-4-20250514-v1:0`. Uses AWS credential chain
+- **Azure AI Inference** (`azure-ai` feature) — reqwest-based client for Azure AI Inference endpoints with `api-key` header auth, streaming SSE and non-streaming JSON. Env: `AZURE_AI_API_KEY`
+- `all-providers` feature now includes all eight new provider feature flags
+- Contract tests (`ProviderSpec` + `provider_contract_tests!` macro) for all eight new providers
+- Comprehensive rustdoc with quick-start examples for all new provider types
 
 #### Examples
 - `gemini_multimodal` — inline image analysis, multi-image comparison, and vision agent pattern using `Part::InlineData` with Gemini
