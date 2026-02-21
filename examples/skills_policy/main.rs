@@ -1,10 +1,10 @@
 //! AgentSkills example: explicit skill index + tag-based selection policy.
 //!
-//! Run:
-//!   cargo run --manifest-path examples/Cargo.toml --example skills_policy_filters
+//! Demonstrates how to filter the global skill index using `SelectionPolicy`
+//! to bind only "security" skills to a specific agent.
 //!
-//! Required env:
-//!   GOOGLE_API_KEY (or GEMINI_API_KEY)
+//! Run:
+//!   cargo run --manifest-path examples/Cargo.toml --example skills_policy
 
 use adk_agent::LlmAgentBuilder;
 use adk_core::{Content, Part};
@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 fn setup_demo_skills_root() -> Result<PathBuf> {
-    let root = std::env::temp_dir().join("adk_skills_policy_filters_demo");
+    let root = std::env::temp_dir().join("adk_skills_policy_demo");
     if root.exists() {
         std::fs::remove_dir_all(&root)?;
     }
@@ -28,15 +28,23 @@ fn setup_demo_skills_root() -> Result<PathBuf> {
     std::fs::create_dir_all(&skills_dir)?;
     std::fs::write(
         skills_dir.join("security_review.md"),
-        "---\nname: security_review\ndescription: Security review checklist for auth and secrets\ntags: [security, auth]\n---\nAudit token lifetime, key storage, and least-privilege scopes.\n",
+        "---
+name: security_review
+description: Security review checklist for auth and secrets
+tags: [security, auth]
+---
+Audit token lifetime and key storage.
+",
     )?;
     std::fs::write(
         skills_dir.join("release_notes.md"),
-        "---\nname: release_notes\ndescription: Release notes formatting\ntags: [release, docs]\n---\nSummarize user-facing changes in bullets.\n",
-    )?;
-    std::fs::write(
-        skills_dir.join("code_search.md"),
-        "---\nname: code_search\ndescription: Search the repository efficiently\ntags: [code, search]\n---\nUse `rg --files` and `rg <pattern>` for focused navigation.\n",
+        "---
+name: release_notes
+description: Release notes formatting
+tags: [release, docs]
+---
+Summarize user-facing changes.
+",
     )?;
     Ok(root)
 }
@@ -52,6 +60,7 @@ async fn main() -> Result<()> {
     let skills_root = setup_demo_skills_root()?;
     let skills_index = load_skill_index(&skills_root)?;
 
+    // 1. Create a policy that ONLY includes 'security' and EXCLUDES 'release'
     let policy = SelectionPolicy {
         top_k: 1,
         min_score: 0.1,
@@ -59,32 +68,19 @@ async fn main() -> Result<()> {
         exclude_tags: vec!["release".to_string()],
     };
 
-    let agent = LlmAgentBuilder::new("assistant_policy_skills")
-        .description("Assistant using explicit skill policy")
-        .instruction("Respond with exactly two concise bullets.")
+    // 2. Build the agent with this restricted view of skills
+    let agent = LlmAgentBuilder::new("security_officer")
+        .description("Assistant focused on security hardening")
         .model(model)
         .with_skills(skills_index)
         .with_skill_policy(policy)
-        .with_skill_budget(240)
         .build()?;
 
-    let app_name = "skills_policy_filters".to_string();
-    let user_id = "user".to_string();
     let session_service = Arc::new(InMemorySessionService::new());
-    let session = session_service
-        .create(CreateRequest {
-            app_name: app_name.clone(),
-            user_id: user_id.clone(),
-            session_id: None,
-            state: HashMap::new(),
-        })
-        .await?;
-    let session_id = session.id().to_string();
-
     let runner = Runner::new(RunnerConfig {
-        app_name,
+        app_name: "policy_demo".into(),
         agent: Arc::new(agent),
-        session_service,
+        session_service: session_service.clone(),
         artifact_service: None,
         memory_service: None,
         plugin_manager: None,
@@ -92,23 +88,29 @@ async fn main() -> Result<()> {
         compaction_config: None,
     })?;
 
+    let user_id = "user".to_string();
+    let session = session_service
+        .create(CreateRequest {
+            app_name: "demo".into(),
+            user_id: user_id.clone(),
+            session_id: None,
+            state: HashMap::new(),
+        })
+        .await?;
+
+    println!("Querying with 'Tell me about release notes' (Should NOT find security skill)...");
     let mut stream = runner
         .run(
-            user_id,
-            session_id,
-            Content::new("user").with_text(
-                "Review service account token handling and list the top two hardening checks.",
-            ),
+            user_id.clone(),
+            session.id().to_string(),
+            Content::new("user").with_text("Tell me about release notes"),
         )
         .await?;
 
     while let Some(event) = stream.next().await {
         let event = event?;
-        if event.author == "assistant_policy_skills" {
-            let text = event
-                .llm_response
-                .content
-                .unwrap_or_else(|| Content { role: "model".to_string(), parts: vec![] })
+        if let Some(content) = event.llm_response.content {
+            let text = content
                 .parts
                 .iter()
                 .filter_map(|p| match p {
@@ -116,8 +118,8 @@ async fn main() -> Result<()> {
                     _ => None,
                 })
                 .collect::<Vec<_>>()
-                .join("\n");
-            println!("{text}");
+                .join("");
+            println!("Agent: {}", text);
         }
     }
 

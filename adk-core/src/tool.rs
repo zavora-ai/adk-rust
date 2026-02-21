@@ -1,5 +1,6 @@
 use crate::{CallbackContext, EventActions, MemoryEntry, Result};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -73,6 +74,36 @@ pub trait ToolContext: CallbackContext {
 pub trait Toolset: Send + Sync {
     fn name(&self) -> &str;
     async fn tools(&self, ctx: Arc<dyn crate::ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>>;
+}
+
+/// Controls how the framework handles skills/agents that request unavailable tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ValidationMode {
+    /// Reject the operation entirely if any requested tool is missing from the registry.
+    Strict,
+    /// Bind available tools, omit missing ones, and log a warning.
+    Permissive,
+}
+
+impl Default for ValidationMode {
+    fn default() -> Self {
+        Self::Strict
+    }
+}
+
+/// A registry that maps tool names to concrete tool instances.
+///
+/// Implementations resolve string identifiers (e.g. from a skill or config)
+/// into executable `Arc<dyn Tool>` instances.
+pub trait ToolRegistry: Send + Sync {
+    /// Resolve a tool name to a concrete tool instance.
+    /// Returns `None` if the tool is not available in this registry.
+    fn resolve(&self, tool_name: &str) -> Option<Arc<dyn Tool>>;
+
+    /// Returns a list of all tool names available in this registry.
+    fn available_tools(&self) -> Vec<String> {
+        vec![]
+    }
 }
 
 pub type ToolPredicate = Box<dyn Fn(&dyn Tool) -> bool + Send + Sync>;

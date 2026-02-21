@@ -15,6 +15,33 @@ pub trait Agent: Send + Sync {
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream>;
 }
 
+/// A validated context containing engineered instructions and resolved tool instances.
+///
+/// This structure serves as the "Atomic Unit of Capability" for an agent. It guarantees
+/// that the agent's cognitive frame (the instructions telling it what it can do) is
+/// perfectly aligned with its physical capabilities (the binary tool instances bound
+/// to the session).
+///
+/// By using `ResolvedContext`, the framework eliminates "Phantom Tool" hallucinations,
+/// where an agent tries to call a tool that was mentioned in its prompt but never
+/// actually registered in the runtime.
+#[derive(Clone)]
+pub struct ResolvedContext {
+    /// The engineered system instruction.
+    pub system_instruction: String,
+    /// The resolved, executable tools.
+    pub active_tools: Vec<Arc<dyn crate::Tool>>,
+}
+
+impl std::fmt::Debug for ResolvedContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedContext")
+            .field("system_instruction_len", &self.system_instruction.len())
+            .field("active_tools_count", &self.active_tools.len())
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

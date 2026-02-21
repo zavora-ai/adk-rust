@@ -37,32 +37,28 @@ name = "loop_workflow"
 path = "loop_workflow/main.rs"
 
 [[example]]
-name = "skills_llm_minimal"
-path = "skills_llm_minimal/main.rs"
+name = "skills_basic"
+path = "skills_basic/main.rs"
 
 [[example]]
-name = "skills_auto_discovery"
-path = "skills_auto_discovery/main.rs"
+name = "skills_conventions"
+path = "skills_conventions/main.rs"
 
 [[example]]
-name = "skills_conventions_index"
-path = "skills_conventions_index/main.rs"
+name = "skills_coordinator"
+path = "skills_coordinator/main.rs"
 
 [[example]]
-name = "skills_conventions_llm"
-path = "skills_conventions_llm/main.rs"
+name = "skills_workflow"
+path = "skills_workflow/main.rs"
 
 [[example]]
-name = "skills_policy_filters"
-path = "skills_policy_filters/main.rs"
+name = "skills_policy"
+path = "skills_policy/main.rs"
 
 [[example]]
-name = "skills_runner_injector"
-path = "skills_runner_injector/main.rs"
-
-[[example]]
-name = "skills_workflow_minimal"
-path = "skills_workflow_minimal/main.rs"
+name = "skills_discovery"
+path = "skills_discovery/main.rs"
 
 [[example]]
 name = "load_artifacts"

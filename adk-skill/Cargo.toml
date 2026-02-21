@@ -22,5 +22,6 @@ walkdir = "2.5"
 sha2 = "0.10"
 
 [dev-dependencies]
+async-trait.workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }

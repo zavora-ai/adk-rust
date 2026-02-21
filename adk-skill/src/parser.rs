@@ -54,9 +54,36 @@ pub fn parse_skill_markdown(path: &Path, content: &str) -> SkillResult<ParsedSki
         .filter(|t| !t.is_empty())
         .collect::<Vec<_>>();
 
+    let allowed_tools = fm
+        .allowed_tools
+        .into_iter()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>();
+
+    let references = fm
+        .references
+        .into_iter()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>();
+
     let body = lines.collect::<Vec<_>>().join("\n").trim().to_string();
 
-    Ok(ParsedSkill { name, description, tags, body })
+    Ok(ParsedSkill {
+        name,
+        description,
+        version: fm.version,
+        license: fm.license,
+        compatibility: fm.compatibility,
+        tags,
+        allowed_tools,
+        references,
+        trigger: fm.trigger.unwrap_or(false),
+        hint: fm.hint,
+        metadata: fm.metadata,
+        body,
+    })
 }
 
 pub fn parse_instruction_markdown(path: &Path, content: &str) -> SkillResult<ParsedSkill> {
@@ -118,7 +145,20 @@ fn parse_convention_markdown(path: &Path, content: &str) -> SkillResult<ParsedSk
         )
     });
 
-    Ok(ParsedSkill { name, description, tags, body })
+    Ok(ParsedSkill {
+        name,
+        description,
+        version: None,
+        license: None,
+        compatibility: None,
+        tags,
+        allowed_tools: Vec::new(),
+        references: Vec::new(),
+        trigger: false,
+        hint: None,
+        metadata: std::collections::HashMap::new(),
+        body,
+    })
 }
 
 fn is_skill_file_path(path: &Path) -> bool {
@@ -173,6 +213,41 @@ Use ripgrep first.
         assert_eq!(parsed.description, "Search the codebase quickly");
         assert_eq!(parsed.tags, vec!["code", "search"]);
         assert!(parsed.body.contains("Use ripgrep first."));
+    }
+
+    #[test]
+    fn parses_skill_with_full_spec() {
+        let content = r#"---
+name: full_spec_agent
+description: An agent with everything
+version: "1.2.3"
+license: MIT
+compatibility: "Requires Python 3.10+"
+allowed-tools:
+  - tool1
+references:
+  - ref1
+trigger: true
+hint: "Say something"
+metadata:
+  custom_key: custom_value
+tags: [tag1]
+---
+Body content.
+"#;
+        let parsed = parse_skill_markdown(Path::new(".skills/full.md"), content).unwrap();
+        assert_eq!(parsed.name, "full_spec_agent");
+        assert_eq!(parsed.version, Some("1.2.3".to_string()));
+        assert_eq!(parsed.license, Some("MIT".to_string()));
+        assert_eq!(parsed.compatibility, Some("Requires Python 3.10+".to_string()));
+        assert_eq!(parsed.allowed_tools, vec!["tool1"]);
+        assert_eq!(parsed.references, vec!["ref1"]);
+        assert!(parsed.trigger);
+        assert_eq!(parsed.hint, Some("Say something".to_string()));
+        assert_eq!(
+            parsed.metadata.get("custom_key").and_then(|v| v.as_str()),
+            Some("custom_value")
+        );
     }
 
     #[test]

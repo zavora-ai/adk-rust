@@ -222,13 +222,17 @@ version = "^0.3"
 
 [dependencies.google-cloud-aiplatform-v1]
 version = "1.7.0"
-features = ["prediction-service"]
+features = ["prediction-service", "default-rustls-provider"]
+default-features = false
 
 [dependencies.google-cloud-auth]
 version = "1.4.0"
+default-features = false
+features = ["default-rustls-provider"]
 
 [dependencies.google-cloud-gax]
 version = "1.7.0"
+default-features = false
 
 [dependencies.mime]
 version = "0.3"

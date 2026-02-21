@@ -6,15 +6,15 @@ pub fn select_skills(index: &SkillIndex, query: &str, policy: &SelectionPolicy) 
         return Vec::new();
     }
 
-    let query_tokens = tokenize(query);
-    if query_tokens.is_empty() {
-        return Vec::new();
-    }
-
     let include_tags =
         policy.include_tags.iter().map(|t| t.to_ascii_lowercase()).collect::<HashSet<_>>();
     let exclude_tags =
         policy.exclude_tags.iter().map(|t| t.to_ascii_lowercase()).collect::<HashSet<_>>();
+
+    let query_tokens = tokenize(query);
+    if query_tokens.is_empty() && include_tags.is_empty() {
+        return Vec::new();
+    }
 
     let mut scored = index
         .skills()

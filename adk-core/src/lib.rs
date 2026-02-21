@@ -70,7 +70,7 @@ pub mod model;
 pub mod tool;
 pub mod types;
 
-pub use agent::{Agent, EventStream};
+pub use agent::{Agent, EventStream, ResolvedContext};
 pub use agent_loader::{AgentLoader, MultiAgentLoader, SingleAgentLoader};
 pub use callbacks::{
     AfterAgentCallback, AfterModelCallback, AfterToolCallback, BaseEventsSummarizer,
@@ -91,5 +91,5 @@ pub use model::{
     CitationMetadata, CitationSource, FinishReason, GenerateContentConfig, Llm, LlmRequest,
     LlmResponse, LlmResponseStream, UsageMetadata,
 };
-pub use tool::{Tool, ToolContext, ToolPredicate, Toolset};
+pub use tool::{Tool, ToolContext, ToolPredicate, ToolRegistry, Toolset, ValidationMode};
 pub use types::{Content, FunctionResponseData, MAX_INLINE_DATA_SIZE, Part};

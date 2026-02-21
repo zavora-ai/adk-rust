@@ -55,7 +55,7 @@ getrandom = { version = "0.3", optional = true }
 adk-gemini = { workspace = true, optional = true }
 
 # Vertex AI Live (optional)
-google-cloud-auth = { version = "1.4", optional = true, default-features = false }
+google-cloud-auth = { version = "1.4", optional = true, default-features = false, features = ["default-rustls-provider"] }
 
 # LiveKit bridge (optional)
 livekit = { version = "0.7", optional = true }

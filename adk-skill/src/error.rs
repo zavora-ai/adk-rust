@@ -16,6 +16,12 @@ pub enum SkillError {
 
     #[error("invalid skills root, expected directory: {0}")]
     InvalidSkillsRoot(PathBuf),
+
+    #[error("skill validation error: {0}")]
+    Validation(String),
+
+    #[error("index error: {0}")]
+    IndexError(String),
 }
 
 pub type SkillResult<T> = Result<T, SkillError>;

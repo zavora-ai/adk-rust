@@ -84,13 +84,8 @@ pub fn select_skill_prompt_block(
     max_injected_chars: usize,
 ) -> Option<(SkillMatch, String)> {
     let top = select_skills(index, query, policy).into_iter().next()?;
-    let matched = index.skills().iter().find(|s| s.id == top.skill.id)?;
-    let mut skill_body = matched.body.clone();
-    if skill_body.chars().count() > max_injected_chars {
-        skill_body = skill_body.chars().take(max_injected_chars).collect();
-    }
-
-    let prompt_block = format!("[skill:{}]\n{}\n[/skill]", matched.name, skill_body);
+    let matched = index.find_by_id(&top.skill.id)?;
+    let prompt_block = matched.engineer_prompt_block(max_injected_chars);
     Some((top, prompt_block))
 }
 

@@ -142,7 +142,22 @@ pub struct EventCompaction {
 }
 ```
 
-See [Context Compaction](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/sessions/context-compaction.md) for usage details.
+### High-Stakes Tooling & Context Engineering
+
+For production agents, `adk-core` provides types to ensure that an agent's instructions (the cognitive frame) always match its tool capabilities (the physical frame).
+
+#### `ResolvedContext`
+An "atomic unit" containing the final system instruction and the collection of verified, binary `Arc<dyn Tool>` instances. This prevents "Phantom Tool" hallucinations.
+
+#### `ToolRegistry`
+A foundational trait for mapping string-based tool names (from config or skills) to concrete executable tool instances.
+
+#### `ValidationMode`
+Defines how the framework handles cases where a requested tool is missing:
+- **Strict**: Rejects the match/operation if any tool is missing.
+- **Permissive**: Binds available tools, omits missing ones, and logs a warning.
+
+---
 
 ## Context Hierarchy
 

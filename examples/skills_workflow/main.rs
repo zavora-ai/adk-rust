@@ -1,12 +1,12 @@
-//! Minimal AgentSkills example for `LlmAgentBuilder`.
+//! AgentSkills example: apply skills to multi-agent workflows.
+//!
+//! Highlights the `SequentialAgent::with_skills_from_root` pattern,
+//! enabling complex workflows to share a skills index.
 //!
 //! Run:
-//!   cargo run --manifest-path examples/Cargo.toml --example skills_llm_minimal
-//!
-//! Required env:
-//!   GOOGLE_API_KEY (or GEMINI_API_KEY)
+//!   cargo run --manifest-path examples/Cargo.toml --example skills_workflow
 
-use adk_agent::LlmAgentBuilder;
+use adk_agent::{LlmAgentBuilder, SequentialAgent};
 use adk_core::{Content, Part};
 use adk_model::gemini::GeminiModel;
 use adk_runner::{Runner, RunnerConfig};
@@ -17,12 +17,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 fn setup_demo_skills_root() -> Result<std::path::PathBuf> {
-    let root = std::env::temp_dir().join("adk_skills_llm_minimal_demo");
+    let root = std::env::temp_dir().join("adk_skills_workflow_demo");
+    if root.exists() {
+        std::fs::remove_dir_all(&root)?;
+    }
     let skills_dir = root.join(".skills");
     std::fs::create_dir_all(&skills_dir)?;
     std::fs::write(
         skills_dir.join("search.md"),
-        "---\nname: search\ndescription: Search source code\ntags: [search, code]\n---\nUse rg --files, then rg <pattern>.\n",
+        "---
+name: search
+description: Search source code
+tags: [search, code]
+---
+Use rg --files, then rg <pattern>.
+",
     )?;
     Ok(root)
 }
@@ -34,18 +43,29 @@ async fn main() -> Result<()> {
     let api_key = std::env::var("GOOGLE_API_KEY")
         .or_else(|_| std::env::var("GEMINI_API_KEY"))
         .expect("GOOGLE_API_KEY or GEMINI_API_KEY must be set");
-    let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
 
+    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
     let skills_root = setup_demo_skills_root()?;
 
-    let agent = LlmAgentBuilder::new("assistant")
-        .description("Assistant with local skills")
-        .instruction("Respond briefly")
-        .model(Arc::new(model))
-        .with_skills_from_root(&skills_root)?
+    // 1. Define individual agents
+    let planner = LlmAgentBuilder::new("planner")
+        .description("Plans the search strategy")
+        .instruction("Given the request, produce a short 2-step search plan.")
+        .model(model.clone())
         .build()?;
 
-    let app_name = "skills_llm_minimal".to_string();
+    let executor = LlmAgentBuilder::new("executor")
+        .description("Executes the planned search")
+        .instruction("Provide concrete ripgrep commands to execute the plan.")
+        .model(model)
+        .build()?;
+
+    // 2. Wrap them in a SequentialAgent and link skills to the entire workflow
+    let workflow =
+        SequentialAgent::new("search_workflow", vec![Arc::new(planner), Arc::new(executor)])
+            .with_skills_from_root(&skills_root)?;
+
+    let app_name = "skills_workflow_demo".to_string();
     let user_id = "user".to_string();
     let session_service = Arc::new(InMemorySessionService::new());
     let session = session_service
@@ -60,7 +80,7 @@ async fn main() -> Result<()> {
 
     let runner = Runner::new(RunnerConfig {
         app_name,
-        agent: Arc::new(agent),
+        agent: Arc::new(workflow),
         session_service,
         artifact_service: None,
         memory_service: None,
@@ -79,11 +99,8 @@ async fn main() -> Result<()> {
 
     while let Some(event) = stream.next().await {
         let event = event?;
-        if event.author == "assistant" {
-            let text = event
-                .llm_response
-                .content
-                .unwrap_or_else(|| Content { role: "model".to_string(), parts: vec![] })
+        if let Some(content) = event.llm_response.content {
+            let text = content
                 .parts
                 .iter()
                 .filter_map(|p| match p {
@@ -91,8 +108,11 @@ async fn main() -> Result<()> {
                     _ => None,
                 })
                 .collect::<Vec<_>>()
-                .join("\n");
-            println!("{text}");
+                .join(
+                    "
+",
+                );
+            println!("{} -> {}", event.author, text);
         }
     }
 
