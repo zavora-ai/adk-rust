@@ -29,9 +29,9 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use surrealdb::Surreal;
 use surrealdb::engine::any::{Any, connect};
+use surrealdb_types::{RecordId, RecordIdKey, SurrealValue};
 use tracing::debug;
 
 use crate::document::{Chunk, SearchResult};
@@ -44,7 +44,7 @@ const DEFAULT_NS: &str = "adk_rag";
 const DEFAULT_DB: &str = "vectors";
 
 /// A row stored in SurrealDB representing a chunk with its embedding.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, SurrealValue)]
 struct ChunkRow {
     text: String,
     embedding: Vec<f32>,
@@ -53,13 +53,23 @@ struct ChunkRow {
 }
 
 /// A row returned from a KNN search query.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, SurrealValue)]
 struct SearchRow {
-    id: surrealdb::RecordId,
+    id: RecordId,
     text: String,
     metadata: HashMap<String, String>,
     document_id: String,
     distance: f32,
+}
+
+/// Extract a string representation from a [`RecordIdKey`].
+fn record_id_key_to_string(key: &RecordIdKey) -> String {
+    match key {
+        RecordIdKey::String(s) => s.clone(),
+        RecordIdKey::Number(n) => n.to_string(),
+        RecordIdKey::Uuid(u) => u.to_string(),
+        _ => format!("{key:?}"),
+    }
 }
 
 /// A [`VectorStore`] backed by [SurrealDB](https://surrealdb.com/).
@@ -231,8 +241,7 @@ impl VectorStore for SurrealVectorStore {
         let results = rows
             .into_iter()
             .map(|row| {
-                // SurrealDB record IDs are in the format "table:id"
-                let id = row.id.key().to_string();
+                let id = record_id_key_to_string(&row.id.key);
                 // Cosine distance → similarity: score = 1.0 - distance
                 let score = 1.0 - row.distance;
 

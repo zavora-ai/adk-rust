@@ -25,12 +25,13 @@ tokio = { workspace = true, features = ["sync"] }
 adk-gemini = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 qdrant-client = { version = "1.13", optional = true }
-lancedb = { version = "0.17", optional = true }
-arrow-array = { version = "53", optional = true }
-arrow-schema = { version = "53", optional = true }
+lancedb = { version = "0.26", optional = true }
+arrow-array = { version = "57", optional = true }
+arrow-schema = { version = "57", optional = true }
 futures = { version = "0.3", optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"], optional = true }
-surrealdb = { version = "2.3", features = ["kv-mem", "kv-rocksdb"], optional = true }
+surrealdb = { version = "3.0", features = ["kv-mem", "kv-rocksdb"], optional = true }
+surrealdb-types = { version = "3.0", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
@@ -43,5 +44,5 @@ openai = ["dep:reqwest"]
 qdrant = ["dep:qdrant-client"]
 lancedb = ["dep:lancedb", "dep:arrow-array", "dep:arrow-schema", "dep:futures"]
 pgvector = ["dep:sqlx"]
-surrealdb = ["dep:surrealdb"]
+surrealdb = ["dep:surrealdb", "dep:surrealdb-types"]
 full = ["gemini", "openai", "qdrant", "lancedb", "pgvector", "surrealdb"]
