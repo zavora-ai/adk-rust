@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+#### adk-realtime
+- **LiveKit re-exports**: Replaced glob `pub use livekit::prelude::*` with explicit type re-exports in `adk_realtime::livekit` module, eliminating semver hazard from upstream prelude changes
+- **Breaking**: Removed crate-level `pub use ::livekit` and `pub use ::livekit_api` re-exports that collided with the `livekit` module namespace — use `adk_realtime::livekit::{AccessToken, VideoGrants}` instead of `adk_realtime::livekit_api::access_token::{AccessToken, VideoGrants}`
+- Added `AudioFrame` re-export to `adk_realtime::livekit` for downstream audio processing
+
 ## [0.3.2] - 2026-02-17
 
 ### ⭐ Highlights
