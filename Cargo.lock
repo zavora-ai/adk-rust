@@ -558,7 +558,7 @@ dependencies = [
  "mime_guess",
  "mongodb",
  "proptest",
- "rand 0.8.5",
+ "rand 0.10.0",
  "redis",
  "reqwest 0.12.28",
  "rust-embed",
