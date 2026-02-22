@@ -14,7 +14,7 @@ jobs:
   sync-wiki:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Sync to Wiki
         uses: Andrew-Chen-Wang/github-wiki-action@v4
@@ -25,11 +25,11 @@ jobs:
   sync-website:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: adk-rust
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           repository: zavora-ai/adk-rust-website
           token: ${{ secrets.WEBSITE_SYNC_TOKEN }}
