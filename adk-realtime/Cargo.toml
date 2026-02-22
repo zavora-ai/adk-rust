@@ -46,7 +46,7 @@ base64 = "0.22"
 uuid.workspace = true
 
 # OpenAI realtime types (optional)
-async-openai = { version = "0.27", optional = true, default-features = false, features = ["rustls"] }
+async-openai = { version = "0.33", optional = true, default-features = false, features = ["rustls"] }
 
 # Random bytes for WebSocket key generation (optional)
 getrandom = { version = "0.3", optional = true }
