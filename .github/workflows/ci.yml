@@ -29,7 +29,7 @@ jobs:
         df -h
 
     # 1. Install Nix
-    - uses: cachix/install-nix-action@v30
+    - uses: cachix/install-nix-action@v31
       with:
         nix_path: nixpkgs=channel:nixos-unstable
 
