@@ -37,7 +37,7 @@ jobs:
         run: nix profile install nixpkgs#devenv
 
       - name: Cache Devenv/Cargo artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/sccache
