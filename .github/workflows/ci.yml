@@ -34,7 +34,7 @@ jobs:
         nix_path: nixpkgs=channel:nixos-unstable
 
     # 2. Use the 'devenv' cache (Crucial for devenv-nixpkgs)
-    - uses: cachix/cachix-action@v15
+    - uses: cachix/cachix-action@v16
       with:
         name: devenv
 
