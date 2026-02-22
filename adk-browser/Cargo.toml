@@ -14,7 +14,7 @@ categories = ["web-programming", "development-tools"]
 
 [dependencies]
 adk-core.workspace = true
-thirtyfour = "0.35"
+thirtyfour = "0.36"
 tokio.workspace = true
 async-trait.workspace = true
 serde.workspace = true
