@@ -58,8 +58,8 @@ adk-gemini = { workspace = true, optional = true }
 google-cloud-auth = { version = "1.4", optional = true, default-features = false }
 
 # LiveKit bridge (optional)
-livekit = { version = "0.7", optional = true }
-livekit-api = { version = "0.4", optional = true }
+livekit = { version = "0.7.32", optional = true }
+livekit-api = { version = "0.4.14", optional = true }
 
 # OpenAI WebRTC (optional)
 # NOTE: `audiopus` builds the Opus C library from source and requires `cmake`.
