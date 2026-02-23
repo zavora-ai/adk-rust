@@ -21,6 +21,10 @@ impl CacheManager {
     ///
     /// Returns `false` when `min_tokens` or `ttl_seconds` is zero,
     /// effectively disabling the cache lifecycle.
+    ///
+    /// Note: The `min_tokens` threshold is enforced server-side by the
+    /// provider (e.g., Gemini rejects cache creation for small contexts).
+    /// A zero value here acts as a kill-switch for the entire lifecycle.
     pub(crate) fn is_enabled(&self) -> bool {
         self.config.min_tokens > 0 && self.config.ttl_seconds > 0
     }

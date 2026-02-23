@@ -47,10 +47,15 @@ pub struct Runner {
     compaction_config: Option<adk_core::EventsCompactionConfig>,
     context_cache_config: Option<ContextCacheConfig>,
     cache_capable: Option<Arc<dyn CacheCapable>>,
+    cache_manager: Option<Arc<tokio::sync::Mutex<CacheManager>>>,
 }
 
 impl Runner {
     pub fn new(config: RunnerConfig) -> Result<Self> {
+        let cache_manager = config
+            .context_cache_config
+            .as_ref()
+            .map(|c| Arc::new(tokio::sync::Mutex::new(CacheManager::new(c.clone()))));
         Ok(Self {
             app_name: config.app_name,
             root_agent: config.agent,
@@ -63,6 +68,7 @@ impl Runner {
             compaction_config: config.compaction_config,
             context_cache_config: config.context_cache_config,
             cache_capable: config.cache_capable,
+            cache_manager,
         })
     }
 
@@ -102,6 +108,7 @@ impl Runner {
         let compaction_config = self.compaction_config.clone();
         let context_cache_config = self.context_cache_config.clone();
         let cache_capable = self.cache_capable.clone();
+        let cache_manager_ref = self.cache_manager.clone();
 
         let s = stream! {
             // Get or create session
@@ -272,11 +279,8 @@ impl Runner {
             // If context caching is configured and a cache-capable model is available,
             // create or refresh the cached content before agent execution.
             // Cache failures are non-fatal — log a warning and proceed without cache.
-            let mut cache_manager = context_cache_config
-                .as_ref()
-                .map(|config| CacheManager::new(config.clone()));
-
-            if let (Some(cm), Some(cache_model)) = (&mut cache_manager, &cache_capable) {
+            if let (Some(cm_mutex), Some(cache_model)) = (&cache_manager_ref, &cache_capable) {
+                let mut cm = cm_mutex.lock().await;
                 if cm.is_enabled() {
                     if cm.active_cache_name().is_none() || cm.needs_refresh() {
                         // Gather system instruction from the agent's description
