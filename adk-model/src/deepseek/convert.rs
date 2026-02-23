@@ -169,13 +169,15 @@ pub struct Usage {
     pub completion_tokens: u32,
     pub total_tokens: u32,
     /// Tokens used for reasoning (thinking mode).
-    #[serde(default, rename = "reasoning_tokens")]
-    pub _reasoning_tokens: Option<u32>,
+    #[serde(default)]
+    pub reasoning_tokens: Option<u32>,
     /// Cache hit tokens for prefix caching.
-    #[serde(default, rename = "prompt_cache_hit_tokens")]
-    pub _prompt_cache_hit_tokens: Option<u32>,
-    #[serde(default, rename = "prompt_cache_miss_tokens")]
-    pub _prompt_cache_miss_tokens: Option<u32>,
+    #[serde(default)]
+    pub prompt_cache_hit_tokens: Option<u32>,
+    /// Non-cached input tokens.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub prompt_cache_miss_tokens: Option<u32>,
 }
 
 /// Convert ADK Content to DeepSeek Message.
@@ -195,7 +197,7 @@ pub fn content_to_message(content: &Content) -> Message {
     for part in &content.parts {
         match part {
             Part::Text { text } => text_parts.push(text.clone()),
-            Part::FunctionCall { name, args, id } => {
+            Part::FunctionCall { name, args, id, .. } => {
                 tool_calls.push(ToolCall {
                     id: id.clone().unwrap_or_else(|| format!("call_{}", tool_calls.len())),
                     call_type: "function".to_string(),
@@ -216,6 +218,9 @@ pub fn content_to_message(content: &Content) -> Message {
             }
             Part::FileData { mime_type, file_uri } => {
                 text_parts.push(attachment::file_attachment_to_text(mime_type, file_uri));
+            }
+            Part::Thinking { thinking, .. } => {
+                text_parts.push(thinking.clone());
             }
         }
     }
@@ -275,9 +280,7 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
             // Add reasoning content if present (thinking mode)
             if let Some(reasoning) = &msg.reasoning_content {
                 if !reasoning.is_empty() {
-                    parts.push(Part::Text {
-                        text: format!("<thinking>\n{}\n</thinking>\n\n", reasoning),
-                    });
+                    parts.push(Part::Thinking { thinking: reasoning.clone(), signature: None });
                 }
             }
 
@@ -297,6 +300,7 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
                         name: tc.function.name.clone(),
                         args,
                         id: Some(tc.id.clone()),
+                        thought_signature: None,
                     });
                 }
             }
@@ -320,6 +324,9 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
         prompt_token_count: u.prompt_tokens as i32,
         candidates_token_count: u.completion_tokens as i32,
         total_token_count: u.total_tokens as i32,
+        thinking_token_count: u.reasoning_tokens.map(|t| t as i32),
+        cache_read_input_token_count: u.prompt_cache_hit_tokens.map(|t| t as i32),
+        ..Default::default()
     });
 
     LlmResponse {
@@ -342,7 +349,12 @@ pub fn create_tool_call_response(
 ) -> LlmResponse {
     let parts: Vec<Part> = tool_calls
         .into_iter()
-        .map(|(id, name, args)| Part::FunctionCall { name, args, id: Some(id) })
+        .map(|(id, name, args)| Part::FunctionCall {
+            name,
+            args,
+            id: Some(id),
+            thought_signature: None,
+        })
         .collect();
 
     LlmResponse {

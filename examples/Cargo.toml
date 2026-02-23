@@ -613,6 +613,33 @@ path = "rag_surrealdb/main.rs"
 required-features = ["rag-surrealdb"]
 
 [[example]]
+name = "openai_token_usage"
+path = "openai_token_usage/main.rs"
+required-features = ["openai"]
+
+[[example]]
+name = "anthropic_token_usage"
+path = "anthropic_token_usage/main.rs"
+required-features = ["anthropic"]
+
+[[example]]
+name = "deepseek_token_usage"
+path = "deepseek_token_usage/main.rs"
+required-features = ["deepseek"]
+
+[[example]]
+name = "gemini_token_usage"
+path = "gemini_token_usage/main.rs"
+
+[[example]]
+name = "gemini_prompt_caching"
+path = "gemini_prompt_caching/main.rs"
+
+[[example]]
+name = "gemini_thinking"
+path = "gemini_thinking/main.rs"
+
+[[example]]
 name = "multi_turn_tool"
 path = "multi_turn_tool/main.rs"
 

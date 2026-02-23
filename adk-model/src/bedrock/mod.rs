@@ -30,3 +30,4 @@ pub(crate) mod convert;
 
 pub use client::BedrockClient;
 pub use config::BedrockConfig;
+pub use config::{BedrockCacheConfig, BedrockCacheTtl};

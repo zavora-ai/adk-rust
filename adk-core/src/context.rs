@@ -196,11 +196,20 @@ pub struct RunConfig {
     /// Optional per-tool confirmation decisions for the current run.
     /// Keys are tool names.
     pub tool_confirmation_decisions: HashMap<String, ToolConfirmationDecision>,
+    /// Optional cached content name for automatic prompt caching.
+    /// When set by the runner's cache lifecycle manager, agents should attach
+    /// this name to their `GenerateContentConfig` so the LLM provider can
+    /// reuse cached system instructions and tool definitions.
+    pub cached_content: Option<String>,
 }
 
 impl Default for RunConfig {
     fn default() -> Self {
-        Self { streaming_mode: StreamingMode::SSE, tool_confirmation_decisions: HashMap::new() }
+        Self {
+            streaming_mode: StreamingMode::SSE,
+            tool_confirmation_decisions: HashMap::new(),
+            cached_content: None,
+        }
     }
 }
 

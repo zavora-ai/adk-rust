@@ -30,6 +30,11 @@ pub struct GenerateContentConfig {
     pub max_output_tokens: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<serde_json::Value>,
+
+    /// Optional cached content name for Gemini provider.
+    /// When set, the Gemini provider attaches this to the generation request.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cached_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -46,11 +51,103 @@ pub struct LlmResponse {
     pub error_message: Option<String>,
 }
 
+/// Trait for LLM providers that support prompt caching.
+///
+/// Providers implementing this trait can create and delete cached content
+/// resources, enabling automatic prompt caching lifecycle management by the
+/// runner. The runner stores an `Option<Arc<dyn CacheCapable>>` alongside the
+/// primary `Arc<dyn Llm>` and calls these methods when [`ContextCacheConfig`]
+/// is active.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use adk_core::CacheCapable;
+///
+/// let cache_name = model
+///     .create_cache("You are a helpful assistant.", &tools, 600)
+///     .await?;
+/// // ... use cache_name in generation requests ...
+/// model.delete_cache(&cache_name).await?;
+/// ```
+#[async_trait]
+pub trait CacheCapable: Send + Sync {
+    /// Create a cached content resource from the given system instruction,
+    /// tool definitions, and TTL.
+    ///
+    /// Returns the provider-specific cache name (e.g. `"cachedContents/abc123"`
+    /// for Gemini) that can be attached to subsequent generation requests via
+    /// [`GenerateContentConfig::cached_content`].
+    async fn create_cache(
+        &self,
+        system_instruction: &str,
+        tools: &HashMap<String, serde_json::Value>,
+        ttl_seconds: u32,
+    ) -> Result<String>;
+
+    /// Delete a previously created cached content resource by name.
+    async fn delete_cache(&self, name: &str) -> Result<()>;
+}
+
+/// Configuration for automatic prompt caching lifecycle management.
+///
+/// When set on runner configuration, the runner will automatically create and manage
+/// cached content resources for supported providers (currently Gemini).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::ContextCacheConfig;
+///
+/// let config = ContextCacheConfig {
+///     min_tokens: 4096,
+///     ttl_seconds: 600,
+///     cache_intervals: 3,
+/// };
+/// assert_eq!(config.min_tokens, 4096);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextCacheConfig {
+    /// Minimum system instruction + tool token count to trigger caching.
+    /// Set to 0 to disable caching.
+    pub min_tokens: u32,
+
+    /// Cache time-to-live in seconds.
+    /// Set to 0 to disable caching.
+    pub ttl_seconds: u32,
+
+    /// Maximum number of LLM invocations before cache refresh.
+    /// After this many invocations, the runner creates a new cache
+    /// and deletes the old one.
+    pub cache_intervals: u32,
+}
+
+impl Default for ContextCacheConfig {
+    fn default() -> Self {
+        Self { min_tokens: 4096, ttl_seconds: 600, cache_intervals: 3 }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UsageMetadata {
     pub prompt_token_count: i32,
     pub candidates_token_count: i32,
     pub total_token_count: i32,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cache_read_input_token_count: Option<i32>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cache_creation_input_token_count: Option<i32>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub thinking_token_count: Option<i32>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub audio_input_token_count: Option<i32>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub audio_output_token_count: Option<i32>,
 }
 
 /// Citation metadata emitted by model providers for source attribution.
@@ -88,13 +185,7 @@ impl LlmRequest {
 
     /// Set the response schema for structured output.
     pub fn with_response_schema(mut self, schema: serde_json::Value) -> Self {
-        let config = self.config.get_or_insert(GenerateContentConfig {
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            max_output_tokens: None,
-            response_schema: None,
-        });
+        let config = self.config.get_or_insert(GenerateContentConfig::default());
         config.response_schema = Some(schema);
         self
     }
@@ -156,7 +247,7 @@ mod tests {
             top_p: Some(0.9),
             top_k: Some(40),
             max_output_tokens: Some(1024),
-            response_schema: None,
+            ..Default::default()
         };
         let req = LlmRequest::new("test-model", vec![]).with_config(config);
 

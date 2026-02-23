@@ -128,7 +128,7 @@ fn collect_function_calls(
         .flat_map(|response| response.content.as_ref().into_iter())
         .flat_map(|content| content.parts.iter())
         .filter_map(|part| {
-            if let Part::FunctionCall { name, args, id } = part {
+            if let Part::FunctionCall { name, args, id, .. } = part {
                 Some((name.clone(), args.clone(), id.clone()))
             } else {
                 None
@@ -456,7 +456,11 @@ fn azure_openai_spec() -> ProviderSpec {
         name: "azure-openai",
         model_env_candidates: &["AZURE_OPENAI_DEPLOYMENT"],
         default_model: "mistral-small-2503",
-        required_envs: &["AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_DEPLOYMENT"],
+        required_envs: &[
+            "AZURE_OPENAI_ENDPOINT",
+            "AZURE_OPENAI_API_KEY",
+            "AZURE_OPENAI_DEPLOYMENT",
+        ],
         supports_tools: true,
         build_model: |model_name| {
             let api_key = required_env("AZURE_OPENAI_API_KEY")?;

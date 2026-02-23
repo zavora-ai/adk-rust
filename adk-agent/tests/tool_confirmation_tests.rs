@@ -28,6 +28,7 @@ impl SequencedModel {
                     name: name.to_string(),
                     args,
                     id: Some(id.to_string()),
+                    thought_signature: None,
                 }],
             }),
             usage_metadata: None,

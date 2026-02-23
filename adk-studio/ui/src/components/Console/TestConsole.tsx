@@ -7,6 +7,7 @@ import type { StateSnapshot, InterruptData } from '../../types/execution';
 import type { Project } from '../../types/project';
 import { ConsoleFilters, EventFilter } from './ConsoleFilters';
 import { DebugPanel } from './DebugPanel';
+import { ThinkingSection } from './ThinkingSection';
 import type { DebugEntry } from '../../types/debug';
 import { DEFAULT_MANUAL_TRIGGER_CONFIG, type TriggerNodeConfig, type TriggerType } from '../../types/actionNodes';
 
@@ -16,6 +17,8 @@ interface Message {
   agent?: string;
   /** Interrupt data for HITL messages */
   interruptData?: InterruptData;
+  /** Accumulated thinking text from thinking-capable models */
+  thinking?: string;
 }
 
 /**
@@ -290,6 +293,9 @@ export function TestConsole({
     currentSnapshotIndex, 
     scrubTo, 
     stateKeys,
+    // Thinking traces: streaming thinking text from thinking-capable models
+    // @see thinking-traces Requirements 7.1, 7.5
+    streamingThinking,
     // HITL: Interrupt state from useSSE
     // @see trigger-input-flow Requirements 3.1, 3.2
     interrupt,
@@ -386,9 +392,9 @@ export function TestConsole({
     
     send(
       inputToSend,
-      (text) => {
+      (text, thinking) => {
         if (text) {
-          setMessages((m) => [...m, { role: 'assistant', content: text, agent: lastAgentRef.current || undefined }]);
+          setMessages((m) => [...m, { role: 'assistant', content: text, agent: lastAgentRef.current || undefined, thinking }]);
         }
         onFlowPhase?.('idle');
         sendingRef.current = false;
@@ -661,9 +667,9 @@ export function TestConsole({
     
     send(
       userMsg,
-      (text) => {
+      (text, thinking) => {
         if (text) {
-          setMessages((m) => [...m, { role: 'assistant', content: text, agent: lastAgentRef.current || undefined }]);
+          setMessages((m) => [...m, { role: 'assistant', content: text, agent: lastAgentRef.current || undefined, thinking }]);
         }
         onFlowPhase?.('idle');
         sendingRef.current = false;
@@ -707,9 +713,9 @@ export function TestConsole({
     
     send(
       userMsg,
-      (text) => {
+      (text, thinking) => {
         if (text) {
-          setMessages((m) => [...m, { role: 'assistant', content: text, agent: lastAgentRef.current || undefined }]);
+          setMessages((m) => [...m, { role: 'assistant', content: text, agent: lastAgentRef.current || undefined, thinking }]);
         }
         onFlowPhase?.('idle');
         sendingRef.current = false;
@@ -1075,6 +1081,11 @@ export function TestConsole({
                 </div>
               ) : (
                 <>
+                  {/* Thinking traces: show collapsible thinking section above assistant response */}
+                  {/* @see thinking-traces Requirements 7.1, 7.4, 7.5 */}
+                  {m.role === 'assistant' && m.thinking && (
+                    <ThinkingSection thinking={m.thinking} />
+                  )}
                   <span className="font-semibold">{m.role === 'user' ? 'You: ' : `${m.agent || 'Agent'}: `}</span>
                   {m.role === 'user' ? (
                     <span>{m.content}</span>
@@ -1092,6 +1103,11 @@ export function TestConsole({
               <span className="animate-spin">⏳</span>
               <span>{currentAgent ? `${currentAgent} is thinking...` : 'Thinking...'}</span>
             </div>
+          )}
+          {/* Thinking traces: show streaming thinking above streaming response */}
+          {/* @see thinking-traces Requirements 7.1, 7.4, 7.5 */}
+          {streamingThinking && (
+            <ThinkingSection thinking={streamingThinking} />
           )}
           {streamingText && (
             <div className="text-sm" style={{ color: 'var(--text-primary)' }}>

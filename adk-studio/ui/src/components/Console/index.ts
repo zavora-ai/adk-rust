@@ -14,3 +14,4 @@ export { DebugEntryRow, formatDebugTimestamp } from './DebugEntryRow';
 export type { DebugEntryRowProps } from './DebugEntryRow';
 export { DebugFilters } from './DebugFilters';
 export type { DebugFiltersProps } from './DebugFilters';
+export { ThinkingSection } from './ThinkingSection';

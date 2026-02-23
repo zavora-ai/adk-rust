@@ -12,25 +12,34 @@
 
 ---
 
-**@zavora-ai/adk-ui-react** is the official React renderer for [ADK-Rust](https://adk-rust.com) - the high-performance Agent Development Kit for building AI agents in Rust.
+**@zavora-ai/adk-ui-react** is the official React renderer for [ADK-Rust](https://adk-rust.com) — the high-performance Agent Development Kit for building AI agents in Rust.
 
-Enable your AI agents to render rich, interactive user interfaces instead of plain text responses. Forms, tables, charts, modals, and more - all controlled by your agent.
+Render rich, interactive user interfaces from your AI agents instead of plain text. Forms, tables, charts, modals, and more — all driven by your agent's output.
 
-## ✨ Features
+## Features
 
-- 🎨 **28 Component Types** - Text, buttons, forms, tables, charts, modals, toasts, and more
-- 🌙 **Dark Mode** - Built-in dark theme support
-- 📤 **Bidirectional Events** - Forms and buttons emit events back to your agent
-- 📦 **TypeScript First** - Full type definitions included
-- ⚡ **Lightweight** - Only 14KB gzipped
+- 28 component types — text, buttons, forms, tables, charts, modals, toasts, and more
+- Dark mode — built-in light/dark/system theme support
+- Bidirectional events — forms and buttons emit events back to your agent
+- Streaming updates — replace, patch, append, or remove components in real time
+- A2UI protocol — surface-based rendering with data bindings and dynamic expressions
+- Tri-protocol support — A2UI, AG-UI, and MCP Apps through a unified client
+- TypeScript first — full type definitions included
+- Lightweight — ~34KB packaged
 
-## 📦 Installation
+## Installation
 
 ```bash
 npm install @zavora-ai/adk-ui-react
 ```
 
-## 🚀 Quick Start
+Peer dependencies: `react >= 17.0.0` and `react-dom >= 17.0.0`.
+
+## Quick Start
+
+### Basic Renderer
+
+Render a `UiResponse` payload from your agent:
 
 ```tsx
 import { Renderer } from '@zavora-ai/adk-ui-react';
@@ -45,11 +54,11 @@ function AgentUI({ response }: { response: UiResponse }) {
   return (
     <div>
       {response.components.map((component, i) => (
-        <Renderer 
-          key={i} 
-          component={component} 
+        <Renderer
+          key={i}
+          component={component}
           onAction={handleAction}
-          theme={response.theme}  // 'light' | 'dark' | 'system'
+          theme={response.theme}
         />
       ))}
     </div>
@@ -57,9 +66,64 @@ function AgentUI({ response }: { response: UiResponse }) {
 }
 ```
 
-## Tri-Protocol Client (A2UI / AG-UI / MCP Apps)
+### Streaming Renderer
 
-Use the protocol client when your backend may return different UI protocols.
+Apply incremental updates to components without re-rendering the full tree:
+
+```tsx
+import { StreamingRenderer } from '@zavora-ai/adk-ui-react';
+import type { Component, UiUpdate } from '@zavora-ai/adk-ui-react';
+
+function LiveUI({ component, updates }: { component: Component; updates: UiUpdate[] }) {
+  return (
+    <StreamingRenderer
+      component={component}
+      updates={updates}
+      onAction={(event) => console.log(event)}
+      theme="dark"
+    />
+  );
+}
+```
+
+Updates support four operations: `replace`, `patch`, `append`, and `remove` — each targeting a component by `target_id`.
+
+## A2UI Surface Renderer
+
+For surface-based rendering with data bindings, dynamic expressions, and action events:
+
+```tsx
+import { A2uiSurfaceRenderer, A2uiStore, parseJsonl, applyParsedMessages } from '@zavora-ai/adk-ui-react';
+
+const store = new A2uiStore();
+
+// Apply A2UI JSONL messages from your agent
+const messages = parseJsonl(jsonlPayload);
+applyParsedMessages(store, messages);
+
+function SurfaceUI() {
+  return (
+    <A2uiSurfaceRenderer
+      store={store}
+      surfaceId="main"
+      onAction={(payload) => console.log(payload)}
+      theme="light"
+    />
+  );
+}
+```
+
+A2UI surfaces support:
+
+- Data bindings — `{ path: "/users/0/name" }` resolves values from the surface data model
+- Dynamic expressions — `${/path}` interpolation in strings, `${concat(...)}` function calls
+- Built-in functions — `now()`, `concat()`, `add()`, `formatString()`
+- Custom function registries — pass your own functions via the `functions` prop
+- Action events — buttons and interactions emit structured `A2uiActionEventPayload` objects
+
+## Tri-Protocol Client
+
+Use the unified protocol client when your backend may return different UI protocols:
 
 ```tsx
 import {
@@ -69,26 +133,27 @@ import {
 } from '@zavora-ai/adk-ui-react';
 
 const store = new UnifiedRenderStore();
-const client = createProtocolClient({ protocol: 'adk_ui', store });
+const client = createProtocolClient({ protocol: 'a2ui', store });
 
-// payload can be:
-// - A2UI JSONL string
-// - AG-UI envelope { protocol: "ag_ui", events: [...] }
-// - MCP Apps envelope { protocol: "mcp_apps", payload: {...} }
-// - legacy ADK-UI payload with `components`
+// Feed any supported payload format
 client.applyPayload(payload);
 
+// Render from the unified store
 const surface = store.getA2uiStore().getSurface('main');
 ```
 
-Supported inbound payload patterns:
+### Supported inbound payload formats
 
-- A2UI: JSONL string or `{ protocol: "a2ui", jsonl, components, ... }`
-- AG-UI: `{ protocol: "ag_ui", events: [...] }` or envelope payload with `payload.events`
-- MCP Apps: `{ protocol: "mcp_apps", payload: { resource, ... } }`
-- Legacy ADK-UI: `{ components: [...] }`
+| Protocol | Payload shape |
+|----------|--------------|
+| A2UI | JSONL string or `{ protocol: "a2ui", jsonl, ... }` |
+| AG-UI | `{ protocol: "ag_ui", events: [...] }` with `adk.ui.surface` custom events |
+| MCP Apps | `{ protocol: "mcp_apps", payload: { resourceReadResponse: { contents: [...] } } }` |
+| Legacy ADK-UI | `{ components: [...] }` — auto-detected, stored as legacy response |
 
-Outbound events can also be generated per protocol:
+### Outbound events
+
+Generate protocol-appropriate outbound events:
 
 ```ts
 import { buildOutboundEvent } from '@zavora-ai/adk-ui-react';
@@ -97,39 +162,100 @@ const event = buildOutboundEvent('ag_ui', {
   action: 'button_click',
   action_id: 'approve',
 });
+// => { protocol: "ag_ui", event: { type: "CUSTOM", name: "adk.ui.event", ... } }
 ```
 
-Common pattern with server runtime negotiation:
+### Runtime negotiation pattern
 
-1. Set runtime profile on requests with `uiProtocol` or `x-adk-ui-protocol`.
+1. Set the UI protocol on requests via `uiProtocol` header or `x-adk-ui-protocol`.
 2. Feed response payloads into `client.applyPayload(...)`.
 3. Render with `A2uiSurfaceRenderer` from the unified store.
+4. Use `client.buildOutboundEvent(event)` for user interactions.
 
-Migration note:
+## Available Components
 
-- `adk_ui` is treated as legacy profile compatibility mode.
-- Prefer `a2ui`, `ag_ui`, or `mcp_apps` for new integrations.
-- Read `/api/ui/capabilities` and surface server-provided deprecation metadata in client UX.
+### Atoms
 
-## 🧩 Available Components
+Text, Button, Icon, Image, Badge
 
-| Category | Components |
-|----------|------------|
-| **Atoms** | Text, Button, Icon, Image, Badge |
-| **Inputs** | TextInput, NumberInput, Select, MultiSelect, Switch, DateInput, Slider, Textarea |
-| **Layouts** | Stack, Grid, Card, Container, Divider, Tabs |
-| **Data Display** | Table (sortable, paginated), List, KeyValue, CodeBlock |
-| **Visualization** | Chart (bar, line, area, pie) |
-| **Feedback** | Alert, Progress, Toast, Modal, Spinner, Skeleton |
+### Inputs
 
-## 🔗 Integration with ADK-Rust
+TextInput, NumberInput, Select, MultiSelect, Switch, DateInput, Slider, Textarea
 
-This package is designed to work with [ADK-Rust](https://adk-rust.com), the Agent Development Kit for building AI agents in Rust.
+### Layouts
+
+Stack, Grid, Card, Container, Divider, Tabs
+
+### Data Display
+
+Table (sortable, paginated), List, KeyValue, CodeBlock
+
+### Visualization
+
+Chart (bar, line, area, pie via Recharts)
+
+### Feedback
+
+Alert, Progress, Toast, Modal, Spinner, Skeleton
+
+### A2UI Components
+
+Text (with Markdown), Image, Icon, Row, Column, List, Card, Divider, Tabs, Modal, Button, CheckBox, TextField, ChoicePicker, Slider, DateTimeInput, Video, AudioPlayer
+
+## API Reference
+
+### Exports
+
+```ts
+// Renderers
+export { Renderer, StreamingRenderer } from './Renderer';
+export { A2uiSurfaceRenderer } from './a2ui/renderer';
+
+// Types
+export type { Component, UiResponse, UiEvent, TableColumn } from './types';
+export { uiEventToMessage } from './types';
+
+// A2UI Store & Parser
+export { A2uiStore } from './a2ui/store';
+export { applyParsedMessages, parseJsonl } from './a2ui/parser';
+export type {
+  A2uiMessage, CreateSurfaceMessage, DeleteSurfaceMessage,
+  ParsedA2uiMessage, UpdateComponentsMessage, UpdateDataModelMessage,
+} from './a2ui/parser';
+
+// A2UI Bindings
+export {
+  isDataBinding, isFunctionCall, resolveDynamicString,
+  resolveDynamicValue, resolvePath,
+} from './a2ui/bindings';
+export type { DataBinding, FunctionCall, FunctionRegistry, ResolveContext } from './a2ui/bindings';
+
+// A2UI Events
+export { buildActionEvent } from './a2ui/events';
+export type {
+  A2uiActionDefinition, A2uiActionEventDefinition,
+  A2uiActionEventPayload, ActionEventOptions,
+} from './a2ui/events';
+
+// Streaming Updates
+export { applyUiUpdate, applyUiUpdates } from './updates';
+
+// Protocol Adapters
+export { applyProtocolPayload, parseProtocolPayload } from './protocols';
+
+// Unified Store & Client
+export { UnifiedRenderStore } from './store';
+export { ProtocolClient, buildOutboundEvent, createProtocolClient } from './client';
+export type { OutboundEventOptions, ProtocolClientOptions, UiProtocol } from './client';
+```
+
+## Integration with ADK-Rust
+
+This package renders UI generated by the `adk-ui` Rust crate:
 
 ```rust
 use adk_ui::UiToolset;
 
-// Add UI rendering tools to your agent
 let tools = UiToolset::all_tools();
 let mut builder = LlmAgentBuilder::new("assistant");
 for tool in tools {
@@ -138,23 +264,16 @@ for tool in tools {
 let agent = builder.build()?;
 ```
 
-Your agent can then call `render_form`, `render_table`, `render_chart`, and other tools to generate UI that this package renders.
+Your agent calls `render_form`, `render_table`, `render_chart`, and other tools to produce UI payloads that this package renders on the client.
 
-## 📚 Learn More
+## Requirements
 
-- 🌐 **Website**: [adk-rust.com](https://adk-rust.com)
-- 📖 **Documentation**: [adk-rust.com/docs](https://adk-rust.com/docs)
-- 💻 **GitHub**: [github.com/zavora-ai/adk-rust](https://github.com/zavora-ai/adk-rust)
-- 📦 **Rust Crate**: [crates.io/crates/adk-ui](https://crates.io/crates/adk-ui)
+- React 17.0.0+
+- react-dom 17.0.0+
 
-## 📋 Requirements
+## License
 
-- React 17.0.0 or higher
-- react-dom 17.0.0 or higher
-
-## 📄 License
-
-Apache-2.0 - See [LICENSE](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE) for details.
+Apache-2.0 — See [LICENSE](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE) for details.
 
 ---
 

@@ -311,6 +311,8 @@ pub async fn run_sse(
             plugin_manager: None,
             run_config: None,
             compaction_config: None,
+            context_cache_config: None,
+            cache_capable: None,
         })
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create runner".to_string()))?;
 
@@ -433,6 +435,8 @@ pub async fn run_sse_compat(
         plugin_manager: None,
         run_config: Some(adk_core::RunConfig { streaming_mode, ..adk_core::RunConfig::default() }),
         compaction_config: None,
+        context_cache_config: None,
+        cache_capable: None,
     })
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create runner".to_string()))?;
 

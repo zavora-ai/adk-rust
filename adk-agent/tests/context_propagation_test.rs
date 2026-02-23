@@ -23,6 +23,7 @@ impl MockModel {
                 name: name.to_string(),
                 args,
                 id: Some(format!("call_{}", name)),
+                thought_signature: None,
             }],
         };
 

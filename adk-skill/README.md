@@ -223,8 +223,7 @@ What "makes the score well used" in a production app is its **predictability** a
 -   **Policy-Enforced Boundaries**: By using `SelectionPolicy`, the application defines a "Safety Contract" where no agent ever receives instructions below a verified relevance threshold.
 
 This transparency allows you to build **unit tests for your agent's persona**:
-```rust
-#[test]
+```rust,ignore
 fn verification_of_emergency_triage() {
     let index = load_skill_index("skills")?;
     let matches = select_skills(&index, "gas leak", &SelectionPolicy::default());

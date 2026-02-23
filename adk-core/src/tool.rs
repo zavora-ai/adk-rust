@@ -77,18 +77,13 @@ pub trait Toolset: Send + Sync {
 }
 
 /// Controls how the framework handles skills/agents that request unavailable tools.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ValidationMode {
     /// Reject the operation entirely if any requested tool is missing from the registry.
+    #[default]
     Strict,
     /// Bind available tools, omit missing ones, and log a warning.
     Permissive,
-}
-
-impl Default for ValidationMode {
-    fn default() -> Self {
-        Self::Strict
-    }
 }
 
 /// A registry that maps tool names to concrete tool instances.

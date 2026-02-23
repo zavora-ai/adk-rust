@@ -1047,6 +1047,17 @@ pub async fn stream_handler(
                     // Streaming chunk - emit immediately
                     let decoded = serde_json::from_str::<String>(chunk).unwrap_or_else(|_| chunk.to_string());
                     yield Ok(Event::default().event("chunk").data(decoded));
+                } else if let Some(thinking) = line.strip_prefix("THINKING:") {
+                    // Thinking trace from a reasoning model - emit as distinct SSE event
+                    // Requirements: 6.1, 6.2, 6.3
+                    let decoded = serde_json::from_str::<String>(thinking)
+                        .unwrap_or_else(|_| thinking.to_string());
+                    yield Ok(Event::default().event("thinking").data(
+                        serde_json::json!({
+                            "content": decoded,
+                            "agent": exec_ctx.current_agent().unwrap_or("system")
+                        }).to_string()
+                    ));
                 } else if let Some(response) = line.strip_prefix("RESPONSE:") {
                     let decoded = serde_json::from_str::<String>(response).unwrap_or_else(|_| response.to_string());
                     // Update execution state with the response

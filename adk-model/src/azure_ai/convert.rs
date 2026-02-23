@@ -139,6 +139,7 @@ fn extract_text(parts: &[Part]) -> String {
         .iter()
         .filter_map(|p| match p {
             Part::Text { text } => Some(text.clone()),
+            Part::Thinking { thinking, .. } => Some(thinking.clone()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -156,7 +157,7 @@ fn extract_tool_calls(parts: &[Part]) -> Vec<Value> {
     parts
         .iter()
         .filter_map(|part| {
-            if let Part::FunctionCall { name, args, id } = part {
+            if let Part::FunctionCall { name, args, id, .. } = part {
                 Some(serde_json::json!({
                     "id": id.clone().unwrap_or_else(|| format!("call_{name}")),
                     "type": "function",
@@ -186,6 +187,13 @@ pub(crate) fn parse_response(body: &Value) -> LlmResponse {
         let message = choice.get("message")?;
         let mut parts = Vec::new();
 
+        // Extract reasoning content (for Azure AI reasoning models)
+        if let Some(reasoning) = message.get("reasoning_content").and_then(|r| r.as_str()) {
+            if !reasoning.is_empty() {
+                parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
+            }
+        }
+
         // Extract text content
         if let Some(text) = message.get("content").and_then(|c| c.as_str()) {
             if !text.is_empty() {
@@ -205,7 +213,7 @@ pub(crate) fn parse_response(body: &Value) -> LlmResponse {
                         .and_then(|a| serde_json::from_str(a).ok())
                         .unwrap_or(serde_json::json!({}));
                     let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
-                    parts.push(Part::FunctionCall { name, args, id });
+                    parts.push(Part::FunctionCall { name, args, id, thought_signature: None });
                 }
             }
         }
@@ -220,11 +228,23 @@ pub(crate) fn parse_response(body: &Value) -> LlmResponse {
         .and_then(|fr| fr.as_str())
         .map(map_finish_reason);
 
-    let usage_metadata = body.get("usage").map(|u| UsageMetadata {
-        prompt_token_count: u.get("prompt_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
-        candidates_token_count: u.get("completion_tokens").and_then(|v| v.as_i64()).unwrap_or(0)
-            as i32,
-        total_token_count: u.get("total_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+    let usage_metadata = body.get("usage").map(|u| {
+        let mut meta = UsageMetadata {
+            prompt_token_count: u.get("prompt_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            candidates_token_count: u.get("completion_tokens").and_then(|v| v.as_i64()).unwrap_or(0)
+                as i32,
+            total_token_count: u.get("total_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            ..Default::default()
+        };
+        if let Some(details) = u.get("prompt_tokens_details") {
+            meta.cache_read_input_token_count =
+                details.get("cached_tokens").and_then(|v| v.as_i64()).map(|v| v as i32);
+        }
+        if let Some(details) = u.get("completion_tokens_details") {
+            meta.thinking_token_count =
+                details.get("reasoning_tokens").and_then(|v| v.as_i64()).map(|v| v as i32);
+        }
+        meta
     });
 
     LlmResponse {
@@ -251,6 +271,13 @@ pub(crate) fn parse_sse_chunk(chunk: &Value) -> LlmResponse {
         let delta = choice.get("delta")?;
         let mut parts = Vec::new();
 
+        // Extract reasoning content delta (for Azure AI reasoning models)
+        if let Some(reasoning) = delta.get("reasoning_content").and_then(|r| r.as_str()) {
+            if !reasoning.is_empty() {
+                parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
+            }
+        }
+
         // Extract text delta
         if let Some(text) = delta.get("content").and_then(|c| c.as_str()) {
             if !text.is_empty() {
@@ -273,7 +300,12 @@ pub(crate) fn parse_sse_chunk(chunk: &Value) -> LlmResponse {
                                 .and_then(|a| serde_json::from_str(a).ok())
                                 .unwrap_or(serde_json::json!({}));
                             let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
-                            parts.push(Part::FunctionCall { name: name.to_string(), args, id });
+                            parts.push(Part::FunctionCall {
+                                name: name.to_string(),
+                                args,
+                                id,
+                                thought_signature: None,
+                            });
                         }
                     }
                 }
@@ -343,8 +375,7 @@ mod tests {
             temperature: Some(0.5),
             top_p: Some(0.5),
             max_output_tokens: Some(1024),
-            top_k: None,
-            response_schema: None,
+            ..Default::default()
         };
         let body = build_request_body("m", &[], &HashMap::new(), Some(&config), true);
 
@@ -430,6 +461,7 @@ mod tests {
                 name: "get_weather".to_string(),
                 args: serde_json::json!({"city": "Seattle"}),
                 id: Some("call_123".to_string()),
+                thought_signature: None,
             }],
         };
         let msg = content_to_message(&content);
@@ -530,7 +562,7 @@ mod tests {
 
         let content = resp.content.unwrap();
         assert_eq!(content.parts.len(), 1);
-        if let Part::FunctionCall { name, args, id } = &content.parts[0] {
+        if let Part::FunctionCall { name, args, id, .. } = &content.parts[0] {
             assert_eq!(name, "get_weather");
             assert_eq!(args["city"], "Seattle");
             assert_eq!(id.as_deref(), Some("call_abc"));
@@ -618,7 +650,7 @@ mod tests {
         assert!(resp.partial);
         let content = resp.content.unwrap();
         assert_eq!(content.parts.len(), 1);
-        if let Part::FunctionCall { name, args, id } = &content.parts[0] {
+        if let Part::FunctionCall { name, args, id, .. } = &content.parts[0] {
             assert_eq!(name, "search");
             assert_eq!(args["q"], "rust");
             assert_eq!(id.as_deref(), Some("call_xyz"));
@@ -697,6 +729,7 @@ mod tests {
                 name: "my_func".to_string(),
                 args: serde_json::json!({}),
                 id: None,
+                thought_signature: None,
             }],
         };
         let msg = content_to_message(&content);
@@ -718,5 +751,248 @@ mod tests {
         };
         let msg = content_to_message(&content);
         assert_eq!(msg["tool_call_id"], "unknown");
+    }
+
+    #[test]
+    fn test_content_to_message_thinking_as_text() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::Thinking {
+                thinking: "Let me reason about this...".to_string(),
+                signature: None,
+            }],
+        };
+        let msg = content_to_message(&content);
+        assert_eq!(msg["role"], "user");
+        assert_eq!(msg["content"], "Let me reason about this...");
+    }
+
+    #[test]
+    fn test_content_to_message_assistant_thinking_as_text() {
+        let content = Content {
+            role: "model".to_string(),
+            parts: vec![
+                Part::Thinking {
+                    thinking: "Step 1: analyze the question".to_string(),
+                    signature: Some("sig123".to_string()),
+                },
+                Part::Text { text: "Here is my answer.".to_string() },
+            ],
+        };
+        let msg = content_to_message(&content);
+        assert_eq!(msg["role"], "assistant");
+        assert_eq!(msg["content"], "Step 1: analyze the question\nHere is my answer.");
+    }
+
+    #[test]
+    fn test_parse_response_with_reasoning_content() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": "Let me think step by step...",
+                    "content": "The answer is 42."
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30
+            }
+        });
+
+        let resp = parse_response(&body);
+        assert!(resp.turn_complete);
+        let content = resp.content.unwrap();
+        assert_eq!(content.parts.len(), 2);
+        assert!(content.parts[0].is_thinking());
+        assert_eq!(content.parts[0].thinking_text().unwrap(), "Let me think step by step...");
+        assert_eq!(content.parts[1].text().unwrap(), "The answer is 42.");
+    }
+
+    #[test]
+    fn test_parse_response_with_empty_reasoning_content() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": "",
+                    "content": "Just the answer."
+                },
+                "finish_reason": "stop"
+            }]
+        });
+
+        let resp = parse_response(&body);
+        let content = resp.content.unwrap();
+        assert_eq!(content.parts.len(), 1);
+        assert_eq!(content.parts[0].text().unwrap(), "Just the answer.");
+    }
+
+    #[test]
+    fn test_parse_response_without_reasoning_content() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "No reasoning here."
+                },
+                "finish_reason": "stop"
+            }]
+        });
+
+        let resp = parse_response(&body);
+        let content = resp.content.unwrap();
+        assert_eq!(content.parts.len(), 1);
+        assert_eq!(content.parts[0].text().unwrap(), "No reasoning here.");
+        assert!(!content.parts[0].is_thinking());
+    }
+
+    #[test]
+    fn test_parse_sse_chunk_with_reasoning_content() {
+        let chunk = serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "reasoning_content": "Thinking about this..."
+                },
+                "finish_reason": null
+            }]
+        });
+
+        let resp = parse_sse_chunk(&chunk);
+        assert!(resp.partial);
+        let content = resp.content.unwrap();
+        assert_eq!(content.parts.len(), 1);
+        assert!(content.parts[0].is_thinking());
+        assert_eq!(content.parts[0].thinking_text().unwrap(), "Thinking about this...");
+    }
+
+    #[test]
+    fn test_parse_sse_chunk_reasoning_then_text() {
+        // A chunk with both reasoning and text content
+        let chunk = serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "reasoning_content": "Step 1...",
+                    "content": "Here's the result"
+                },
+                "finish_reason": null
+            }]
+        });
+
+        let resp = parse_sse_chunk(&chunk);
+        let content = resp.content.unwrap();
+        assert_eq!(content.parts.len(), 2);
+        assert!(content.parts[0].is_thinking());
+        assert_eq!(content.parts[0].thinking_text().unwrap(), "Step 1...");
+        assert_eq!(content.parts[1].text().unwrap(), "Here's the result");
+    }
+
+    #[test]
+    fn test_parse_response_with_cached_tokens() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 10,
+                "total_tokens": 110,
+                "prompt_tokens_details": {
+                    "cached_tokens": 80
+                }
+            }
+        });
+
+        let resp = parse_response(&body);
+        let usage = resp.usage_metadata.unwrap();
+        assert_eq!(usage.prompt_token_count, 100);
+        assert_eq!(usage.candidates_token_count, 10);
+        assert_eq!(usage.total_token_count, 110);
+        assert_eq!(usage.cache_read_input_token_count, Some(80));
+        assert_eq!(usage.thinking_token_count, None);
+    }
+
+    #[test]
+    fn test_parse_response_with_reasoning_tokens() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "42"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 50,
+                "completion_tokens": 200,
+                "total_tokens": 250,
+                "completion_tokens_details": {
+                    "reasoning_tokens": 150
+                }
+            }
+        });
+
+        let resp = parse_response(&body);
+        let usage = resp.usage_metadata.unwrap();
+        assert_eq!(usage.thinking_token_count, Some(150));
+        assert_eq!(usage.cache_read_input_token_count, None);
+    }
+
+    #[test]
+    fn test_parse_response_with_both_token_details() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "result"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 200,
+                "total_tokens": 300,
+                "prompt_tokens_details": {
+                    "cached_tokens": 60
+                },
+                "completion_tokens_details": {
+                    "reasoning_tokens": 120
+                }
+            }
+        });
+
+        let resp = parse_response(&body);
+        let usage = resp.usage_metadata.unwrap();
+        assert_eq!(usage.cache_read_input_token_count, Some(60));
+        assert_eq!(usage.thinking_token_count, Some(120));
+    }
+
+    #[test]
+    fn test_parse_response_without_token_details() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15
+            }
+        });
+
+        let resp = parse_response(&body);
+        let usage = resp.usage_metadata.unwrap();
+        assert_eq!(usage.cache_read_input_token_count, None);
+        assert_eq!(usage.thinking_token_count, None);
     }
 }

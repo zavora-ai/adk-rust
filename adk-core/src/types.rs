@@ -19,6 +19,15 @@ pub struct Content {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Part {
+    /// Thinking/reasoning trace from a thinking-capable model.
+    ///
+    /// Must be placed before `Text` in the enum so that `#[serde(untagged)]`
+    /// deserialization matches `{"thinking": "..."}` before falling through to `Text`.
+    Thinking {
+        thinking: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
     Text {
         text: String,
     },
@@ -53,6 +62,11 @@ pub enum Part {
         /// Tool call ID for OpenAI-style providers. None for Gemini.
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        /// Thought signature for Gemini 3 series models.
+        /// Must be preserved and relayed back in conversation history
+        /// during multi-turn function calling.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     FunctionResponse {
@@ -88,6 +102,12 @@ impl Content {
         self
     }
 
+    /// Add a thinking/reasoning trace part.
+    pub fn with_thinking(mut self, thinking: impl Into<String>) -> Self {
+        self.parts.push(Part::Thinking { thinking: thinking.into(), signature: None });
+        self
+    }
+
     /// Add a file reference by URI (URL or cloud storage path).
     pub fn with_file_uri(
         mut self,
@@ -104,6 +124,19 @@ impl Part {
     pub fn text(&self) -> Option<&str> {
         match self {
             Part::Text { text } => Some(text.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Returns true if this part is a Thinking variant
+    pub fn is_thinking(&self) -> bool {
+        matches!(self, Part::Thinking { .. })
+    }
+
+    /// Returns the thinking text content if this is a Thinking part, None otherwise
+    pub fn thinking_text(&self) -> Option<&str> {
+        match self {
+            Part::Thinking { thinking, .. } => Some(thinking.as_str()),
             _ => None,
         }
     }
@@ -301,5 +334,75 @@ mod tests {
     fn test_inline_data_exceeds_limit_part() {
         let data = vec![0u8; MAX_INLINE_DATA_SIZE + 1];
         let _ = Part::inline_data("image/png", data);
+    }
+
+    #[test]
+    fn test_thinking_variant_accessors() {
+        let part = Part::Thinking {
+            thinking: "step by step".to_string(),
+            signature: Some("sig123".to_string()),
+        };
+        assert!(part.is_thinking());
+        assert_eq!(part.thinking_text(), Some("step by step"));
+        assert_eq!(part.text(), None);
+    }
+
+    #[test]
+    fn test_non_thinking_variant_accessors() {
+        let text = Part::Text { text: "hello".to_string() };
+        assert!(!text.is_thinking());
+        assert_eq!(text.thinking_text(), None);
+
+        let data = Part::InlineData { mime_type: "image/png".to_string(), data: vec![] };
+        assert!(!data.is_thinking());
+        assert_eq!(data.thinking_text(), None);
+    }
+
+    #[test]
+    fn test_content_with_thinking() {
+        let content = Content::new("model").with_thinking("Let me reason about this");
+        assert_eq!(content.parts.len(), 1);
+        assert!(matches!(
+            &content.parts[0],
+            Part::Thinking { thinking, signature } if thinking == "Let me reason about this" && signature.is_none()
+        ));
+    }
+
+    #[test]
+    fn test_thinking_serialization_round_trip() {
+        let part = Part::Thinking {
+            thinking: "reasoning here".to_string(),
+            signature: Some("sig".to_string()),
+        };
+        let json = serde_json::to_string(&part).unwrap();
+        let deserialized: Part = serde_json::from_str(&json).unwrap();
+        assert_eq!(part, deserialized);
+    }
+
+    #[test]
+    fn test_thinking_without_signature_serialization() {
+        let part = Part::Thinking { thinking: "reasoning".to_string(), signature: None };
+        let json = serde_json::to_string(&part).unwrap();
+        // signature should be omitted from JSON
+        assert!(!json.contains("signature"));
+        let deserialized: Part = serde_json::from_str(&json).unwrap();
+        assert_eq!(part, deserialized);
+    }
+
+    #[test]
+    fn test_thinking_does_not_deserialize_as_text() {
+        let json = r#"{"thinking": "some reasoning"}"#;
+        let part: Part = serde_json::from_str(json).unwrap();
+        assert!(part.is_thinking());
+        assert_eq!(part.thinking_text(), Some("some reasoning"));
+        assert_eq!(part.text(), None);
+    }
+
+    #[test]
+    fn test_text_does_not_deserialize_as_thinking() {
+        let json = r#"{"text": "hello world"}"#;
+        let part: Part = serde_json::from_str(json).unwrap();
+        assert!(!part.is_thinking());
+        assert_eq!(part.text(), Some("hello world"));
     }
 }

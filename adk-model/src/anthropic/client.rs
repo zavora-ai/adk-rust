@@ -387,6 +387,11 @@ impl Llm for AnthropicClient {
                 let mut current_tool_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, args_json)
                 let mut current_tool_index: Option<usize> = None;
 
+                // Track usage from MessageStart for propagation to final MessageDelta
+                let mut stream_input_tokens: i32 = 0;
+                let mut stream_cache_read_tokens: Option<i32> = None;
+                let mut stream_cache_creation_tokens: Option<i32> = None;
+
                 while let Some(event_result) = pinned_stream.next().await {
                     // Requirement 3.4: Handle error events from the stream.
                     // The claudius SSE parser converts `event: error` into stream Err values
@@ -501,9 +506,12 @@ impl Llm for AnthropicClient {
                                 yield adk_core::LlmResponse {
                                     content: None,
                                     usage_metadata: Some(adk_core::UsageMetadata {
-                                        prompt_token_count: 0,
+                                        prompt_token_count: stream_input_tokens,
                                         candidates_token_count: delta_event.usage.output_tokens,
-                                        total_token_count: delta_event.usage.output_tokens,
+                                        total_token_count: stream_input_tokens + delta_event.usage.output_tokens,
+                                        cache_read_input_token_count: stream_cache_read_tokens,
+                                        cache_creation_input_token_count: stream_cache_creation_tokens,
+                                        ..Default::default()
                                     }),
                                     finish_reason,
                                     citation_metadata: None,
@@ -528,6 +536,11 @@ impl Llm for AnthropicClient {
                                 "gen_ai.usage.input_tokens",
                                 start_event.message.usage.input_tokens as i64,
                             );
+                            // Store input tokens for the final UsageMetadata
+                            stream_input_tokens = start_event.message.usage.input_tokens;
+                            // Store cache token counts for propagation to the final MessageDelta
+                            stream_cache_read_tokens = start_event.message.usage.cache_read_input_tokens;
+                            stream_cache_creation_tokens = start_event.message.usage.cache_creation_input_tokens;
                             // Requirement 6.3: Extract cache usage from the initial message usage
                             let cache_meta = convert::extract_cache_usage(&start_event.message.usage);
                             if !cache_meta.is_empty() {
@@ -833,10 +846,7 @@ mod tests {
 
         // Verify it matches the Ping variant (the match arm is `MessageStreamEvent::Ping => {}`)
         // This test documents and enforces that Ping is a recognized no-op event.
-        let produces_response = match event {
-            MessageStreamEvent::Ping => false,
-            _ => true,
-        };
+        let produces_response = !matches!(event, MessageStreamEvent::Ping);
 
         assert!(!produces_response, "Ping events must not produce any LlmResponse");
     }
@@ -881,10 +891,7 @@ mod tests {
         for sig in signatures {
             let delta = ContentBlockDelta::SignatureDelta(SignatureDelta::new(sig.clone()));
 
-            let produces_response = match delta {
-                ContentBlockDelta::SignatureDelta(_) => false,
-                _ => true,
-            };
+            let produces_response = !matches!(delta, ContentBlockDelta::SignatureDelta(_));
 
             assert!(
                 !produces_response,

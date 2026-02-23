@@ -41,7 +41,7 @@ pub fn content_to_message(content: &Content) -> IndexMap<String, Value> {
         .parts
         .iter()
         .filter_map(|part| match part {
-            Part::FunctionCall { id, name, args } => {
+            Part::FunctionCall { id, name, args, .. } => {
                 let mut call = serde_json::Map::new();
                 if let Some(id) = id {
                     call.insert("id".to_string(), Value::String(id.clone()));
@@ -163,6 +163,7 @@ mod tests {
                 id: Some("call_123".to_string()),
                 name: "get_weather".to_string(),
                 args: json!({"location": "Tokyo"}),
+                thought_signature: None,
             }],
         };
 

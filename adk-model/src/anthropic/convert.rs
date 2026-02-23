@@ -47,7 +47,7 @@ pub fn content_to_message(
                     Some(ContentBlock::Text(block))
                 }
             }
-            Part::FunctionCall { name, args, id } => {
+            Part::FunctionCall { name, args, id, .. } => {
                 let mut block = ToolUseBlock {
                     id: id.clone().unwrap_or_else(|| format!("call_{name}")),
                     name: name.clone(),
@@ -113,6 +113,13 @@ pub fn content_to_message(
                     ))))
                 }
             }
+            Part::Thinking { thinking, .. } => {
+                if thinking.is_empty() {
+                    None
+                } else {
+                    Some(ContentBlock::Text(TextBlock::new(thinking.clone())))
+                }
+            }
         })
         .collect();
 
@@ -166,7 +173,20 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
                     name: tool_use.name.clone(),
                     args: tool_use.input.clone(),
                     id: Some(tool_use.id.clone()),
+                    thought_signature: None,
                 });
+            }
+            ContentBlock::Thinking(thinking_block) => {
+                if !thinking_block.thinking.is_empty() {
+                    parts.push(Part::Thinking {
+                        thinking: thinking_block.thinking.clone(),
+                        signature: if thinking_block.signature.is_empty() {
+                            None
+                        } else {
+                            Some(thinking_block.signature.clone())
+                        },
+                    });
+                }
             }
             _ => {}
         }
@@ -179,6 +199,9 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
         prompt_token_count: message.usage.input_tokens,
         candidates_token_count: message.usage.output_tokens,
         total_token_count: (message.usage.input_tokens + message.usage.output_tokens),
+        cache_read_input_token_count: message.usage.cache_read_input_tokens,
+        cache_creation_input_token_count: message.usage.cache_creation_input_tokens,
+        ..Default::default()
     });
 
     let finish_reason = message.stop_reason.as_ref().map(|sr| match sr {
@@ -230,16 +253,11 @@ pub fn from_thinking_delta(thinking_text: &str) -> LlmResponse {
     LlmResponse {
         content: Some(Content {
             role: "model".to_string(),
-            parts: vec![Part::Text { text: format!("<thinking>{thinking_text}</thinking>") }],
+            parts: vec![Part::Thinking { thinking: thinking_text.to_string(), signature: None }],
         }),
-        usage_metadata: None,
-        finish_reason: None,
-        citation_metadata: None,
         partial: true,
         turn_complete: false,
-        interrupted: false,
-        error_code: None,
-        error_message: None,
+        ..Default::default()
     }
 }
 
@@ -277,7 +295,12 @@ pub fn create_tool_call_response(
 ) -> LlmResponse {
     let parts: Vec<Part> = tool_calls
         .into_iter()
-        .map(|(id, name, args)| Part::FunctionCall { name, args, id: Some(id) })
+        .map(|(id, name, args)| Part::FunctionCall {
+            name,
+            args,
+            id: Some(id),
+            thought_signature: None,
+        })
         .collect();
 
     LlmResponse {
@@ -492,5 +515,79 @@ mod tests {
 
         let claude_tools = convert_tools(&tools);
         assert_eq!(claude_tools.len(), 1);
+    }
+
+    #[test]
+    fn test_from_anthropic_message_with_thinking_block() {
+        use claudius::{ThinkingBlock, Usage};
+
+        let message = Message {
+            id: "msg_123".to_string(),
+            model: Model::Custom("claude-3-5-sonnet-20241022".to_string()),
+            role: MessageRole::Assistant,
+            content: vec![
+                ContentBlock::Thinking(ThinkingBlock::new(
+                    "Let me reason through this step by step...",
+                    "sig_abc123",
+                )),
+                ContentBlock::Text(TextBlock::new("The answer is 42.")),
+            ],
+            stop_reason: Some(StopReason::EndTurn),
+            stop_sequence: None,
+            r#type: "message".to_string(),
+            usage: Usage {
+                input_tokens: 10,
+                output_tokens: 20,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+                server_tool_use: None,
+            },
+        };
+
+        let (response, _cache_meta) = from_anthropic_message(&message);
+        let content = response.content.expect("should have content");
+        assert_eq!(content.parts.len(), 2);
+
+        // First part should be Thinking
+        assert!(content.parts[0].is_thinking());
+        assert_eq!(
+            content.parts[0].thinking_text(),
+            Some("Let me reason through this step by step...")
+        );
+
+        // Second part should be Text
+        assert!(!content.parts[1].is_thinking());
+        assert_eq!(content.parts[1].text(), Some("The answer is 42."));
+    }
+
+    #[test]
+    fn test_from_anthropic_message_empty_thinking_block_skipped() {
+        use claudius::{ThinkingBlock, Usage};
+
+        let message = Message {
+            id: "msg_456".to_string(),
+            model: Model::Custom("claude-3-5-sonnet-20241022".to_string()),
+            role: MessageRole::Assistant,
+            content: vec![
+                ContentBlock::Thinking(ThinkingBlock::new("", "sig_empty")),
+                ContentBlock::Text(TextBlock::new("Just text.")),
+            ],
+            stop_reason: Some(StopReason::EndTurn),
+            stop_sequence: None,
+            r#type: "message".to_string(),
+            usage: Usage {
+                input_tokens: 5,
+                output_tokens: 10,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+                server_tool_use: None,
+            },
+        };
+
+        let (response, _) = from_anthropic_message(&message);
+        let content = response.content.expect("should have content");
+        // Empty thinking block should be skipped
+        assert_eq!(content.parts.len(), 1);
+        assert_eq!(content.parts[0].text(), Some("Just text."));
     }
 }

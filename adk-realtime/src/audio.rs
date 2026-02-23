@@ -241,15 +241,15 @@ mod tests {
         let mut buffer = SmartAudioBuffer::new(sample_rate, target_ms);
 
         // Push 50 samples (50ms)
-        buffer.push(&vec![0; 50]);
+        buffer.push(&[0; 50]);
         assert!(buffer.flush().is_none());
 
         // Push 49 samples (total 99ms)
-        buffer.push(&vec![0; 49]);
+        buffer.push(&[0; 49]);
         assert!(buffer.flush().is_none());
 
         // Push 1 sample (total 100ms)
-        buffer.push(&vec![0; 1]);
+        buffer.push(&[0; 1]);
         let flushed = buffer.flush();
         assert!(flushed.is_some());
         assert_eq!(flushed.unwrap().len(), 100);
@@ -262,7 +262,7 @@ mod tests {
         let target_ms = 100;
         let mut buffer = SmartAudioBuffer::new(sample_rate, target_ms);
 
-        buffer.push(&vec![0; 50]);
+        buffer.push(&[0; 50]);
         assert!(buffer.flush().is_none());
 
         let remaining = buffer.flush_remaining();

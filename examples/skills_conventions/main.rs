@@ -90,6 +90,8 @@ async fn main() -> Result<()> {
         plugin_manager: None,
         run_config: None,
         compaction_config: None,
+        context_cache_config: None,
+        cache_capable: None,
     })?;
 
     let mut stream = runner

@@ -97,6 +97,11 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
   // @see trigger-input-flow Requirements 3.1, 3.2
   const [interrupt, setInterrupt] = useState<InterruptData | null>(null);
   
+  // Thinking traces: accumulate thinking text during streaming
+  // @see thinking-traces Requirements 7.1, 7.5
+  const thinkingRef = useRef('');
+  const [streamingThinking, setStreamingThinking] = useState('');
+
   const esRef = useRef<EventSource | null>(null);
   const textRef = useRef('');
   const agentRef = useRef('');
@@ -149,14 +154,16 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
   }, [snapshots.length]);
 
   const send = useCallback(
-    (input: string, onComplete: (text: string) => void, onError?: (msg: string) => void, overrideSessionId?: string) => {
+    (input: string, onComplete: (text: string, thinking?: string) => void, onError?: (msg: string) => void, overrideSessionId?: string) => {
       if (!projectId) return;
 
       textRef.current = '';
       agentRef.current = '';
       iterRef.current = 0;
       seenAgentsRef.current = new Set();
+      thinkingRef.current = '';
       setStreamingText('');
+      setStreamingThinking('');
       setCurrentAgent('');
       setToolCalls([]);
       setIteration(0);
@@ -206,6 +213,29 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
       es.addEventListener('chunk', (e) => {
         textRef.current = e.data;  // Replace, not append (binary sends full response)
         setStreamingText(textRef.current);
+      });
+
+      /**
+       * Handle thinking SSE events from thinking-capable models.
+       * Accumulates thinking text in a ref during streaming.
+       * The accumulated thinking is attached to the assistant message on completion.
+       * @see thinking-traces Requirements 7.1, 7.5
+       */
+      es.addEventListener('thinking', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          const content = data.content || '';
+          if (content) {
+            thinkingRef.current += content;
+            setStreamingThinking(thinkingRef.current);
+          }
+        } catch {
+          // Fallback: treat raw data as thinking text
+          if (e.data) {
+            thinkingRef.current += e.data;
+            setStreamingThinking(thinkingRef.current);
+          }
+        }
       });
 
       es.addEventListener('trace', (e) => {
@@ -419,19 +449,22 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
       es.addEventListener('end', () => {
         ended = true;
         const finalText = textRef.current;
+        const finalThinking = thinkingRef.current;
         setStreamingText('');
+        setStreamingThinking('');
         setCurrentAgent('');
         setIsStreaming(false);
         // HITL: Reset flow phase on completion
         setFlowPhase('idle');
         es.close();
-        onComplete(finalText);
+        onComplete(finalText, finalThinking || undefined);
       });
 
       es.addEventListener('error', (e) => {
         if (!ended) {
           const msg = (e as MessageEvent).data || 'Connection error';
           setStreamingText('');
+          setStreamingThinking('');
           setCurrentAgent('');
           setIsStreaming(false);
           // HITL: Reset flow phase on error
@@ -449,6 +482,8 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
   const cancel = useCallback(() => {
     esRef.current?.close();
     setStreamingText('');
+    setStreamingThinking('');
+    thinkingRef.current = '';
     setCurrentAgent('');
     setIsStreaming(false);
     // HITL: Reset flow phase and interrupt state on cancel
@@ -490,6 +525,7 @@ export function useSSE(projectId: string | null, binaryPath?: string | null) {
     cancel,
     isStreaming,
     streamingText,
+    streamingThinking,
     currentAgent,
     toolCalls,
     events,

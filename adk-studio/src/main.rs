@@ -10,6 +10,141 @@ use tower_http::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+/// Parsed CLI configuration for the adk-studio binary.
+#[derive(Debug, Clone)]
+pub struct CliConfig {
+    pub port: u16,
+    pub host: [u8; 4],
+    pub projects_dir: PathBuf,
+    pub static_dir: Option<PathBuf>,
+}
+
+impl Default for CliConfig {
+    fn default() -> Self {
+        Self {
+            port: 3000,
+            host: [127, 0, 0, 1],
+            projects_dir: dirs::data_local_dir().unwrap_or_default().join("adk-studio/projects"),
+            static_dir: None,
+        }
+    }
+}
+
+/// Result of parsing CLI arguments.
+#[derive(Debug)]
+pub enum CliAction {
+    /// Print version and exit.
+    PrintVersion,
+    /// Print help and exit.
+    PrintHelp,
+    /// Start the server with this config.
+    Run(CliConfig),
+}
+
+/// Parse CLI arguments into a `CliAction`.
+///
+/// `args` should be the arguments *after* the binary name (i.e., `std::env::args().skip(1)`).
+///
+/// Scanning order:
+/// 1. `--version` / `-V` (highest priority)
+/// 2. `--help`
+/// 3. Iterate through args, matching known flags and consuming values
+/// 4. Reject unknown flags (anything starting with `-`)
+pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
+    // 1. Scan for --version / -V first (highest priority)
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        return Ok(CliAction::PrintVersion);
+    }
+
+    // 2. Scan for --help (second priority)
+    if args.iter().any(|a| a == "--help") {
+        return Ok(CliAction::PrintHelp);
+    }
+
+    // 3. Iterate through args, matching known flags
+    let mut config = CliConfig::default();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        match arg.as_str() {
+            "--port" | "-p" => {
+                let val =
+                    args.get(i + 1).ok_or_else(|| format!("flag '{arg}' requires a value"))?;
+                config.port =
+                    val.parse::<u16>().map_err(|_| format!("invalid port value '{val}'"))?;
+                i += 2;
+            }
+            "--host" | "-h" => {
+                let val =
+                    args.get(i + 1).ok_or_else(|| format!("flag '{arg}' requires a value"))?;
+                config.host = parse_host(val)?;
+                i += 2;
+            }
+            "--dir" | "-d" => {
+                let val =
+                    args.get(i + 1).ok_or_else(|| format!("flag '{arg}' requires a value"))?;
+                config.projects_dir = PathBuf::from(val);
+                i += 2;
+            }
+            "--static" | "-s" => {
+                let val =
+                    args.get(i + 1).ok_or_else(|| format!("flag '{arg}' requires a value"))?;
+                config.static_dir = Some(PathBuf::from(val));
+                i += 2;
+            }
+            other if other.starts_with('-') => {
+                return Err(format!(
+                    "unknown flag '{other}'\nRun 'adk-studio --help' for usage information."
+                ));
+            }
+            _ => {
+                // Positional argument — skip (not an error for forward compat)
+                i += 1;
+            }
+        }
+    }
+
+    Ok(CliAction::Run(config))
+}
+
+/// Parse a host string like "a.b.c.d" into `[u8; 4]`.
+fn parse_host(s: &str) -> Result<[u8; 4], String> {
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.len() != 4 {
+        return Err(format!("invalid host '{s}': expected format a.b.c.d"));
+    }
+    let mut octets = [0u8; 4];
+    for (i, part) in parts.iter().enumerate() {
+        octets[i] = part
+            .parse::<u8>()
+            .map_err(|_| format!("invalid host '{s}': '{part}' is not a valid octet"))?;
+    }
+    Ok(octets)
+}
+
+/// Print the version string to stdout.
+pub fn print_version() {
+    println!("adk-studio {}", env!("CARGO_PKG_VERSION"));
+}
+
+/// Print usage information to stdout.
+pub fn print_help() {
+    println!("adk-studio {}", env!("CARGO_PKG_VERSION"));
+    println!();
+    println!("Visual development environment for ADK-Rust agents");
+    println!();
+    println!("USAGE:");
+    println!("    adk-studio [OPTIONS]");
+    println!();
+    println!("OPTIONS:");
+    println!("    -p, --port <PORT>      Server port [default: 3000]");
+    println!("    -h, --host <HOST>      Server host [default: 127.0.0.1]");
+    println!("    -d, --dir <DIR>        Projects directory");
+    println!("    -s, --static <DIR>     Static files directory");
+    println!("    -V, --version          Print version and exit");
+    println!("        --help             Print this help message and exit");
+}
+
 /// Handler for serving embedded static files
 async fn serve_static(AxumPath(path): AxumPath<String>) -> axum::response::Response {
     embedded::serve_embedded(path)
@@ -22,6 +157,25 @@ async fn serve_root() -> axum::response::Response {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    let config = match parse_args(&args) {
+        Ok(CliAction::PrintVersion) => {
+            print_version();
+            return Ok(());
+        }
+        Ok(CliAction::PrintHelp) => {
+            print_help();
+            return Ok(());
+        }
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            eprintln!("Run 'adk-studio --help' for usage information.");
+            std::process::exit(1);
+        }
+        Ok(CliAction::Run(config)) => config,
+    };
+
     // Load .env file if present
     dotenvy::dotenv().ok();
 
@@ -32,33 +186,10 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let args: Vec<String> = std::env::args().collect();
-    let port: u16 = args
-        .iter()
-        .position(|a| a == "--port" || a == "-p")
-        .and_then(|i| args.get(i + 1))
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(3000);
-
-    let host: [u8; 4] = args
-        .iter()
-        .position(|a| a == "--host" || a == "-h")
-        .and_then(|i| args.get(i + 1))
-        .map(|h| if h == "0.0.0.0" { [0, 0, 0, 0] } else { [127, 0, 0, 1] })
-        .unwrap_or([127, 0, 0, 1]);
-
-    let projects_dir = args
-        .iter()
-        .position(|a| a == "--dir" || a == "-d")
-        .and_then(|i| args.get(i + 1))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::data_local_dir().unwrap_or_default().join("adk-studio/projects"));
-
-    let static_dir = args
-        .iter()
-        .position(|a| a == "--static" || a == "-s")
-        .and_then(|i| args.get(i + 1))
-        .map(PathBuf::from);
+    let port = config.port;
+    let host = config.host;
+    let projects_dir = config.projects_dir;
+    let static_dir = config.static_dir;
 
     let storage = FileStorage::new(projects_dir.clone()).await?;
     let state = AppState::new(storage);

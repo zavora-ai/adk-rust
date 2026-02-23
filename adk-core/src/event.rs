@@ -243,6 +243,7 @@ mod tests {
                 name: "get_weather".to_string(),
                 args: serde_json::json!({"city": "NYC"}),
                 id: Some("call_123".to_string()),
+                thought_signature: None,
             }],
         });
         // Has function call -> NOT final (need to execute it)
@@ -306,6 +307,7 @@ mod tests {
                 name: "process_video".to_string(),
                 args: serde_json::json!({"file": "video.mp4"}),
                 id: Some("call_process".to_string()),
+                thought_signature: None,
             }],
         });
         // Has long_running_tool_ids -> final (async operation started)
@@ -322,12 +324,14 @@ mod tests {
                     name: "get_weather".to_string(),
                     args: serde_json::json!({}),
                     id: Some("call_1".to_string()),
+                    thought_signature: None,
                 },
                 Part::Text { text: "I'll check the weather".to_string() },
                 Part::FunctionCall {
                     name: "get_time".to_string(),
                     args: serde_json::json!({}),
                     id: Some("call_2".to_string()),
+                    thought_signature: None,
                 },
             ],
         });
@@ -348,6 +352,7 @@ mod tests {
                 name: "get_weather".to_string(),
                 args: serde_json::json!({}),
                 id: None, // Gemini-style: no explicit ID
+                thought_signature: None,
             }],
         });
 

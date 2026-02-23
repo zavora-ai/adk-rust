@@ -37,7 +37,7 @@ fn arb_status_code() -> impl Strategy<Value = u16> {
 }
 
 fn arb_request_id() -> impl Strategy<Value = Option<String>> {
-    prop_oneof![Just(None), "req_[a-zA-Z0-9]{8,24}".prop_map(|s| Some(s)),]
+    prop_oneof![Just(None), "req_[a-zA-Z0-9]{8,24}".prop_map(Some),]
 }
 
 proptest! {

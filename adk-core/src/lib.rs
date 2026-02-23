@@ -88,8 +88,8 @@ pub use event::{
 };
 pub use instruction_template::inject_session_state;
 pub use model::{
-    CitationMetadata, CitationSource, FinishReason, GenerateContentConfig, Llm, LlmRequest,
-    LlmResponse, LlmResponseStream, UsageMetadata,
+    CacheCapable, CitationMetadata, CitationSource, ContextCacheConfig, FinishReason,
+    GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream, UsageMetadata,
 };
 pub use tool::{Tool, ToolContext, ToolPredicate, ToolRegistry, Toolset, ValidationMode};
 pub use types::{Content, FunctionResponseData, MAX_INLINE_DATA_SIZE, Part};

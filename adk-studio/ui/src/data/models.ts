@@ -91,10 +91,10 @@ export const PROVIDERS: ProviderInfo[] = [
       {
         id: 'gemini-2.5-flash-lite',
         name: 'Gemini 2.5 Flash Lite',
-        description: 'Most cost-effective Gemini model for high-volume tasks',
+        description: 'Low-cost Gemini model for high-volume tasks',
         contextWindow: 1000000,
         capabilities: ['text', 'vision', 'code', 'tools'],
-        tier: 'free',
+        tier: 'standard',
       },
       // Gemini 2.0 Series (Legacy)
       {
@@ -790,6 +790,31 @@ export const PROVIDERS: ProviderInfo[] = [
       },
     ],
   },
+  {
+    id: 'xai',
+    name: 'xAI',
+    icon: '𝕏',
+    envVar: 'XAI_API_KEY',
+    docsUrl: 'https://docs.x.ai',
+    models: [
+      {
+        id: 'grok-3',
+        name: 'Grok 3',
+        description: 'Flagship reasoning model from xAI',
+        contextWindow: 131072,
+        capabilities: ['text', 'vision', 'code', 'reasoning', 'tools'],
+        tier: 'premium',
+      },
+      {
+        id: 'grok-3-mini',
+        name: 'Grok 3 Mini',
+        description: 'Efficient reasoning model from xAI',
+        contextWindow: 131072,
+        capabilities: ['text', 'code', 'reasoning', 'tools'],
+        tier: 'standard',
+      },
+    ],
+  },
 ];
 
 // Helper functions
@@ -810,6 +835,7 @@ export function detectProviderFromModel(modelId: string): string {
   if (lowerModel.includes('gemini') || lowerModel.includes('gemma')) return 'gemini';
   if (lowerModel.includes('gpt') || lowerModel.includes('o1') || lowerModel.includes('o3') || lowerModel.includes('o4') || lowerModel.includes('codex')) return 'openai';
   if (lowerModel.includes('claude')) return 'anthropic';
+  if (lowerModel.startsWith('grok')) return 'xai';
   // Bedrock uses inference profile IDs like "us.anthropic.claude-*" or "us.amazon.nova-*"
   if (lowerModel.startsWith('us.') || lowerModel.startsWith('eu.') || lowerModel.startsWith('ap.')) return 'bedrock';
   if (lowerModel.includes('deepseek') && !lowerModel.includes(':')) return 'deepseek';

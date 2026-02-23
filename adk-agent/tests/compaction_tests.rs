@@ -112,6 +112,7 @@ async fn test_summarize_skips_non_text_parts() {
             name: "get_weather".to_string(),
             args: serde_json::json!({}),
             id: Some("call_1".to_string()),
+            thought_signature: None,
         }],
     });
 

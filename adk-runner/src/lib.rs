@@ -35,6 +35,7 @@
 //! - Artifact handling
 //! - Callback hooks at every stage
 
+mod cache;
 mod callbacks;
 mod context;
 mod runner;
@@ -47,3 +48,7 @@ pub use runner::{Runner, RunnerConfig};
 
 // Re-export compaction types for convenience
 pub use adk_core::{BaseEventsSummarizer, EventsCompactionConfig};
+
+// Re-export cache types for convenience
+pub use adk_core::{CacheCapable, ContextCacheConfig};
+pub use cache::{CacheMetrics, CachePerformanceAnalyzer};

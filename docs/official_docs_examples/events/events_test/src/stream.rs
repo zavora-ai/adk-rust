@@ -93,6 +93,7 @@ fn create_sample_conversation() -> Vec<Event> {
             name: "get_weather".to_string(),
             args: json!({"city": "Tokyo"}),
             id: Some("call_weather".to_string()),
+            thought_signature: None,
         }],
     });
 

@@ -132,12 +132,30 @@ pub struct DeltaFunction {
     pub arguments: Option<String>,
 }
 
+/// Prompt token breakdown details (OpenAI-compatible).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PromptTokensDetails {
+    #[serde(default)]
+    pub cached_tokens: Option<u32>,
+}
+
+/// Completion token breakdown details (OpenAI-compatible).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct CompletionTokensDetails {
+    #[serde(default)]
+    pub reasoning_tokens: Option<u32>,
+}
+
 /// Token usage information.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
+    #[serde(default)]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
+    #[serde(default)]
+    pub completion_tokens_details: Option<CompletionTokensDetails>,
 }
 
 /// Convert ADK Content to Groq Message.
@@ -157,7 +175,8 @@ pub fn content_to_message(content: &Content) -> Message {
     for part in &content.parts {
         match part {
             Part::Text { text } => text_parts.push(text.clone()),
-            Part::FunctionCall { name, args, id } => {
+            Part::Thinking { thinking, .. } => text_parts.push(thinking.clone()),
+            Part::FunctionCall { name, args, id, .. } => {
                 tool_calls.push(ToolCall {
                     id: id.clone().unwrap_or_else(|| format!("call_{}", tool_calls.len())),
                     call_type: "function".to_string(),
@@ -246,6 +265,7 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
                         name: tc.function.name.clone(),
                         args,
                         id: Some(tc.id.clone()),
+                        thought_signature: None,
                     });
                 }
             }
@@ -265,10 +285,20 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
         (None, None)
     };
 
-    let usage = response.usage.as_ref().map(|u| UsageMetadata {
-        prompt_token_count: u.prompt_tokens as i32,
-        candidates_token_count: u.completion_tokens as i32,
-        total_token_count: u.total_tokens as i32,
+    let usage = response.usage.as_ref().map(|u| {
+        let mut meta = UsageMetadata {
+            prompt_token_count: u.prompt_tokens as i32,
+            candidates_token_count: u.completion_tokens as i32,
+            total_token_count: u.total_tokens as i32,
+            ..Default::default()
+        };
+        if let Some(ref details) = u.prompt_tokens_details {
+            meta.cache_read_input_token_count = details.cached_tokens.map(|t| t as i32);
+        }
+        if let Some(ref details) = u.completion_tokens_details {
+            meta.thinking_token_count = details.reasoning_tokens.map(|t| t as i32);
+        }
+        meta
     });
 
     LlmResponse {
@@ -291,7 +321,12 @@ pub fn create_tool_call_response(
 ) -> LlmResponse {
     let parts: Vec<Part> = tool_calls
         .into_iter()
-        .map(|(id, name, args)| Part::FunctionCall { name, args, id: Some(id) })
+        .map(|(id, name, args)| Part::FunctionCall {
+            name,
+            args,
+            id: Some(id),
+            thought_signature: None,
+        })
         .collect();
 
     LlmResponse {

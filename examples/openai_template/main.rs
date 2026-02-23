@@ -73,6 +73,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         plugin_manager: None,
         run_config: None,
         compaction_config: None,
+        context_cache_config: None,
+        cache_capable: None,
     })?;
 
     println!("\nSession configured with:");

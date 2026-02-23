@@ -405,6 +405,7 @@ fn conversation_history_preserves_tool_role() {
             name: "browser_navigate".into(),
             args: serde_json::json!({"url": "https://example.com"}),
             id: Some("call_1".into()),
+            thought_signature: None,
         }],
     });
     mutable.append_event(assistant_event);

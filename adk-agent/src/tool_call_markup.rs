@@ -143,6 +143,7 @@ fn parse_tool_call_block(block: &str) -> Option<Part> {
         name: name_line.to_string(),
         args: serde_json::Value::Object(args_map),
         id: None,
+        thought_signature: None,
     })
 }
 

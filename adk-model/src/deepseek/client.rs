@@ -206,13 +206,14 @@ impl Llm for DeepSeekClient {
                                                 if !reasoning.is_empty() {
                                                     reasoning_buffer.push_str(reasoning);
 
-                                                    // Emit reasoning as streaming text if thinking is enabled
+                                                    // Emit reasoning as Part::Thinking if thinking is enabled
                                                     if thinking_enabled {
                                                         yield LlmResponse {
                                                             content: Some(adk_core::Content {
                                                                 role: "model".to_string(),
-                                                                parts: vec![Part::Text {
-                                                                    text: reasoning.clone(),
+                                                                parts: vec![Part::Thinking {
+                                                                    thinking: reasoning.clone(),
+                                                                    signature: None,
                                                                 }],
                                                             }),
                                                             usage_metadata: None,
@@ -317,6 +318,9 @@ impl Llm for DeepSeekClient {
                                                         prompt_token_count: u.prompt_tokens as i32,
                                                         candidates_token_count: u.completion_tokens as i32,
                                                         total_token_count: u.total_tokens as i32,
+                                                        thinking_token_count: u.reasoning_tokens.map(|t| t as i32),
+                                                        cache_read_input_token_count: u.prompt_cache_hit_tokens.map(|t| t as i32),
+                                                        ..Default::default()
                                                     }
                                                 }),
                                                 finish_reason,

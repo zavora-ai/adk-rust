@@ -3,12 +3,13 @@
 //! This module handles mapping between ADK's `LlmRequest`/`LlmResponse` types
 //! and the Bedrock Converse API format used by `aws-sdk-bedrockruntime`.
 
+use super::config::{BedrockCacheConfig, BedrockCacheTtl};
 use adk_core::{Content, FinishReason, GenerateContentConfig, LlmResponse, Part, UsageMetadata};
 use aws_sdk_bedrockruntime::types::{
-    self as bedrock, ContentBlock, ContentBlockDelta, ContentBlockStart, ConversationRole,
-    ConverseOutput, InferenceConfiguration, Message, StopReason, SystemContentBlock, Tool,
-    ToolConfiguration, ToolInputSchema, ToolResultBlock, ToolResultContentBlock, ToolSpecification,
-    ToolUseBlock,
+    self as bedrock, CachePointBlock, CachePointType, CacheTtl, ContentBlock, ContentBlockDelta,
+    ContentBlockStart, ConversationRole, ConverseOutput, InferenceConfiguration, Message,
+    StopReason, SystemContentBlock, Tool, ToolConfiguration, ToolInputSchema, ToolResultBlock,
+    ToolResultContentBlock, ToolSpecification, ToolUseBlock,
 };
 use aws_smithy_types::Document;
 use serde_json::Value;
@@ -33,10 +34,14 @@ pub(crate) struct BedrockConverseInput {
 ///
 /// Extracts system messages into separate system content blocks and maps
 /// conversation messages, tools, and inference configuration.
+///
+/// When `prompt_caching` is provided, `CachePoint` blocks are appended after
+/// system content and after tool definitions to enable Bedrock prompt caching.
 pub(crate) fn adk_request_to_bedrock(
     contents: &[Content],
     tools: &HashMap<String, Value>,
     config: Option<&GenerateContentConfig>,
+    prompt_caching: Option<&BedrockCacheConfig>,
 ) -> Result<BedrockConverseInput, String> {
     let mut messages = Vec::new();
     let mut system = Vec::new();
@@ -45,10 +50,14 @@ pub(crate) fn adk_request_to_bedrock(
         match content.role.as_str() {
             "system" => {
                 for part in &content.parts {
-                    if let Part::Text { text } = part {
-                        if !text.is_empty() {
+                    match part {
+                        Part::Text { text } if !text.is_empty() => {
                             system.push(SystemContentBlock::Text(text.clone()));
                         }
+                        Part::Thinking { thinking, .. } if !thinking.is_empty() => {
+                            system.push(SystemContentBlock::Text(thinking.clone()));
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -72,10 +81,30 @@ pub(crate) fn adk_request_to_bedrock(
         }
     }
 
+    // Inject CachePoint after system content when prompt caching is enabled.
+    if let Some(cache_config) = prompt_caching {
+        if !system.is_empty() {
+            system.push(SystemContentBlock::CachePoint(build_cache_point_block(cache_config)));
+        }
+    }
+
     let inference_config = config.map(adk_config_to_bedrock);
-    let tool_config = if tools.is_empty() { None } else { Some(adk_tools_to_bedrock(tools)) };
+    let tool_config =
+        if tools.is_empty() { None } else { Some(adk_tools_to_bedrock(tools, prompt_caching)) };
 
     Ok(BedrockConverseInput { messages, system, inference_config, tool_config })
+}
+
+/// Build a `CachePointBlock` from the given cache configuration.
+///
+/// Sets the TTL to 1 hour when `BedrockCacheTtl::OneHour` is configured;
+/// otherwise uses the default 5-minute TTL (no explicit TTL field).
+fn build_cache_point_block(cache_config: &BedrockCacheConfig) -> CachePointBlock {
+    let mut builder = CachePointBlock::builder().r#type(CachePointType::Default);
+    if cache_config.ttl == BedrockCacheTtl::OneHour {
+        builder = builder.ttl(CacheTtl::OneHour);
+    }
+    builder.build().expect("CachePointBlock builder with type set should not fail")
 }
 
 /// Convert ADK `Part` list to Bedrock `ContentBlock` list.
@@ -90,7 +119,7 @@ fn adk_parts_to_bedrock(parts: &[Part]) -> Vec<ContentBlock> {
                     Some(ContentBlock::Text(text.clone()))
                 }
             }
-            Part::FunctionCall { name, args, id } => {
+            Part::FunctionCall { name, args, id, .. } => {
                 let tool_use = ToolUseBlock::builder()
                     .tool_use_id(id.clone().unwrap_or_else(|| format!("call_{name}")))
                     .name(name.clone())
@@ -109,6 +138,15 @@ fn adk_parts_to_bedrock(parts: &[Part]) -> Vec<ContentBlock> {
                     .ok()?;
                 Some(ContentBlock::ToolResult(tool_result))
             }
+            Part::Thinking { thinking, .. } => {
+                if thinking.is_empty() {
+                    None
+                } else {
+                    // Bedrock Converse API doesn't accept thinking blocks in input,
+                    // convert to text for conversation history
+                    Some(ContentBlock::Text(thinking.clone()))
+                }
+            }
             // InlineData and FileData are not directly supported by Bedrock Converse text API;
             // skip them for now (image/document support can be added later).
             Part::InlineData { .. } | Part::FileData { .. } => None,
@@ -120,8 +158,14 @@ fn adk_parts_to_bedrock(parts: &[Part]) -> Vec<ContentBlock> {
 ///
 /// Each tool in the ADK format is a `(name, JSON schema)` pair. The schema
 /// typically contains `description` and `parameters` fields.
-fn adk_tools_to_bedrock(tools: &HashMap<String, Value>) -> ToolConfiguration {
-    let bedrock_tools: Vec<Tool> = tools
+///
+/// When `prompt_caching` is provided, a `CachePoint` block is appended after
+/// the tool definitions.
+fn adk_tools_to_bedrock(
+    tools: &HashMap<String, Value>,
+    prompt_caching: Option<&BedrockCacheConfig>,
+) -> ToolConfiguration {
+    let mut bedrock_tools: Vec<Tool> = tools
         .iter()
         .filter_map(|(name, decl)| {
             let description = decl.get("description").and_then(|d| d.as_str()).map(String::from);
@@ -142,6 +186,13 @@ fn adk_tools_to_bedrock(tools: &HashMap<String, Value>) -> ToolConfiguration {
             spec_builder.build().ok().map(Tool::ToolSpec)
         })
         .collect();
+
+    // Inject CachePoint after tool definitions when prompt caching is enabled.
+    if let Some(cache_config) = prompt_caching {
+        if !bedrock_tools.is_empty() {
+            bedrock_tools.push(Tool::CachePoint(build_cache_point_block(cache_config)));
+        }
+    }
 
     // ToolConfiguration requires at least one tool; caller ensures tools is non-empty.
     ToolConfiguration::builder().set_tools(Some(bedrock_tools)).build().unwrap_or_else(|_| {
@@ -190,6 +241,9 @@ pub(crate) fn bedrock_response_to_adk(
         prompt_token_count: u.input_tokens,
         candidates_token_count: u.output_tokens,
         total_token_count: u.total_tokens,
+        cache_read_input_token_count: u.cache_read_input_tokens,
+        cache_creation_input_token_count: u.cache_write_input_tokens,
+        ..Default::default()
     });
 
     LlmResponse {
@@ -221,7 +275,23 @@ fn bedrock_content_blocks_to_parts(blocks: &[ContentBlock]) -> Vec<Part> {
                 name: tool_use.name.clone(),
                 args: document_to_json_value(&tool_use.input),
                 id: Some(tool_use.tool_use_id.clone()),
+                thought_signature: None,
             }),
+            ContentBlock::ReasoningContent(reasoning) => {
+                if let Ok(reasoning_text) = reasoning.as_reasoning_text() {
+                    let text = reasoning_text.text().to_string();
+                    if text.is_empty() {
+                        None
+                    } else {
+                        Some(Part::Thinking {
+                            thinking: text,
+                            signature: reasoning_text.signature().map(String::from),
+                        })
+                    }
+                } else {
+                    None
+                }
+            }
             _ => None,
         })
         .collect()
@@ -260,6 +330,7 @@ pub(crate) fn bedrock_stream_content_start_to_adk(
                         name: tool_start.name.clone(),
                         args: Value::Null,
                         id: Some(tool_start.tool_use_id.clone()),
+                        thought_signature: None,
                     }],
                 }),
                 usage_metadata: None,
@@ -278,7 +349,7 @@ pub(crate) fn bedrock_stream_content_start_to_adk(
 
 /// Convert a streaming `ContentBlockDelta` event to an ADK `LlmResponse`.
 ///
-/// Handles text deltas and tool use input deltas.
+/// Handles text deltas, tool use input deltas, and reasoning content deltas.
 pub(crate) fn bedrock_stream_delta_to_adk(delta: &ContentBlockDelta) -> Option<LlmResponse> {
     match delta {
         ContentBlockDelta::Text(text) => {
@@ -321,6 +392,31 @@ pub(crate) fn bedrock_stream_delta_to_adk(delta: &ContentBlockDelta) -> Option<L
                     error_code: None,
                     error_message: None,
                 })
+            }
+        }
+        ContentBlockDelta::ReasoningContent(reasoning_delta) => {
+            if let Ok(text) = reasoning_delta.as_text() {
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(LlmResponse {
+                        content: Some(Content {
+                            role: "model".to_string(),
+                            parts: vec![Part::Thinking { thinking: text.clone(), signature: None }],
+                        }),
+                        usage_metadata: None,
+                        finish_reason: None,
+                        citation_metadata: None,
+                        partial: true,
+                        turn_complete: false,
+                        interrupted: false,
+                        error_code: None,
+                        error_message: None,
+                    })
+                }
+            } else {
+                // Signature and RedactedContent deltas are not emitted as responses
+                None
             }
         }
         _ => None,
@@ -434,7 +530,7 @@ mod tests {
             },
         ];
 
-        let result = adk_request_to_bedrock(&contents, &HashMap::new(), None).unwrap();
+        let result = adk_request_to_bedrock(&contents, &HashMap::new(), None, None).unwrap();
         assert_eq!(result.system.len(), 1);
         assert_eq!(result.messages.len(), 1);
     }
@@ -456,7 +552,7 @@ mod tests {
             },
         ];
 
-        let result = adk_request_to_bedrock(&contents, &HashMap::new(), None).unwrap();
+        let result = adk_request_to_bedrock(&contents, &HashMap::new(), None, None).unwrap();
         assert_eq!(result.messages.len(), 3);
         assert_eq!(result.messages[0].role, ConversationRole::User);
         assert_eq!(result.messages[1].role, ConversationRole::Assistant);
@@ -471,10 +567,11 @@ mod tests {
                 name: "get_weather".to_string(),
                 args: serde_json::json!({"city": "Seattle"}),
                 id: Some("call_123".to_string()),
+                thought_signature: None,
             }],
         }];
 
-        let result = adk_request_to_bedrock(&contents, &HashMap::new(), None).unwrap();
+        let result = adk_request_to_bedrock(&contents, &HashMap::new(), None, None).unwrap();
         assert_eq!(result.messages.len(), 1);
 
         let blocks = &result.messages[0].content;
@@ -495,7 +592,7 @@ mod tests {
             }],
         }];
 
-        let result = adk_request_to_bedrock(&contents, &HashMap::new(), None).unwrap();
+        let result = adk_request_to_bedrock(&contents, &HashMap::new(), None, None).unwrap();
         assert_eq!(result.messages.len(), 1);
 
         let blocks = &result.messages[0].content;
@@ -519,7 +616,7 @@ mod tests {
             }),
         );
 
-        let result = adk_request_to_bedrock(&[], &tools, None).unwrap();
+        let result = adk_request_to_bedrock(&[], &tools, None, None).unwrap();
         assert!(result.tool_config.is_some());
         let tool_config = result.tool_config.unwrap();
         assert_eq!(tool_config.tools.len(), 1);
@@ -532,10 +629,10 @@ mod tests {
             top_p: Some(0.9),
             top_k: None,
             max_output_tokens: Some(1024),
-            response_schema: None,
+            ..Default::default()
         };
 
-        let result = adk_request_to_bedrock(&[], &HashMap::new(), Some(&config)).unwrap();
+        let result = adk_request_to_bedrock(&[], &HashMap::new(), Some(&config), None).unwrap();
         let inf = result.inference_config.unwrap();
         assert_eq!(inf.temperature, Some(0.7));
         assert_eq!(inf.top_p, Some(0.9));
@@ -582,10 +679,263 @@ mod tests {
 
     #[test]
     fn test_empty_contents_produces_no_messages() {
-        let result = adk_request_to_bedrock(&[], &HashMap::new(), None).unwrap();
+        let result = adk_request_to_bedrock(&[], &HashMap::new(), None, None).unwrap();
         assert!(result.messages.is_empty());
         assert!(result.system.is_empty());
         assert!(result.inference_config.is_none());
         assert!(result.tool_config.is_none());
+    }
+
+    #[test]
+    fn test_reasoning_content_block_to_thinking_part() {
+        let reasoning_text = bedrock::ReasoningTextBlock::builder()
+            .text("Let me think step by step...")
+            .build()
+            .unwrap();
+        let block = ContentBlock::ReasoningContent(bedrock::ReasoningContentBlock::ReasoningText(
+            reasoning_text,
+        ));
+
+        let parts = bedrock_content_blocks_to_parts(&[block]);
+        assert_eq!(parts.len(), 1);
+        assert!(parts[0].is_thinking());
+        assert_eq!(parts[0].thinking_text().unwrap(), "Let me think step by step...");
+    }
+
+    #[test]
+    fn test_reasoning_content_block_with_signature() {
+        let reasoning_text = bedrock::ReasoningTextBlock::builder()
+            .text("Analyzing the problem...")
+            .signature("sig_abc123")
+            .build()
+            .unwrap();
+        let block = ContentBlock::ReasoningContent(bedrock::ReasoningContentBlock::ReasoningText(
+            reasoning_text,
+        ));
+
+        let parts = bedrock_content_blocks_to_parts(&[block]);
+        assert_eq!(parts.len(), 1);
+        match &parts[0] {
+            Part::Thinking { thinking, signature } => {
+                assert_eq!(thinking, "Analyzing the problem...");
+                assert_eq!(signature.as_deref(), Some("sig_abc123"));
+            }
+            _ => panic!("expected Part::Thinking"),
+        }
+    }
+
+    #[test]
+    fn test_reasoning_content_block_empty_text_skipped() {
+        let reasoning_text = bedrock::ReasoningTextBlock::builder().text("").build().unwrap();
+        let block = ContentBlock::ReasoningContent(bedrock::ReasoningContentBlock::ReasoningText(
+            reasoning_text,
+        ));
+
+        let parts = bedrock_content_blocks_to_parts(&[block]);
+        assert!(parts.is_empty());
+    }
+
+    #[test]
+    fn test_reasoning_content_block_redacted_skipped() {
+        let block =
+            ContentBlock::ReasoningContent(bedrock::ReasoningContentBlock::RedactedContent(
+                aws_smithy_types::Blob::new(b"redacted"),
+            ));
+
+        let parts = bedrock_content_blocks_to_parts(&[block]);
+        assert!(parts.is_empty());
+    }
+
+    #[test]
+    fn test_mixed_text_and_reasoning_blocks() {
+        let reasoning_text =
+            bedrock::ReasoningTextBlock::builder().text("Thinking...").build().unwrap();
+        let blocks = vec![
+            ContentBlock::ReasoningContent(bedrock::ReasoningContentBlock::ReasoningText(
+                reasoning_text,
+            )),
+            ContentBlock::Text("Final answer".to_string()),
+        ];
+
+        let parts = bedrock_content_blocks_to_parts(&blocks);
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].is_thinking());
+        assert_eq!(parts[0].thinking_text().unwrap(), "Thinking...");
+        assert_eq!(parts[1].text().unwrap(), "Final answer");
+    }
+
+    #[test]
+    fn test_stream_reasoning_text_delta() {
+        let reasoning_delta =
+            bedrock::ReasoningContentBlockDelta::Text("reasoning chunk".to_string());
+        let delta = ContentBlockDelta::ReasoningContent(reasoning_delta);
+
+        let response = bedrock_stream_delta_to_adk(&delta).unwrap();
+        assert!(response.partial);
+        assert!(!response.turn_complete);
+        let content = response.content.unwrap();
+        assert_eq!(content.parts.len(), 1);
+        assert!(content.parts[0].is_thinking());
+        assert_eq!(content.parts[0].thinking_text().unwrap(), "reasoning chunk");
+    }
+
+    #[test]
+    fn test_stream_reasoning_empty_text_delta_skipped() {
+        let reasoning_delta = bedrock::ReasoningContentBlockDelta::Text(String::new());
+        let delta = ContentBlockDelta::ReasoningContent(reasoning_delta);
+
+        assert!(bedrock_stream_delta_to_adk(&delta).is_none());
+    }
+
+    #[test]
+    fn test_stream_reasoning_signature_delta_skipped() {
+        let reasoning_delta = bedrock::ReasoningContentBlockDelta::Signature("sig_xyz".to_string());
+        let delta = ContentBlockDelta::ReasoningContent(reasoning_delta);
+
+        // Signature deltas are not emitted as LlmResponse; they are
+        // accumulated in the streaming client and emitted at block stop.
+        assert!(bedrock_stream_delta_to_adk(&delta).is_none());
+    }
+
+    #[test]
+    fn test_non_streaming_response_with_reasoning() {
+        let reasoning_text = bedrock::ReasoningTextBlock::builder()
+            .text("Step 1: analyze input")
+            .signature("sig_test")
+            .build()
+            .unwrap();
+        let message = Message::builder()
+            .role(ConversationRole::Assistant)
+            .content(ContentBlock::ReasoningContent(bedrock::ReasoningContentBlock::ReasoningText(
+                reasoning_text,
+            )))
+            .content(ContentBlock::Text("The answer is 42.".to_string()))
+            .build()
+            .unwrap();
+
+        let output = ConverseOutput::Message(message);
+        let response = bedrock_response_to_adk(&output, &StopReason::EndTurn, None);
+
+        let content = response.content.unwrap();
+        assert_eq!(content.parts.len(), 2);
+
+        assert!(content.parts[0].is_thinking());
+        assert_eq!(content.parts[0].thinking_text().unwrap(), "Step 1: analyze input");
+        match &content.parts[0] {
+            Part::Thinking { signature, .. } => {
+                assert_eq!(signature.as_deref(), Some("sig_test"));
+            }
+            _ => panic!("expected Part::Thinking"),
+        }
+
+        assert_eq!(content.parts[1].text().unwrap(), "The answer is 42.");
+    }
+
+    #[test]
+    fn test_cache_point_not_injected_when_none() {
+        let contents = vec![Content {
+            role: "system".to_string(),
+            parts: vec![Part::Text { text: "You are helpful.".to_string() }],
+        }];
+        let mut tools = HashMap::new();
+        tools.insert(
+            "get_weather".to_string(),
+            serde_json::json!({
+                "description": "Get weather",
+                "parameters": { "type": "object", "properties": {} }
+            }),
+        );
+
+        let result = adk_request_to_bedrock(&contents, &tools, None, None).unwrap();
+        // No CachePoint in system blocks
+        assert_eq!(result.system.len(), 1);
+        assert!(result.system[0].is_text());
+        // No CachePoint in tools
+        let tool_config = result.tool_config.unwrap();
+        assert_eq!(tool_config.tools.len(), 1);
+        assert!(tool_config.tools[0].is_tool_spec());
+    }
+
+    #[test]
+    fn test_cache_point_injected_after_system_content() {
+        let contents = vec![Content {
+            role: "system".to_string(),
+            parts: vec![Part::Text { text: "You are helpful.".to_string() }],
+        }];
+        let cache_config = BedrockCacheConfig::default();
+
+        let result =
+            adk_request_to_bedrock(&contents, &HashMap::new(), None, Some(&cache_config)).unwrap();
+        // System should have text + CachePoint
+        assert_eq!(result.system.len(), 2);
+        assert!(result.system[0].is_text());
+        assert!(result.system[1].is_cache_point());
+    }
+
+    #[test]
+    fn test_cache_point_not_injected_when_system_empty() {
+        let contents = vec![Content {
+            role: "user".to_string(),
+            parts: vec![Part::Text { text: "Hello".to_string() }],
+        }];
+        let cache_config = BedrockCacheConfig::default();
+
+        let result =
+            adk_request_to_bedrock(&contents, &HashMap::new(), None, Some(&cache_config)).unwrap();
+        // No system blocks, so no CachePoint
+        assert!(result.system.is_empty());
+    }
+
+    #[test]
+    fn test_cache_point_injected_after_tools() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "get_weather".to_string(),
+            serde_json::json!({
+                "description": "Get weather",
+                "parameters": { "type": "object", "properties": {} }
+            }),
+        );
+        let cache_config = BedrockCacheConfig::default();
+
+        let result = adk_request_to_bedrock(&[], &tools, None, Some(&cache_config)).unwrap();
+        let tool_config = result.tool_config.unwrap();
+        // Tools should have tool spec + CachePoint
+        assert_eq!(tool_config.tools.len(), 2);
+        assert!(tool_config.tools[0].is_tool_spec());
+        assert!(tool_config.tools[1].is_cache_point());
+    }
+
+    #[test]
+    fn test_cache_point_with_one_hour_ttl() {
+        let contents = vec![Content {
+            role: "system".to_string(),
+            parts: vec![Part::Text { text: "You are helpful.".to_string() }],
+        }];
+        let cache_config = BedrockCacheConfig { ttl: BedrockCacheTtl::OneHour };
+
+        let result =
+            adk_request_to_bedrock(&contents, &HashMap::new(), None, Some(&cache_config)).unwrap();
+        assert_eq!(result.system.len(), 2);
+        let cache_point = result.system[1].as_cache_point().unwrap();
+        assert_eq!(*cache_point.r#type(), CachePointType::Default);
+        assert_eq!(*cache_point.ttl().unwrap(), CacheTtl::OneHour);
+    }
+
+    #[test]
+    fn test_cache_point_with_five_minutes_ttl_no_explicit_ttl() {
+        let contents = vec![Content {
+            role: "system".to_string(),
+            parts: vec![Part::Text { text: "You are helpful.".to_string() }],
+        }];
+        let cache_config = BedrockCacheConfig { ttl: BedrockCacheTtl::FiveMinutes };
+
+        let result =
+            adk_request_to_bedrock(&contents, &HashMap::new(), None, Some(&cache_config)).unwrap();
+        assert_eq!(result.system.len(), 2);
+        let cache_point = result.system[1].as_cache_point().unwrap();
+        assert_eq!(*cache_point.r#type(), CachePointType::Default);
+        // FiveMinutes is the default — no explicit TTL set
+        assert!(cache_point.ttl().is_none());
     }
 }

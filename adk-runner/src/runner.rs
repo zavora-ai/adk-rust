@@ -1,6 +1,9 @@
 use crate::InvocationContext;
+use crate::cache::CacheManager;
 use adk_artifact::ArtifactService;
-use adk_core::{Agent, Content, EventStream, Memory, Result, RunConfig};
+use adk_core::{
+    Agent, CacheCapable, Content, ContextCacheConfig, EventStream, Memory, Result, RunConfig,
+};
 use adk_plugin::PluginManager;
 use adk_session::SessionService;
 use adk_skill::{SkillInjector, SkillInjectorConfig};
@@ -23,6 +26,13 @@ pub struct RunnerConfig {
     /// When set, the runner will periodically summarize older events
     /// to reduce context size sent to the LLM.
     pub compaction_config: Option<adk_core::EventsCompactionConfig>,
+    /// Optional context cache configuration for automatic prompt caching lifecycle.
+    /// When set alongside `cache_capable`, the runner will automatically create and
+    /// manage cached content resources for supported providers.
+    pub context_cache_config: Option<ContextCacheConfig>,
+    /// Optional cache-capable model reference for automatic cache management.
+    /// Set this to the same model used by the agent if it supports caching.
+    pub cache_capable: Option<Arc<dyn CacheCapable>>,
 }
 
 pub struct Runner {
@@ -35,6 +45,8 @@ pub struct Runner {
     skill_injector: Option<Arc<SkillInjector>>,
     run_config: RunConfig,
     compaction_config: Option<adk_core::EventsCompactionConfig>,
+    context_cache_config: Option<ContextCacheConfig>,
+    cache_capable: Option<Arc<dyn CacheCapable>>,
 }
 
 impl Runner {
@@ -49,6 +61,8 @@ impl Runner {
             skill_injector: None,
             run_config: config.run_config.unwrap_or_default(),
             compaction_config: config.compaction_config,
+            context_cache_config: config.context_cache_config,
+            cache_capable: config.cache_capable,
         })
     }
 
@@ -84,8 +98,10 @@ impl Runner {
         let memory_service = self.memory_service.clone();
         let plugin_manager = self.plugin_manager.clone();
         let skill_injector = self.skill_injector.clone();
-        let run_config = self.run_config.clone();
+        let mut run_config = self.run_config.clone();
         let compaction_config = self.compaction_config.clone();
+        let context_cache_config = self.context_cache_config.clone();
+        let cache_capable = self.cache_capable.clone();
 
         let s = stream! {
             // Get or create session
@@ -250,6 +266,78 @@ impl Runner {
                 }
                 yield Err(e);
                 return;
+            }
+
+            // ===== CONTEXT CACHE LIFECYCLE =====
+            // If context caching is configured and a cache-capable model is available,
+            // create or refresh the cached content before agent execution.
+            // Cache failures are non-fatal — log a warning and proceed without cache.
+            let mut cache_manager = context_cache_config
+                .as_ref()
+                .map(|config| CacheManager::new(config.clone()));
+
+            if let (Some(cm), Some(cache_model)) = (&mut cache_manager, &cache_capable) {
+                if cm.is_enabled() {
+                    if cm.active_cache_name().is_none() || cm.needs_refresh() {
+                        // Gather system instruction from the agent's description
+                        // (the full instruction is resolved inside the agent, but the
+                        // description provides a reasonable proxy for cache keying)
+                        let system_instruction = agent_to_run.description().to_string();
+                        let tools = std::collections::HashMap::new();
+                        let ttl = context_cache_config.as_ref().map_or(600, |c| c.ttl_seconds);
+
+                        match cache_model.create_cache(&system_instruction, &tools, ttl).await {
+                            Ok(name) => {
+                                // Delete old cache if refreshing
+                                if let Some(old) = cm.clear_active_cache() {
+                                    if let Err(e) = cache_model.delete_cache(&old).await {
+                                        tracing::warn!(
+                                            old_cache = %old,
+                                            error = %e,
+                                            "failed to delete old cache, proceeding with new cache"
+                                        );
+                                    }
+                                }
+                                cm.set_active_cache(name);
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "cache creation failed, proceeding without cache"
+                                );
+                            }
+                        }
+                    }
+
+                    // Attach cache name to run config so agents can use it
+                    if let Some(cache_name) = cm.record_invocation() {
+                        run_config.cached_content = Some(cache_name.to_string());
+                        // Rebuild the invocation context with the updated run config
+                        let mut refreshed_ctx = InvocationContext::with_mutable_session(
+                            invocation_id.clone(),
+                            agent_to_run.clone(),
+                            user_id.clone(),
+                            app_name.clone(),
+                            session_id.clone(),
+                            effective_user_content.clone(),
+                            ctx.mutable_session().clone(),
+                        );
+                        if let Some(service) = artifact_service_clone.clone() {
+                            let scoped = adk_artifact::ScopedArtifacts::new(
+                                service,
+                                app_name.clone(),
+                                user_id.clone(),
+                                session_id.clone(),
+                            );
+                            refreshed_ctx = refreshed_ctx.with_artifacts(Arc::new(scoped));
+                        }
+                        if let Some(memory) = memory_service_clone.clone() {
+                            refreshed_ctx = refreshed_ctx.with_memory(memory);
+                        }
+                        refreshed_ctx = refreshed_ctx.with_run_config(run_config.clone());
+                        ctx = Arc::new(refreshed_ctx);
+                    }
+                }
             }
 
             // Run the agent with instrumentation (ADK-Go style attributes)

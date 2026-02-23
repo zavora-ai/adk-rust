@@ -128,6 +128,8 @@ async fn test_e2e_compaction_with_inmemory_session() {
             overlap_size: 0,
             summarizer: summarizer.clone(),
         }),
+        context_cache_config: None,
+        cache_capable: None,
     })
     .unwrap();
 

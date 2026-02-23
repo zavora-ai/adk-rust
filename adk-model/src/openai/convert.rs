@@ -32,6 +32,13 @@ pub fn content_to_message(content: &Content) -> ChatCompletionRequestMessage {
                                 ChatCompletionRequestMessageContentPartText { text: text.clone() },
                             ))
                         }
+                        Part::Thinking { thinking, .. } => {
+                            Some(ChatCompletionRequestUserMessageContentPart::Text(
+                                ChatCompletionRequestMessageContentPartText {
+                                    text: thinking.clone(),
+                                },
+                            ))
+                        }
                         Part::InlineData { mime_type, data } => {
                             Some(inline_data_part_to_openai(mime_type, data))
                         }
@@ -169,6 +176,7 @@ fn extract_text(parts: &[Part]) -> String {
         .iter()
         .filter_map(|p| match p {
             Part::Text { text } => Some(text.clone()),
+            Part::Thinking { thinking, .. } => Some(thinking.clone()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -186,7 +194,7 @@ fn extract_tool_calls(parts: &[Part]) -> Vec<ChatCompletionMessageToolCall> {
     parts
         .iter()
         .filter_map(|part| {
-            if let Part::FunctionCall { name, args, id } = part {
+            if let Part::FunctionCall { name, args, id, .. } = part {
                 Some(ChatCompletionMessageToolCall {
                     id: id.clone().unwrap_or_else(|| format!("call_{}", name)),
                     r#type: ChatCompletionToolType::Function,
@@ -244,6 +252,7 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
                     name: tc.function.name.clone(),
                     args,
                     id: Some(tc.id.clone()),
+                    thought_signature: None,
                 });
             }
         }
@@ -251,10 +260,22 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
         Content { role: "model".to_string(), parts }
     });
 
-    let usage_metadata = resp.usage.as_ref().map(|u| UsageMetadata {
-        prompt_token_count: u.prompt_tokens as i32,
-        candidates_token_count: u.completion_tokens as i32,
-        total_token_count: u.total_tokens as i32,
+    let usage_metadata = resp.usage.as_ref().map(|u| {
+        let mut meta = UsageMetadata {
+            prompt_token_count: u.prompt_tokens as i32,
+            candidates_token_count: u.completion_tokens as i32,
+            total_token_count: u.total_tokens as i32,
+            ..Default::default()
+        };
+        if let Some(ref details) = u.prompt_tokens_details {
+            meta.cache_read_input_token_count = details.cached_tokens.map(|t| t as i32);
+            meta.audio_input_token_count = details.audio_tokens.map(|t| t as i32);
+        }
+        if let Some(ref details) = u.completion_tokens_details {
+            meta.thinking_token_count = details.reasoning_tokens.map(|t| t as i32);
+            meta.audio_output_token_count = details.audio_tokens.map(|t| t as i32);
+        }
+        meta
     });
 
     let finish_reason = resp.choices.first().and_then(|c| c.finish_reason).map(|fr| match fr {
@@ -305,6 +326,7 @@ pub fn from_openai_chunk(chunk: &CreateChatCompletionStreamResponse) -> LlmRespo
                                 name: name.clone(),
                                 args,
                                 id: tc.id.clone(),
+                                thought_signature: None,
                             });
                         }
                     }

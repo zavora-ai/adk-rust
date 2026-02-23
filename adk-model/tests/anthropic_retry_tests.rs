@@ -37,10 +37,7 @@ fn arb_optional_u32() -> impl Strategy<Value = Option<u32>> {
 
 /// Generate optional ISO 8601 reset timestamps.
 fn arb_optional_reset() -> impl Strategy<Value = Option<String>> {
-    prop_oneof![
-        Just(None),
-        "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z".prop_map(|s| Some(s)),
-    ]
+    prop_oneof![Just(None), "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z".prop_map(Some),]
 }
 
 /// Generate optional retry-after header values (seconds as string).

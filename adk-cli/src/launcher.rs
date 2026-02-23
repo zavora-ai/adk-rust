@@ -166,6 +166,8 @@ impl Launcher {
             plugin_manager: None,
             run_config: self.run_config,
             compaction_config: None,
+            context_cache_config: None,
+            cache_capable: None,
         })?;
 
         println!("🤖 Agent ready! Type your questions (or 'exit' to quit).\n");

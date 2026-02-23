@@ -144,6 +144,13 @@ impl Llm for OllamaModel {
                 while let Some(chunk_result) = pinned_stream.next().await {
                     match chunk_result {
                         Ok(response) => {
+                            // Yield thinking delta for each chunk
+                            if let Some(thinking) = &response.message.thinking {
+                                if !thinking.is_empty() {
+                                    yield convert::thinking_delta_response(thinking);
+                                }
+                            }
+
                             // Yield text delta for each chunk
                             if !response.message.content.is_empty() {
                                 yield convert::text_delta_response(&response.message.content);

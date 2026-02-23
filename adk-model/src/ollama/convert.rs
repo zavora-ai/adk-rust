@@ -12,6 +12,7 @@ pub fn content_to_chat_message(content: &Content) -> Option<ChatMessage> {
         .iter()
         .filter_map(|p| match p {
             Part::Text { text } => Some(text.clone()),
+            Part::Thinking { thinking, .. } => Some(thinking.clone()),
             Part::InlineData { mime_type, data } => {
                 Some(attachment::inline_attachment_to_text(mime_type, data))
             }
@@ -54,6 +55,13 @@ pub fn content_to_chat_message(content: &Content) -> Option<ChatMessage> {
 pub fn chat_response_to_llm_response(response: &ChatMessageResponse, partial: bool) -> LlmResponse {
     let mut parts = Vec::new();
 
+    // Extract thinking content if present
+    if let Some(thinking) = &response.message.thinking {
+        if !thinking.is_empty() {
+            parts.push(Part::Thinking { thinking: thinking.clone(), signature: None });
+        }
+    }
+
     // Add text content
     if !response.message.content.is_empty() {
         parts.push(Part::Text { text: response.message.content.clone() });
@@ -65,6 +73,7 @@ pub fn chat_response_to_llm_response(response: &ChatMessageResponse, partial: bo
             name: tool_call.function.name.clone(),
             args: tool_call.function.arguments.clone(),
             id: None, // Ollama doesn't provide tool call IDs
+            thought_signature: None,
         });
     }
 
@@ -79,6 +88,7 @@ pub fn chat_response_to_llm_response(response: &ChatMessageResponse, partial: bo
         prompt_token_count: data.prompt_eval_count as i32,
         candidates_token_count: data.eval_count as i32,
         total_token_count: (data.prompt_eval_count + data.eval_count) as i32,
+        ..Default::default()
     });
 
     LlmResponse {
@@ -100,6 +110,23 @@ pub fn text_delta_response(text: &str) -> LlmResponse {
         content: Some(Content {
             role: "model".to_string(),
             parts: vec![Part::Text { text: text.to_string() }],
+        }),
+        usage_metadata: None,
+        finish_reason: None,
+        citation_metadata: None,
+        partial: true,
+        turn_complete: false,
+        interrupted: false,
+        error_code: None,
+        error_message: None,
+    }
+}
+/// Create a thinking delta response for streaming.
+pub fn thinking_delta_response(thinking: &str) -> LlmResponse {
+    LlmResponse {
+        content: Some(Content {
+            role: "model".to_string(),
+            parts: vec![Part::Thinking { thinking: thinking.to_string(), signature: None }],
         }),
         usage_metadata: None,
         finish_reason: None,

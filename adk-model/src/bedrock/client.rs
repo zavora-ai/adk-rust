@@ -38,6 +38,7 @@ pub struct BedrockClient {
     model_id: String,
     region: String,
     retry_config: RetryConfig,
+    prompt_caching: Option<super::config::BedrockCacheConfig>,
 }
 
 impl BedrockClient {
@@ -53,6 +54,7 @@ impl BedrockClient {
     pub async fn new(config: BedrockConfig) -> Result<Self, AdkError> {
         let region = config.region.clone();
         let model_id = config.model_id.clone();
+        let prompt_caching = config.prompt_caching.clone();
 
         let mut sdk_config_loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .region(aws_config::Region::new(config.region.clone()));
@@ -66,7 +68,7 @@ impl BedrockClient {
 
         info!("bedrock client created for region={region}, model={model_id}");
 
-        Ok(Self { client, model_id, region, retry_config: RetryConfig::default() })
+        Ok(Self { client, model_id, region, retry_config: RetryConfig::default(), prompt_caching })
     }
 
     /// Set the retry configuration, consuming and returning `self`.
@@ -99,14 +101,18 @@ impl Llm for BedrockClient {
         request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
-        let bedrock_input =
-            adk_request_to_bedrock(&request.contents, &request.tools, request.config.as_ref())
-                .map_err(|e| {
-                    AdkError::Model(format!(
-                        "Bedrock request conversion failed for region={}, model={}: {e}",
-                        self.region, self.model_id
-                    ))
-                })?;
+        let bedrock_input = adk_request_to_bedrock(
+            &request.contents,
+            &request.tools,
+            request.config.as_ref(),
+            self.prompt_caching.as_ref(),
+        )
+        .map_err(|e| {
+            AdkError::Model(format!(
+                "Bedrock request conversion failed for region={}, model={}: {e}",
+                self.region, self.model_id
+            ))
+        })?;
 
         if stream {
             self.generate_streaming(bedrock_input).await
@@ -187,6 +193,8 @@ impl BedrockClient {
             let mut tool_name: Option<String> = None;
             let mut tool_id: Option<String> = None;
             let mut tool_args_buf = String::new();
+            // Track reasoning signature for the current reasoning content block.
+            let mut reasoning_signature: Option<String> = None;
             // Buffer the stop response and usage metadata so they can be merged.
             // Bedrock sends Metadata after MessageStop, so we defer emitting
             // the final chunk until the stream ends.
@@ -226,6 +234,16 @@ impl BedrockClient {
                                 tool_args_buf.push_str(&tool_delta.input);
                             }
 
+                            // Capture reasoning signature deltas for later attachment.
+                            if let aws_sdk_bedrockruntime::types::ContentBlockDelta::ReasoningContent(
+                                reasoning_delta,
+                            ) = delta
+                            {
+                                if let Ok(sig) = reasoning_delta.as_signature() {
+                                    reasoning_signature = Some(sig.clone());
+                                }
+                            }
+
                             if let Some(response) = bedrock_stream_delta_to_adk(delta) {
                                 yield response;
                             }
@@ -245,12 +263,36 @@ impl BedrockClient {
                                         name,
                                         args,
                                         id: Some(id),
+                                        thought_signature: None,
                                     }],
                                 }),
                                 usage_metadata: None,
                                 finish_reason: None,
                                 citation_metadata: None,
                                 partial: false,
+                                turn_complete: false,
+                                interrupted: false,
+                                error_code: None,
+                                error_message: None,
+                            };
+                        }
+
+                        // If we accumulated a reasoning signature, emit it as a
+                        // Part::Thinking with the signature so downstream consumers
+                        // can attach it to the reasoning block.
+                        if let Some(sig) = reasoning_signature.take() {
+                            yield LlmResponse {
+                                content: Some(adk_core::Content {
+                                    role: "model".to_string(),
+                                    parts: vec![adk_core::Part::Thinking {
+                                        thinking: String::new(),
+                                        signature: Some(sig),
+                                    }],
+                                }),
+                                usage_metadata: None,
+                                finish_reason: None,
+                                citation_metadata: None,
+                                partial: true,
                                 turn_complete: false,
                                 interrupted: false,
                                 error_code: None,
@@ -271,6 +313,9 @@ impl BedrockClient {
                                 prompt_token_count: usage.input_tokens,
                                 candidates_token_count: usage.output_tokens,
                                 total_token_count: usage.total_tokens,
+                                cache_read_input_token_count: usage.cache_read_input_tokens,
+                                cache_creation_input_token_count: usage.cache_write_input_tokens,
+                                ..Default::default()
                             });
                         }
                     }

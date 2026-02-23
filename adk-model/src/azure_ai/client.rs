@@ -183,6 +183,7 @@ impl Llm for AzureAIClient {
                                                         name,
                                                         args,
                                                         id: Some(id),
+                                                        thought_signature: None,
                                                     }
                                                 })
                                                 .collect();

@@ -49,6 +49,7 @@ fn main() {
             name: "get_weather".to_string(),
             args: json!({"city": "Tokyo"}),
             id: Some("call_1".to_string()),
+            thought_signature: None,
         }],
     });
     println!("   Has function call: true");

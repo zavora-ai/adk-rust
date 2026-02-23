@@ -28,7 +28,7 @@ pub fn adk_parts_to_a2a(
                     uri: Some(file_uri.clone()),
                 }))
             }
-            Part::FunctionCall { name, args, id } => {
+            Part::FunctionCall { name, args, id, .. } => {
                 let is_long_running = long_running_ids.contains(name);
                 let mut data = Map::new();
                 let mut call_data = Map::new();
@@ -43,6 +43,10 @@ pub fn adk_parts_to_a2a(
                 metadata.insert("long_running".to_string(), Value::Bool(is_long_running));
 
                 Ok(crate::a2a::Part::Data { data, metadata: Some(metadata) })
+            }
+            Part::Thinking { thinking, .. } => {
+                // Convert thinking traces to text for A2A protocol
+                Ok(crate::a2a::Part::text(thinking.clone()))
             }
             Part::FunctionResponse { function_response, id } => {
                 let mut data = Map::new();
@@ -89,7 +93,7 @@ pub fn a2a_parts_to_adk(parts: &[crate::a2a::Part]) -> Result<Vec<Part>> {
                         .to_string();
                     let args = call.get("args").cloned().unwrap_or(Value::Object(Map::new()));
                     let id = call.get("id").and_then(|v| v.as_str()).map(String::from);
-                    Ok(Part::FunctionCall { name, args, id })
+                    Ok(Part::FunctionCall { name, args, id, thought_signature: None })
                 } else if let Some(resp) = data.get("function_response") {
                     let name = resp
                         .get("name")
@@ -134,6 +138,7 @@ mod tests {
             name: "test".to_string(),
             args: json!({"key": "value"}),
             id: Some("call_123".to_string()),
+            thought_signature: None,
         }];
         let a2a_parts = adk_parts_to_a2a(&adk_parts, &[]).unwrap();
         assert_eq!(a2a_parts.len(), 1);

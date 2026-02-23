@@ -1,8 +1,8 @@
 use crate::attachment;
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
-    CitationMetadata, CitationSource, Content, FinishReason, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Part, Result, UsageMetadata,
+    CacheCapable, CitationMetadata, CitationSource, Content, FinishReason, Llm, LlmRequest,
+    LlmResponse, LlmResponseStream, Part, Result, UsageMetadata,
 };
 use adk_gemini::Gemini;
 use async_trait::async_trait;
@@ -115,8 +115,15 @@ impl GeminiModel {
         if let Some(parts) = resp.candidates.first().and_then(|c| c.content.parts.as_ref()) {
             for p in parts {
                 match p {
-                    adk_gemini::Part::Text { text, .. } => {
-                        converted_parts.push(Part::Text { text: text.clone() });
+                    adk_gemini::Part::Text { text, thought, thought_signature } => {
+                        if thought == &Some(true) {
+                            converted_parts.push(Part::Thinking {
+                                thinking: text.clone(),
+                                signature: thought_signature.clone(),
+                            });
+                        } else {
+                            converted_parts.push(Part::Text { text: text.clone() });
+                        }
                     }
                     adk_gemini::Part::InlineData { inline_data } => {
                         let decoded =
@@ -130,11 +137,12 @@ impl GeminiModel {
                             data: decoded,
                         });
                     }
-                    adk_gemini::Part::FunctionCall { function_call, .. } => {
+                    adk_gemini::Part::FunctionCall { function_call, thought_signature } => {
                         converted_parts.push(Part::FunctionCall {
                             name: function_call.name.clone(),
                             args: function_call.args.clone(),
                             id: None,
+                            thought_signature: thought_signature.clone(),
                         });
                     }
                     adk_gemini::Part::FunctionResponse { function_response } => {
@@ -191,6 +199,9 @@ impl GeminiModel {
             prompt_token_count: u.prompt_token_count.unwrap_or(0),
             candidates_token_count: u.candidates_token_count.unwrap_or(0),
             total_token_count: u.total_token_count.unwrap_or(0),
+            thinking_token_count: u.thoughts_token_count,
+            cache_read_input_token_count: u.cached_content_token_count,
+            ..Default::default()
         });
 
         let finish_reason =
@@ -301,6 +312,13 @@ impl GeminiModel {
                                     thought_signature: None,
                                 });
                             }
+                            Part::Thinking { thinking, signature } => {
+                                gemini_parts.push(adk_gemini::Part::Text {
+                                    text: thinking.clone(),
+                                    thought: Some(true),
+                                    thought_signature: signature.clone(),
+                                });
+                            }
                             Part::InlineData { data, mime_type } => {
                                 let encoded = attachment::encode_base64(data);
                                 gemini_parts.push(adk_gemini::Part::InlineData {
@@ -343,14 +361,21 @@ impl GeminiModel {
                                     thought_signature: None,
                                 });
                             }
-                            Part::FunctionCall { name, args, .. } => {
+                            Part::Thinking { thinking, signature } => {
+                                gemini_parts.push(adk_gemini::Part::Text {
+                                    text: thinking.clone(),
+                                    thought: Some(true),
+                                    thought_signature: signature.clone(),
+                                });
+                            }
+                            Part::FunctionCall { name, args, thought_signature, .. } => {
                                 gemini_parts.push(adk_gemini::Part::FunctionCall {
                                     function_call: adk_gemini::FunctionCall {
                                         name: name.clone(),
                                         args: args.clone(),
-                                        thought_signature: None,
+                                        thought_signature: thought_signature.clone(),
                                     },
-                                    thought_signature: None,
+                                    thought_signature: thought_signature.clone(),
                                 });
                             }
                             _ => {}
@@ -401,6 +426,12 @@ impl GeminiModel {
                 ..Default::default()
             };
             builder = builder.with_generation_config(gen_config);
+
+            // Attach cached content reference if provided
+            if let Some(ref name) = config.cached_content {
+                let handle = self.client.get_cached_content(name);
+                builder = builder.with_cached_content(&handle);
+            }
         }
 
         // Add tools
@@ -487,6 +518,57 @@ impl GeminiModel {
             Ok(Box::pin(stream))
         }
     }
+
+    /// Create a cached content resource with the given system instruction, tools, and TTL.
+    ///
+    /// Returns the cache name (e.g., "cachedContents/abc123") on success.
+    /// The cache is created using the model configured on this `GeminiModel` instance.
+    pub async fn create_cached_content(
+        &self,
+        system_instruction: &str,
+        tools: &std::collections::HashMap<String, serde_json::Value>,
+        ttl_seconds: u32,
+    ) -> Result<String> {
+        let mut cache_builder = self
+            .client
+            .create_cache()
+            .with_system_instruction(system_instruction)
+            .with_ttl(std::time::Duration::from_secs(u64::from(ttl_seconds)));
+
+        // Convert ADK tool definitions to Gemini FunctionDeclarations
+        let mut function_declarations = Vec::new();
+        for (name, tool_decl) in tools {
+            if name == "google_search" {
+                continue;
+            }
+            if let Ok(func_decl) =
+                serde_json::from_value::<adk_gemini::FunctionDeclaration>(tool_decl.clone())
+            {
+                function_declarations.push(func_decl);
+            }
+        }
+        if !function_declarations.is_empty() {
+            cache_builder = cache_builder
+                .with_tools(vec![adk_gemini::Tool::with_functions(function_declarations)]);
+        }
+
+        let handle = cache_builder
+            .execute()
+            .await
+            .map_err(|e| adk_core::AdkError::Model(format!("cache creation failed: {e}")))?;
+
+        Ok(handle.name().to_string())
+    }
+
+    /// Delete a cached content resource by name.
+    pub async fn delete_cached_content(&self, name: &str) -> Result<()> {
+        let handle = self.client.get_cached_content(name);
+        handle
+            .delete()
+            .await
+            .map_err(|(_, e)| adk_core::AdkError::Model(format!("cache deletion failed: {e}")))?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -513,6 +595,22 @@ impl Llm for GeminiModel {
             self.generate_content_internal(req.clone(), stream)
         })
         .await
+    }
+}
+
+#[async_trait]
+impl CacheCapable for GeminiModel {
+    async fn create_cache(
+        &self,
+        system_instruction: &str,
+        tools: &std::collections::HashMap<String, serde_json::Value>,
+        ttl_seconds: u32,
+    ) -> Result<String> {
+        self.create_cached_content(system_instruction, tools, ttl_seconds).await
+    }
+
+    async fn delete_cache(&self, name: &str) -> Result<()> {
+        self.delete_cached_content(name).await
     }
 }
 

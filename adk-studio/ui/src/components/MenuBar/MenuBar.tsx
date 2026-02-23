@@ -30,7 +30,7 @@ export function MenuBar({ onExportCode, onNewProject, onTemplateApplied, onRunTe
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [showTemplateGallery, setShowTemplateGallery] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const { currentProject, addAgent, removeAgent, addEdge, removeEdge } = useStore();
+  const { currentProject, closeProject, addAgent, removeAgent, addEdge, removeEdge } = useStore();
   const { mode } = useTheme();
   const { completed: walkthroughCompleted, show: showWalkthrough, reset: resetWalkthrough } = useWalkthrough();
   const { start: startTemplateWalkthrough } = useTemplateWalkthrough();
@@ -200,6 +200,9 @@ export function MenuBar({ onExportCode, onNewProject, onTemplateApplied, onRunTe
 
       <Menu name="File">
         <MenuItem onClick={onNewProject}>📄 New Project</MenuItem>
+        {currentProject && (
+          <MenuItem onClick={() => closeProject()}>📂 Open Project...</MenuItem>
+        )}
         <Divider />
         <MenuItem onClick={onExportCode} disabled={!currentProject}>📦 Export Code</MenuItem>
       </Menu>

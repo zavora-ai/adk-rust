@@ -504,6 +504,7 @@ impl MistralRsAdapterModel {
             prompt_token_count: response.usage.prompt_tokens as i32,
             candidates_token_count: response.usage.completion_tokens as i32,
             total_token_count: response.usage.total_tokens as i32,
+            ..Default::default()
         });
 
         let finish_reason =
@@ -595,6 +596,7 @@ impl Llm for MistralRsAdapterModel {
                                         prompt_token_count: final_response.usage.prompt_tokens as i32,
                                         candidates_token_count: final_response.usage.completion_tokens as i32,
                                         total_token_count: final_response.usage.total_tokens as i32,
+                                        ..Default::default()
                                     });
 
                                     let response = LlmResponse {

@@ -248,9 +248,7 @@ impl LlmAgentBuilder {
     ///     .generate_content_config(GenerateContentConfig {
     ///         temperature: Some(0.7),
     ///         max_output_tokens: Some(2048),
-    ///         top_p: None,
-    ///         top_k: None,
-    ///         response_schema: None,
+    ///         ..Default::default()
     ///     })
     ///     .build()?;
     /// ```
@@ -263,13 +261,7 @@ impl LlmAgentBuilder {
     /// Shorthand for setting just temperature without a full `GenerateContentConfig`.
     pub fn temperature(mut self, temperature: f32) -> Self {
         self.generate_content_config
-            .get_or_insert(adk_core::GenerateContentConfig {
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                max_output_tokens: None,
-                response_schema: None,
-            })
+            .get_or_insert(adk_core::GenerateContentConfig::default())
             .temperature = Some(temperature);
         self
     }
@@ -277,13 +269,7 @@ impl LlmAgentBuilder {
     /// Set the default top_p for LLM requests.
     pub fn top_p(mut self, top_p: f32) -> Self {
         self.generate_content_config
-            .get_or_insert(adk_core::GenerateContentConfig {
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                max_output_tokens: None,
-                response_schema: None,
-            })
+            .get_or_insert(adk_core::GenerateContentConfig::default())
             .top_p = Some(top_p);
         self
     }
@@ -291,13 +277,7 @@ impl LlmAgentBuilder {
     /// Set the default top_k for LLM requests.
     pub fn top_k(mut self, top_k: i32) -> Self {
         self.generate_content_config
-            .get_or_insert(adk_core::GenerateContentConfig {
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                max_output_tokens: None,
-                response_schema: None,
-            })
+            .get_or_insert(adk_core::GenerateContentConfig::default())
             .top_k = Some(top_k);
         self
     }
@@ -305,13 +285,7 @@ impl LlmAgentBuilder {
     /// Set the default max output tokens for LLM requests.
     pub fn max_output_tokens(mut self, max_tokens: i32) -> Self {
         self.generate_content_config
-            .get_or_insert(adk_core::GenerateContentConfig {
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                max_output_tokens: None,
-                response_schema: None,
-            })
+            .get_or_insert(adk_core::GenerateContentConfig::default())
             .max_output_tokens = Some(max_tokens);
         self
     }
@@ -832,6 +806,8 @@ impl Agent for LlmAgent {
                 // Merge agent-level generate_content_config with output_schema.
                 // Agent-level config provides defaults (temperature, top_p, etc.),
                 // output_schema is layered on top as response_schema.
+                // If the runner set a cached_content name (via automatic cache lifecycle),
+                // merge it into the config so the provider can reuse cached content.
                 let config = match (&generate_content_config, &output_schema) {
                     (Some(base), Some(schema)) => {
                         let mut merged = base.clone();
@@ -840,13 +816,22 @@ impl Agent for LlmAgent {
                     }
                     (Some(base), None) => Some(base.clone()),
                     (None, Some(schema)) => Some(adk_core::GenerateContentConfig {
-                        temperature: None,
-                        top_p: None,
-                        top_k: None,
-                        max_output_tokens: None,
                         response_schema: Some(schema.clone()),
+                        ..Default::default()
                     }),
                     (None, None) => None,
+                };
+
+                // Layer cached_content from RunConfig onto the request config.
+                let config = if let Some(ref cached) = ctx.run_config().cached_content {
+                    let mut cfg = config.unwrap_or_default();
+                    // Only set if the agent hasn't already specified one
+                    if cfg.cached_content.is_none() {
+                        cfg.cached_content = Some(cached.clone());
+                    }
+                    Some(cfg)
+                } else {
+                    config
                 };
 
                 let request = LlmRequest {
@@ -1104,7 +1089,7 @@ impl Agent for LlmAgent {
                 if let Some(content) = &accumulated_content {
                     let mut tool_call_index = 0usize;
                     for part in &content.parts {
-                        if let Part::FunctionCall { name, args, id } = part {
+                        if let Part::FunctionCall { name, args, id, .. } = part {
                             let fallback_call_id =
                                 format!("{}_{}_{}", invocation_id, name, tool_call_index);
                             tool_call_index += 1;

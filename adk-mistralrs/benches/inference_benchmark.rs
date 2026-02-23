@@ -166,6 +166,7 @@ fn conversion_benchmark(c: &mut Criterion) {
                 id: Some("call_123".to_string()),
                 name: "get_weather".to_string(),
                 args: json!({"location": "Tokyo", "units": "celsius"}),
+                thought_signature: None,
             },
         ],
     };

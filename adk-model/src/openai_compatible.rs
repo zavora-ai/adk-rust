@@ -254,6 +254,7 @@ impl Llm for OpenAICompatible {
                                         name: name.clone(),
                                         args,
                                         id: Some(call_id.clone()),
+                                        thought_signature: None,
                                     });
                                 }
 

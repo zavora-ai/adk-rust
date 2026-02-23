@@ -8,6 +8,8 @@ import { WalkthroughModal, SettingsModal, TemplateWalkthroughModal } from './com
 import { useWalkthrough } from './hooks/useWalkthrough';
 import { useTheme } from './hooks/useTheme';
 import { useVSCodeThemeSync } from './hooks/useVSCodeThemeSync';
+import { useVSCodeProjectSync } from './hooks/useVSCodeProjectSync';
+import { ADK_VERSION } from './version';
 import { loadGlobalSettings } from './types/settings';
 import { api } from './api/client';
 import type { ProjectSettings } from './types/project';
@@ -31,13 +33,15 @@ function ThemeInitializer() {
 }
 
 export default function App() {
-  const { currentProject, fetchProjects } = useStore();
+  const { currentProject, fetchProjects, openProject } = useStore();
   const [showGlobalSettings, setShowGlobalSettings] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [deployMessage, setDeployMessage] = useState<string | null>(null);
 
   // Listen for live VS Code theme changes via postMessage
   useVSCodeThemeSync();
+  // Listen for VS Code project open/close commands via postMessage
+  useVSCodeProjectSync();
   const { 
     isVisible: showWalkthrough, 
     complete: completeWalkthrough, 
@@ -48,8 +52,16 @@ export default function App() {
   } = useWalkthrough();
 
   useEffect(() => {
-    fetchProjects();
-  }, [fetchProjects]);
+    fetchProjects().then(() => {
+      const params = new URLSearchParams(window.location.search);
+      const projectParam = params.get('project');
+      if (projectParam) {
+        openProject(projectParam).catch((err) => {
+          console.warn(`[ADK Studio] Failed to open project from URL param: ${projectParam}`, err);
+        });
+      }
+    });
+  }, [fetchProjects, openProject]);
 
   // Show walkthrough on first run
   useEffect(() => {
@@ -100,6 +112,7 @@ export default function App() {
           <div className="flex items-center">
             <h1 className="text-lg font-bold flex items-center gap-2">
               <img src="https://adk-rust.com/icon.svg" alt="ADK" className="w-7 h-7" /> ADK Studio
+              <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>v{ADK_VERSION}</span>
             </h1>
             {currentProject && (
               <span className="ml-4" style={{ color: 'var(--text-secondary)' }}>/ {currentProject.name}</span>

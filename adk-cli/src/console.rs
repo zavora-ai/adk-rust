@@ -31,6 +31,8 @@ pub async fn run_console(agent: Arc<dyn Agent>, app_name: String, user_id: Strin
         plugin_manager: None,
         run_config: None,
         compaction_config: None,
+        context_cache_config: None,
+        cache_capable: None,
     })?;
 
     let mut rl = DefaultEditor::new()?;
@@ -108,6 +110,10 @@ impl StreamPrinter {
     fn handle_part(&mut self, part: &Part) {
         match part {
             Part::Text { text } => self.handle_text_chunk(text),
+            Part::Thinking { thinking, .. } => {
+                print!("\n[thinking] {}\n", thinking);
+                let _ = io::stdout().flush();
+            }
             Part::FunctionCall { name, args, .. } => self.print_tool_call(name, args),
             Part::FunctionResponse { function_response, .. } => {
                 self.print_tool_response(&function_response.name, &function_response.response)

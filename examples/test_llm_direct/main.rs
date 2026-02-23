@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Part::Text { text } => {
                                 println!("    [{}] Text: {}", i, text);
                             }
-                            Part::FunctionCall { name, args, id } => {
+                            Part::FunctionCall { name, args, id, .. } => {
                                 println!("    [{}] FunctionCall:", i);
                                 println!("        name: {}", name);
                                 println!("        args: {}", args);
