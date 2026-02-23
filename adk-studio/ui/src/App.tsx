@@ -57,7 +57,7 @@ export default function App() {
       const projectParam = params.get('project');
       if (projectParam) {
         openProject(projectParam).catch((err) => {
-          console.warn(`[ADK Studio] Failed to open project from URL param: ${projectParam}`, err);
+          console.warn('[ADK Studio] Failed to open project from URL param: %s', projectParam, err);
         });
       }
     });

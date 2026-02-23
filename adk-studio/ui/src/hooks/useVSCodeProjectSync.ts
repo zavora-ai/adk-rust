@@ -109,7 +109,7 @@ export function useVSCodeProjectSync(): void {
             postResponse({ type: 'projectOpened', projectId: data.projectId, success: true });
           })
           .catch((err) => {
-            console.warn(`[ADK Studio] Failed to open project via postMessage: ${data.projectId}`, err);
+            console.warn('[ADK Studio] Failed to open project via postMessage: %s', data.projectId, err);
             postResponse({ type: 'projectOpened', projectId: data.projectId, success: false });
           });
       } else if (data.type === 'closeProject') {
