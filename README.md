@@ -984,3 +984,7 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 | 🔴 P0 | [ADK-UI vNext (A2UI + Generative UI)](docs/roadmap/adk-ui.md) | Q2-Q4 2026 | Planned |
 | 🟡 P1 | [Cloud Integrations](docs/roadmap/cloud-integrations.md) | Q2-Q3 2026 | Planned |
 | 🟢 P2 | [Enterprise Features](docs/roadmap/enterprise.md) | Q4 2026 | Planned |
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=zavora-ai/adk-rust&type=date&legend=top-left)](https://www.star-history.com/#zavora-ai/adk-rust&type=date&legend=top-left)
