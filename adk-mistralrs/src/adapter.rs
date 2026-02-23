@@ -46,7 +46,7 @@ use adk_core::{
 };
 use async_trait::async_trait;
 use futures::stream;
-use mistralrs::core::Ordering;
+use mistralrs::Ordering;
 use mistralrs::{
     AutoDeviceMapParams, DeviceMapSetting, IsqType, LoraModelBuilder, PagedAttentionMetaBuilder,
     RequestBuilder, Response, TextMessageRole, TextMessages, TextModelBuilder, Topology,
@@ -169,7 +169,7 @@ impl MistralRsAdapterModel {
                 .map_err(|e| {
                     MistralRsError::model_load(
                         &model_id,
-                        format!("PagedAttention initialization failed: {}", e),
+                        format!("PagedAttention initialization failed: {e}"),
                     )
                 })?;
             debug!("PagedAttention enabled");

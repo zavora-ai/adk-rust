@@ -122,7 +122,7 @@ impl MistralRsVisionModel {
                 .map_err(|e| {
                     MistralRsError::model_load(
                         &model_id,
-                        format!("PagedAttention initialization failed: {}", e),
+                        format!("PagedAttention initialization failed: {e}"),
                     )
                 })?;
             debug!("PagedAttention enabled");
