@@ -27,6 +27,7 @@ members = [
     "adk-gemini",
     "adk-doc-audit",
     "adk-rag",
+    "adk-audio",
 
     # Development packages (not published)
     "examples",
@@ -143,3 +144,4 @@ adk-studio = { path = "adk-studio", version = "0.3.2" }
 adk-gemini = { path = "adk-gemini", version = "0.3.2" }
 adk-doc-audit = { path = "adk-doc-audit", version = "0.3.2" }
 adk-rag = { path = "adk-rag", version = "0.3.2" }
+adk-audio = { path = "adk-audio", version = "0.3.2" }

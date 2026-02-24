@@ -747,6 +747,23 @@ pub mod plugin {
     pub use adk_plugin::*;
 }
 
+/// Audio processing pipeline (TTS, STT, music, FX).
+///
+/// Provides audio capabilities for agents:
+/// - [`TtsProvider`](audio::TtsProvider) - Text-to-speech synthesis
+/// - [`SttProvider`](audio::SttProvider) - Speech-to-text transcription
+/// - [`AudioProcessor`](audio::AudioProcessor) - Audio effects processing
+/// - [`AudioPipeline`](audio::AudioPipeline) - Composable audio pipelines
+/// - Cloud providers: ElevenLabs, OpenAI, Gemini, Cartesia, Deepgram, AssemblyAI
+/// - Local inference: MLX (Apple Silicon), ONNX Runtime
+///
+/// Available with feature: `audio`
+#[cfg(feature = "audio")]
+#[cfg_attr(docsrs, doc(cfg(feature = "audio")))]
+pub mod audio {
+    pub use adk_audio::*;
+}
+
 /// Retrieval-Augmented Generation (RAG) pipeline.
 ///
 /// Modular RAG system with trait-based components:

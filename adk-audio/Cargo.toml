@@ -1,0 +1,67 @@
+[package]
+name = "adk-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Audio intelligence and pipeline orchestration for ADK-Rust agents"
+
+[dependencies]
+# Core (always included)
+adk-core = { workspace = true }
+bytes = "1"
+bytemuck = { version = "1", features = ["derive"] }
+async-trait = { workspace = true }
+async-stream = { workspace = true }
+futures = { workspace = true }
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+pin-project-lite = "0.2"
+
+# Cloud providers (optional)
+reqwest = { workspace = true, features = ["multipart"], optional = true }
+base64 = { version = "0.22", optional = true }
+
+# DSP (optional)
+rubato = { version = "0.16", optional = true }
+dasp = { version = "0.11", features = ["signal"], optional = true }
+
+# VAD (optional)
+webrtc-vad = { version = "0.4", optional = true }
+
+# Codec (optional)
+audiopus = { version = "0.3.0-rc.0", optional = true }
+
+# Local inference (optional)
+mlx-rs = { version = "0.25", features = ["metal"], optional = true }
+ort = { version = "2.0.0-rc.11", optional = true }
+tokenizers = { version = "0.21", optional = true }
+hf-hub = { version = "0.4", optional = true }
+
+# Streaming (optional)
+tokio-tungstenite = { version = "0.24", optional = true }
+
+# Bridge (optional)
+adk-realtime = { workspace = true, optional = true }
+livekit-api = { version = "0.4", optional = true }
+
+[dev-dependencies]
+proptest = "1"
+tokio = { version = "1", features = ["full", "test-util"] }
+
+[features]
+default = ["tts", "stt"]
+tts = ["dep:reqwest", "dep:base64"]
+stt = ["dep:reqwest", "dep:tokio-tungstenite"]
+music = ["dep:reqwest"]
+fx = ["dep:rubato", "dep:dasp"]
+vad = ["dep:webrtc-vad"]
+streaming = []
+opus = ["dep:audiopus"]
+mlx = ["dep:mlx-rs", "dep:tokenizers", "dep:hf-hub"]
+onnx = ["dep:ort", "dep:tokenizers", "dep:hf-hub"]
+livekit = ["dep:livekit-api", "dep:adk-realtime", "dep:base64"]
+all = ["tts", "stt", "music", "fx", "vad", "streaming"]

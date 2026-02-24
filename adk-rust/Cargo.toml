@@ -39,7 +39,8 @@ full = [
     "guardrail",
     "auth",
     "plugin",
-    "rag"
+    "rag",
+    "audio"
 ]
 
 # CLI launcher support
@@ -91,6 +92,14 @@ vertex-live = ["realtime", "adk-realtime/vertex-live"]
 livekit = ["realtime", "adk-realtime/livekit"]
 openai-webrtc = ["realtime", "adk-realtime/openai-webrtc"]
 
+# Audio features (forwarded to adk-audio)
+audio = ["dep:adk-audio"]
+audio-tts = ["audio", "adk-audio/tts"]
+audio-stt = ["audio", "adk-audio/stt"]
+audio-fx = ["audio", "adk-audio/fx"]
+audio-mlx = ["audio", "adk-audio/mlx"]
+audio-onnx = ["audio", "adk-audio/onnx"]
+
 [dependencies]
 # Core is always included
 adk-core.workspace = true
@@ -117,6 +126,7 @@ adk-guardrail = { workspace = true, optional = true }
 adk-auth = { workspace = true, optional = true }
 adk-plugin = { workspace = true, optional = true }
 adk-rag = { workspace = true, optional = true }
+adk-audio = { workspace = true, optional = true }
 
 # Re-export common dependencies
 tokio = { workspace = true }
