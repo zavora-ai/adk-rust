@@ -12016,9 +12016,9 @@ dependencies = [
 
 [[package]]
 name = "surrealdb-types"
-version = "3.0.0"
+version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72231b6b94c1dbd6e2453c50266c679eb621701cd01cb8f8fc32923d3ce0a217"
+checksum = "58db59440236ec593dbbb2487c4db11e4452ee636f9a1da3e3672c1cc1f42259"
 dependencies = [
  "anyhow",
  "bytes",
@@ -12042,9 +12042,9 @@ dependencies = [
 
 [[package]]
 name = "surrealdb-types-derive"
-version = "3.0.0"
+version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef7818b988bb8a8d424751ba5c0fe6aabf3e41dc26fbc8a922803c1615ae641b"
+checksum = "617a808c9b3a2cd688c98027f4781c522507df73b42b1c56820ae72407eda016"
 dependencies = [
  "proc-macro2",
  "quote",
