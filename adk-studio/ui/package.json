@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
-    "@xyflow/react": "^12.0.0",
+    "@xyflow/react": "^12.10.1",
     "dagre": "^0.8.5",
     "framer-motion": "^12.34.0",
     "lucide-react": "^0.564.0",
