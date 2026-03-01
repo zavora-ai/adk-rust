@@ -272,7 +272,7 @@ version = "0.27"
 features = ["derive"]
 
 [dependencies.strum_macros]
-version = "0.27"
+version = "0.28"
 
 [dependencies.time]
 version = "0.3"
