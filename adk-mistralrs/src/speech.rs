@@ -162,7 +162,7 @@ impl SpeechConfigBuilder {
 
     /// Set the DAC model ID.
     pub fn dac_model_id(mut self, id: impl Into<String>) -> Self {
-        self.config.dac_model_id = Some(id));
+        self.config.dac_model_id = Some(id.into());
         self
     }
 

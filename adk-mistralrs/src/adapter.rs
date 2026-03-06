@@ -49,7 +49,7 @@ use futures::stream;
 use mistralrs::Ordering;
 use mistralrs::{
     AutoDeviceMapParams, DeviceMapSetting, IsqType, LoraModelBuilder, PagedAttentionMetaBuilder,
-    RequestBuilder, Response, TextMessageRole, TextMessages, TextModelBuilder, Topology,
+    RequestBuilder, Response, TextMessages, TextModelBuilder, Topology,
     XLoraModelBuilder,
 };
 use tokio::sync::RwLock;
@@ -467,12 +467,7 @@ impl MistralRsAdapterModel {
         let mut messages = TextMessages::new();
 
         for content in &request.contents {
-            let role = match content.role.as_str() {
-                "user" => TextMessageRole::User,
-                "model" | "assistant" => TextMessageRole::Assistant,
-                "system" => TextMessageRole::System,
-                _ => TextMessageRole::User,
-            };
+            let role = crate::convert::role_to_mistralrs(&content.role);
 
             let text: String = content
                 .parts
@@ -511,7 +506,7 @@ impl MistralRsAdapterModel {
             response.choices.first().map(|choice| match choice.finish_reason.as_str() {
                 "stop" => FinishReason::Stop,
                 "length" => FinishReason::MaxTokens,
-                _ => FinishReason::Other,
+                other => FinishReason::Other(other.to_string()),
             });
 
         LlmResponse {

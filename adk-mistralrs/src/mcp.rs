@@ -393,7 +393,7 @@ impl McpServerConfig {
     /// Set the working directory (for process-based servers).
     pub fn with_work_dir(mut self, work_dir: impl Into<String>) -> Self {
         if let McpServerSource::Process { work_dir: ref mut wd, .. } = self.source {
-            *wd = Some(work_dir));
+            *wd = Some(work_dir.into());
         }
         self
     }

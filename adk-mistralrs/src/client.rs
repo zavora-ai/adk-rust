@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use futures::stream;
 use mistralrs::{
     AutoDeviceMapParams, DeviceMapSetting, IsqType, PagedAttentionMetaBuilder, Response,
-    TextMessageRole, TextMessages, TextModelBuilder, Topology,
+    TextMessages, TextModelBuilder, Topology,
 };
 use tracing::{debug, info, instrument, warn};
 
@@ -315,12 +315,7 @@ impl MistralRsModel {
         let mut messages = TextMessages::new();
 
         for content in &request.contents {
-            let role = match content.role.as_str() {
-                "user" => TextMessageRole::User,
-                "model" | "assistant" => TextMessageRole::Assistant,
-                "system" => TextMessageRole::System,
-                _ => TextMessageRole::User, // Default to user for unknown roles
-            };
+            let role = crate::convert::role_to_mistralrs(&content.role);
 
             // Extract text from parts
             let text: String = content
@@ -360,7 +355,7 @@ impl MistralRsModel {
             response.choices.first().map(|choice| match choice.finish_reason.as_str() {
                 "stop" => FinishReason::Stop,
                 "length" => FinishReason::MaxTokens,
-                _ => FinishReason::Other,
+                other => FinishReason::Other(other.to_string()),
             });
 
         LlmResponse {

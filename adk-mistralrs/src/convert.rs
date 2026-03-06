@@ -13,14 +13,14 @@ pub fn content_to_message(content: &Content) -> IndexMap<String, Value> {
     let mut message = IndexMap::new();
 
     // Convert role - map ADK roles to OpenAI-style roles
-    let role = match content.role.as_str() {
-        "user" => "user",
-        "model" | "assistant" => "assistant",
-        "system" => "system",
-        "tool" | "function" => "tool",
-        other => other, // Pass through unknown roles
+    let role_str = match &content.role {
+        adk_core::types::Role::User => "user",
+        adk_core::types::Role::Model => "assistant",
+        adk_core::types::Role::System => "system",
+        adk_core::types::Role::Tool => "tool",
+        adk_core::types::Role::Custom(c) => c.as_str(),
     };
-    message.insert("role".to_string(), Value::String(role.to_string()));
+    message.insert("role".to_string(), Value::String(role_str.to_string()));
 
     // Convert content parts to text
     let text_parts: Vec<String> = content
@@ -68,11 +68,11 @@ pub fn content_to_message(content: &Content) -> IndexMap<String, Value> {
 
     // Handle function responses
     for part in &content.parts {
-        if let Part::FunctionResponse { id, function_response } = part {
+        if let Part::FunctionResponse { id, name, response } = part {
             message
                 .insert("tool_call_id".to_string(), Value::String(id.clone().unwrap_or_default()));
-            message.insert("name".to_string(), Value::String(function_response.name.clone()));
-            message.insert("content".to_string(), function_response.response.clone());
+            message.insert("name".to_string(), Value::String(name.clone()));
+            message.insert("content".to_string(), response.clone());
         }
     }
 
@@ -127,6 +127,21 @@ pub fn extract_tool_parameters(tool: &Value) -> Option<Value> {
     tool.get("function").and_then(|f| f.get("parameters")).cloned()
 }
 
+/// Convert an ADK Role to a mistral.rs TextMessageRole
+pub fn role_to_mistralrs(role: &adk_core::types::Role) -> mistralrs::TextMessageRole {
+    match role {
+        adk_core::types::Role::User => mistralrs::TextMessageRole::User,
+        adk_core::types::Role::Model => mistralrs::TextMessageRole::Assistant,
+        adk_core::types::Role::System => mistralrs::TextMessageRole::System,
+        adk_core::types::Role::Tool => mistralrs::TextMessageRole::Tool,
+        adk_core::types::Role::Custom(s) => match s.as_str() {
+            "assistant" => mistralrs::TextMessageRole::Assistant,
+            "function" => mistralrs::TextMessageRole::Tool,
+            _ => mistralrs::TextMessageRole::User,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,7 +150,7 @@ mod tests {
     #[test]
     fn test_content_to_message_user() {
         let content = Content {
-            role: "user".to_string(),
+            role: adk_core::types::Role::User,
             parts: vec![Part::text("Hello, world!".to_string())],
         };
 
@@ -147,7 +162,7 @@ mod tests {
     #[test]
     fn test_content_to_message_assistant() {
         let content = Content {
-            role: "model".to_string(),
+            role: adk_core::types::Role::Model,
             parts: vec![Part::text("Hi there!".to_string())],
         };
 
@@ -158,7 +173,7 @@ mod tests {
     #[test]
     fn test_content_to_message_with_function_call() {
         let content = Content {
-            role: "model".to_string(),
+            role: adk_core::types::Role::Model,
             parts: vec![Part::FunctionCall {
                 id: Some("call_123".to_string()),
                 name: "get_weather".to_string(),
@@ -292,14 +307,14 @@ impl ImageFormat {
 pub fn image_part_to_mistralrs(part: &Part) -> Option<DynamicImage> {
     match part {
         Part::InlineData { mime_type, data } => {
-            if ImageFormat::is_supported_mime_type(mime_type) {
+            if ImageFormat::is_supported_mime_type(mime_type.as_ref()) {
                 image::load_from_memory(data).ok()
             } else {
                 None
             }
         }
         Part::FileData { mime_type, file_uri } => {
-            if ImageFormat::is_supported_mime_type(mime_type) {
+            if ImageFormat::is_supported_mime_type(mime_type.as_ref()) {
                 image_from_uri(file_uri).ok()
             } else {
                 None
@@ -499,14 +514,14 @@ impl AudioFormat {
 pub fn audio_part_to_mistralrs(part: &Part) -> Option<AudioInput> {
     match part {
         Part::InlineData { mime_type, data } => {
-            if AudioFormat::is_supported_mime_type(mime_type) {
+            if AudioFormat::is_supported_mime_type(mime_type.as_ref()) {
                 AudioInput::from_bytes(data).ok()
             } else {
                 None
             }
         }
         Part::FileData { mime_type, file_uri } => {
-            if AudioFormat::is_supported_mime_type(mime_type) {
+            if AudioFormat::is_supported_mime_type(mime_type.as_ref()) {
                 audio_from_uri(file_uri).ok()
             } else {
                 None
@@ -724,7 +739,7 @@ mod image_audio_tests {
     #[test]
     fn test_extract_text_from_content() {
         let content = Content {
-            role: "user".to_string(),
+            role: adk_core::types::Role::User,
             parts: vec![
                 Part::text("Hello".to_string()),
                 Part::text("World".to_string()),

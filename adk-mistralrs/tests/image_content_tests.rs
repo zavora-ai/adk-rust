@@ -122,7 +122,7 @@ proptest! {
         text2 in arb_text(),
     ) {
         let content = Content {
-            role: "user".to_string(),
+            role: adk_core::types::Role::User,
             parts: vec![
                 Part::text(text1.clone()),
                 Part::text(text2.clone()),
@@ -174,7 +174,7 @@ fn test_png_image_from_bytes() {
 #[test]
 fn test_image_part_to_mistralrs_with_png() {
     let png_data = generate_minimal_png();
-    let part = Part::InlineData { mime_type: "image/png".to_string(), data: png_data };
+    let part = Part::InlineData { mime_type: "image/png".parse().unwrap(), data: png_data.into() };
 
     let result = image_part_to_mistralrs(&part);
     assert!(result.is_some(), "PNG part should convert to image");
@@ -183,8 +183,8 @@ fn test_image_part_to_mistralrs_with_png() {
 #[test]
 fn test_image_part_to_mistralrs_with_unsupported_mime() {
     let part = Part::InlineData {
-        mime_type: "application/octet-stream".to_string(),
-        data: vec![0, 1, 2, 3],
+        mime_type: "application/octet-stream".parse().unwrap(),
+        data: vec![0, 1, 2, 3].into(),
     };
 
     let result = image_part_to_mistralrs(&part);
@@ -195,10 +195,10 @@ fn test_image_part_to_mistralrs_with_unsupported_mime() {
 fn test_extract_images_from_content() {
     let png_data = generate_minimal_png();
     let content = Content {
-        role: "user".to_string(),
+        role: adk_core::types::Role::User,
         parts: vec![
             Part::text("Describe this image".to_string()),
-            Part::InlineData { mime_type: "image/png".to_string(), data: png_data },
+            Part::InlineData { mime_type: "image/png".parse().unwrap(), data: png_data.into() },
         ],
     };
 
@@ -209,7 +209,7 @@ fn test_extract_images_from_content() {
 #[test]
 fn test_extract_images_from_content_no_images() {
     let content = Content {
-        role: "user".to_string(),
+        role: adk_core::types::Role::User,
         parts: vec![Part::text("Hello world".to_string())],
     };
 
@@ -254,7 +254,7 @@ fn test_audio_format_mime_types() {
 #[test]
 fn test_file_data_part_with_image_mime() {
     let part = Part::FileData {
-        mime_type: "image/jpeg".to_string(),
+        mime_type: "image/jpeg".parse().unwrap(),
         file_uri: "https://example.com/image.jpg".to_string(),
     };
 
@@ -267,7 +267,7 @@ fn test_file_data_part_with_image_mime() {
 #[test]
 fn test_file_data_part_with_audio_mime() {
     let part = Part::FileData {
-        mime_type: "audio/wav".to_string(),
+        mime_type: "audio/wav".parse().unwrap(),
         file_uri: "https://example.com/audio.wav".to_string(),
     };
 
@@ -285,13 +285,13 @@ fn test_content_with_file_uri() {
     assert_eq!(content.parts.len(), 2);
 
     // First part is text
-    assert!(matches!(&content.parts[0], Part::text(text) if text == "Check this image"));
+    assert!(matches!(&content.parts[0], Part::Text(text) if text == "Check this image"));
 
     // Second part is FileData
     assert!(matches!(
         &content.parts[1],
         Part::FileData { mime_type, file_uri }
-        if mime_type == "image/jpeg" && file_uri == "https://example.com/photo.jpg"
+        if mime_type.as_ref() == "image/jpeg" && file_uri == "https://example.com/photo.jpg"
     ));
 }
 
@@ -302,14 +302,14 @@ fn test_part_constructors() {
     assert!(matches!(
         file_part,
         Part::FileData { mime_type, file_uri }
-        if mime_type == "image/png" && file_uri == "https://example.com/img.png"
+        if mime_type.as_ref() == "image/png" && file_uri == "https://example.com/img.png"
     ));
 
     // Test Part::inline_data constructor
     let inline_part = Part::inline_data("image/jpeg", vec![1, 2, 3]);
     assert!(matches!(
         inline_part,
-        Part::InlineData { mime_type, data }
-        if mime_type == "image/jpeg" && data == vec![1, 2, 3]
+        Ok(Part::InlineData { mime_type, data })
+        if mime_type.as_ref() == "image/jpeg" && data.as_ref() == [1, 2, 3]
     ));
 }

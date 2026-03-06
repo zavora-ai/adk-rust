@@ -158,8 +158,8 @@ fn test_audio_format_ogg() {
 #[test]
 fn test_audio_part_to_mistralrs_with_unsupported_mime() {
     let part = Part::InlineData {
-        mime_type: "application/octet-stream".to_string(),
-        data: vec![0, 1, 2, 3],
+        mime_type: "application/octet-stream".parse().unwrap(),
+        data: vec![0, 1, 2, 3].into(),
     };
 
     let result = audio_part_to_mistralrs(&part);
