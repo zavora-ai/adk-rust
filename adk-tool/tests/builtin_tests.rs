@@ -1,13 +1,13 @@
 use adk_core::{
-    CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Tool, ToolContext,
+    CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Role, Tool, ToolContext,
 };
-use std::collections::HashMap;
 use adk_tool::FunctionTool;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 // Mock context for testing
@@ -33,7 +33,7 @@ impl ReadonlyContext for MockContext {
 
     fn user_content(&self) -> &Content {
         static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
-        CONTENT.get_or_init(|| Content::new("user"))
+        CONTENT.get_or_init(|| Content::new(Role::User))
     }
 
     fn metadata(&self) -> &HashMap<String, String> {

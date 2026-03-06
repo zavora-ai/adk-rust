@@ -50,14 +50,14 @@ impl MockSession {
 impl Session for MockSession {
     fn id(&self) -> &adk_core::types::SessionId {
         static ID: std::sync::OnceLock<adk_core::types::SessionId> = std::sync::OnceLock::new();
-        ID.get_or_init(|| "session-1".to_string().into())
+        ID.get_or_init(|| adk_core::types::SessionId::new("session-1").unwrap())
     }
     fn app_name(&self) -> &str {
         "test-app"
     }
     fn user_id(&self) -> &adk_core::types::UserId {
         static ID: std::sync::OnceLock<adk_core::types::UserId> = std::sync::OnceLock::new();
-        ID.get_or_init(|| "user-1".to_string().into())
+        ID.get_or_init(|| adk_core::types::UserId::new("user-1").unwrap())
     }
     fn state(&self) -> &dyn State {
         &self.state
@@ -77,7 +77,7 @@ impl Artifacts for MockArtifacts {
 
     async fn load(&self, name: &str) -> adk_core::Result<adk_core::Part> {
         if name == "welcome.txt" {
-            Ok(adk_core::Part::Text { text: "Welcome to ADK!".to_string() })
+            Ok(adk_core::Part::text("Welcome to ADK!".to_string()))
         } else {
             Err(AdkError::Agent("Artifact not found".to_string()))
         }
@@ -111,18 +111,18 @@ impl ReadonlyContext for MockContext {
             std::sync::OnceLock::new();
         IDENTITY.get_or_init(|| {
             let mut id = adk_core::types::AdkIdentity::default();
-            id.invocation_id = "inv-1".to_string().into();
+            id.invocation_id = adk_core::types::InvocationId::new("inv-1").unwrap();
             id.agent_name = "test-agent".to_string();
-            id.user_id = "user-1".to_string().into();
+            id.user_id = adk_core::types::UserId::new("user-1").unwrap();
             id.app_name = "test-app".to_string();
-            id.session_id = "session-1".to_string().into();
+            id.session_id = adk_core::types::SessionId::new("session-1").unwrap();
             id.branch = "main".to_string();
             id
         })
     }
     fn user_content(&self) -> &Content {
         static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
-        CONTENT.get_or_init(|| Content::new("user"))
+        CONTENT.get_or_init(|| Content::user())
     }
     fn metadata(&self) -> &HashMap<String, String> {
         static METADATA: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();

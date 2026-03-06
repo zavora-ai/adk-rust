@@ -17,8 +17,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _session = service
         .create(CreateRequest {
             app_name: "test_app".to_string(),
-            user_id: "user1".to_string(),
-            session_id: Some("session1".to_string()),
+            user_id: UserId::new("user1").unwrap(),
+            session_id: Some(SessionId::new("session1").unwrap()),
             state: HashMap::new(),
         })
         .await?;
@@ -31,8 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _retrieved = service
         .get(GetRequest {
             app_name: "test_app".to_string(),
-            user_id: "user1".to_string(),
-            session_id: "session1".to_string(),
+            user_id: UserId::new("user1").unwrap(),
+            session_id: SessionId::new("session1").unwrap(),
             num_recent_events: None,
             after: None,
         })
@@ -42,7 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // List sessions
     let sessions = service
-        .list(ListRequest { app_name: "test_app".to_string(), user_id: "user1".to_string() })
+        .list(ListRequest {
+            app_name: "test_app".to_string(),
+            user_id: UserId::new("user1").unwrap(),
+        })
         .await?;
 
     println!("✅ Found {} session(s)", sessions.len());

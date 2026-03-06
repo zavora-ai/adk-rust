@@ -210,11 +210,8 @@ impl Llm for DeepSeekClient {
                                                     if thinking_enabled {
                                                         yield LlmResponse {
                                                             content: Some(adk_core::Content {
-                                                                role: "model".to_string(),
-                                                                parts: vec![Part::Thinking {
-                                                                    thinking: reasoning.clone(),
-                                                                    signature: None,
-                                                                }],
+                                                                role: adk_core::types::Role::Model,
+                                                                parts: vec![Part::Thinking { thought: reasoning.clone(), signature: None }],
                                                             }),
                                                             usage_metadata: None,
                                                             finish_reason: None,
@@ -299,7 +296,7 @@ impl Llm for DeepSeekClient {
                                             if let Some(delta) = &choice.delta {
                                                 if let Some(text) = &delta.content {
                                                     if !text.is_empty() {
-                                                        parts.push(Part::Text { text: text.clone() });
+                                                        parts.push(Part::text(text.clone()));
                                                     }
                                                 }
                                             }
@@ -309,7 +306,7 @@ impl Llm for DeepSeekClient {
                                                     None
                                                 } else {
                                                     Some(adk_core::Content {
-                                                        role: "model".to_string(),
+                                                        role: adk_core::types::Role::Model,
                                                         parts,
                                                     })
                                                 },
@@ -338,10 +335,8 @@ impl Llm for DeepSeekClient {
                                                     if !text.is_empty() {
                                                         yield LlmResponse {
                                                             content: Some(adk_core::Content {
-                                                                role: "model".to_string(),
-                                                                parts: vec![Part::Text {
-                                                                    text: text.clone(),
-                                                                }],
+                                                                role: adk_core::types::Role::Model,
+                                                                parts: vec![Part::text(text.clone())],
                                                             }),
                                                             usage_metadata: None,
                                                             finish_reason: None,

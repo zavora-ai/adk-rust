@@ -21,7 +21,7 @@ use adk_rag::{
 fn codebase_docs() -> Vec<Document> {
     vec![
         Document {
-            id: "architecture".into(),
+            id: "architecture",
             text: "The application follows a layered architecture with three main layers: \
                    the API layer (axum handlers), the service layer (business logic), and \
                    the repository layer (database access via sqlx).\n\n\
@@ -32,16 +32,15 @@ fn codebase_docs() -> Vec<Document> {
                    Cross-cutting concerns like authentication, logging, and error handling \
                    are implemented as axum middleware. The auth middleware extracts JWT \
                    tokens from the Authorization header and validates them against the \
-                   signing key stored in environment variables."
-                .into(),
+                   signing key stored in environment variables.",
             metadata: HashMap::from([
-                ("file".into(), "docs/architecture.md".into()),
-                ("area".into(), "architecture".into()),
+                ("file", "docs/architecture.md".to_string()),
+                ("area", "architecture".to_string()),
             ]),
-            source_uri: Some("docs/architecture.md".into()),
+            source_uri: Some("docs/architecture.md"),
         },
         Document {
-            id: "database".into(),
+            id: "database",
             text: "Database migrations are managed with sqlx-cli. Run `sqlx migrate run` \
                    to apply pending migrations. The migrations directory is at `migrations/`.\n\n\
                    The schema includes four main tables: users, projects, tasks, and comments. \
@@ -50,16 +49,15 @@ fn codebase_docs() -> Vec<Document> {
                    created_at and updated_at timestamps.\n\n\
                    Connection pooling is configured in config.rs with a default pool size of 10. \
                    Set DATABASE_URL in .env to point to your PostgreSQL instance. For testing, \
-                   use DATABASE_URL_TEST which creates an isolated test database."
-                .into(),
+                   use DATABASE_URL_TEST which creates an isolated test database.",
             metadata: HashMap::from([
-                ("file".into(), "docs/database.md".into()),
-                ("area".into(), "database".into()),
+                ("file", "docs/database.md".to_string()),
+                ("area", "database".to_string()),
             ]),
-            source_uri: Some("docs/database.md".into()),
+            source_uri: Some("docs/database.md"),
         },
         Document {
-            id: "api_endpoints".into(),
+            id: "api_endpoints",
             text: "POST /api/auth/register — Create a new user account. Requires email, \
                    password (min 8 chars), and display_name. Returns the user object with \
                    an access token.\n\n\
@@ -69,16 +67,15 @@ fn codebase_docs() -> Vec<Document> {
                    ?page and ?limit query parameters. Returns paginated results with total count.\n\n\
                    POST /api/projects/:id/tasks — Create a task within a project. Requires \
                    title and optional description, priority (low/medium/high), and due_date. \
-                   The assignee defaults to the creating user."
-                .into(),
+                   The assignee defaults to the creating user.",
             metadata: HashMap::from([
-                ("file".into(), "docs/api.md".into()),
-                ("area".into(), "api".into()),
+                ("file", "docs/api.md".to_string()),
+                ("area", "api".to_string()),
             ]),
-            source_uri: Some("docs/api.md".into()),
+            source_uri: Some("docs/api.md"),
         },
         Document {
-            id: "deployment".into(),
+            id: "deployment",
             text: "The application is deployed as a Docker container on AWS ECS Fargate. \
                    The Dockerfile uses a multi-stage build: the first stage compiles the \
                    Rust binary with cargo build --release, and the second stage copies \
@@ -88,13 +85,12 @@ fn codebase_docs() -> Vec<Document> {
                    service. Environment variables are injected via AWS Secrets Manager.\n\n\
                    Health checks are exposed at GET /health which returns 200 OK when the \
                    server is ready. The ECS task definition configures a health check \
-                   interval of 30 seconds with a 5-second timeout."
-                .into(),
+                   interval of 30 seconds with a 5-second timeout.",
             metadata: HashMap::from([
-                ("file".into(), "docs/deployment.md".into()),
-                ("area".into(), "deployment".into()),
+                ("file", "docs/deployment.md".to_string()),
+                ("area", "deployment".to_string()),
             ]),
-            source_uri: Some("docs/deployment.md".into()),
+            source_uri: Some("docs/deployment.md"),
         },
     ]
 }
@@ -152,7 +148,12 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     println!("Codebase Q&A agent ready. Ask about architecture, database, API, or deployment.\n");
-    adk_cli::console::run_console(Arc::new(agent), "rag_recursive".into(), "dev1".into()).await?;
+    adk_cli::console::run_console(
+        Arc::new(agent),
+        "rag_recursive".to_string(),
+        adk_core::types::UserId::new("dev1").unwrap(),
+    )
+    .await?;
 
     Ok(())
 }

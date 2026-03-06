@@ -72,7 +72,7 @@ async fn send_request(
                             println!("  [thinking] {}", &thinking[..thinking.len().min(80)]);
                         }
                     }
-                    Part::Text { text: t } => text.push_str(t),
+                    Part::Text(t) => text.push_str(t),
                     _ => {}
                 }
             }

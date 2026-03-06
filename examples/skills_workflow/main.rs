@@ -7,6 +7,7 @@
 //!   cargo run --manifest-path examples/Cargo.toml --example skills_workflow
 
 use adk_agent::{LlmAgentBuilder, SequentialAgent};
+use adk_core::types::{SessionId, UserId};
 use adk_core::{Content, Part};
 use adk_model::gemini::GeminiModel;
 use adk_runner::{Runner, RunnerConfig};
@@ -66,17 +67,17 @@ async fn main() -> Result<()> {
             .with_skills_from_root(&skills_root)?;
 
     let app_name = "skills_workflow_demo".to_string();
-    let user_id = "user".to_string();
+    let user_id = UserId::new("user").unwrap();
     let session_service = Arc::new(InMemorySessionService::new());
     let session = session_service
         .create(CreateRequest {
             app_name: app_name.clone(),
-            user_id: user_id.clone().into(),
+            user_id: user_id.clone(),
             session_id: None,
             state: HashMap::new(),
         })
         .await?;
-    let session_id = session.id().to_string();
+    let session_id = session.id().clone();
 
     let runner = Runner::new(RunnerConfig {
         app_name,
@@ -93,8 +94,8 @@ async fn main() -> Result<()> {
 
     let mut stream = runner
         .run(
-            user_id.into(),
-            session_id.into(),
+            user_id,
+            session_id,
             Content::new("user").with_text("Please search this repository for TODO markers."),
         )
         .await?;
@@ -106,7 +107,7 @@ async fn main() -> Result<()> {
                 .parts
                 .iter()
                 .filter_map(|p| match p {
-                    Part::Text { text } => Some(text.as_str()),
+                    Part::Text(text) => Some(text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()

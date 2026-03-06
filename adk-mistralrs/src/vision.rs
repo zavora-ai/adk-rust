@@ -360,7 +360,7 @@ impl MistralRsVisionModel {
                 .parts
                 .iter()
                 .filter_map(|part| match part {
-                    Part::Text { text } => Some(text.as_str()),
+                    Part::Text(text) => Some(text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()

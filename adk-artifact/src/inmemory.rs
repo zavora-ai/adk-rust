@@ -1,38 +1,56 @@
 use crate::service::*;
+use adk_core::types::{SessionId, UserId};
 use adk_core::{Part, Result};
 use async_trait::async_trait;
-use std::collections::HashMap;
+use moka::future::Cache;
+use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 const USER_SCOPED_KEY: &str = "user";
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-struct ArtifactKey {
+/// The base identity of an artifact, ignoring its version.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ArtifactBaseKey {
     app_name: String,
-    user_id: String,
-    session_id: String,
+    user_id: UserId,
+    session_id: SessionId,
     file_name: String,
-    version: i64,
 }
 
 pub struct InMemoryArtifactService {
-    artifacts: Arc<RwLock<HashMap<ArtifactKey, Part>>>,
+    /// Moka handles TTL, TTI, and capacity limits asynchronously.
+    /// The Arc<RwLock<BTreeMap>> allows hyper-fast, deadlock-free version mutations.
+    artifacts: Cache<ArtifactBaseKey, Arc<RwLock<BTreeMap<i64, Part>>>>,
+    user_scoped_session: SessionId,
 }
 
 impl InMemoryArtifactService {
     pub fn new() -> Self {
-        Self { artifacts: Arc::new(RwLock::new(HashMap::new())) }
+        // Configure the cache limits to prevent OOM crashes in production.
+        // Adjust these heuristics based on your expected server RAM.
+        let cache = Cache::builder()
+            // Max 100,000 active artifact streams in memory at once
+            .max_capacity(100_000)
+            // Automatically evict streams that haven't been read/written in 2 hours
+            .time_to_idle(Duration::from_secs(2 * 60 * 60))
+            .build();
+
+        Self {
+            artifacts: cache,
+            user_scoped_session: SessionId::new(USER_SCOPED_KEY.to_string()).unwrap(),
+        }
     }
 
     fn is_user_scoped(file_name: &str) -> bool {
         file_name.starts_with("user:")
     }
 
-    fn get_session_id(session_id: &str, file_name: &str) -> String {
+    fn get_session_id(&self, session_id: &SessionId, file_name: &str) -> SessionId {
         if Self::is_user_scoped(file_name) {
-            USER_SCOPED_KEY.to_string()
+            self.user_scoped_session.clone()
         } else {
-            session_id.to_string()
+            session_id.clone()
         }
     }
 
@@ -43,13 +61,7 @@ impl InMemoryArtifactService {
             ));
         }
 
-        // Prevent path traversal and path-like names; artifacts are logical keys, not paths.
-        if file_name.contains('/')
-            || file_name.contains('\\')
-            || file_name == "."
-            || file_name == ".."
-            || file_name.contains("..")
-        {
+        if file_name.contains('/') || file_name.contains('\\') || file_name.contains("..") {
             return Err(adk_core::AdkError::Artifact(format!(
                 "invalid artifact file name '{}': path separators and traversal patterns are not allowed",
                 file_name
@@ -59,26 +71,19 @@ impl InMemoryArtifactService {
         Ok(())
     }
 
-    fn find_latest_version(
+    fn build_base_key(
         &self,
         app_name: &str,
-        user_id: &str,
-        session_id: &str,
+        user_id: &UserId,
+        session_id: &SessionId,
         file_name: &str,
-    ) -> Option<(i64, Part)> {
-        let artifacts = self.artifacts.read().unwrap();
-        let mut versions: Vec<_> = artifacts
-            .iter()
-            .filter(|(k, _)| {
-                k.app_name == app_name
-                    && k.user_id == user_id
-                    && k.session_id == session_id
-                    && k.file_name == file_name
-            })
-            .collect();
-
-        versions.sort_by_key(|b| std::cmp::Reverse(b.0.version));
-        versions.first().map(|(k, v)| (k.version, (*v).clone()))
+    ) -> ArtifactBaseKey {
+        ArtifactBaseKey {
+            app_name: app_name.to_string(),
+            user_id: user_id.clone(),
+            session_id: self.get_session_id(session_id, file_name),
+            file_name: file_name.to_string(),
+        }
     }
 }
 
@@ -92,126 +97,280 @@ impl Default for InMemoryArtifactService {
 impl ArtifactService for InMemoryArtifactService {
     async fn save(&self, req: SaveRequest) -> Result<SaveResponse> {
         Self::validate_file_name(&req.file_name)?;
-        let session_id = Self::get_session_id(&req.session_id, &req.file_name);
 
-        let version = if let Some(v) = req.version {
-            v
-        } else {
-            let latest =
-                self.find_latest_version(&req.app_name, &req.user_id, &session_id, &req.file_name);
-            latest.map(|(v, _)| v + 1).unwrap_or(1)
-        };
+        let base_key =
+            self.build_base_key(&req.app_name, &req.user_id, &req.session_id, &req.file_name);
 
-        let key = ArtifactKey {
-            app_name: req.app_name,
-            user_id: req.user_id,
-            session_id,
-            file_name: req.file_name,
-            version,
-        };
+        // Atomically fetch the existing tree or initialize a new one.
+        // This is safe and lock-free at the cache level.
+        let tree_arc = self
+            .artifacts
+            .get_with(base_key, async { Arc::new(RwLock::new(BTreeMap::new())) })
+            .await;
 
-        let mut artifacts = self.artifacts.write().unwrap();
-        artifacts.insert(key, req.part);
+        // Acquire a synchronous lock strictly for the nanoseconds it takes to insert.
+        // Never hold this across an await point.
+        let mut versions = tree_arc.write().unwrap();
+
+        let version = req
+            .version
+            .unwrap_or_else(|| versions.last_key_value().map(|(&v, _)| v + 1).unwrap_or(1));
+
+        versions.insert(version, req.part);
 
         Ok(SaveResponse { version })
     }
 
     async fn load(&self, req: LoadRequest) -> Result<LoadResponse> {
         Self::validate_file_name(&req.file_name)?;
-        let session_id = Self::get_session_id(&req.session_id, &req.file_name);
 
-        if let Some(version) = req.version {
-            let key = ArtifactKey {
-                app_name: req.app_name,
-                user_id: req.user_id,
-                session_id,
-                file_name: req.file_name,
-                version,
-            };
+        let base_key =
+            self.build_base_key(&req.app_name, &req.user_id, &req.session_id, &req.file_name);
 
-            let artifacts = self.artifacts.read().unwrap();
-            let part = artifacts
-                .get(&key)
-                .ok_or_else(|| adk_core::AdkError::Artifact("artifact not found".into()))?;
+        let tree_arc = self
+            .artifacts
+            .get(&base_key)
+            .await // Moka uses .await for get() in future cache
+            .ok_or_else(|| adk_core::AdkError::Artifact("artifact not found".into()))?;
 
-            Ok(LoadResponse { part: part.clone() })
+        let versions = tree_arc.read().unwrap();
+
+        let part = if let Some(version) = req.version {
+            versions
+                .get(&version)
+                .ok_or_else(|| {
+                    adk_core::AdkError::Artifact(format!("version {} not found", version))
+                })?
+                .clone()
         } else {
-            let (_, part) = self
-                .find_latest_version(&req.app_name, &req.user_id, &session_id, &req.file_name)
-                .ok_or_else(|| adk_core::AdkError::Artifact("artifact not found".into()))?;
+            versions
+                .last_key_value()
+                .ok_or_else(|| adk_core::AdkError::Artifact("artifact has no versions".into()))?
+                .1
+                .clone()
+        };
 
-            Ok(LoadResponse { part })
-        }
+        Ok(LoadResponse { part })
     }
 
     async fn delete(&self, req: DeleteRequest) -> Result<()> {
         Self::validate_file_name(&req.file_name)?;
-        let session_id = Self::get_session_id(&req.session_id, &req.file_name);
 
-        let mut artifacts = self.artifacts.write().unwrap();
+        let base_key =
+            self.build_base_key(&req.app_name, &req.user_id, &req.session_id, &req.file_name);
 
         if let Some(version) = req.version {
-            let key = ArtifactKey {
-                app_name: req.app_name,
-                user_id: req.user_id,
-                session_id,
-                file_name: req.file_name,
-                version,
-            };
-            artifacts.remove(&key);
+            let should_remove_parent = {
+                // Scope the read lock
+                if let Some(tree_arc) = self.artifacts.get(&base_key).await {
+                    let mut versions = tree_arc.write().unwrap();
+                    versions.remove(&version);
+                    versions.is_empty() // Return true if the map is now empty
+                } else {
+                    false
+                }
+            }; // Lock drops here
+
+            if should_remove_parent {
+                self.artifacts.invalidate(&base_key).await;
+            }
         } else {
-            artifacts.retain(|k, _| {
-                !(k.app_name == req.app_name
-                    && k.user_id == req.user_id
-                    && k.session_id == session_id
-                    && k.file_name == req.file_name)
-            });
+            // Invalidate triggers eviction instantly
+            self.artifacts.invalidate(&base_key).await;
         }
 
         Ok(())
     }
 
     async fn list(&self, req: ListRequest) -> Result<ListResponse> {
-        let artifacts = self.artifacts.read().unwrap();
-        let mut file_names = std::collections::HashSet::new();
+        let mut file_names = Vec::new();
 
-        for key in artifacts.keys() {
-            if key.app_name == req.app_name
-                && key.user_id == req.user_id
-                && (key.session_id == req.session_id || key.session_id == USER_SCOPED_KEY)
+        // Moka allows safe iteration over the snapshot of keys
+        for (k, _) in self.artifacts.iter() {
+            if k.app_name == req.app_name
+                && k.user_id == req.user_id
+                && (k.session_id == req.session_id || k.session_id == self.user_scoped_session)
             {
-                file_names.insert(key.file_name.clone());
+                file_names.push(k.file_name.clone());
             }
         }
 
-        let mut sorted: Vec<_> = file_names.into_iter().collect();
-        sorted.sort();
+        file_names.sort();
+        file_names.dedup();
 
-        Ok(ListResponse { file_names: sorted })
+        Ok(ListResponse { file_names })
     }
 
     async fn versions(&self, req: VersionsRequest) -> Result<VersionsResponse> {
         Self::validate_file_name(&req.file_name)?;
-        let session_id = Self::get_session_id(&req.session_id, &req.file_name);
-        let artifacts = self.artifacts.read().unwrap();
 
-        let mut versions: Vec<i64> = artifacts
-            .keys()
-            .filter(|k| {
-                k.app_name == req.app_name
-                    && k.user_id == req.user_id
-                    && k.session_id == session_id
-                    && k.file_name == req.file_name
-            })
-            .map(|k| k.version)
-            .collect();
+        let base_key =
+            self.build_base_key(&req.app_name, &req.user_id, &req.session_id, &req.file_name);
 
-        if versions.is_empty() {
-            return Err(adk_core::AdkError::Artifact("artifact not found".into()));
-        }
+        let tree_arc = self
+            .artifacts
+            .get(&base_key)
+            .await
+            .ok_or_else(|| adk_core::AdkError::Artifact("artifact not found".into()))?;
 
-        versions.sort_by(|a, b| b.cmp(a));
+        let versions_map = tree_arc.read().unwrap();
+
+        let mut versions: Vec<i64> = versions_map.keys().copied().collect();
+        versions.reverse();
 
         Ok(VersionsResponse { versions })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::{ListRequest, LoadRequest, SaveRequest, VersionsRequest};
+    use adk_core::Part;
+    use adk_core::types::{SessionId, UserId};
+
+    #[tokio::test]
+    async fn test_in_memory_artifact_service_user_scope() {
+        let service = InMemoryArtifactService::new();
+        let app_name = "test_app".to_string();
+        let user_id = UserId::new("user_1").unwrap();
+        let session_1 = SessionId::new("session_1").unwrap();
+        let session_2 = SessionId::new("session_2").unwrap();
+
+        // Save user-scoped artifact in session 1
+        service
+            .save(SaveRequest {
+                app_name: app_name.clone(),
+                user_id: user_id.clone(),
+                session_id: session_1.clone(),
+                file_name: "user:prefs.json".to_string(),
+                version: None,
+                part: Part::text("dark mode"),
+            })
+            .await
+            .unwrap();
+
+        // Save session-scoped artifact in session 1
+        service
+            .save(SaveRequest {
+                app_name: app_name.clone(),
+                user_id: user_id.clone(),
+                session_id: session_1.clone(),
+                file_name: "chat_history.txt".to_string(),
+                version: None,
+                part: Part::text("hello"),
+            })
+            .await
+            .unwrap();
+
+        // Both should be listed in session 1
+        let list1 = service
+            .list(ListRequest {
+                app_name: app_name.clone(),
+                user_id: user_id.clone(),
+                session_id: session_1.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(list1.file_names.len(), 2);
+        assert!(list1.file_names.contains(&"user:prefs.json".to_string()));
+        assert!(list1.file_names.contains(&"chat_history.txt".to_string()));
+
+        // Only user-scoped should be listed in session 2
+        let list2 = service
+            .list(ListRequest {
+                app_name: app_name.clone(),
+                user_id: user_id.clone(),
+                session_id: session_2.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(list2.file_names.len(), 1);
+        assert!(list2.file_names.contains(&"user:prefs.json".to_string()));
+
+        // Retrieving from session 2 works for user-scoped
+        let load2 = service
+            .load(LoadRequest {
+                app_name: app_name.clone(),
+                user_id: user_id.clone(),
+                session_id: session_2.clone(),
+                file_name: "user:prefs.json".to_string(),
+                version: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(load2.part, Part::text("dark mode"));
+
+        // Retrieving from session 2 fails for session 1 scoped
+        let res = service
+            .load(LoadRequest {
+                app_name: app_name.clone(),
+                user_id: user_id.clone(),
+                session_id: session_2.clone(),
+                file_name: "chat_history.txt".to_string(),
+                version: None,
+            })
+            .await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_artifact_service_versions() {
+        let service = InMemoryArtifactService::new();
+        let app_name = "test_app".to_string();
+        let user_id = UserId::new("user_1").unwrap();
+        let session_id = SessionId::new("session_1").unwrap();
+
+        for i in 1..=3 {
+            service
+                .save(SaveRequest {
+                    app_name: app_name.clone(),
+                    user_id: user_id.clone(),
+                    session_id: session_id.clone(),
+                    file_name: "doc.txt".to_string(),
+                    version: None,
+                    part: Part::text(format!("v{}", i)),
+                })
+                .await
+                .unwrap();
+        }
+
+        // Implicitly loads latest (v3)
+        let load_latest = service
+            .load(LoadRequest {
+                app_name: app_name.clone(),
+                user_id: user_id.clone(),
+                session_id: session_id.clone(),
+                file_name: "doc.txt".to_string(),
+                version: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(load_latest.part, Part::text("v3"));
+
+        // Explicitly load v1
+        let load_v1 = service
+            .load(LoadRequest {
+                app_name: app_name.clone(),
+                user_id: user_id.clone(),
+                session_id: session_id.clone(),
+                file_name: "doc.txt".to_string(),
+                version: Some(1),
+            })
+            .await
+            .unwrap();
+        assert_eq!(load_v1.part, Part::text("v1"));
+
+        // Versions list (descending)
+        let vers = service
+            .versions(VersionsRequest {
+                app_name: app_name.clone(),
+                user_id: user_id.clone(),
+                session_id: session_id.clone(),
+                file_name: "doc.txt".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(vers.versions, vec![3, 2, 1]);
     }
 }

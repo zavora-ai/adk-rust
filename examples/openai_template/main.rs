@@ -48,21 +48,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Prepare initial state with user preferences
     let mut state = HashMap::new();
-    state.insert("user:name".to_string(), "Alice".into());
-    state.insert("user:language".to_string(), "French".into());
-    state.insert("user:expertise".to_string(), "intermediate".into());
+    state.insert("user:name".to_string(), "Alice".to_string());
+    state.insert("user:language".to_string(), "French".to_string());
+    state.insert("user:expertise".to_string(), "intermediate".to_string());
 
     // Create session with initial state
     let session = session_service
         .create(CreateRequest {
             app_name: app_name.to_string(),
-            user_id: user_id.to_string(),
+            user_id: UserId::new(user_id).unwrap(),
             session_id: None,
             state,
         })
         .await?;
 
-    let session_id = session.id().to_string();
+    let session_id = session.id().clone();
 
     let runner = Runner::new(RunnerConfig {
         app_name: app_name.to_string(),
@@ -96,7 +96,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let content = Content::new("user").with_text(&input);
-        let mut events = runner.run(user_id.to_string(), session_id.clone(), content).await?;
+        let mut events =
+            runner.run(UserId::new(user_id).unwrap(), session_id.clone(), content).await?;
 
         print!("Assistant: ");
         stdout.flush()?;
@@ -106,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(e) => {
                     if let Some(content) = e.llm_response.content {
                         for part in content.parts {
-                            if let adk_core::Part::Text { text } = part {
+                            if let adk_core::Part::text(text) = part {
                                 print!("{}", text);
                                 stdout.flush()?;
                             }

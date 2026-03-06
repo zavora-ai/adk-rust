@@ -41,8 +41,7 @@ mod tests {
 
     #[test]
     fn test_mock_llm() {
-        let mock =
-            MockLlm::new("test-llm").with_response(LlmResponse::new(Content::new("assistant")));
+        let mock = MockLlm::new("test-llm").with_response(LlmResponse::new(Content::model()));
         assert_eq!(mock.name(), "test-llm");
         assert_eq!(mock.responses.len(), 1);
     }
@@ -52,7 +51,7 @@ mod tests {
         use futures::StreamExt;
 
         let mock = MockLlm::new("test")
-            .with_response(LlmResponse::new(Content::new("assistant").with_text("Hello")));
+            .with_response(LlmResponse::new(Content::model().with_text("Hello")));
 
         let req = LlmRequest::new("test", vec![]);
         let mut stream = mock.generate_content(req, false).await.unwrap();

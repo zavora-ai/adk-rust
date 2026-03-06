@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
     // === Content Filtering ===
     println!("\n--- Content Filtering ---\n");
 
-    let filter = ContentFilter::blocked_keywords(vec!["forbidden".into(), "banned".into()]);
+    let filter = ContentFilter::blocked_keywords(vec!["forbidden", "banned"]);
     let content = adk_core::Content::new("user").with_text("This is forbidden content");
     let result = filter.validate(&content).await;
     println!("  'forbidden content' -> pass={}", result.is_pass());

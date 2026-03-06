@@ -63,6 +63,7 @@ version = "0.3.2"
 dependencies = [
  "adk-core",
  "async-trait",
+ "moka",
  "tokio",
 ]
 
@@ -91,6 +92,7 @@ dependencies = [
  "adk-core",
  "async-trait",
  "base64 0.22.1",
+ "mime",
  "serde",
  "serde_json",
  "thirtyfour",
@@ -129,9 +131,12 @@ version = "0.3.2"
 dependencies = [
  "async-stream",
  "async-trait",
+ "base64 0.21.7",
+ "bytes",
  "chrono",
  "derive_more",
  "futures",
+ "mime",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -326,8 +331,10 @@ dependencies = [
  "aws-sdk-bedrockruntime",
  "aws-smithy-types",
  "base64 0.21.7",
+ "bytes",
  "claudius",
  "futures",
+ "mime",
  "ollama-rs",
  "proptest",
  "reqwest 0.12.28",
@@ -394,6 +401,7 @@ dependencies = [
  "google-cloud-auth",
  "livekit",
  "livekit-api",
+ "mime",
  "proptest",
  "reqwest 0.12.28",
  "serde",
@@ -483,6 +491,7 @@ dependencies = [
  "futures",
  "http-body-util",
  "hyper 1.8.1",
+ "mime",
  "mime_guess",
  "reqwest 0.12.28",
  "rust-embed",
@@ -1390,6 +1399,7 @@ name = "auth_test"
 version = "0.1.0"
 dependencies = [
  "adk-auth",
+ "adk-core",
 ]
 
 [[package]]
@@ -7544,6 +7554,8 @@ dependencies = [
 name = "llm_agent_test"
 version = "0.1.0"
 dependencies = [
+ "adk-agent",
+ "adk-core",
  "adk-rust",
  "dotenvy",
  "serde_json",

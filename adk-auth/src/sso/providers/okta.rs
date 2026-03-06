@@ -69,7 +69,7 @@ impl OktaProvider {
 impl TokenValidator for OktaProvider {
     async fn validate(&self, token: &str) -> Result<TokenClaims, TokenError> {
         let header = jsonwebtoken::decode_header(token)?;
-        let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".into()))?;
+        let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".to_string()))?;
 
         let key = self.jwks_cache.get_key(&kid).await?;
 

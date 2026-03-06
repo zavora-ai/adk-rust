@@ -123,7 +123,7 @@ impl Agent for LoopAgent {
             for callback in before_callbacks.as_ref() {
                 match callback(run_ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
-                        let mut early_event = Event::new(run_ctx.invocation_id().to_string());
+                        let mut early_event = Event::new(run_ctx.invocation_id().clone());
                         early_event.author = agent_name.clone();
                         early_event.llm_response.content = Some(content);
                         yield Ok(early_event);
@@ -131,7 +131,7 @@ impl Agent for LoopAgent {
                         for after_cb in after_callbacks.as_ref() {
                             match after_cb(run_ctx.clone() as Arc<dyn CallbackContext>).await {
                                 Ok(Some(after_content)) => {
-                                    let mut after_event = Event::new(run_ctx.invocation_id().to_string());
+                                    let mut after_event = Event::new(run_ctx.invocation_id().clone());
                                     after_event.author = agent_name.clone();
                                     after_event.llm_response.content = Some(after_content);
                                     yield Ok(after_event);
@@ -194,7 +194,7 @@ impl Agent for LoopAgent {
             for callback in after_callbacks.as_ref() {
                 match callback(run_ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
-                        let mut after_event = Event::new(run_ctx.invocation_id().to_string());
+                        let mut after_event = Event::new(run_ctx.invocation_id().clone());
                         after_event.author = agent_name.clone();
                         after_event.llm_response.content = Some(content);
                         yield Ok(after_event);

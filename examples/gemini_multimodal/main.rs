@@ -29,7 +29,7 @@ async fn print_response(
     while let Some(Ok(response)) = stream.next().await {
         if let Some(content) = &response.content {
             for part in &content.parts {
-                if let Part::Text { text } = part {
+                if let Some(text) = part.as_text() {
                     print!("{text}");
                 }
             }
@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         role: "user".to_string(),
         parts: vec![
             Part::InlineData { mime_type: "image/png".to_string(), data: red_pixel_png.clone() },
-            Part::Text { text: "What do you see in this image? It's very small.".to_string() },
+            Part::text("What do you see in this image? It's very small.".to_string()),
         ],
     }]);
     print_response(&model, request).await?;
@@ -85,10 +85,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         parts: vec![
             Part::InlineData { mime_type: "image/png".to_string(), data: red_pixel_png.clone() },
             Part::InlineData { mime_type: "image/png".to_string(), data: blue_pixel_png },
-            Part::Text {
-                text: "I sent you two tiny 1x1 pixel images. Can you tell what colors they are?"
+            Part::text(
+                "What is shown in this image and audio? Answer based on the provided context."
                     .to_string(),
-            },
+            ),
         ],
     }]);
     print_response(&model, request).await?;

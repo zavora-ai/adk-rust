@@ -1,0 +1,11 @@
+--- adk-graph/src/agent.rs
++++ adk-graph/src/agent.rs
+@@ -107,7 +107,7 @@
+         };
+
+         // Create execution config
+-        let config = ExecutionConfig::new(ctx.session_id());
++        let config = ExecutionConfig::new(ctx.session_id().to_string().as_str());
+
+         // Start graph execution
+         let mut stream = self.graph.stream(state, config).await?;

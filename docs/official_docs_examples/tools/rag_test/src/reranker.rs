@@ -30,11 +30,11 @@ impl Reranker for KeywordBoostReranker {
 fn make_result(text: &str, score: f32) -> SearchResult {
     SearchResult {
         chunk: Chunk {
-            id: "c1".into(),
-            text: text.into(),
+            id: "c1".to_string(),
+            text: text.to_string(),
             embedding: vec![],
             metadata: Default::default(),
-            document_id: "d1".into(),
+            document_id: "d1".to_string(),
         },
         score,
     }

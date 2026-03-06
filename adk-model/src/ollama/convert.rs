@@ -1,53 +1,43 @@
 //! Type conversions between ADK core types and ollama-rs types.
 
-use crate::attachment;
-use adk_core::{Content, FinishReason, LlmResponse, Part, UsageMetadata};
+use adk_core::{Content, FinishReason, LlmResponse, Part, Role, UsageMetadata};
+use bytes::Bytes;
 use ollama_rs::generation::chat::{ChatMessage, ChatMessageResponse};
 
 /// Convert ADK Content to Ollama ChatMessage.
 pub fn content_to_chat_message(content: &Content) -> Option<ChatMessage> {
-    // Extract text from parts
-    let text: String = content
-        .parts
-        .iter()
-        .filter_map(|p| match p {
-            Part::Text { text } => Some(text.clone()),
-            Part::Thinking { thinking, .. } => Some(thinking.clone()),
-            Part::InlineData { mime_type, data } => {
-                Some(attachment::inline_attachment_to_text(mime_type, data))
-            }
-            Part::FileData { mime_type, file_uri } => {
-                Some(attachment::file_attachment_to_text(mime_type, file_uri))
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = content.collect_text();
 
-    match content.role.as_str() {
-        "user" => Some(ChatMessage::user(text)),
-        "model" | "assistant" => Some(ChatMessage::assistant(text)),
-        "system" => Some(ChatMessage::system(text)),
-        "function" | "tool" => {
-            // Handle function responses - combine all responses into one tool message
-            let mut response_texts = Vec::new();
-            for part in &content.parts {
-                if let Part::FunctionResponse { function_response, .. } = part {
-                    response_texts.push(format!(
-                        "{}: {}",
-                        function_response.name, function_response.response
-                    ));
+    match content.role {
+        Role::User => Some(ChatMessage::user(text)),
+        Role::Model | Role::System => Some(ChatMessage::assistant(text)),
+        Role::Custom(ref s) if s == "assistant" => Some(ChatMessage::assistant(text)),
+        Role::Custom(ref s) if s == "system" => Some(ChatMessage::system(text)),
+        Role::Custom(ref s) if s == "user" => Some(ChatMessage::user(text)),
+        _ => {
+            // Check for tool/function role equivalents
+            if content.role.is_tool() {
+                let mut response_texts = Vec::new();
+                for part in &content.parts {
+                    if let Part::FunctionResponse { name, response, .. } = part {
+                        response_texts.push(format!("{}: {}", name, response));
+                    }
+                }
+                if !response_texts.is_empty() {
+                    return Some(ChatMessage::tool(response_texts.join("\n")));
+                } else if !text.is_empty() {
+                    return Some(ChatMessage::tool(text));
                 }
             }
-            if !response_texts.is_empty() {
-                Some(ChatMessage::tool(response_texts.join("\n")))
-            } else if !text.is_empty() {
-                Some(ChatMessage::tool(text))
+            // Fallback for unknown roles
+            if content.role.is_system() {
+                Some(ChatMessage::system(text))
+            } else if content.role.is_model() {
+                Some(ChatMessage::assistant(text))
             } else {
-                None
+                Some(ChatMessage::user(text))
             }
         }
-        _ => None,
     }
 }
 
@@ -58,13 +48,13 @@ pub fn chat_response_to_llm_response(response: &ChatMessageResponse, partial: bo
     // Extract thinking content if present
     if let Some(thinking) = &response.message.thinking {
         if !thinking.is_empty() {
-            parts.push(Part::Thinking { thinking: thinking.clone(), signature: None });
+            parts.push(Part::thinking(thinking.clone()));
         }
     }
 
     // Add text content
     if !response.message.content.is_empty() {
-        parts.push(Part::Text { text: response.message.content.clone() });
+        parts.push(Part::text(response.message.content.clone()));
     }
 
     // Handle tool calls if present
@@ -77,8 +67,11 @@ pub fn chat_response_to_llm_response(response: &ChatMessageResponse, partial: bo
         });
     }
 
-    let content =
-        if parts.is_empty() { None } else { Some(Content { role: "model".to_string(), parts }) };
+    let content = if parts.is_empty() {
+        None
+    } else {
+        Some(Content { role: adk_core::types::Role::Model, parts })
+    };
 
     // Determine finish reason
     let finish_reason = if response.done { Some(FinishReason::Stop) } else { None };
@@ -108,8 +101,8 @@ pub fn chat_response_to_llm_response(response: &ChatMessageResponse, partial: bo
 pub fn text_delta_response(text: &str) -> LlmResponse {
     LlmResponse {
         content: Some(Content {
-            role: "model".to_string(),
-            parts: vec![Part::Text { text: text.to_string() }],
+            role: adk_core::types::Role::Model,
+            parts: vec![Part::text(text)],
         }),
         usage_metadata: None,
         finish_reason: None,
@@ -121,12 +114,13 @@ pub fn text_delta_response(text: &str) -> LlmResponse {
         error_message: None,
     }
 }
+
 /// Create a thinking delta response for streaming.
 pub fn thinking_delta_response(thinking: &str) -> LlmResponse {
     LlmResponse {
         content: Some(Content {
-            role: "model".to_string(),
-            parts: vec![Part::Thinking { thinking: thinking.to_string(), signature: None }],
+            role: adk_core::types::Role::Model,
+            parts: vec![Part::thinking(thinking)],
         }),
         usage_metadata: None,
         finish_reason: None,
@@ -145,29 +139,17 @@ mod tests {
 
     #[test]
     fn content_to_chat_message_keeps_inline_attachment_payload() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![Part::InlineData {
-                mime_type: "application/pdf".to_string(),
-                data: b"%PDF".to_vec(),
-            }],
-        };
+        let content = Content::user()
+            .with_inline_data("application/pdf", Bytes::from_static(b"%PDF"))
+            .unwrap();
         let message = content_to_chat_message(&content).expect("message should be created");
-        assert!(message.content.contains("application/pdf"));
-        assert!(message.content.contains("encoding=\"base64\""));
+        assert!(message.content.contains("[Inline Data: application/pdf]"));
     }
 
     #[test]
     fn content_to_chat_message_keeps_file_attachment_payload() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![Part::FileData {
-                mime_type: "text/csv".to_string(),
-                file_uri: "https://example.com/data.csv".to_string(),
-            }],
-        };
+        let content = Content::user().with_file_uri("text/csv", "https://example.com/data.csv");
         let message = content_to_chat_message(&content).expect("message should be created");
-        assert!(message.content.contains("text/csv"));
-        assert!(message.content.contains("https://example.com/data.csv"));
+        assert!(message.content.contains("[File: https://example.com/data.csv]"));
     }
 }

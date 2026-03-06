@@ -19,8 +19,8 @@ struct TestSession {
 impl TestSession {
     fn new() -> Self {
         Self {
-            id: SessionId::from("test-session".to_string()),
-            user_id: UserId::from("test-user".to_string()),
+            id: SessionId::new("test-session".to_string()).unwrap(),
+            user_id: UserId::new("test-user".to_string()).unwrap(),
         }
     }
 }
@@ -69,7 +69,7 @@ impl TestContext {
             session: TestSession::new(),
             user_content: Content {
                 role: "user".to_string(),
-                parts: vec![Part::Text { text: text.to_string() }],
+                parts: vec![Part::text(text.to_string())],
             },
             metadata: HashMap::new(),
         }
@@ -151,7 +151,7 @@ async fn main() -> Result<()> {
 
         if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
-                if let Part::Text { text } = part {
+                if let Some(text) = part.as_text() {
                     println!("Response: {}", text);
                 }
             }
@@ -205,7 +205,7 @@ async fn main() -> Result<()> {
 
         if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
-                if let Part::Text { text } = part {
+                if let Some(text) = part.as_text() {
                     println!("Response: {}", text);
                 }
             }
@@ -242,10 +242,8 @@ async fn main() -> Result<()> {
                     text.push_str(&format!("- {}: {}\n", key, value));
                 }
 
-                event.llm_response.content = Some(Content {
-                    role: "assistant".to_string(),
-                    parts: vec![Part::Text { text }],
-                });
+                event.llm_response.content =
+                    Some(Content { role: "assistant".to_string(), parts: vec![Part::text(text)] });
 
                 Ok(Box::pin(futures::stream::iter(vec![Ok(event)])) as adk_core::EventStream)
             }
@@ -259,7 +257,7 @@ async fn main() -> Result<()> {
         let event = result?;
         if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
-                if let Part::Text { text } = part {
+                if let Some(text) = part.as_text() {
                     println!("{}", text);
                 }
             }

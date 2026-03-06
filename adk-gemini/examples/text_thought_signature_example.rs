@@ -134,14 +134,15 @@ fn do_main() -> Result<(), Box<dyn std::error::Error>> {
         && let Some(parts) = &candidate.content.parts
     {
         for (i, part) in parts.iter().enumerate() {
-            if let Part::Text { text: _, thought, thought_signature } = part {
+            if let Part::Text(text) = part {
+                let is_thought = false;
                 info!(
                     part_number = i + 1,
-                    text_type = if *thought == Some(true) { "Thought" } else { "Regular" },
-                    has_signature = thought_signature.is_some(),
+                    text_type = if is_thought { "Thought" } else { "Regular" },
+                    has_signature = false,
                     "part analysis"
                 );
-
+/*
                 if let Some(sig) = thought_signature {
                     info!(signature_preview = &sig[..10.min(sig.len())], "preserve signature");
                 }

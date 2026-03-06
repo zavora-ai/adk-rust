@@ -1,3 +1,4 @@
+use adk_core::types::{SessionId, UserId};
 use axum::{
     Json,
     extract::{Path, State},
@@ -33,7 +34,7 @@ impl SessionController {
         SessionResponse {
             id: session.id().to_string(),
             app_name: session.app_name().to_string(),
-            user_id: session.user_id().to_string(),
+            user_id: UserId::new(session.user_id().to_string()).unwrap(),
             last_update_time: session.last_update_time().timestamp(),
             events,
             state: session.state().all(),
@@ -46,7 +47,7 @@ pub struct CreateSessionRequest {
     #[serde(rename = "appName")]
     pub app_name: String,
     #[serde(rename = "userId")]
-    pub user_id: String,
+    pub user_id: UserId,
     #[serde(rename = "sessionId", default)]
     pub session_id: Option<String>,
 }
@@ -56,7 +57,7 @@ pub struct CreateSessionRequest {
 pub struct SessionResponse {
     pub id: String,
     pub app_name: String,
-    pub user_id: String,
+    pub user_id: UserId,
     pub last_update_time: i64,
     pub events: Vec<serde_json::Value>,
     pub state: std::collections::HashMap<String, serde_json::Value>,
@@ -80,8 +81,8 @@ pub async fn create_session(
         .session_service
         .create(adk_session::CreateRequest {
             app_name: req.app_name.clone(),
-            user_id: req.user_id.clone().into(),
-            session_id: Some(session_id.into()),
+            user_id: UserId::new(req.user_id.clone()).unwrap(),
+            session_id: Some(SessionId::new(session_id).unwrap()),
             state: std::collections::HashMap::new(),
         })
         .await
@@ -102,8 +103,8 @@ pub async fn get_session(
         .session_service
         .get(adk_session::GetRequest {
             app_name,
-            user_id: user_id.into(),
-            session_id: session_id.into(),
+            user_id: UserId::new(user_id).unwrap(),
+            session_id: SessionId::new(session_id).unwrap(),
             num_recent_events: None,
             after: None,
         })
@@ -121,8 +122,8 @@ pub async fn delete_session(
         .session_service
         .delete(adk_session::DeleteRequest {
             app_name,
-            user_id: user_id.into(),
-            session_id: session_id.into(),
+            user_id: UserId::new(user_id).unwrap(),
+            session_id: SessionId::new(session_id).unwrap(),
         })
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -177,7 +178,7 @@ pub struct CreateSessionBodyRequest {
 #[derive(Deserialize)]
 pub struct SessionPathParams {
     pub app_name: String,
-    pub user_id: String,
+    pub user_id: UserId,
     #[serde(default)]
     pub session_id: Option<String>,
 }
@@ -190,14 +191,14 @@ pub async fn create_session_from_path(
     Path(params): Path<SessionPathParams>,
     body: Option<Json<CreateSessionBodyRequest>>,
 ) -> Result<Json<SessionResponse>, StatusCode> {
-    let session_id = params.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let session_id = params.session_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let session = controller
         .session_service
         .create(adk_session::CreateRequest {
             app_name: params.app_name.clone(),
-            user_id: params.user_id.clone().into(),
-            session_id: Some(session_id.into()),
+            user_id: UserId::new(params.user_id.clone()).unwrap(),
+            session_id: Some(SessionId::new(session_id).unwrap()),
             state: match body {
                 Some(b) => {
                     let s = b.0.state;
@@ -221,14 +222,14 @@ pub async fn get_session_from_path(
     State(controller): State<SessionController>,
     Path(params): Path<SessionPathParams>,
 ) -> Result<Json<SessionResponse>, StatusCode> {
-    let session_id = params.session_id.ok_or(StatusCode::BAD_REQUEST)?;
+    let session_id = params.session_id.clone().ok_or(StatusCode::BAD_REQUEST)?;
 
     let session = controller
         .session_service
         .get(adk_session::GetRequest {
             app_name: params.app_name,
-            user_id: params.user_id.into(),
-            session_id: session_id.into(),
+            user_id: UserId::new(params.user_id).unwrap(),
+            session_id: SessionId::new(session_id).unwrap(),
             num_recent_events: None,
             after: None,
         })
@@ -243,14 +244,14 @@ pub async fn delete_session_from_path(
     State(controller): State<SessionController>,
     Path(params): Path<SessionPathParams>,
 ) -> Result<StatusCode, StatusCode> {
-    let session_id = params.session_id.ok_or(StatusCode::BAD_REQUEST)?;
+    let session_id = params.session_id.clone().ok_or(StatusCode::BAD_REQUEST)?;
 
     controller
         .session_service
         .delete(adk_session::DeleteRequest {
             app_name: params.app_name,
-            user_id: params.user_id.into(),
-            session_id: session_id.into(),
+            user_id: UserId::new(params.user_id).unwrap(),
+            session_id: SessionId::new(session_id).unwrap(),
         })
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -273,7 +274,7 @@ pub async fn list_sessions(
         .session_service
         .list(adk_session::ListRequest {
             app_name: params.app_name.clone(),
-            user_id: params.user_id.clone().into(),
+            user_id: UserId::new(params.user_id.clone()).unwrap(),
         })
         .await
         .map_err(|e| {

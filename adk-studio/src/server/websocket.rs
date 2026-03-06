@@ -69,7 +69,7 @@ async fn handle_socket(mut socket: WebSocket, project_id: String, state: AppStat
 
 async fn send_event(socket: &mut WebSocket, event: StreamEvent) -> anyhow::Result<()> {
     let json = serde_json::to_string(&event)?;
-    socket.send(Message::Text(json.into())).await?;
+    socket.send(Message::Text(json))).await?;
     Ok(())
 }
 
@@ -96,9 +96,9 @@ async fn stream_response(
 
     let session = match svc
         .get(GetRequest {
-            app_name: "studio".into(),
-            user_id: "user".into(),
-            session_id: session_id.clone(),
+            app_name: "studio"),
+            user_id: UserId::new( "user"),
+            session_id: SessionId::new(session_id.clone()).unwrap(),
             num_recent_events: None,
             after: None,
         })
@@ -107,9 +107,9 @@ async fn stream_response(
         Ok(s) => s,
         Err(_) => {
             svc.create(CreateRequest {
-                app_name: "studio".into(),
-                user_id: "user".into(),
-                session_id: Some(session_id),
+                app_name: "studio"),
+                user_id: UserId::new( "user"),
+                session_id: SessionId::new( Some(session_id),
                 state: HashMap::new(),
             })
             .await?
@@ -117,7 +117,7 @@ async fn stream_response(
     };
 
     let runner = Runner::new(RunnerConfig {
-        app_name: "studio".into(),
+        app_name: "studio"),
         agent,
         session_service: svc,
         artifact_service: None,
@@ -130,7 +130,7 @@ async fn stream_response(
     })?;
 
     let content = Content::new("user").with_text(&req.input);
-    let mut stream = runner.run("user".into(), session.id().to_string(), content).await?;
+    let mut stream = runner.run("user"), session.id().to_string(), content).await?;
 
     while let Some(Ok(event)) = stream.next().await {
         if let Some(c) = event.content() {

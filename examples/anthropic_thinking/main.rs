@@ -34,11 +34,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         model: String::new(),
         contents: vec![Content {
             role: "user".to_string(),
-            parts: vec![Part::Text {
-                text: "A bat and a ball cost $1.10 in total. The bat costs $1.00 more \
+            parts: vec![Part::text(
+                "A bat and a ball cost $1.10 in total. The bat costs $1.00 more \
                        than the ball. How much does the ball cost? Think carefully."
                     .to_string(),
-            }],
+            )],
         }],
         config: None,
         tools: HashMap::new(),
@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(response) => {
                 if let Some(content) = &response.content {
                     for part in &content.parts {
-                        if let Part::Text { text } = part {
+                        if let Some(text) = part.as_text() {
                             print!("{text}");
                         }
                     }

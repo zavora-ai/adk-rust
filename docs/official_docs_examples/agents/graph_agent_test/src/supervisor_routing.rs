@@ -78,14 +78,14 @@ async fn main() -> anyhow::Result<()> {
             };
             
             println!("🎯 Supervisor analyzing (iteration {}): {}", iteration, task);
-            adk_core::Content::new("user").with_text(&prompt)
+            adk_core::Content::user().with_text(&prompt)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("")
                         .to_lowercase()
@@ -110,14 +110,14 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let task = state.get("task").and_then(|v| v.as_str()).unwrap_or("");
             println!("🔍 Researcher working on: {}", task);
-            adk_core::Content::new("user").with_text(task)
+            adk_core::Content::user().with_text(task)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("");
                     
@@ -133,14 +133,14 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let task = state.get("task").and_then(|v| v.as_str()).unwrap_or("");
             println!("✍️  Writer working on: {}", task);
-            adk_core::Content::new("user").with_text(task)
+            adk_core::Content::user().with_text(task)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("");
                     
@@ -156,14 +156,14 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let task = state.get("task").and_then(|v| v.as_str()).unwrap_or("");
             println!("💻 Coder working on: {}", task);
-            adk_core::Content::new("user").with_text(task)
+            adk_core::Content::user().with_text(task)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("");
                     
@@ -229,7 +229,7 @@ async fn main() -> anyhow::Result<()> {
         let mut input = State::new();
         input.insert("task".to_string(), json!(task));
 
-        let result = graph.invoke(input, ExecutionConfig::new(&format!("task-{}", i + 1))).await?;
+        let result = graph.invoke(input, ExecutionConfig::new(SessionId::new(&format!("task-{}", i + 1)).unwrap())).await?;
         
         println!("✅ Final result: {}", result.get("work_done").and_then(|v| v.as_str()).unwrap_or("No work completed"));
         println!("{}", "─".repeat(60));

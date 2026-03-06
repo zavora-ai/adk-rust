@@ -14,6 +14,7 @@ use crate::server::handlers::{
     WebhookNotification, get_project_binary_path, is_project_built, notify_webhook,
 };
 use crate::server::state::AppState;
+use adk_core::types::SessionId;
 use chrono::Timelike;
 use chrono::{DateTime, Utc};
 use cron::Schedule;
@@ -216,7 +217,7 @@ async fn execute_job(job: &ScheduledJob) {
     notify_webhook(
         &job.project_id,
         WebhookNotification {
-            session_id: session_id.clone(),
+            session_id: SessionId::new(session_id.clone()).unwrap(),
             path: format!("/schedule/{}", job.trigger_id),
             method: "SCHEDULE".to_string(),
             payload,

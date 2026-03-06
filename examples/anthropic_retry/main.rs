@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let request = make_request(vec![Content {
         role: "user".to_string(),
-        parts: vec![Part::Text { text: "Say 'hello' and nothing else.".to_string() }],
+        parts: vec![Part::text("Say 'hello' and nothing else.".to_string())],
     }]);
 
     let mut stream = client.generate_content(request, false).await?;
@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         && let Some(content) = &response.content
     {
         for part in &content.parts {
-            if let Part::Text { text } = part {
+            if let Some(text) = part.as_text() {
                 println!("  Response: {text}");
             }
         }
@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let request = make_request(vec![Content {
         role: "user".to_string(),
-        parts: vec![Part::Text { text: "test".to_string() }],
+        parts: vec![Part::text("test".to_string())],
     }]);
 
     match bad_client.generate_content(request, false).await {
@@ -113,7 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let request = make_request(vec![Content {
         role: "user".to_string(),
-        parts: vec![Part::Text { text: "Quick test with no retry.".to_string() }],
+        parts: vec![Part::text("Quick test with no retry.".to_string())],
     }]);
 
     let mut stream = no_retry_client.generate_content(request, false).await?;
@@ -121,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         && let Some(content) = &response.content
     {
         for part in &content.parts {
-            if let Part::Text { text } = part {
+            if let Some(text) = part.as_text() {
                 println!("  Response: {text}");
             }
         }

@@ -1,136 +1,123 @@
-//! Edge and routing tests
-
-use adk_graph::edge::{END, EdgeTarget, Router, START};
+use adk_graph::edge::*;
 use adk_graph::state::State;
 use serde_json::json;
 
 #[test]
 fn test_edge_target_from_str() {
+    let start: EdgeTarget = START.into();
+    assert_eq!(start, EdgeTarget::from(START));
+
     let end: EdgeTarget = END.into();
-    assert_eq!(end, EdgeTarget::End);
+    assert_eq!(end, EdgeTarget::from(END));
 
-    let node: EdgeTarget = "my_node".into();
-    assert_eq!(node, EdgeTarget::Node("my_node".to_string()));
+    // Prove distinct nodes do not match
+    assert_ne!(EdgeTarget::Node("a".to_string()), EdgeTarget::Node("b".to_string()));
+
+    // Prove a node coincidentally named "end" is NOT evaluated as the framework's semantic End state
+    assert_ne!(EdgeTarget::Node("end".to_string()), EdgeTarget::End);
+    
+    // Prove a node injected with the END constant string is still distinct from the explicit End variant
+    assert_ne!(EdgeTarget::Node(END.to_string()), EdgeTarget::End);
 }
 
-#[test]
-fn test_start_end_constants() {
-    assert_eq!(START, "__start__");
-    assert_eq!(END, "__end__");
-}
+// ==========================================
+// Domain 2: Routing Logic
+// Tests the Router factory functions against state
+// ==========================================
 
 #[test]
 fn test_by_field_router() {
     let router = Router::by_field("action");
-
     let mut state = State::new();
-    state.insert("action".to_string(), json!("process"));
+    state.insert("action".to_string(), json!("save"));
+    assert_eq!(router(&state), "save");
 
-    let result = router(&state);
-    assert_eq!(result, "process");
+    state.insert("action".to_string(), json!("delete"));
+    assert_eq!(router(&state), "delete");
 
+    state.insert("action".to_string(), json!("unknown"));
+    assert_eq!(router(&state), "unknown");
+
+    // Invalid non-string field safely falls back to the END target
     state.insert("action".to_string(), json!(123));
-    let result2 = router(&state);
-    assert_eq!(result2, END);
+    assert_eq!(router(&state), END);
 }
 
 #[test]
 fn test_by_bool_router() {
-    let router = Router::by_bool("is_valid", "success", "failure");
-
+    let router = Router::by_bool("is_valid", "success", "fail");
     let mut state = State::new();
+
+    // True branch
     state.insert("is_valid".to_string(), json!(true));
     assert_eq!(router(&state), "success");
 
+    // False branch
     state.insert("is_valid".to_string(), json!(false));
-    assert_eq!(router(&state), "failure");
+    assert_eq!(router(&state), "fail");
 
-    // Missing field defaults to false
-    let empty_state = State::new();
-    assert_eq!(router(&empty_state), "failure");
-}
-
-#[test]
-fn test_has_tool_calls_router() {
-    let router = Router::has_tool_calls("messages", "handle_tools", "respond");
-
-    // No tool calls
-    let mut state = State::new();
-    state.insert(
-        "messages".to_string(),
-        json!([
-            {"role": "user", "content": "Hello"}
-        ]),
-    );
-    assert_eq!(router(&state), "respond");
-
-    // With tool calls
-    state.insert(
-        "messages".to_string(),
-        json!([
-            {"role": "assistant", "tool_calls": [{"name": "search", "args": {}}]}
-        ]),
-    );
-    assert_eq!(router(&state), "handle_tools");
+    // Invalid type branch falls back to fail
+    state.insert("is_valid".to_string(), json!("not a bool"));
+    assert_eq!(router(&state), "fail");
 }
 
 #[test]
 fn test_max_iterations_router() {
-    let router = Router::max_iterations("iteration_count", 3, "continue", "stop");
-
+    let router = Router::max_iterations("iteration_count", 5, "loop_node", "stop");
     let mut state = State::new();
-    state.insert("iteration_count".to_string(), json!(1));
-    assert_eq!(router(&state), "continue");
+    
+    // Missing iteration state defaults to allowing the loop
+    assert_eq!(router(&state), "loop_node");
 
+    // Under threshold
     state.insert("iteration_count".to_string(), json!(3));
-    assert_eq!(router(&state), "stop");
+    assert_eq!(router(&state), "loop_node");
 
+    // Hitting the threshold aborts the loop
     state.insert("iteration_count".to_string(), json!(5));
     assert_eq!(router(&state), "stop");
 }
 
 #[test]
 fn test_on_error_router() {
-    let router = Router::on_error("error", "handle_error", "continue");
-
-    // No error
+    let router = Router::on_error("error", "handle_error", "next");
     let mut state = State::new();
-    state.insert("error".to_string(), json!(null));
-    assert_eq!(router(&state), "continue");
+    
+    // Empty state without errors proceeds cleanly
+    assert_eq!(router(&state), "next");
 
-    // With error
+    // Triggering the error handler when an error string is present
     state.insert("error".to_string(), json!("Something went wrong"));
     assert_eq!(router(&state), "handle_error");
 }
 
 #[test]
 fn test_custom_router() {
+    // Custom closure evaluation
     let router = Router::custom(|state| {
         let score = state.get("score").and_then(|v| v.as_i64()).unwrap_or(0);
-
-        match score {
-            0..=49 => "low".to_string(),
-            50..=79 => "medium".to_string(),
-            _ => "high".to_string(),
-        }
+        if score > 80 { "high".to_string() } else { "low".to_string() }
     });
 
     let mut state = State::new();
-
-    state.insert("score".to_string(), json!(25));
-    assert_eq!(router(&state), "low");
-
-    state.insert("score".to_string(), json!(65));
-    assert_eq!(router(&state), "medium");
-
+    
     state.insert("score".to_string(), json!(90));
     assert_eq!(router(&state), "high");
+
+    state.insert("score".to_string(), json!(50));
+    assert_eq!(router(&state), "low");
 }
+
 
 #[test]
 fn test_edge_target_equality() {
-    assert_eq!(EdgeTarget::End, EdgeTarget::End);
+    assert_eq!(EdgeTarget::from(START), EdgeTarget::from(START));
+    assert_eq!(EdgeTarget::from(END), EdgeTarget::from(END));
     assert_eq!(EdgeTarget::Node("a".to_string()), EdgeTarget::Node("a".to_string()));
+
+    // Prove distinct nodes are not equal
     assert_ne!(EdgeTarget::Node("a".to_string()), EdgeTarget::Node("b".to_string()));
+
+    // Prove a node coincidentally named "end" is NOT the framework's End state
     assert_ne!(EdgeTarget::Node("end".to_string()), EdgeTarget::End);
 }

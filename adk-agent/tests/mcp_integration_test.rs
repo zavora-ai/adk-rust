@@ -27,8 +27,8 @@ struct MockSession {
 impl MockSession {
     fn new() -> Self {
         Self {
-            id: SessionId::from("mcp-session".to_string()),
-            user_id: UserId::from("mcp-user".to_string()),
+            id: SessionId::new("mcp-session".to_string()).unwrap(),
+            user_id: UserId::new("mcp-user".to_string()).unwrap(),
         }
     }
 }
@@ -76,7 +76,7 @@ impl MockContext {
             session: MockSession::new(),
             user_content: Content {
                 role: "user".to_string(),
-                parts: vec![Part::Text { text: text.to_string() }],
+                parts: vec![Part::text(text.to_string())],
             },
             metadata: HashMap::new(),
         }

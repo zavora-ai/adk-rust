@@ -5,6 +5,7 @@ use adk_graph::node::{
     ExecutionConfig, FunctionNode, Node, NodeContext, NodeOutput, PassthroughNode,
 };
 use adk_graph::state::State;
+use adk_core::types::SessionId;
 use serde_json::json;
 
 #[test]
@@ -30,7 +31,7 @@ async fn test_function_node() {
     let mut state = State::new();
     state.insert("input".to_string(), json!(21));
 
-    let config = ExecutionConfig::new("test-thread".to_string());
+    let config = ExecutionConfig::new(SessionId::new("test-thread").unwrap());
     let ctx = NodeContext::new(state, config, 0);
     let result = node.execute(&ctx).await.unwrap();
 
@@ -46,7 +47,7 @@ async fn test_passthrough_node() {
     let mut state = State::new();
     state.insert("value".to_string(), json!("unchanged"));
 
-    let config = ExecutionConfig::new("test-thread".to_string());
+    let config = ExecutionConfig::new(SessionId::new("test-thread").unwrap());
     let ctx = NodeContext::new(state, config, 0);
     let result = node.execute(&ctx).await.unwrap();
 
@@ -67,7 +68,7 @@ async fn test_function_node_with_multiple_outputs() {
     let mut state = State::new();
     state.insert("input".to_string(), json!("hello world"));
 
-    let config = ExecutionConfig::new("test-thread".to_string());
+    let config = ExecutionConfig::new(SessionId::new("test-thread").unwrap());
     let ctx = NodeContext::new(state, config, 0);
     let result = node.execute(&ctx).await.unwrap();
 
@@ -82,7 +83,7 @@ async fn test_node_context_methods() {
     state.insert("key1".to_string(), json!("value1"));
     state.insert("key2".to_string(), json!(100));
 
-    let config = ExecutionConfig::new("test-thread".to_string());
+    let config = ExecutionConfig::new(SessionId::new("test-thread").unwrap());
     let ctx = NodeContext::new(state, config, 5);
 
     assert_eq!(ctx.get("key1"), Some(&json!("value1")));
@@ -100,7 +101,7 @@ async fn test_node_error_handling() {
         })
     });
 
-    let config = ExecutionConfig::new("test-thread".to_string());
+    let config = ExecutionConfig::new(SessionId::new("test-thread").unwrap());
     let ctx = NodeContext::new(State::new(), config, 0);
     let result = node.execute(&ctx).await;
 
@@ -116,11 +117,11 @@ async fn test_node_error_handling() {
 
 #[test]
 fn test_execution_config() {
-    let config = ExecutionConfig::new("thread-123".to_string())
+    let config = ExecutionConfig::new(SessionId::new("thread-123").unwrap())
         .with_recursion_limit(100)
         .with_metadata("key", json!("value"));
 
-    assert_eq!(config.thread_id.as_ref(), "thread-123");
+    assert_eq!(config.thread_id.as_str(), "thread-123");
     assert_eq!(config.recursion_limit, 100);
     assert_eq!(config.metadata.get("key"), Some(&json!("value")));
     assert!(config.resume_from.is_none());
@@ -128,7 +129,7 @@ fn test_execution_config() {
 
 #[test]
 fn test_execution_config_with_resume() {
-    let config = ExecutionConfig::new("thread-123".to_string()).with_resume_from("checkpoint-456");
+    let config = ExecutionConfig::new(SessionId::new("thread-123").unwrap()).with_resume_from("checkpoint-456");
 
     assert_eq!(config.resume_from, Some("checkpoint-456".to_string()));
 }

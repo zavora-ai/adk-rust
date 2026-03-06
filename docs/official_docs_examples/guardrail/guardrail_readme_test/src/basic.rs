@@ -9,16 +9,17 @@ use adk_guardrail::{
 // Validate: PiiRedactor
 async fn _pii_redactor_example() {
     let redactor = PiiRedactor::new();
-    let content = Content::new("user").with_text("Contact me at test@example.com");
+    let content = Content::user().with_text("Contact me at test@example.com");
     let _result = redactor.validate(&content).await;
 }
 
 // Validate: ContentFilter factory methods
 fn _content_filter_examples() {
     let _filter1 = ContentFilter::harmful_content();
-    let _filter2 = ContentFilter::on_topic("cooking", vec!["recipe".into(), "bake".into()]);
+    let _filter2 =
+        ContentFilter::on_topic("cooking", vec!["recipe".to_string(), "bake".to_string()]);
     let _filter3 = ContentFilter::max_length(1000);
-    let _filter4 = ContentFilter::blocked_keywords(vec!["forbidden".into()]);
+    let _filter4 = ContentFilter::blocked_keywords(vec!["forbidden".to_string()]);
 }
 
 // Validate: GuardrailSet builder
@@ -39,7 +40,7 @@ fn _guardrail_result_examples() {
     let _pass = GuardrailResult::pass();
     let _fail = GuardrailResult::fail("reason", Severity::High);
     let _transform =
-        GuardrailResult::transform(Content::new("user").with_text("redacted"), "PII removed");
+        GuardrailResult::transform(Content::user().with_text("redacted"), "PII removed");
 }
 
 // Validate: Severity levels

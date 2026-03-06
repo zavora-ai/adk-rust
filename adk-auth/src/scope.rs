@@ -237,7 +237,7 @@ impl<T: Tool + Send + Sync> Tool for ScopedTool<T> {
                 let outcome =
                     if result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
                 let event = AuditEvent::tool_access(ctx.user_id(), self.name(), outcome)
-                    .with_session(ctx.session_id().to_string());
+                    .with_session(ctx.session_id().clone());
                 let _ = sink.log(event).await;
             }
 
@@ -303,7 +303,7 @@ impl Tool for ScopedToolDyn {
                 let outcome =
                     if result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
                 let event = AuditEvent::tool_access(ctx.user_id(), self.name(), outcome)
-                    .with_session(ctx.session_id().to_string());
+                    .with_session(ctx.session_id().clone());
                 let _ = sink.log(event).await;
             }
 
@@ -370,8 +370,10 @@ mod tests {
 
     #[test]
     fn test_scope_denied_display() {
-        let denied =
-            ScopeDenied { required: vec!["a".into(), "b".into()], missing: vec!["b".into()] };
+        let denied = ScopeDenied {
+            required: vec!["a".to_string(), "b".to_string()],
+            missing: vec!["b".to_string()],
+        };
         let msg = denied.to_string();
         assert!(msg.contains("missing required scopes"));
         assert!(msg.contains("b"));

@@ -1,9 +1,9 @@
 use adk_core::{
     AfterAgentCallback, AfterModelCallback, AfterToolCallback, Agent, BeforeAgentCallback,
     BeforeModelCallback, BeforeModelResult, BeforeToolCallback, CallbackContext, Content, Event,
-    EventActions, FunctionResponseData, GlobalInstructionProvider, InstructionProvider,
-    InvocationContext, Llm, LlmRequest, LlmResponse, MemoryEntry, Part, ReadonlyContext, Result,
-    Tool, ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest, ToolContext,
+    EventActions, GlobalInstructionProvider, InstructionProvider, InvocationContext, Llm,
+    LlmRequest, LlmResponse, MemoryEntry, Part, ReadonlyContext, Result, Tool,
+    ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest, ToolContext,
 };
 use adk_skill::{SelectionPolicy, SkillIndex, load_skill_index, select_skill_prompt_block};
 use async_stream::stream;
@@ -551,7 +551,7 @@ impl Agent for LlmAgent {
                 match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
                         // Callback returned content - yield it and skip agent execution
-                        let mut early_event = Event::new(&invocation_id);
+                        let mut early_event = Event::new(ctx.invocation_id().clone());
                         early_event.author = agent_name.clone();
                         early_event.llm_response.content = Some(content);
                         yield Ok(early_event);
@@ -560,7 +560,7 @@ impl Agent for LlmAgent {
                         for after_callback in after_agent_callbacks.as_ref() {
                             match after_callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                                 Ok(Some(after_content)) => {
-                                    let mut after_event = Event::new(&invocation_id);
+                                    let mut after_event = Event::new(ctx.invocation_id().clone());
                                     after_event.author = agent_name.clone();
                                     after_event.llm_response.content = Some(after_content);
                                     yield Ok(after_event);
@@ -599,7 +599,7 @@ impl Agent for LlmAgent {
                     .parts
                     .iter()
                     .filter_map(|part| match part {
-                        Part::Text { text } => Some(text.as_str()),
+                        Part::Text(text) => Some(text.as_str()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -612,8 +612,8 @@ impl Agent for LlmAgent {
                     max_skill_chars,
                 ) {
                     conversation_history.push(Content {
-                        role: "user".to_string(),
-                        parts: vec![Part::Text { text: skill_block }],
+                        role: adk_core::types::Role::User,
+                        parts: vec![Part::text(skill_block)],
                     });
                 }
             }
@@ -625,8 +625,8 @@ impl Agent for LlmAgent {
                 let global_inst = provider(ctx.clone() as Arc<dyn ReadonlyContext>).await?;
                 if !global_inst.is_empty() {
                     conversation_history.push(Content {
-                        role: "user".to_string(),
-                        parts: vec![Part::Text { text: global_inst }],
+                        role: adk_core::types::Role::User,
+                        parts: vec![Part::text(global_inst)],
                     });
                 }
             } else if let Some(ref template) = global_instruction {
@@ -634,8 +634,8 @@ impl Agent for LlmAgent {
                 let processed = adk_core::inject_session_state(ctx.as_ref(), template).await?;
                 if !processed.is_empty() {
                     conversation_history.push(Content {
-                        role: "user".to_string(),
-                        parts: vec![Part::Text { text: processed }],
+                        role: adk_core::types::Role::User,
+                        parts: vec![Part::text(processed)],
                     });
                 }
             }
@@ -647,8 +647,8 @@ impl Agent for LlmAgent {
                 let inst = provider(ctx.clone() as Arc<dyn ReadonlyContext>).await?;
                 if !inst.is_empty() {
                     conversation_history.push(Content {
-                        role: "user".to_string(),
-                        parts: vec![Part::Text { text: inst }],
+                        role: adk_core::types::Role::User,
+                        parts: vec![Part::text(inst)],
                     });
                 }
             } else if let Some(ref template) = instruction {
@@ -656,8 +656,8 @@ impl Agent for LlmAgent {
                 let processed = adk_core::inject_session_state(ctx.as_ref(), template).await?;
                 if !processed.is_empty() {
                     conversation_history.push(Content {
-                        role: "user".to_string(),
-                        parts: vec![Part::Text { text: processed }],
+                        role: adk_core::types::Role::User,
+                        parts: vec![Part::text(processed)],
                     });
                 }
             }
@@ -678,8 +678,8 @@ impl Agent for LlmAgent {
 
                     // Keep global and agent instructions (already added above)
                     let instruction_count = conversation_history.iter()
-                        .take_while(|c| c.role == "user" && c.parts.iter().any(|p| {
-                            if let Part::Text { text } = p {
+                        .take_while(|c| c.role == adk_core::types::Role::User && c.parts.iter().any(|p| {
+                            if let Some(text) = p.as_text() {
                                 // These are likely instructions, not user queries
                                 !text.is_empty()
                             } else {
@@ -693,7 +693,7 @@ impl Agent for LlmAgent {
 
                     // Take only the last user message (current turn)
                     if let Some(last) = conversation_history.last() {
-                        if last.role == "user" {
+                        if last.role == adk_core::types::Role::User {
                             filtered.push(last.clone());
                         }
                     }
@@ -852,7 +852,7 @@ impl Agent for LlmAgent {
                 if let Some(cached_response) = model_response_override {
                     // Use callback-provided response (e.g., from cache)
                     // Yield it as an event
-                    let mut cached_event = Event::new(&invocation_id);
+                    let mut cached_event = Event::new(ctx.invocation_id().clone());
                     cached_event.author = agent_name.clone();
                     cached_event.llm_response.content = cached_response.content.clone();
                     cached_event.llm_request = Some(serde_json::to_string(&request).unwrap_or_default());
@@ -953,7 +953,7 @@ impl Agent for LlmAgent {
 
                         // For SSE/Bidi mode: yield each chunk immediately with stable event ID
                         if should_stream_to_client {
-                            let mut partial_event = Event::with_id(&llm_event_id, &invocation_id);
+                            let mut partial_event = Event::with_id(&llm_event_id, ctx.invocation_id().clone());
                             partial_event.author = agent_name.clone();
                             partial_event.llm_request = Some(request_json.clone());
                             partial_event.provider_metadata.insert("adk.llm_request".to_string(), request_json.clone());
@@ -963,8 +963,8 @@ impl Agent for LlmAgent {
                             partial_event.provider_metadata.insert("gcp.vertex.llm_response".to_string(), serde_json::to_string(&chunk).unwrap_or_default());
                             partial_event.llm_response.partial = chunk.partial;
                             partial_event.llm_response.turn_complete = chunk.turn_complete;
-                            partial_event.llm_response.finish_reason = chunk.finish_reason;
-                            partial_event.llm_response.usage_metadata = chunk.usage_metadata.clone();
+                            partial_event.llm_response.finish_reason = crate::util::map_finish_reason(chunk.finish_reason.clone());
+                            partial_event.llm_response.usage_metadata = crate::util::map_usage_metadata(chunk.usage_metadata.clone());
                             partial_event.llm_response.content = chunk.content.clone();
 
                             // Populate long_running_tool_ids
@@ -986,7 +986,7 @@ impl Agent for LlmAgent {
 
                     // For None mode: yield single final event with accumulated content
                     if !should_stream_to_client {
-                        let mut final_event = Event::with_id(&llm_event_id, &invocation_id);
+                        let mut final_event = Event::with_id(&llm_event_id, ctx.invocation_id().clone());
                         final_event.author = agent_name.clone();
                         final_event.provider_metadata.insert("adk.llm_request".to_string(), request_json.clone());
                         // Legacy
@@ -1001,8 +1001,8 @@ impl Agent for LlmAgent {
                             final_event.provider_metadata.insert("adk.llm_response".to_string(), serde_json::to_string(last).unwrap_or_default());
                             // Legacy
                             final_event.provider_metadata.insert("gcp.vertex.llm_response".to_string(), serde_json::to_string(last).unwrap_or_default());
-                            final_event.llm_response.finish_reason = last.finish_reason;
-                            final_event.llm_response.usage_metadata = last.usage_metadata.clone();
+                            final_event.llm_response.finish_reason = crate::util::map_finish_reason(last.finish_reason.clone());
+                            final_event.llm_response.usage_metadata = crate::util::map_usage_metadata(last.usage_metadata.clone());
                             final_event.provider_metadata.insert("gcp.vertex.llm_response".to_string(), serde_json::to_string(last).unwrap_or_default());
                         }
 
@@ -1055,13 +1055,13 @@ impl Agent for LlmAgent {
                         if !has_function_calls {  // Only save if not calling tools
                             let mut text_parts = String::new();
                             for part in &content.parts {
-                                if let Part::Text { text } = part {
+                                if let Some(text) = part.as_text() {
                                     text_parts.push_str(text);
                                 }
                             }
                             if !text_parts.is_empty() {
                                 // Yield a final state update event
-                                let mut state_event = Event::new(&invocation_id);
+                                let mut state_event = Event::new(ctx.invocation_id().clone());
                                 state_event.author = agent_name.clone();
                                 state_event.actions.state_delta.insert(
                                     output_key.clone(),
@@ -1108,31 +1108,29 @@ impl Agent for LlmAgent {
                                 if !valid_target {
                                     // Return error to LLM so it can try again
                                     let error_content = Content {
-                                        role: "function".to_string(),
+                                        role: adk_core::types::Role::Custom("tool".to_string()),
                                         parts: vec![Part::FunctionResponse {
-                                            function_response: FunctionResponseData {
-                                                name: name.clone(),
-                                                response: serde_json::json!({
-                                                    "error": format!(
-                                                        "Agent '{}' not found. Available agents: {:?}",
-                                                        target_agent,
-                                                        sub_agents.iter().map(|a| a.name()).collect::<Vec<_>>()
-                                                    )
-                                                }),
-                                            },
+                                            name: name.clone(),
+                                            response: serde_json::json!({
+                                                "error": format!(
+                                                    "Agent '{}' not found. Available agents: {:?}",
+                                                    target_agent,
+                                                    sub_agents.iter().map(|a| a.name()).collect::<Vec<_>>()
+                                                )
+                                            }),
                                             id: id.clone(),
                                         }],
                                     };
                                     conversation_history.push(error_content.clone());
 
-                                    let mut error_event = Event::new(&invocation_id);
+                                    let mut error_event = Event::new(ctx.invocation_id().clone());
                                     error_event.author = agent_name.clone();
                                     error_event.llm_response.content = Some(error_content);
                                     yield Ok(error_event);
                                     continue;
                                 }
 
-                                let mut transfer_event = Event::new(&invocation_id);
+                                let mut transfer_event = Event::new(ctx.invocation_id().clone());
                                 transfer_event.author = agent_name.clone();
                                 transfer_event.actions.transfer_to_agent = Some(target_agent);
 
@@ -1154,49 +1152,44 @@ impl Agent for LlmAgent {
                                 match ctx.run_config().tool_confirmation_decisions.get(name).copied()
                                 {
                                     Some(ToolConfirmationDecision::Approve) => {
-                                        tool_actions.tool_confirmation_decision =
-                                            Some(ToolConfirmationDecision::Approve);
+                                        tool_actions.tool_confirmation_decision = Some(true);
                                     }
                                     Some(ToolConfirmationDecision::Deny) => {
-                                        tool_actions.tool_confirmation_decision =
-                                            Some(ToolConfirmationDecision::Deny);
+                                        tool_actions.tool_confirmation_decision = Some(false);
                                         response_content = Some(Content {
-                                            role: "function".to_string(),
+                                            role: adk_core::types::Role::Custom("tool".to_string()),
                                             parts: vec![Part::FunctionResponse {
-                                                function_response: FunctionResponseData {
-                                                    name: name.clone(),
-                                                    response: serde_json::json!({
-                                                        "error": format!(
-                                                            "Tool '{}' execution denied by confirmation policy",
-                                                            name
-                                                        ),
-                                                    }),
-                                                },
+                                                name: name.clone(),
+                                                response: serde_json::json!({
+                                                    "error": format!(
+                                                        "Tool '{}' execution denied by confirmation policy",
+                                                        name
+                                                    ),
+                                                }),
                                                 id: id.clone(),
                                             }],
                                         });
                                         run_after_tool_callbacks = false;
                                     }
                                     None => {
-                                        let mut confirmation_event = Event::new(&invocation_id);
+                                        let mut confirmation_event = Event::new(ctx.invocation_id().clone());
                                         confirmation_event.author = agent_name.clone();
                                         confirmation_event.llm_response.interrupted = true;
                                         confirmation_event.llm_response.turn_complete = true;
                                         confirmation_event.llm_response.content = Some(Content {
-                                            role: "model".to_string(),
-                                            parts: vec![Part::Text {
-                                                text: format!(
-                                                    "Tool confirmation required for '{}'. Provide approve/deny decision to continue.",
-                                                    name
-                                                ),
-                                            }],
+                                            role: adk_core::types::Role::Model,
+                                            parts: vec![Part::text(format!(
+                                                "Tool confirmation required for '{}'. Provide approve/deny decision to continue.",
+                                                name
+                                            ))],
                                         });
                                         confirmation_event.actions.tool_confirmation =
-                                            Some(ToolConfirmationRequest {
+                                            serde_json::to_value(ToolConfirmationRequest {
                                                 tool_name: name.clone(),
                                                 function_call_id: Some(function_call_id),
                                                 args: args.clone(),
-                                            });
+                                            })
+                                            .ok();
                                         yield Ok(confirmation_event);
                                         return;
                                     }
@@ -1279,25 +1272,21 @@ impl Agent for LlmAgent {
                                             confirmation_decision;
                                     }
                                     response_content = Some(Content {
-                                        role: "function".to_string(),
+                                        role: adk_core::types::Role::Custom("tool".to_string()),
                                         parts: vec![Part::FunctionResponse {
-                                            function_response: FunctionResponseData {
-                                                name: name.clone(),
-                                                response: result,
-                                            },
+                                            name: name.clone(),
+                                            response: result,
                                             id: id.clone(),
                                         }],
                                     });
                                 } else {
                                     response_content = Some(Content {
-                                        role: "function".to_string(),
+                                        role: adk_core::types::Role::Custom("tool".to_string()),
                                         parts: vec![Part::FunctionResponse {
-                                            function_response: FunctionResponseData {
-                                                name: name.clone(),
-                                                response: serde_json::json!({
-                                                    "error": format!("Tool {} not found", name)
-                                                }),
-                                            },
+                                            name: name.clone(),
+                                            response: serde_json::json!({
+                                                "error": format!("Tool {} not found", name)
+                                            }),
                                             id: id.clone(),
                                         }],
                                     });
@@ -1324,7 +1313,7 @@ impl Agent for LlmAgent {
                             }
 
                             // Yield tool execution event
-                            let mut tool_event = Event::new(&invocation_id);
+                            let mut tool_event = Event::new(ctx.invocation_id().clone());
                             tool_event.author = agent_name.clone();
                             tool_event.actions = tool_actions.clone();
                             tool_event.llm_response.content = Some(response_content.clone());
@@ -1358,7 +1347,7 @@ impl Agent for LlmAgent {
                 match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
                         // Callback returned content - yield it
-                        let mut after_event = Event::new(&invocation_id);
+                        let mut after_event = Event::new(ctx.invocation_id().clone());
                         after_event.author = agent_name.clone();
                         after_event.llm_response.content = Some(content);
                         yield Ok(after_event);

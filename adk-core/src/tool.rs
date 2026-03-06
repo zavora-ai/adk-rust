@@ -123,7 +123,7 @@ mod tests {
     impl TestContext {
         fn new() -> Self {
             Self {
-                content: Content::new("user"),
+                content: Content::new(crate::types::Role::User),
                 config: RunConfig::default(),
                 actions: Mutex::new(EventActions::default()),
             }

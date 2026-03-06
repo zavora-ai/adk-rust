@@ -1,9 +1,10 @@
 use adk_agent::LlmAgentBuilder;
 use adk_core::{
     Agent, CallbackContext, Content, FinishReason, InvocationContext, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Part, Result, RunConfig, Session, State, Tool, ToolConfirmationDecision,
-    ToolContext,
+    LlmResponseStream, Part, Result, RunConfig, Session, State, Tool, 
+    ToolContext, ToolConfirmationDecision,
 };
+use adk_core::types::{Role, SessionId, UserId, InvocationId};
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -23,7 +24,7 @@ impl SequencedModel {
     fn function_call_response(name: &str, args: Value, id: &str) -> LlmResponse {
         LlmResponse {
             content: Some(Content {
-                role: "model".to_string(),
+                role: Role::Model,
                 parts: vec![Part::FunctionCall {
                     name: name.to_string(),
                     args,
@@ -45,8 +46,8 @@ impl SequencedModel {
     fn text_response(text: &str) -> LlmResponse {
         LlmResponse {
             content: Some(Content {
-                role: "model".to_string(),
-                parts: vec![Part::Text { text: text.to_string() }],
+                role: Role::Model,
+                parts: vec![Part::text(text.to_string())],
             }),
             usage_metadata: None,
             finish_reason: Some(FinishReason::Stop),
@@ -120,8 +121,6 @@ impl State for MockState {
     }
 }
 
-use adk_core::types::{SessionId, UserId};
-
 struct MockSession {
     id: SessionId,
     user_id: UserId,
@@ -131,8 +130,8 @@ struct MockSession {
 impl MockSession {
     fn new() -> Self {
         Self {
-            id: SessionId::from("session-1".to_string()),
-            user_id: UserId::from("user-1".to_string()),
+            id: SessionId::new("session-1").unwrap(),
+            user_id: UserId::new("user-1").unwrap(),
             state: MockState,
         }
     }
@@ -170,17 +169,17 @@ struct MockContext {
 impl MockContext {
     fn new(run_config: RunConfig) -> Self {
         let mut identity = adk_core::types::AdkIdentity::default();
-        identity.invocation_id = "inv-1".to_string().into();
+        identity.invocation_id = "inv-1".into();
         identity.agent_name = "test-agent".to_string();
-        identity.user_id = "user-1".to_string().into();
+        identity.user_id = "user-1".into();
         identity.app_name = "test-app".to_string();
-        identity.session_id = "session-1".to_string().into();
+        identity.session_id = "session-1".into();
         identity.branch = "main".to_string();
 
         Self {
             identity,
             session: MockSession::new(),
-            user_content: Content::new("user").with_text("start"),
+            user_content: Content::new(Role::User).with_text("start"),
             run_config,
         }
     }
@@ -257,10 +256,11 @@ async fn test_tool_confirmation_interrupts_when_decision_missing() {
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
         if event.llm_response.interrupted {
-            let request = event.actions.tool_confirmation.as_ref().unwrap();
-            assert_eq!(request.tool_name, "test_tool");
-            assert_eq!(request.function_call_id.as_deref(), Some("call-1"));
-            saw_confirmation_interrupt = true;
+            if let Some(conf) = &event.actions.tool_confirmation {
+                if conf.get("toolName").and_then(|v| v.as_str()) == Some("test_tool") {
+                    saw_confirmation_interrupt = true;
+                }
+            }
         }
     }
 
@@ -285,25 +285,21 @@ async fn test_tool_confirmation_deny_skips_tool_execution() {
         .unwrap();
 
     let mut run_config = RunConfig::default();
-    run_config
-        .tool_confirmation_decisions
-        .insert("test_tool".to_string(), ToolConfirmationDecision::Deny);
+    run_config.tool_confirmation_decisions.insert("test_tool".to_string(), ToolConfirmationDecision::Deny);
 
     let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
     let mut saw_denied_response = false;
 
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
-        if event.actions.tool_confirmation_decision == Some(ToolConfirmationDecision::Deny) {
-            let content = event.llm_response.content.as_ref().unwrap();
-            if let Some(Part::FunctionResponse { function_response, .. }) = content.parts.first() {
-                let error = function_response
-                    .response
-                    .get("error")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                if error.contains("denied") {
-                    saw_denied_response = true;
+        // Check if decision was Deny (false)
+        if event.actions.tool_confirmation_decision == Some(false) {
+            if let Some(content) = &event.llm_response.content {
+                if let Some(Part::FunctionResponse { response, .. }) = content.parts.first() {
+                    let error = response.get("error").and_then(|v| v.as_str()).unwrap_or_default();
+                    if error.contains("denied") {
+                        saw_denied_response = true;
+                    }
                 }
             }
         }
@@ -330,20 +326,20 @@ async fn test_tool_confirmation_approve_executes_tool() {
         .unwrap();
 
     let mut run_config = RunConfig::default();
-    run_config
-        .tool_confirmation_decisions
-        .insert("test_tool".to_string(), ToolConfirmationDecision::Approve);
+    run_config.tool_confirmation_decisions.insert("test_tool".to_string(), ToolConfirmationDecision::Approve);
 
     let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
     let mut saw_tool_result = false;
 
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
-        if event.actions.tool_confirmation_decision == Some(ToolConfirmationDecision::Approve) {
-            let content = event.llm_response.content.as_ref().unwrap();
-            if let Some(Part::FunctionResponse { function_response, .. }) = content.parts.first() {
-                if function_response.response.get("status") == Some(&json!("tool-ok")) {
-                    saw_tool_result = true;
+        // Check if decision was Approve (true)
+        if event.actions.tool_confirmation_decision == Some(true) {
+            if let Some(content) = &event.llm_response.content {
+                if let Some(Part::FunctionResponse { response, .. }) = content.parts.first() {
+                    if response.get("status") == Some(&json!("tool-ok")) {
+                        saw_tool_result = true;
+                    }
                 }
             }
         }

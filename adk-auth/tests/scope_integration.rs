@@ -11,6 +11,7 @@ use adk_auth::{
 use adk_core::{
     Artifacts, CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Tool,
     ToolContext,
+    types::{InvocationId, SessionId, UserId},
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -100,18 +101,18 @@ struct ScopedMockContext {
 }
 
 impl ScopedMockContext {
-    fn create(user_id: &str, scopes: Vec<&str>) -> Arc<dyn ToolContext> {
+    fn create(user_id: &UserId, scopes: Vec<&str>) -> Arc<dyn ToolContext> {
         let mut identity = adk_core::types::AdkIdentity::default();
-        identity.invocation_id = "test-invocation".to_string().into();
+        identity.invocation_id = InvocationId::new("test-invocation").unwrap();
         identity.agent_name = "test-agent".to_string();
-        identity.user_id = user_id.to_string().into();
+        identity.user_id = user_id.clone();
         identity.app_name = "test-app".to_string();
-        identity.session_id = "test-session".to_string().into();
+        identity.session_id = SessionId::new("test-session").unwrap();
 
         Arc::new(Self {
             identity,
             scopes: scopes.into_iter().map(String::from).collect(),
-            content: Content::new("user"),
+            content: Content::user(),
             actions: Mutex::new(EventActions::default()),
         })
     }
@@ -168,25 +169,26 @@ impl ToolContext for ScopedMockContext {
 fn test_check_scopes_no_requirements() {
     // Tools with no scope requirements always pass
     assert!(check_scopes(&[], &[]).is_ok());
-    assert!(check_scopes(&[], &["admin".into()]).is_ok());
+    assert!(check_scopes(&[], &["admin".to_string()]).is_ok());
 }
 
 #[test]
 fn test_check_scopes_all_satisfied() {
-    let granted = vec!["finance:read".into(), "finance:write".into(), "verified".into()];
+    let granted =
+        vec!["finance:read".to_string(), "finance:write".to_string(), "verified".to_string()];
     assert!(check_scopes(&["finance:write", "verified"], &granted).is_ok());
 }
 
 #[test]
 fn test_check_scopes_superset_granted() {
     // User has more scopes than required — should pass
-    let granted = vec!["admin".into(), "finance:write".into(), "verified".into()];
+    let granted = vec!["admin".to_string(), "finance:write".to_string(), "verified".to_string()];
     assert!(check_scopes(&["finance:write"], &granted).is_ok());
 }
 
 #[test]
 fn test_check_scopes_partial_missing() {
-    let granted = vec!["finance:read".into()];
+    let granted = vec!["finance:read".to_string()];
     let err = check_scopes(&["finance:read", "finance:write"], &granted).unwrap_err();
     assert_eq!(err.missing, vec!["finance:write"]);
     assert_eq!(err.required, vec!["finance:read", "finance:write"]);
@@ -203,8 +205,8 @@ fn test_check_scopes_all_missing() {
 #[test]
 fn test_scope_denied_display_message() {
     let denied = ScopeDenied {
-        required: vec!["finance:write".into(), "verified".into()],
-        missing: vec!["verified".into()],
+        required: vec!["finance:write".to_string(), "verified".to_string()],
+        missing: vec!["verified".to_string()],
     };
     let msg = denied.to_string();
     assert!(msg.contains("missing required scopes"));
@@ -244,7 +246,8 @@ async fn test_scope_guard_allows_when_scopes_satisfied() {
     let protected = guard.protect(TransferFundsTool);
 
     // User has both required scopes
-    let ctx = ScopedMockContext::create("alice", vec!["finance:write", "verified"]);
+    let user_id = UserId::new("alice").unwrap();
+    let ctx = ScopedMockContext::create(&user_id, vec!["finance:write", "verified"]);
     let result = protected.execute(ctx, json!({"amount": 100})).await;
 
     assert!(result.is_ok());
@@ -257,7 +260,8 @@ async fn test_scope_guard_denies_when_scopes_missing() {
     let protected = guard.protect(TransferFundsTool);
 
     // User only has finance:read, missing finance:write and verified
-    let ctx = ScopedMockContext::create("bob", vec!["finance:read"]);
+    let user_id = UserId::new("bob").unwrap();
+    let ctx = ScopedMockContext::create(&user_id, vec!["finance:read"]);
     let result = protected.execute(ctx, json!({"amount": 100})).await;
 
     assert!(result.is_err());
@@ -271,7 +275,8 @@ async fn test_scope_guard_denies_with_no_scopes() {
     let protected = guard.protect(AdminPanelTool);
 
     // User has zero scopes
-    let ctx = ScopedMockContext::create("anonymous", vec![]);
+    let user_id = UserId::new("anonymous").unwrap();
+    let ctx = ScopedMockContext::create(&user_id, vec![]);
     let result = protected.execute(ctx, json!({})).await;
 
     assert!(result.is_err());
@@ -283,7 +288,8 @@ async fn test_scope_guard_passthrough_for_unscoped_tools() {
     let protected = guard.protect(PublicSearchTool);
 
     // Even a user with no scopes can use an unscoped tool
-    let ctx = ScopedMockContext::create("anonymous", vec![]);
+    let user_id = UserId::new("anonymous").unwrap();
+    let ctx = ScopedMockContext::create(&user_id, vec![]);
     let result = protected.execute(ctx, json!({"query": "hello"})).await;
 
     assert!(result.is_ok());
@@ -296,8 +302,9 @@ async fn test_scope_guard_superset_scopes_allowed() {
     let protected = guard.protect(TransferFundsTool);
 
     // User has more scopes than required — should still work
+    let user_id = UserId::new("superuser").unwrap();
     let ctx = ScopedMockContext::create(
-        "superuser",
+        &user_id,
         vec!["admin", "finance:read", "finance:write", "verified"],
     );
     let result = protected.execute(ctx, json!({"amount": 500})).await;
@@ -316,7 +323,8 @@ async fn test_static_resolver_grants_fixed_scopes() {
     let protected = guard.protect(TransferFundsTool);
 
     // Context scopes don't matter — static resolver overrides
-    let ctx = ScopedMockContext::create("anyone", vec![]);
+    let user_id = UserId::new("anyone").unwrap();
+    let ctx = ScopedMockContext::create(&user_id, vec![]);
     let result = protected.execute(ctx, json!({"amount": 50})).await;
 
     assert!(result.is_ok());
@@ -328,7 +336,8 @@ async fn test_static_resolver_insufficient_scopes() {
     let guard = ScopeGuard::new(resolver);
     let protected = guard.protect(TransferFundsTool);
 
-    let ctx = ScopedMockContext::create("anyone", vec![]);
+    let user_id = UserId::new("anyone").unwrap();
+    let ctx = ScopedMockContext::create(&user_id, vec![]);
     let result = protected.execute(ctx, json!({"amount": 50})).await;
 
     assert!(result.is_err());
@@ -343,7 +352,8 @@ async fn test_scope_tool_ext_shorthand() {
     // .with_scope_guard() is the ergonomic one-liner
     let protected = TransferFundsTool.with_scope_guard(ContextScopeResolver);
 
-    let ctx = ScopedMockContext::create("alice", vec!["finance:write", "verified"]);
+    let user_id = UserId::new("alice").unwrap();
+    let ctx = ScopedMockContext::create(&user_id, vec!["finance:write", "verified"]);
     let result = protected.execute(ctx, json!({"amount": 200})).await;
 
     assert!(result.is_ok());
@@ -353,7 +363,8 @@ async fn test_scope_tool_ext_shorthand() {
 async fn test_scope_tool_ext_denied() {
     let protected = AdminPanelTool.with_scope_guard(ContextScopeResolver);
 
-    let ctx = ScopedMockContext::create("bob", vec!["user"]);
+    let user_id = UserId::new("bob").unwrap();
+    let ctx = ScopedMockContext::create(&user_id, vec!["user"]);
     let result = protected.execute(ctx, json!({})).await;
 
     assert!(result.is_err());
@@ -374,7 +385,8 @@ async fn test_protect_all_mixed_tools() {
     assert_eq!(protected.len(), 3);
 
     // User with finance scopes but not admin
-    let ctx = ScopedMockContext::create("finance_user", vec!["finance:write", "verified"]);
+    let user_id = UserId::new("finance_user").unwrap();
+    let ctx = ScopedMockContext::create(&user_id, vec!["finance:write", "verified"]);
 
     // Public tool: allowed (no scopes required)
     assert!(protected[0].execute(ctx.clone(), json!({})).await.is_ok());
@@ -424,7 +436,7 @@ struct UserDatabaseResolver {
 #[async_trait]
 impl ScopeResolver for UserDatabaseResolver {
     async fn resolve(&self, ctx: &dyn ToolContext) -> Vec<String> {
-        self.user_scopes.get(ctx.user_id().as_ref()).cloned().unwrap_or_default()
+        self.user_scopes.get(ctx.user_id().as_str()).cloned().unwrap_or_default()
     }
 }
 
@@ -439,10 +451,12 @@ async fn test_custom_resolver_per_user_scopes() {
     let protected = guard.protect(AdminPanelTool);
 
     // Alice has admin scope
-    let alice_ctx = ScopedMockContext::create("alice", vec![]);
+    let user_id = UserId::new("alice").unwrap();
+    let alice_ctx = ScopedMockContext::create(&user_id, vec![]);
     assert!(protected.execute(alice_ctx, json!({})).await.is_ok());
 
     // Bob does not have admin scope
-    let bob_ctx = ScopedMockContext::create("bob", vec![]);
+    let user_id = UserId::new("bob").unwrap();
+    let bob_ctx = ScopedMockContext::create(&user_id, vec![]);
     assert!(protected.execute(bob_ctx, json!({})).await.is_err());
 }

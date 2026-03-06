@@ -1,42 +1,44 @@
 use adk_core::ReadonlyContext;
 use tracing::Span;
 
+/// A unified macro to guarantee all ADK spans initialize the correct fields.
+/// This eliminates the risk of `span.record` silently failing and enforces DRY.
+#[macro_export]
+macro_rules! adk_span {
+    ($level:expr, $name:expr, $id:expr $(, $($fields:tt)*)?) => {
+        tracing::span!(
+            $level,
+            $name,
+            adk.invocation_id = %$id.invocation_id,
+            adk.session_id = %$id.session_id,
+            adk.user_id = %$id.user_id,
+            adk.app_name = %$id.app_name,
+            adk.branch = %$id.branch,
+            gcp.vertex.invocation_id = %$id.invocation_id,
+            gcp.vertex.session_id = %$id.session_id,
+            gen_ai.conversation.id = %$id.session_id
+            $(, $($fields)*)?
+        )
+    };
+}
+
 /// An extension trait that adds synergistic tracing capabilities to any ADK context.
 pub trait TraceContextExt: ReadonlyContext {
     /// Creates a top-level invocation span.
     fn invocation_span(&self) -> Span {
-        let id = self.identity();
-        let span = tracing::info_span!(
-            "adk.invocation",
-            "adk.invocation_id" = %id.invocation_id,
-            "adk.session_id" = %id.session_id,
-            "adk.user_id" = %id.user_id,
-            "adk.app_name" = %id.app_name,
-            "adk.branch" = %id.branch,
-            // Vertex AI Observability: Native integration for Google Cloud monitoring
-            "gcp.vertex.invocation_id" = %id.invocation_id,
-            "gcp.vertex.session_id" = %id.session_id,
-            "gen_ai.conversation.id" = %id.session_id
-        );
+        let span = adk_span!(tracing::Level::INFO, "adk.invocation", self.identity());
         self.record_metadata(&span);
         span
     }
 
     /// Creates a child span for a specific execution step.
     fn step_span(&self, name: &'static str) -> Span {
-        let id = self.identity();
-        let span = tracing::info_span!(
+        let span = adk_span!(
+            tracing::Level::INFO,
             "adk.step",
-            "adk.step.name" = name,
-            "adk.invocation_id" = %id.invocation_id,
-            "adk.session_id" = %id.session_id,
-            "adk.user_id" = %id.user_id,
-            "adk.app_name" = %id.app_name,
-            "adk.branch" = %id.branch,
-            "adk.tool.name" = tracing::field::Empty,
-            // Vertex AI Observability: Native integration for Google Cloud monitoring
-            "gcp.vertex.invocation_id" = %id.invocation_id,
-            "gcp.vertex.session_id" = %id.session_id
+            self.identity(),
+            adk.step.name = name,
+            adk.tool.name = tracing::field::Empty
         );
         self.record_metadata(&span);
         span
@@ -45,37 +47,37 @@ pub trait TraceContextExt: ReadonlyContext {
     /// Creates a specialized span for agent execution.
     fn agent_span(&self) -> Span {
         let id = self.identity();
-        let span = tracing::info_span!(
+        let span = adk_span!(
+            tracing::Level::INFO,
             "agent.execute",
-            "agent.name" = %id.agent_name,
-            "adk.invocation_id" = %id.invocation_id,
-            "adk.session_id" = %id.session_id,
-            "adk.user_id" = %id.user_id,
-            "adk.app_name" = %id.app_name,
-            "adk.branch" = %id.branch,
-            // Vertex AI Observability: Native integration for Google Cloud monitoring
-            "gcp.vertex.invocation_id" = %id.invocation_id,
-            "gcp.vertex.session_id" = %id.session_id,
-            // Agent-specific trace attributes
-            "adk.skills.selected_name" = tracing::field::Empty,
-            "adk.skills.selected_id" = tracing::field::Empty
+            id,
+            agent.name = %id.agent_name,
+            adk.skills.selected_name = tracing::field::Empty,
+            adk.skills.selected_id = tracing::field::Empty
         );
         self.record_metadata(&span);
         span
     }
 
-    /// Stamps the current span with all identity attributes and metadata from this context.
-    fn record_identity(&self, span: &Span) {
+    /// Extends an ALREADY INITIALIZED span with W3C baggage for downstream context propagation.
+    fn propagate_adk_identity(&self) {
         let id = self.identity();
-        span.record("adk.invocation_id", id.invocation_id.to_string());
-        span.record("adk.session_id", id.session_id.to_string());
-        span.record("adk.user_id", id.user_id.to_string());
-        span.record("adk.app_name", &id.app_name);
-        span.record("adk.branch", &id.branch);
-        // Vertex AI Observability: Native integration for Google Cloud monitoring
-        span.record("gcp.vertex.invocation_id", id.invocation_id.to_string());
-        span.record("gcp.vertex.session_id", id.session_id.to_string());
-        self.record_metadata(span);
+
+        {
+            use opentelemetry::{Context, KeyValue, baggage::BaggageExt};
+
+            // ✅ ADK identity attributes injected directly into W3C Baggage
+            let cx = Context::current().with_baggage(vec![
+                KeyValue::new("adk.invocation_id", id.invocation_id.as_str().to_owned()),
+                KeyValue::new("adk.session_id", id.session_id.as_str().to_owned()),
+                KeyValue::new("adk.user_id", id.user_id.as_str().to_owned()),
+                KeyValue::new("adk.app_name", id.app_name.clone()),
+                KeyValue::new("adk.branch", id.branch.clone()),
+            ]);
+
+            // The guard implicitly attaches the context to the current thread scope
+            let _guard = cx.attach();
+        }
     }
 
     /// Records all key-value pairs from the context's metadata map onto the span.

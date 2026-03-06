@@ -9,6 +9,7 @@
 //!   GOOGLE_API_KEY=your_key cargo run --bin image_analysis
 
 use adk_artifact::{ArtifactService, InMemoryArtifactService, LoadRequest, SaveRequest};
+use adk_core::types::{SessionId, UserId};
 use adk_core::{BeforeModelResult, Part};
 use adk_rust::prelude::*;
 use std::sync::Arc;
@@ -32,10 +33,13 @@ async fn main() -> anyhow::Result<()> {
     artifact_service
         .save(SaveRequest {
             app_name: "image_app".to_string(),
-            user_id: "user".to_string(),
-            session_id: "init".to_string(),
+            user_id: UserId::new("user").unwrap(),
+            session_id: SessionId::new("init").unwrap(),
             file_name: "user:photo.jpg".to_string(),
-            part: Part::InlineData { data: image_bytes, mime_type: "image/jpeg".to_string() },
+            part: Part::InlineData {
+                data: image_bytes.into(),
+                mime_type: "image/jpeg".parse().unwrap(),
+            },
             version: None,
         })
         .await?;
@@ -56,8 +60,8 @@ async fn main() -> anyhow::Result<()> {
                 if let Ok(response) = service
                     .load(LoadRequest {
                         app_name: "image_app".to_string(),
-                        user_id: "user".to_string(),
-                        session_id: "init".to_string(),
+                        user_id: UserId::new("user").unwrap(),
+                        session_id: SessionId::new("init").unwrap(),
                         file_name: "user:photo.jpg".to_string(),
                         version: None,
                     })
@@ -65,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
                 {
                     // Inject image into the last user message
                     if let Some(last_content) = request.contents.last_mut() {
-                        if last_content.role == "user" {
+                        if last_content.role == adk_core::types::Role::User {
                             last_content.parts.push(response.part);
                         }
                     }
@@ -77,8 +81,12 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Ask questions about the image (e.g., 'What do you see?', 'Describe the colors')\n");
 
-    adk_cli::console::run_console(Arc::new(agent), "image_demo".to_string(), "user".to_string())
-        .await?;
+    adk_cli::console::run_console(
+        Arc::new(agent),
+        "image_demo".to_string(),
+        UserId::new("user").unwrap(),
+    )
+    .await?;
 
     Ok(())
 }

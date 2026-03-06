@@ -93,44 +93,40 @@ async fn main() -> anyhow::Result<()> {
     // -- 5. Ingest sample documents ---------------------------------------
     let documents = vec![
         Document {
-            id: "doc1".into(),
+            id: "doc1",
             text: "Rust is a systems programming language focused on safety, speed, \
                    and concurrency. It achieves memory safety without a garbage collector \
                    through its ownership system. The borrow checker enforces strict rules \
-                   at compile time to prevent data races and dangling pointers."
-                .into(),
-            metadata: HashMap::from([("topic".into(), "rust".into())]),
-            source_uri: Some("https://www.rust-lang.org".into()),
+                   at compile time to prevent data races and dangling pointers.",
+            metadata: HashMap::from([("topic", "rust".to_string())]),
+            source_uri: Some("https://www.rust-lang.org"),
         },
         Document {
-            id: "doc2".into(),
+            id: "doc2",
             text: "Python is a high-level, interpreted programming language known for \
                    its readability and versatility. It is widely used in data science, \
                    web development, and automation. Libraries like NumPy, pandas, and \
-                   scikit-learn make it the go-to language for machine learning."
-                .into(),
-            metadata: HashMap::from([("topic".into(), "python".into())]),
-            source_uri: Some("https://www.python.org".into()),
+                   scikit-learn make it the go-to language for machine learning.",
+            metadata: HashMap::from([("topic", "python".to_string())]),
+            source_uri: Some("https://www.python.org"),
         },
         Document {
-            id: "doc3".into(),
+            id: "doc3",
             text: "SurrealDB is a multi-model database written in Rust. It supports \
                    document, graph, and vector data in a single engine. Its native HNSW \
                    indexing enables fast approximate nearest-neighbor search for embeddings. \
-                   It can run embedded (in-process) or as a distributed server."
-                .into(),
-            metadata: HashMap::from([("topic".into(), "surrealdb".into())]),
-            source_uri: Some("https://surrealdb.com".into()),
+                   It can run embedded (in-process) or as a distributed server.",
+            metadata: HashMap::from([("topic", "surrealdb".to_string())]),
+            source_uri: Some("https://surrealdb.com"),
         },
         Document {
-            id: "doc4".into(),
+            id: "doc4",
             text: "Retrieval-Augmented Generation (RAG) combines a retrieval system \
                    with a language model. Documents are chunked, embedded, and stored \
                    in a vector database. At query time the most relevant chunks are \
                    retrieved and fed to the LLM as context, grounding its answers in \
-                   your actual data rather than training knowledge alone."
-                .into(),
-            metadata: HashMap::from([("topic".into(), "rag".into())]),
+                   your actual data rather than training knowledge alone.",
+            metadata: HashMap::from([("topic", "rag".to_string())]),
             source_uri: None,
         },
     ];
@@ -173,13 +169,12 @@ async fn main() -> anyhow::Result<()> {
         .ingest(
             collection,
             &Document {
-                id: "doc1".into(),
+                id: "doc1",
                 text: "Rust 2024 edition introduced async closures, gen blocks, and \
                        improved pattern matching. The language continues to evolve while \
-                       maintaining its zero-cost abstractions and memory safety guarantees."
-                    .into(),
-                metadata: HashMap::from([("topic".into(), "rust".into())]),
-                source_uri: Some("https://www.rust-lang.org".into()),
+                       maintaining its zero-cost abstractions and memory safety guarantees.",
+                metadata: HashMap::from([("topic", "rust".to_string())]),
+                source_uri: Some("https://www.rust-lang.org"),
             },
         )
         .await?;

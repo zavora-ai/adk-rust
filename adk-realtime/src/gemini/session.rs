@@ -164,10 +164,12 @@ struct GeminiClientContent {
     turn_complete: bool,
 }
 
+use adk_core::types::Role;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GeminiTurn {
-    role: String,
+    role: Role,
     parts: Vec<GeminiPart>,
 }
 
@@ -536,7 +538,7 @@ impl RealtimeSession for GeminiRealtimeSession {
             tool_response: None,
             client_content: Some(GeminiClientContent {
                 turns: vec![GeminiTurn {
-                    role: "user".to_string(),
+                    role: Role::User,
                     parts: vec![GeminiPart { text: Some(text.to_string()), inline_data: None }],
                 }],
                 turn_complete: true,

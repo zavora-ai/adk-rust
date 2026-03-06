@@ -259,7 +259,7 @@ impl Evaluator {
             if let Some(content) = event.content() {
                 for part in &content.parts {
                     // Extract text content
-                    if let Some(text) = part.text() {
+                    if let Some(text) = part.as_text() {
                         response_text.push_str(text);
                     }
                     // Extract function calls using pattern matching
@@ -627,10 +627,10 @@ impl EvalInvocationContext {
     fn new(invocation_id: String, user_content: Content, agent: Arc<dyn Agent>) -> Self {
         let session_id = format!("eval-session-{}", uuid::Uuid::new_v4());
         let identity = adk_core::types::AdkIdentity {
-            invocation_id: adk_core::types::InvocationId::from(invocation_id),
-            session_id: adk_core::types::SessionId::from(session_id.clone()),
+            invocation_id: adk_core::types::InvocationId::new(invocation_id).unwrap(),
+            session_id: adk_core::types::SessionId::new(session_id.clone()).unwrap(),
             agent_name: agent.name().to_string(),
-            user_id: adk_core::types::UserId::from("eval_user".to_string()),
+            user_id: adk_core::types::UserId::new("eval_user".to_string()).unwrap(),
             app_name: "eval_app".to_string(),
             ..Default::default()
         };
@@ -707,8 +707,8 @@ struct EvalSession {
 impl EvalSession {
     fn new(id: String) -> Self {
         Self {
-            id: SessionId::from(id),
-            user_id: UserId::from("eval_user".to_string()),
+            id: SessionId::new(id).unwrap(),
+            user_id: UserId::new("eval_user".to_string()).unwrap(),
             state: EvalState::new(),
         }
     }

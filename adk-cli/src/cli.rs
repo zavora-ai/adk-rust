@@ -1,3 +1,4 @@
+use adk_core::types::UserId;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -18,7 +19,7 @@ pub enum Commands {
 
         /// User ID for session
         #[arg(short, long, default_value = "console_user")]
-        user_id: String,
+        user_id: UserId,
     },
 
     /// Start web server

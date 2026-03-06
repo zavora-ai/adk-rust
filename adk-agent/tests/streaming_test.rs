@@ -1,61 +1,48 @@
 use adk_agent::LlmAgentBuilder;
-use adk_core::{
-    Agent, Content, FinishReason, InvocationContext, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Part, Result, RunConfig, Session, State,
-};
-use adk_core::types::{SessionId, UserId};
-use async_stream::stream;
+use adk_core::model::{Llm, LlmRequest, LlmResponse, LlmResponseStream};
+use adk_core::types::{Content, InvocationId, Part, Role, SessionId, UserId};
+use adk_core::{Result, RunConfig};
+use adk_session::{Session, State};
 use async_trait::async_trait;
 use futures::StreamExt;
-use serde_json::Value;
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-// --- Mocks ---
-
-struct MockModel {
+struct StreamingMockLlm {
     chunks: Vec<String>,
 }
 
-impl MockModel {
-    fn new(chunks: Vec<&str>) -> Self {
-        Self { chunks: chunks.iter().map(|s| s.to_string()).collect() }
-    }
-}
-
 #[async_trait]
-impl Llm for MockModel {
+impl Llm for StreamingMockLlm {
     fn name(&self) -> &str {
-        "mock-model"
+        "streaming-mock"
     }
 
     async fn generate_content(&self, _req: LlmRequest, stream: bool) -> Result<LlmResponseStream> {
-        assert!(stream, "Agent should request streaming");
-
         let chunks = self.chunks.clone();
-        let s = stream! {
-            for (i, text) in chunks.iter().enumerate() {
-                let is_last = i == chunks.len() - 1;
-
-                let content = Content {
-                    role: "model".to_string(),
-                    parts: vec![Part::Text { text: text.clone() }],
-                };
-
+        let s = async_stream::stream! {
+            if stream {
+                for chunk in chunks {
+                    yield Ok(LlmResponse {
+                        content: Some(Content::new(Role::Model).with_text(chunk)),
+                        partial: true,
+                        ..Default::default()
+                    });
+                }
                 yield Ok(LlmResponse {
-                    content: Some(content),
-                    usage_metadata: None,
-                    finish_reason: if is_last { Some(FinishReason::Stop) } else { None },
-                    citation_metadata: None,
-                    partial: !is_last,
-                    turn_complete: is_last,
-                    interrupted: false,
-                    error_code: None,
-                    error_message: None,
+                    partial: false,
+                    turn_complete: true,
+                    ..Default::default()
+                });
+            } else {
+                yield Ok(LlmResponse {
+                    content: Some(Content::new(Role::Model).with_text(chunks.join(""))),
+                    turn_complete: true,
+                    ..Default::default()
                 });
             }
         };
-
         Ok(Box::pin(s))
     }
 }
@@ -63,15 +50,6 @@ impl Llm for MockModel {
 struct MockSession {
     session_id: SessionId,
     user_id: UserId,
-}
-
-impl MockSession {
-    fn new() -> Self {
-        Self {
-            session_id: "session-1".to_string().into(),
-            user_id: "user-1".to_string().into(),
-        }
-    }
 }
 
 impl Session for MockSession {
@@ -87,20 +65,16 @@ impl Session for MockSession {
     fn state(&self) -> &dyn State {
         &MockState
     }
-    fn conversation_history(&self) -> Vec<adk_core::Content> {
+    fn conversation_history(&self) -> Vec<Content> {
         Vec::new()
     }
 }
 
 struct MockState;
 impl State for MockState {
-    fn get(&self, _key: &str) -> Option<Value> {
-        None
-    }
-    fn set(&mut self, _key: String, _value: Value) {}
-    fn all(&self) -> HashMap<String, Value> {
-        HashMap::new()
-    }
+    fn get(&self, _key: &str) -> Option<serde_json::Value> { None }
+    fn set(&mut self, _key: String, _value: serde_json::Value) {}
+    fn all(&self) -> HashMap<String, serde_json::Value> { HashMap::new() }
 }
 
 struct MockContext {
@@ -111,157 +85,57 @@ struct MockContext {
 impl MockContext {
     fn new() -> Self {
         let mut identity = adk_core::types::AdkIdentity::default();
-        identity.invocation_id = "inv-1".to_string().into();
-        identity.agent_name = "test-agent".to_string();
-        identity.user_id = "user-1".to_string().into();
-        identity.app_name = "test-app".to_string();
-        identity.session_id = "session-1".to_string().into();
-        identity.branch = "main".to_string();
+        identity.invocation_id = "inv-1".into();
+        identity.user_id = "user-1".into();
+        identity.session_id = "session-1".into();
 
-        Self { identity, session: MockSession::new() }
+        Self {
+            identity,
+            session: MockSession {
+                session_id: SessionId::new("session-1").unwrap(),
+                user_id: UserId::new("user-1").unwrap(),
+            },
+        }
     }
 }
 
 #[async_trait]
-impl adk_core::ReadonlyContext for MockContext {
-    fn identity(&self) -> &adk_core::types::AdkIdentity {
-        &self.identity
+impl adk_agent::InvocationContext for MockContext {
+    fn invocation_id(&self) -> &InvocationId { &self.identity.invocation_id }
+    fn user_content(&self) -> &Content { 
+        static EMPTY: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(|| Content::new(Role::User).with_text("hi"))
     }
-    fn user_content(&self) -> &Content {
-        unimplemented!()
-    }
-    fn metadata(&self) -> &std::collections::HashMap<String, String> {
-        static METADATA: std::sync::OnceLock<std::collections::HashMap<String, String>> =
-            std::sync::OnceLock::new();
-        METADATA.get_or_init(std::collections::HashMap::new)
-    }
-}
-
-#[async_trait]
-impl adk_core::CallbackContext for MockContext {
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
-        None
+    fn identity(&self) -> &adk_core::types::AdkIdentity { &self.identity }
+    fn session(&self) -> &dyn Session { &self.session }
+    fn metadata(&self) -> &HashMap<String, String> {
+        static EMPTY: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(HashMap::new)
     }
 }
-
-#[async_trait]
-impl InvocationContext for MockContext {
-    fn agent(&self) -> Arc<dyn Agent> {
-        unimplemented!()
-    }
-    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
-        None
-    }
-    fn session(&self) -> &dyn Session {
-        &self.session
-    }
-    fn run_config(&self) -> &RunConfig {
-        static RUN_CONFIG: std::sync::OnceLock<RunConfig> = std::sync::OnceLock::new();
-        RUN_CONFIG.get_or_init(RunConfig::default)
-    }
-    fn end_invocation(&self) {}
-    fn ended(&self) -> bool {
-        false
-    }
-}
-
-// --- Tests ---
 
 #[tokio::test]
-async fn test_streaming_chunks() {
-    let model = Arc::new(MockModel::new(vec!["Hello", " ", "World", "!"]));
-    let agent = LlmAgentBuilder::new("test-agent").model(model).build().unwrap();
+async fn test_llm_agent_streaming_accumulation() {
+    let chunks = vec!["Hello ".to_string(), "world".to_string(), "!".to_string()];
+    let model = Arc::new(StreamingMockLlm { chunks });
+    let agent = LlmAgentBuilder::new("test").model(model).build().unwrap();
 
-    let _ctx = Arc::new(MockContext::new());
-
-    // We need to provide user content in the context, but MockContext panics on user_content()
-    // Let's fix MockContext to return dummy content
-    // Actually, LlmAgent calls ctx.user_content()
-
-    // Let's refine MockContext
-    struct BetterMockContext {
-        identity: adk_core::types::AdkIdentity,
-        session: MockSession,
-        user_content: Content,
-    }
-
-    impl BetterMockContext {
-        fn new() -> Self {
-            let mut identity = adk_core::types::AdkIdentity::default();
-            identity.invocation_id = "inv-1".to_string().into();
-            identity.agent_name = "test-agent".to_string();
-            identity.user_id = "user-1".to_string().into();
-            identity.app_name = "test-app".to_string();
-            identity.session_id = "session-1".to_string().into();
-            identity.branch = "main".to_string();
-
-            Self {
-                identity,
-                session: MockSession::new(),
-                user_content: Content {
-                    role: "user".to_string(),
-                    parts: vec![Part::Text { text: "Hi".to_string() }],
-                },
-            }
-        }
-    }
-
-    #[async_trait]
-    impl adk_core::ReadonlyContext for BetterMockContext {
-        fn identity(&self) -> &adk_core::types::AdkIdentity {
-            &self.identity
-        }
-        fn user_content(&self) -> &Content {
-            &self.user_content
-        }
-        fn metadata(&self) -> &std::collections::HashMap<String, String> {
-            static METADATA: std::sync::OnceLock<std::collections::HashMap<String, String>> =
-                std::sync::OnceLock::new();
-            METADATA.get_or_init(std::collections::HashMap::new)
-        }
-    }
-
-    #[async_trait]
-    impl adk_core::CallbackContext for BetterMockContext {
-        fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
-            None
-        }
-    }
-
-    #[async_trait]
-    impl InvocationContext for BetterMockContext {
-        fn agent(&self) -> Arc<dyn Agent> {
-            unimplemented!()
-        }
-        fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
-            None
-        }
-        fn session(&self) -> &dyn Session {
-            &self.session
-        }
-        fn run_config(&self) -> &RunConfig {
-            static RUN_CONFIG: std::sync::OnceLock<RunConfig> = std::sync::OnceLock::new();
-            RUN_CONFIG.get_or_init(RunConfig::default)
-        }
-        fn end_invocation(&self) {}
-        fn ended(&self) -> bool {
-            false
-        }
-    }
-
-    let ctx = Arc::new(BetterMockContext::new());
+    let ctx = Arc::new(MockContext::new());
     let mut stream = agent.run(ctx).await.unwrap();
 
-    let mut received_chunks = Vec::new();
+    let mut partials = 0;
+    let mut final_text = String::new();
 
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
-        if let Some(content) = event.llm_response.content {
-            if let Some(Part::Text { text }) = content.parts.first() {
-                received_chunks.push(text.clone());
+        if event.llm_response.partial {
+            partials += 1;
+            if let Some(content) = event.content() {
+                final_text.push_str(&content.text());
             }
         }
     }
 
-    assert_eq!(received_chunks, vec!["Hello", " ", "World", "!"]);
+    assert_eq!(partials, 3);
+    assert_eq!(final_text, "Hello world!");
 }

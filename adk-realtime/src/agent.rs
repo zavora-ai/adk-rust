@@ -362,7 +362,7 @@ impl Agent for RealtimeAgent {
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
         let agent_name = self.name.clone();
-        let invocation_id = ctx.invocation_id().to_string();
+        let invocation_id = ctx.invocation_id().clone();
         let model = self.model.clone();
 
         let before_callbacks = self.before_callbacks.clone();
@@ -382,7 +382,7 @@ impl Agent for RealtimeAgent {
             for callback in before_callbacks.as_ref() {
                 match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
-                        let mut early_event = Event::new(&invocation_id);
+                        let mut early_event = Event::new(invocation_id.clone());
                         early_event.author = agent_name.clone();
                         early_event.llm_response.content = Some(content);
                         yield Ok(early_event);
@@ -398,16 +398,16 @@ impl Agent for RealtimeAgent {
                 Err(e) => { yield Err(AdkError::Model(format!("Failed to connect: {}", e))); return; }
             };
 
-            let mut start_event = Event::new(&invocation_id);
+            let mut start_event = Event::new(invocation_id.clone());
             start_event.author = agent_name.clone();
             start_event.llm_response.content = Some(Content {
-                role: "system".to_string(),
-                parts: vec![Part::Text { text: format!("Realtime session started: {}", session.session_id()) }],
+                role: adk_core::types::Role::System,
+                parts: vec![Part::text(format!("Realtime session started: {}", session.session_id()))],
             });
             yield Ok(start_event);
 
             for part in &ctx.user_content().parts {
-                if let Part::Text { text } = part {
+                if let Some(text) = part.as_text() {
                     if let Err(e) = session.send_text(text).await {
                         yield Err(AdkError::Model(format!("Failed to send text: {}", e))); return;
                     }
@@ -424,20 +424,20 @@ impl Agent for RealtimeAgent {
                         match server_event {
                             ServerEvent::AudioDelta { delta, item_id, .. } => {
                                 if let Some(ref cb) = on_audio { cb(&delta, &item_id).await; }
-                                let mut audio_event = Event::new(&invocation_id);
+                                let mut audio_event = Event::new(invocation_id.clone());
                                 audio_event.author = agent_name.clone();
                                 audio_event.llm_response.content = Some(Content {
-                                    role: "model".to_string(),
-                                    parts: vec![Part::InlineData { mime_type: "audio/pcm".to_string(), data: delta }],
+                                    role: adk_core::types::Role::Model,
+                                    parts: vec![Part::InlineData { mime_type: "audio/pcm".parse().unwrap(), data: delta.into() }],
                                 });
                                 yield Ok(audio_event);
                             }
                             ServerEvent::TextDelta { delta, .. } => {
-                                let mut text_event = Event::new(&invocation_id);
+                                let mut text_event = Event::new(invocation_id.clone());
                                 text_event.author = agent_name.clone();
                                 text_event.llm_response.content = Some(Content {
-                                    role: "model".to_string(),
-                                    parts: vec![Part::Text { text: delta.clone() }],
+                                    role: adk_core::types::Role::Model,
+                                    parts: vec![Part::text(delta.clone())],
                                 });
                                 yield Ok(text_event);
                             }
@@ -454,7 +454,7 @@ impl Agent for RealtimeAgent {
                                 if name == "transfer_to_agent" {
                                     let args: serde_json::Value = serde_json::from_str(&arguments).unwrap_or(serde_json::json!({}));
                                     let target = args.get("agent_name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                                    let mut transfer_event = Event::new(&invocation_id);
+                                    let mut transfer_event = Event::new(invocation_id.clone());
                                     transfer_event.author = agent_name.clone();
                                     transfer_event.actions.transfer_to_agent = Some(target);
                                     yield Ok(transfer_event);
@@ -484,13 +484,14 @@ impl Agent for RealtimeAgent {
                                     (serde_json::json!({ "error": format!("Tool {} not found", name) }), EventActions::default())
                                 };
 
-                                let mut tool_event = Event::new(&invocation_id);
+                                let mut tool_event = Event::new(invocation_id.clone());
                                 tool_event.author = agent_name.clone();
                                 tool_event.actions = actions.clone();
                                 tool_event.llm_response.content = Some(Content {
-                                    role: "function".to_string(),
+                                    role: adk_core::types::Role::Custom("function".to_string()),
                                     parts: vec![Part::FunctionResponse {
-                                        function_response: adk_core::types::FunctionResponseData { name: name.clone(), response: result.clone() },
+                                        name: name.clone(),
+                                        response: result.clone(),
                                         id: Some(call_id.clone()),
                                     }],
                                 });
@@ -501,7 +502,7 @@ impl Agent for RealtimeAgent {
                                     return;
                                 }
 
-                                let response = ToolResponse { call_id, output: result };
+                                let response = ToolResponse { call_id: call_id.clone(), output: result.clone() };
                                 if let Err(e) = session.send_tool_response(response).await {
                                     yield Err(AdkError::Model(format!("Failed to send tool response: {}", e)));
                                     let _ = session.close().await;
@@ -519,7 +520,7 @@ impl Agent for RealtimeAgent {
             for callback in after_callbacks.as_ref() {
                 match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
-                        let mut after_event = Event::new(&invocation_id);
+                        let mut after_event = Event::new(invocation_id.clone());
                         after_event.author = agent_name.clone();
                         after_event.llm_response.content = Some(content);
                         yield Ok(after_event);

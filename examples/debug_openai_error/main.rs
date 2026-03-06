@@ -14,18 +14,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     test_request(
         &model,
         vec![
-            Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: "Hello".to_string() }],
-            },
+            Content { role: "user".to_string(), parts: vec![Part::text("Hello".to_string())] },
             Content {
                 role: "model".to_string(),
                 parts: vec![], // Empty parts - this creates an empty assistant message!
             },
-            Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: "Say more".to_string() }],
-            },
+            Content { role: "user".to_string(), parts: vec![Part::text("Say more".to_string())] },
         ],
         HashMap::new(),
     )
@@ -35,18 +29,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     test_request(
         &model,
         vec![
-            Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: "Hello".to_string() }],
-            },
+            Content { role: "user".to_string(), parts: vec![Part::text("Hello".to_string())] },
             Content {
                 role: "model".to_string(),
-                parts: vec![Part::Text { text: "".to_string() }], // Empty text
+                parts: vec![Part::text("".to_string())], // Empty text
             },
-            Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: "Say more".to_string() }],
-            },
+            Content { role: "user".to_string(), parts: vec![Part::text("Say more".to_string())] },
         ],
         HashMap::new(),
     )
@@ -56,22 +44,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     test_request(
         &model,
         vec![
-            Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: "Hello".to_string() }],
-            },
+            Content { role: "user".to_string(), parts: vec![Part::text("Hello".to_string())] },
+            Content { role: "model".to_string(), parts: vec![Part::text("Hi".to_string())] },
             Content {
                 role: "model".to_string(),
-                parts: vec![Part::Text { text: "Hi".to_string() }],
+                parts: vec![Part::text("How are you?".to_string())],
             },
-            Content {
-                role: "model".to_string(),
-                parts: vec![Part::Text { text: "How are you?".to_string() }],
-            },
-            Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: "Fine".to_string() }],
-            },
+            Content { role: "user".to_string(), parts: vec![Part::text("Fine".to_string())] },
         ],
         HashMap::new(),
     )
@@ -81,13 +60,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     test_request(
         &model,
         vec![
+            Content { role: "user".to_string(), parts: vec![Part::text("Hello".to_string())] },
             Content {
                 role: "user".to_string(),
-                parts: vec![Part::Text { text: "Hello".to_string() }],
-            },
-            Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: "Are you there?".to_string() }],
+                parts: vec![Part::text("Are you there?".to_string())],
             },
         ],
         HashMap::new(),
@@ -97,10 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Test E: User message with empty text ===");
     test_request(
         &model,
-        vec![Content {
-            role: "user".to_string(),
-            parts: vec![Part::Text { text: "".to_string() }],
-        }],
+        vec![Content { role: "user".to_string(), parts: vec![Part::text("".to_string())] }],
         HashMap::new(),
     )
     .await;
@@ -112,20 +85,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![
             Content {
                 role: "user".to_string(),
-                parts: vec![Part::Text { text: "Analyze this".to_string() }],
+                parts: vec![Part::text("Analyze this".to_string())],
             },
             Content {
                 role: "model".to_string(),
                 parts: vec![
-                    Part::Text { text: "Technical view: ...".to_string() },
-                    Part::Text { text: "Business view: ...".to_string() },
-                    Part::Text { text: "User view: ...".to_string() },
+                    Part::text("Technical view: ...".to_string()),
+                    Part::text("Business view: ...".to_string()),
+                    Part::text("User view: ...".to_string()),
                 ],
             },
-            Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: "Thanks".to_string() }],
-            },
+            Content { role: "user".to_string(), parts: vec![Part::text("Thanks".to_string())] },
         ],
         HashMap::new(),
     )
@@ -151,7 +121,7 @@ async fn test_request(
                     Ok(response) => {
                         if let Some(content) = &response.content {
                             for part in &content.parts {
-                                if let Part::Text { text } = part {
+                                if let Some(text) = part.as_text() {
                                     print!("{}", text);
                                 }
                             }

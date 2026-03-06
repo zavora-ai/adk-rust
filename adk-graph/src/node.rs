@@ -59,7 +59,7 @@ impl ExecutionConfig {
 
 impl Default for ExecutionConfig {
     fn default() -> Self {
-        Self::new(uuid::Uuid::new_v4().to_string())
+        Self::new(SessionId::new(uuid::Uuid::new_v4().to_string()).unwrap())
     }
 }
 
@@ -286,17 +286,17 @@ fn default_input_mapper(state: &State) -> adk_core::Content {
         if let Some(arr) = messages.as_array() {
             if let Some(last) = arr.last() {
                 if let Some(content) = last.get("content").and_then(|c| c.as_str()) {
-                    return adk_core::Content::new("user").with_text(content);
+                    return adk_core::Content::user().with_text(content);
                 }
             }
         }
     }
     if let Some(input) = state.get("input") {
         if let Some(text) = input.as_str() {
-            return adk_core::Content::new("user").with_text(text);
+            return adk_core::Content::user().with_text(text);
         }
     }
-    adk_core::Content::new("user")
+    adk_core::Content::user()
 }
 
 /// Default output mapper - extracts text content to "messages"
@@ -305,7 +305,8 @@ fn default_output_mapper(events: &[adk_core::Event]) -> HashMap<String, Value> {
     let mut messages = Vec::new();
     for event in events {
         if let Some(content) = event.content() {
-            let text = content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+            let text =
+                content.parts.iter().filter_map(|p| p.as_text()).collect::<Vec<_>>().join("");
             if !text.is_empty() {
                 messages.push(serde_json::json!({ "role": "assistant", "content": text }));
             }
@@ -386,7 +387,7 @@ impl Node for AgentNode {
                     Ok(event) => {
                         // Emit streaming event immediately
                         if let Some(content) = event.content() {
-                            let text: String = content.parts.iter().filter_map(|p| p.text()).collect();
+                            let text: String = content.parts.iter().filter_map(|p| p.as_text()).collect();
                             if !text.is_empty() {
                                 yield Ok(StreamEvent::Message {
                                     node: name.clone(),
@@ -435,11 +436,11 @@ impl GraphInvocationContext {
         agent: Arc<dyn adk_core::Agent>,
     ) -> Self {
         let identity = AdkIdentity {
-            invocation_id: InvocationId::from(uuid::Uuid::new_v4().to_string()),
+            invocation_id: InvocationId::new(uuid::Uuid::new_v4().to_string()).unwrap(),
             session_id: session_id.clone(),
             agent_name: agent.name().to_string(),
             app_name: "graph_app".to_string(),
-            user_id: UserId::from("graph_user".to_string()),
+            user_id: UserId::new("graph_user".to_string()).unwrap(),
             ..Default::default()
         };
 
@@ -519,7 +520,7 @@ impl GraphSession {
     fn new(id: SessionId) -> Self {
         Self {
             id,
-            user_id: UserId::from("graph_user".to_string()),
+            user_id: UserId::new("graph_user".to_string()).unwrap(),
             state: GraphState::new(),
             history: std::sync::RwLock::new(Vec::new()),
         }

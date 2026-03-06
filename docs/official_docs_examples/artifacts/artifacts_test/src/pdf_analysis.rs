@@ -9,6 +9,7 @@
 //!   GOOGLE_API_KEY=your_key cargo run --bin pdf_analysis
 
 use adk_artifact::{ArtifactService, InMemoryArtifactService, LoadRequest, SaveRequest};
+use adk_core::types::{SessionId, UserId};
 use adk_core::{BeforeModelResult, Part};
 use adk_rust::prelude::*;
 use std::sync::Arc;
@@ -32,10 +33,13 @@ async fn main() -> anyhow::Result<()> {
     artifact_service
         .save(SaveRequest {
             app_name: "pdf_app".to_string(),
-            user_id: "user".to_string(),
-            session_id: "init".to_string(),
+            user_id: UserId::new("user").unwrap(),
+            session_id: SessionId::new("init").unwrap(),
             file_name: "user:document.pdf".to_string(),
-            part: Part::InlineData { data: pdf_bytes, mime_type: "application/pdf".to_string() },
+            part: Part::InlineData {
+                data: pdf_bytes.into(),
+                mime_type: "application/pdf".parse().unwrap(),
+            },
             version: None,
         })
         .await?;
@@ -52,15 +56,15 @@ async fn main() -> anyhow::Result<()> {
                 if let Ok(response) = service
                     .load(LoadRequest {
                         app_name: "pdf_app".to_string(),
-                        user_id: "user".to_string(),
-                        session_id: "init".to_string(),
+                        user_id: UserId::new("user").unwrap(),
+                        session_id: SessionId::new("init").unwrap(),
                         file_name: "user:document.pdf".to_string(),
                         version: None,
                     })
                     .await
                 {
                     if let Some(last_content) = request.contents.last_mut() {
-                        if last_content.role == "user" {
+                        if last_content.role == adk_core::types::Role::User {
                             // Inject PDF as InlineData - Gemini processes it natively
                             last_content.parts.push(response.part);
                         }
@@ -73,8 +77,12 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Ask questions about the PDF document:\n");
 
-    adk_cli::console::run_console(Arc::new(agent), "pdf_demo".to_string(), "user".to_string())
-        .await?;
+    adk_cli::console::run_console(
+        Arc::new(agent),
+        "pdf_demo".to_string(),
+        UserId::new("user").unwrap(),
+    )
+    .await?;
 
     Ok(())
 }

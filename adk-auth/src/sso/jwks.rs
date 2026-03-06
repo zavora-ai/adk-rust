@@ -160,26 +160,22 @@ impl Jwk {
     fn to_decoding_key(&self) -> Result<DecodingKey, TokenError> {
         match self.kty.as_str() {
             "RSA" => {
-                let n = self
-                    .n
-                    .as_ref()
-                    .ok_or_else(|| TokenError::JwksParseError("Missing 'n' in RSA key".into()))?;
-                let e = self
-                    .e
-                    .as_ref()
-                    .ok_or_else(|| TokenError::JwksParseError("Missing 'e' in RSA key".into()))?;
+                let n = self.n.as_ref().ok_or_else(|| {
+                    TokenError::JwksParseError("Missing 'n' in RSA key".to_string())
+                })?;
+                let e = self.e.as_ref().ok_or_else(|| {
+                    TokenError::JwksParseError("Missing 'e' in RSA key".to_string())
+                })?;
                 DecodingKey::from_rsa_components(n, e)
                     .map_err(|e| TokenError::JwksParseError(e.to_string()))
             }
             "EC" => {
-                let x = self
-                    .x
-                    .as_ref()
-                    .ok_or_else(|| TokenError::JwksParseError("Missing 'x' in EC key".into()))?;
-                let y = self
-                    .y
-                    .as_ref()
-                    .ok_or_else(|| TokenError::JwksParseError("Missing 'y' in EC key".into()))?;
+                let x = self.x.as_ref().ok_or_else(|| {
+                    TokenError::JwksParseError("Missing 'x' in EC key".to_string())
+                })?;
+                let y = self.y.as_ref().ok_or_else(|| {
+                    TokenError::JwksParseError("Missing 'y' in EC key".to_string())
+                })?;
                 DecodingKey::from_ec_components(x, y)
                     .map_err(|e| TokenError::JwksParseError(e.to_string()))
             }

@@ -363,20 +363,17 @@ impl McpServerConfig {
 
     /// Set the server ID.
     pub fn with_id(mut self, id: impl Into<String>) -> Self {
-        self.id = id.into();
-        self
+        self.id = id.into();        self
     }
 
     /// Set the tool prefix.
     pub fn with_tool_prefix(mut self, prefix: impl Into<String>) -> Self {
-        self.tool_prefix = Some(prefix.into());
-        self
+        self.tool_prefix = Some(prefix.into());        self
     }
 
     /// Set the bearer token for authentication.
     pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
-        self.bearer_token = Some(token.into());
-        self
+        self.bearer_token = Some(token.into());        self
     }
 
     /// Disable this server.
@@ -396,7 +393,7 @@ impl McpServerConfig {
     /// Set the working directory (for process-based servers).
     pub fn with_work_dir(mut self, work_dir: impl Into<String>) -> Self {
         if let McpServerSource::Process { work_dir: ref mut wd, .. } = self.source {
-            *wd = Some(work_dir.into());
+            *wd = Some(work_dir));
         }
         self
     }

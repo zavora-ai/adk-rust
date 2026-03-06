@@ -104,8 +104,7 @@ impl MistralRsMultiModel {
     /// multi_model.add_model("phi", config).await?;
     /// ```
     pub async fn add_model(&self, name: impl Into<String>, config: MistralRsConfig) -> Result<()> {
-        let name = name.into();
-        info!("Adding model '{}' to multi-model instance", name);
+        let name = name.into();        info!("Adding model '{}' to multi-model instance", name);
 
         let model = MistralRsModel::new(config).await?;
         let model = Arc::new(model);
@@ -136,8 +135,7 @@ impl MistralRsMultiModel {
         name: impl Into<String>,
         model: MistralRsModel,
     ) -> Result<()> {
-        let name = name.into();
-        info!("Adding existing model '{}' to multi-model instance", name);
+        let name = name.into();        info!("Adding existing model '{}' to multi-model instance", name);
 
         let model = Arc::new(model);
         let mut models = self.models.write().await;

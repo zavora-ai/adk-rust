@@ -2,6 +2,7 @@ use crate::keystore::{KNOWN_PROVIDER_KEYS, Keystore};
 use crate::server::events::{DebugEvent, TraceEventV2};
 use crate::server::graph_runner::{GraphInterruptHandler, INTERRUPTED_SESSIONS};
 use crate::server::state::AppState;
+use adk_core::types::{SessionId, UserId};
 use axum::{
     extract::{Path, Query, State},
     response::sse::{Event, Sse},
@@ -550,16 +551,16 @@ pub struct StreamQuery {
     #[serde(default)]
     binary_path: Option<String>,
     #[serde(default)]
-    session_id: Option<String>,
+    session_id: SessionId,
 }
 
 async fn get_or_create_session(
-    session_id: &str,
+    session_id: &SessionId,
     binary_path: &str,
     merged_env: &HashMap<String, String>,
 ) -> Result<(), String> {
     let mut sessions = SESSIONS.lock().await;
-    if sessions.contains_key(session_id) {
+    if sessions.contains_key(session_id.as_str()) {
         return Ok(());
     }
 
@@ -567,7 +568,7 @@ async fn get_or_create_session(
     // The caller (stream_handler) has already merged keys from process env,
     // project env_vars, and the encrypted keystore in priority order.
     let mut cmd = Command::new(binary_path);
-    cmd.arg(session_id)
+    cmd.arg(session_id.to_string())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -624,7 +625,7 @@ pub async fn stream_handler(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let input = query.input.clone();
     let binary_path = query.binary_path;
-    let session_id = query.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let session_id = query.session_id.clone();
 
     // Load the project's action node output key mappings so we can
     // reconstruct per-node output snapshots from the final state.
@@ -760,7 +761,7 @@ pub async fn stream_handler(
         // Send input
         {
             let mut sessions = SESSIONS.lock().await;
-            if let Some(session) = sessions.get_mut(&session_id) {
+            if let Some(session) = sessions.get_mut(session_id.as_str()) {
                 if session.stdin.write_all(format!("{}\n", actual_input).as_bytes()).await.is_err()
                     || session.stdin.flush().await.is_err() {
                     let err_msg = "Failed to send input";
@@ -785,7 +786,7 @@ pub async fn stream_handler(
                 }
                 let (stdout_msg, stderr_msg) = {
                     let mut sessions = SESSIONS.lock().await;
-                    match sessions.get_mut(&session_id) {
+                    match sessions.get_mut(session_id.as_str()) {
                         Some(s) => (s.stdout_rx.try_recv().ok(), s.stderr_rx.try_recv().ok()),
                         None => (None, None),
                     }
@@ -861,7 +862,7 @@ pub async fn stream_handler(
 
             let (stdout_msg, stderr_msg) = {
                 let mut sessions = SESSIONS.lock().await;
-                match sessions.get_mut(&session_id) {
+                match sessions.get_mut(session_id.as_str()) {
                     Some(s) => (s.stdout_rx.try_recv().ok(), s.stderr_rx.try_recv().ok()),
                     None => {
                         let err_msg = "Session lost";
@@ -1227,7 +1228,7 @@ fn capitalize(s: &str) -> String {
 
 pub async fn kill_session(Path(session_id): Path<String>) -> &'static str {
     let mut sessions = SESSIONS.lock().await;
-    if let Some(mut session) = sessions.remove(&session_id) {
+    if let Some(mut session) = sessions.remove(session_id.as_str()) {
         // Kill the child process explicitly
         if let Err(e) = session._child.kill().await {
             tracing::warn!("Failed to kill session {}: {}", session_id, e);
@@ -1260,13 +1261,13 @@ pub async fn kill_session(Path(session_id): Path<String>) -> &'static str {
 /// - Requirement 3.2: After user response, workflow resumes
 /// - Requirement 5.2: State persistence - workflow resumes from checkpoint
 pub async fn send_resume_response(
-    session_id: &str,
+    session_id: &SessionId,
     response: serde_json::Value,
 ) -> Result<(), String> {
     let mut sessions = SESSIONS.lock().await;
 
     let session = sessions
-        .get_mut(session_id)
+        .get_mut(session_id.as_str())
         .ok_or_else(|| format!("Session '{}' not found", session_id))?;
 
     // Format the response as a JSON string to send to the subprocess
@@ -1292,9 +1293,9 @@ pub async fn send_resume_response(
 }
 
 /// Check if a session exists and is active.
-pub async fn session_exists(session_id: &str) -> bool {
+pub async fn session_exists(session_id: &SessionId) -> bool {
     let sessions = SESSIONS.lock().await;
-    sessions.contains_key(session_id)
+    sessions.contains_key(&session_id.to_string())
 }
 
 /// Get the list of active session IDs.

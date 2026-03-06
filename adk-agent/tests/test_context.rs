@@ -17,8 +17,8 @@ impl TestContext {
         Self {
             identity: AdkIdentity::default(),
             content: Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: message.to_string() }],
+                role: adk_core::types::Role::User,
+                parts: vec![Part::text(message.to_string())],
             },
             config: RunConfig::default(),
             metadata: std::collections::HashMap::new(),
@@ -80,8 +80,8 @@ struct DummySession {
 impl DummySession {
     fn new() -> Self {
         Self {
-            id: SessionId::from("test-session".to_string()),
-            user_id: UserId::from("test-user".to_string()),
+            id: SessionId::new("test-session".to_string()).unwrap(),
+            user_id: UserId::new("test-user".to_string()).unwrap(),
         }
     }
 }

@@ -3,6 +3,7 @@
 //! This example shows how to use template variables in instructions that get
 //! replaced with values from session state at runtime.
 
+use adk_core::types::{SessionId, UserId};
 use adk_rust::futures::StreamExt;
 use adk_rust::prelude::*;
 use adk_rust::runner::{Runner, RunnerConfig};
@@ -49,7 +50,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let session = session_service
         .create(CreateRequest {
             app_name: "templating_demo".to_string(),
-            user_id: "user123".to_string().into(),
+            user_id: UserId::new("user123").unwrap(),
             session_id: None,
             state,
         })
@@ -64,9 +65,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Run the agent with templated instruction
     let mut response_stream = runner
         .run(
-            "user123".to_string().into(),
+            UserId::new("user123").unwrap(),
             session.id().clone(),
-            Content::new("user").with_text("Explain async/await in Rust"),
+            Content::user().with_text("Explain async/await in Rust"),
         )
         .await?;
 
@@ -75,7 +76,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let event = event?;
         if let Some(content) = event.content() {
             for part in &content.parts {
-                if let Part::Text { text } = part {
+                if let Some(text) = part.as_text() {
                     print!("{}", text);
                 }
             }

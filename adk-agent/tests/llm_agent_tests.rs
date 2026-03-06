@@ -34,8 +34,8 @@ impl adk_core::Llm for MockLlm {
         let s = async_stream::stream! {
             yield Ok(adk_core::LlmResponse {
                 content: Some(adk_core::Content {
-                    role: "model".to_string(),
-                    parts: vec![adk_core::Part::Text { text }],
+                    role: adk_core::types::Role::Model,
+                    parts: vec![adk_core::Part::text(text)],
                 }),
                 usage_metadata: None,
                 finish_reason: None,
@@ -79,8 +79,8 @@ impl adk_core::Llm for SpyLlm {
         let s = async_stream::stream! {
             yield Ok(adk_core::LlmResponse {
                 content: Some(adk_core::Content {
-                    role: "model".to_string(),
-                    parts: vec![adk_core::Part::Text { text }],
+                    role: adk_core::types::Role::Model,
+                    parts: vec![adk_core::Part::text(text)],
                 }),
                 usage_metadata: None,
                 finish_reason: None,
@@ -108,8 +108,8 @@ impl TestContext {
     fn new(message: &str) -> Self {
         Self {
             content: Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: message.to_string() }],
+                role: adk_core::types::Role::User,
+                parts: vec![Part::text(message.to_string())],
             },
             config: RunConfig::default(),
             identity: AdkIdentity::default(),
@@ -170,8 +170,8 @@ struct DummySession {
 impl DummySession {
     fn new() -> Self {
         Self {
-            id: SessionId::from("test-session".to_string()),
-            user_id: UserId::from("test-user".to_string()),
+            id: SessionId::new("test-session".to_string()).unwrap(),
+            user_id: UserId::new("test-user".to_string()).unwrap(),
         }
     }
 }
@@ -261,7 +261,7 @@ async fn test_llm_agent_basic_generation() {
         .parts
         .iter()
         .filter_map(|p| match p {
-            Part::Text { text } => Some(text.as_str()),
+            Part::Text(text) => Some(text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -302,7 +302,7 @@ async fn test_llm_agent_with_instruction() {
         .parts
         .iter()
         .filter_map(|p| match p {
-            Part::Text { text } => Some(text.as_str()),
+            Part::Text(text) => Some(text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -404,8 +404,8 @@ fn test_llm_agent_builder_with_callbacks() {
             Box::pin(async move {
                 *flag.lock().unwrap() = true;
                 Ok(Some(Content {
-                    role: "system".to_string(),
-                    parts: vec![Part::Text { text: "Before callback".to_string() }],
+                    role: adk_core::types::Role::System,
+                    parts: vec![Part::text("Before callback".to_string())],
                 }))
             })
         }))
@@ -414,8 +414,8 @@ fn test_llm_agent_builder_with_callbacks() {
             Box::pin(async move {
                 *flag.lock().unwrap() = true;
                 Ok(Some(Content {
-                    role: "system".to_string(),
-                    parts: vec![Part::Text { text: "After callback".to_string() }],
+                    role: adk_core::types::Role::System,
+                    parts: vec![Part::text("After callback".to_string())],
                 }))
             })
         }))
@@ -466,7 +466,7 @@ async fn test_llm_agent_injects_skill_prompt_block() {
         .contents
         .iter()
         .flat_map(|c| c.parts.iter())
-        .filter_map(|p| p.text())
+        .filter_map(|p| p.as_text())
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -499,7 +499,7 @@ async fn test_llm_agent_legacy_builder_path_has_no_skill_injection() {
         .contents
         .iter()
         .flat_map(|c| c.parts.iter())
-        .filter_map(|p| p.text())
+        .filter_map(|p| p.as_text())
         .collect::<Vec<_>>()
         .join("\n");
 

@@ -104,14 +104,14 @@ proptest! {
     /// Property: Text parts should not be converted to images
     #[test]
     fn prop_text_part_not_image(text in arb_text()) {
-        let part = Part::Text { text };
+        let part = Part::text(text);
         prop_assert!(image_part_to_mistralrs(&part).is_none());
     }
 
     /// Property: Text parts should not be converted to audio
     #[test]
     fn prop_text_part_not_audio(text in arb_text()) {
-        let part = Part::Text { text };
+        let part = Part::text(text);
         prop_assert!(audio_part_to_mistralrs(&part).is_none());
     }
 
@@ -124,8 +124,8 @@ proptest! {
         let content = Content {
             role: "user".to_string(),
             parts: vec![
-                Part::Text { text: text1.clone() },
-                Part::Text { text: text2.clone() },
+                Part::text(text1.clone()),
+                Part::text(text2.clone()),
             ],
         };
 
@@ -197,7 +197,7 @@ fn test_extract_images_from_content() {
     let content = Content {
         role: "user".to_string(),
         parts: vec![
-            Part::Text { text: "Describe this image".to_string() },
+            Part::text("Describe this image".to_string()),
             Part::InlineData { mime_type: "image/png".to_string(), data: png_data },
         ],
     };
@@ -210,7 +210,7 @@ fn test_extract_images_from_content() {
 fn test_extract_images_from_content_no_images() {
     let content = Content {
         role: "user".to_string(),
-        parts: vec![Part::Text { text: "Hello world".to_string() }],
+        parts: vec![Part::text("Hello world".to_string())],
     };
 
     let images = extract_images_from_content(&content);
@@ -285,7 +285,7 @@ fn test_content_with_file_uri() {
     assert_eq!(content.parts.len(), 2);
 
     // First part is text
-    assert!(matches!(&content.parts[0], Part::Text { text } if text == "Check this image"));
+    assert!(matches!(&content.parts[0], Part::text(text) if text == "Check this image"));
 
     // Second part is FileData
     assert!(matches!(

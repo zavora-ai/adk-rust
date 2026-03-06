@@ -83,7 +83,7 @@ proptest! {
     /// Property: Text parts should not be converted to audio
     #[test]
     fn prop_text_part_not_audio(text in arb_text()) {
-        let part = Part::Text { text };
+        let part = Part::text(text);
         prop_assert!(audio_part_to_mistralrs(&part).is_none());
     }
 

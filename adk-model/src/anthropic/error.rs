@@ -79,6 +79,8 @@ impl From<AnthropicApiError> for AdkError {
 pub enum ConversionError {
     /// The MIME type is not supported by the Anthropic API.
     UnsupportedMimeType(String),
+    /// File data (URLs) not supported for this provider.
+    UnsupportedFileData,
 }
 
 impl std::fmt::Display for ConversionError {
@@ -86,6 +88,9 @@ impl std::fmt::Display for ConversionError {
         match self {
             ConversionError::UnsupportedMimeType(mime) => {
                 write!(f, "unsupported MIME type for Anthropic API: {mime}")
+            }
+            ConversionError::UnsupportedFileData => {
+                write!(f, "file data (URLs) not supported for Anthropic API")
             }
         }
     }

@@ -28,7 +28,7 @@ async fn print_response(
         && let Some(content) = &response.content
     {
         for part in &content.parts {
-            if let Part::Text { text } = part {
+            if let Some(text) = part.as_text() {
                 println!("{text}");
             }
         }
@@ -53,9 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 mime_type: "image/jpeg".to_string(),
                 file_uri: "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/1200px-Cat03.jpg".to_string(),
             },
-            Part::Text {
-                text: "Describe this image in 2-3 sentences.".to_string(),
-            },
+            Part::text("Describe this image in 2-3 sentences.".to_string()),
         ],
     }]);
     print_response(&client, request).await?;
@@ -76,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         role: "user".to_string(),
         parts: vec![
             Part::InlineData { mime_type: "image/png".to_string(), data: red_pixel_png },
-            Part::Text { text: "What do you see in this image? It's very small.".to_string() },
+            Part::text("What do you see in this image? It's very small.".to_string()),
         ],
     }]);
     print_response(&client, request).await?;
@@ -95,9 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 mime_type: "image/jpeg".to_string(),
                 file_uri: "https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/YellowLabradorLooking_new.jpg/1200px-YellowLabradorLooking_new.jpg".to_string(),
             },
-            Part::Text {
-                text: "Compare these two animals in one sentence.".to_string(),
-            },
+            Part::text("Compare these two animals in one sentence.".to_string()),
         ],
     }]);
     print_response(&client, request).await?;

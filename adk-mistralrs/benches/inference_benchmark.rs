@@ -150,7 +150,7 @@ fn conversion_benchmark(c: &mut Criterion) {
     // Simple content conversion
     let simple_content = Content {
         role: "user".to_string(),
-        parts: vec![Part::Text { text: "Hello, world!".to_string() }],
+        parts: vec![Part::text("Hello, world!".to_string())],
     };
 
     group.bench_function("content_to_message_simple", |b| {
@@ -161,7 +161,7 @@ fn conversion_benchmark(c: &mut Criterion) {
     let complex_content = Content {
         role: "model".to_string(),
         parts: vec![
-            Part::Text { text: "I'll help you with that.".to_string() },
+            Part::text("I'll help you with that.".to_string()),
             Part::FunctionCall {
                 id: Some("call_123".to_string()),
                 name: "get_weather".to_string(),
@@ -343,7 +343,7 @@ mod real_benchmarks {
             let request = LlmRequest {
                 contents: vec![Content {
                     role: "user".to_string(),
-                    parts: vec![Part::Text { text: config.short_prompt.to_string() }],
+                    parts: vec![Part::text(config.short_prompt.to_string())],
                 }],
                 ..Default::default()
             };
@@ -359,7 +359,7 @@ mod real_benchmarks {
             let request = LlmRequest {
                 contents: vec![Content {
                     role: "user".to_string(),
-                    parts: vec![Part::Text { text: config.medium_prompt.to_string() }],
+                    parts: vec![Part::text(config.medium_prompt.to_string())],
                 }],
                 ..Default::default()
             };
@@ -401,7 +401,7 @@ mod real_benchmarks {
             let request = LlmRequest {
                 contents: vec![Content {
                     role: "user".to_string(),
-                    parts: vec![Part::Text { text: "What is 2 + 2?".to_string() }],
+                    parts: vec![Part::text("What is 2 + 2?".to_string())],
                 }],
                 ..Default::default()
             };

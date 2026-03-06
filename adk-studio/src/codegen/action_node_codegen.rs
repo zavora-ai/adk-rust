@@ -72,7 +72,7 @@ pub fn generate_error_handling_wrapper(node_id: &str, props: &StandardProperties
                          Err(e) => {{\n\
                              {}_attempts += 1;\n\
                              if {}_attempts >= {} {{\n\
-                                 return Err(e.into());\n\
+                                 return Err(e));\n\
                              }}\n\
                              tracing::warn!(node = \"{}\", attempt = {}_attempts, error = %e, \"Retrying\");\n\
                              tokio::time::sleep(std::time::Duration::from_millis({})).await;\n\

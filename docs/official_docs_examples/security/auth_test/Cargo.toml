@@ -9,3 +9,4 @@ path = "src/basic.rs"
 
 [dependencies]
 adk-auth = { path = "../../../../adk-auth" }
+adk-core = { path = "../../../../adk-core" }

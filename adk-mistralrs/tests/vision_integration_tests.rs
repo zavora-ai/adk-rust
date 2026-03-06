@@ -103,7 +103,7 @@ async fn test_vision_streaming() {
         role: "user".to_string(),
         parts: vec![
             Part::InlineData { mime_type: "image/jpeg".to_string(), data: image_bytes },
-            Part::Text { text: "What is in this image? Answer briefly.".to_string() },
+            Part::text("What is in this image? Answer briefly.".to_string()),
         ],
     };
 
@@ -119,7 +119,7 @@ async fn test_vision_streaming() {
             Ok(response) => {
                 if let Some(content) = &response.content {
                     for part in &content.parts {
-                        if let Part::Text { text } = part {
+                        if let Some(text) = part.as_text() {
                             print!("{}", text);
                             full_response.push_str(text);
                         }

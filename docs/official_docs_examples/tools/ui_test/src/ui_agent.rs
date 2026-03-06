@@ -51,7 +51,7 @@ Always prefer UI components over plain text responses for structured interaction
     println!("  - \"Delete my account\"");
     println!();
 
-    adk_cli::console::run_console(Arc::new(agent), "ui_demo".to_string(), "user1".to_string()).await?;
+    adk_cli::console::run_console(Arc::new(agent), "ui_demo".to_string(), UserId::new("user1").unwrap()).await?;
 
     Ok(())
 }

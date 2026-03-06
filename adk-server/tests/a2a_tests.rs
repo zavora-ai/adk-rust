@@ -43,9 +43,7 @@ impl Agent for TestAgent {
             event.author = agent_name;
             event.llm_response.content = Some(adk_core::Content {
                 role: "model".to_string(),
-                parts: vec![adk_core::Part::Text {
-                    text: "Hello from test agent!".to_string(),
-                }],
+                parts: vec![adk_core::Part::text("Hello from test agent!".to_string())],
             });
             event.llm_response.turn_complete = true;
             yield Ok(event);

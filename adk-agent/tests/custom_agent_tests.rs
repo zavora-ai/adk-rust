@@ -18,8 +18,8 @@ struct MockSession {
 impl MockSession {
     fn new() -> Self {
         Self {
-            id: SessionId::from("test-session".to_string()),
-            user_id: UserId::from("test-user".to_string()),
+            id: SessionId::new("test-session".to_string()).unwrap(),
+            user_id: UserId::new("test-user".to_string()).unwrap(),
         }
     }
 }
@@ -56,12 +56,12 @@ impl MockContext {
         Self {
             content: Content {
                 role: "user".to_string(),
-                parts: vec![Part::Text { text: "test".to_string() }],
+                parts: vec![Part::text("test".to_string())],
             },
             session: MockSession::new(),
             user_content: Content {
                 role: "user".to_string(),
-                parts: vec![Part::Text { text: "test".to_string() }],
+                parts: vec![Part::text("test".to_string())],
             },
             identity: AdkIdentity::default(),
             metadata: HashMap::new(),

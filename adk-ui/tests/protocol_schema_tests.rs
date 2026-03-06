@@ -1,4 +1,4 @@
-use adk_core::{Content, EventActions, ReadonlyContext, Tool, ToolContext, types::AdkIdentity};
+use adk_core::{Content, EventActions, ReadonlyContext, Role, Tool, ToolContext, types::AdkIdentity};
 use adk_ui::tools::{RenderFormTool, RenderScreenTool};
 use async_trait::async_trait;
 use jsonschema::Validator;
@@ -17,7 +17,7 @@ impl TestContext {
     fn new() -> Self {
         Self {
             identity: AdkIdentity::default(),
-            content: Content::new("user"),
+            content: Content::new(Role::User),
             metadata: HashMap::new(),
             actions: Mutex::new(EventActions::default()),
         }

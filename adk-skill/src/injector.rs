@@ -95,7 +95,7 @@ pub fn apply_skill_injection(
     policy: &SelectionPolicy,
     max_injected_chars: usize,
 ) -> Option<SkillMatch> {
-    if content.role != "user" || index.is_empty() {
+    if content.role != adk_core::types::Role::User || index.is_empty() {
         return None;
     }
 
@@ -108,12 +108,12 @@ pub fn apply_skill_injection(
         select_skill_prompt_block(index, &original_text, policy, max_injected_chars)?;
     let injected_text = format!("{prompt_block}\n\n{original_text}");
 
-    if let Some(Part::Text { text }) =
-        content.parts.iter_mut().find(|part| matches!(part, Part::Text { .. }))
+    if let Some(Part::Text(text)) =
+        content.parts.iter_mut().find(|part| matches!(part, Part::Text(..)))
     {
         *text = injected_text;
     } else {
-        content.parts.insert(0, Part::Text { text: injected_text });
+        content.parts.insert(0, Part::text(injected_text));
     }
 
     Some(top)
@@ -124,7 +124,7 @@ fn extract_text(content: &Content) -> String {
         .parts
         .iter()
         .filter_map(|p| match p {
-            Part::Text { text } => Some(text.as_str()),
+            Part::Text(text) => Some(text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -152,11 +152,11 @@ mod tests {
         let index = load_skill_index(root).unwrap();
         let policy = SelectionPolicy { top_k: 1, min_score: 0.1, ..SelectionPolicy::default() };
 
-        let mut content = Content::new("user").with_text("Please search this repository quickly");
+        let mut content = Content::new(adk_core::Role::User).with_text("Please search this repository quickly");
         let matched = apply_skill_injection(&mut content, &index, &policy, 1000);
 
         assert!(matched.is_some());
-        let injected = content.parts[0].text().unwrap();
+        let injected = content.parts[0].as_text().unwrap();
         assert!(injected.contains("[skill:search]"));
         assert!(injected.contains("Use rg first."));
     }

@@ -115,7 +115,7 @@ chrono = { version = "0.4", features = ["serde"] }
 regex = "1.10"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-opentelemetry = "0.21"
+mime = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 
 # ADK internal crates (use { workspace = true } in member crates)
@@ -139,7 +139,6 @@ adk-guardrail = { path = "adk-guardrail", version = "0.3.2" }
 adk-auth = { path = "adk-auth", version = "0.3.2" }
 adk-plugin = { path = "adk-plugin", version = "0.3.2" }
 adk-skill = { path = "adk-skill", version = "0.3.2" }
-adk-studio = { path = "adk-studio", version = "0.3.2" }
 adk-gemini = { path = "adk-gemini", version = "0.3.2" }
 adk-doc-audit = { path = "adk-doc-audit", version = "0.3.2" }
 adk-rag = { path = "adk-rag", version = "0.3.2" }

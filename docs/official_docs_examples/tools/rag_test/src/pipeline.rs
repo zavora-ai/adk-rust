@@ -49,9 +49,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ingest(
             "docs",
             &Document {
-                id: "intro".into(),
-                text: "Rust is a systems programming language focused on safety and speed.".into(),
-                metadata: HashMap::from([("topic".into(), "rust".into())]),
+                id: "intro".to_string(),
+                text: "Rust is a systems programming language focused on safety and speed."
+                    .to_string(),
+                metadata: HashMap::from([("topic".to_string(), "rust".to_string())]),
                 source_uri: None,
             },
         )
@@ -73,14 +74,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // From docs: Batch ingest
     let docs = vec![
         Document {
-            id: "doc2".into(),
-            text: "Python is great for data science.".into(),
+            id: "doc2".to_string(),
+            text: "Python is great for data science.".to_string(),
             metadata: Default::default(),
             source_uri: None,
         },
         Document {
-            id: "doc3".into(),
-            text: "JavaScript runs in the browser.".into(),
+            id: "doc3".to_string(),
+            text: "JavaScript runs in the browser.".to_string(),
             metadata: Default::default(),
             source_uri: None,
         },

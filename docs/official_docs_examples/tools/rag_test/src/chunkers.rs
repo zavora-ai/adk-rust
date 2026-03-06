@@ -5,11 +5,11 @@ use adk_rag::{Document, FixedSizeChunker, MarkdownChunker, RecursiveChunker};
 
 fn sample_doc() -> Document {
     Document {
-        id: "test".into(),
+        id: "test".to_string(),
         text: "First paragraph about Rust programming.\n\n\
                Second paragraph about memory safety. Rust prevents dangling pointers.\n\n\
                Third paragraph about async. Tokio is the most popular runtime."
-            .into(),
+            .to_string(),
         metadata: Default::default(),
         source_uri: None,
     }
@@ -17,14 +17,14 @@ fn sample_doc() -> Document {
 
 fn markdown_doc() -> Document {
     Document {
-        id: "md".into(),
+        id: "md".to_string(),
         text: "# Getting Started\n\n\
                Install the CLI tool.\n\n\
                ## Installation\n\n\
                Run npm install to get started.\n\n\
                ## Configuration\n\n\
                Edit the config file."
-            .into(),
+            .to_string(),
         metadata: Default::default(),
         source_uri: None,
     }
@@ -71,7 +71,7 @@ fn main() {
 
     // Empty document produces no chunks
     let empty = Document {
-        id: "empty".into(),
+        id: "empty".to_string(),
         text: String::new(),
         metadata: Default::default(),
         source_uri: None,

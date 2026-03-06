@@ -16,7 +16,7 @@ struct MockCallbackContext {
 impl MockCallbackContext {
     fn new(id: &str) -> Self {
         let mut identity = AdkIdentity::default();
-        identity.invocation_id = id.to_string().into();
+        identity.invocation_id = id.to_string());
         Self { content: Content::new("user"), identity, metadata: std::collections::HashMap::new() }
     }
 }
@@ -56,7 +56,7 @@ async fn test_callback_execution() {
             *flag.lock().unwrap() = true;
             Ok(Some(Content {
                 role: "system".to_string(),
-                parts: vec![Part::Text { text: "Before callback executed".to_string() }],
+                parts: vec![Part::text("Before callback executed".to_string())],
             }))
         })
             as std::pin::Pin<
@@ -70,7 +70,7 @@ async fn test_callback_execution() {
             *flag.lock().unwrap() = true;
             Ok(Some(Content {
                 role: "system".to_string(),
-                parts: vec![Part::Text { text: "After callback executed".to_string() }],
+                parts: vec![Part::text("After callback executed".to_string())],
             }))
         })
             as std::pin::Pin<
@@ -85,7 +85,7 @@ async fn test_callback_execution() {
     assert!(before_result.is_some());
     assert_eq!(
         before_result.unwrap().parts[0],
-        Part::Text { text: "Before callback executed".to_string() }
+        Part::text("Before callback executed".to_string())
     );
     assert!(*before_called.lock().unwrap());
 
@@ -93,7 +93,7 @@ async fn test_callback_execution() {
     assert!(after_result.is_some());
     assert_eq!(
         after_result.unwrap().parts[0],
-        Part::Text { text: "After callback executed".to_string() }
+        Part::text("After callback executed".to_string())
     );
     assert!(*after_called.lock().unwrap());
 }

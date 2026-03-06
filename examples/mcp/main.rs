@@ -97,7 +97,7 @@ impl MockContext {
             session: MockSession::new(),
             user_content: Content {
                 role: "user".to_string(),
-                parts: vec![Part::Text { text: text.to_string() }],
+                parts: vec![Part::text(text.to_string())],
             },
             metadata: HashMap::new(),
         }
@@ -245,7 +245,7 @@ async fn main() -> anyhow::Result<()> {
                             && let Some(content) = event.llm_response.content
                         {
                             for part in content.parts {
-                                if let Part::Text { text } = part {
+                                if let Some(text) = part.as_text() {
                                     print!("{}", text);
                                 }
                             }

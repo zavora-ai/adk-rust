@@ -54,7 +54,7 @@ async fn send_and_print(
         let response = result?;
         if let Some(content) = &response.content {
             for part in &content.parts {
-                if let Part::Text { text: t } = part {
+                if let Some(t ) = part.as_text() {
                     text.push_str(t);
                 }
             }

@@ -229,7 +229,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     adk_cli::console::run_console(
         Arc::new(agent),
         "deepseek_thinking_tools".to_string(),
-        "user_1".to_string(),
+        adk_core::types::UserId::new("user_1").unwrap(),
     )
     .await?;
 

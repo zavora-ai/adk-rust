@@ -5,12 +5,11 @@
 # These settings are automatically applied by Cargo.
 
 [build]
-# WHY INCREMENTAL = FALSE:
-# sccache (our compilation cache) is incompatible with Cargo's incremental 
-# compilation. Incremental builds produce highly volatile, developer-specific 
-# artifacts that cannot be reliably cached or shared. Disabling it ensures 
-# object files are cacheable, leading to faster clean builds and better CI performance.
-incremental = false
+# WHY INCREMENTAL = TRUE:
+# While sccache is generally incompatible with Cargo's incremental compilation,
+# 'wild' (a modern, concurrent linker) is being tested with incremental
+# compilation support to optimize local developer iteration speed in this massive monorepo.
+incremental = true
 
 # ---------------------------------------------------------------------------
 # Faster linker per platform
@@ -18,18 +17,18 @@ incremental = false
 # We use 'clang' as the compiler driver because it supports advanced linkers 
 # like 'mold' and 'wild' natively.
 #
-# -fuse-ld=mold: 
-#   Instructs clang to use a linker named 'mold'. It searches the system PATH 
-#   for a binary matching 'ld.mold'.
+# Comparing 'mold' and 'wild' under 'clang' as linker:
+# - `mold`: (-fuse-ld=mold) Mold is the general-purpose king of speed. It excels at linking
+#   large binaries incredibly fast by parallelizing many traditionally sequential linking phases.
+#   It's passed to clang by using `-fuse-ld=mold`, causing clang to invoke `ld.mold`.
+# - `wild`: (--ld-path=wild) Wild is a specialized linker designed specifically for Rust workspaces
+#   with massive monorepo structures. It aims for ultra-fast incremental rebuilds by minimizing
+#   I/O and caching linking intermediate stages where possible. When combined with Cargo's
+#   incremental compilation (`incremental = true`) and `WILD_INCREMENTAL="1"`, it dramatically
+#   accelerates the dev cycle by only linking modified object code.
+#   It's passed to clang explicitly via direct path overriding with `--ld-path=wild`.
 #
-# --ld-path=wild: 
-#   Provides the direct filesystem path or specific binary name for the 'wild' 
-#   linker. This is more explicit than -fuse-ld and useful when multiple 
-#   versions exist or when using specialized linkers like 'wild'.
-#
-# mold is the general-purpose king of speed. 
-# wild is used in this workspace for specific performance characteristics 
-# in massive monorepo structures.
+# In this workspace, `wild` is the configured linker of choice alongside incremental compilation.
 
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"

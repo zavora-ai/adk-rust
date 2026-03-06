@@ -122,12 +122,13 @@ impl adk_core::Session for MutableSession {
 
             if let Some(content) = &event.llm_response.content {
                 let mut mapped_content = content.clone();
-                mapped_content.role = match (event.author.as_str(), content.role.as_str()) {
-                    ("user", _) => "user",
-                    (_, "function" | "tool") => content.role.as_str(),
-                    _ => "model",
-                }
-                .to_string();
+                let author_str = event.author.to_string();
+                let role_str = content.role.to_string();
+                mapped_content.role = match (author_str.as_str(), role_str.as_str()) {
+                    ("user", _) => adk_core::types::Role::User,
+                    (_, "function" | "tool") => content.role.clone(),
+                    _ => adk_core::types::Role::Model,
+                };
                 history.push(mapped_content);
             }
         }
@@ -181,7 +182,7 @@ impl RunnerContext {
         session: Arc<dyn AdkSession>,
     ) -> Self {
         let base = adk_core::AdkContext::builder()
-            .invocation_id(InvocationId::from(invocation_id))
+            .invocation_id(InvocationId::new(invocation_id).unwrap())
             .agent_name(agent.name())
             .user_id(user_id)
             .app_name(app_name)
@@ -212,7 +213,7 @@ impl RunnerContext {
         session: Arc<MutableSession>,
     ) -> Self {
         let base = adk_core::AdkContext::builder()
-            .invocation_id(InvocationId::from(invocation_id))
+            .invocation_id(InvocationId::new(invocation_id).unwrap())
             .agent_name(agent.name())
             .user_id(user_id)
             .app_name(app_name)

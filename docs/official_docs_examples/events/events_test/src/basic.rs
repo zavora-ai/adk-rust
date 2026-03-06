@@ -15,9 +15,9 @@ fn main() {
 
     // 1. Create a basic event
     println!("1. Creating a basic event:");
-    let mut event = Event::new("inv-123");
+    let mut event = Event::new(adk_core::types::InvocationId::new("inv-123").unwrap());
     event.author = "assistant".to_string();
-    event.set_content(Content::new("model").with_text("Hello! How can I help?"));
+    event.set_content(Content::model().with_text("Hello! How can I help?"));
 
     println!("   ID: {}", event.id);
     println!("   Author: {}", event.author);
@@ -29,7 +29,7 @@ fn main() {
     if let Some(content) = event.content() {
         println!("   Role: {}", content.role);
         for part in &content.parts {
-            if let Part::Text { text } = part {
+            if let Some(text) = part.as_text() {
                 println!("   Text: {}", text);
             }
         }
@@ -41,10 +41,10 @@ fn main() {
 
     // 4. Event with function call (not final)
     println!("\n4. Event with function call:");
-    let mut tool_event = Event::new("inv-456");
+    let mut tool_event = Event::new(adk_core::types::InvocationId::new("inv-456").unwrap());
     tool_event.author = "assistant".to_string();
     tool_event.set_content(Content {
-        role: "model".to_string(),
+        role: adk_core::types::Role::Model,
         parts: vec![Part::FunctionCall {
             name: "get_weather".to_string(),
             args: json!({"city": "Tokyo"}),
@@ -57,7 +57,7 @@ fn main() {
 
     // 5. Event with state delta
     println!("\n5. Event with state changes:");
-    let mut state_event = Event::new("inv-789");
+    let mut state_event = Event::new(adk_core::types::InvocationId::new("inv-789").unwrap());
     state_event.author = "assistant".to_string();
     state_event.actions.state_delta.insert("user_name".to_string(), json!("Alice"));
     state_event.actions.state_delta.insert("temp:step".to_string(), json!(1));
@@ -70,7 +70,7 @@ fn main() {
 
     // 6. Event with artifact delta
     println!("\n6. Event with artifact changes:");
-    let mut artifact_event = Event::new("inv-abc");
+    let mut artifact_event = Event::new(adk_core::types::InvocationId::new("inv-abc").unwrap());
     artifact_event.actions.artifact_delta.insert("report.pdf".to_string(), 1);
     artifact_event.actions.artifact_delta.insert("chart.png".to_string(), 2);
 
@@ -81,10 +81,10 @@ fn main() {
 
     // 7. Event with transfer
     println!("\n7. Event with agent transfer:");
-    let mut transfer_event = Event::new("inv-def");
+    let mut transfer_event = Event::new(adk_core::types::InvocationId::new("inv-def").unwrap());
     transfer_event.author = "router".to_string();
     transfer_event.actions.transfer_to_agent = Some("specialist".to_string());
-    transfer_event.set_content(Content::new("model").with_text("Transferring to specialist..."));
+    transfer_event.set_content(Content::model().with_text("Transferring to specialist..."));
 
     if let Some(target) = &transfer_event.actions.transfer_to_agent {
         println!("   Transfer to: {}", target);
@@ -92,9 +92,9 @@ fn main() {
 
     // 8. Partial streaming event
     println!("\n8. Partial streaming event:");
-    let mut partial_event = Event::new("inv-stream");
+    let mut partial_event = Event::new(adk_core::types::InvocationId::new("inv-stream").unwrap());
     partial_event.llm_response.partial = true;
-    partial_event.set_content(Content::new("model").with_text("Hello..."));
+    partial_event.set_content(Content::model().with_text("Hello..."));
 
     println!("   partial: {}", partial_event.llm_response.partial);
     println!("   is_final_response: {}", partial_event.is_final_response());

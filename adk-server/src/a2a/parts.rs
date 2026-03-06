@@ -9,12 +9,12 @@ pub fn adk_parts_to_a2a(
     parts
         .iter()
         .map(|part| match part {
-            Part::Text { text } => Ok(crate::a2a::Part::text(text.clone())),
+            Part::Text(text) => Ok(crate::a2a::Part::text(text.clone())),
             Part::InlineData { mime_type, data } => {
                 let encoded = general_purpose::STANDARD.encode(data);
                 Ok(crate::a2a::Part::file(crate::a2a::FileContent {
                     name: None,
-                    mime_type: Some(mime_type.clone()),
+                    mime_type: Some(mime_type.to_string()),
                     bytes: Some(encoded),
                     uri: None,
                 }))
@@ -23,7 +23,7 @@ pub fn adk_parts_to_a2a(
                 // FileData contains a URI reference to a file
                 Ok(crate::a2a::Part::file(crate::a2a::FileContent {
                     name: None,
-                    mime_type: Some(mime_type.clone()),
+                    mime_type: Some(mime_type.to_string()),
                     bytes: None,
                     uri: Some(file_uri.clone()),
                 }))
@@ -44,15 +44,15 @@ pub fn adk_parts_to_a2a(
 
                 Ok(crate::a2a::Part::Data { data, metadata: Some(metadata) })
             }
-            Part::Thinking { thinking, .. } => {
+            Part::Thinking { thought, .. } => {
                 // Convert thinking traces to text for A2A protocol
-                Ok(crate::a2a::Part::text(thinking.clone()))
+                Ok(crate::a2a::Part::text(thought.clone()))
             }
-            Part::FunctionResponse { function_response, id } => {
+            Part::FunctionResponse { name, response, id } => {
                 let mut data = Map::new();
                 let mut resp_data = Map::new();
-                resp_data.insert("name".to_string(), Value::String(function_response.name.clone()));
-                resp_data.insert("response".to_string(), function_response.response.clone());
+                resp_data.insert("name".to_string(), Value::String(name.clone()));
+                resp_data.insert("response".to_string(), response.clone());
                 if let Some(resp_id) = id {
                     resp_data.insert("id".to_string(), Value::String(resp_id.clone()));
                 }
@@ -68,15 +68,15 @@ pub fn a2a_parts_to_adk(parts: &[crate::a2a::Part]) -> Result<Vec<Part>> {
     parts
         .iter()
         .map(|part| match part {
-            crate::a2a::Part::Text { text, .. } => Ok(Part::Text { text: text.clone() }),
+            crate::a2a::Part::Text { text, .. } => Ok(Part::text(text.clone())),
             crate::a2a::Part::File { file, .. } => {
                 if let Some(bytes) = &file.bytes {
                     let data = general_purpose::STANDARD.decode(bytes).map_err(|e| {
                         adk_core::AdkError::Agent(format!("Base64 decode error: {}", e))
                     })?;
                     Ok(Part::InlineData {
-                        mime_type: file.mime_type.clone().unwrap_or_default(),
-                        data,
+                        mime_type: file.mime_type.clone().unwrap_or_else(|| "application/octet-stream".to_string()).parse().unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
+                        data: data.into(),
                     })
                 } else {
                     Err(adk_core::AdkError::Agent("File part with URI not supported".to_string()))
@@ -105,10 +105,7 @@ pub fn a2a_parts_to_adk(parts: &[crate::a2a::Part]) -> Result<Vec<Part>> {
                     let response =
                         resp.get("response").cloned().unwrap_or(Value::Object(Map::new()));
                     let id = resp.get("id").and_then(|v| v.as_str()).map(String::from);
-                    Ok(Part::FunctionResponse {
-                        function_response: adk_core::FunctionResponseData { name, response },
-                        id,
-                    })
+                    Ok(Part::FunctionResponse { name, response, id })
                 } else {
                     Err(adk_core::AdkError::Agent("Unknown data part format".to_string()))
                 }
@@ -124,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_text_conversion() {
-        let adk_parts = vec![Part::Text { text: "Hello".to_string() }];
+        let adk_parts = vec![Part::text("Hello".to_string())];
         let a2a_parts = adk_parts_to_a2a(&adk_parts, &[]).unwrap();
         assert_eq!(a2a_parts.len(), 1);
 

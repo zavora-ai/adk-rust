@@ -19,7 +19,9 @@
 //! ```
 
 use adk_agent::LlmAgentBuilder;
-use adk_core::{AdkError, Content, Llm, LlmRequest, Part, Result as AdkResult, ToolContext};
+use adk_core::{
+    AdkError, Content, Llm, LlmRequest, Part, Result as AdkResult, SessionId, ToolContext, UserId,
+};
 use adk_model::gemini::GeminiModel;
 use adk_runner::{Runner, RunnerConfig};
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
@@ -133,7 +135,7 @@ async fn demo_thinking_traces(model: &GeminiModel) -> Result<(), Box<dyn std::er
                             );
                         }
                     }
-                    Part::Text { text } => {
+                    Part::Text(text) => {
                         print!("{text}");
                     }
                     _ => {}
@@ -193,12 +195,12 @@ async fn demo_thought_signature(model: Arc<GeminiModel>) -> Result<(), Box<dyn s
     let session = session_service
         .create(CreateRequest {
             app_name: "gemini_thinking".to_string(),
-            user_id: "user_1".to_string().into(),
+            user_id: UserId::new("user_1").unwrap(),
             session_id: None,
             state: HashMap::new(),
         })
         .await?;
-    let session_id = session.id().to_string();
+    let session_id = session.id().clone();
 
     let runner = Runner::new(RunnerConfig {
         app_name: "gemini_thinking".to_string(),
@@ -221,7 +223,7 @@ async fn demo_thought_signature(model: Arc<GeminiModel>) -> Result<(), Box<dyn s
     );
 
     let mut stream =
-        runner.run("user_1".to_string().into(), session_id.clone().into(), content).await?;
+        runner.run(UserId::new("user_1").unwrap(), session_id.clone(), content).await?;
 
     let mut saw_thinking = false;
     let mut saw_tool_call = false;
@@ -240,7 +242,7 @@ async fn demo_thought_signature(model: Arc<GeminiModel>) -> Result<(), Box<dyn s
                                 println!("     [has signature]");
                             }
                         }
-                        Part::Text { text } => print!("{text}"),
+                        Part::Text(text) => print!("{text}"),
                         Part::FunctionCall { name, args, thought_signature, .. } => {
                             saw_tool_call = true;
                             println!("  🔧 Tool call: {name}({args})");
@@ -262,14 +264,14 @@ async fn demo_thought_signature(model: Arc<GeminiModel>) -> Result<(), Box<dyn s
                     }
                 }
             }
-            if e.llm_response.turn_complete
-                && let Some(usage) = &e.llm_response.usage_metadata
-            {
-                println!("\n\n  Token usage:");
-                println!("    prompt:    {}", usage.prompt_token_count);
-                println!("    output:    {}", usage.candidates_token_count);
-                if let Some(thinking) = usage.thinking_token_count {
-                    println!("    thinking:  {thinking}");
+            if e.llm_response.turn_complete {
+                if let Some(usage) = &e.llm_response.usage_metadata {
+                    println!("\n\n  Token usage:");
+                    println!("    prompt:    {}", usage.prompt_token_count);
+                    println!("    output:    {}", usage.candidates_token_count);
+                    if let Some(thinking) = usage.thinking_token_count {
+                        println!("    thinking:  {thinking}");
+                    }
                 }
             }
         }
@@ -285,26 +287,26 @@ async fn demo_thought_signature(model: Arc<GeminiModel>) -> Result<(), Box<dyn s
     let content = Content::new("user").with_text("Now convert that speed to km/h as well.");
 
     let mut stream =
-        runner.run("user_1".to_string().into(), session_id.clone().into(), content).await?;
+        runner.run(UserId::new("user_1").unwrap(), session_id.clone(), content).await?;
 
     while let Some(event) = stream.next().await {
-        if let Ok(e) = event
-            && let Some(content) = e.llm_response.content
-        {
-            for part in &content.parts {
-                match part {
-                    Part::Thinking { thinking, .. } => {
-                        let preview = &thinking[..thinking.len().min(100)];
-                        println!("  💭 {preview}...");
+        if let Ok(e) = event {
+            if let Some(content) = e.llm_response.content {
+                for part in &content.parts {
+                    match part {
+                        Part::Thinking { thinking, .. } => {
+                            let preview = &thinking[..thinking.len().min(100)];
+                            println!("  💭 {preview}...");
+                        }
+                        Part::Text(text) => print!("{text}"),
+                        Part::FunctionCall { name, args, .. } => {
+                            println!("  🔧 Tool call: {name}({args})");
+                        }
+                        Part::FunctionResponse { function_response, .. } => {
+                            println!("  📋 Tool result: {}", function_response.response);
+                        }
+                        _ => {}
                     }
-                    Part::Text { text } => print!("{text}"),
-                    Part::FunctionCall { name, args, .. } => {
-                        println!("  🔧 Tool call: {name}({args})");
-                    }
-                    Part::FunctionResponse { function_response, .. } => {
-                        println!("  📋 Tool result: {}", function_response.response);
-                    }
-                    _ => {}
                 }
             }
         }

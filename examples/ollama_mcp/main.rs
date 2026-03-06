@@ -44,7 +44,7 @@ impl ReadonlyContext for SimpleContext {
         static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
         CONTENT.get_or_init(|| Content {
             role: "user".to_string(),
-            parts: vec![Part::Text { text: "init".to_string() }],
+            parts: vec![Part::text("init".to_string())],
         })
     }
 
@@ -58,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
     // Initialize tracing (only show warnings by default to reduce noise)
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "warn,adk_agent=info".into()),
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "warn,adk_agent=info"),
         ))
         .with(tracing_subscriber::fmt::layer())
         .init();

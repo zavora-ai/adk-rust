@@ -40,14 +40,14 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let text = state.get("input").and_then(|v| v.as_str()).unwrap_or("");
             println!("📝 Translator processing: {}", text);
-            adk_core::Content::new("user").with_text(text)
+            adk_core::Content::user().with_text(text)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("");
                     if !text.is_empty() {
@@ -63,14 +63,14 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let text = state.get("input").and_then(|v| v.as_str()).unwrap_or("");
             println!("📋 Summarizer processing: {}", text);
-            adk_core::Content::new("user").with_text(text)
+            adk_core::Content::user().with_text(text)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("");
                     if !text.is_empty() {
@@ -115,7 +115,7 @@ async fn main() -> anyhow::Result<()> {
     input.insert("input".to_string(), json!("AI is transforming how we work and live."));
 
     println!("⚡ Executing parallel processing...\n");
-    let result = agent.invoke(input, ExecutionConfig::new("thread-1".to_string())).await?;
+    let result = agent.invoke(input, ExecutionConfig::new(SessionId::new("thread-1").unwrap())).await?;
     
     println!("\n✅ Final Result:");
     println!("{}", result.get("result").and_then(|v| v.as_str()).unwrap_or(""));

@@ -53,14 +53,14 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let data = state.get("input").and_then(|v| v.as_str()).unwrap_or("");
             println!("🔍 Step 1: Analyzing data...");
-            adk_core::Content::new("user").with_text(data)
+            adk_core::Content::user().with_text(data)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("");
                     println!("📊 Analysis complete: {}", text.chars().take(50).collect::<String>() + "...");
@@ -74,14 +74,14 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let analysis = state.get("analysis").and_then(|v| v.as_str()).unwrap_or("");
             println!("⚙️  Step 2: Processing analysis...");
-            adk_core::Content::new("user").with_text(&format!("Based on this analysis: {}", analysis))
+            adk_core::Content::user().with_text(&format!("Based on this analysis: {}", analysis))
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("");
                     println!("🔧 Processing complete: {}", text.chars().take(50).collect::<String>() + "...");
@@ -96,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
             let analysis = state.get("analysis").and_then(|v| v.as_str()).unwrap_or("");
             let recommendations = state.get("recommendations").and_then(|v| v.as_str()).unwrap_or("");
             println!("📝 Step 3: Creating final summary...");
-            adk_core::Content::new("user").with_text(&format!(
+            adk_core::Content::user().with_text(&format!(
                 "Create a final summary from:\nAnalysis: {}\nRecommendations: {}", 
                 analysis, recommendations
             ))
@@ -106,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("");
                     println!("✅ Final summary complete");
@@ -142,7 +142,7 @@ async fn main() -> anyhow::Result<()> {
     input.insert("input".to_string(), json!("Analyze the impact of remote work on team productivity"));
 
     println!("🚀 Starting workflow with checkpointing...\n");
-    let result = graph.invoke(input, ExecutionConfig::new(thread_id)).await?;
+    let result = graph.invoke(input, ExecutionConfig::new(SessionId::new(thread_id).unwrap())).await?;
 
     println!("\n🎯 Workflow Complete!");
     println!("Final result: {}", result.get("final_result").and_then(|v| v.as_str()).unwrap_or("N/A"));

@@ -21,7 +21,7 @@ impl GoogleProvider {
     pub fn new(client_id: impl Into<String>) -> Self {
         Self {
             client_id: client_id.into(),
-            issuer: "https://accounts.google.com".into(),
+            issuer: "https://accounts.google.com".to_string(),
             jwks_cache: Arc::new(JwksCache::new("https://www.googleapis.com/oauth2/v3/certs")),
         }
     }
@@ -37,7 +37,7 @@ impl GoogleProvider {
 impl TokenValidator for GoogleProvider {
     async fn validate(&self, token: &str) -> Result<TokenClaims, TokenError> {
         let header = jsonwebtoken::decode_header(token)?;
-        let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".into()))?;
+        let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".to_string()))?;
 
         let key = self.jwks_cache.get_key(&kid).await?;
 

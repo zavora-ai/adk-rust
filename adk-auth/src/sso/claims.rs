@@ -171,24 +171,24 @@ mod tests {
     #[test]
     fn test_token_claims_user_id() {
         let claims = TokenClaims {
-            sub: "user-123".into(),
-            email: Some("alice@example.com".into()),
+            sub: "user-123".to_string(),
+            email: Some("alice@example.com".to_string()),
             ..Default::default()
         };
         assert_eq!(claims.user_id(), "alice@example.com");
 
         let claims_no_email =
-            TokenClaims { sub: "user-123".into(), email: None, ..Default::default() };
+            TokenClaims { sub: "user-123".to_string(), email: None, ..Default::default() };
         assert_eq!(claims_no_email.user_id(), "user-123");
     }
 
     #[test]
     fn test_audience_contains() {
-        let single = Audience::Single("client-1".into());
+        let single = Audience::Single("client-1".to_string());
         assert!(single.contains("client-1"));
         assert!(!single.contains("client-2"));
 
-        let multiple = Audience::Multiple(vec!["client-1".into(), "client-2".into()]);
+        let multiple = Audience::Multiple(vec!["client-1".to_string(), "client-2".to_string()]);
         assert!(multiple.contains("client-1"));
         assert!(multiple.contains("client-2"));
         assert!(!multiple.contains("client-3"));

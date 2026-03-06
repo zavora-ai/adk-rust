@@ -1,4 +1,5 @@
 use crate::{Result, types::Content};
+pub use crate::event::{UsageMetadata, FinishReason};
 use async_trait::async_trait;
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,7 @@ pub struct GenerateContentConfig {
     pub top_p: Option<f32>,
     pub top_k: Option<i32>,
     pub max_output_tokens: Option<i32>,
+    
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<serde_json::Value>,
 
@@ -128,28 +130,6 @@ impl Default for ContextCacheConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct UsageMetadata {
-    pub prompt_token_count: i32,
-    pub candidates_token_count: i32,
-    pub total_token_count: i32,
-
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub cache_read_input_token_count: Option<i32>,
-
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub cache_creation_input_token_count: Option<i32>,
-
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub thinking_token_count: Option<i32>,
-
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub audio_input_token_count: Option<i32>,
-
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub audio_output_token_count: Option<i32>,
-}
-
 /// Citation metadata emitted by model providers for source attribution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -167,15 +147,6 @@ pub struct CitationSource {
     pub end_index: Option<i32>,
     pub license: Option<String>,
     pub publication_date: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FinishReason {
-    Stop,
-    MaxTokens,
-    Safety,
-    Recitation,
-    Other,
 }
 
 impl LlmRequest {
@@ -259,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_llm_response_creation() {
-        let content = Content::new("assistant");
+        let content = Content::new(crate::types::Role::Custom("assistant".to_string()));
         let resp = LlmResponse::new(content);
         assert!(resp.content.is_some());
         assert!(resp.turn_complete);
@@ -287,7 +258,7 @@ mod tests {
     #[test]
     fn test_llm_response_roundtrip_with_citations() {
         let response = LlmResponse {
-            content: Some(Content::new("model").with_text("hello")),
+            content: Some(Content::model().with_text("hello")),
             usage_metadata: None,
             finish_reason: Some(FinishReason::Stop),
             citation_metadata: Some(CitationMetadata {
@@ -315,6 +286,6 @@ mod tests {
     #[test]
     fn test_finish_reason() {
         assert_eq!(FinishReason::Stop, FinishReason::Stop);
-        assert_ne!(FinishReason::Stop, FinishReason::MaxTokens);
+        assert_ne!(FinishReason::Stop, FinishReason::Length);
     }
 }

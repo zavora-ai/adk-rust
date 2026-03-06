@@ -78,11 +78,11 @@ struct AgentContext {
 impl AgentContext {
     fn new(agent: Arc<dyn Agent>, content: Content) -> Self {
         let mut identity = adk_core::types::AdkIdentity::default();
-        identity.invocation_id = "inv-1".to_string().into();
+        identity.invocation_id = "inv-1".to_string();
         identity.agent_name = agent.name().to_string();
-        identity.user_id = "user".to_string().into();
+        identity.user_id = "user".to_string();
         identity.app_name = "browser_interactive".to_string();
-        identity.session_id = "interactive-session".to_string().into();
+        identity.session_id = "interactive-session".to_string();
         identity.branch = "".to_string();
 
         Self {
@@ -143,8 +143,7 @@ async fn run_agent(
 ) -> Result<String, Box<dyn std::error::Error>> {
     println!("  Executing task...");
 
-    let content =
-        Content { role: "user".to_string(), parts: vec![Part::Text { text: task.to_string() }] };
+    let content = Content { role: "user".to_string(), parts: vec![Part::text(task.to_string())] };
 
     let ctx = Arc::new(AgentContext::new(agent.clone(), content));
 
@@ -160,13 +159,13 @@ async fn run_agent(
 
                 if let Some(content) = &event.llm_response.content {
                     for part in &content.parts {
-                        if let Part::Text { text } = part {
+                        if let Some(text) = part.as_text() {
                             response.push_str(text);
                         }
                     }
                 }
             }
-            Err(e) => return Err(format!("Agent error: {}", e).into()),
+            Err(e) => return Err(format!("Agent error: {}", e)),
         }
     }
 

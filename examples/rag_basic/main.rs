@@ -88,31 +88,28 @@ async fn main() -> anyhow::Result<()> {
     // -- 4. Ingest sample documents ---------------------------------------
     let documents = vec![
         Document {
-            id: "doc1".into(),
+            id: "doc1",
             text: "Rust is a systems programming language focused on safety, speed, \
                    and concurrency. It achieves memory safety without a garbage collector \
-                   through its ownership system."
-                .into(),
-            metadata: HashMap::from([("topic".into(), "rust".into())]),
-            source_uri: Some("https://www.rust-lang.org".into()),
+                   through its ownership system.",
+            metadata: HashMap::from([("topic", "rust".to_string())]),
+            source_uri: Some("https://www.rust-lang.org"),
         },
         Document {
-            id: "doc2".into(),
+            id: "doc2",
             text: "Python is a high-level, interpreted programming language known for \
                    its readability and versatility. It is widely used in data science, \
-                   web development, and automation."
-                .into(),
-            metadata: HashMap::from([("topic".into(), "python".into())]),
-            source_uri: Some("https://www.python.org".into()),
+                   web development, and automation.",
+            metadata: HashMap::from([("topic", "python".to_string())]),
+            source_uri: Some("https://www.python.org"),
         },
         Document {
-            id: "doc3".into(),
+            id: "doc3",
             text: "Retrieval-Augmented Generation (RAG) combines a retrieval system \
                    with a language model. Documents are chunked, embedded, and stored \
                    in a vector database. At query time the most relevant chunks are \
-                   retrieved and fed to the LLM as context."
-                .into(),
-            metadata: HashMap::from([("topic".into(), "rag".into())]),
+                   retrieved and fed to the LLM as context.",
+            metadata: HashMap::from([("topic", "rag".to_string())]),
             source_uri: None,
         },
     ];

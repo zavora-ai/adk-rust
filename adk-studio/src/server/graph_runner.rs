@@ -12,6 +12,7 @@
 //! - Requirement 5.2: State Persistence
 
 use crate::server::events::HitlEventEmitter;
+use adk_core::types::SessionId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -86,7 +87,7 @@ impl InterruptData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterruptedSessionState {
     /// Session ID
-    pub session_id: String,
+    pub session_id: SessionId,
     /// Thread ID for ADK-Graph resumption
     pub thread_id: String,
     /// Checkpoint ID for ADK-Graph resumption
@@ -108,7 +109,7 @@ pub struct InterruptedSessionState {
 impl InterruptedSessionState {
     /// Create a new interrupted session state.
     pub fn new(
-        session_id: String,
+        session_id: SessionId,
         interrupt_data: InterruptData,
         state: HashMap<String, Value>,
     ) -> Self {
@@ -151,7 +152,7 @@ impl InterruptedSessionStore {
     ///
     /// ## Requirements
     /// Validates: Requirement 5.2 - State Persistence
-    pub async fn store(&self, session_id: &str, state: InterruptedSessionState) {
+    pub async fn store(&self, session_id: &SessionId, state: InterruptedSessionState) {
         let mut sessions = self.sessions.write().await;
         sessions.insert(session_id.to_string(), state);
     }
@@ -163,9 +164,9 @@ impl InterruptedSessionStore {
     ///
     /// ## Returns
     /// The interrupted session state if found, None otherwise.
-    pub async fn get(&self, session_id: &str) -> Option<InterruptedSessionState> {
+    pub async fn get(&self, session_id: &SessionId) -> Option<InterruptedSessionState> {
         let sessions = self.sessions.read().await;
-        sessions.get(session_id).cloned()
+        sessions.get(&session_id.to_string()).cloned()
     }
 
     /// Remove an interrupted session state (after resumption).
@@ -175,15 +176,15 @@ impl InterruptedSessionStore {
     ///
     /// ## Returns
     /// The removed session state if found, None otherwise.
-    pub async fn remove(&self, session_id: &str) -> Option<InterruptedSessionState> {
+    pub async fn remove(&self, session_id: &SessionId) -> Option<InterruptedSessionState> {
         let mut sessions = self.sessions.write().await;
-        sessions.remove(session_id)
+        sessions.remove(&session_id.to_string())
     }
 
     /// Check if a session is interrupted.
-    pub async fn is_interrupted(&self, session_id: &str) -> bool {
+    pub async fn is_interrupted(&self, session_id: &SessionId) -> bool {
         let sessions = self.sessions.read().await;
-        sessions.contains_key(session_id)
+        sessions.contains_key(&session_id.to_string())
     }
 
     /// Get all interrupted session IDs.
@@ -260,7 +261,7 @@ impl GraphInterruptHandler {
     #[allow(clippy::too_many_arguments)]
     pub async fn handle_interrupt(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         thread_id: String,
         checkpoint_id: String,
         node_id: String,
@@ -285,8 +286,7 @@ impl GraphInterruptHandler {
         }
 
         // Store interrupted state for resumption
-        let session_state =
-            InterruptedSessionState::new(session_id.to_string(), interrupt_data, state);
+        let session_state = InterruptedSessionState::new(session_id.clone(), interrupt_data, state);
         self.store.store(session_id, session_state).await;
     }
 
@@ -307,7 +307,7 @@ impl GraphInterruptHandler {
     #[allow(dead_code, clippy::too_many_arguments)]
     pub async fn handle_graph_interrupt_direct(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         thread_id: String,
         checkpoint_id: String,
         interrupt_type: &str,
@@ -348,19 +348,22 @@ impl GraphInterruptHandler {
     }
 
     /// Get the interrupted state for a session.
-    pub async fn get_interrupted_state(&self, session_id: &str) -> Option<InterruptedSessionState> {
+    pub async fn get_interrupted_state(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<InterruptedSessionState> {
         self.store.get(session_id).await
     }
 
     /// Check if a session is interrupted.
-    pub async fn is_interrupted(&self, session_id: &str) -> bool {
+    pub async fn is_interrupted(&self, session_id: &SessionId) -> bool {
         self.store.is_interrupted(session_id).await
     }
 
     /// Clear the interrupted state for a session (after resumption).
     pub async fn clear_interrupted_state(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
     ) -> Option<InterruptedSessionState> {
         self.store.remove(session_id).await
     }
@@ -500,25 +503,25 @@ mod tests {
         state.insert("task".to_string(), serde_json::json!("Delete files"));
 
         let session_state =
-            InterruptedSessionState::new("session-789".to_string(), interrupt_data, state);
+            InterruptedSessionState::new(adk_core::types::SessionId::new("session-789").unwrap(), interrupt_data, state);
 
         // Store the session
-        store.store("session-789", session_state.clone()).await;
+        store.store(&SessionId::new("session-789").unwrap(), session_state.clone()).await;
 
         // Verify it's stored
-        assert!(store.is_interrupted("session-789").await);
+        assert!(store.is_interrupted(&SessionId::new("session-789").unwrap()).await);
 
         // Get the session
-        let retrieved = store.get("session-789").await;
+        let retrieved = store.get(&SessionId::new("session-789").unwrap()).await;
         assert!(retrieved.is_some());
         let retrieved = retrieved.unwrap();
         assert_eq!(retrieved.node_id, "review");
         assert_eq!(retrieved.thread_id, "thread-123");
 
         // Remove the session
-        let removed = store.remove("session-789").await;
+        let removed = store.remove(&SessionId::new("session-789").unwrap()).await;
         assert!(removed.is_some());
-        assert!(!store.is_interrupted("session-789").await);
+        assert!(!store.is_interrupted(&SessionId::new("session-789").unwrap()).await);
     }
 
     #[test]
@@ -566,7 +569,7 @@ mod tests {
         // Handle an interrupt
         handler
             .handle_interrupt(
-                "session-123",
+                &SessionId::new("session-123").unwrap(),
                 "thread-456".to_string(),
                 "checkpoint-789".to_string(),
                 "review".to_string(),
@@ -578,9 +581,10 @@ mod tests {
             .await;
 
         // Verify the interrupt was stored
-        assert!(handler.is_interrupted("session-123").await);
+        assert!(handler.is_interrupted(&SessionId::new("session-123").unwrap()).await);
 
-        let interrupted_state = handler.get_interrupted_state("session-123").await;
+        let interrupted_state =
+            handler.get_interrupted_state(&SessionId::new("session-123").unwrap()).await;
         assert!(interrupted_state.is_some());
         let interrupted_state = interrupted_state.unwrap();
         assert_eq!(interrupted_state.node_id, "review");
@@ -588,9 +592,10 @@ mod tests {
         assert_eq!(interrupted_state.checkpoint_id, "checkpoint-789");
 
         // Clear the interrupt
-        let cleared = handler.clear_interrupted_state("session-123").await;
+        let cleared =
+            handler.clear_interrupted_state(&SessionId::new("session-123").unwrap()).await;
         assert!(cleared.is_some());
-        assert!(!handler.is_interrupted("session-123").await);
+        assert!(!handler.is_interrupted(&adk_core::types::SessionId::new("session-123").unwrap()).await);
     }
 
     #[tokio::test]
@@ -608,11 +613,11 @@ mod tests {
         );
 
         let mut session_state =
-            InterruptedSessionState::new("old-session".to_string(), interrupt_data, HashMap::new());
+            InterruptedSessionState::new(adk_core::types::SessionId::new("old-session").unwrap(), interrupt_data, HashMap::new());
         // Set timestamp to 2 hours ago
         session_state.interrupted_at = current_timestamp_ms() - (2 * 60 * 60 * 1000);
 
-        store.store("old-session", session_state).await;
+        store.store(&SessionId::new("old-session").unwrap(), session_state).await;
 
         // Create a recent session
         let interrupt_data = InterruptData::from_interrupted(
@@ -625,19 +630,19 @@ mod tests {
         );
 
         let session_state = InterruptedSessionState::new(
-            "recent-session".to_string(),
+            adk_core::types::SessionId::new("recent-session").unwrap(),
             interrupt_data,
             HashMap::new(),
         );
 
-        store.store("recent-session", session_state).await;
+        store.store(&SessionId::new("recent-session").unwrap(), session_state).await;
 
         // Cleanup sessions older than 1 hour
         store.cleanup_old(60 * 60 * 1000).await;
 
         // Old session should be removed
-        assert!(!store.is_interrupted("old-session").await);
+        assert!(!store.is_interrupted(&SessionId::new("old-session").unwrap()).await);
         // Recent session should still exist
-        assert!(store.is_interrupted("recent-session").await);
+        assert!(store.is_interrupted(&SessionId::new("recent-session").unwrap()).await);
     }
 }

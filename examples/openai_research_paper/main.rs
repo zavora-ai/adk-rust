@@ -80,7 +80,7 @@ async fn generate_pdf(ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value, A
     // Save as artifact
     if let Some(artifact_service) = ctx.artifacts() {
         let filename = format!("{}.pdf", title.replace(' ', "_").to_lowercase());
-        let part = Part::Text { text: pdf_content.clone() };
+        let part = Part::text(pdf_content.clone());
 
         artifact_service
             .save(&filename, &part)

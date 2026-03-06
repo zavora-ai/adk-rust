@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
 
     // Create a runner that automatically injects skills based on user messages
     let runner = Runner::new(RunnerConfig {
-        app_name: "skills_basic_demo".into(),
+        app_name: "skills_basic_demo",
         agent: Arc::new(base_agent),
         session_service: session_service.clone(),
         artifact_service: None,
@@ -97,9 +97,9 @@ async fn main() -> Result<()> {
     let user_id = "user123".to_string();
     let session = session_service
         .create(CreateRequest {
-            app_name: "demo".into(),
-            user_id: user_id.clone().into(),
-            session_id: None,
+            app_name: "demo",
+            user_id: UserId::new(user_id.clone()),
+            session_id: SessionId::new(None),
             state: HashMap::new(),
         })
         .await?;
@@ -109,11 +109,7 @@ async fn main() -> Result<()> {
     for query in queries {
         println!("\nUser: {}", query);
         let mut stream = runner
-            .run(
-                user_id.clone().into(),
-                session.id().clone().into(),
-                Content::new("user").with_text(query),
-            )
+            .run(user_id.clone(), session.id().clone(), Content::new("user").with_text(query))
             .await?;
 
         while let Some(event) = stream.next().await {
@@ -123,7 +119,7 @@ async fn main() -> Result<()> {
                     .parts
                     .iter()
                     .filter_map(|p| match p {
-                        Part::Text { text } => Some(text.as_str()),
+                        Part::Text(text) => Some(text.as_str()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()

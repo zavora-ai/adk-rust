@@ -619,10 +619,10 @@ impl UiResponse {
     pub fn to_content(self) -> adk_core::Content {
         let json = serde_json::to_vec(&self).unwrap_or_default();
         adk_core::Content {
-            role: "model".to_string(),
+            role: adk_core::types::Role::Model,
             parts: vec![adk_core::Part::InlineData {
-                mime_type: MIME_TYPE_UI.to_string(),
-                data: json,
+                mime_type: MIME_TYPE_UI.parse().unwrap(),
+                data: json.into(),
             }],
         }
     }
@@ -682,7 +682,7 @@ impl UiEvent {
 
     /// Convert to Content for sending to agent
     pub fn to_content(&self) -> adk_core::Content {
-        adk_core::Content::new("user").with_text(self.to_user_message())
+        adk_core::Content::user().with_text(self.to_user_message())
     }
 }
 
@@ -745,10 +745,10 @@ impl UiUpdate {
     pub fn to_content(self) -> adk_core::Content {
         let json = serde_json::to_vec(&self).unwrap_or_default();
         adk_core::Content {
-            role: "model".to_string(),
+            role: adk_core::types::Role::Model,
             parts: vec![adk_core::Part::InlineData {
-                mime_type: MIME_TYPE_UI_UPDATE.to_string(),
-                data: json,
+                mime_type: MIME_TYPE_UI_UPDATE.parse().unwrap(),
+                data: json.into(),
             }],
         }
     }

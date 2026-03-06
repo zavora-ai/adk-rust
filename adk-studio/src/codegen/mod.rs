@@ -520,7 +520,7 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
         code.push_str("    fn new() -> Self {\n");
         code.push_str("        Self {\n");
         code.push_str("            identity: AdkIdentity::default(),\n");
-        code.push_str("            content: Content { role: String::new(), parts: vec![] },\n");
+        code.push_str("            content: Content { role: Role::User, parts: vec![] },\n");
         code.push_str("            metadata: std::collections::HashMap::new(),\n");
         code.push_str("        }\n");
         code.push_str("    }\n");
@@ -3313,18 +3313,18 @@ fn generate_action_node_function(
                         match config.db_type {
                             crate::codegen::action_node_types::DatabaseType::Sqlite => {
                                 code.push_str("        let pool = sqlx::SqlitePool::connect(&conn_str).await\n");
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"SQLite connection failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"SQLite connection failed: {}\", e) })?;\n");
                             }
                             crate::codegen::action_node_types::DatabaseType::Mysql => {
                                 code.push_str("        let pool = sqlx::MySqlPool::connect(&conn_str).await\n");
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"MySQL connection failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"MySQL connection failed: {}\", e) })?;\n");
                             }
                             _ => {
                                 // PostgreSQL (default)
                                 code.push_str(
                                     "        let pool = sqlx::PgPool::connect(&conn_str).await\n",
                                 );
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"PostgreSQL connection failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"PostgreSQL connection failed: {}\", e) })?;\n");
                             }
                         }
 
@@ -3336,7 +3336,7 @@ fn generate_action_node_function(
                                 code.push_str("        use sqlx::Column;\n");
                                 code.push_str("        let raw_rows = sqlx::query(&query_str)\n");
                                 code.push_str("            .fetch_all(&pool).await\n");
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Query failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"Query failed: {}\", e) })?;\n");
                                 code.push_str("        let rows: Vec<serde_json::Value> = raw_rows.iter().map(|row| {\n");
                                 code.push_str(
                                     "            let mut obj = serde_json::Map::new();\n",
@@ -3365,7 +3365,7 @@ fn generate_action_node_function(
                                 // INSERT, UPDATE, DELETE, UPSERT — returns affected rows
                                 code.push_str("        let result = sqlx::query(&query_str)\n");
                                 code.push_str("            .execute(&pool).await\n");
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Query failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"Query failed: {}\", e) })?;\n");
                                 code.push_str(&format!(
                                     "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"affected\": result.rows_affected(), \"operation\": \"{}\" }})))\n",
                                     output_key, sql.operation
@@ -3384,7 +3384,7 @@ fn generate_action_node_function(
                         code.push_str(
                             "        let client = mongodb::Client::with_uri_str(&conn_str).await\n",
                         );
-                        code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"MongoDB connection failed: {}\", e) })?;\n");
+                        code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"MongoDB connection failed: {}\", e) })?;\n");
                         // Extract database name from connection string
                         code.push_str("        let db_name = conn_str.rsplit('/').next()\n");
                         code.push_str("            .and_then(|s| s.split('?').next())\n");
@@ -3413,14 +3413,14 @@ fn generate_action_node_function(
                                 code.push_str(
                                     "        let mut cursor = collection.find(filter_doc).await\n",
                                 );
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"MongoDB find failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"MongoDB find failed: {}\", e) })?;\n");
                                 code.push_str(
                                     "        let mut docs: Vec<serde_json::Value> = Vec::new();\n",
                                 );
                                 code.push_str(
                                     "        while let Some(doc) = cursor.try_next().await\n",
                                 );
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Cursor error: {}\", e) })? {\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"Cursor error: {}\", e) })? {\n");
                                 code.push_str("            if let Ok(json) = mongodb::bson::from_document::<serde_json::Value>(doc) {\n");
                                 code.push_str("                docs.push(json);\n");
                                 code.push_str("            }\n");
@@ -3439,7 +3439,7 @@ fn generate_action_node_function(
                                 code.push_str(
                                     "        let result = collection.find_one(filter_doc).await\n",
                                 );
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"MongoDB findOne failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"MongoDB findOne failed: {}\", e) })?;\n");
                                 code.push_str("        let doc_json = result.map(|d| mongodb::bson::from_document::<serde_json::Value>(d).unwrap_or(json!(null))).unwrap_or(json!(null));\n");
                                 code.push_str(&format!(
                                     "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"doc\": doc_json }})))\n",
@@ -3460,7 +3460,7 @@ fn generate_action_node_function(
                                 code.push_str(
                                     "        let result = collection.insert_one(doc).await\n",
                                 );
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"MongoDB insert failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"MongoDB insert failed: {}\", e) })?;\n");
                                 code.push_str(&format!(
                                     "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"inserted_id\": result.inserted_id.to_string() }})))\n",
                                     output_key
@@ -3483,7 +3483,7 @@ fn generate_action_node_function(
                                 ));
                                 code.push_str("        let update_doc = mongodb::bson::to_document(&update_json).unwrap_or_default();\n");
                                 code.push_str("        let result = collection.update_many(filter_doc, update_doc).await\n");
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"MongoDB update failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"MongoDB update failed: {}\", e) })?;\n");
                                 code.push_str(&format!(
                                     "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"matched\": result.matched_count, \"modified\": result.modified_count }})))\n",
                                     output_key
@@ -3496,7 +3496,7 @@ fn generate_action_node_function(
                                 ));
                                 code.push_str("        let filter_doc = mongodb::bson::to_document(&filter_json).unwrap_or_default();\n");
                                 code.push_str("        let result = collection.delete_many(filter_doc).await\n");
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"MongoDB delete failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"MongoDB delete failed: {}\", e) })?;\n");
                                 code.push_str(&format!(
                                     "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"deleted\": result.deleted_count }})))\n",
                                     output_key
@@ -3521,9 +3521,9 @@ fn generate_action_node_function(
                         code.push_str(
                             "        let client = redis::Client::open(conn_str.as_str())\n",
                         );
-                        code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Redis connection failed: {}\", e) })?;\n");
+                        code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"Redis connection failed: {}\", e) })?;\n");
                         code.push_str("        let mut con = client.get_multiplexed_async_connection().await\n");
-                        code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Redis connect failed: {}\", e) })?;\n");
+                        code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"Redis connect failed: {}\", e) })?;\n");
 
                         // Key with variable interpolation
                         let key = &redis_cfg.key;
@@ -3556,7 +3556,7 @@ fn generate_action_node_function(
                                 code.push_str(
                                     "        let val: Option<String> = con.get(&redis_key).await\n",
                                 );
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Redis GET failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"Redis GET failed: {}\", e) })?;\n");
                                 code.push_str(&format!(
                                     "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"value\": val }})))\n",
                                     output_key
@@ -3585,7 +3585,7 @@ fn generate_action_node_function(
                                         "        let _: () = con.set(&redis_key, val).await\n",
                                     );
                                 }
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Redis SET failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"Redis SET failed: {}\", e) })?;\n");
                                 code.push_str(&format!(
                                     "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"set\": true, \"key\": redis_key }})))\n",
                                     output_key
@@ -3595,7 +3595,7 @@ fn generate_action_node_function(
                                 code.push_str(
                                     "        let deleted: i64 = con.del(&redis_key).await\n",
                                 );
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Redis DEL failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"Redis DEL failed: {}\", e) })?;\n");
                                 code.push_str(&format!(
                                     "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"deleted\": deleted }})))\n",
                                     output_key
@@ -3612,7 +3612,7 @@ fn generate_action_node_function(
                                     "        let val: Option<String> = con.hget(&redis_key, \"{}\").await\n",
                                     field.replace('"', "\\\"")
                                 ));
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Redis HGET failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"Redis HGET failed: {}\", e) })?;\n");
                                 code.push_str(&format!(
                                     "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"value\": val }})))\n",
                                     output_key
@@ -3632,7 +3632,7 @@ fn generate_action_node_function(
                                 code.push_str("            for (field, val) in obj {\n");
                                 code.push_str("                let val_str = val.as_str().map(|s| s.to_string()).unwrap_or_else(|| val.to_string());\n");
                                 code.push_str("                let _: () = con.hset(&redis_key, field, &val_str).await\n");
-                                code.push_str("                    .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Redis HSET failed: {}\", e) })?;\n");
+                                code.push_str("                    .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"Redis HSET failed: {}\", e) })?;\n");
                                 code.push_str("            }\n");
                                 code.push_str("        }\n");
                                 code.push_str(&format!(
@@ -3653,7 +3653,7 @@ fn generate_action_node_function(
                                     "        let len: i64 = con.lpush(&redis_key, \"{}\").await\n",
                                     val_str.replace('"', "\\\"")
                                 ));
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Redis LPUSH failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"Redis LPUSH failed: {}\", e) })?;\n");
                                 code.push_str(&format!(
                                     "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"length\": len }})))\n",
                                     output_key
@@ -3661,7 +3661,7 @@ fn generate_action_node_function(
                             }
                             "rpop" => {
                                 code.push_str("        let val: Option<String> = con.rpop(&redis_key, None).await\n");
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\".into(), message: format!(\"Redis RPOP failed: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"db\"), message: format!(\"Redis RPOP failed: {}\", e) })?;\n");
                                 code.push_str(&format!(
                                     "        Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"value\": val }})))\n",
                                     output_key
@@ -3775,7 +3775,7 @@ fn generate_action_node_function(
                             "        let from = \"{}\".parse::<lettre::message::Mailbox>()\n",
                             from_addr
                         ));
-                        code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\".into(), message: format!(\"Invalid from address: {}\", e) })?;\n");
+                        code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\"), message: format!(\"Invalid from address: {}\", e) })?;\n");
 
                         // To recipients
                         code.push_str(&format!(
@@ -3834,13 +3834,13 @@ fn generate_action_node_function(
                                 code.push_str("        let email = email_builder\n");
                                 code.push_str("            .header(lettre::message::header::ContentType::TEXT_HTML)\n");
                                 code.push_str("            .body(body.clone())\n");
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\".into(), message: format!(\"Failed to build email: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\"), message: format!(\"Failed to build email: {}\", e) })?;\n");
                             }
                             _ => {
                                 code.push_str("        let email = email_builder\n");
                                 code.push_str("            .header(lettre::message::header::ContentType::TEXT_PLAIN)\n");
                                 code.push_str("            .body(body.clone())\n");
-                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\".into(), message: format!(\"Failed to build email: {}\", e) })?;\n");
+                                code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\"), message: format!(\"Failed to build email: {}\", e) })?;\n");
                             }
                         }
 
@@ -3877,7 +3877,7 @@ fn generate_action_node_function(
                                 "        let transport = lettre::SmtpTransport::relay(\"{}\")\n",
                                 host
                             ));
-                            code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\".into(), message: format!(\"SMTP relay failed: {}\", e) })?\n");
+                            code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\"), message: format!(\"SMTP relay failed: {}\", e) })?\n");
                             code.push_str(&format!("            .port({})\n", smtp.port));
                             code.push_str(&format!(
                                 "            .credentials(lettre::transport::smtp::authentication::Credentials::new(\"{}\".to_string(), smtp_password))\n",
@@ -3964,18 +3964,18 @@ fn generate_action_node_function(
                             code.push_str(
                                 "        let tls = native_tls::TlsConnector::builder().build()\n",
                             );
-                            code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\".into(), message: format!(\"TLS error: {}\", e) })?;\n");
+                            code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\"), message: format!(\"TLS error: {}\", e) })?;\n");
                             code.push_str(&format!(
                                 "        let client = imap::ClientBuilder::new(\"{}\", {}).native_tls(tls)\n",
                                 host, imap_cfg.port
                             ));
-                            code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\".into(), message: format!(\"IMAP connection failed: {}\", e) })?;\n");
+                            code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\"), message: format!(\"IMAP connection failed: {}\", e) })?;\n");
                         } else {
                             code.push_str(&format!(
                                 "        let client = imap::ClientBuilder::new(\"{}\", {}).connect()\n",
                                 host, imap_cfg.port
                             ));
-                            code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\".into(), message: format!(\"IMAP connection failed: {}\", e) })?;\n");
+                            code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\"), message: format!(\"IMAP connection failed: {}\", e) })?;\n");
                         }
 
                         // Login
@@ -3983,11 +3983,11 @@ fn generate_action_node_function(
                             "        let mut session = client.login(\"{}\", &imap_password)\n",
                             username
                         ));
-                        code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\".into(), message: format!(\"IMAP login failed: {:?}\", e.0) })?;\n");
+                        code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\"), message: format!(\"IMAP login failed: {:?}\", e.0) })?;\n");
 
                         // Select folder
                         code.push_str(&format!("        session.select(\"{}\")\n", folder));
-                        code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\".into(), message: format!(\"Folder select failed: {}\", e) })?;\n");
+                        code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\"), message: format!(\"Folder select failed: {}\", e) })?;\n");
 
                         // Build search query from filters
                         let mut search_criteria = Vec::new();
@@ -4022,7 +4022,7 @@ fn generate_action_node_function(
                             "        let messages = session.search(\"{}\")\n",
                             search_str
                         ));
-                        code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\".into(), message: format!(\"IMAP search failed: {}\", e) })?;\n");
+                        code.push_str("            .map_err(|e| adk_graph::GraphError::NodeExecutionFailed { node: \"email\"), message: format!(\"IMAP search failed: {}\", e) })?;\n");
 
                         // Fetch message details
                         code.push_str(

@@ -1,7 +1,7 @@
 use adk_core::{
     Agent, Artifacts, CallbackContext, Content, Event, InvocationContext, Memory, ReadonlyContext,
     Result, RunConfig, Session, State, Tool, ToolContext,
-    types::{AdkIdentity, InvocationId},
+    types::{AdkIdentity, InvocationId, SessionId, UserId},
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -86,7 +86,7 @@ impl AgentTool {
             if let Some(content) = &event.llm_response.content {
                 // If we want raw text, extract it
                 for part in &content.parts {
-                    if let Some(text) = part.text() {
+                    if let Some(text) = part.as_text() {
                         return json!({ "response": text });
                     }
                 }
@@ -140,7 +140,7 @@ impl Tool for AgentTool {
             .and_then(|v| v.as_str())
             .unwrap_or_else(|| args.as_str().unwrap_or(""));
 
-        let user_content = Content::new("user").with_text(request);
+        let user_content = Content::user().with_text(request);
 
         // Create sub-context for the agent
         let sub_ctx = Arc::new(AgentToolInvocationContext::new(
@@ -235,7 +235,7 @@ impl AgentToolInvocationContext {
         let mut identity = parent_ctx.identity().clone();
         identity.agent_name = agent.name().to_string();
         identity.invocation_id =
-            InvocationId::from(format!("{}-sub-{}", identity.invocation_id, agent.name()));
+            InvocationId::new(format!("{}-sub-{}", identity.invocation_id, agent.name())).unwrap();
 
         Self {
             parent_ctx,
@@ -300,7 +300,6 @@ impl InvocationContext for AgentToolInvocationContext {
 }
 
 // Minimal session for sub-agent execution
-use adk_core::types::{SessionId, UserId};
 
 struct AgentToolSession {
     id: SessionId,
@@ -311,8 +310,8 @@ struct AgentToolSession {
 impl AgentToolSession {
     fn new() -> Self {
         Self {
-            id: SessionId::from("sub-session".to_string()),
-            user_id: UserId::from("system".to_string()),
+            id: SessionId::new("sub-session".to_string()).unwrap(),
+            user_id: UserId::new("system".to_string()).unwrap(),
             state: std::sync::RwLock::new(HashMap::new()),
         }
     }

@@ -2,7 +2,10 @@ use crate::{
     CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_APP, KEY_PREFIX_TEMP,
     KEY_PREFIX_USER, ListRequest, Session, SessionService, State,
 };
-use adk_core::Result;
+use adk_core::{
+    Result,
+    types::{InvocationId, SessionId, UserId},
+};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -138,7 +141,8 @@ impl DatabaseSessionService {
 #[async_trait]
 impl SessionService for DatabaseSessionService {
     async fn create(&self, req: CreateRequest) -> Result<Box<dyn Session>> {
-        let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        let session_id =
+            req.session_id.unwrap_or_else(|| SessionId::new(Uuid::new_v4().to_string()).unwrap());
         let now = Utc::now();
 
         let (app_delta, user_delta, session_state) = Self::extract_state_deltas(&req.state);
@@ -182,7 +186,7 @@ impl SessionService for DatabaseSessionService {
         let user_state: HashMap<String, Value> =
             sqlx::query("SELECT state FROM user_states WHERE app_name = ? AND user_id = ?")
                 .bind(&req.app_name)
-                .bind(&req.user_id)
+                .bind(req.user_id.as_str())
                 .fetch_optional(&mut *tx)
                 .await
                 .map_err(|e| adk_core::AdkError::Session(format!("query failed: {}", e)))?
@@ -200,7 +204,7 @@ impl SessionService for DatabaseSessionService {
 
         sqlx::query("INSERT OR REPLACE INTO user_states (app_name, user_id, state, updated_at) VALUES (?, ?, ?, ?)")
             .bind(&req.app_name)
-            .bind(&req.user_id)
+            .bind(req.user_id.as_str())
             .bind(&user_state_json)
             .bind(now.to_rfc3339())
             .execute(&mut *tx)
@@ -214,8 +218,8 @@ impl SessionService for DatabaseSessionService {
 
         sqlx::query("INSERT INTO sessions (app_name, user_id, session_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
             .bind(&req.app_name)
-            .bind(&req.user_id)
-            .bind(&session_id)
+            .bind(req.user_id.as_str())
+            .bind(session_id.as_str())
             .bind(&merged_state_json)
             .bind(now.to_rfc3339())
             .bind(now.to_rfc3339())
@@ -229,7 +233,7 @@ impl SessionService for DatabaseSessionService {
 
         Ok(Box::new(DatabaseSession {
             app_name: req.app_name,
-            user_id: req.user_id,
+            user_id: UserId::new(req.user_id).unwrap(),
             session_id,
             state: merged_state,
             events: Vec::new(),
@@ -240,8 +244,8 @@ impl SessionService for DatabaseSessionService {
     async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
         let row = sqlx::query("SELECT state, updated_at FROM sessions WHERE app_name = ? AND user_id = ? AND session_id = ?")
             .bind(&req.app_name)
-            .bind(&req.user_id)
-            .bind(&req.session_id)
+            .bind(req.user_id.as_str())
+            .bind(req.session_id.as_str())
             .fetch_one(&self.pool)
             .await
             .map_err(|_| adk_core::AdkError::Session("session not found".into()))?;
@@ -255,8 +259,8 @@ impl SessionService for DatabaseSessionService {
 
         let events: Vec<Event> = sqlx::query("SELECT * FROM events WHERE app_name = ? AND user_id = ? AND session_id = ? ORDER BY timestamp")
             .bind(&req.app_name)
-            .bind(&req.user_id)
-            .bind(&req.session_id)
+            .bind(req.user_id.as_str())
+            .bind(req.session_id.as_str())
             .fetch_all(&self.pool)
             .await
             .map_err(|e| adk_core::AdkError::Session(format!("query failed: {}", e)))?
@@ -267,10 +271,11 @@ impl SessionService for DatabaseSessionService {
                 let long_running_tool_ids = serde_json::from_str(row.get("long_running_tool_ids")).ok()?;
                 let timestamp: String = row.get("timestamp");
                 let timestamp = DateTime::parse_from_rfc3339(&timestamp).ok()?.with_timezone(&Utc);
+                let invocation_id_str: String = row.get("invocation_id");
                 Some(Event {
                     id: row.get("id"),
                     timestamp,
-                    invocation_id: row.get("invocation_id"),
+                    invocation_id: invocation_id_str.into(),
                     branch: row.get("branch"),
                     author: row.get("author"),
                     llm_request: None,
@@ -278,6 +283,9 @@ impl SessionService for DatabaseSessionService {
                     actions,
                     long_running_tool_ids,
                     provider_metadata: std::collections::HashMap::new(),
+                    data: serde_json::Value::Null,
+                    metadata: None,
+                    control: std::collections::HashMap::new(),
                 })
             })
             .collect();
@@ -294,8 +302,8 @@ impl SessionService for DatabaseSessionService {
 
         Ok(Box::new(DatabaseSession {
             app_name: req.app_name,
-            user_id: req.user_id,
-            session_id: req.session_id,
+            user_id: UserId::new(req.user_id).unwrap(),
+            session_id: SessionId::new(req.session_id).unwrap(),
             state,
             events,
             updated_at,
@@ -307,7 +315,7 @@ impl SessionService for DatabaseSessionService {
             "SELECT session_id, state, updated_at FROM sessions WHERE app_name = ? AND user_id = ?",
         )
         .bind(&req.app_name)
-        .bind(&req.user_id)
+        .bind(req.user_id.as_str())
         .fetch_all(&self.pool)
         .await
         .map_err(|e| adk_core::AdkError::Session(format!("query failed: {}", e)))?;
@@ -323,8 +331,8 @@ impl SessionService for DatabaseSessionService {
 
             sessions.push(Box::new(DatabaseSession {
                 app_name: req.app_name.clone(),
-                user_id: req.user_id.clone(),
-                session_id: row.get("session_id"),
+                user_id: UserId::new(req.user_id.clone()).unwrap(),
+                session_id: SessionId::new(row.get::<String, _>("session_id")).unwrap(),
                 state,
                 events: Vec::new(),
                 updated_at,
@@ -345,16 +353,16 @@ impl SessionService for DatabaseSessionService {
         // configurations where foreign-key enforcement may differ.
         sqlx::query("DELETE FROM events WHERE app_name = ? AND user_id = ? AND session_id = ?")
             .bind(&req.app_name)
-            .bind(&req.user_id)
-            .bind(&req.session_id)
+            .bind(req.user_id.as_str())
+            .bind(req.session_id.as_str())
             .execute(&mut *tx)
             .await
             .map_err(|e| adk_core::AdkError::Session(format!("delete events failed: {}", e)))?;
 
         sqlx::query("DELETE FROM sessions WHERE app_name = ? AND user_id = ? AND session_id = ?")
             .bind(&req.app_name)
-            .bind(&req.user_id)
-            .bind(&req.session_id)
+            .bind(req.user_id.as_str())
+            .bind(req.session_id.as_str())
             .execute(&mut *tx)
             .await
             .map_err(|e| adk_core::AdkError::Session(format!("delete failed: {}", e)))?;
@@ -366,7 +374,7 @@ impl SessionService for DatabaseSessionService {
         Ok(())
     }
 
-    async fn append_event(&self, session_id: &str, mut event: Event) -> Result<()> {
+    async fn append_event(&self, session_id: &SessionId, mut event: Event) -> Result<()> {
         event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
 
         let mut tx = self
@@ -377,7 +385,7 @@ impl SessionService for DatabaseSessionService {
 
         let session_rows =
             sqlx::query("SELECT app_name, user_id, state FROM sessions WHERE session_id = ?")
-                .bind(session_id)
+                .bind(session_id.as_str())
                 .fetch_all(&mut *tx)
                 .await
                 .map_err(|e| adk_core::AdkError::Session(format!("query failed: {}", e)))?;
@@ -479,7 +487,7 @@ impl SessionService for DatabaseSessionService {
         .bind(event.timestamp.to_rfc3339())
         .bind(&app_name)
         .bind(&user_id)
-        .bind(session_id)
+        .bind(session_id.as_str())
         .execute(&mut *tx)
         .await
         .map_err(|e| adk_core::AdkError::Session(format!("update failed: {}", e)))?;
@@ -495,8 +503,8 @@ impl SessionService for DatabaseSessionService {
             .bind(&event.id)
             .bind(&app_name)
             .bind(&user_id)
-            .bind(session_id)
-            .bind(&event.invocation_id)
+            .bind(session_id.as_str())
+            .bind(event.invocation_id.as_str())
             .bind(&event.branch)
             .bind(&event.author)
             .bind(event.timestamp.to_rfc3339())
@@ -517,15 +525,15 @@ impl SessionService for DatabaseSessionService {
 
 struct DatabaseSession {
     app_name: String,
-    user_id: String,
-    session_id: String,
+    user_id: UserId,
+    session_id: SessionId,
     state: HashMap<String, Value>,
     events: Vec<Event>,
     updated_at: DateTime<Utc>,
 }
 
 impl Session for DatabaseSession {
-    fn id(&self) -> &str {
+    fn id(&self) -> &SessionId {
         &self.session_id
     }
 
@@ -533,7 +541,7 @@ impl Session for DatabaseSession {
         &self.app_name
     }
 
-    fn user_id(&self) -> &str {
+    fn user_id(&self) -> &UserId {
         &self.user_id
     }
 

@@ -42,11 +42,11 @@ fn main() -> anyhow::Result<()> {
     let admin = Role::new("admin").allow(Permission::AllTools).allow(Permission::AllAgents);
 
     let analyst = Role::new("analyst")
-        .allow(Permission::Tool("search".into()))
-        .allow(Permission::Tool("summarize".into()))
-        .deny(Permission::Tool("code_exec".into()));
+        .allow(Permission::Tool("search"))
+        .allow(Permission::Tool("summarize"))
+        .deny(Permission::Tool("code_exec"));
 
-    let viewer = Role::new("viewer").allow(Permission::Tool("search".into()));
+    let viewer = Role::new("viewer").allow(Permission::Tool("search"));
 
     println!("   - admin: all tools + agents");
     println!("   - analyst: search + summarize (no code_exec)");
@@ -113,7 +113,7 @@ fn main() -> anyhow::Result<()> {
 
     for (role, tool, expected) in checks {
         let role_obj = ac.get_role(role).unwrap();
-        let perm = Permission::Tool(tool.into());
+        let perm = Permission::Tool(tool);
         let allowed = role_obj.can_access(&perm);
         let emoji = if allowed == expected { "✅" } else { "❌" };
         println!("   {} {} -> {} = {}", emoji, role, tool, allowed);

@@ -43,21 +43,21 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     // Prepare initial state
     let mut state = HashMap::new();
-    state.insert("user:name".to_string(), "Alice".into());
-    state.insert("user:language".to_string(), "French".into());
-    state.insert("user:expertise".to_string(), "intermediate".into());
+    state.insert("user:name".to_string(), "Alice".to_string());
+    state.insert("user:language".to_string(), "French".to_string());
+    state.insert("user:expertise".to_string(), "intermediate".to_string());
 
     // Create session with initial state
     let session = session_service
         .create(CreateRequest {
             app_name: app_name.to_string(),
-            user_id: user_id.to_string().into(),
+            user_id: UserId::new(user_id).unwrap(),
             session_id: None,
             state,
         })
         .await?;
 
-    let session_id = session.id().to_string();
+    let session_id = session.id().clone();
 
     let runner = Runner::new(RunnerConfig {
         app_name: app_name.to_string(),
@@ -99,7 +99,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
         let content = Content::new("user").with_text(input);
         let mut events =
-            runner.run(user_id.to_string().into(), session_id.clone().into(), content).await?;
+            runner.run(UserId::new(user_id).unwrap(), session_id.clone(), content).await?;
 
         print!("Assistant: ");
         stdout.flush()?;

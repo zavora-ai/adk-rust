@@ -1,4 +1,4 @@
-use adk_core::{ContextCacheConfig, Event};
+use adk_core::{ContextCacheConfig, Event, LlmResponse, UsageMetadata};
 use serde::{Deserialize, Serialize};
 
 /// Internal cache lifecycle manager.
@@ -161,6 +161,8 @@ impl CachePerformanceAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adk_core::types::InvocationId;
+    use adk_core::event::{LlmResponse, UsageMetadata};
 
     fn default_config() -> ContextCacheConfig {
         ContextCacheConfig { min_tokens: 4096, ttl_seconds: 600, cache_intervals: 3 }
@@ -299,20 +301,18 @@ mod tests {
 
     // --- CachePerformanceAnalyzer tests ---
 
-    use adk_core::{LlmResponse, UsageMetadata};
-
     fn event_with_usage(
-        prompt: i32,
-        candidates: i32,
-        cache_read: Option<i32>,
-        cache_creation: Option<i32>,
+        prompt: u32,
+        candidates: u32,
+        cache_read: Option<u32>,
+        cache_creation: Option<u32>,
     ) -> Event {
-        let mut event = Event::new("test-invocation");
+        let mut event = Event::new(InvocationId::new("test-invocation").unwrap());
         event.llm_response = LlmResponse {
             usage_metadata: Some(UsageMetadata {
                 prompt_token_count: prompt,
-                candidates_token_count: candidates,
-                total_token_count: prompt + candidates,
+                candidates_tokens: candidates,
+                total_tokens: prompt + candidates,
                 cache_read_input_token_count: cache_read,
                 cache_creation_input_token_count: cache_creation,
                 ..Default::default()
@@ -323,7 +323,7 @@ mod tests {
     }
 
     fn event_without_usage() -> Event {
-        Event::new("test-invocation")
+        Event::new(InvocationId::new("test-invocation").unwrap())
     }
 
     #[test]

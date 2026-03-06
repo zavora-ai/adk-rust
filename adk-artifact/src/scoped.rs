@@ -1,4 +1,5 @@
 use crate::service::{ArtifactService, ListRequest, LoadRequest, SaveRequest};
+use adk_core::types::{SessionId, UserId};
 use adk_core::{Artifacts, Part, Result};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -22,12 +23,12 @@ use std::sync::Arc;
 /// let artifacts = ScopedArtifacts::new(
 ///     service,
 ///     "my_app".to_string(),
-///     "user_123".to_string(),
-///     "session_456".to_string(),
+///     adk_core::types::UserId::new("user_123".to_string()).unwrap(),
+///     adk_core::types::SessionId::new("session_456".to_string()).unwrap(),
 /// );
 ///
 /// // Simple API - scoping is automatic
-/// let part = Part::Text { text: "data".to_string() };
+/// let part = Part::text("data".to_string());
 /// let version = artifacts.save("report.pdf", &part).await?;
 /// let loaded = artifacts.load("report.pdf").await?;
 /// let files = artifacts.list().await?;
@@ -37,8 +38,8 @@ use std::sync::Arc;
 pub struct ScopedArtifacts {
     service: Arc<dyn ArtifactService>,
     app_name: String,
-    user_id: String,
-    session_id: String,
+    user_id: UserId,
+    session_id: SessionId,
 }
 
 impl ScopedArtifacts {
@@ -53,8 +54,8 @@ impl ScopedArtifacts {
     pub fn new(
         service: Arc<dyn ArtifactService>,
         app_name: String,
-        user_id: String,
-        session_id: String,
+        user_id: UserId,
+        session_id: SessionId,
     ) -> Self {
         Self { service, app_name, user_id, session_id }
     }
@@ -116,26 +117,26 @@ mod tests {
         let sess1 = ScopedArtifacts::new(
             service.clone(),
             "app".to_string(),
-            "user".to_string(),
-            "sess1".to_string(),
+            UserId::new("user").unwrap(),
+            SessionId::new("sess1").unwrap(),
         );
         let sess2 = ScopedArtifacts::new(
             service.clone(),
             "app".to_string(),
-            "user".to_string(),
-            "sess2".to_string(),
+            UserId::new("user").unwrap(),
+            SessionId::new("sess2").unwrap(),
         );
 
         // Save different data to same filename in different sessions
-        sess1.save("file.txt", &Part::Text { text: "session 1 data".to_string() }).await.unwrap();
-        sess2.save("file.txt", &Part::Text { text: "session 2 data".to_string() }).await.unwrap();
+        sess1.save("file.txt", &Part::text("session 1 data".to_string())).await.unwrap();
+        sess2.save("file.txt", &Part::text("session 2 data".to_string())).await.unwrap();
 
         // Load from each session - should get isolated data
         let loaded1 = sess1.load("file.txt").await.unwrap();
         let loaded2 = sess2.load("file.txt").await.unwrap();
 
         match (loaded1, loaded2) {
-            (Part::Text { text: text1 }, Part::Text { text: text2 }) => {
+            (Part::Text(text1), Part::Text(text2)) => {
                 assert_eq!(text1, "session 1 data");
                 assert_eq!(text2, "session 2 data");
             }
@@ -150,19 +151,19 @@ mod tests {
         let sess1 = ScopedArtifacts::new(
             service.clone(),
             "app".to_string(),
-            "user".to_string(),
-            "sess1".to_string(),
+            UserId::new("user").unwrap(),
+            SessionId::new("sess1").unwrap(),
         );
         let sess2 = ScopedArtifacts::new(
             service.clone(),
             "app".to_string(),
-            "user".to_string(),
-            "sess2".to_string(),
+            UserId::new("user").unwrap(),
+            SessionId::new("sess2").unwrap(),
         );
 
         // Save files in different sessions
-        sess1.save("file1.txt", &Part::Text { text: "data1".to_string() }).await.unwrap();
-        sess2.save("file2.txt", &Part::Text { text: "data2".to_string() }).await.unwrap();
+        sess1.save("file1.txt", &Part::text("data1".to_string())).await.unwrap();
+        sess2.save("file2.txt", &Part::text("data2".to_string())).await.unwrap();
 
         // List should only show session-specific files
         let files1 = sess1.list().await.unwrap();
@@ -179,28 +180,25 @@ mod tests {
         let sess1 = ScopedArtifacts::new(
             service.clone(),
             "app".to_string(),
-            "user1".to_string(),
-            "sess1".to_string(),
+            UserId::new("user1").unwrap(),
+            SessionId::new("sess1").unwrap(),
         );
         let sess2 = ScopedArtifacts::new(
             service.clone(),
             "app".to_string(),
-            "user1".to_string(),
-            "sess2".to_string(),
+            UserId::new("user1").unwrap(),
+            SessionId::new("sess2").unwrap(),
         );
 
         // Save user-scoped artifact (with "user:" prefix)
-        sess1
-            .save("user:shared.txt", &Part::Text { text: "shared data".to_string() })
-            .await
-            .unwrap();
+        sess1.save("user:shared.txt", &Part::text("shared data".to_string())).await.unwrap();
 
         // Should be accessible from both sessions (user-scoped)
         let loaded1 = sess1.load("user:shared.txt").await.unwrap();
         let loaded2 = sess2.load("user:shared.txt").await.unwrap();
 
         match (loaded1, loaded2) {
-            (Part::Text { text: text1 }, Part::Text { text: text2 }) => {
+            (Part::Text(text1), Part::Text(text2)) => {
                 assert_eq!(text1, "shared data");
                 assert_eq!(text2, "shared data");
             }

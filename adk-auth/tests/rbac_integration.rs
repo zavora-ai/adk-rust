@@ -4,6 +4,7 @@ use adk_auth::{AccessControl, AuthMiddleware, Permission, Role, ToolExt};
 use adk_core::{
     Artifacts, CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Tool,
     ToolContext,
+    types::{InvocationId, SessionId, UserId},
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -47,17 +48,17 @@ struct MockContext {
 }
 
 impl MockContext {
-    fn create(user_id: &str) -> Arc<dyn ToolContext> {
+    fn create(user_id: &UserId) -> Arc<dyn ToolContext> {
         let mut identity = adk_core::types::AdkIdentity::default();
-        identity.invocation_id = "test-invocation".to_string().into();
+        identity.invocation_id = InvocationId::new("test-invocation").unwrap();
         identity.agent_name = "test-agent".to_string();
-        identity.user_id = user_id.to_string().into();
+        identity.user_id = user_id.clone();
         identity.app_name = "test-app".to_string();
-        identity.session_id = "test-session".to_string().into();
+        identity.session_id = SessionId::new("test-session").unwrap();
 
         Arc::new(Self {
             identity,
-            content: Content::new("user"),
+            content: Content::user(),
             actions: Mutex::new(EventActions::default()),
         })
     }
@@ -115,20 +116,20 @@ fn test_basic_role_access() {
     let ac = AccessControl::builder()
         .role(admin)
         .role(user)
-        .assign("alice", "admin")
-        .assign("bob", "user")
+        .assign(UserId::new("alice").unwrap(), "admin")
+        .assign(UserId::new("bob").unwrap(), "user")
         .build()
         .unwrap();
 
     // Admin can access everything
-    assert!(ac.check("alice", &Permission::Tool("search".into())).is_ok());
-    assert!(ac.check("alice", &Permission::Tool("admin".into())).is_ok());
-    assert!(ac.check("alice", &Permission::AllTools).is_ok());
+    assert!(ac.check(&UserId::new("alice").unwrap(), &Permission::Tool("search".into())).is_ok());
+    assert!(ac.check(&UserId::new("alice").unwrap(), &Permission::Tool("admin".into())).is_ok());
+    assert!(ac.check(&UserId::new("alice").unwrap(), &Permission::AllTools).is_ok());
 
     // User can only access search
-    assert!(ac.check("bob", &Permission::Tool("search".into())).is_ok());
-    assert!(ac.check("bob", &Permission::Tool("admin".into())).is_err());
-    assert!(ac.check("bob", &Permission::AllTools).is_err());
+    assert!(ac.check(&UserId::new("bob").unwrap(), &Permission::Tool("search".into())).is_ok());
+    assert!(ac.check(&UserId::new("bob").unwrap(), &Permission::Tool("admin".into())).is_err());
+    assert!(ac.check(&UserId::new("bob").unwrap(), &Permission::AllTools).is_err());
 }
 
 #[test]
@@ -136,13 +137,19 @@ fn test_deny_precedence() {
     let role =
         Role::new("limited").allow(Permission::AllTools).deny(Permission::Tool("dangerous".into()));
 
-    let ac = AccessControl::builder().role(role).assign("user", "limited").build().unwrap();
+    let ac = AccessControl::builder()
+        .role(role)
+        .assign(UserId::new("user").unwrap(), "limited")
+        .build()
+        .unwrap();
 
     // Can access other tools
-    assert!(ac.check("user", &Permission::Tool("safe".into())).is_ok());
+    assert!(ac.check(&UserId::new("user").unwrap(), &Permission::Tool("safe".into())).is_ok());
 
     // Cannot access denied tool
-    assert!(ac.check("user", &Permission::Tool("dangerous".into())).is_err());
+    assert!(
+        ac.check(&UserId::new("user").unwrap(), &Permission::Tool("dangerous".into())).is_err()
+    );
 }
 
 #[test]
@@ -153,30 +160,36 @@ fn test_multi_role_union() {
     let ac = AccessControl::builder()
         .role(reader)
         .role(writer)
-        .assign("alice", "reader")
-        .assign("alice", "writer")
+        .assign(UserId::new("alice").unwrap(), "reader")
+        .assign(UserId::new("alice").unwrap(), "writer")
         .build()
         .unwrap();
 
     // Alice has both permissions
-    assert!(ac.check("alice", &Permission::Tool("read".into())).is_ok());
-    assert!(ac.check("alice", &Permission::Tool("write".into())).is_ok());
+    assert!(ac.check(&UserId::new("alice").unwrap(), &Permission::Tool("read".into())).is_ok());
+    assert!(ac.check(&UserId::new("alice").unwrap(), &Permission::Tool("write".into())).is_ok());
 }
 
 #[test]
 fn test_unknown_user_denied() {
     let role = Role::new("user").allow(Permission::AllTools);
 
-    let ac = AccessControl::builder().role(role).assign("known", "user").build().unwrap();
+    let ac = AccessControl::builder()
+        .role(role)
+        .assign(UserId::new("known").unwrap(), "user")
+        .build()
+        .unwrap();
 
-    assert!(ac.check("known", &Permission::Tool("any".into())).is_ok());
-    assert!(ac.check("unknown", &Permission::Tool("any".into())).is_err());
+    assert!(ac.check(&UserId::new("known").unwrap(), &Permission::Tool("any".into())).is_ok());
+    assert!(ac.check(&UserId::new("unknown").unwrap(), &Permission::Tool("any".into())).is_err());
 }
 
 #[test]
 fn test_invalid_role_assignment_fails() {
-    let result =
-        AccessControl::builder().role(Role::new("admin")).assign("alice", "nonexistent").build();
+    let result = AccessControl::builder()
+        .role(Role::new("admin"))
+        .assign(UserId::new("alice").unwrap(), "nonexistent")
+        .build();
 
     assert!(result.is_err());
 }
@@ -189,13 +202,17 @@ fn test_invalid_role_assignment_fails() {
 async fn test_protected_tool_allows_authorized() {
     let role = Role::new("user").allow(Permission::Tool("search".into()));
 
-    let ac = AccessControl::builder().role(role).assign("alice", "user").build().unwrap();
+    let ac = AccessControl::builder()
+        .role(role)
+        .assign(UserId::new("alice").unwrap(), "user")
+        .build()
+        .unwrap();
 
     let tool = MockTool::new("search");
     let protected = tool.with_access_control(Arc::new(ac));
 
-    let ctx = MockContext::create("alice");
-    let result = protected.execute(ctx, json!({"query": "test"})).await;
+    let ctx = MockContext::create(&UserId::new("alice").unwrap());
+    let result = protected.execute(ctx.clone(), json!({"query": "test"})).await;
 
     assert!(result.is_ok());
     let value = result.unwrap();
@@ -206,12 +223,16 @@ async fn test_protected_tool_allows_authorized() {
 async fn test_protected_tool_denies_unauthorized() {
     let role = Role::new("user").allow(Permission::Tool("other".into()));
 
-    let ac = AccessControl::builder().role(role).assign("alice", "user").build().unwrap();
+    let ac = AccessControl::builder()
+        .role(role)
+        .assign(UserId::new("alice").unwrap(), "user")
+        .build()
+        .unwrap();
 
     let tool = MockTool::new("search");
     let protected = tool.with_access_control(Arc::new(ac));
 
-    let ctx = MockContext::create("alice");
+    let ctx = MockContext::create(&UserId::new("alice").unwrap());
     let result = protected.execute(ctx, json!({})).await;
 
     assert!(result.is_err());
@@ -225,7 +246,11 @@ async fn test_protected_tool_denies_unauthorized() {
 fn test_middleware_protects_all_tools() {
     let admin = Role::new("admin").allow(Permission::AllTools);
 
-    let ac = AccessControl::builder().role(admin).assign("admin", "admin").build().unwrap();
+    let ac = AccessControl::builder()
+        .role(admin)
+        .assign(UserId::new("admin").unwrap(), "admin")
+        .build()
+        .unwrap();
 
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(MockTool::new("tool1")),
@@ -248,7 +273,11 @@ async fn test_middleware_batch_execution() {
         .allow(Permission::Tool("allowed1".into()))
         .allow(Permission::Tool("allowed2".into()));
 
-    let ac = AccessControl::builder().role(role).assign("user", "user").build().unwrap();
+    let ac = AccessControl::builder()
+        .role(role)
+        .assign(UserId::new("user").unwrap(), "user")
+        .build()
+        .unwrap();
 
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(MockTool::new("allowed1")),
@@ -259,7 +288,7 @@ async fn test_middleware_batch_execution() {
     let middleware = AuthMiddleware::new(ac);
     let protected = middleware.protect_all(tools);
 
-    let ctx = MockContext::create("user");
+    let ctx = MockContext::create(&UserId::new("user").unwrap());
 
     // Allowed tools work
     assert!(protected[0].execute(ctx.clone(), json!({})).await.is_ok());
@@ -277,12 +306,16 @@ async fn test_middleware_batch_execution() {
 fn test_permission_wildcards() {
     let role = Role::new("all_tools").allow(Permission::AllTools);
 
-    let ac = AccessControl::builder().role(role).assign("user", "all_tools").build().unwrap();
+    let ac = AccessControl::builder()
+        .role(role)
+        .assign(UserId::new("user").unwrap(), "all_tools")
+        .build()
+        .unwrap();
 
     // AllTools covers any specific tool
-    assert!(ac.check("user", &Permission::Tool("tool1".into())).is_ok());
-    assert!(ac.check("user", &Permission::Tool("tool2".into())).is_ok());
-    assert!(ac.check("user", &Permission::AllTools).is_ok());
+    assert!(ac.check(&UserId::new("user").unwrap(), &Permission::Tool("tool1".into())).is_ok());
+    assert!(ac.check(&UserId::new("user").unwrap(), &Permission::Tool("tool2".into())).is_ok());
+    assert!(ac.check(&UserId::new("user").unwrap(), &Permission::AllTools).is_ok());
 }
 
 #[test]
@@ -291,9 +324,13 @@ fn test_agent_permissions() {
         .allow(Permission::Agent("agent1".into()))
         .allow(Permission::AllAgents);
 
-    let ac = AccessControl::builder().role(role).assign("user", "agent_access").build().unwrap();
+    let ac = AccessControl::builder()
+        .role(role)
+        .assign(UserId::new("user").unwrap(), "agent_access")
+        .build()
+        .unwrap();
 
-    assert!(ac.check("user", &Permission::Agent("agent1".into())).is_ok());
-    assert!(ac.check("user", &Permission::Agent("any".into())).is_ok());
-    assert!(ac.check("user", &Permission::AllAgents).is_ok());
+    assert!(ac.check(&UserId::new("user").unwrap(), &Permission::Agent("agent1".into())).is_ok());
+    assert!(ac.check(&UserId::new("user").unwrap(), &Permission::Agent("any".into())).is_ok());
+    assert!(ac.check(&UserId::new("user").unwrap(), &Permission::AllAgents).is_ok());
 }

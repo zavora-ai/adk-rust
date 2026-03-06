@@ -28,36 +28,33 @@ use adk_rag::{
 fn sample_documents() -> Vec<Document> {
     vec![
         Document {
-            id: "features".into(),
+            id: "features",
             text: "AcmeBot is an AI-powered customer support assistant. It can handle \
                    ticket routing, FAQ answering, and sentiment analysis. AcmeBot supports \
                    multi-language conversations in English, Spanish, French, and Japanese. \
-                   It integrates with Slack, Microsoft Teams, and email via SMTP."
-                .into(),
-            metadata: HashMap::from([("category".into(), "features".into())]),
+                   It integrates with Slack, Microsoft Teams, and email via SMTP.",
+            metadata: HashMap::from([("category", "features".to_string())]),
             source_uri: None,
         },
         Document {
-            id: "pricing".into(),
+            id: "pricing",
             text: "AcmeBot pricing starts at $29/month for the Starter plan which includes \
                    up to 1,000 conversations per month. The Professional plan at $99/month \
                    supports 10,000 conversations and adds priority support. The Enterprise \
                    plan offers unlimited conversations, custom integrations, and a dedicated \
-                   account manager — contact sales for pricing."
-                .into(),
-            metadata: HashMap::from([("category".into(), "pricing".into())]),
+                   account manager — contact sales for pricing.",
+            metadata: HashMap::from([("category", "pricing".to_string())]),
             source_uri: None,
         },
         Document {
-            id: "faq".into(),
+            id: "faq",
             text: "Frequently Asked Questions about AcmeBot: \
                    Q: How do I reset my API key? A: Go to Settings > API Keys > Regenerate. \
                    Q: Does AcmeBot store conversation data? A: Yes, conversations are stored \
                    for 90 days by default. You can configure retention in the admin panel. \
                    Q: Can I train AcmeBot on my own data? A: Yes, upload documents through \
-                   the Knowledge Base section in the dashboard."
-                .into(),
-            metadata: HashMap::from([("category".into(), "faq".into())]),
+                   the Knowledge Base section in the dashboard.",
+            metadata: HashMap::from([("category", "faq".to_string())]),
             source_uri: None,
         },
     ]

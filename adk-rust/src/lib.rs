@@ -228,8 +228,8 @@
 //! // Create a session
 //! let session = session_service.create(CreateRequest {
 //!     app_name: "my_app".to_string(),
-//!     user_id: "user_123".to_string().into(),
-//!     session_id: None,
+//!     user_id: UserId::new( "user_123".to_string()),
+//!     session_id: SessionId::new( None,
 //!     state: HashMap::new(),
 //! }).await?;
 //!
@@ -285,18 +285,18 @@
 //! // Save an artifact
 //! let response = artifact_service.save(SaveRequest {
 //!     app_name: "my_app".to_string(),
-//!     user_id: "user_123".to_string(),
-//!     session_id: "session_456".to_string(),
+//!     user_id: UserId::new( "user_123".to_string(),
+//!     session_id: SessionId::new( "session_456".to_string(),
 //!     file_name: "sales_chart.png".to_string(),
-//!     part: Part::Text { text: "chart data".to_string() },
+//!     part: Part::text("chart data".to_string()),
 //!     version: None,
 //! }).await?;
 //!
 //! // Load an artifact
 //! let loaded = artifact_service.load(LoadRequest {
 //!     app_name: "my_app".to_string(),
-//!     user_id: "user_123".to_string(),
-//!     session_id: "session_456".to_string(),
+//!     user_id: UserId::new( "user_123".to_string(),
+//!     session_id: SessionId::new( "session_456".to_string(),
 //!     file_name: "sales_chart.png".to_string(),
 //!     version: None,
 //! }).await?;

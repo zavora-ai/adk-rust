@@ -57,7 +57,7 @@ fn main() -> anyhow::Result<()> {
     println!("==============================\n");
 
     // Define roles
-    let data_analyst = Role::new("data_analyst").allow(Permission::Tool("data_query".into()));
+    let data_analyst = Role::new("data_analyst").allow(Permission::Tool("data_query"));
 
     let guest = Role::new("guest"); // No permissions
 
@@ -95,7 +95,7 @@ fn main() -> anyhow::Result<()> {
     ];
 
     for (user, tool, expected) in checks {
-        let perm = Permission::Tool(tool.into());
+        let perm = Permission::Tool(tool);
         let result = ac.check(user, &perm);
         let outcome = if result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
 

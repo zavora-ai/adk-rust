@@ -240,7 +240,7 @@ REASONING: [Brief explanation of the score]"#,
         );
 
         let request =
-            LlmRequest::new(self.model.name(), vec![Content::new("user").with_text(&full_prompt)]);
+            LlmRequest::new(self.model.name(), vec![Content::user().with_text(&full_prompt)]);
 
         let mut stream = self
             .model
@@ -256,7 +256,7 @@ REASONING: [Brief explanation of the score]"#,
 
             if let Some(content) = &response.content {
                 for part in &content.parts {
-                    if let Some(text) = part.text() {
+                    if let Some(text) = part.as_text() {
                         response_text.push_str(text);
                     }
                 }

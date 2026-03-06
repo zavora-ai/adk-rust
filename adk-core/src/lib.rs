@@ -67,6 +67,7 @@ pub mod error;
 pub mod event;
 pub mod instruction_template;
 pub mod model;
+pub mod prelude;
 pub mod tool;
 pub mod types;
 
@@ -93,4 +94,4 @@ pub use model::{
     GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream, UsageMetadata,
 };
 pub use tool::{Tool, ToolContext, ToolPredicate, ToolRegistry, Toolset, ValidationMode};
-pub use types::{Content, FunctionResponseData, MAX_INLINE_DATA_SIZE, Part};
+pub use types::{Content, MAX_INLINE_DATA_SIZE, Part, Role};

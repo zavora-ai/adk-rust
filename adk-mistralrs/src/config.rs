@@ -254,22 +254,22 @@ pub enum ModelSource {
 impl ModelSource {
     /// Create a HuggingFace model source
     pub fn huggingface(model_id: impl Into<String>) -> Self {
-        Self::HuggingFace(model_id.into())
+        Self::HuggingFace(model_id))
     }
 
     /// Create a local path model source
     pub fn local(path: impl Into<PathBuf>) -> Self {
-        Self::Local(path.into())
+        Self::Local(path))
     }
 
     /// Create a GGUF file model source
     pub fn gguf(path: impl Into<PathBuf>) -> Self {
-        Self::Gguf(path.into())
+        Self::Gguf(path))
     }
 
     /// Create a UQFF file model source
     pub fn uqff(path: impl Into<PathBuf>) -> Self {
-        Self::Uqff(path.into())
+        Self::Uqff(path))
     }
 }
 
@@ -527,7 +527,7 @@ impl AdapterConfig {
     /// ]);
     /// ```
     pub fn lora_multi(adapters: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        let mut adapters: Vec<String> = adapters.into_iter().map(|s| s.into()).collect();
+        let mut adapters: Vec<String> = adapters.into_iter().map(|s| s)).collect();
         let primary = adapters.remove(0);
         Self {
             adapter_type: AdapterType::LoRA,
@@ -580,7 +580,7 @@ impl AdapterConfig {
         mut self,
         adapters: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        self.additional_adapters.extend(adapters.into_iter().map(|s| s.into()));
+        self.additional_adapters.extend(adapters.into_iter().map(|s| s)));
         self
     }
 
@@ -662,13 +662,12 @@ impl MatFormerConfig {
         target_size: impl Into<String>,
         config_path: impl Into<PathBuf>,
     ) -> Self {
-        Self { target_size: target_size.into(), config_path: Some(config_path.into()) }
+        Self { target_size: target_size.into(), config_path: Some(config_path)) }
     }
 
     /// Set the configuration file path.
     pub fn config_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.config_path = Some(path.into());
-        self
+        self.config_path = Some(path.into());        self
     }
 }
 

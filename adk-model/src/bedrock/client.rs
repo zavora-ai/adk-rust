@@ -6,8 +6,8 @@
 
 use super::config::BedrockConfig;
 use super::convert::{
-    adk_request_to_bedrock, bedrock_response_to_adk, bedrock_stream_content_start_to_adk,
-    bedrock_stream_delta_to_adk, bedrock_stream_stop_to_adk,
+    self, adk_request_to_bedrock, bedrock_response_to_adk, bedrock_stream_delta_to_adk,
+    bedrock_stream_start_to_adk,
 };
 use crate::retry::RetryConfig;
 use adk_core::{AdkError, Llm, LlmRequest, LlmResponse, LlmResponseStream};
@@ -152,7 +152,7 @@ impl BedrockClient {
         })?;
 
         let adk_response =
-            bedrock_response_to_adk(&output, &response.stop_reason, response.usage.as_ref());
+            bedrock_response_to_adk(&output, &response.stop_reason, response.usage);
 
         let response_stream = try_stream! {
             yield adk_response;
@@ -219,7 +219,7 @@ impl BedrockClient {
                                 tool_args_buf.clear();
                             }
 
-                            if let Some(response) = bedrock_stream_content_start_to_adk(start) {
+                            if let Some(response) = bedrock_stream_start_to_adk(start) {
                                 yield response;
                             }
                         }
@@ -258,7 +258,7 @@ impl BedrockClient {
 
                             yield LlmResponse {
                                 content: Some(adk_core::Content {
-                                    role: "model".to_string(),
+                                    role: adk_core::types::Role::Model,
                                     parts: vec![adk_core::Part::FunctionCall {
                                         name,
                                         args,
@@ -280,13 +280,13 @@ impl BedrockClient {
                         // If we accumulated a reasoning signature, emit it as a
                         // Part::Thinking with the signature so downstream consumers
                         // can attach it to the reasoning block.
-                        if let Some(sig) = reasoning_signature.take() {
+                        if let Some(_sig) = reasoning_signature.take() {
                             yield LlmResponse {
                                 content: Some(adk_core::Content {
-                                    role: "model".to_string(),
+                                    role: adk_core::types::Role::Model,
                                     parts: vec![adk_core::Part::Thinking {
-                                        thinking: String::new(),
-                                        signature: Some(sig),
+                                        thought: String::new(),
+                                        signature: None,
                                     }],
                                 }),
                                 usage_metadata: None,
@@ -305,16 +305,20 @@ impl BedrockClient {
                     }
                     ConverseStreamOutput::MessageStop(stop_event) => {
                         // Buffer the stop chunk — Metadata arrives after this.
-                        pending_stop = Some(bedrock_stream_stop_to_adk(&stop_event.stop_reason));
+                        pending_stop = Some(LlmResponse {
+                            finish_reason: Some(convert::map_stop_reason(&stop_event.stop_reason)),
+                            turn_complete: true,
+                            ..Default::default()
+                        });
                     }
                     ConverseStreamOutput::Metadata(metadata_event) => {
                         if let Some(usage) = &metadata_event.usage {
                             pending_usage = Some(adk_core::UsageMetadata {
-                                prompt_token_count: usage.input_tokens,
-                                candidates_token_count: usage.output_tokens,
-                                total_token_count: usage.total_tokens,
-                                cache_read_input_token_count: usage.cache_read_input_tokens,
-                                cache_creation_input_token_count: usage.cache_write_input_tokens,
+                                prompt_token_count: usage.input_tokens as i32,
+                                candidates_token_count: usage.output_tokens as i32,
+                                total_token_count: usage.total_tokens as i32,
+                                cache_read_input_token_count: usage.cache_read_input_tokens.map(|t| t as i32),
+                                cache_creation_input_token_count: usage.cache_write_input_tokens.map(|t| t as i32),
                                 ..Default::default()
                             });
                         }

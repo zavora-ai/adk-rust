@@ -46,7 +46,7 @@ impl GeminiEmbeddingProvider {
     pub fn new(api_key: impl AsRef<str>) -> Result<Self> {
         let client = Gemini::with_model(api_key, Model::GeminiEmbedding001).map_err(|e| {
             RagError::EmbeddingError {
-                provider: "Gemini".into(),
+                provider: "Gemini".to_string(),
                 message: format!("failed to create Gemini client: {e}"),
             }
         })?;
@@ -104,7 +104,7 @@ impl EmbeddingProvider for GeminiEmbeddingProvider {
 
         let response = self.embed_builder().with_text(text).execute().await.map_err(|e| {
             error!(provider = "Gemini", error = %e, "embedding request failed");
-            RagError::EmbeddingError { provider: "Gemini".into(), message: format!("{e}") }
+            RagError::EmbeddingError { provider: "Gemini".to_string(), message: format!("{e}") }
         })?;
 
         Ok(response.embedding.values)
@@ -124,7 +124,7 @@ impl EmbeddingProvider for GeminiEmbeddingProvider {
             .await
             .map_err(|e| {
                 error!(provider = "Gemini", error = %e, "batch embedding request failed");
-                RagError::EmbeddingError { provider: "Gemini".into(), message: format!("{e}") }
+                RagError::EmbeddingError { provider: "Gemini".to_string(), message: format!("{e}") }
             })?;
 
         Ok(response.embeddings.into_iter().map(|e| e.values).collect())

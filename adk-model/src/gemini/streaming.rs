@@ -16,7 +16,7 @@ pub async fn aggregate_stream(
 
         if let Some(content) = &response.content {
             for part in &content.parts {
-                if let Part::Text { text } = part {
+                if let Some(text) = part.as_text() {
                     aggregated_text.push_str(text);
                 }
             }
@@ -30,8 +30,8 @@ pub async fn aggregate_stream(
     })?;
 
     final_response.content = Some(Content {
-        role: "model".to_string(),
-        parts: vec![Part::Text { text: aggregated_text }],
+        role: adk_core::types::Role::Model,
+        parts: vec![Part::text(aggregated_text)],
     });
     final_response.partial = false;
     final_response.turn_complete = true;

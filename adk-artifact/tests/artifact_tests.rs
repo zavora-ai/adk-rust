@@ -1,5 +1,6 @@
 use adk_artifact::*;
 use adk_core::Part;
+use adk_core::types::{SessionId, UserId};
 
 #[tokio::test]
 async fn test_save_and_load() {
@@ -7,10 +8,10 @@ async fn test_save_and_load() {
 
     let save_req = SaveRequest {
         app_name: "app1".to_string(),
-        user_id: "user1".to_string(),
-        session_id: "session1".to_string(),
+        user_id: UserId::new("user1".to_string()).unwrap(),
+        session_id: SessionId::new("session1".to_string()).unwrap(),
         file_name: "test.txt".to_string(),
-        part: Part::Text { text: "Hello World".to_string() },
+        part: Part::text("Hello World".to_string()),
         version: None,
     };
 
@@ -19,14 +20,14 @@ async fn test_save_and_load() {
 
     let load_req = LoadRequest {
         app_name: "app1".to_string(),
-        user_id: "user1".to_string(),
-        session_id: "session1".to_string(),
+        user_id: UserId::new("user1".to_string()).unwrap(),
+        session_id: SessionId::new("session1".to_string()).unwrap(),
         file_name: "test.txt".to_string(),
         version: None,
     };
 
     let load_resp = service.load(load_req).await.unwrap();
-    assert_eq!(load_resp.part, Part::Text { text: "Hello World".to_string() });
+    assert_eq!(load_resp.part, Part::text("Hello World".to_string()));
 }
 
 #[tokio::test]
@@ -37,10 +38,10 @@ async fn test_versioning() {
     service
         .save(SaveRequest {
             app_name: "app1".to_string(),
-            user_id: "user1".to_string(),
-            session_id: "session1".to_string(),
+            user_id: UserId::new("user1".to_string()).unwrap(),
+            session_id: SessionId::new("session1".to_string()).unwrap(),
             file_name: "test.txt".to_string(),
-            part: Part::Text { text: "v1".to_string() },
+            part: Part::text("v1".to_string()),
             version: None,
         })
         .await
@@ -50,10 +51,10 @@ async fn test_versioning() {
     service
         .save(SaveRequest {
             app_name: "app1".to_string(),
-            user_id: "user1".to_string(),
-            session_id: "session1".to_string(),
+            user_id: UserId::new("user1".to_string()).unwrap(),
+            session_id: SessionId::new("session1".to_string()).unwrap(),
             file_name: "test.txt".to_string(),
-            part: Part::Text { text: "v2".to_string() },
+            part: Part::text("v2".to_string()),
             version: None,
         })
         .await
@@ -63,34 +64,34 @@ async fn test_versioning() {
     let load_resp = service
         .load(LoadRequest {
             app_name: "app1".to_string(),
-            user_id: "user1".to_string(),
-            session_id: "session1".to_string(),
+            user_id: UserId::new("user1".to_string()).unwrap(),
+            session_id: SessionId::new("session1".to_string()).unwrap(),
             file_name: "test.txt".to_string(),
             version: None,
         })
         .await
         .unwrap();
-    assert_eq!(load_resp.part, Part::Text { text: "v2".to_string() });
+    assert_eq!(load_resp.part, Part::text("v2".to_string()));
 
     // Load v1
     let load_resp = service
         .load(LoadRequest {
             app_name: "app1".to_string(),
-            user_id: "user1".to_string(),
-            session_id: "session1".to_string(),
+            user_id: UserId::new("user1".to_string()).unwrap(),
+            session_id: SessionId::new("session1".to_string()).unwrap(),
             file_name: "test.txt".to_string(),
             version: Some(1),
         })
         .await
         .unwrap();
-    assert_eq!(load_resp.part, Part::Text { text: "v1".to_string() });
+    assert_eq!(load_resp.part, Part::text("v1".to_string()));
 
     // List versions
     let versions_resp = service
         .versions(VersionsRequest {
             app_name: "app1".to_string(),
-            user_id: "user1".to_string(),
-            session_id: "session1".to_string(),
+            user_id: UserId::new("user1".to_string()).unwrap(),
+            session_id: SessionId::new("session1".to_string()).unwrap(),
             file_name: "test.txt".to_string(),
         })
         .await
@@ -105,10 +106,10 @@ async fn test_list() {
     service
         .save(SaveRequest {
             app_name: "app1".to_string(),
-            user_id: "user1".to_string(),
-            session_id: "session1".to_string(),
+            user_id: UserId::new("user1".to_string()).unwrap(),
+            session_id: SessionId::new("session1".to_string()).unwrap(),
             file_name: "file1.txt".to_string(),
-            part: Part::Text { text: "content1".to_string() },
+            part: Part::text("content1".to_string()),
             version: None,
         })
         .await
@@ -117,10 +118,10 @@ async fn test_list() {
     service
         .save(SaveRequest {
             app_name: "app1".to_string(),
-            user_id: "user1".to_string(),
-            session_id: "session1".to_string(),
+            user_id: UserId::new("user1".to_string()).unwrap(),
+            session_id: SessionId::new("session1".to_string()).unwrap(),
             file_name: "file2.txt".to_string(),
-            part: Part::Text { text: "content2".to_string() },
+            part: Part::text("content2".to_string()),
             version: None,
         })
         .await
@@ -129,8 +130,8 @@ async fn test_list() {
     let list_resp = service
         .list(ListRequest {
             app_name: "app1".to_string(),
-            user_id: "user1".to_string(),
-            session_id: "session1".to_string(),
+            user_id: UserId::new("user1".to_string()).unwrap(),
+            session_id: SessionId::new("session1".to_string()).unwrap(),
         })
         .await
         .unwrap();
@@ -145,10 +146,10 @@ async fn test_delete() {
     service
         .save(SaveRequest {
             app_name: "app1".to_string(),
-            user_id: "user1".to_string(),
-            session_id: "session1".to_string(),
+            user_id: UserId::new("user1".to_string()).unwrap(),
+            session_id: SessionId::new("session1".to_string()).unwrap(),
             file_name: "test.txt".to_string(),
-            part: Part::Text { text: "content".to_string() },
+            part: Part::text("content".to_string()),
             version: None,
         })
         .await
@@ -157,8 +158,8 @@ async fn test_delete() {
     service
         .delete(DeleteRequest {
             app_name: "app1".to_string(),
-            user_id: "user1".to_string(),
-            session_id: "session1".to_string(),
+            user_id: UserId::new("user1".to_string()).unwrap(),
+            session_id: SessionId::new("session1".to_string()).unwrap(),
             file_name: "test.txt".to_string(),
             version: None,
         })
@@ -168,8 +169,8 @@ async fn test_delete() {
     let load_result = service
         .load(LoadRequest {
             app_name: "app1".to_string(),
-            user_id: "user1".to_string(),
-            session_id: "session1".to_string(),
+            user_id: UserId::new("user1".to_string()).unwrap(),
+            session_id: SessionId::new("session1".to_string()).unwrap(),
             file_name: "test.txt".to_string(),
             version: None,
         })
@@ -186,10 +187,10 @@ async fn test_user_scoped_artifacts() {
     service
         .save(SaveRequest {
             app_name: "app1".to_string(),
-            user_id: "user1".to_string(),
-            session_id: "session1".to_string(),
+            user_id: UserId::new("user1".to_string()).unwrap(),
+            session_id: SessionId::new("session1".to_string()).unwrap(),
             file_name: "user:profile.txt".to_string(),
-            part: Part::Text { text: "user data".to_string() },
+            part: Part::text("user data".to_string()),
             version: None,
         })
         .await
@@ -199,15 +200,15 @@ async fn test_user_scoped_artifacts() {
     let load_resp = service
         .load(LoadRequest {
             app_name: "app1".to_string(),
-            user_id: "user1".to_string(),
-            session_id: "session2".to_string(),
+            user_id: UserId::new("user1".to_string()).unwrap(),
+            session_id: SessionId::new("session2".to_string()).unwrap(),
             file_name: "user:profile.txt".to_string(),
             version: None,
         })
         .await
         .unwrap();
 
-    assert_eq!(load_resp.part, Part::Text { text: "user data".to_string() });
+    assert_eq!(load_resp.part, Part::text("user data".to_string()));
 }
 
 #[tokio::test]
@@ -219,10 +220,10 @@ async fn test_reject_invalid_artifact_file_names() {
         let save_result = service
             .save(SaveRequest {
                 app_name: "app1".to_string(),
-                user_id: "user1".to_string(),
-                session_id: "session1".to_string(),
+                user_id: UserId::new("user1".to_string()).unwrap(),
+                session_id: SessionId::new("session1".to_string()).unwrap(),
                 file_name: file_name.to_string(),
-                part: Part::Text { text: "blocked".to_string() },
+                part: Part::text("blocked".to_string()),
                 version: None,
             })
             .await;
@@ -231,8 +232,8 @@ async fn test_reject_invalid_artifact_file_names() {
         let load_result = service
             .load(LoadRequest {
                 app_name: "app1".to_string(),
-                user_id: "user1".to_string(),
-                session_id: "session1".to_string(),
+                user_id: UserId::new("user1".to_string()).unwrap(),
+                session_id: SessionId::new("session1".to_string()).unwrap(),
                 file_name: file_name.to_string(),
                 version: None,
             })

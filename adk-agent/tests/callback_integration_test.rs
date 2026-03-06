@@ -90,8 +90,8 @@ struct MockSession {
 impl MockSession {
     fn new() -> Self {
         Self {
-            id: SessionId::from("session-1".to_string()),
-            user_id: UserId::from("user-1".to_string()),
+            id: SessionId::new("session-1".to_string()).unwrap(),
+            user_id: UserId::new("user-1".to_string()).unwrap(),
         }
     }
 }
@@ -134,11 +134,11 @@ struct MockContext {
 impl MockContext {
     fn new() -> Self {
         let mut identity = adk_core::types::AdkIdentity::default();
-        identity.invocation_id = "inv-1".to_string().into();
+        identity.invocation_id = "inv-1".into();
         identity.agent_name = "test-agent".to_string();
-        identity.user_id = "user-1".to_string().into();
+        identity.user_id = "user-1".into();
         identity.app_name = "test-app".to_string();
-        identity.session_id = "session-1".to_string().into();
+        identity.session_id = "session-1".into();
         identity.branch = "main".to_string();
 
         Self {
@@ -146,7 +146,7 @@ impl MockContext {
             session: MockSession::new(),
             user_content: Content {
                 role: "user".to_string(),
-                parts: vec![Part::Text { text: "start".to_string() }],
+                parts: vec![Part::text("start".to_string())],
             },
         }
     }
@@ -237,7 +237,7 @@ async fn test_callback_short_circuit() {
             // Return Some(content) to short-circuit
             Ok(Some(Content {
                 role: "assistant".to_string(),
-                parts: vec![Part::Text { text: "Short-circuited!".to_string() }],
+                parts: vec![Part::text("Short-circuited!".to_string())],
             }))
         })
             as std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Content>>> + Send>>
@@ -257,7 +257,7 @@ async fn test_callback_short_circuit() {
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
         if let Some(content) = event.llm_response.content {
-            if let Some(Part::Text { text }) = content.parts.first() {
+            if let Some(Part::text(text)) = content.parts.first() {
                 if text.contains("Short-circuited") {
                     found_short_circuit = true;
                 }

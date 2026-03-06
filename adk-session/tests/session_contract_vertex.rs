@@ -32,7 +32,7 @@ struct MockVertexDb {
 
 #[derive(Clone)]
 struct MockSession {
-    user_id: String,
+    user_id: UserId,
     state: HashMap<String, Value>,
     update_time: String,
 }
@@ -45,7 +45,7 @@ struct CreateSessionRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateSessionBody {
-    user_id: String,
+    user_id: UserId,
     #[serde(default)]
     session_state: HashMap<String, Value>,
 }
@@ -181,7 +181,7 @@ async fn get_session(
     project: &str,
     location: &str,
     engine: &str,
-    session_id: &str,
+    session_id: &SessionId,
 ) -> (StatusCode, Json<Value>) {
     let name = session_name(project, location, engine, session_id);
 
@@ -209,7 +209,7 @@ async fn delete_session(
     project: &str,
     location: &str,
     engine: &str,
-    session_id: &str,
+    session_id: &SessionId,
 ) -> (StatusCode, Json<Value>) {
     let name = session_name(project, location, engine, session_id);
 
@@ -225,7 +225,7 @@ async fn append_event(
     project: &str,
     location: &str,
     engine: &str,
-    session_id: &str,
+    session_id: &SessionId,
     body: Bytes,
 ) -> (StatusCode, Json<Value>) {
     let name = session_name(project, location, engine, session_id);
@@ -285,7 +285,7 @@ async fn list_events(
     project: &str,
     location: &str,
     engine: &str,
-    session_id: &str,
+    session_id: &SessionId,
 ) -> (StatusCode, Json<Value>) {
     let name = session_name(project, location, engine, session_id);
 

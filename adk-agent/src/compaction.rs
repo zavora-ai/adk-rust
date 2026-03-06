@@ -46,7 +46,7 @@ impl LlmEventSummarizer {
         for event in events {
             if let Some(content) = &event.llm_response.content {
                 for part in &content.parts {
-                    if let Part::Text { text } = part {
+                    if let Some(text) = part.as_text() {
                         lines.push(format!("{}: {}", event.author, text));
                     }
                 }
@@ -69,8 +69,8 @@ impl BaseEventsSummarizer for LlmEventSummarizer {
         let request = LlmRequest {
             model: self.llm.name().to_string(),
             contents: vec![Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: prompt }],
+                role: adk_core::types::Role::User,
+                parts: vec![Part::text(prompt)],
             }],
             tools: Default::default(),
             config: None,
@@ -95,17 +95,17 @@ impl BaseEventsSummarizer for LlmEventSummarizer {
         };
 
         // Ensure the compacted content has the role 'model'
-        summary.role = "model".to_string();
+        summary.role = adk_core::types::Role::Model;
 
         let start_timestamp = events.first().map(|e| e.timestamp).unwrap_or_default();
         let end_timestamp = events.last().map(|e| e.timestamp).unwrap_or_default();
 
         let compaction =
-            EventCompaction { start_timestamp, end_timestamp, compacted_content: summary };
+            EventCompaction { start_timestamp, end_timestamp, compacted_content: summary, summary: None, truncate_before_id: "".to_string() };
 
         let actions = EventActions { compaction: Some(compaction), ..Default::default() };
 
-        let mut event = Event::new(Event::new("compaction").invocation_id);
+        let mut event = Event::new(adk_core::types::InvocationId::new("compaction").unwrap());
         event.author = "system".to_string();
         event.actions = actions;
 

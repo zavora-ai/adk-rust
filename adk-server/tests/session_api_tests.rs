@@ -65,7 +65,7 @@ struct MockSessionService;
 impl SessionService for MockSessionService {
     async fn create(&self, req: CreateRequest) -> adk_core::Result<Box<dyn Session>> {
         Ok(Box::new(MockSession {
-            id: req.session_id.unwrap_or_else(|| "generated-id".to_string().into()),
+            id: req.session_id.unwrap_or_else(|| SessionId::new("generated-id").unwrap()),
             app_name: req.app_name,
             user_id: req.user_id,
         }))
@@ -87,7 +87,11 @@ impl SessionService for MockSessionService {
         Ok(())
     }
 
-    async fn append_event(&self, _session_id: &adk_core::types::SessionId, _event: Event) -> adk_core::Result<()> {
+    async fn append_event(
+        &self,
+        _session_id: &adk_core::types::SessionId,
+        _event: Event,
+    ) -> adk_core::Result<()> {
         Ok(())
     }
 }

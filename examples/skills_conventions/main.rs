@@ -74,8 +74,8 @@ async fn main() -> Result<()> {
     let session = session_service
         .create(CreateRequest {
             app_name: app_name.clone(),
-            user_id: user_id.clone().into(),
-            session_id: None,
+            user_id: UserId::new(user_id.clone()),
+            session_id: SessionId::new(None),
             state: HashMap::new(),
         })
         .await?;
@@ -96,8 +96,8 @@ async fn main() -> Result<()> {
 
     let mut stream = runner
         .run(
-            user_id.into(),
-            session_id.into(),
+            user_id,
+            session_id,
             Content::new("user")
                 .with_text("How should I configure Gemini access for this project?"),
         )
@@ -113,7 +113,7 @@ async fn main() -> Result<()> {
                 .parts
                 .iter()
                 .filter_map(|p| match p {
-                    Part::Text { text } => Some(text.as_str()),
+                    Part::Text(text) => Some(text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()

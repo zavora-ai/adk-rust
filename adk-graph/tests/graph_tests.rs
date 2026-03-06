@@ -40,22 +40,21 @@ fn test_graph_missing_node() {
 
 #[test]
 fn test_graph_with_multiple_nodes() {
-    let graph =
-        StateGraph::with_channels(&["value"])
-            .add_node_fn("step1", |_ctx| async move {
-                Ok(NodeOutput::new().with_update("value", json!(1)))
-            })
-            .add_node_fn("step2", |_ctx| async move {
-                Ok(NodeOutput::new().with_update("value", json!(2)))
-            })
-            .add_node_fn("step3", |_ctx| async move {
-                Ok(NodeOutput::new().with_update("value", json!(3)))
-            })
-            .add_edge(START, "step1")
-            .add_edge("step1", "step2")
-            .add_edge("step2", "step3")
-            .add_edge("step3", END)
-            .compile();
+    let graph = StateGraph::with_channels(&["value"])
+        .add_node_fn("step1", |_ctx| async move {
+            Ok(NodeOutput::new().with_update("value", json!(1)))
+        })
+        .add_node_fn("step2", |_ctx| async move {
+            Ok(NodeOutput::new().with_update("value", json!(2)))
+        })
+        .add_node_fn("step3", |_ctx| async move {
+            Ok(NodeOutput::new().with_update("value", json!(3)))
+        })
+        .add_edge(START, "step1")
+        .add_edge("step1", "step2")
+        .add_edge("step2", "step3")
+        .add_edge("step3", END)
+        .compile();
 
     assert!(graph.is_ok());
 }

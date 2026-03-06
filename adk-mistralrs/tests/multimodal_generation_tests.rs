@@ -57,7 +57,7 @@ fn arb_audio_mime_type() -> impl Strategy<Value = String> {
 fn arb_text_only_content() -> impl Strategy<Value = Content> {
     (arb_text(), arb_text()).prop_map(|(text1, text2)| Content {
         role: "user".to_string(),
-        parts: vec![Part::Text { text: text1 }, Part::Text { text: text2 }],
+        parts: vec![Part::text(text1), Part::text(text2)],
     })
 }
 
@@ -67,7 +67,7 @@ fn arb_text_and_image_content() -> impl Strategy<Value = Content> {
         let png_data = generate_minimal_png();
         Content {
             role: "user".to_string(),
-            parts: vec![Part::Text { text }, Part::InlineData { mime_type, data: png_data }],
+            parts: vec![Part::text(text), Part::InlineData { mime_type, data: png_data }],
         }
     })
 }
@@ -79,7 +79,7 @@ fn arb_text_and_audio_content() -> impl Strategy<Value = Content> {
         Content {
             role: "user".to_string(),
             parts: vec![
-                Part::Text { text },
+                Part::text(text),
                 Part::InlineData {
                     mime_type,
                     data: vec![0u8; 44], // Minimal WAV header size
@@ -97,7 +97,7 @@ fn arb_multimodal_content() -> impl Strategy<Value = Content> {
             Content {
                 role: "user".to_string(),
                 parts: vec![
-                    Part::Text { text },
+                    Part::text(text),
                     Part::InlineData { mime_type: image_mime, data: png_data },
                     Part::InlineData { mime_type: audio_mime, data: vec![0u8; 44] },
                 ],
@@ -202,7 +202,7 @@ proptest! {
     /// **Validates: Requirements 6.1, 17.1**
     #[test]
     fn prop_content_part_count(content in arb_multimodal_content()) {
-        let text_parts: Vec<_> = content.parts.iter().filter(|p| matches!(p, Part::Text { .. })).collect();
+        let text_parts: Vec<_> = content.parts.iter().filter(|p| matches!(p, Part::Text(..))).collect();
         let image_parts: Vec<_> = content.parts.iter().filter(|p| {
             matches!(p, Part::InlineData { mime_type, .. } if ImageFormat::is_supported_mime_type(mime_type))
         }).collect();
@@ -234,7 +234,7 @@ proptest! {
     ) {
         let content = Content {
             role: role.clone(),
-            parts: vec![Part::Text { text }],
+            parts: vec![Part::text(text)],
         };
 
         // Role should be preserved
@@ -283,9 +283,9 @@ fn test_multiple_text_parts_joined() {
     let content = Content {
         role: "user".to_string(),
         parts: vec![
-            Part::Text { text: "Hello".to_string() },
-            Part::Text { text: "World".to_string() },
-            Part::Text { text: "Test".to_string() },
+            Part::text("Hello".to_string()),
+            Part::text("World".to_string()),
+            Part::text("Test".to_string()),
         ],
     };
 
@@ -302,7 +302,7 @@ fn test_multimodal_with_multiple_images() {
     let content = Content {
         role: "user".to_string(),
         parts: vec![
-            Part::Text { text: "Describe these images".to_string() },
+            Part::text("Describe these images".to_string()),
             Part::InlineData { mime_type: "image/png".to_string(), data: png_data1 },
             Part::InlineData { mime_type: "image/png".to_string(), data: png_data2 },
         ],
@@ -320,7 +320,7 @@ fn test_unsupported_mime_type_ignored() {
     let content = Content {
         role: "user".to_string(),
         parts: vec![
-            Part::Text { text: "Test".to_string() },
+            Part::text("Test".to_string()),
             Part::InlineData {
                 mime_type: "application/octet-stream".to_string(),
                 data: vec![0, 1, 2, 3],

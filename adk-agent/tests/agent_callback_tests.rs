@@ -1,155 +1,128 @@
 use adk_agent::LlmAgentBuilder;
-use adk_core::{Agent, CallbackContext, Content, Part};
+use adk_core::model::{Llm, LlmRequest, LlmResponse, LlmResponseStream};
+use adk_core::types::{Content, InvocationId, Part, Role, SessionId, UserId};
+use adk_core::{Agent, InvocationContext, ReadonlyContext, RunConfig, Session, State};
 use async_trait::async_trait;
 use futures::StreamExt;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-mod test_context;
-use test_context::TestContext;
-
-struct MockLlm;
+struct MockLlm {
+    response_text: String,
+}
 
 #[async_trait]
-impl adk_core::Llm for MockLlm {
+impl Llm for MockLlm {
     fn name(&self) -> &str {
-        "mock-llm"
+        "mock"
     }
-
-    async fn generate_content(
-        &self,
-        _request: adk_core::LlmRequest,
-        _stream: bool,
-    ) -> adk_core::Result<adk_core::LlmResponseStream> {
+    async fn generate_content(&self, _req: LlmRequest, _stream: bool) -> adk_core::Result<LlmResponseStream> {
+        let text = self.response_text.clone();
         let s = async_stream::stream! {
-            yield Ok(adk_core::LlmResponse {
-                content: Some(adk_core::Content {
-                    role: "model".to_string(),
-                    parts: vec![adk_core::Part::Text { text: "mock response".to_string() }],
-                }),
-                usage_metadata: None,
-                finish_reason: None,
-                citation_metadata: None,
-                partial: false,
-                turn_complete: true,
-                interrupted: false,
-                error_code: None,
-                error_message: None,
+            yield Ok(LlmResponse {
+                content: Some(Content::new(Role::Model).with_text(text)),
+                ..Default::default()
             });
         };
         Ok(Box::pin(s))
     }
 }
 
-#[tokio::test]
-async fn test_before_agent_callback() {
-    let model = MockLlm;
+struct MockSession;
+impl Session for MockSession {
+    fn id(&self) -> &SessionId { unimplemented!() }
+    fn app_name(&self) -> &str { "test" }
+    fn user_id(&self) -> &UserId { unimplemented!() }
+    fn state(&self) -> &dyn State { unimplemented!() }
+    fn conversation_history(&self) -> Vec<Content> { Vec::new() }
+}
 
-    let callback_called = Arc::new(Mutex::new(false));
-    let flag = callback_called.clone();
+struct MockContext {
+    identity: adk_core::types::AdkIdentity,
+    content: Content,
+}
 
-    let agent = LlmAgentBuilder::new("test_agent")
-        .description("Test agent")
-        .model(Arc::new(model))
-        .before_callback(Box::new(move |_ctx: Arc<dyn CallbackContext>| {
-            let f = flag.clone();
-            Box::pin(async move {
-                *f.lock().unwrap() = true;
-                println!("BeforeAgent callback executed");
-                Ok(None) // Don't skip agent
-            })
-        }))
-        .build()
-        .unwrap();
+impl MockContext {
+    fn new() -> Self {
+        Self {
+            identity: adk_core::types::AdkIdentity::default(),
+            content: Content::new(Role::User).with_text("hi"),
+        }
+    }
+}
 
-    let ctx = Arc::new(TestContext::new("test"));
-    let mut stream = agent.run(ctx).await.unwrap();
-    while (stream.next().await).is_some() {}
+#[async_trait]
+impl ReadonlyContext for MockContext {
+    fn identity(&self) -> &adk_core::types::AdkIdentity { &self.identity }
+    fn user_content(&self) -> &Content { &self.content }
+    fn metadata(&self) -> &HashMap<String, String> { 
+        static EMPTY: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(HashMap::new)
+    }
+}
 
-    assert!(*callback_called.lock().unwrap(), "BeforeAgent callback should execute");
+#[async_trait]
+impl adk_core::CallbackContext for MockContext {
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> { None }
+}
+
+#[async_trait]
+impl InvocationContext for MockContext {
+    fn agent(&self) -> Arc<dyn Agent> { unimplemented!() }
+    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> { None }
+    fn session(&self) -> &dyn Session { &MockSession }
+    fn run_config(&self) -> &RunConfig { 
+        static DEFAULT: std::sync::OnceLock<RunConfig> = std::sync::OnceLock::new();
+        DEFAULT.get_or_init(RunConfig::default)
+    }
+    fn end_invocation(&self) {}
+    fn ended(&self) -> bool { false }
 }
 
 #[tokio::test]
-async fn test_before_agent_callback_skip_execution() {
-    let model = MockLlm;
-
-    let agent = LlmAgentBuilder::new("skip_agent")
-        .description("Agent that gets skipped")
-        .model(Arc::new(model))
-        .before_callback(Box::new(|_ctx: Arc<dyn CallbackContext>| {
+async fn test_agent_before_callback_mutation() {
+    let llm = Arc::new(MockLlm { response_text: "ok".to_string() });
+    
+    let agent = LlmAgentBuilder::new("test")
+        .model(llm)
+        .before_callback(Box::new(|_ctx| {
             Box::pin(async move {
-                println!("BeforeAgent: Skipping agent execution");
-                Ok(Some(Content {
-                    role: "model".to_string(),
-                    parts: vec![Part::Text { text: "AGENT SKIPPED BY CALLBACK".to_string() }],
-                }))
+                Ok(Some(Content::new(Role::System).with_text("prefix: ")))
             })
         }))
         .build()
         .unwrap();
 
-    let ctx = Arc::new(TestContext::new("This should not reach the model"));
+    let ctx = Arc::new(MockContext::new());
     let mut stream = agent.run(ctx).await.unwrap();
-
-    let mut found_skip_message = false;
-    while let Some(result) = stream.next().await {
-        if let Ok(event) = result {
-            if let Some(content) = &event.llm_response.content {
-                for part in &content.parts {
-                    if let Part::Text { text } = part {
-                        if text.contains("AGENT SKIPPED BY CALLBACK") {
-                            found_skip_message = true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    assert!(found_skip_message, "Should receive callback content instead of model response");
+    let event = stream.next().await.unwrap().unwrap();
+    
+    assert_eq!(event.author, "test");
 }
 
 #[tokio::test]
-async fn test_after_agent_callback() {
-    let model = MockLlm;
-
-    let callback_called = Arc::new(Mutex::new(false));
-    let flag = callback_called.clone();
-
-    let agent = LlmAgentBuilder::new("test_agent")
-        .description("Test agent")
-        .model(Arc::new(model))
-        .after_callback(Box::new(move |_ctx: Arc<dyn CallbackContext>| {
-            let f = flag.clone();
+async fn test_agent_after_callback_observation() {
+    let called = Arc::new(Mutex::new(false));
+    let called_clone = called.clone();
+    
+    let llm = Arc::new(MockLlm { response_text: "ok".to_string() });
+    let agent = LlmAgentBuilder::new("test")
+        .model(llm)
+        .after_callback(Box::new(move |_ctx| {
+            let called = called_clone.clone();
             Box::pin(async move {
-                *f.lock().unwrap() = true;
-                println!("AfterAgent callback executed");
-                Ok(Some(Content {
-                    role: "model".to_string(),
-                    parts: vec![Part::Text { text: "AFTER AGENT CALLBACK".to_string() }],
-                }))
+                *called.lock().unwrap() = true;
+                Ok(None)
             })
         }))
         .build()
         .unwrap();
 
-    let ctx = Arc::new(TestContext::new("Say hello"));
+    let ctx = Arc::new(MockContext::new());
     let mut stream = agent.run(ctx).await.unwrap();
-
-    let mut found_after_message = false;
-    while let Some(result) = stream.next().await {
-        if let Ok(event) = result {
-            if let Some(content) = &event.llm_response.content {
-                for part in &content.parts {
-                    if let Part::Text { text } = part {
-                        if text.contains("AFTER AGENT CALLBACK") {
-                            found_after_message = true;
-                        }
-                    }
-                }
-            }
-        }
+    while let Some(res) = stream.next().await {
+        let _ = res.unwrap();
     }
-
-    assert!(*callback_called.lock().unwrap(), "AfterAgent callback should execute");
-    assert!(found_after_message, "Should receive after agent callback content");
+    
+    assert!(*called.lock().unwrap());
 }

@@ -3,6 +3,7 @@ use crate::context::RunnerContext;
 use adk_artifact::ArtifactService;
 use adk_core::{
     Agent, CacheCapable, Content, ContextCacheConfig, EventStream, Memory, Result, RunConfig,
+    types::{SessionId, UserId},
 };
 use adk_plugin::PluginManager;
 use adk_session::SessionService;
@@ -95,8 +96,8 @@ impl Runner {
 
     pub async fn run(
         &self,
-        user_id: adk_core::types::UserId,
-        session_id: adk_core::types::SessionId,
+        user_id: UserId,
+        session_id: SessionId,
         user_content: Content,
     ) -> Result<EventStream> {
         let app_name = self.app_name.clone();
@@ -172,8 +173,8 @@ impl Runner {
                 let scoped = adk_artifact::ScopedArtifacts::new(
                     service,
                     app_name.clone(),
-                    user_id.to_string(),
-                    session_id.to_string(),
+                    user_id.clone(),
+                    session_id.clone(),
                 );
                 runner_ctx = runner_ctx.with_artifacts(Arc::new(scoped));
             }
@@ -192,7 +193,7 @@ impl Runner {
                     .await
                 {
                     Ok(Some(content)) => {
-                        let mut early_event = adk_core::Event::new(&invocation_id);
+                        let mut early_event = adk_core::Event::new(adk_core::types::InvocationId::try_from(invocation_id.as_str()).unwrap());
                         early_event.author = agent_to_run.name().to_string();
                         early_event.llm_response.content = Some(content);
 
@@ -238,8 +239,8 @@ impl Runner {
                             let scoped = adk_artifact::ScopedArtifacts::new(
                                 service,
                                 app_name.clone(),
-                                user_id.to_string(),
-                                session_id.to_string(),
+                                user_id.clone(),
+                                session_id.clone(),
                             );
                             refreshed_ctx = refreshed_ctx.with_artifacts(Arc::new(scoped));
                         }
@@ -261,7 +262,7 @@ impl Runner {
             }
 
             // Append user message to session service (persistent storage)
-            let mut user_event = adk_core::Event::new(&invocation_id);
+            let mut user_event = adk_core::Event::new(adk_core::types::InvocationId::try_from(invocation_id.as_str()).unwrap());
             user_event.author = "user".to_string();
             user_event.llm_response.content = Some(effective_user_content.clone());
 
@@ -332,8 +333,8 @@ impl Runner {
                             let scoped = adk_artifact::ScopedArtifacts::new(
                                 service,
                                 app_name.clone(),
-                                user_id.to_string(),
-                                session_id.to_string(),
+                                user_id.clone(),
+                                session_id.clone(),
                             );
                             refreshed_ctx = refreshed_ctx.with_artifacts(Arc::new(scoped));
                         }
@@ -458,8 +459,8 @@ impl Runner {
                         let scoped = adk_artifact::ScopedArtifacts::new(
                             service,
                             app_name.clone(),
-                            user_id.to_string(),
-                            session_id.to_string(),
+                            user_id.clone(),
+                            session_id.clone(),
                         );
                         transfer_ctx = transfer_ctx.with_artifacts(Arc::new(scoped));
                     }

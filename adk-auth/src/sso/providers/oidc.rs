@@ -72,7 +72,7 @@ impl TokenValidator for OidcProvider {
     async fn validate(&self, token: &str) -> Result<TokenClaims, TokenError> {
         // Decode header to get key ID
         let header = jsonwebtoken::decode_header(token)?;
-        let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".into()))?;
+        let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".to_string()))?;
 
         // Get decoding key from JWKS cache
         let key = self.jwks_cache.get_key(&kid).await?;

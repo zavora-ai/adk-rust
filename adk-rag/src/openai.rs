@@ -53,8 +53,8 @@ impl OpenAIEmbeddingProvider {
         let api_key = api_key.into();
         if api_key.is_empty() {
             return Err(RagError::EmbeddingError {
-                provider: "OpenAI".into(),
-                message: "API key must not be empty".into(),
+                provider: "OpenAI".to_string(),
+                message: "API key must not be empty".to_string(),
             });
         }
 
@@ -70,8 +70,8 @@ impl OpenAIEmbeddingProvider {
     /// Create a new provider using the `OPENAI_API_KEY` environment variable.
     pub fn from_env() -> Result<Self> {
         let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| RagError::EmbeddingError {
-            provider: "OpenAI".into(),
-            message: "OPENAI_API_KEY environment variable not set".into(),
+            provider: "OpenAI".to_string(),
+            message: "OPENAI_API_KEY environment variable not set".to_string(),
         })?;
         Self::new(api_key)
     }
@@ -132,8 +132,8 @@ impl EmbeddingProvider for OpenAIEmbeddingProvider {
 
         let results = self.embed_batch(&[text]).await?;
         results.into_iter().next().ok_or_else(|| RagError::EmbeddingError {
-            provider: "OpenAI".into(),
-            message: "API returned empty response".into(),
+            provider: "OpenAI".to_string(),
+            message: "API returned empty response".to_string(),
         })
     }
 
@@ -165,7 +165,7 @@ impl EmbeddingProvider for OpenAIEmbeddingProvider {
             .map_err(|e| {
                 error!(provider = "OpenAI", error = %e, "request failed");
                 RagError::EmbeddingError {
-                    provider: "OpenAI".into(),
+                    provider: "OpenAI".to_string(),
                     message: format!("request failed: {e}"),
                 }
             })?;
@@ -179,7 +179,7 @@ impl EmbeddingProvider for OpenAIEmbeddingProvider {
 
             error!(provider = "OpenAI", %status, "API error");
             return Err(RagError::EmbeddingError {
-                provider: "OpenAI".into(),
+                provider: "OpenAI".to_string(),
                 message: format!("API returned {status}: {detail}"),
             });
         }
@@ -187,7 +187,7 @@ impl EmbeddingProvider for OpenAIEmbeddingProvider {
         let embedding_response: EmbeddingResponse = response.json().await.map_err(|e| {
             error!(provider = "OpenAI", error = %e, "failed to parse response");
             RagError::EmbeddingError {
-                provider: "OpenAI".into(),
+                provider: "OpenAI".to_string(),
                 message: format!("failed to parse response: {e}"),
             }
         })?;

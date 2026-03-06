@@ -145,13 +145,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let session = session_service
         .create(CreateRequest {
             app_name: "deepseek_caching".to_string(),
-            user_id: "user_1".to_string(),
+            user_id: UserId::new("user_1").unwrap(),
             session_id: None,
             state: std::collections::HashMap::new(),
         })
         .await?;
 
-    let session_id = session.id().to_string();
+    let session_id = session.id().clone();
 
     let runner = Runner::new(RunnerConfig {
         app_name: "deepseek_caching".to_string(),
@@ -190,7 +190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             && let Some(content) = e.llm_response.content
         {
             for part in content.parts {
-                if let adk_core::Part::Text { text } = part {
+                if let adk_core::Part::text(text) = part {
                     print!("{}", text);
                 }
             }
@@ -212,7 +212,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             && let Some(content) = e.llm_response.content
         {
             for part in content.parts {
-                if let adk_core::Part::Text { text } = part {
+                if let adk_core::Part::text(text) = part {
                     print!("{}", text);
                 }
             }
@@ -234,7 +234,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             && let Some(content) = e.llm_response.content
         {
             for part in content.parts {
-                if let adk_core::Part::Text { text } = part {
+                if let adk_core::Part::text(text) = part {
                     print!("{}", text);
                 }
             }

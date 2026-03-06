@@ -3,6 +3,7 @@ use crate::a2a::{
     metadata::to_invocation_meta, processor::EventProcessor,
 };
 use adk_core::Result;
+use adk_core::types::{SessionId, UserId};
 use adk_runner::{Runner, RunnerConfig};
 use adk_session::{CreateRequest, GetRequest};
 use futures::StreamExt;
@@ -80,7 +81,7 @@ impl Executor {
             .ok_or_else(|| adk_core::AdkError::Agent("Event has no content".to_string()))?;
 
         let mut event_stream =
-            runner.run(meta.user_id.clone().into(), meta.session_id.clone().into(), content).await?;
+            runner.run(meta.user_id.clone(), meta.session_id.clone(), content).await?;
 
         // Process events
         while let Some(result) = event_stream.next().await {
@@ -123,15 +124,15 @@ impl Executor {
         })
     }
 
-    async fn prepare_session(&self, user_id: &str, session_id: &str) -> Result<()> {
+    async fn prepare_session(&self, user_id: &UserId, session_id: &SessionId) -> Result<()> {
         let session_service = &self.config.runner_config.session_service;
 
         // Try to get existing session
         let get_result = session_service
             .get(GetRequest {
                 app_name: self.config.app_name.clone(),
-                user_id: user_id.to_string().into(),
-                session_id: session_id.to_string().into(),
+                user_id: user_id.clone(),
+                session_id: session_id.clone(),
                 num_recent_events: None,
                 after: None,
             })
@@ -145,8 +146,8 @@ impl Executor {
         session_service
             .create(CreateRequest {
                 app_name: self.config.app_name.clone(),
-                user_id: user_id.to_string().into(),
-                session_id: Some(session_id.to_string().into()),
+                user_id: user_id.clone(),
+                session_id: Some(session_id.clone()),
                 state: std::collections::HashMap::new(),
             })
             .await?;

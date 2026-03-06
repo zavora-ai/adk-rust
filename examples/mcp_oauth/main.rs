@@ -252,7 +252,7 @@ let oauth_config = OAuth2Config::new(
     "https://auth.example.com/oauth/token"
 )
 .with_secret("your-client-secret")
-.with_scopes(vec!["mcp:read".into(), "mcp:write".into()]);
+.with_scopes(vec!["mcp:read"), "mcp:write")]);
 
 let toolset = McpHttpClientBuilder::new("https://mcp.example.com/v1")
     .with_auth(McpAuth::oauth2(oauth_config))

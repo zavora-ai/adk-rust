@@ -64,8 +64,7 @@ impl TimingGuard {
     /// * `operation` - Name of the operation being timed
     /// * `context` - Additional context (e.g., model ID)
     pub fn new(operation: &'static str, context: impl Into<String>) -> Self {
-        let context = context.into();
-        let span = span!(Level::INFO, "timing", operation = operation, context = %context);
+        let context = context.into();        let span = span!(Level::INFO, "timing", operation = operation, context = %context);
 
         // Enter the span briefly to log the start
         {

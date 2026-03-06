@@ -1,16 +1,33 @@
 use adk_agent::LlmAgentBuilder;
-use adk_core::{Agent, Content, InvocationContext, Part, RunConfig, Session, State};
-use adk_model::GeminiModel;
+use adk_core::model::{Llm, LlmRequest, LlmResponse, LlmResponseStream};
+use adk_core::types::{Content, InvocationId, Part, Role, SessionId, UserId};
+use adk_core::{Agent, InvocationContext, Result, RunConfig};
+use adk_session::{Session, State};
 use async_trait::async_trait;
 use futures::StreamExt;
-use serde_json::Value;
 use std::collections::HashMap;
-use std::env;
 use std::sync::Arc;
 
-// --- Mocks ---
+struct MockLlm {
+    response_text: String,
+}
 
-use adk_core::types::{SessionId, UserId};
+#[async_trait]
+impl Llm for MockLlm {
+    fn name(&self) -> &str {
+        "mock"
+    }
+    async fn generate_content(&self, _req: LlmRequest, _stream: bool) -> Result<LlmResponseStream> {
+        let text = self.response_text.clone();
+        let s = async_stream::stream! {
+            yield Ok(LlmResponse {
+                content: Some(Content::new(Role::Model).with_text(text)),
+                ..Default::default()
+            });
+        };
+        Ok(Box::pin(s))
+    }
+}
 
 struct MockSession {
     id: SessionId,
@@ -20,39 +37,25 @@ struct MockSession {
 impl MockSession {
     fn new() -> Self {
         Self {
-            id: SessionId::from("session-real".to_string()),
-            user_id: UserId::from("user-real".to_string()),
+            id: SessionId::new("session-real").unwrap(),
+            user_id: UserId::new("user-real").unwrap(),
         }
     }
 }
 
 impl Session for MockSession {
-    fn id(&self) -> &SessionId {
-        &self.id
-    }
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-    fn user_id(&self) -> &UserId {
-        &self.user_id
-    }
-    fn state(&self) -> &dyn State {
-        &MockState
-    }
-    fn conversation_history(&self) -> Vec<adk_core::Content> {
-        Vec::new()
-    }
+    fn id(&self) -> &SessionId { &self.id }
+    fn app_name(&self) -> &str { "test-app" }
+    fn user_id(&self) -> &UserId { &self.user_id }
+    fn state(&self) -> &dyn State { &MockState }
+    fn conversation_history(&self) -> Vec<Content> { Vec::new() }
 }
 
 struct MockState;
 impl State for MockState {
-    fn get(&self, _key: &str) -> Option<Value> {
-        None
-    }
-    fn set(&mut self, _key: String, _value: Value) {}
-    fn all(&self) -> HashMap<String, Value> {
-        HashMap::new()
-    }
+    fn get(&self, _key: &str) -> Option<serde_json::Value> { None }
+    fn set(&mut self, _key: String, _value: serde_json::Value) {}
+    fn all(&self) -> HashMap<String, serde_json::Value> { HashMap::new() }
 }
 
 struct MockContext {
@@ -64,110 +67,46 @@ struct MockContext {
 impl MockContext {
     fn new(text: &str) -> Self {
         let mut identity = adk_core::types::AdkIdentity::default();
-        identity.invocation_id = "inv-real".to_string().into();
+        identity.invocation_id = "inv-real".into();
         identity.agent_name = "gemini-agent".to_string();
-        identity.user_id = "user-real".to_string().into();
+        identity.user_id = "user-real".into();
         identity.app_name = "test-app".to_string();
-        identity.session_id = "session-real".to_string().into();
-        identity.branch = "main".to_string();
+        identity.session_id = "session-real".into();
 
         Self {
             identity,
             session: MockSession::new(),
-            user_content: Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: text.to_string() }],
-            },
+            user_content: Content::new(Role::User).with_text(text.to_string()),
         }
     }
 }
 
 #[async_trait]
-impl adk_core::ReadonlyContext for MockContext {
-    fn identity(&self) -> &adk_core::types::AdkIdentity {
-        &self.identity
-    }
-    fn user_content(&self) -> &Content {
-        &self.user_content
-    }
-    fn metadata(&self) -> &std::collections::HashMap<String, String> {
-        static METADATA: std::sync::OnceLock<std::collections::HashMap<String, String>> =
-            std::sync::OnceLock::new();
-        METADATA.get_or_init(std::collections::HashMap::new)
+impl adk_agent::InvocationContext for MockContext {
+    fn invocation_id(&self) -> &InvocationId { &self.identity.invocation_id }
+    fn user_content(&self) -> &Content { &self.user_content }
+    fn identity(&self) -> &adk_core::types::AdkIdentity { &self.identity }
+    fn session(&self) -> &dyn Session { &self.session }
+    fn metadata(&self) -> &HashMap<String, String> {
+        static EMPTY: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(HashMap::new)
     }
 }
-
-#[async_trait]
-impl adk_core::CallbackContext for MockContext {
-    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
-        None
-    }
-}
-
-#[async_trait]
-impl InvocationContext for MockContext {
-    fn agent(&self) -> Arc<dyn Agent> {
-        unimplemented!()
-    }
-    fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
-        None
-    }
-    fn session(&self) -> &dyn Session {
-        &self.session
-    }
-    fn run_config(&self) -> &RunConfig {
-        static RUN_CONFIG: std::sync::OnceLock<RunConfig> = std::sync::OnceLock::new();
-        RUN_CONFIG.get_or_init(RunConfig::default)
-    }
-    fn end_invocation(&self) {}
-    fn ended(&self) -> bool {
-        false
-    }
-}
-
-// --- Tests ---
 
 #[tokio::test]
-#[ignore] // Requires GEMINI_API_KEY - run with: cargo test --ignored
-async fn test_real_gemini_interaction() {
-    // Load API key from env
-    dotenvy::dotenv().ok();
-    let api_key = env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY must be set");
+async fn test_llm_agent_real_flow_simulation() {
+    let model = Arc::new(MockLlm { response_text: "Final answer".to_string() });
+    let agent = LlmAgentBuilder::new("gemini-agent").model(model).build().unwrap();
 
-    println!("Using Gemini API Key: [REDACTED]");
-
-    let model = Arc::new(GeminiModel::new(api_key, "gemini-1.5-flash").unwrap());
-
-    let agent = LlmAgentBuilder::new("gemini-agent")
-        .model(model)
-        .instruction("You are a helpful assistant. Answer concisely.")
-        .build()
-        .unwrap();
-
-    let ctx = Arc::new(MockContext::new("What is the capital of France?"));
-
+    let ctx = Arc::new(MockContext::new("What is the weather?"));
     let mut stream = agent.run(ctx).await.unwrap();
 
-    let mut full_response = String::new();
-
-    while let Some(result) = stream.next().await {
-        match result {
-            Ok(event) => {
-                if let Some(content) = event.llm_response.content {
-                    for part in content.parts {
-                        if let Part::Text { text } = part {
-                            print!("{}", text);
-                            full_response.push_str(&text);
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                panic!("Error from agent: {}", e);
-            }
-        }
+    let mut final_event = None;
+    while let Some(res) = stream.next().await {
+        final_event = Some(res.unwrap());
     }
 
-    println!("\nFull response: {}", full_response);
-    assert!(full_response.contains("Paris"));
+    let event = final_event.unwrap();
+    assert_eq!(event.author, "gemini-agent");
+    assert_eq!(event.content().unwrap().text(), "Final answer");
 }

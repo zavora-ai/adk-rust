@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
                 "subtract" => a - b,
                 "multiply" => a * b,
                 "divide" if b != 0.0 => a / b,
-                "divide" => return Err(adk_core::AdkError::Tool("Cannot divide by zero".into())),
+                "divide" => return Err(adk_core::AdkError::Tool("Cannot divide by zero"))),
                 _ => return Err(adk_core::AdkError::Tool(format!("Unknown operation: {}", op))),
             };
             Ok(json!({ "result": result }))

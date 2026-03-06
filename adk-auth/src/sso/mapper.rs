@@ -1,6 +1,7 @@
 //! Claims mapping for SSO integration.
 
 use super::TokenClaims;
+use adk_core::types::UserId;
 use std::collections::HashMap;
 
 /// Maps IdP claims to adk-auth roles.
@@ -46,8 +47,8 @@ impl ClaimsMapper {
     }
 
     /// Get user ID from claims based on configured claim.
-    pub fn get_user_id(&self, claims: &TokenClaims) -> String {
-        match &self.user_id_claim {
+    pub fn get_user_id(&self, claims: &TokenClaims) -> UserId {
+        let raw_id = match &self.user_id_claim {
             UserIdClaim::Sub => claims.sub.clone(),
             UserIdClaim::Email => claims.email.clone().unwrap_or_else(|| claims.sub.clone()),
             UserIdClaim::PreferredUsername => {
@@ -56,7 +57,8 @@ impl ClaimsMapper {
             UserIdClaim::Custom(key) => {
                 claims.get_custom::<String>(key).unwrap_or_else(|| claims.sub.clone())
             }
-        }
+        };
+        UserId::new(raw_id).unwrap_or_else(|_| UserId::new("anonymous").unwrap())
     }
 
     /// Map claims to adk-auth role names.
@@ -153,10 +155,10 @@ mod tests {
 
     fn test_claims() -> TokenClaims {
         TokenClaims {
-            sub: "user-123".into(),
-            email: Some("alice@example.com".into()),
-            preferred_username: Some("alice".into()),
-            groups: vec!["AdminGroup".into(), "Users".into()],
+            sub: "user-123".to_string(),
+            email: Some("alice@example.com".to_string()),
+            preferred_username: Some("alice".to_string()),
+            groups: vec!["AdminGroup".to_string(), "Users".to_string()],
             ..Default::default()
         }
     }
@@ -187,12 +189,12 @@ mod tests {
     #[test]
     fn test_user_id_from_email() {
         let mapper = ClaimsMapper::builder().user_id_from_email().build();
-        assert_eq!(mapper.get_user_id(&test_claims()), "alice@example.com");
+        assert_eq!(&*mapper.get_user_id(&test_claims()), "alice@example.com");
     }
 
     #[test]
     fn test_user_id_from_sub() {
         let mapper = ClaimsMapper::builder().user_id_from_sub().build();
-        assert_eq!(mapper.get_user_id(&test_claims()), "user-123");
+        assert_eq!(&*mapper.get_user_id(&test_claims()), "user-123");
     }
 }
