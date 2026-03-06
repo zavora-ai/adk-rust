@@ -237,6 +237,34 @@ async fn test_no_artifacts_service_error() {
 }
 
 #[tokio::test]
+async fn test_empty_artifact_name_error() {
+    let ctx = MockContext::new().with_artifacts();
+    let template = "Content: {artifact.}";
+    let result = inject_session_state(&ctx, template).await;
+
+    match result {
+        Err(AdkError::Agent(msg)) => {
+            assert!(msg.contains("must include a file name after 'artifact.'"));
+        }
+        _ => panic!("Expected AdkError::Agent with empty artifact-name guidance"),
+    }
+}
+
+#[tokio::test]
+async fn test_empty_optional_artifact_name_error() {
+    let ctx = MockContext::new().with_artifacts();
+    let template = "Content: {artifact.?}";
+    let result = inject_session_state(&ctx, template).await;
+
+    match result {
+        Err(AdkError::Agent(msg)) => {
+            assert!(msg.contains("must include a file name after 'artifact.'"));
+        }
+        _ => panic!("Expected AdkError::Agent for optional empty artifact name"),
+    }
+}
+
+#[tokio::test]
 async fn test_complex_mix() {
     let ctx = MockContext::new().with_artifacts();
     let template = "{user_name} read '{artifact.welcome.txt}' (Theme: {user:pref?})";

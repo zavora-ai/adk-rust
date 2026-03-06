@@ -94,6 +94,12 @@ async fn replace_match(ctx: &dyn InvocationContext, content: &str) -> Result<Str
 
     // Handle artifact.{name} pattern
     if let Some(file_name) = var_name.strip_prefix("artifact.") {
+        if file_name.is_empty() {
+            return Err(AdkError::Agent(
+                "Invalid artifact name '': must include a file name after 'artifact.'".to_string(),
+            ));
+        }
+
         // Reject path traversal attempts in artifact names
         if file_name.contains("..") || file_name.contains('/') || file_name.contains('\\') {
             return Err(AdkError::Agent(format!(
