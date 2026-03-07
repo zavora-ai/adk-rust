@@ -373,7 +373,7 @@ impl GeminiModel {
                                     function_call: adk_gemini::FunctionCall {
                                         name: name.clone(),
                                         args: args.clone(),
-                                        thought_signature: thought_signature.clone(),
+                                        thought_signature: None,
                                     },
                                     thought_signature: thought_signature.clone(),
                                 });

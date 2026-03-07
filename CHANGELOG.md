@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### adk-gemini
+- **FunctionCall serialization**: Fixed `thought_signature` leaking inside the `functionCall` JSON object when serializing `Part::FunctionCall`. The Gemini API expects `thoughtSignature` at the Part level only, not inside `functionCall`. The conversion layer in `adk-model` now correctly places the signature at the Part level and omits it from the inner `FunctionCall` struct.
+- **Broken serde attributes**: Restored missing `#[serde(skip_serializing_if = "Option::is_none")]` attributes on `FunctionDeclaration`, `FunctionCall`, `FunctionResponse`, and `ToolConfig` fields that had been replaced with invalid placeholder text, causing compilation failures.
+
 ### Changed
 
 #### adk-realtime

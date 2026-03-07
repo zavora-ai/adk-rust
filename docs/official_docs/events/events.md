@@ -427,9 +427,12 @@ When the LLM requests a tool, the event contains function call information:
 ```rust
 if let Some(content) = &event.llm_response.content {
     for part in &content.parts {
-        if let Part::FunctionCall { name, args } = part {
+        if let Part::FunctionCall { name, args, thought_signature, .. } = part {
             println!("Tool requested: {}", name);
             println!("Arguments: {}", args);
+            if let Some(sig) = thought_signature {
+                println!("Thought signature: {} bytes", sig.len());
+            }
 
             // Your application might dispatch tool execution here
             // based on the tool name and arguments

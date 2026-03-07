@@ -45,7 +45,11 @@ static V1_BASE_URL: LazyLock<Url> = LazyLock::new(|| {
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum Model {
-    // ── Gemini 3 (newest generation) ──────────────────────────────
+    // ── Gemini 3.1 (newest generation) ────────────────────────────
+    #[serde(rename = "models/gemini-3.1-pro-preview")]
+    Gemini31ProPreview,
+
+    // ── Gemini 3 ─────────────────────────────────────────────────
     #[serde(rename = "models/gemini-3-pro-preview")]
     Gemini3ProPreview,
     #[serde(rename = "models/gemini-3-pro-image-preview")]
@@ -115,6 +119,7 @@ impl Model {
     pub fn as_str(&self) -> &str {
         #[allow(deprecated)]
         match self {
+            Model::Gemini31ProPreview => "models/gemini-3.1-pro-preview",
             Model::Gemini3ProPreview => "models/gemini-3-pro-preview",
             Model::Gemini3ProImagePreview => "models/gemini-3-pro-image-preview",
             Model::Gemini3FlashPreview => "models/gemini-3-flash-preview",
@@ -147,6 +152,7 @@ impl Model {
     pub fn vertex_model_path(&self, project_id: &str, location: &str) -> String {
         #[allow(deprecated)]
         let model_id = match self {
+            Model::Gemini31ProPreview => "gemini-3.1-pro-preview",
             Model::Gemini3ProPreview => "gemini-3-pro-preview",
             Model::Gemini3ProImagePreview => "gemini-3-pro-image-preview",
             Model::Gemini3FlashPreview => "gemini-3-flash-preview",
@@ -188,7 +194,9 @@ impl From<String> for Model {
         // Match known model names (with or without "models/" prefix) to proper variants.
         let bare = model.strip_prefix("models/").unwrap_or(&model);
         match bare {
-            // Gemini 3 models (newest generation)
+            // Gemini 3.1 models (newest generation)
+            "gemini-3.1-pro-preview" => Self::Gemini31ProPreview,
+            // Gemini 3 models
             "gemini-3-pro-preview" => Self::Gemini3ProPreview,
             "gemini-3-pro-image-preview" => Self::Gemini3ProImagePreview,
             "gemini-3-flash-preview" => Self::Gemini3FlashPreview,
@@ -841,9 +849,9 @@ impl Gemini {
         Self::with_model(api_key, Model::default())
     }
 
-    /// Create a new client for the Gemini Pro model
+    /// Create a new client for the Gemini 3.1 Pro model
     pub fn pro<K: AsRef<str>>(api_key: K) -> Result<Self, Error> {
-        Self::with_model(api_key, Model::Gemini25Pro)
+        Self::with_model(api_key, Model::Gemini31ProPreview)
     }
 
     /// Create a new client with the specified API key and model

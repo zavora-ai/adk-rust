@@ -14,6 +14,7 @@ Rust client library for Google's Gemini API — content generation, streaming, f
 - Real-time streaming responses
 - Function calling and tool integration (including Google Search and URL Context)
 - Thinking mode (Gemini 2.5 / Gemini 3)
+- Thought signatures for multi-turn thinking context
 - Text embeddings
 - Image generation and editing
 - Text-to-speech (single and multi-speaker)
@@ -188,6 +189,39 @@ for thought in response.thoughts() {
 }
 println!("Answer: {}", response.text());
 ```
+
+### Thought Signatures (Multi-Turn Thinking Context)
+
+When using thinking mode with function calling, Gemini 2.5+ returns `thoughtSignature` values that preserve the model's reasoning context across conversation turns. Include these signatures in subsequent requests to maintain coherent multi-turn thinking.
+
+```rust
+let response = client
+    .generate_content()
+    .with_user_message("What's the weather in Tokyo?")
+    .with_tool(Tool::new(weather_function))
+    .with_thinking_config(
+        ThinkingConfig::new().with_dynamic_thinking().with_thoughts_included(true),
+    )
+    .execute()
+    .await?;
+
+// Extract function calls with their thought signatures
+for (call, signature) in response.function_calls_with_thoughts() {
+    println!("Function: {} (signature: {:?})", call.name, signature.is_some());
+
+    // When building the next turn, include the signature at the Part level
+    let model_content = Content {
+        parts: Some(vec![Part::FunctionCall {
+            function_call: call.clone(),
+            thought_signature: signature.cloned(),
+        }]),
+        role: Some(Role::Model),
+    };
+    // Add model_content to the next request's conversation history
+}
+```
+
+> **Note**: `thoughtSignature` is a Part-level field, not part of the `functionCall` object. The `FunctionCall` struct carries the signature internally for convenience during deserialization, but it is serialized only at the Part level when sending requests to the API.
 
 ### Structured JSON Output
 
@@ -459,6 +493,8 @@ cargo run -p adk-gemini --example streaming
 cargo run -p adk-gemini --example tools
 cargo run -p adk-gemini --example google_search
 cargo run -p adk-gemini --example thinking_basic
+cargo run -p adk-gemini --example simple_thought_signature
+cargo run -p adk-gemini --example thought_signature_example
 cargo run -p adk-gemini --example embedding
 cargo run -p adk-gemini --example image_generation
 cargo run -p adk-gemini --example structured_response

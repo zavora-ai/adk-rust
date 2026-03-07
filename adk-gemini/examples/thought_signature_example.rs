@@ -1,4 +1,4 @@
-/// Comprehensive example demonstrating thoughtSignature support in Gemini 2.5 Pro
+/// Comprehensive example demonstrating thoughtSignature support in Gemini 3.1 Pro
 ///
 /// This example shows:
 /// 1. How to enable thinking and function calling to receive thought signatures
@@ -6,16 +6,14 @@
 /// 3. How to maintain thought context across multiple turns in a conversation
 ///
 /// Key points about thought signatures:
-/// - Only available with Gemini 2.5 series models
+/// - Available with Gemini 2.5+ and Gemini 3.x series models
 /// - Requires both thinking and function calling to be enabled
 /// - Must include the entire response with thought signatures in subsequent turns
 /// - Don't concatenate or merge parts with signatures
 ///
 /// Thought signatures are encrypted representations of the model's internal
 /// thought process that help maintain context across conversation turns.
-use adk_gemini::{
-    FunctionCallingMode, FunctionDeclaration, FunctionResponse, Gemini, ThinkingConfig, Tool,
-};
+use adk_gemini::{FunctionCallingMode, FunctionDeclaration, Gemini, ThinkingConfig, Tool};
 use display_error_chain::DisplayErrorChain;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -70,10 +68,10 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     // Get API key from environment variable
     let api_key = env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY environment variable not set");
 
-    // Create client using Gemini 2.5 Pro which supports thoughtSignature
+    // Create client using Gemini 3.1 Pro which supports thoughtSignature
     let client = Gemini::pro(api_key).expect("unable to create Gemini API client");
 
-    info!("starting gemini 2.5 pro thoughtSignature example");
+    info!("starting gemini 3.1 pro thoughtSignature example");
 
     // Define the weather function tool
     let weather_function = FunctionDeclaration::new(
@@ -141,21 +139,37 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
             info!(weather_data = ?weather_data, "mock weather response");
 
             // Continue the conversation with function response
+            // IMPORTANT: Include the model's function call turn (with thought signature)
+            // so the API sees the correct turn sequence: user → model(fc) → function(response)
             info!("step 2: providing function response");
-            let function_response = FunctionResponse::new(&function_call.name, weather_data);
 
-            let final_response = client
-                .generate_content()
-                .with_system_instruction("Please respond in Traditional Chinese")
-                .with_user_message(
-                    "What's the weather like in Kaohsiung Zuoying District right now?",
-                )
-                .with_function_response(
-                    &function_call.name,
-                    function_response.response.unwrap_or_default(),
-                )?
-                .execute()
-                .await?;
+            let mut step2_builder = client.generate_content();
+            step2_builder =
+                step2_builder.with_system_instruction("Please respond in Traditional Chinese");
+            step2_builder = step2_builder.with_user_message(
+                "What's the weather like in Kaohsiung Zuoying District right now?",
+            );
+
+            // Add the model's function call turn WITH thought signature
+            let model_fc_content = adk_gemini::Content {
+                parts: Some(vec![adk_gemini::Part::FunctionCall {
+                    function_call: function_call.clone(),
+                    thought_signature: thought_signature.cloned(),
+                }]),
+                role: Some(adk_gemini::Role::Model),
+            };
+            step2_builder.contents.push(model_fc_content);
+
+            // Now add the function response
+            step2_builder =
+                step2_builder.with_function_response(&function_call.name, weather_data.clone())?;
+
+            // Enable thinking for the response too
+            step2_builder = step2_builder.with_thinking_config(
+                ThinkingConfig::new().with_dynamic_thinking().with_thoughts_included(true),
+            );
+
+            let final_response = step2_builder.execute().await?;
 
             info!(final_response = final_response.text(), "final response");
 

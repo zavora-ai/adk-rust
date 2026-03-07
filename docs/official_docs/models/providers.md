@@ -26,7 +26,7 @@ ADK-Rust supports multiple cloud LLM providers through the `adk-model` crate. Al
 
 | Provider | Best For | Speed | Cost | Key Feature |
 |----------|----------|-------|------|-------------|
-| **Gemini** | General use | ⚡⚡⚡ | 💰 | Multimodal, large context |
+| **Gemini** | General use | ⚡⚡⚡ | 💰 | Multimodal, large context, thinking |
 | **OpenAI** | Reliability | ⚡⚡ | 💰💰 | Best ecosystem |
 | **Anthropic** | Complex reasoning | ⚡⚡ | 💰💰 | Safest, most thoughtful |
 | **DeepSeek** | Chain-of-thought | ⚡⚡ | 💰 | Thinking mode, cheap |
@@ -70,6 +70,7 @@ export GROQ_API_KEY="your-key"        # Groq
 > **Key highlights**:
 > - 🖼️ Native multimodal (images, video, audio, PDF)
 > - 📚 Up to 2M token context window
+> - 🧠 Thinking mode with thought signatures for multi-turn reasoning (Gemini 2.5+)
 > - 💰 Competitive pricing
 > - ⚡ Fast inference
 
