@@ -99,6 +99,7 @@ audio-stt = ["audio", "adk-audio/stt"]
 audio-fx = ["audio", "adk-audio/fx"]
 audio-mlx = ["audio", "adk-audio/mlx"]
 audio-onnx = ["audio", "adk-audio/onnx"]
+audio-all = ["audio", "adk-audio/all"]
 
 # ONNX audio model features (forwarded to adk-audio)
 whisper-onnx = ["audio", "adk-audio/whisper-onnx"]

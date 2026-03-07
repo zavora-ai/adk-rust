@@ -14,11 +14,10 @@
 //! - `music` — Music generation providers
 //! - `fx` — DSP processors (normalizer, resampler, noise, compressor)
 //! - `vad` — Voice Activity Detection
-//! - `mlx` — Apple Silicon local inference (macOS only)
+//! - `mlx` — Local inference model loading (tokenizers + HF Hub, cross-platform)
 //! - `onnx` — ONNX Runtime local inference (cross-platform)
-//! - `opus` — Opus codec (requires cmake)
 //! - `livekit` — adk-realtime bridge
-//! - `all` — All non-platform features
+//! - `all` — All features (safe for any platform and CI)
 //!
 //! ## Quick Start
 //!

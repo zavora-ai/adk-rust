@@ -40,16 +40,13 @@ impl RealtimeBridge {
                 match base64::engine::general_purpose::STANDARD.decode(&b64) {
                     Ok(pcm_bytes) => {
                         if pcm_bytes.len() >= 2 {
-                            let frame = AudioFrame::new(pcm_bytes, sample_rate, channels);
+                            let frame = AudioFrame::new(pcm_bytes, sample_rate, channels as u8);
                             yield Ok(PipelineInput::Audio(frame));
                         }
                     }
                     Err(e) => {
                         tracing::warn!("base64 decode failed in realtime bridge: {e}");
-                        yield Err(AudioError::Codec {
-                            format: "base64-pcm16".into(),
-                            message: format!("decode failed: {e}"),
-                        });
+                        yield Err(AudioError::Codec(format!("base64-pcm16 decode failed: {e}")));
                     }
                 }
             }

@@ -1,16 +1,10 @@
 //! MLX local inference backend for Apple Silicon.
 //!
-//! Provides `MlxTtsProvider` and `MlxSttProvider` for on-device TTS and STT
-//! using Apple's MLX framework via `mlx-rs`. Exploits Metal GPU acceleration
-//! and unified memory for zero-copy inference.
+//! Provides `MlxTtsProvider` and `MlxSttProvider` for on-device TTS and STT.
+//! Currently uses `tokenizers` + `hf-hub` for model loading and tokenization.
+//! Full Metal GPU inference via `mlx-rs` is planned for a future release.
 //!
-//! Requires the `mlx` feature flag. Only compiles on macOS.
-
-#[cfg(not(target_os = "macos"))]
-compile_error!(
-    "The `mlx` feature requires macOS with Apple Silicon (M1–M4). \
-     For cross-platform local inference, use the `onnx` feature instead."
-);
+//! Requires the `mlx` feature flag.
 
 mod config;
 mod mel;

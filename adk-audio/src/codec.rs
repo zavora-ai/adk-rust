@@ -11,7 +11,7 @@ pub enum AudioFormat {
     /// Raw PCM-16 LE (internal format, no header).
     #[default]
     Pcm16,
-    /// Opus codec (requires `opus` feature).
+    /// Opus codec (not yet implemented).
     Opus,
     /// MP3 format.
     Mp3,
