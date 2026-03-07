@@ -346,6 +346,7 @@ async fn test_runner_triggers_compaction_at_interval() {
         compaction_config: Some(compaction_config),
         context_cache_config: None,
         cache_capable: None,
+        request_context: None,
     })
     .unwrap();
 
@@ -403,6 +404,7 @@ async fn test_runner_no_compaction_before_interval() {
         compaction_config: Some(compaction_config),
         context_cache_config: None,
         cache_capable: None,
+        request_context: None,
     })
     .unwrap();
 

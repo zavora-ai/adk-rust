@@ -1,5 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
+use crate::auth_bridge::RequestContextExtractor;
+
 /// Security configuration for the ADK server.
 #[derive(Clone, Debug)]
 pub struct SecurityConfig {
@@ -52,9 +54,11 @@ pub struct ServerConfig {
     pub agent_loader: Arc<dyn adk_core::AgentLoader>,
     pub session_service: Arc<dyn adk_session::SessionService>,
     pub artifact_service: Option<Arc<dyn adk_artifact::ArtifactService>>,
+    pub memory_service: Option<Arc<dyn adk_core::Memory>>,
     pub span_exporter: Option<Arc<adk_telemetry::AdkSpanExporter>>,
     pub backend_url: Option<String>,
     pub security: SecurityConfig,
+    pub request_context_extractor: Option<Arc<dyn RequestContextExtractor>>,
 }
 
 impl ServerConfig {
@@ -66,9 +70,11 @@ impl ServerConfig {
             agent_loader,
             session_service,
             artifact_service: None,
+            memory_service: None,
             span_exporter: None,
             backend_url: None,
             security: SecurityConfig::default(),
+            request_context_extractor: None,
         }
     }
 
@@ -85,6 +91,16 @@ impl ServerConfig {
         artifact_service: Option<Arc<dyn adk_artifact::ArtifactService>>,
     ) -> Self {
         self.artifact_service = artifact_service;
+        self
+    }
+
+    /// Configure a memory service for semantic search across sessions.
+    ///
+    /// When set, the runner injects memory into the invocation context,
+    /// allowing agents to search previous conversation content via
+    /// `ToolContext::search_memory()`.
+    pub fn with_memory_service(mut self, memory_service: Arc<dyn adk_core::Memory>) -> Self {
+        self.memory_service = Some(memory_service);
         self
     }
 
@@ -127,6 +143,17 @@ impl ServerConfig {
     /// Enable detailed error messages (for development only)
     pub fn with_error_details(mut self, expose: bool) -> Self {
         self.security.expose_error_details = expose;
+        self
+    }
+
+    /// Configure a request context extractor for auth middleware bridging.
+    ///
+    /// When set, the server invokes the extractor on each incoming request
+    /// to extract authenticated identity (user_id, scopes, metadata) from
+    /// HTTP headers. The extracted context flows into `InvocationContext`,
+    /// making scopes available via `ToolContext::user_scopes()`.
+    pub fn with_request_context(mut self, extractor: Arc<dyn RequestContextExtractor>) -> Self {
+        self.request_context_extractor = Some(extractor);
         self
     }
 }

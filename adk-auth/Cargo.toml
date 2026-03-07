@@ -15,9 +15,11 @@ readme = "README.md"
 [features]
 default = []
 sso = ["jsonwebtoken", "reqwest", "dashmap", "base64"]
+auth-bridge = ["sso", "adk-server"]
 
 [dependencies]
 adk-core.workspace = true
+adk-server = { workspace = true, optional = true }
 async-trait.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 serde = { workspace = true, features = ["derive"] }

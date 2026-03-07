@@ -46,6 +46,9 @@ pub use callbacks::{
 pub use context::{InvocationContext, MutableSession};
 pub use runner::{Runner, RunnerConfig};
 
+// Re-export RequestContext for convenience
+pub use adk_core::RequestContext;
+
 // Re-export compaction types for convenience
 pub use adk_core::{BaseEventsSummarizer, EventsCompactionConfig};
 

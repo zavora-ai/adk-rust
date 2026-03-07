@@ -49,6 +49,7 @@ impl Executor {
             compaction_config: self.config.runner_config.compaction_config.clone(),
             context_cache_config: self.config.runner_config.context_cache_config.clone(),
             cache_capable: self.config.runner_config.cache_capable.clone(),
+            request_context: self.config.runner_config.request_context.clone(),
         })?;
 
         // Create processor

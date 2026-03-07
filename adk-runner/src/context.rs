@@ -1,6 +1,6 @@
 use adk_core::{
     Agent, Artifacts, CallbackContext, Content, Event, InvocationContext as InvocationContextTrait,
-    Memory, ReadonlyContext, RunConfig,
+    Memory, ReadonlyContext, RequestContext, RunConfig,
 };
 use adk_session::Session as AdkSession;
 use async_trait::async_trait;
@@ -198,6 +198,10 @@ pub struct InvocationContext {
     /// This is shared across all agents in a workflow, enabling state
     /// propagation between sequential/parallel agents.
     session: Arc<MutableSession>,
+    /// Optional request context from the server's auth middleware bridge.
+    /// When present, `user_id()` returns `request_context.user_id` and
+    /// `user_scopes()` returns `request_context.scopes`.
+    request_context: Option<RequestContext>,
 }
 
 impl InvocationContext {
@@ -223,6 +227,7 @@ impl InvocationContext {
             run_config: RunConfig::default(),
             ended: Arc::new(AtomicBool::new(false)),
             session: Arc::new(MutableSession::new(session)),
+            request_context: None,
         }
     }
 
@@ -251,6 +256,7 @@ impl InvocationContext {
             run_config: RunConfig::default(),
             ended: Arc::new(AtomicBool::new(false)),
             session,
+            request_context: None,
         }
     }
 
@@ -274,6 +280,15 @@ impl InvocationContext {
         self
     }
 
+    /// Set the request context from the server's auth middleware bridge.
+    ///
+    /// When set, `user_id()` returns `request_context.user_id` (overriding
+    /// the original), and `user_scopes()` returns `request_context.scopes`.
+    pub fn with_request_context(mut self, ctx: RequestContext) -> Self {
+        self.request_context = Some(ctx);
+        self
+    }
+
     /// Get a reference to the mutable session.
     /// This allows the Runner to apply state deltas when events are processed.
     pub fn mutable_session(&self) -> &Arc<MutableSession> {
@@ -292,7 +307,7 @@ impl ReadonlyContext for InvocationContext {
     }
 
     fn user_id(&self) -> &str {
-        &self.user_id
+        self.request_context.as_ref().map_or(&self.user_id, |rc| &rc.user_id)
     }
 
     fn app_name(&self) -> &str {
@@ -343,5 +358,18 @@ impl InvocationContextTrait for InvocationContext {
 
     fn ended(&self) -> bool {
         self.ended.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn user_scopes(&self) -> Vec<String> {
+        self.request_context.as_ref().map_or_else(Vec::new, |rc| rc.scopes.clone())
+    }
+
+    fn request_metadata(&self) -> HashMap<String, serde_json::Value> {
+        self.request_context.as_ref().map_or_else(HashMap::new, |rc| {
+            rc.metadata
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect()
+        })
     }
 }

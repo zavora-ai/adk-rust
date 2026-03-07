@@ -67,6 +67,7 @@ pub mod error;
 pub mod event;
 pub mod instruction_template;
 pub mod model;
+pub mod request_context;
 pub mod tool;
 pub mod types;
 
@@ -91,5 +92,6 @@ pub use model::{
     CacheCapable, CitationMetadata, CitationSource, ContextCacheConfig, FinishReason,
     GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream, UsageMetadata,
 };
+pub use request_context::RequestContext;
 pub use tool::{Tool, ToolContext, ToolPredicate, ToolRegistry, Toolset, ValidationMode};
 pub use types::{Content, FunctionResponseData, MAX_INLINE_DATA_SIZE, Part};

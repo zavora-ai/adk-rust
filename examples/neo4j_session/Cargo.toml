@@ -1,0 +1,29 @@
+[package]
+name = "neo4j-session-example"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Neo4j session service example with Docker-managed database"
+
+[[bin]]
+name = "neo4j-session-example"
+path = "src/main.rs"
+
+[[bin]]
+name = "neo4j-llm-chat"
+path = "src/llm_chat.rs"
+
+[dependencies]
+adk-core.workspace = true
+adk-agent.workspace = true
+adk-model = { workspace = true, features = ["gemini"] }
+adk-runner.workspace = true
+adk-tool.workspace = true
+adk-session = { workspace = true, features = ["neo4j"] }
+tokio.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+futures.workspace = true
+dotenvy = "0.15"

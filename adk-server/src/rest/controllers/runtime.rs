@@ -1,4 +1,6 @@
 use crate::ServerConfig;
+use crate::auth_bridge::{RequestContextError, RequestContextExtractor};
+use adk_core::RequestContext;
 use adk_ui::{SUPPORTED_UI_PROTOCOLS, UI_PROTOCOL_CAPABILITIES, normalize_runtime_ui_protocol};
 use axum::{
     Json,
@@ -265,6 +267,45 @@ fn build_content_from_parts(parts: &[MessagePart]) -> Result<adk_core::Content, 
     Ok(content)
 }
 
+/// Extract [`RequestContext`] from the configured extractor, if present.
+///
+/// Constructs minimal HTTP request [`Parts`] from the provided headers so the
+/// extractor can inspect `Authorization` and other headers. Returns `None`
+/// when no extractor is configured (fall-through to existing behavior).
+async fn extract_request_context(
+    extractor: Option<&dyn RequestContextExtractor>,
+    headers: &HeaderMap,
+) -> Result<Option<RequestContext>, RuntimeError> {
+    let Some(extractor) = extractor else {
+        return Ok(None);
+    };
+
+    // Build minimal Parts from the headers
+    let mut builder = axum::http::Request::builder();
+    for (name, value) in headers {
+        builder = builder.header(name, value);
+    }
+    let (parts, _) = builder
+        .body(())
+        .map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to build request parts: {e}"))
+        })?
+        .into_parts();
+
+    match extractor.extract(&parts).await {
+        Ok(ctx) => Ok(Some(ctx)),
+        Err(RequestContextError::MissingAuth) => {
+            Err((StatusCode::UNAUTHORIZED, "missing authorization".to_string()))
+        }
+        Err(RequestContextError::InvalidToken(msg)) => {
+            Err((StatusCode::UNAUTHORIZED, format!("invalid token: {msg}")))
+        }
+        Err(RequestContextError::ExtractionFailed(msg)) => {
+            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("auth extraction failed: {msg}")))
+        }
+    }
+}
+
 pub async fn run_sse(
     State(controller): State<RuntimeController>,
     Path((app_name, user_id, session_id)): Path<(String, String, String)>,
@@ -281,13 +322,23 @@ pub async fn run_sse(
             "resolved ui protocol profile for runtime request"
         );
 
+        // Extract request context from auth middleware bridge if configured
+        let request_context = extract_request_context(
+            controller.config.request_context_extractor.as_deref(),
+            &headers,
+        )
+        .await?;
+
+        // Use authenticated user_id if present, otherwise fall back to path param
+        let effective_user_id = request_context.as_ref().map_or(user_id, |rc| rc.user_id.clone());
+
         // Validate session exists
         controller
             .config
             .session_service
             .get(adk_session::GetRequest {
                 app_name: app_name.clone(),
-                user_id: user_id.clone(),
+                user_id: effective_user_id.clone(),
                 session_id: session_id.clone(),
                 num_recent_events: None,
                 after: None,
@@ -307,12 +358,13 @@ pub async fn run_sse(
             agent,
             session_service: controller.config.session_service.clone(),
             artifact_service: controller.config.artifact_service.clone(),
-            memory_service: None,
+            memory_service: controller.config.memory_service.clone(),
             plugin_manager: None,
             run_config: None,
             compaction_config: None,
             context_cache_config: None,
             cache_capable: None,
+            request_context,
         })
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create runner".to_string()))?;
 
@@ -326,7 +378,7 @@ pub async fn run_sse(
 
         // Run agent
         let event_stream = runner
-            .run(user_id, session_id, content)
+            .run(effective_user_id, session_id, content)
             .await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to run agent".to_string()))?;
 
@@ -369,6 +421,14 @@ pub async fn run_sse_compat(
     );
     log_profile_deprecation(ui_profile);
 
+    // Extract request context from auth middleware bridge if configured
+    let request_context =
+        extract_request_context(controller.config.request_context_extractor.as_deref(), &headers)
+            .await?;
+
+    // Use authenticated user_id if present, otherwise fall back to request body
+    let effective_user_id = request_context.as_ref().map_or(user_id, |rc| rc.user_id.clone());
+
     // Build content from message parts (includes both text and inline_data)
     let content = build_content_from_parts(&req.new_message.parts)?;
 
@@ -390,7 +450,7 @@ pub async fn run_sse_compat(
         .session_service
         .get(adk_session::GetRequest {
             app_name: app_name.clone(),
-            user_id: user_id.clone(),
+            user_id: effective_user_id.clone(),
             session_id: session_id.clone(),
             num_recent_events: None,
             after: None,
@@ -404,7 +464,7 @@ pub async fn run_sse_compat(
             .session_service
             .create(adk_session::CreateRequest {
                 app_name: app_name.clone(),
-                user_id: user_id.clone(),
+                user_id: effective_user_id.clone(),
                 session_id: Some(session_id.clone()),
                 state: std::collections::HashMap::new(),
             })
@@ -431,18 +491,19 @@ pub async fn run_sse_compat(
         agent,
         session_service: controller.config.session_service.clone(),
         artifact_service: controller.config.artifact_service.clone(),
-        memory_service: None,
+        memory_service: controller.config.memory_service.clone(),
         plugin_manager: None,
         run_config: Some(adk_core::RunConfig { streaming_mode, ..adk_core::RunConfig::default() }),
         compaction_config: None,
         context_cache_config: None,
         cache_capable: None,
+        request_context,
     })
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create runner".to_string()))?;
 
     // Run agent with full content (text + inline data)
     let event_stream = runner
-        .run(user_id, session_id, content)
+        .run(effective_user_id, session_id, content)
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to run agent".to_string()))?;
 

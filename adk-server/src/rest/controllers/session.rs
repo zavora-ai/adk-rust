@@ -270,6 +270,8 @@ pub async fn list_sessions(
         .list(adk_session::ListRequest {
             app_name: params.app_name.clone(),
             user_id: params.user_id.clone(),
+            limit: None,
+            offset: None,
         })
         .await
         .map_err(|e| {

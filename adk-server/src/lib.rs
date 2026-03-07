@@ -32,6 +32,7 @@
 //! - `POST /a2a/stream` - SSE streaming
 
 pub mod a2a;
+pub mod auth_bridge;
 pub mod config;
 pub mod rest;
 pub mod web_ui;
@@ -40,6 +41,7 @@ pub use a2a::{
     A2aClient, Executor, ExecutorConfig, RemoteA2aAgent, RemoteA2aAgentBuilder, RemoteA2aConfig,
     build_agent_card, build_agent_skills,
 };
+pub use auth_bridge::{RequestContext, RequestContextError, RequestContextExtractor};
 pub use config::{SecurityConfig, ServerConfig};
 pub use rest::{
     A2aController, RuntimeController, SessionController, create_app, create_app_with_a2a,

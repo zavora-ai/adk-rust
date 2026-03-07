@@ -215,6 +215,7 @@ async fn translate_language(
         compaction_config: None,
         context_cache_config: None,
         cache_capable: None,
+        request_context: None,
     })?);
     
     let mut stats = TranslationStats {

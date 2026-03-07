@@ -121,7 +121,12 @@ pub async fn assert_session_contract_with_users(
     assert_eq!(after.events().at(0).expect("event 0").timestamp, t2);
 
     let sessions_user1 = service
-        .list(ListRequest { app_name: app_name.to_string(), user_id: user_1.to_string() })
+        .list(ListRequest {
+            app_name: app_name.to_string(),
+            user_id: user_1.to_string(),
+            limit: None,
+            offset: None,
+        })
         .await
         .expect("list for user1 should succeed");
 
@@ -150,7 +155,12 @@ pub async fn assert_session_contract_with_users(
     assert!(wrong_user_get.is_err());
 
     let sessions_user2 = service
-        .list(ListRequest { app_name: app_name.to_string(), user_id: user_2.to_string() })
+        .list(ListRequest {
+            app_name: app_name.to_string(),
+            user_id: user_2.to_string(),
+            limit: None,
+            offset: None,
+        })
         .await
         .expect("list for user2 should succeed");
 
@@ -169,7 +179,12 @@ pub async fn assert_session_contract_with_users(
     let other_app_session_id = other_app.id().to_string();
 
     let sessions_primary_app = service
-        .list(ListRequest { app_name: app_name.to_string(), user_id: user_1.to_string() })
+        .list(ListRequest {
+            app_name: app_name.to_string(),
+            user_id: user_1.to_string(),
+            limit: None,
+            offset: None,
+        })
         .await
         .expect("list primary app should succeed");
 
@@ -177,7 +192,12 @@ pub async fn assert_session_contract_with_users(
     assert!(!sessions_primary_app.iter().any(|session| session.id() == other_app_session_id));
 
     let sessions_other_app = service
-        .list(ListRequest { app_name: other_app_name.to_string(), user_id: user_1.to_string() })
+        .list(ListRequest {
+            app_name: other_app_name.to_string(),
+            user_id: user_1.to_string(),
+            limit: None,
+            offset: None,
+        })
         .await
         .expect("list secondary app should succeed");
 

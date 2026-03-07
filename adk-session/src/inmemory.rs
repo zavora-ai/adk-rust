@@ -176,18 +176,32 @@ impl SessionService for InMemorySessionService {
 
     async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
         let sessions = self.sessions.read().unwrap();
+        let offset = req.offset.unwrap_or(0);
+        let limit = req.limit.unwrap_or(usize::MAX);
         let mut result = Vec::new();
 
         for data in sessions.values() {
             if data.id.app_name == req.app_name && data.id.user_id == req.user_id {
-                result.push(Box::new(InMemorySession {
-                    id: data.id.clone(),
-                    state: data.state.clone(),
-                    events: data.events.clone(),
-                    updated_at: data.updated_at,
-                }) as Box<dyn Session>);
+                result.push(data.clone());
             }
         }
+
+        // Sort by updated_at descending for consistency with other backends
+        result.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+        let result: Vec<Box<dyn Session>> = result
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|data| {
+                Box::new(InMemorySession {
+                    id: data.id,
+                    state: data.state,
+                    events: data.events,
+                    updated_at: data.updated_at,
+                }) as Box<dyn Session>
+            })
+            .collect();
 
         Ok(result)
     }
@@ -198,6 +212,12 @@ impl SessionService for InMemorySessionService {
 
         let mut sessions = self.sessions.write().unwrap();
         sessions.remove(&id.key());
+        Ok(())
+    }
+
+    async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
+        let mut sessions = self.sessions.write().unwrap();
+        sessions.retain(|_, data| !(data.id.app_name == app_name && data.id.user_id == user_id));
         Ok(())
     }
 

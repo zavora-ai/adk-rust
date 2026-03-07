@@ -42,6 +42,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         query: "Rust".to_string(),
         user_id: "user-123".to_string(),
         app_name: "my_app".to_string(),
+        limit: None,
+        min_score: None,
     };
 
     let response = memory.search(request).await?;
@@ -68,6 +70,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         query: "topic".to_string(),
         user_id: "user-a".to_string(),
         app_name: "app".to_string(),
+        limit: None,
+        min_score: None,
     };
     let response = memory.search(request).await?;
     assert_eq!(response.memories.len(), 1);
@@ -82,6 +86,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         query: "Rust".to_string(),
         user_id: "user-123".to_string(),
         app_name: "different_app".to_string(), // Different app
+        limit: None,
+        min_score: None,
     };
     let response = memory.search(request).await?;
     assert!(response.memories.is_empty());

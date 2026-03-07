@@ -1,6 +1,6 @@
 use crate::{
-    CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_APP, KEY_PREFIX_TEMP,
-    KEY_PREFIX_USER, ListRequest, Session, SessionService, State,
+    CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP, ListRequest, Session,
+    SessionService, State, state_utils,
 };
 use adk_core::Result;
 use async_trait::async_trait;
@@ -98,41 +98,6 @@ impl DatabaseSessionService {
 
         Ok(())
     }
-
-    fn extract_state_deltas(
-        delta: &HashMap<String, Value>,
-    ) -> (HashMap<String, Value>, HashMap<String, Value>, HashMap<String, Value>) {
-        let mut app_delta = HashMap::new();
-        let mut user_delta = HashMap::new();
-        let mut session_delta = HashMap::new();
-
-        for (key, value) in delta {
-            if let Some(clean_key) = key.strip_prefix(KEY_PREFIX_APP) {
-                app_delta.insert(clean_key.to_string(), value.clone());
-            } else if let Some(clean_key) = key.strip_prefix(KEY_PREFIX_USER) {
-                user_delta.insert(clean_key.to_string(), value.clone());
-            } else if !key.starts_with(KEY_PREFIX_TEMP) {
-                session_delta.insert(key.clone(), value.clone());
-            }
-        }
-
-        (app_delta, user_delta, session_delta)
-    }
-
-    fn merge_states(
-        app: &HashMap<String, Value>,
-        user: &HashMap<String, Value>,
-        session: &HashMap<String, Value>,
-    ) -> HashMap<String, Value> {
-        let mut merged = session.clone();
-        for (k, v) in app {
-            merged.insert(format!("{}{}", KEY_PREFIX_APP, k), v.clone());
-        }
-        for (k, v) in user {
-            merged.insert(format!("{}{}", KEY_PREFIX_USER, k), v.clone());
-        }
-        merged
-    }
 }
 
 #[async_trait]
@@ -141,7 +106,7 @@ impl SessionService for DatabaseSessionService {
         let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         let now = Utc::now();
 
-        let (app_delta, user_delta, session_state) = Self::extract_state_deltas(&req.state);
+        let (app_delta, user_delta, session_state) = state_utils::extract_state_deltas(&req.state);
 
         let mut tx = self
             .pool
@@ -208,7 +173,8 @@ impl SessionService for DatabaseSessionService {
             .map_err(|e| adk_core::AdkError::Session(format!("insert failed: {}", e)))?;
 
         // Create session
-        let merged_state = Self::merge_states(&new_app_state, &new_user_state, &session_state);
+        let merged_state =
+            state_utils::merge_states(&new_app_state, &new_user_state, &session_state);
         let merged_state_json = serde_json::to_string(&merged_state)
             .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {}", e)))?;
 
@@ -303,11 +269,18 @@ impl SessionService for DatabaseSessionService {
     }
 
     async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>> {
+        let limit = req.limit.map(|l| l as i64).unwrap_or(i64::MAX);
+        let offset = req.offset.unwrap_or(0) as i64;
+
         let rows = sqlx::query(
-            "SELECT session_id, state, updated_at FROM sessions WHERE app_name = ? AND user_id = ?",
+            "SELECT session_id, state, updated_at FROM sessions \
+             WHERE app_name = ? AND user_id = ? \
+             ORDER BY updated_at DESC LIMIT ? OFFSET ?",
         )
         .bind(&req.app_name)
         .bind(&req.user_id)
+        .bind(limit)
+        .bind(offset)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| adk_core::AdkError::Session(format!("query failed: {}", e)))?;
@@ -366,6 +339,38 @@ impl SessionService for DatabaseSessionService {
         Ok(())
     }
 
+    async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| adk_core::AdkError::Session(format!("transaction failed: {}", e)))?;
+
+        sqlx::query("DELETE FROM events WHERE app_name = ? AND user_id = ?")
+            .bind(app_name)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                adk_core::AdkError::Session(format!("delete_all_sessions failed: {}", e))
+            })?;
+
+        sqlx::query("DELETE FROM sessions WHERE app_name = ? AND user_id = ?")
+            .bind(app_name)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                adk_core::AdkError::Session(format!("delete_all_sessions failed: {}", e))
+            })?;
+
+        tx.commit()
+            .await
+            .map_err(|e| adk_core::AdkError::Session(format!("commit failed: {}", e)))?;
+
+        Ok(())
+    }
+
     async fn append_event(&self, session_id: &str, mut event: Event) -> Result<()> {
         event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
 
@@ -398,7 +403,7 @@ impl SessionService for DatabaseSessionService {
         let session_state_json: String = row.get("state");
         let existing_state: HashMap<String, Value> = serde_json::from_str(&session_state_json)
             .map_err(|e| adk_core::AdkError::Session(format!("deserialize failed: {}", e)))?;
-        let (_, _, mut session_state) = Self::extract_state_deltas(&existing_state);
+        let (_, _, mut session_state) = state_utils::extract_state_deltas(&existing_state);
 
         let app_state: HashMap<String, Value> =
             match sqlx::query("SELECT state FROM app_states WHERE app_name = ?")
@@ -434,7 +439,7 @@ impl SessionService for DatabaseSessionService {
             };
 
         let (app_delta, user_delta, session_delta) =
-            Self::extract_state_deltas(&event.actions.state_delta);
+            state_utils::extract_state_deltas(&event.actions.state_delta);
 
         let mut new_app_state = app_state.clone();
         new_app_state.extend(app_delta);
@@ -468,7 +473,8 @@ impl SessionService for DatabaseSessionService {
         .map_err(|e| adk_core::AdkError::Session(format!("insert failed: {}", e)))?;
 
         session_state.extend(session_delta);
-        let merged_state = Self::merge_states(&new_app_state, &new_user_state, &session_state);
+        let merged_state =
+            state_utils::merge_states(&new_app_state, &new_user_state, &session_state);
         let merged_state_json = serde_json::to_string(&merged_state)
             .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {}", e)))?;
 

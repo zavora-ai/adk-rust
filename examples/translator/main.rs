@@ -278,6 +278,7 @@ async fn run_batch_mode(
             compaction_config: None,
             context_cache_config: None,
             cache_capable: None,
+            request_context: None,
         };
 
         let runner = Runner::new(config)?;

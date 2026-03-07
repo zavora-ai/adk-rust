@@ -26,6 +26,8 @@ async fn test_add_and_search() {
             query: "weather sunny".to_string(),
             user_id: "user1".to_string(),
             app_name: "app1".to_string(),
+            limit: None,
+            min_score: None,
         })
         .await
         .unwrap();
@@ -53,6 +55,8 @@ async fn test_search_no_results() {
             query: "programming rust".to_string(),
             user_id: "user1".to_string(),
             app_name: "app1".to_string(),
+            limit: None,
+            min_score: None,
         })
         .await
         .unwrap();
@@ -97,6 +101,8 @@ async fn test_multiple_sessions() {
             query: "session content".to_string(),
             user_id: "user1".to_string(),
             app_name: "app1".to_string(),
+            limit: None,
+            min_score: None,
         })
         .await
         .unwrap();
@@ -141,6 +147,8 @@ async fn test_user_isolation() {
             query: "data".to_string(),
             user_id: "user1".to_string(),
             app_name: "app1".to_string(),
+            limit: None,
+            min_score: None,
         })
         .await
         .unwrap();
@@ -168,6 +176,8 @@ async fn test_empty_content_filtered() {
             query: "anything".to_string(),
             user_id: "user1".to_string(),
             app_name: "app1".to_string(),
+            limit: None,
+            min_score: None,
         })
         .await
         .unwrap();

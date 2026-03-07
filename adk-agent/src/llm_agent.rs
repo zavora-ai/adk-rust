@@ -503,6 +503,10 @@ impl ToolContext for AgentToolContext {
             Ok(vec![])
         }
     }
+
+    fn user_scopes(&self) -> Vec<String> {
+        self.parent_ctx.user_scopes()
+    }
 }
 
 #[async_trait]

@@ -18,16 +18,28 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 reqwest = { workspace = true, optional = true }
 google-cloud-auth = { version = "1.4", optional = true, default-features = false, features = ["default-rustls-provider"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"], optional = true }
+sqlx = { version = "0.8", features = ["runtime-tokio", "chrono", "json"], optional = true }
+fred = { version = "10", optional = true }
+mongodb = { version = "3", optional = true }
+firestore = { version = "0.44", optional = true }
+neo4rs = { version = "0.8", optional = true }
 
 [dev-dependencies]
 tokio.workspace = true
 axum = "0.8"
+proptest = "1.5"
 
 [features]
 default = []
-database = ["sqlx"]
+sqlite = ["sqlx/sqlite"]
+database = ["sqlite"]
+postgres = ["sqlx/postgres"]
+redis = ["fred"]
+mongodb = ["dep:mongodb"]
+firestore = ["dep:firestore"]
+neo4j = ["dep:neo4rs"]
 vertex-session = ["google-cloud-auth", "reqwest"]

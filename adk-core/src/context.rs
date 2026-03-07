@@ -96,6 +96,23 @@ pub trait InvocationContext: CallbackContext {
     fn run_config(&self) -> &RunConfig;
     fn end_invocation(&self);
     fn ended(&self) -> bool;
+
+    /// Returns the scopes granted to the current user for this invocation.
+    ///
+    /// When a [`RequestContext`](crate::RequestContext) is present (set by the
+    /// server's auth middleware bridge), this returns the scopes from that
+    /// context. The default returns an empty vec (no scopes granted).
+    fn user_scopes(&self) -> Vec<String> {
+        vec![]
+    }
+
+    /// Returns the request metadata from the auth middleware bridge, if present.
+    ///
+    /// This provides access to custom key-value pairs extracted from the HTTP
+    /// request by the [`RequestContextExtractor`](crate::RequestContext).
+    fn request_metadata(&self) -> HashMap<String, serde_json::Value> {
+        HashMap::new()
+    }
 }
 
 // Placeholder service traits

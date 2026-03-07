@@ -345,6 +345,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         compaction_config: None,
         context_cache_config: Some(cache_config),
         cache_capable: Some(model),
+        request_context: None,
     })?;
 
     println!("=== Gemini Prompt Caching Lifecycle Demo ===\n");

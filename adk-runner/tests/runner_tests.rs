@@ -161,6 +161,7 @@ fn test_runner_creation() {
         compaction_config: None,
         context_cache_config: None,
         cache_capable: None,
+        request_context: None,
     });
 
     assert!(runner.is_ok());
@@ -183,6 +184,7 @@ async fn test_runner_run() {
         compaction_config: None,
         context_cache_config: None,
         cache_capable: None,
+        request_context: None,
     })
     .unwrap();
 
@@ -404,6 +406,7 @@ async fn test_plugin_callback_order_and_mutation() {
         compaction_config: None,
         context_cache_config: None,
         cache_capable: None,
+        request_context: None,
     })
     .unwrap();
 
@@ -460,6 +463,7 @@ async fn test_plugin_error_propagates_from_on_user_message() {
         compaction_config: None,
         context_cache_config: None,
         cache_capable: None,
+        request_context: None,
     })
     .unwrap();
 
@@ -508,6 +512,7 @@ async fn test_skill_injector_plugin_mutates_user_prompt() {
         compaction_config: None,
         context_cache_config: None,
         cache_capable: None,
+        request_context: None,
     })
     .unwrap();
 
@@ -557,6 +562,7 @@ async fn test_runner_with_auto_skills_mutates_user_prompt() {
         compaction_config: None,
         context_cache_config: None,
         cache_capable: None,
+        request_context: None,
     })
     .unwrap()
     .with_auto_skills(

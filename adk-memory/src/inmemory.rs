@@ -88,6 +88,7 @@ impl MemoryService for InMemoryMemoryService {
 
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {
         let query_words = Self::extract_words(&req.query);
+        let limit = req.limit.unwrap_or(10);
 
         let key = MemoryKey { app_name: req.app_name, user_id: req.user_id };
 
@@ -105,6 +106,8 @@ impl MemoryService for InMemoryMemoryService {
                 }
             }
         }
+
+        memories.truncate(limit);
 
         Ok(SearchResponse { memories })
     }

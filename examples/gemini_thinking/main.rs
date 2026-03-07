@@ -211,6 +211,7 @@ async fn demo_thought_signature(model: Arc<GeminiModel>) -> Result<(), Box<dyn s
         compaction_config: None,
         context_cache_config: None,
         cache_capable: None,
+        request_context: None,
     })?;
 
     // Turn 1: triggers thinking + tool call with thought_signature

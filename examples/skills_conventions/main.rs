@@ -92,6 +92,7 @@ async fn main() -> Result<()> {
         compaction_config: None,
         context_cache_config: None,
         cache_capable: None,
+        request_context: None,
     })?;
 
     let mut stream = runner

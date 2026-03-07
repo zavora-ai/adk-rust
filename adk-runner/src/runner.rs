@@ -33,6 +33,10 @@ pub struct RunnerConfig {
     /// Optional cache-capable model reference for automatic cache management.
     /// Set this to the same model used by the agent if it supports caching.
     pub cache_capable: Option<Arc<dyn CacheCapable>>,
+    /// Optional request context from the server's auth middleware bridge.
+    /// When set, the runner passes it to `InvocationContext` so that
+    /// `user_scopes()` and `user_id()` reflect the authenticated identity.
+    pub request_context: Option<adk_core::RequestContext>,
 }
 
 pub struct Runner {
@@ -48,6 +52,7 @@ pub struct Runner {
     context_cache_config: Option<ContextCacheConfig>,
     cache_capable: Option<Arc<dyn CacheCapable>>,
     cache_manager: Option<Arc<tokio::sync::Mutex<CacheManager>>>,
+    request_context: Option<adk_core::RequestContext>,
 }
 
 impl Runner {
@@ -69,6 +74,7 @@ impl Runner {
             context_cache_config: config.context_cache_config,
             cache_capable: config.cache_capable,
             cache_manager,
+            request_context: config.request_context,
         })
     }
 
@@ -109,6 +115,7 @@ impl Runner {
         let context_cache_config = self.context_cache_config.clone();
         let cache_capable = self.cache_capable.clone();
         let cache_manager_ref = self.cache_manager.clone();
+        let request_context = self.request_context.clone();
 
         let s = stream! {
             // Get or create session
@@ -182,6 +189,11 @@ impl Runner {
             // Apply run config (streaming mode, etc.)
             invocation_ctx = invocation_ctx.with_run_config(run_config.clone());
 
+            // Apply request context from auth middleware bridge if present
+            if let Some(rc) = request_context.clone() {
+                invocation_ctx = invocation_ctx.with_request_context(rc);
+            }
+
             let mut ctx = Arc::new(invocation_ctx);
 
             if let Some(manager) = plugin_manager.as_ref() {
@@ -245,6 +257,9 @@ impl Runner {
                             refreshed_ctx = refreshed_ctx.with_memory(memory);
                         }
                         refreshed_ctx = refreshed_ctx.with_run_config(run_config.clone());
+                        if let Some(rc) = request_context.clone() {
+                            refreshed_ctx = refreshed_ctx.with_request_context(rc);
+                        }
                         ctx = Arc::new(refreshed_ctx);
                     }
                     Ok(None) => {}
@@ -339,6 +354,9 @@ impl Runner {
                             refreshed_ctx = refreshed_ctx.with_memory(memory);
                         }
                         refreshed_ctx = refreshed_ctx.with_run_config(run_config.clone());
+                        if let Some(rc) = request_context.clone() {
+                            refreshed_ctx = refreshed_ctx.with_request_context(rc);
+                        }
                         ctx = Arc::new(refreshed_ctx);
                     }
                 }
@@ -414,12 +432,19 @@ impl Runner {
                         ctx.mutable_session().append_event(event.clone());
 
                         // Append event to session service (persistent storage)
-                        if let Err(e) = session_service.append_event(&session_id, event.clone()).await {
-                            if let Some(manager) = plugin_manager.as_ref() {
-                                manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                        // Skip partial streaming chunks — only persist the final
+                        // event. Streaming chunks share the same event ID, so
+                        // persisting each one would violate the primary key
+                        // constraint. The final chunk (partial=false) carries the
+                        // complete accumulated content.
+                        if !event.llm_response.partial {
+                            if let Err(e) = session_service.append_event(&session_id, event.clone()).await {
+                                if let Some(manager) = plugin_manager.as_ref() {
+                                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                                }
+                                yield Err(e);
+                                return;
                             }
-                            yield Err(e);
-                            return;
                         }
                         yield Ok(event);
                     }
@@ -502,6 +527,9 @@ impl Runner {
                     transfer_ctx = transfer_ctx.with_memory(memory.clone());
                 }
                 transfer_ctx = transfer_ctx.with_run_config(transfer_run_config);
+                if let Some(rc) = request_context.clone() {
+                    transfer_ctx = transfer_ctx.with_request_context(rc);
+                }
 
                 let transfer_ctx = Arc::new(transfer_ctx);
 
@@ -555,12 +583,14 @@ impl Runner {
                             // Add to mutable session
                             transfer_ctx.mutable_session().append_event(event.clone());
 
-                            if let Err(e) = session_service.append_event(&session_id, event.clone()).await {
-                                if let Some(manager) = plugin_manager.as_ref() {
-                                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                            if !event.llm_response.partial {
+                                if let Err(e) = session_service.append_event(&session_id, event.clone()).await {
+                                    if let Some(manager) = plugin_manager.as_ref() {
+                                        manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                                    }
+                                    yield Err(e);
+                                    return;
                                 }
-                                yield Err(e);
-                                return;
                             }
                             yield Ok(event);
                         }

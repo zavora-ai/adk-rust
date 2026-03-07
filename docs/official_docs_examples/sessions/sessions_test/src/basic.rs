@@ -69,7 +69,12 @@ async fn main() -> anyhow::Result<()> {
     // 5. List all sessions
     println!("\n5. Listing sessions...");
     let sessions = service
-        .list(ListRequest { app_name: "demo".to_string(), user_id: "alice".to_string() })
+        .list(ListRequest {
+            app_name: "demo".to_string(),
+            user_id: "alice".to_string(),
+            limit: None,
+            offset: None,
+        })
         .await?;
 
     println!("   Total sessions: {}", sessions.len());
@@ -91,7 +96,12 @@ async fn main() -> anyhow::Result<()> {
 
     // Verify deletion
     let sessions = service
-        .list(ListRequest { app_name: "demo".to_string(), user_id: "alice".to_string() })
+        .list(ListRequest {
+            app_name: "demo".to_string(),
+            user_id: "alice".to_string(),
+            limit: None,
+            offset: None,
+        })
         .await?;
     println!("   Remaining sessions: {}", sessions.len());
 

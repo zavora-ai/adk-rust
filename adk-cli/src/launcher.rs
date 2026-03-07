@@ -168,6 +168,7 @@ impl Launcher {
             compaction_config: None,
             context_cache_config: None,
             cache_capable: None,
+            request_context: None,
         })?;
 
         println!("🤖 Agent ready! Type your questions (or 'exit' to quit).\n");

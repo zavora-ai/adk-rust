@@ -42,7 +42,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // List sessions
     let sessions = service
-        .list(ListRequest { app_name: "test_app".to_string(), user_id: "user1".to_string() })
+        .list(ListRequest {
+            app_name: "test_app".to_string(),
+            user_id: "user1".to_string(),
+            limit: None,
+            offset: None,
+        })
         .await?;
 
     println!("✅ Found {} session(s)", sessions.len());

@@ -75,6 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         compaction_config: None,
         context_cache_config: None,
         cache_capable: None,
+        request_context: None,
     })?;
 
     println!("\nSession configured with:");

@@ -550,6 +550,10 @@ path = "groq_tools/main.rs"
 required-features = ["groq"]
 
 [[example]]
+name = "auth_bridge"
+path = "auth_bridge/main.rs"
+
+[[example]]
 name = "auth_basic"
 path = "auth_basic/main.rs"
 

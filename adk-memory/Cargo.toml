@@ -16,6 +16,25 @@ readme = "README.md"
 adk-core.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+sqlx = { version = "0.8", features = ["runtime-tokio", "chrono", "json"], optional = true }
+pgvector = { version = "0.4", features = ["sqlx"], optional = true }
+mongodb = { version = "3", optional = true }
+neo4rs = { version = "0.8", optional = true }
+fred = { version = "10", optional = true }
 
 [dev-dependencies]
 tokio.workspace = true
+proptest = "1.5"
+serde_json.workspace = true
+chrono.workspace = true
+
+[features]
+default = []
+sqlite-memory = ["sqlx/sqlite"]
+database-memory = ["sqlx/postgres", "pgvector"]
+redis-memory = ["fred"]
+mongodb-memory = ["dep:mongodb"]
+neo4j-memory = ["dep:neo4rs"]

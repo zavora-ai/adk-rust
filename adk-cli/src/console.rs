@@ -33,6 +33,7 @@ pub async fn run_console(agent: Arc<dyn Agent>, app_name: String, user_id: Strin
         compaction_config: None,
         context_cache_config: None,
         cache_capable: None,
+        request_context: None,
     })?;
 
     let mut rl = DefaultEditor::new()?;

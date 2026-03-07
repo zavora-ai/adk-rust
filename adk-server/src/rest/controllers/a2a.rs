@@ -177,12 +177,13 @@ fn create_message_stream(
                 agent: root_agent,
                 session_service: controller.config.session_service.clone(),
                 artifact_service: controller.config.artifact_service.clone(),
-                memory_service: None,
+                memory_service: controller.config.memory_service.clone(),
                 plugin_manager: None,
                 run_config: None,
         compaction_config: None,
                 context_cache_config: None,
                 cache_capable: None,
+                request_context: None,
             }),
         });
 
@@ -265,12 +266,13 @@ async fn handle_message_send(
             agent: root_agent,
             session_service: controller.config.session_service.clone(),
             artifact_service: controller.config.artifact_service.clone(),
-            memory_service: None,
+            memory_service: controller.config.memory_service.clone(),
             plugin_manager: None,
             run_config: None,
             compaction_config: None,
             context_cache_config: None,
             cache_capable: None,
+            request_context: None,
         }),
     });
 
@@ -379,12 +381,13 @@ async fn handle_tasks_cancel(
             agent: root_agent,
             session_service: controller.config.session_service.clone(),
             artifact_service: controller.config.artifact_service.clone(),
-            memory_service: None,
+            memory_service: controller.config.memory_service.clone(),
             plugin_manager: None,
             run_config: None,
             compaction_config: None,
             context_cache_config: None,
             cache_capable: None,
+            request_context: None,
         }),
     });
 
