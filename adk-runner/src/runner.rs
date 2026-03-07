@@ -433,97 +433,143 @@ impl Runner {
                 }
             }
 
-            // If a transfer was requested, automatically invoke the target agent
-            if let Some(target_name) = transfer_target {
-                if let Some(target_agent) = Self::find_agent(&root_agent, &target_name) {
-                    // For transfers, we reuse the same mutable session to preserve state
-                    let transfer_invocation_id = format!("inv-{}", uuid::Uuid::new_v4());
-                    let mut transfer_ctx = InvocationContext::with_mutable_session(
-                        transfer_invocation_id.clone(),
-                        target_agent.clone(),
-                        user_id.clone(),
-                        app_name.clone(),
-                        session_id.clone(),
-                        effective_user_content.clone(),
-                        ctx.mutable_session().clone(),
+            // ===== TRANSFER LOOP =====
+            // Support multi-hop transfers with a max-depth guard.
+            // When an agent emits transfer_to_agent, the runner resolves the
+            // target from the root agent tree, computes transfer_targets
+            // (parent + peers) for the new agent, and runs it. This repeats
+            // until no further transfer is requested or the depth limit is hit.
+            const MAX_TRANSFER_DEPTH: u32 = 10;
+            let mut transfer_depth: u32 = 0;
+            let mut current_transfer_target = transfer_target;
+
+            while let Some(target_name) = current_transfer_target.take() {
+                transfer_depth += 1;
+                if transfer_depth > MAX_TRANSFER_DEPTH {
+                    tracing::warn!(
+                        depth = transfer_depth,
+                        target = %target_name,
+                        "max transfer depth exceeded, stopping transfer chain"
                     );
+                    break;
+                }
 
-                    if let Some(service) = artifact_service_clone {
-                        let scoped = adk_artifact::ScopedArtifacts::new(
-                            service,
-                            app_name.clone(),
-                            user_id.clone(),
-                            session_id.clone(),
-                        );
-                        transfer_ctx = transfer_ctx.with_artifacts(Arc::new(scoped));
+                let target_agent = match Self::find_agent(&root_agent, &target_name) {
+                    Some(a) => a,
+                    None => {
+                        tracing::warn!(target = %target_name, "transfer target not found in agent tree");
+                        break;
                     }
-                    if let Some(memory) = memory_service_clone {
-                        transfer_ctx = transfer_ctx.with_memory(memory);
-                    }
+                };
 
-                    let transfer_ctx = Arc::new(transfer_ctx);
+                // Compute transfer_targets for the target agent:
+                // - parent: the agent that transferred to it (or root if applicable)
+                // - peers: siblings in the agent tree
+                // - children: handled by the agent itself via sub_agents()
+                let (parent_name, peer_names) = Self::compute_transfer_context(&root_agent, &target_name);
 
-                    // Run the transferred agent
-                    let mut transfer_stream = match target_agent.run(transfer_ctx.clone()).await {
-                        Ok(s) => s,
-                        Err(e) => {
-                            if let Some(manager) = plugin_manager.as_ref() {
-                                manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                            }
-                            yield Err(e);
-                            return;
+                let mut transfer_run_config = run_config.clone();
+                let mut targets = Vec::new();
+                if let Some(ref parent) = parent_name {
+                    targets.push(parent.clone());
+                }
+                targets.extend(peer_names);
+                transfer_run_config.transfer_targets = targets;
+                transfer_run_config.parent_agent = parent_name;
+
+                // For transfers, we reuse the same mutable session to preserve state
+                let transfer_invocation_id = format!("inv-{}", uuid::Uuid::new_v4());
+                let mut transfer_ctx = InvocationContext::with_mutable_session(
+                    transfer_invocation_id.clone(),
+                    target_agent.clone(),
+                    user_id.clone(),
+                    app_name.clone(),
+                    session_id.clone(),
+                    effective_user_content.clone(),
+                    ctx.mutable_session().clone(),
+                );
+
+                if let Some(ref service) = artifact_service_clone {
+                    let scoped = adk_artifact::ScopedArtifacts::new(
+                        service.clone(),
+                        app_name.clone(),
+                        user_id.clone(),
+                        session_id.clone(),
+                    );
+                    transfer_ctx = transfer_ctx.with_artifacts(Arc::new(scoped));
+                }
+                if let Some(ref memory) = memory_service_clone {
+                    transfer_ctx = transfer_ctx.with_memory(memory.clone());
+                }
+                transfer_ctx = transfer_ctx.with_run_config(transfer_run_config);
+
+                let transfer_ctx = Arc::new(transfer_ctx);
+
+                // Run the transferred agent
+                let mut transfer_stream = match target_agent.run(transfer_ctx.clone()).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        if let Some(manager) = plugin_manager.as_ref() {
+                            manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
                         }
-                    };
+                        yield Err(e);
+                        return;
+                    }
+                };
 
-                    // Stream events from the transferred agent
-                    while let Some(result) = transfer_stream.next().await {
-                        match result {
-                            Ok(event) => {
-                                let mut event = event;
-                                if let Some(manager) = plugin_manager.as_ref() {
-                                    match manager
-                                        .run_on_event(
-                                            transfer_ctx.clone() as Arc<dyn adk_core::InvocationContext>,
-                                            event.clone(),
-                                        )
-                                        .await
-                                    {
-                                        Ok(Some(modified)) => {
-                                            event = modified;
-                                        }
-                                        Ok(None) => {}
-                                        Err(e) => {
-                                            manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
-                                            yield Err(e);
-                                            return;
-                                        }
+                // Stream events from the transferred agent, capturing any further transfer
+                while let Some(result) = transfer_stream.next().await {
+                    match result {
+                        Ok(event) => {
+                            let mut event = event;
+                            if let Some(manager) = plugin_manager.as_ref() {
+                                match manager
+                                    .run_on_event(
+                                        transfer_ctx.clone() as Arc<dyn adk_core::InvocationContext>,
+                                        event.clone(),
+                                    )
+                                    .await
+                                {
+                                    Ok(Some(modified)) => {
+                                        event = modified;
                                     }
-                                }
-
-                                // Apply state delta for transferred agent too
-                                if !event.actions.state_delta.is_empty() {
-                                    transfer_ctx.mutable_session().apply_state_delta(&event.actions.state_delta);
-                                }
-
-                                // Add to mutable session
-                                transfer_ctx.mutable_session().append_event(event.clone());
-
-                                if let Err(e) = session_service.append_event(&session_id, event.clone()).await {
-                                    if let Some(manager) = plugin_manager.as_ref() {
+                                    Ok(None) => {}
+                                    Err(e) => {
                                         manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                                        yield Err(e);
+                                        return;
                                     }
-                                    yield Err(e);
-                                    return;
                                 }
-                                yield Ok(event);
                             }
-                            Err(e) => {
+
+                            // Capture further transfer requests
+                            if let Some(target) = &event.actions.transfer_to_agent {
+                                current_transfer_target = Some(target.clone());
+                            }
+
+                            // Apply state delta for transferred agent too
+                            if !event.actions.state_delta.is_empty() {
+                                transfer_ctx.mutable_session().apply_state_delta(&event.actions.state_delta);
+                            }
+
+                            // Add to mutable session
+                            transfer_ctx.mutable_session().append_event(event.clone());
+
+                            if let Err(e) = session_service.append_event(&session_id, event.clone()).await {
                                 if let Some(manager) = plugin_manager.as_ref() {
                                     manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
                                 }
                                 yield Err(e);
                                 return;
                             }
+                            yield Ok(event);
+                        }
+                        Err(e) => {
+                            if let Some(manager) = plugin_manager.as_ref() {
+                                manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                            }
+                            yield Err(e);
+                            return;
                         }
                     }
                 }
@@ -656,5 +702,47 @@ impl Runner {
         }
 
         None
+    }
+
+    /// Compute the parent name and peer names for a given agent in the tree.
+    /// Returns `(parent_name, peer_names)`.
+    ///
+    /// Walks the agent tree to find the parent of `target_name`, then collects
+    /// the parent's name and the sibling agent names (excluding the target itself).
+    pub fn compute_transfer_context(
+        root: &Arc<dyn Agent>,
+        target_name: &str,
+    ) -> (Option<String>, Vec<String>) {
+        // If the target is the root itself, there's no parent or peers
+        if root.name() == target_name {
+            return (None, Vec::new());
+        }
+
+        // BFS/DFS to find the parent of target_name
+        fn find_parent(current: &Arc<dyn Agent>, target: &str) -> Option<Arc<dyn Agent>> {
+            for sub in current.sub_agents() {
+                if sub.name() == target {
+                    return Some(current.clone());
+                }
+                if let Some(found) = find_parent(sub, target) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        match find_parent(root, target_name) {
+            Some(parent) => {
+                let parent_name = parent.name().to_string();
+                let peers: Vec<String> = parent
+                    .sub_agents()
+                    .iter()
+                    .filter(|a| a.name() != target_name)
+                    .map(|a| a.name().to_string())
+                    .collect();
+                (Some(parent_name), peers)
+            }
+            None => (None, Vec::new()),
+        }
     }
 }

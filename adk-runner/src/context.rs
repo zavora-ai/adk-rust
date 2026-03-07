@@ -68,6 +68,73 @@ impl MutableSession {
         let events = self.events.read().unwrap();
         events.clone()
     }
+
+    /// Build conversation history, optionally filtered for a specific agent.
+    ///
+    /// When `agent_name` is `Some`, events authored by other agents (not "user",
+    /// not the named agent, and not function/tool responses) are excluded. This
+    /// prevents a transferred sub-agent from seeing the parent's tool calls
+    /// mapped as "model" role, which would cause the LLM to think work is
+    /// already done.
+    ///
+    /// When `agent_name` is `None`, all events are included (backward-compatible).
+    pub fn conversation_history_for_agent_impl(
+        &self,
+        agent_name: Option<&str>,
+    ) -> Vec<adk_core::Content> {
+        let events = self.events.read().unwrap();
+        let mut history = Vec::new();
+
+        // Find the most recent compaction event — everything before its
+        // end_timestamp has been summarized and should be replaced by the
+        // compacted content.
+        let mut compaction_boundary = None;
+        for event in events.iter().rev() {
+            if let Some(ref compaction) = event.actions.compaction {
+                history.push(compaction.compacted_content.clone());
+                compaction_boundary = Some(compaction.end_timestamp);
+                break;
+            }
+        }
+
+        for event in events.iter() {
+            // Skip the compaction event itself
+            if event.actions.compaction.is_some() {
+                continue;
+            }
+
+            // Skip events that were already compacted
+            if let Some(boundary) = compaction_boundary {
+                if event.timestamp <= boundary {
+                    continue;
+                }
+            }
+
+            // When filtering for a specific agent, skip events from other agents.
+            // Keep: user messages and the agent's own events.
+            // Skip: other agents' events entirely (model-role, function calls,
+            // and function/tool responses). This prevents the sub-agent from
+            // seeing orphaned function responses without their preceding calls.
+            if let Some(name) = agent_name {
+                if event.author != "user" && event.author != name {
+                    continue;
+                }
+            }
+
+            if let Some(content) = &event.llm_response.content {
+                let mut mapped_content = content.clone();
+                mapped_content.role = match (event.author.as_str(), content.role.as_str()) {
+                    ("user", _) => "user",
+                    (_, "function" | "tool") => content.role.as_str(),
+                    _ => "model",
+                }
+                .to_string();
+                history.push(mapped_content);
+            }
+        }
+
+        history
+    }
 }
 
 impl adk_core::Session for MutableSession {
@@ -90,48 +157,11 @@ impl adk_core::Session for MutableSession {
     }
 
     fn conversation_history(&self) -> Vec<adk_core::Content> {
-        let events = self.events.read().unwrap();
-        let mut history = Vec::new();
+        self.conversation_history_for_agent_impl(None)
+    }
 
-        // Find the most recent compaction event — everything before its
-        // end_timestamp has been summarized and should be replaced by the
-        // compacted content.
-        let mut compaction_boundary = None;
-        for event in events.iter().rev() {
-            if let Some(ref compaction) = event.actions.compaction {
-                // Insert the summary as the first history entry
-                history.push(compaction.compacted_content.clone());
-                compaction_boundary = Some(compaction.end_timestamp);
-                break;
-            }
-        }
-
-        for event in events.iter() {
-            // Skip the compaction event itself (author == "system" with compaction data)
-            if event.actions.compaction.is_some() {
-                continue;
-            }
-
-            // Skip events that were already compacted
-            if let Some(boundary) = compaction_boundary {
-                if event.timestamp <= boundary {
-                    continue;
-                }
-            }
-
-            if let Some(content) = &event.llm_response.content {
-                let mut mapped_content = content.clone();
-                mapped_content.role = match (event.author.as_str(), content.role.as_str()) {
-                    ("user", _) => "user",
-                    (_, "function" | "tool") => content.role.as_str(),
-                    _ => "model",
-                }
-                .to_string();
-                history.push(mapped_content);
-            }
-        }
-
-        history
+    fn conversation_history_for_agent(&self, agent_name: &str) -> Vec<adk_core::Content> {
+        self.conversation_history_for_agent_impl(Some(agent_name))
     }
 }
 

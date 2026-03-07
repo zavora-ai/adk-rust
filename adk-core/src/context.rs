@@ -65,6 +65,18 @@ pub trait Session: Send + Sync {
     fn state(&self) -> &dyn State;
     /// Returns the conversation history from this session as Content items
     fn conversation_history(&self) -> Vec<Content>;
+    /// Returns conversation history filtered for a specific agent.
+    ///
+    /// When provided, events authored by other agents (not "user", not the
+    /// named agent, and not function/tool responses) are excluded. This
+    /// prevents a transferred sub-agent from seeing the parent's tool calls
+    /// mapped as "model" role, which would cause the LLM to think work is
+    /// already done.
+    ///
+    /// Default implementation delegates to [`conversation_history`](Self::conversation_history).
+    fn conversation_history_for_agent(&self, _agent_name: &str) -> Vec<Content> {
+        self.conversation_history()
+    }
     /// Append content to conversation history (for sequential agent support)
     fn append_to_history(&self, _content: Content) {
         // Default no-op - implementations can override to track history
@@ -201,6 +213,14 @@ pub struct RunConfig {
     /// this name to their `GenerateContentConfig` so the LLM provider can
     /// reuse cached system instructions and tool definitions.
     pub cached_content: Option<String>,
+    /// Valid agent names this agent can transfer to (parent, peers, children).
+    /// Set by the runner when invoking agents in a multi-agent tree.
+    /// When non-empty, the `transfer_to_agent` tool is injected and validation
+    /// uses this list instead of only checking `sub_agents`.
+    pub transfer_targets: Vec<String>,
+    /// The name of the parent agent, if this agent was invoked via transfer.
+    /// Used by the agent to apply `disallow_transfer_to_parent` filtering.
+    pub parent_agent: Option<String>,
 }
 
 impl Default for RunConfig {
@@ -209,6 +229,8 @@ impl Default for RunConfig {
             streaming_mode: StreamingMode::SSE,
             tool_confirmation_decisions: HashMap::new(),
             cached_content: None,
+            transfer_targets: Vec::new(),
+            parent_agent: None,
         }
     }
 }

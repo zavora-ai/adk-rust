@@ -449,3 +449,303 @@ fn conversation_history_maps_agent_events_to_model() {
     let history = mutable.conversation_history();
     assert_eq!(history[0].role, "model");
 }
+
+#[test]
+fn conversation_history_for_agent_filters_other_agents_events() {
+    // When a sub-agent is invoked after a transfer, it should NOT see
+    // the parent agent's tool calls mapped as "model" role.
+    let session = Arc::new(MockSessionWithState::new());
+    let mutable = MutableSession::new(session);
+
+    // 1. User message
+    let mut user_event = Event::new("inv-1");
+    user_event.author = "user".to_string();
+    user_event.llm_response.content = Some(Content {
+        role: "user".to_string(),
+        parts: vec![Part::Text { text: "find me a job".into() }],
+    });
+    mutable.append_event(user_event);
+
+    // 2. Coordinator calls get_profile tool
+    let mut coord_call = Event::new("inv-1");
+    coord_call.author = "coordinator".to_string();
+    coord_call.llm_response.content = Some(Content {
+        role: "model".to_string(),
+        parts: vec![Part::FunctionCall {
+            name: "get_profile".into(),
+            args: serde_json::json!({}),
+            id: Some("call_1".into()),
+            thought_signature: None,
+        }],
+    });
+    mutable.append_event(coord_call);
+
+    // 3. Coordinator's tool response
+    let mut coord_tool_resp = Event::new("inv-1");
+    coord_tool_resp.author = "coordinator".to_string();
+    coord_tool_resp.llm_response.content = Some(Content {
+        role: "function".to_string(),
+        parts: vec![Part::FunctionResponse {
+            function_response: FunctionResponseData {
+                name: "get_profile".into(),
+                response: serde_json::json!({"name": "Alice"}),
+            },
+            id: Some("call_1".into()),
+        }],
+    });
+    mutable.append_event(coord_tool_resp);
+
+    // 4. Coordinator transfers to sourcing_agent
+    let mut transfer_event = Event::new("inv-1");
+    transfer_event.author = "coordinator".to_string();
+    transfer_event.actions.transfer_to_agent = Some("sourcing_agent".to_string());
+    transfer_event.llm_response.content = Some(Content {
+        role: "model".to_string(),
+        parts: vec![Part::Text { text: "transferring".into() }],
+    });
+    mutable.append_event(transfer_event);
+
+    // Unfiltered history should have all 4 events
+    let full_history = mutable.conversation_history();
+    assert_eq!(full_history.len(), 4);
+
+    // Filtered history for sourcing_agent should only have the user message
+    // (coordinator's tool call, tool response, and transfer are excluded)
+    use adk_core::Session;
+    let filtered = mutable.conversation_history_for_agent("sourcing_agent");
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].role, "user");
+}
+
+#[test]
+fn conversation_history_for_agent_keeps_own_events() {
+    // An agent should see its own prior tool calls and responses
+    let session = Arc::new(MockSessionWithState::new());
+    let mutable = MutableSession::new(session);
+
+    // 1. User message
+    let mut user_event = Event::new("inv-1");
+    user_event.author = "user".to_string();
+    user_event.llm_response.content = Some(Content {
+        role: "user".to_string(),
+        parts: vec![Part::Text { text: "search for jobs".into() }],
+    });
+    mutable.append_event(user_event);
+
+    // 2. sourcing_agent calls search_jobs
+    let mut agent_call = Event::new("inv-2");
+    agent_call.author = "sourcing_agent".to_string();
+    agent_call.llm_response.content = Some(Content {
+        role: "model".to_string(),
+        parts: vec![Part::FunctionCall {
+            name: "search_jobs".into(),
+            args: serde_json::json!({"query": "rust developer"}),
+            id: Some("call_2".into()),
+            thought_signature: None,
+        }],
+    });
+    mutable.append_event(agent_call);
+
+    // 3. sourcing_agent's tool response
+    let mut tool_resp = Event::new("inv-2");
+    tool_resp.author = "sourcing_agent".to_string();
+    tool_resp.llm_response.content = Some(Content {
+        role: "function".to_string(),
+        parts: vec![Part::FunctionResponse {
+            function_response: FunctionResponseData {
+                name: "search_jobs".into(),
+                response: serde_json::json!({"jobs": []}),
+            },
+            id: Some("call_2".into()),
+        }],
+    });
+    mutable.append_event(tool_resp);
+
+    // Filtered for sourcing_agent: should see all 3 (user + own call + own response)
+    use adk_core::Session;
+    let filtered = mutable.conversation_history_for_agent("sourcing_agent");
+    assert_eq!(filtered.len(), 3);
+    assert_eq!(filtered[0].role, "user");
+    assert_eq!(filtered[1].role, "model");
+    assert_eq!(filtered[2].role, "function");
+}
+
+#[test]
+fn conversation_history_for_agent_excludes_other_agents_function_responses() {
+    // Function/tool role events from other agents should also be excluded
+    // to avoid orphaned responses without their preceding function calls
+    let session = Arc::new(MockSessionWithState::new());
+    let mutable = MutableSession::new(session);
+
+    // User message
+    let mut user_event = Event::new("inv-1");
+    user_event.author = "user".to_string();
+    user_event.llm_response.content = Some(Content {
+        role: "user".to_string(),
+        parts: vec![Part::Text { text: "hello".into() }],
+    });
+    mutable.append_event(user_event);
+
+    // Other agent's function response (role = "function")
+    let mut other_tool = Event::new("inv-1");
+    other_tool.author = "other_agent".to_string();
+    other_tool.llm_response.content = Some(Content {
+        role: "function".to_string(),
+        parts: vec![Part::FunctionResponse {
+            function_response: FunctionResponseData {
+                name: "some_tool".into(),
+                response: serde_json::json!({"data": "value"}),
+            },
+            id: None,
+        }],
+    });
+    mutable.append_event(other_tool);
+
+    // Other agent's model response (should be filtered out)
+    let mut other_model = Event::new("inv-1");
+    other_model.author = "other_agent".to_string();
+    other_model.llm_response.content = Some(Content {
+        role: "model".to_string(),
+        parts: vec![Part::Text { text: "I did something".into() }],
+    });
+    mutable.append_event(other_model);
+
+    use adk_core::Session;
+    let filtered = mutable.conversation_history_for_agent("my_agent");
+    // Only user message kept — other agent's function response and model response both filtered
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].role, "user");
+}
+
+#[test]
+fn conversation_history_for_agent_double_transfer_sees_own_prior_events() {
+    // Scenario: coordinator → sourcing → coordinator → sourcing (second time)
+    // The second sourcing invocation should see its own events from the first
+    // invocation but NOT the coordinator's events in between.
+    let session = Arc::new(MockSessionWithState::new());
+    let mutable = MutableSession::new(session);
+
+    // 1. User message
+    let mut user_event = Event::new("inv-1");
+    user_event.author = "user".to_string();
+    user_event.llm_response.content = Some(Content {
+        role: "user".to_string(),
+        parts: vec![Part::Text { text: "find me a rust job".into() }],
+    });
+    mutable.append_event(user_event);
+
+    // 2. Coordinator analyzes request (model role)
+    let mut coord_analyze = Event::new("inv-1");
+    coord_analyze.author = "coordinator".to_string();
+    coord_analyze.llm_response.content = Some(Content {
+        role: "model".to_string(),
+        parts: vec![Part::Text { text: "I'll delegate to sourcing".into() }],
+    });
+    mutable.append_event(coord_analyze);
+
+    // 3. Coordinator transfers to sourcing_agent
+    let mut transfer1 = Event::new("inv-1");
+    transfer1.author = "coordinator".to_string();
+    transfer1.actions.transfer_to_agent = Some("sourcing_agent".to_string());
+    mutable.append_event(transfer1);
+
+    // 4. sourcing_agent calls search_jobs (first invocation)
+    let mut sourcing_call1 = Event::new("inv-2");
+    sourcing_call1.author = "sourcing_agent".to_string();
+    sourcing_call1.llm_response.content = Some(Content {
+        role: "model".to_string(),
+        parts: vec![Part::FunctionCall {
+            name: "search_jobs".into(),
+            args: serde_json::json!({"query": "rust developer"}),
+            id: Some("call_s1".into()),
+            thought_signature: None,
+        }],
+    });
+    mutable.append_event(sourcing_call1);
+
+    // 5. sourcing_agent's tool response
+    let mut sourcing_resp1 = Event::new("inv-2");
+    sourcing_resp1.author = "sourcing_agent".to_string();
+    sourcing_resp1.llm_response.content = Some(Content {
+        role: "function".to_string(),
+        parts: vec![Part::FunctionResponse {
+            function_response: FunctionResponseData {
+                name: "search_jobs".into(),
+                response: serde_json::json!({"jobs": ["job_1", "job_2"]}),
+            },
+            id: Some("call_s1".into()),
+        }],
+    });
+    mutable.append_event(sourcing_resp1);
+
+    // 6. sourcing_agent transfers back to coordinator
+    let mut transfer_back = Event::new("inv-2");
+    transfer_back.author = "sourcing_agent".to_string();
+    transfer_back.actions.transfer_to_agent = Some("coordinator".to_string());
+    transfer_back.llm_response.content = Some(Content {
+        role: "model".to_string(),
+        parts: vec![Part::Text { text: "Found 2 jobs, transferring back".into() }],
+    });
+    mutable.append_event(transfer_back);
+
+    // 7. Coordinator does more work
+    let mut coord_work = Event::new("inv-3");
+    coord_work.author = "coordinator".to_string();
+    coord_work.llm_response.content = Some(Content {
+        role: "model".to_string(),
+        parts: vec![Part::FunctionCall {
+            name: "rank_candidates".into(),
+            args: serde_json::json!({}),
+            id: Some("call_c2".into()),
+            thought_signature: None,
+        }],
+    });
+    mutable.append_event(coord_work);
+
+    // 8. Coordinator's tool response
+    let mut coord_resp = Event::new("inv-3");
+    coord_resp.author = "coordinator".to_string();
+    coord_resp.llm_response.content = Some(Content {
+        role: "function".to_string(),
+        parts: vec![Part::FunctionResponse {
+            function_response: FunctionResponseData {
+                name: "rank_candidates".into(),
+                response: serde_json::json!({"ranked": ["job_1"]}),
+            },
+            id: Some("call_c2".into()),
+        }],
+    });
+    mutable.append_event(coord_resp);
+
+    // 9. Coordinator transfers to sourcing_agent AGAIN
+    let mut transfer2 = Event::new("inv-3");
+    transfer2.author = "coordinator".to_string();
+    transfer2.actions.transfer_to_agent = Some("sourcing_agent".to_string());
+    mutable.append_event(transfer2);
+
+    // Now: sourcing_agent is invoked a second time.
+    // It should see:
+    //   - user message (author=user)
+    //   - its own search_jobs call from first invocation (author=sourcing_agent)
+    //   - its own tool response from first invocation (author=sourcing_agent)
+    //   - its own transfer-back text from first invocation (author=sourcing_agent)
+    // It should NOT see:
+    //   - coordinator's analyze text
+    //   - coordinator's transfer events
+    //   - coordinator's rank_candidates call/response
+    use adk_core::Session;
+    let filtered = mutable.conversation_history_for_agent("sourcing_agent");
+
+    // user + sourcing call + sourcing response + sourcing transfer-back text = 4
+    assert_eq!(
+        filtered.len(),
+        4,
+        "Expected 4 events (user + 3 own), got {}: {:?}",
+        filtered.len(),
+        filtered.iter().map(|c| (&c.role, c.parts.first())).collect::<Vec<_>>()
+    );
+    assert_eq!(filtered[0].role, "user");
+    assert_eq!(filtered[1].role, "model"); // own function call
+    assert_eq!(filtered[2].role, "function"); // own tool response
+    assert_eq!(filtered[3].role, "model"); // own transfer-back text
+}

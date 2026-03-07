@@ -33,9 +33,7 @@ pub struct LlmAgent {
     #[allow(dead_code)] // Part of public API via builder
     input_schema: Option<serde_json::Value>,
     output_schema: Option<serde_json::Value>,
-    #[allow(dead_code)] // Part of public API via builder
     disallow_transfer_to_parent: bool,
-    #[allow(dead_code)] // Part of public API via builder
     disallow_transfer_to_peers: bool,
     include_contents: adk_core::IncludeContents,
     tools: Vec<Arc<dyn Tool>>,
@@ -561,6 +559,8 @@ impl Agent for LlmAgent {
         let before_tool_callbacks = self.before_tool_callbacks.clone();
         let after_tool_callbacks = self.after_tool_callbacks.clone();
         let tool_confirmation_policy = self.tool_confirmation_policy.clone();
+        let disallow_transfer_to_parent = self.disallow_transfer_to_parent;
+        let disallow_transfer_to_peers = self.disallow_transfer_to_peers;
 
         let s = stream! {
             // ===== BEFORE AGENT CALLBACKS =====
@@ -684,7 +684,13 @@ impl Agent for LlmAgent {
             // ===== LOAD SESSION HISTORY =====
             // Load previous conversation turns from the session
             // NOTE: Session history already includes the current user message (added by Runner before agent runs)
-            let session_history = ctx.session().conversation_history();
+            // When transfer_targets is set, this agent was invoked via transfer — filter out
+            // other agents' events so the LLM doesn't see the parent's tool calls as its own.
+            let session_history = if !ctx.run_config().transfer_targets.is_empty() {
+                ctx.session().conversation_history_for_agent(&agent_name)
+            } else {
+                ctx.session().conversation_history()
+            };
             conversation_history.extend(session_history);
 
             // ===== APPLY INCLUDE_CONTENTS FILTERING =====
@@ -769,18 +775,57 @@ impl Agent for LlmAgent {
                 tool_declarations.insert(tool.name().to_string(), decl);
             }
 
-            // Inject transfer_to_agent tool if sub-agents exist
-            if !sub_agents.is_empty() {
+            // Build the list of valid transfer targets.
+            // Sources: sub_agents (always) + transfer_targets from RunConfig
+            // (set by the runner to include parent/peers for transferred agents).
+            // Apply disallow_transfer_to_parent / disallow_transfer_to_peers filtering.
+            let mut valid_transfer_targets: Vec<String> = sub_agents
+                .iter()
+                .map(|a| a.name().to_string())
+                .collect();
+
+            // Merge in runner-provided targets (parent, peers) from RunConfig
+            let run_config_targets = &ctx.run_config().transfer_targets;
+            let parent_agent_name = ctx.run_config().parent_agent.clone();
+            let sub_agent_names: std::collections::HashSet<&str> = sub_agents
+                .iter()
+                .map(|a| a.name())
+                .collect();
+
+            for target in run_config_targets {
+                // Skip if already in the list (from sub_agents)
+                if sub_agent_names.contains(target.as_str()) {
+                    continue;
+                }
+
+                // Apply disallow flags
+                let is_parent = parent_agent_name.as_deref() == Some(target.as_str());
+                if is_parent && disallow_transfer_to_parent {
+                    continue;
+                }
+                if !is_parent && disallow_transfer_to_peers {
+                    continue;
+                }
+
+                valid_transfer_targets.push(target.clone());
+            }
+
+            // Inject transfer_to_agent tool if there are valid targets
+            if !valid_transfer_targets.is_empty() {
                 let transfer_tool_name = "transfer_to_agent";
                 let transfer_tool_decl = serde_json::json!({
                     "name": transfer_tool_name,
-                    "description": "Transfer execution to another agent.",
+                    "description": format!(
+                        "Transfer execution to another agent. Valid targets: {}",
+                        valid_transfer_targets.join(", ")
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "agent_name": {
                                 "type": "string",
-                                "description": "The name of the agent to transfer to."
+                                "description": "The name of the agent to transfer to.",
+                                "enum": valid_transfer_targets
                             }
                         },
                         "required": ["agent_name"]
@@ -1102,8 +1147,9 @@ impl Agent for LlmAgent {
                                     .unwrap_or_default()
                                     .to_string();
 
-                                // Validate that the target agent exists in sub_agents
-                                let valid_target = sub_agents.iter().any(|a| a.name() == target_agent);
+                                // Validate against the full set of valid transfer targets
+                                // (sub-agents + parent/peers from RunConfig)
+                                let valid_target = valid_transfer_targets.iter().any(|n| n == &target_agent);
                                 if !valid_target {
                                     // Return error to LLM so it can try again
                                     let error_content = Content {
@@ -1115,7 +1161,7 @@ impl Agent for LlmAgent {
                                                     "error": format!(
                                                         "Agent '{}' not found. Available agents: {:?}",
                                                         target_agent,
-                                                        sub_agents.iter().map(|a| a.name()).collect::<Vec<_>>()
+                                                        valid_transfer_targets
                                                     )
                                                 }),
                                             },

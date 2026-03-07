@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **FunctionCall serialization**: Fixed `thought_signature` leaking inside the `functionCall` JSON object when serializing `Part::FunctionCall`. The Gemini API expects `thoughtSignature` at the Part level only, not inside `functionCall`. The conversion layer in `adk-model` now correctly places the signature at the Part level and omits it from the inner `FunctionCall` struct.
 - **Broken serde attributes**: Restored missing `#[serde(skip_serializing_if = "Option::is_none")]` attributes on `FunctionDeclaration`, `FunctionCall`, `FunctionResponse`, and `ToolConfig` fields that had been replaced with invalid placeholder text, causing compilation failures.
 
+#### adk-agent / adk-runner / adk-core
+- **Multi-agent transfer round-trip**: Sub-agents can now transfer back to their parent and peer agents. The runner computes valid transfer targets (parent + peers) and passes them via `RunConfig::transfer_targets`. Previously, sub-agents with no children had an empty valid-agents list, making all transfers fail.
+- **Transfer chain support**: The runner now loops on transfers (up to 10 hops) instead of handling only a single transfer. This enables coordinator → sub-agent → coordinator round-trip patterns.
+- **Sub-agent conversation history isolation**: When a sub-agent is invoked via transfer, it now receives filtered conversation history that excludes other agents' events. Previously, the sub-agent's LLM saw the parent's tool calls mapped as "model" role, causing it to think work was already done and return immediately.
+- **Transfer tool schema**: The `transfer_to_agent` tool declaration now includes valid target names as an `enum` in the JSON schema and lists them in the description, so the LLM knows which agents it can transfer to.
+- **`disallow_transfer_to_parent` / `disallow_transfer_to_peers`**: These `LlmAgent` builder flags are now wired up and actively filter the transfer targets list. Previously they were stored but never checked.
+
 ### Changed
 
 #### adk-realtime
