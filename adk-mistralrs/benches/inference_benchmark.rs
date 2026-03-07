@@ -149,7 +149,7 @@ fn conversion_benchmark(c: &mut Criterion) {
 
     // Simple content conversion
     let simple_content = Content {
-        role: Role::User,
+        role: adk_core::Role::User,
         parts: vec![Part::text("Hello, world!".to_string())],
     };
 
@@ -342,7 +342,7 @@ mod real_benchmarks {
         group.bench_function("short_prompt", |b| {
             let request = LlmRequest {
                 contents: vec![Content {
-                    role: Role::User,
+                    role: adk_core::Role::User,
                     parts: vec![Part::text(config.short_prompt.to_string())],
                 }],
                 ..Default::default()
