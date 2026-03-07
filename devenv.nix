@@ -42,6 +42,7 @@ let
       pkgs.lz4
       pkgs.zstd
       pkgs.snappy
+      pkgs.libopus
       # Lower priority for xorgproto to avoid header collisions with libX11
       (lib.lowPrio pkgs.xorgproto)
     ];

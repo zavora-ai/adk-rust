@@ -1,5 +1,5 @@
 use adk_core::types::{SessionId, UserId};
-use adk_core::{Content, Part, Role};
+use adk_core::{Content, Role};
 use adk_memory::*;
 use chrono::Utc;
 
