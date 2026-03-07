@@ -1,14 +1,28 @@
-//! Cloud TTS provider implementations.
+//! TTS provider implementations (cloud and native).
 
+#[cfg(feature = "tts")]
 mod cartesia;
+#[cfg(feature = "tts")]
 mod elevenlabs;
+#[cfg(feature = "tts")]
 mod gemini;
+#[cfg(feature = "tts")]
 mod openai;
 
+#[cfg(feature = "qwen3-tts")]
+pub mod qwen3_tts_native;
+
+#[cfg(feature = "tts")]
 pub use cartesia::CartesiaTts;
+#[cfg(feature = "tts")]
 pub use elevenlabs::ElevenLabsTts;
+#[cfg(feature = "tts")]
 pub use gemini::GeminiTts;
+#[cfg(feature = "tts")]
 pub use openai::OpenAiTts;
+
+#[cfg(feature = "qwen3-tts")]
+pub use qwen3_tts_native::{Qwen3TtsNativeProvider, Qwen3TtsVariant};
 
 /// Shared configuration for cloud TTS providers.
 #[derive(Debug, Clone)]

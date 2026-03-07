@@ -89,10 +89,8 @@ impl ElevenLabsTts {
 impl TtsProvider for ElevenLabsTts {
     async fn synthesize(&self, request: &TtsRequest) -> AudioResult<AudioFrame> {
         let voice_id = if request.voice.is_empty() { &self.voices[0].id } else { &request.voice };
-        let url = format!(
-            "{}/v1/text-to-speech/{voice_id}?output_format=pcm_24000",
-            self.base_url()
-        );
+        let url =
+            format!("{}/v1/text-to-speech/{voice_id}?output_format=pcm_24000", self.base_url());
         let voice_settings = self.emotion_to_settings(request.emotion.as_ref());
 
         let body = serde_json::json!({

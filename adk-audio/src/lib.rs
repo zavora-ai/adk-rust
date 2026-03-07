@@ -73,6 +73,9 @@ pub use traits::{
 #[cfg(feature = "tts")]
 pub use providers::tts::{CartesiaTts, CloudTtsConfig, ElevenLabsTts, GeminiTts, OpenAiTts};
 
+#[cfg(feature = "qwen3-tts")]
+pub use providers::tts::{Qwen3TtsNativeProvider, Qwen3TtsVariant};
+
 #[cfg(feature = "stt")]
 pub use providers::stt::{AssemblyAiStt, DeepgramStt, WhisperApiStt};
 
@@ -89,6 +92,21 @@ pub use bridge::RealtimeBridge;
 pub use mlx::{MlxQuantization, MlxSttConfig, MlxSttProvider, MlxTtsConfig, MlxTtsProvider};
 
 #[cfg(feature = "onnx")]
-pub use onnx::{OnnxExecutionProvider, OnnxModelConfig, OnnxTtsProvider};
+pub use onnx::{
+    OnnxExecutionProvider, OnnxModelConfig, OnnxTtsProvider, Preprocessor, PreprocessorOutput,
+    TokenizerPreprocessor,
+};
+
+#[cfg(feature = "kokoro")]
+pub use onnx::{KokoroPreprocessor, KokoroVoices};
+
+#[cfg(feature = "chatterbox")]
+pub use onnx::{ChatterboxConfig, ChatterboxTtsProvider, ChatterboxVariant};
+
+#[cfg(any(feature = "whisper-onnx", feature = "distil-whisper", feature = "moonshine"))]
+pub use onnx::{
+    DistilWhisperVariant, MoonshineVariant, OnnxSttConfig, OnnxSttConfigBuilder, OnnxSttProvider,
+    SttBackend, WhisperModelSize,
+};
 
 pub use registry::LocalModelRegistry;

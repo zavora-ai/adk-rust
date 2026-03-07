@@ -35,25 +35,19 @@ async fn main() -> Result<()> {
     // Show available voices
     println!("Available voices:");
     for v in tts.voice_catalog() {
-        println!(
-            "  - {} [{}] ({})",
-            v.name,
-            v.id,
-            v.gender.as_deref().unwrap_or("unspecified")
-        );
+        println!("  - {} [{}] ({})", v.name, v.id, v.gender.as_deref().unwrap_or("unspecified"));
     }
     println!();
 
     // 1. Basic synthesis with different voices
-    let voices = [
-        ("21m00Tcm4TlvDq8ikWAM", "Rachel"),
-        ("ErXwobaYiN019PkySvjV", "Antoni"),
-    ];
+    let voices = [("21m00Tcm4TlvDq8ikWAM", "Rachel"), ("ErXwobaYiN019PkySvjV", "Antoni")];
 
     for (voice_id, name) in &voices {
         println!("Synthesizing with {name}...");
         let request = TtsRequest {
-            text: format!("Hello, I'm {name} from ElevenLabs. This is high-quality neural speech synthesis."),
+            text: format!(
+                "Hello, I'm {name} from ElevenLabs. This is high-quality neural speech synthesis."
+            ),
             voice: (*voice_id).into(),
             ..Default::default()
         };
@@ -63,14 +57,20 @@ async fn main() -> Result<()> {
         std::fs::write(&filename, &wav)?;
         println!(
             "  → {filename}: {}ms, {}Hz, {} bytes\n",
-            frame.duration_ms, frame.sample_rate, wav.len()
+            frame.duration_ms,
+            frame.sample_rate,
+            wav.len()
         );
     }
 
     // 2. Emotion control
     println!("Emotion-controlled synthesis (Rachel):");
     let emotions = [
-        (Some(Emotion::Happy), "happy", "This is wonderful news! I'm so excited to share it with you."),
+        (
+            Some(Emotion::Happy),
+            "happy",
+            "This is wonderful news! I'm so excited to share it with you.",
+        ),
         (Some(Emotion::Calm), "calm", "Take a deep breath. Everything is going to be just fine."),
         (Some(Emotion::Whisper), "whisper", "Let me tell you a secret. Come a little closer."),
     ];
@@ -112,7 +112,8 @@ async fn main() -> Result<()> {
     // 4. Round-trip with Whisper STT
     if std::env::var("OPENAI_API_KEY").is_ok() {
         println!("Round-trip: ElevenLabs TTS → Whisper STT:");
-        let original = "The Agent Development Kit makes it easy to build voice-powered applications.";
+        let original =
+            "The Agent Development Kit makes it easy to build voice-powered applications.";
         println!("  Original: \"{original}\"");
 
         let request = TtsRequest {

@@ -31,6 +31,7 @@ members = [
 
     # Development packages (not published)
     "examples",
+    "examples/audio",
     "examples/ralph",
     "docs/official_docs_examples/quickstart_test", "docs/official_docs_examples/agents/llm_agent_test",
     "docs/official_docs_examples/tools/mcp_test",

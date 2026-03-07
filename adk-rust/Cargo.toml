@@ -100,6 +100,15 @@ audio-fx = ["audio", "adk-audio/fx"]
 audio-mlx = ["audio", "adk-audio/mlx"]
 audio-onnx = ["audio", "adk-audio/onnx"]
 
+# ONNX audio model features (forwarded to adk-audio)
+whisper-onnx = ["audio", "adk-audio/whisper-onnx"]
+distil-whisper = ["audio", "adk-audio/distil-whisper"]
+moonshine = ["audio", "adk-audio/moonshine"]
+qwen3-tts = ["audio", "adk-audio/qwen3-tts"]
+all-onnx = ["audio", "adk-audio/all-onnx"]
+kokoro = ["audio", "adk-audio/kokoro"]
+chatterbox = ["audio", "adk-audio/chatterbox"]
+
 [dependencies]
 # Core is always included
 adk-core.workspace = true

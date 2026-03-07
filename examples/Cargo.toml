@@ -643,45 +643,8 @@ path = "gemini_thinking/main.rs"
 name = "multi_turn_tool"
 path = "multi_turn_tool/main.rs"
 
-[[example]]
-name = "audio_tts_basic"
-path = "audio_tts_basic/main.rs"
-required-features = ["audio"]
-
-[[example]]
-name = "audio_pipeline"
-path = "audio_pipeline/main.rs"
-required-features = ["audio"]
-
-[[example]]
-name = "audio_mixer"
-path = "audio_mixer/main.rs"
-required-features = ["audio"]
-
-[[example]]
-name = "audio_openai_tts"
-path = "audio_openai_tts/main.rs"
-required-features = ["audio"]
-
-[[example]]
-name = "audio_gemini_tts"
-path = "audio_gemini_tts/main.rs"
-required-features = ["audio"]
-
-[[example]]
-name = "audio_openai_stt"
-path = "audio_openai_stt/main.rs"
-required-features = ["audio"]
-
-[[example]]
-name = "audio_gemini_stt"
-path = "audio_gemini_stt/main.rs"
-required-features = ["audio"]
-
-[[example]]
-name = "audio_elevenlabs_tts"
-path = "audio_elevenlabs_tts/main.rs"
-required-features = ["audio"]
+# Note: audio examples are now in the audio crate at examples/audio/
+# Run with: cargo run -p audio-examples --example <name> --features <flags>
 
 # Note: mistralrs examples are part of the adk-mistralrs crate (excluded from workspace)
 # Build them explicitly: cargo build -p adk-mistralrs --examples
@@ -707,7 +670,7 @@ sso = ["adk-auth/sso"]
 rag = ["dep:adk-rag"]
 rag-gemini = ["rag", "adk-rag/gemini"]
 rag-surrealdb = ["rag", "adk-rag/surrealdb"]
-audio = ["dep:adk-audio"]
+# Audio features moved to examples/audio/ crate (cargo run -p audio-examples)
 
 [dependencies]
 adk-core.workspace = true
@@ -730,7 +693,7 @@ adk-auth.workspace = true
 adk-browser = { workspace = true, optional = true }
 adk-guardrail = { workspace = true, optional = true }
 adk-rag = { workspace = true, optional = true }
-adk-audio = { workspace = true, optional = true }
+# adk-audio moved to examples/audio/ crate
 # adk-mistralrs is excluded from workspace — build explicitly: cargo build -p adk-mistralrs
 # adk-mistralrs = { path = "../adk-mistralrs", optional = true }
 tokio.workspace = true
@@ -750,6 +713,7 @@ dotenvy = "0.15"
 rmcp = { version = "0.15", features = ["client", "transport-child-process"] }
 rustyline = "15"
 image = "0.25"
+hound = "3.5"
 clap = { version = "4.0", features = ["derive"] }
 
 [dev-dependencies]
