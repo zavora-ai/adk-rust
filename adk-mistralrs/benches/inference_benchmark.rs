@@ -149,7 +149,7 @@ fn conversion_benchmark(c: &mut Criterion) {
 
     // Simple content conversion
     let simple_content = Content {
-        role: "user".to_string(),
+        role: Role::User,
         parts: vec![Part::text("Hello, world!".to_string())],
     };
 
@@ -159,7 +159,7 @@ fn conversion_benchmark(c: &mut Criterion) {
 
     // Complex content with function call
     let complex_content = Content {
-        role: "model".to_string(),
+        role: adk_core::Role::Model,
         parts: vec![
             Part::text("I'll help you with that.".to_string()),
             Part::FunctionCall {
@@ -342,7 +342,7 @@ mod real_benchmarks {
         group.bench_function("short_prompt", |b| {
             let request = LlmRequest {
                 contents: vec![Content {
-                    role: "user".to_string(),
+                    role: Role::User,
                     parts: vec![Part::text(config.short_prompt.to_string())],
                 }],
                 ..Default::default()
@@ -358,7 +358,7 @@ mod real_benchmarks {
         group.bench_function("medium_prompt", |b| {
             let request = LlmRequest {
                 contents: vec![Content {
-                    role: "user".to_string(),
+                    role: adk_core::Role::User,
                     parts: vec![Part::text(config.medium_prompt.to_string())],
                 }],
                 ..Default::default()
@@ -400,7 +400,7 @@ mod real_benchmarks {
         group.bench_function("q4k_short_prompt", |b| {
             let request = LlmRequest {
                 contents: vec![Content {
-                    role: "user".to_string(),
+                    role: adk_core::Role::User,
                     parts: vec![Part::text("What is 2 + 2?".to_string())],
                 }],
                 ..Default::default()
