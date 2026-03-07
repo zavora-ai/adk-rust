@@ -72,14 +72,14 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let text = state.get("feedback").and_then(|v| v.as_str()).unwrap_or("");
             println!("🧠 Classifying sentiment for: {}", text);
-            adk_core::Content::new("user").with_text(text)
+            adk_core::Content::user().with_text(text)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("")
                         .to_lowercase()
@@ -102,14 +102,14 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let text = state.get("feedback").and_then(|v| v.as_str()).unwrap_or("");
             println!("😊 Generating positive response...");
-            adk_core::Content::new("user").with_text(text)
+            adk_core::Content::user().with_text(text)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("");
                     updates.insert("response".to_string(), json!(text));
@@ -122,14 +122,14 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let text = state.get("feedback").and_then(|v| v.as_str()).unwrap_or("");
             println!("😔 Generating empathetic response...");
-            adk_core::Content::new("user").with_text(text)
+            adk_core::Content::user().with_text(text)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("");
                     updates.insert("response".to_string(), json!(text));
@@ -142,14 +142,14 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let text = state.get("feedback").and_then(|v| v.as_str()).unwrap_or("");
             println!("😐 Generating clarifying response...");
-            adk_core::Content::new("user").with_text(text)
+            adk_core::Content::user().with_text(text)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("");
                     updates.insert("response".to_string(), json!(text));
@@ -192,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
         let mut input = State::new();
         input.insert("feedback".to_string(), json!(feedback));
 
-        let result = graph.invoke(input, ExecutionConfig::new(&format!("feedback-{}", i + 1))).await?;
+        let result = graph.invoke(input, ExecutionConfig::new(SessionId::new(&format!("feedback-{}", i + 1)).unwrap())).await?;
         
         println!("📊 Sentiment: {}", result.get("sentiment").and_then(|v| v.as_str()).unwrap_or(""));
         println!("💬 Response: {}", result.get("response").and_then(|v| v.as_str()).unwrap_or(""));

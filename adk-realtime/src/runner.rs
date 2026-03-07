@@ -189,6 +189,12 @@ impl RealtimeRunnerBuilder {
         self
     }
 
+    /// Set output modalities.
+    pub fn modalities(mut self, modalities: Vec<String>) -> Self {
+        self.config.modalities = Some(modalities);
+        self
+    }
+
     /// Register a tool with its handler.
     pub fn tool(mut self, definition: ToolDefinition, handler: impl ToolHandler + 'static) -> Self {
         let name = definition.name.clone();

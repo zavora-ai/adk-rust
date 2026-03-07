@@ -82,8 +82,12 @@ async fn main() -> anyhow::Result<()> {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    let text: String = content
+                        .parts
+                        .iter()
+                        .filter_map(|p| p.as_text())
+                        .collect::<Vec<_>>()
+                        .join("");
                     if !text.is_empty() {
                         updates.insert("key_points".to_string(), json!(text));
                         updates.insert("step".to_string(), json!("extraction_complete"));
@@ -102,8 +106,12 @@ async fn main() -> anyhow::Result<()> {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    let text: String = content
+                        .parts
+                        .iter()
+                        .filter_map(|p| p.as_text())
+                        .collect::<Vec<_>>()
+                        .join("");
                     if !text.is_empty() {
                         updates.insert("analysis".to_string(), json!(text));
                         updates.insert("step".to_string(), json!("analysis_complete"));
@@ -122,8 +130,12 @@ async fn main() -> anyhow::Result<()> {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    let text: String = content
+                        .parts
+                        .iter()
+                        .filter_map(|p| p.as_text())
+                        .collect::<Vec<_>>()
+                        .join("");
                     if !text.is_empty() {
                         updates.insert("summary".to_string(), json!(text));
                         updates.insert("step".to_string(), json!("complete"));
@@ -166,7 +178,7 @@ async fn main() -> anyhow::Result<()> {
     println!("[analyzer] Running...");
     println!("[summarizer] Running...");
 
-    let result = graph.invoke(input, ExecutionConfig::new(thread_id)).await?;
+    let result = graph.invoke(input, ExecutionConfig::new(thread_id.to_string())).await?;
 
     println!("\n--- Results ---");
     println!(
@@ -240,7 +252,7 @@ async fn main() -> anyhow::Result<()> {
         let mut input = State::new();
         input.insert("text".to_string(), json!(text));
 
-        let result = graph.invoke(input, ExecutionConfig::new(thread)).await?;
+        let result = graph.invoke(input, ExecutionConfig::new(thread.to_string())).await?;
         println!(
             "\n{}: {}",
             thread,

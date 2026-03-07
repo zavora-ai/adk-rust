@@ -3,38 +3,42 @@ use adk_runner::Callbacks;
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 
+use adk_core::types::{AdkIdentity, InvocationId, SessionId, UserId};
+
 // Mock context for testing
 struct MockCallbackContext {
-    invocation_id: String,
+    identity: AdkIdentity,
     content: Content,
+    metadata: std::collections::HashMap<String, String>,
 }
 
 impl MockCallbackContext {
     fn new(id: &str) -> Self {
-        Self { invocation_id: id.to_string(), content: Content::new("user") }
+        let identity = AdkIdentity {
+            invocation_id: InvocationId::new(id).unwrap(),
+            agent_name: "test-agent".to_string(),
+            user_id: UserId::new("test-user").unwrap(),
+            app_name: "test-app".to_string(),
+            session_id: SessionId::new("test-session").unwrap(),
+            branch: "".to_string(),
+        };
+        Self {
+            identity,
+            content: Content::new(adk_core::Role::User),
+            metadata: std::collections::HashMap::new(),
+        }
     }
 }
 
-#[async_trait]
 impl ReadonlyContext for MockCallbackContext {
-    fn invocation_id(&self) -> &str {
-        &self.invocation_id
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
-    fn agent_name(&self) -> &str {
-        "test-agent"
+
+    fn metadata(&self) -> &std::collections::HashMap<String, String> {
+        &self.metadata
     }
-    fn user_id(&self) -> &str {
-        "test-user"
-    }
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-    fn session_id(&self) -> &str {
-        "test-session"
-    }
-    fn branch(&self) -> &str {
-        ""
-    }
+
     fn user_content(&self) -> &Content {
         &self.content
     }
@@ -76,8 +80,8 @@ async fn test_execute_before_model_callbacks() {
         Box::pin(async move {
             *count.lock().unwrap() += 1;
             Ok(Some(Content {
-                role: "system".to_string(),
-                parts: vec![Part::Text { text: "Before model 1".to_string() }],
+                role: adk_core::Role::System,
+                parts: vec![Part::Text("Before model 1".to_string())],
             }))
         })
     }));
@@ -88,8 +92,8 @@ async fn test_execute_before_model_callbacks() {
         Box::pin(async move {
             *count.lock().unwrap() += 1;
             Ok(Some(Content {
-                role: "system".to_string(),
-                parts: vec![Part::Text { text: "Before model 2".to_string() }],
+                role: adk_core::Role::System,
+                parts: vec![Part::Text("Before model 2".to_string())],
             }))
         })
     }));
@@ -108,8 +112,8 @@ async fn test_execute_after_model_callbacks() {
     callbacks.add_after_model(Box::new(|_ctx| {
         Box::pin(async move {
             Ok(Some(Content {
-                role: "assistant".to_string(),
-                parts: vec![Part::Text { text: "After model".to_string() }],
+                role: adk_core::Role::Model,
+                parts: vec![Part::Text("After model".to_string())],
             }))
         })
     }));
@@ -128,8 +132,8 @@ async fn test_execute_before_tool_callbacks() {
     callbacks.add_before_tool(Box::new(|_ctx| {
         Box::pin(async move {
             Ok(Some(Content {
-                role: "system".to_string(),
-                parts: vec![Part::Text { text: "Before tool".to_string() }],
+                role: adk_core::Role::System,
+                parts: vec![Part::Text("Before tool".to_string())],
             }))
         })
     }));
@@ -147,8 +151,8 @@ async fn test_execute_after_tool_callbacks() {
     callbacks.add_after_tool(Box::new(|_ctx| {
         Box::pin(async move {
             Ok(Some(Content {
-                role: "function".to_string(),
-                parts: vec![Part::Text { text: "After tool".to_string() }],
+                role: adk_core::Role::Custom("function".to_string()),
+                parts: vec![Part::Text("After tool".to_string())],
             }))
         })
     }));

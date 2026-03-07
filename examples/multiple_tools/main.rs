@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
     adk_cli::console::run_console(
         Arc::new(root_agent),
         "multiple_tools_app".to_string(),
-        "user1".to_string(),
+        adk_core::types::UserId::new("user1").unwrap(),
     )
     .await?;
 

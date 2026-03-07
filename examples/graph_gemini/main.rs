@@ -36,7 +36,7 @@ async fn call_gemini(model: &Arc<GeminiModel>, prompt: &str) -> Result<String, G
             && let Some(content) = response.content
         {
             for part in content.parts {
-                if let Some(text) = part.text() {
+                if let Some(text) = part.as_text() {
                     result.push_str(text);
                 }
             }
@@ -216,7 +216,7 @@ async fn main() -> anyhow::Result<()> {
         let mut input = State::new();
         input.insert("topic".to_string(), json!(topic));
 
-        let result = graph.invoke(input, ExecutionConfig::new(&format!("research-{}", i))).await?;
+        let result = graph.invoke(input, ExecutionConfig::new(format!("research-{}", i))).await?;
 
         println!("\n{}\n", result.get("result").and_then(|v| v.as_str()).unwrap_or("No result"));
     }

@@ -18,7 +18,7 @@ struct MockModel {
 impl MockModel {
     fn new_function_call(name: &str, args: Value) -> Self {
         let content = Content {
-            role: "model".to_string(),
+            role: adk_core::Role::Model,
             parts: vec![Part::FunctionCall {
                 name: name.to_string(),
                 args,
@@ -80,16 +80,31 @@ impl Tool for MockTool {
     }
 }
 
-struct MockSession;
+use adk_core::types::{SessionId, UserId};
+
+struct MockSession {
+    id: SessionId,
+    user_id: UserId,
+}
+
+impl MockSession {
+    fn new() -> Self {
+        Self {
+            id: SessionId::new("session-1".to_string()).unwrap(),
+            user_id: UserId::new("user-1".to_string()).unwrap(),
+        }
+    }
+}
+
 impl Session for MockSession {
-    fn id(&self) -> &str {
-        "session-1"
+    fn id(&self) -> &SessionId {
+        &self.id
     }
     fn app_name(&self) -> &str {
         "test-app"
     }
-    fn user_id(&self) -> &str {
-        "user-1"
+    fn user_id(&self) -> &UserId {
+        &self.user_id
     }
     fn state(&self) -> &dyn State {
         &MockState
@@ -111,17 +126,27 @@ impl State for MockState {
 }
 
 struct MockContext {
+    identity: adk_core::types::AdkIdentity,
     session: MockSession,
     user_content: Content,
 }
 
 impl MockContext {
     fn new() -> Self {
+        let mut identity = adk_core::types::AdkIdentity::default();
+        identity.invocation_id = "inv-1".into();
+        identity.agent_name = "test-agent".to_string();
+        identity.user_id = "user-1".into();
+        identity.app_name = "test-app".to_string();
+        identity.session_id = "session-1".into();
+        identity.branch = "main".to_string();
+
         Self {
-            session: MockSession,
+            identity,
+            session: MockSession::new(),
             user_content: Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: "start".to_string() }],
+                role: adk_core::Role::User,
+                parts: vec![Part::text("start".to_string())],
             },
         }
     }
@@ -129,26 +154,16 @@ impl MockContext {
 
 #[async_trait]
 impl adk_core::ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str {
-        "inv-1"
-    }
-    fn agent_name(&self) -> &str {
-        "test-agent"
-    }
-    fn user_id(&self) -> &str {
-        "user-1"
-    }
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-    fn session_id(&self) -> &str {
-        "session-1"
-    }
-    fn branch(&self) -> &str {
-        "main"
+    fn identity(&self) -> &adk_core::types::AdkIdentity {
+        &self.identity
     }
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+    fn metadata(&self) -> &std::collections::HashMap<String, String> {
+        static METADATA: std::sync::OnceLock<std::collections::HashMap<String, String>> =
+            std::sync::OnceLock::new();
+        METADATA.get_or_init(std::collections::HashMap::new)
     }
 }
 
@@ -221,8 +236,8 @@ async fn test_callback_short_circuit() {
         Box::pin(async move {
             // Return Some(content) to short-circuit
             Ok(Some(Content {
-                role: "assistant".to_string(),
-                parts: vec![Part::Text { text: "Short-circuited!".to_string() }],
+                role: adk_core::Role::Model,
+                parts: vec![Part::text("Short-circuited!".to_string())],
             }))
         })
             as std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Content>>> + Send>>
@@ -242,7 +257,7 @@ async fn test_callback_short_circuit() {
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
         if let Some(content) = event.llm_response.content {
-            if let Some(Part::Text { text }) = content.parts.first() {
+            if let Some(Part::Text(text)) = content.parts.first() {
                 if text.contains("Short-circuited") {
                     found_short_circuit = true;
                 }

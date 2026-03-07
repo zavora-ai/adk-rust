@@ -6,7 +6,7 @@
 //!   cd doc-test/events/events_test
 //!   cargo run --bin stream
 
-use adk_core::{Content, Event, FunctionResponseData, Part};
+use adk_core::{Content, Event, Part};
 use serde_json::json;
 
 fn main() {
@@ -25,7 +25,7 @@ fn main() {
 
         // Identify event type by content
         if let Some(content) = event.content() {
-            let has_text = content.parts.iter().any(|p| matches!(p, Part::Text { .. }));
+            let has_text = content.parts.iter().any(|p| matches!(p, Part::Text(..)));
             let has_function_call =
                 content.parts.iter().any(|p| matches!(p, Part::FunctionCall { .. }));
             let has_function_response =
@@ -42,15 +42,15 @@ fn main() {
             } else if has_function_response {
                 println!("Type: Tool Result");
                 for part in &content.parts {
-                    if let Part::FunctionResponse { function_response, .. } = part {
-                        println!("  Tool: {}", function_response.name);
-                        println!("  Result: {}", function_response.response);
+                    if let Part::FunctionResponse { name, response, .. } = part {
+                        println!("  Tool: {}", name);
+                        println!("  Result: {}", response);
                     }
                 }
             } else if has_text {
                 println!("Type: Text Message");
                 for part in &content.parts {
-                    if let Part::Text { text } = part {
+                    if let Some(text) = part.as_text() {
                         println!("  Content: {}", text);
                     }
                 }
@@ -80,15 +80,15 @@ fn create_sample_conversation() -> Vec<Event> {
     let invocation_id = "inv-conversation-1";
 
     // Event 1: User message
-    let mut e1 = Event::new(invocation_id);
+    let mut e1 = Event::new(adk_core::types::InvocationId::new(invocation_id).unwrap());
     e1.author = "user".to_string();
-    e1.set_content(Content::new("user").with_text("What's the weather in Tokyo?"));
+    e1.set_content(Content::user().with_text("What's the weather in Tokyo?"));
 
     // Event 2: Agent requests tool
-    let mut e2 = Event::new(invocation_id);
+    let mut e2 = Event::new(adk_core::types::InvocationId::new(invocation_id).unwrap());
     e2.author = "assistant".to_string();
     e2.set_content(Content {
-        role: "model".to_string(),
+        role: adk_core::types::Role::Model,
         parts: vec![Part::FunctionCall {
             name: "get_weather".to_string(),
             args: json!({"city": "Tokyo"}),
@@ -98,23 +98,21 @@ fn create_sample_conversation() -> Vec<Event> {
     });
 
     // Event 3: Tool response
-    let mut e3 = Event::new(invocation_id);
+    let mut e3 = Event::new(adk_core::types::InvocationId::new(invocation_id).unwrap());
     e3.author = "get_weather".to_string();
     e3.set_content(Content {
-        role: "function".to_string(),
+        role: adk_core::types::Role::Custom("function".to_string()),
         parts: vec![Part::FunctionResponse {
-            function_response: FunctionResponseData {
-                name: "get_weather".to_string(),
-                response: json!({"temp": 22, "condition": "sunny"}),
-            },
+            name: "get_weather".to_string(),
+            response: json!({"temp": 22, "condition": "sunny"}),
             id: Some("call_weather".to_string()),
         }],
     });
 
     // Event 4: Agent final response
-    let mut e4 = Event::new(invocation_id);
+    let mut e4 = Event::new(adk_core::types::InvocationId::new(invocation_id).unwrap());
     e4.author = "assistant".to_string();
-    e4.set_content(Content::new("model").with_text("It's 22°C and sunny in Tokyo!"));
+    e4.set_content(Content::model().with_text("It's 22°C and sunny in Tokyo!"));
 
     vec![e1, e2, e3, e4]
 }

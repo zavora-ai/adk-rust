@@ -48,15 +48,22 @@ impl<H: EventHandler> EventHandler for LiveKitEventHandler<H> {
         self.inner.on_audio(audio, item_id).await?;
 
         // Convert PCM bytes to i16 samples and push to LiveKit
-        // Using manual loop for safety instead of bytemuck::cast_slice which requires alignment
-        let mut samples = Vec::with_capacity(audio.len() / 2);
-        for chunk in audio.chunks_exact(2) {
-            samples.push(i16::from_le_bytes([chunk[0], chunk[1]]));
-        }
+        // Using bytemuck::try_cast_slice for zero-copy optimization where alignment allows,
+        // with a manual fallback to Cow::Owned if the buffer is unaligned.
+        let samples = match bytemuck::try_cast_slice::<u8, i16>(audio) {
+            Ok(s) => Cow::Borrowed(s),
+            Err(_) => {
+                let mut samples = Vec::with_capacity(audio.len() / 2);
+                for chunk in audio.chunks_exact(2) {
+                    samples.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+                }
+                Cow::Owned(samples)
+            }
+        };
 
         let samples_per_channel = samples.len() as u32 / self.num_channels;
         let frame = AudioFrame {
-            data: Cow::Owned(samples),
+            data: samples,
             sample_rate: self.sample_rate,
             num_channels: self.num_channels,
             samples_per_channel,

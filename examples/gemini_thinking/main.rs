@@ -1,6 +1,6 @@
 //! Gemini Thinking & Thought Signature Example
 //!
-//! Demonstrates Gemini 2.5 series thinking capabilities:
+//! Demonstrates Gemini 2.5 series thought capabilities:
 //!
 //! 1. **Thinking traces** — The model's internal reasoning is returned as
 //!    `Part::Thinking` with an optional `signature` field.
@@ -10,15 +10,16 @@
 //!    that must be preserved and relayed back in conversation history. This is
 //!    critical for Gemini 3 series models during multi-turn function calling.
 //!
-//! 3. **Usage metadata** — `thinking_token_count` shows how many tokens the
+//! 3. **Usage metadata** — `thought_token_count` shows how many tokens the
 //!    model spent on internal reasoning.
 //!
 //! ```bash
 //! export GOOGLE_API_KEY=...
-//! cargo run --example gemini_thinking
+//! cargo run --example gemini_thought
 //! ```
 
 use adk_agent::LlmAgentBuilder;
+use adk_core::types::{SessionId, UserId};
 use adk_core::{AdkError, Content, Llm, LlmRequest, Part, Result as AdkResult, ToolContext};
 use adk_model::gemini::GeminiModel;
 use adk_runner::{Runner, RunnerConfig};
@@ -32,7 +33,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
-// Tools for the thinking demo
+// Tools for the thought demo
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -96,12 +97,12 @@ async fn unit_convert(_ctx: Arc<dyn ToolContext>, input: Value) -> AdkResult<Val
 }
 
 // ---------------------------------------------------------------------------
-// Part 1: Direct LLM usage — observe thinking traces
+// Part 1: Direct LLM usage — observe thought traces
 // ---------------------------------------------------------------------------
 
-async fn demo_thinking_traces(model: &GeminiModel) -> Result<(), Box<dyn std::error::Error>> {
+async fn demo_thought_traces(model: &GeminiModel) -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Part 1: Thinking Traces ===\n");
-    println!("Asking a reasoning question to trigger extended thinking.\n");
+    println!("Asking a reasoning question to trigger extended thought.\n");
 
     let request = LlmRequest {
         model: String::new(),
@@ -114,17 +115,17 @@ async fn demo_thinking_traces(model: &GeminiModel) -> Result<(), Box<dyn std::er
     };
 
     let mut stream = model.generate_content(request, true).await?;
-    let mut thinking_count = 0;
+    let mut thought_count = 0;
 
     while let Some(result) = stream.next().await {
         let response = result?;
         if let Some(content) = &response.content {
             for part in &content.parts {
                 match part {
-                    Part::Thinking { thinking, signature } => {
-                        thinking_count += 1;
-                        let preview = &thinking[..thinking.len().min(120)];
-                        println!("  💭 Thinking #{thinking_count}: {preview}...");
+                    Part::Thinking { thought, signature } => {
+                        thought_count += 1;
+                        let preview = &thought[..thought.len().min(120)];
+                        println!("  💭 Thinking #{thought_count}: {preview}...");
                         if let Some(sig) = signature {
                             println!(
                                 "     signature: {}...({} chars)",
@@ -133,7 +134,7 @@ async fn demo_thinking_traces(model: &GeminiModel) -> Result<(), Box<dyn std::er
                             );
                         }
                     }
-                    Part::Text { text } => {
+                    Part::Text(text) => {
                         print!("{text}");
                     }
                     _ => {}
@@ -146,8 +147,8 @@ async fn demo_thinking_traces(model: &GeminiModel) -> Result<(), Box<dyn std::er
                 println!("\n  Token usage:");
                 println!("    prompt:    {}", usage.prompt_token_count);
                 println!("    output:    {}", usage.candidates_token_count);
-                if let Some(thinking) = usage.thinking_token_count {
-                    println!("    thinking:  {thinking}  ← tokens spent on reasoning");
+                if let Some(thought) = usage.thinking_token_count {
+                    println!("    thought:  {thought}  ← tokens spent on reasoning");
                 }
                 println!("    total:     {}", usage.total_token_count);
             }
@@ -178,7 +179,7 @@ async fn demo_thought_signature(model: Arc<GeminiModel>) -> Result<(), Box<dyn s
             .with_parameters_schema::<UnitConvertArgs>();
 
     let agent = LlmAgentBuilder::new("math_agent")
-        .description("Math and unit conversion assistant with thinking")
+        .description("Math and unit conversion assistant with thought")
         .instruction(
             "You are a precise math assistant. Think through problems carefully. \
              Use the calculate tool for arithmetic and unit_convert for unit conversions. \
@@ -192,16 +193,16 @@ async fn demo_thought_signature(model: Arc<GeminiModel>) -> Result<(), Box<dyn s
     let session_service = Arc::new(InMemorySessionService::new());
     let session = session_service
         .create(CreateRequest {
-            app_name: "gemini_thinking".to_string(),
-            user_id: "user_1".to_string(),
+            app_name: "gemini_thought".to_string(),
+            user_id: adk_core::types::UserId::new("user_1").unwrap(),
             session_id: None,
             state: HashMap::new(),
         })
         .await?;
-    let session_id = session.id().to_string();
+    let session_id = session.id().clone();
 
     let runner = Runner::new(RunnerConfig {
-        app_name: "gemini_thinking".to_string(),
+        app_name: "gemini_thought".to_string(),
         agent: Arc::new(agent),
         session_service: session_service.clone(),
         artifact_service: None,
@@ -213,16 +214,18 @@ async fn demo_thought_signature(model: Arc<GeminiModel>) -> Result<(), Box<dyn s
         cache_capable: None,
     })?;
 
-    // Turn 1: triggers thinking + tool call with thought_signature
+    // Turn 1: triggers thought + tool call with thought_signature
     println!(">> Turn 1: Multi-step problem requiring tools\n");
     let content = Content::new("user").with_text(
         "A train travels 120 km in 2 hours and 15 minutes. \
          What is its average speed in miles per hour?",
     );
 
-    let mut stream = runner.run("user_1".to_string(), session_id.clone(), content).await?;
+    let mut stream = runner
+        .run(adk_core::types::UserId::new("user_1").unwrap(), session_id.clone(), content)
+        .await?;
 
-    let mut saw_thinking = false;
+    let mut saw_thought = false;
     let mut saw_tool_call = false;
     let mut saw_thought_signature = false;
 
@@ -231,15 +234,15 @@ async fn demo_thought_signature(model: Arc<GeminiModel>) -> Result<(), Box<dyn s
             if let Some(content) = e.llm_response.content {
                 for part in &content.parts {
                     match part {
-                        Part::Thinking { thinking, signature } => {
-                            saw_thinking = true;
-                            let preview = &thinking[..thinking.len().min(100)];
+                        Part::Thinking { thought, signature } => {
+                            saw_thought = true;
+                            let preview = &thought[..thought.len().min(100)];
                             println!("  💭 {preview}...");
                             if signature.is_some() {
                                 println!("     [has signature]");
                             }
                         }
-                        Part::Text { text } => print!("{text}"),
+                        Part::Text(text) => print!("{text}"),
                         Part::FunctionCall { name, args, thought_signature, .. } => {
                             saw_tool_call = true;
                             println!("  🔧 Tool call: {name}({args})");
@@ -254,28 +257,28 @@ async fn demo_thought_signature(model: Arc<GeminiModel>) -> Result<(), Box<dyn s
                                 println!("       and relayed back to Gemini on the next turn.");
                             }
                         }
-                        Part::FunctionResponse { function_response, .. } => {
-                            println!("  📋 Tool result: {}", function_response.response);
+                        Part::FunctionResponse { response, .. } => {
+                            println!("  📋 Tool result: {}", response);
                         }
                         _ => {}
                     }
                 }
             }
-            if e.llm_response.turn_complete
-                && let Some(usage) = &e.llm_response.usage_metadata
-            {
-                println!("\n\n  Token usage:");
-                println!("    prompt:    {}", usage.prompt_token_count);
-                println!("    output:    {}", usage.candidates_token_count);
-                if let Some(thinking) = usage.thinking_token_count {
-                    println!("    thinking:  {thinking}");
+            if e.llm_response.turn_complete {
+                if let Some(usage) = &e.llm_response.usage_metadata {
+                    println!("\n\n  Token usage:");
+                    println!("    prompt:    {}", usage.prompt_token_count);
+                    println!("    output:    {}", usage.candidates_token_count);
+                    if let Some(thought) = usage.thinking_token_count {
+                        println!("    thought:  {thought}");
+                    }
                 }
             }
         }
     }
 
     println!("\n\n  Summary:");
-    println!("    saw thinking traces:    {saw_thinking}");
+    println!("    saw thought traces:    {saw_thought}");
     println!("    saw tool calls:         {saw_tool_call}");
     println!("    saw thought_signature:  {saw_thought_signature}");
 
@@ -283,26 +286,28 @@ async fn demo_thought_signature(model: Arc<GeminiModel>) -> Result<(), Box<dyn s
     println!("\n>> Turn 2: Follow-up (history includes thought_signature)\n");
     let content = Content::new("user").with_text("Now convert that speed to km/h as well.");
 
-    let mut stream = runner.run("user_1".to_string(), session_id.clone(), content).await?;
+    let mut stream = runner
+        .run(adk_core::types::UserId::new("user_1").unwrap(), session_id.clone(), content)
+        .await?;
 
     while let Some(event) = stream.next().await {
-        if let Ok(e) = event
-            && let Some(content) = e.llm_response.content
-        {
-            for part in &content.parts {
-                match part {
-                    Part::Thinking { thinking, .. } => {
-                        let preview = &thinking[..thinking.len().min(100)];
-                        println!("  💭 {preview}...");
+        if let Ok(e) = event {
+            if let Some(content) = e.llm_response.content {
+                for part in &content.parts {
+                    match part {
+                        Part::Thinking { thought, .. } => {
+                            let preview = &thought[..thought.len().min(100)];
+                            println!("  💭 {preview}...");
+                        }
+                        Part::Text(text) => print!("{text}"),
+                        Part::FunctionCall { name, args, .. } => {
+                            println!("  🔧 Tool call: {name}({args})");
+                        }
+                        Part::FunctionResponse { response, .. } => {
+                            println!("  📋 Tool result: {}", response);
+                        }
+                        _ => {}
                     }
-                    Part::Text { text } => print!("{text}"),
-                    Part::FunctionCall { name, args, .. } => {
-                        println!("  🔧 Tool call: {name}({args})");
-                    }
-                    Part::FunctionResponse { function_response, .. } => {
-                        println!("  📋 Tool result: {}", function_response.response);
-                    }
-                    _ => {}
                 }
             }
         }
@@ -325,11 +330,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("=== Gemini Thinking & Thought Signature Demo ===\n");
 
-    // Use Gemini 2.5 Flash which supports thinking natively
+    // Use Gemini 2.5 Flash which supports thought natively
     let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
 
-    // Part 1: Direct LLM — observe thinking traces and signatures
-    demo_thinking_traces(&model).await?;
+    // Part 1: Direct LLM — observe thought traces and signatures
+    demo_thought_traces(&model).await?;
 
     // Part 2: Agent with tools — thought_signature preservation
     let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
@@ -339,7 +344,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("• Part::Thinking contains the model's reasoning with optional signature");
     println!("• Part::FunctionCall.thought_signature links tool calls to reasoning");
     println!("• ADK automatically preserves thought_signature in session history");
-    println!("• thinking_token_count in UsageMetadata tracks reasoning cost");
+    println!("• thought_token_count in UsageMetadata tracks reasoning cost");
     println!("• Gemini 3 series requires thought_signature relay for correct behavior");
 
     Ok(())

@@ -1,8 +1,8 @@
-//! End-to-end compaction test using InMemorySessionService.
-//!
-//! Verifies the full flow: multiple invocations → compaction triggers →
-//! compacted history is used by subsequent invocations.
-
+use adk_core::types::{SessionId, UserId};
+/// End-to-end compaction test using InMemorySessionService.
+///
+/// Verifies the full flow: multiple invocations → compaction triggers →
+/// compacted history is used by subsequent invocations.
 use adk_core::{
     Agent, BaseEventsSummarizer, Content, Event, EventActions, EventCompaction, EventStream,
     EventsCompactionConfig, InvocationContext, Part, Result,
@@ -78,13 +78,15 @@ impl BaseEventsSummarizer for DeterministicSummarizer {
         let start_timestamp = events.first().unwrap().timestamp;
         let end_timestamp = events.last().unwrap().timestamp;
 
-        let mut event = Event::new("compaction");
+        let mut event = Event::new(adk_core::types::InvocationId::new("compaction").unwrap());
         event.author = "system".to_string();
         event.actions = EventActions {
             compaction: Some(EventCompaction {
+                truncate_before_id: "id".to_string(),
+                summary: Some(summary_text),
+                compacted_content: summary_content,
                 start_timestamp,
                 end_timestamp,
-                compacted_content: summary_content,
             }),
             ..Default::default()
         };
@@ -108,8 +110,8 @@ async fn test_e2e_compaction_with_inmemory_session() {
     session_service
         .create(adk_session::CreateRequest {
             app_name: "test_app".to_string(),
-            user_id: "user-1".to_string(),
-            session_id: Some("sess-e2e".to_string()),
+            user_id: UserId::new("user-1").unwrap(),
+            session_id: Some(SessionId::new("sess-e2e").unwrap()),
             state: Default::default(),
         })
         .await
@@ -135,16 +137,20 @@ async fn test_e2e_compaction_with_inmemory_session() {
 
     // Invocation 1
     let content1 = Content::new("user").with_text("Hello");
-    let mut stream =
-        runner.run("user-1".to_string(), "sess-e2e".to_string(), content1).await.unwrap();
+    let mut stream = runner
+        .run(UserId::new("user-1").unwrap(), SessionId::new("sess-e2e").unwrap(), content1)
+        .await
+        .unwrap();
     while let Some(r) = stream.next().await {
         assert!(r.is_ok(), "Invocation 1 failed: {:?}", r.err());
     }
 
     // Invocation 2 — should trigger compaction (interval=2)
     let content2 = Content::new("user").with_text("How are you?");
-    let mut stream =
-        runner.run("user-1".to_string(), "sess-e2e".to_string(), content2).await.unwrap();
+    let mut stream = runner
+        .run(UserId::new("user-1").unwrap(), SessionId::new("sess-e2e").unwrap(), content2)
+        .await
+        .unwrap();
     while let Some(r) = stream.next().await {
         assert!(r.is_ok(), "Invocation 2 failed: {:?}", r.err());
     }
@@ -160,8 +166,8 @@ async fn test_e2e_compaction_with_inmemory_session() {
     let session = session_service
         .get(adk_session::GetRequest {
             app_name: "test_app".to_string(),
-            user_id: "user-1".to_string(),
-            session_id: "sess-e2e".to_string(),
+            user_id: UserId::new("user-1").unwrap(),
+            session_id: SessionId::new("sess-e2e").unwrap(),
             num_recent_events: None,
             after: None,
         })
@@ -181,7 +187,7 @@ async fn test_e2e_compaction_with_inmemory_session() {
 
     let compaction = compaction_events[0].actions.compaction.as_ref().unwrap();
     let summary_text = match &compaction.compacted_content.parts[0] {
-        Part::Text { text } => text.clone(),
+        Part::Text(text) => text.clone(),
         _ => panic!("Expected text part in compaction summary"),
     };
     assert!(
@@ -195,9 +201,11 @@ async fn test_e2e_compaction_with_inmemory_session() {
 #[test]
 fn test_event_compaction_serde_roundtrip() {
     let compaction = EventCompaction {
+        truncate_before_id: "id".to_string(),
+        summary: Some("Summary of conversation".to_string()),
+        compacted_content: Content::new(adk_core::Role::Model).with_text("Summary of conversation"),
         start_timestamp: chrono::Utc::now() - chrono::Duration::minutes(5),
         end_timestamp: chrono::Utc::now(),
-        compacted_content: Content::new("model").with_text("Summary of conversation"),
     };
 
     let actions = EventActions { compaction: Some(compaction.clone()), ..Default::default() };
@@ -211,7 +219,7 @@ fn test_event_compaction_serde_roundtrip() {
     assert_eq!(restored.compacted_content.role, "model");
 
     let text = match &restored.compacted_content.parts[0] {
-        Part::Text { text } => text.clone(),
+        Part::Text(text) => text.clone(),
         _ => panic!("Expected text part"),
     };
     assert_eq!(text, "Summary of conversation");

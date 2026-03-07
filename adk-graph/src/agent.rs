@@ -118,7 +118,7 @@ impl Agent for GraphAgent {
         let input = (self.input_mapper)(ctx.as_ref());
 
         // Create execution config from context
-        let config = ExecutionConfig::new(ctx.session_id());
+        let config = ExecutionConfig::new(ctx.session_id().clone());
 
         // Execute graph
         let graph = self.graph.clone();
@@ -143,8 +143,9 @@ impl Agent for GraphAgent {
                 }
                 Err(GraphError::Interrupted(interrupt)) => {
                     // Create an interrupt event
-                    let mut event = Event::new("graph_interrupted");
-                    event.set_content(Content::new("assistant").with_text(format!(
+                    let id = adk_core::types::InvocationId::new("graph_interrupted").unwrap();
+                    let mut event = Event::new(id);
+                    event.set_content(Content::model().with_text(format!(
                         "Graph interrupted: {:?}\nThread: {}\nCheckpoint: {}",
                         interrupt.interrupt,
                         interrupt.thread_id,
@@ -168,7 +169,8 @@ fn default_input_mapper(ctx: &dyn InvocationContext) -> State {
 
     // Get user content
     let content = ctx.user_content();
-    let text: String = content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("\n");
+    let text: String =
+        content.parts.iter().filter_map(|p| p.as_text()).collect::<Vec<_>>().join("\n");
 
     if !text.is_empty() {
         state.insert("input".to_string(), json!(text));
@@ -206,8 +208,9 @@ fn default_output_mapper(state: &State) -> Vec<Event> {
         serde_json::to_string_pretty(state).unwrap_or_default()
     };
 
-    let mut event = Event::new("graph_output");
-    event.set_content(Content::new("assistant").with_text(&text));
+    let id = adk_core::types::InvocationId::new("graph_output").unwrap();
+    let mut event = Event::new(id);
+    event.set_content(Content::model().with_text(&text));
     events.push(event);
 
     events
@@ -450,6 +453,7 @@ impl GraphAgentBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adk_core::types::SessionId;
     use serde_json::json;
 
     #[tokio::test]
@@ -467,7 +471,10 @@ mod tests {
         assert_eq!(agent.description(), "Test agent");
 
         // Test direct invocation
-        let result = agent.invoke(State::new(), ExecutionConfig::new("test")).await.unwrap();
+        let result = agent
+            .invoke(State::new(), ExecutionConfig::new(SessionId::new("test").unwrap()))
+            .await
+            .unwrap();
 
         assert_eq!(result.get("value"), Some(&json!(42)));
     }

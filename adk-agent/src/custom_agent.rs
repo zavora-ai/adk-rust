@@ -54,9 +54,9 @@ impl Agent for CustomAgent {
         for callback in before_callbacks.as_ref() {
             match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                 Ok(Some(content)) => {
-                    let invocation_id = ctx.invocation_id().to_string();
+                    let _invocation_id = ctx.invocation_id().to_string();
                     let s = stream! {
-                        let mut early_event = Event::new(&invocation_id);
+                        let mut early_event = Event::new(ctx.invocation_id().clone());
                         early_event.author = agent_name.clone();
                         early_event.llm_response.content = Some(content);
                         yield Ok(early_event);
@@ -64,7 +64,7 @@ impl Agent for CustomAgent {
                         for after_cb in after_callbacks.as_ref() {
                             match after_cb(ctx.clone() as Arc<dyn CallbackContext>).await {
                                 Ok(Some(after_content)) => {
-                                    let mut after_event = Event::new(&invocation_id);
+                                    let mut after_event = Event::new(ctx.invocation_id().clone());
                                     after_event.author = agent_name.clone();
                                     after_event.llm_response.content = Some(after_content);
                                     yield Ok(after_event);
@@ -94,7 +94,7 @@ impl Agent for CustomAgent {
             for callback in after_callbacks.as_ref() {
                 match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
-                        let mut after_event = Event::new(ctx.invocation_id());
+                        let mut after_event = Event::new(ctx.invocation_id().clone());
                         after_event.author = agent_name.clone();
                         after_event.llm_response.content = Some(content);
                         yield Ok(after_event);

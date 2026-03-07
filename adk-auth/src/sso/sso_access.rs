@@ -2,6 +2,7 @@
 
 use super::{ClaimsMapper, TokenClaims, TokenError, TokenValidator};
 use crate::{AccessControl, AuditEvent, AuditOutcome, AuditSink, Permission};
+use adk_core::types::UserId;
 use std::sync::Arc;
 
 /// Combines SSO token validation with adk-auth access control.
@@ -66,7 +67,7 @@ impl SsoAccessControl {
     /// Check permission with pre-mapped roles.
     fn check_with_roles(
         &self,
-        user_id: &str,
+        user_id: &UserId,
         roles: &[String],
         permission: &Permission,
     ) -> Result<(), SsoError> {

@@ -1,3 +1,4 @@
+use crate::visitor::StringVisitor;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tracing::{Id, Subscriber, debug};
@@ -9,11 +10,16 @@ use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 pub struct AdkSpanExporter {
     /// Map of event_id -> span attributes (following ADK-Go pattern)
     trace_dict: Arc<RwLock<HashMap<String, HashMap<String, String>>>>,
+    /// Index of session_id -> list of event_ids for O(1) lookup
+    session_index: Arc<RwLock<HashMap<String, Vec<String>>>>,
 }
 
 impl AdkSpanExporter {
     pub fn new() -> Self {
-        Self { trace_dict: Arc::new(RwLock::new(HashMap::new())) }
+        Self {
+            trace_dict: Arc::new(RwLock::new(HashMap::new())),
+            session_index: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 
     /// Get trace dict (following ADK-Go GetTraceDict method)
@@ -33,20 +39,23 @@ impl AdkSpanExporter {
     /// Get all spans for a session (by filtering spans that have matching session_id)
     pub fn get_session_trace(&self, session_id: &str) -> Vec<HashMap<String, String>> {
         debug!("AdkSpanExporter::get_session_trace called with session_id: {}", session_id);
-        let trace_dict = self.trace_dict.read().unwrap();
 
-        let mut spans = Vec::new();
-        for (_event_id, attributes) in trace_dict.iter() {
-            // Check if this span belongs to the session
-            if let Some(span_session_id) = attributes.get("gcp.vertex.agent.session_id") {
-                if span_session_id == session_id {
-                    spans.push(attributes.clone());
-                }
-            }
+        // O(1) lookup using session_index without cloning event_ids
+        let session_index = self.session_index.read().unwrap();
+        if let Some(event_ids) = session_index.get(session_id) {
+            let trace_dict = self.trace_dict.read().unwrap();
+            let spans: Vec<_> =
+                event_ids.iter().filter_map(|id| trace_dict.get(id).cloned()).collect();
+            debug!(
+                "get_session_trace result for session_id '{}': {} spans",
+                session_id,
+                spans.len()
+            );
+            spans
+        } else {
+            debug!("get_session_trace result for session_id '{}': 0 spans", session_id);
+            Vec::new()
         }
-
-        debug!("get_session_trace result for session_id '{}': {} spans", session_id, spans.len());
-        spans
     }
 
     /// Internal method to store span (following ADK-Go ExportSpans pattern)
@@ -57,14 +66,29 @@ impl AdkSpanExporter {
             || span_name == "send_data"
             || span_name.starts_with("execute_tool")
         {
-            if let Some(event_id) = attributes.get("gcp.vertex.agent.event_id") {
+            let event_id_opt = attributes.get("adk.agent.event_id").cloned();
+            let session_id_opt = attributes.get("adk.agent.session_id").cloned();
+
+            if let Some(event_id) = event_id_opt {
                 debug!(
                     "AdkSpanExporter: Storing span '{}' with event_id '{}'",
                     span_name, event_id
                 );
+
+                // Acquire locks in consistent order: session_index then trace_dict
+                // to prevent potential deadlocks with get_session_trace
+                let mut session_index = self.session_index.write().unwrap();
                 let mut trace_dict = self.trace_dict.write().unwrap();
-                trace_dict.insert(event_id.clone(), attributes);
-                debug!("AdkSpanExporter: Span stored, total event_ids: {}", trace_dict.len());
+
+                if trace_dict.insert(event_id.clone(), attributes).is_none() {
+                    debug!("AdkSpanExporter: Span stored");
+                    // Update session index if session_id exists and it's a new event
+                    if let Some(sid) = session_id_opt {
+                        session_index.entry(sid).or_default().push(event_id);
+                    }
+                } else {
+                    debug!("AdkSpanExporter: Span updated");
+                }
             } else {
                 debug!("AdkSpanExporter: Skipping span '{}' - no event_id found", span_name);
             }
@@ -113,9 +137,9 @@ where
         if let Some(parent) = span.parent() {
             if let Some(parent_fields) = parent.extensions().get::<SpanFields>() {
                 let context_keys = [
-                    "gcp.vertex.agent.session_id",
-                    "gcp.vertex.agent.invocation_id",
-                    "gcp.vertex.agent.event_id",
+                    "adk.agent.session_id",
+                    "adk.agent.invocation_id",
+                    "adk.agent.event_id",
                     "gen_ai.conversation.id",
                 ];
 
@@ -172,11 +196,11 @@ where
         // Use invocation_id as trace_id (for grouping in UI)
         // Use event_id as span_id (for uniqueness)
         let invocation_id = attributes
-            .get("gcp.vertex.agent.invocation_id")
+            .get("adk.agent.invocation_id")
             .cloned()
             .unwrap_or_else(|| format!("{:016x}", id.into_u64()));
         let event_id = attributes
-            .get("gcp.vertex.agent.event_id")
+            .get("adk.agent.event_id")
             .cloned()
             .unwrap_or_else(|| format!("{:016x}", id.into_u64()));
 
@@ -208,9 +232,9 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             let parent = tracing::info_span!(
                 "agent.execute",
-                "gcp.vertex.agent.event_id" = "evt-parent",
-                "gcp.vertex.agent.invocation_id" = "inv-1",
-                "gcp.vertex.agent.session_id" = "session-1",
+                "adk.agent.event_id" = "evt-parent",
+                "adk.agent.invocation_id" = "inv-1",
+                "adk.agent.session_id" = "session-1",
                 "gen_ai.conversation.id" = "session-1",
                 "agent.name" = "test-agent"
             );
@@ -219,8 +243,8 @@ mod tests {
 
             let child = tracing::info_span!(
                 "call_llm",
-                "gcp.vertex.agent.event_id" = "evt-child",
-                "gcp.vertex.agent.llm_request" = "{}"
+                "adk.agent.event_id" = "evt-child",
+                "adk.agent.llm_request" = "{}"
             );
             let _child_guard = child.enter();
             tracing::info!("child span body");
@@ -233,33 +257,45 @@ mod tests {
             Some("session-1")
         );
     }
-}
 
-#[derive(Default)]
-struct StringVisitor(HashMap<String, String>);
+    #[test]
+    fn test_no_duplicate_spans_in_session_trace() {
+        let exporter = Arc::new(AdkSpanExporter::new());
+        let event_id = "evt-duplicate";
+        let session_id = "session-duplicate";
 
-impl tracing::field::Visit for StringVisitor {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        self.0.insert(field.name().to_string(), format!("{:?}", value));
-    }
+        // First span
+        {
+            let layer = AdkSpanLayer::new(exporter.clone());
+            let subscriber = tracing_subscriber::registry().with(layer);
+            tracing::subscriber::with_default(subscriber, || {
+                let span1 = tracing::info_span!(
+                    "agent.execute",
+                    "adk.agent.event_id" = event_id,
+                    "adk.agent.session_id" = session_id,
+                    "otel.name" = "agent.execute"
+                );
+                let _guard1 = span1.enter();
+            });
+        }
 
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        self.0.insert(field.name().to_string(), value.to_string());
-    }
+        // Second span (duplicate event_id)
+        {
+            let layer = AdkSpanLayer::new(exporter.clone());
+            let subscriber = tracing_subscriber::registry().with(layer);
+            tracing::subscriber::with_default(subscriber, || {
+                let span2 = tracing::info_span!(
+                    "agent.execute",
+                    "adk.agent.event_id" = event_id,
+                    "adk.agent.session_id" = session_id,
+                    "otel.name" = "agent.execute"
+                );
+                let _guard2 = span2.enter();
+            });
+        }
 
-    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-        self.0.insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
-        self.0.insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-        self.0.insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
-        self.0.insert(field.name().to_string(), value.to_string());
+        let trace = exporter.get_session_trace(session_id);
+        assert_eq!(trace.len(), 1, "Should have only 1 span for the session");
+        assert_eq!(trace[0].get("adk.agent.event_id").map(String::as_str), Some(event_id));
     }
 }

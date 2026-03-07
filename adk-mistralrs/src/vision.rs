@@ -348,19 +348,14 @@ impl MistralRsVisionModel {
         let mut messages = VisionMessages::new();
 
         for content in &request.contents {
-            let role = match content.role.as_str() {
-                "user" => TextMessageRole::User,
-                "model" | "assistant" => TextMessageRole::Assistant,
-                "system" => TextMessageRole::System,
-                _ => TextMessageRole::User,
-            };
+            let role = crate::convert::role_to_mistralrs(&content.role);
 
             // Collect text parts
             let text: String = content
                 .parts
                 .iter()
                 .filter_map(|part| match part {
-                    Part::Text { text } => Some(text.as_str()),
+                    Part::Text(text) => Some(text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -372,7 +367,7 @@ impl MistralRsVisionModel {
                 .iter()
                 .filter_map(|part| match part {
                     Part::InlineData { mime_type, data } => {
-                        if is_image_mime_type(mime_type) {
+                        if is_image_mime_type(mime_type.as_ref()) {
                             image_from_bytes(data).ok()
                         } else {
                             None
@@ -388,7 +383,7 @@ impl MistralRsVisionModel {
                 .iter()
                 .filter_map(|part| match part {
                     Part::InlineData { mime_type, data } => {
-                        if is_audio_mime_type(mime_type) {
+                        if is_audio_mime_type(mime_type.as_ref()) {
                             audio_from_bytes(data).ok()
                         } else {
                             None
@@ -430,7 +425,7 @@ impl MistralRsVisionModel {
             response.choices.first().map(|choice| match choice.finish_reason.as_str() {
                 "stop" => FinishReason::Stop,
                 "length" => FinishReason::MaxTokens,
-                _ => FinishReason::Other,
+                other => FinishReason::Other(other.to_string()),
             });
 
         LlmResponse {

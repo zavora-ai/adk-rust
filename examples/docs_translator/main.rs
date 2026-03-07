@@ -252,17 +252,19 @@ async fn translate_language(
             
             let session = session_service.create(adk_rust::session::CreateRequest {
                 app_name: "docs_translator".to_string(),
-                user_id: "translator".to_string(),
+                user_id: UserId::new("translator").unwrap(),
                 session_id: None,
-                state: HashMap::new(),
+            state: HashMap::new(),
             }).await?;
             
             let user_content = Content::new("user").with_text(chunk);
-            let result = runner.run(
-                "translator".to_string(),
-                session.id().to_string(),
-                user_content,
-            ).await;
+            let result = runner
+                .run(
+                    UserId::new("translator").unwrap(),
+                    session.id().clone(),
+                    user_content,
+                )
+                .await;
             
             match result {
                 Ok(mut events) => {
@@ -271,7 +273,7 @@ async fn translate_language(
                     while let Some(Ok(event)) = events.next().await {
                         if let Some(content) = &event.llm_response.content {
                             for part in &content.parts {
-                                if let Part::Text { text } = part {
+                                if let Some(text) = part.as_text() {
                                     chunk_translated.push_str(text);
                                 }
                             }

@@ -243,7 +243,7 @@ async fn main() -> anyhow::Result<()> {
     let mut input = State::new();
     input.insert("input".to_string(), json!("AI is transforming how we work and live."));
 
-    let result = agent.invoke(input, ExecutionConfig::new("thread-1")).await?;
+    let result = agent.invoke(input, ExecutionConfig::new("thread-1".to_string())).await?;
     println!("{}", result.get("result").and_then(|v| v.as_str()).unwrap_or(""));
 
     Ok(())
@@ -513,7 +513,7 @@ async fn main() -> anyhow::Result<()> {
     let mut input = State::new();
     input.insert("feedback".to_string(), json!("Your product is amazing! I love it!"));
 
-    let result = graph.invoke(input, ExecutionConfig::new("feedback-1")).await?;
+    let result = graph.invoke(input, ExecutionConfig::new("feedback-1".to_string())).await?;
     println!("Sentiment: {}", result.get("sentiment").and_then(|v| v.as_str()).unwrap_or(""));
     println!("Response: {}", result.get("response").and_then(|v| v.as_str()).unwrap_or(""));
 
@@ -703,7 +703,7 @@ async fn main() -> anyhow::Result<()> {
     let mut input = State::new();
     input.insert("question".to_string(), json!("What's the weather in Paris and what's 15 + 25?"));
 
-    let result = graph.invoke(input, ExecutionConfig::new("react-1")).await?;
+    let result = graph.invoke(input, ExecutionConfig::new("react-1".to_string())).await?;
     println!("Final answer: {}", result.get("response").and_then(|v| v.as_str()).unwrap_or(""));
     println!("Iterations: {}", result.get("iteration").and_then(|v| v.as_i64()).unwrap_or(0));
 

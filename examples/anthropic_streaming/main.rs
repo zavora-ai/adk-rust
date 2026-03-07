@@ -35,19 +35,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![
             Content {
                 role: "system".to_string(),
-                parts: vec![Part::Text {
-                    text: "You are a concise technical writer. Respond in short, \
-                           well-structured paragraphs. Use bullet points for lists."
+                parts: vec![Part::text(
+                    "You are a helpful assistant that answers questions in a concise way."
                         .to_string(),
-                }],
+                )],
             },
             Content {
                 role: "user".to_string(),
-                parts: vec![Part::Text {
-                    text: "Explain the key differences between TCP and UDP in networking. \
+                parts: vec![Part::text(
+                    "Explain the key differences between TCP and UDP in networking. \
                            Keep it under 200 words."
                         .to_string(),
-                }],
+                )],
             },
         ],
         Some(GenerateContentConfig {
@@ -69,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(response) => {
                 if let Some(content) = &response.content {
                     for part in &content.parts {
-                        if let Part::Text { text } = part {
+                        if let Some(text) = part.as_text() {
                             print!("{text}");
                         }
                     }
@@ -98,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(Ok(response)) = stream.next().await {
         if let Some(content) = &response.content {
             for part in &content.parts {
-                if let Part::Text { text } = part {
+                if let Some(text) = part.as_text() {
                     println!("{text}");
                 }
             }

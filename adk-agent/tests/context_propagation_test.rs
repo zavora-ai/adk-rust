@@ -1,8 +1,10 @@
 use adk_agent::LlmAgentBuilder;
+use adk_core::types::{AdkIdentity, InvocationId, Role, SessionId, UserId};
 use adk_core::{
     Agent, Content, FinishReason, InvocationContext, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Part, Result, RunConfig, Session, State, Tool, ToolContext,
+    LlmResponseStream, Part, Result, RunConfig, Session, State, ToolContext,
 };
+use adk_tool::Tool;
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -18,7 +20,7 @@ struct MockModel {
 impl MockModel {
     fn new_function_call(name: &str, args: Value) -> Self {
         let content = Content {
-            role: "model".to_string(),
+            role: Role::Model,
             parts: vec![Part::FunctionCall {
                 name: name.to_string(),
                 args,
@@ -96,16 +98,20 @@ impl Tool for MockTool {
     }
 }
 
-struct MockSession;
+struct MockSession {
+    session_id: SessionId,
+    user_id: UserId,
+}
+
 impl Session for MockSession {
-    fn id(&self) -> &str {
-        "session-456"
+    fn id(&self) -> &SessionId {
+        &self.session_id
     }
     fn app_name(&self) -> &str {
         "test-app"
     }
-    fn user_id(&self) -> &str {
-        "user-123"
+    fn user_id(&self) -> &UserId {
+        &self.user_id
     }
     fn state(&self) -> &dyn State {
         &MockState
@@ -127,41 +133,41 @@ impl State for MockState {
 }
 
 struct MockContext {
+    identity: AdkIdentity,
     session: MockSession,
     user_content: Content,
+    metadata: HashMap<String, String>,
 }
 
 impl MockContext {
     fn new() -> Self {
+        let identity = AdkIdentity {
+            invocation_id: InvocationId::new("inv-1").unwrap(),
+            user_id: UserId::new("user-123").unwrap(),
+            session_id: SessionId::new("session-456").unwrap(),
+            ..Default::default()
+        };
         Self {
-            session: MockSession,
-            user_content: Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: "call tool".to_string() }],
+            identity,
+            session: MockSession {
+                session_id: SessionId::new("session-456").unwrap(),
+                user_id: UserId::new("user-123").unwrap(),
             },
+            user_content: Content {
+                role: Role::User,
+                parts: vec![Part::Text("call tool".to_string())],
+            },
+            metadata: HashMap::new(),
         }
     }
 }
 
-#[async_trait]
 impl adk_core::ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str {
-        "inv-1"
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
-    fn agent_name(&self) -> &str {
-        "test-agent"
-    }
-    fn user_id(&self) -> &str {
-        "user-123"
-    }
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-    fn session_id(&self) -> &str {
-        "session-456"
-    }
-    fn branch(&self) -> &str {
-        "main"
+    fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
     }
     fn user_content(&self) -> &Content {
         &self.user_content

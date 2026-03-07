@@ -51,7 +51,7 @@ async fn call_once<M: Llm + ?Sized>(label: &str, model: &M, prompt: &str) -> Res
         let response = chunk?;
         if let Some(content) = response.content {
             for part in content.parts {
-                if let Part::Text { text } = part {
+                if let Some(text) = part.as_text() {
                     output.push_str(&text);
                 }
             }

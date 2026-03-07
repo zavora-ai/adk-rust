@@ -112,7 +112,7 @@ impl ContentFilter {
     }
 
     fn extract_text(&self, content: &Content) -> String {
-        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join(" ")
+        content.parts.iter().filter_map(|p| p.as_text()).collect::<Vec<_>>().join(" ")
     }
 }
 

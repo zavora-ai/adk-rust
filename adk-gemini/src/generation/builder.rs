@@ -105,7 +105,7 @@ impl ContentBuilder {
         name: impl Into<String>,
         response: impl Into<String>,
     ) -> std::result::Result<Self, serde_json::Error> {
-        let response_str = response.into();
+        let response_str: String = response.into();
         let json = serde_json::from_str(&response_str)?;
         let content = Content::function_response_json(name, json).with_role(Role::User);
         self.contents.push(content);

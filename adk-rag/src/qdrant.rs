@@ -140,7 +140,7 @@ impl VectorStore for QdrantVectorStore {
         }
 
         let point_ids: Vec<qdrant_client::qdrant::PointId> =
-            ids.iter().map(|id| (*id).into()).collect();
+            ids.iter().map(|&id| qdrant_client::qdrant::PointId::from(id)).collect();
 
         self.client
             .delete_points(

@@ -1,6 +1,7 @@
 //! README Graph-Based Workflows snippet validation
 
 use adk_agent::LlmAgentBuilder;
+use adk_core::types::SessionId;
 use adk_graph::{
     node::{AgentNode, ExecutionConfig, NodeOutput},
     prelude::*,
@@ -32,14 +33,18 @@ async fn main() -> anyhow::Result<()> {
     let translator_node = AgentNode::new(translator)
         .with_input_mapper(|state| {
             let text = state.get("input").and_then(|v| v.as_str()).unwrap_or("");
-            adk_core::Content::new("user").with_text(text)
+            adk_core::Content::user().with_text(text)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    let text: String = content
+                        .parts
+                        .iter()
+                        .filter_map(|p| p.as_text())
+                        .collect::<Vec<_>>()
+                        .join("");
                     updates.insert("translation".to_string(), json!(text));
                 }
             }
@@ -49,14 +54,18 @@ async fn main() -> anyhow::Result<()> {
     let summarizer_node = AgentNode::new(summarizer)
         .with_input_mapper(|state| {
             let text = state.get("input").and_then(|v| v.as_str()).unwrap_or("");
-            adk_core::Content::new("user").with_text(text)
+            adk_core::Content::user().with_text(text)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    let text: String = content
+                        .parts
+                        .iter()
+                        .filter_map(|p| p.as_text())
+                        .collect::<Vec<_>>()
+                        .join("");
                     updates.insert("summary".to_string(), json!(text));
                 }
             }
@@ -85,7 +94,8 @@ async fn main() -> anyhow::Result<()> {
     // Execute
     let mut input = State::new();
     input.insert("input".to_string(), json!("AI is transforming how we work."));
-    let _result = _agent.invoke(input, ExecutionConfig::new("thread-1")).await?;
+    let _result =
+        _agent.invoke(input, ExecutionConfig::new(SessionId::new("thread-1").unwrap())).await?;
 
     println!("✓ Graph snippet compiles");
     Ok(())

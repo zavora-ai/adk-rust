@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
-                    let text: String = content.parts.iter().filter_map(|p| p.text()).collect();
+                    let text: String = content.parts.iter().filter_map(|p| p.as_text()).collect();
                     if !text.is_empty() {
                         updates.insert("response".to_string(), json!(text));
                     }
@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
 
     println!("📝 Prompt: Tell me a very short story about a robot.\n");
 
-    let config = ExecutionConfig::new("demo-session");
+    let config = ExecutionConfig::new("demo-session".to_string());
 
     // Choose streaming mode
     let mode = if streaming { StreamMode::Messages } else { StreamMode::Values };

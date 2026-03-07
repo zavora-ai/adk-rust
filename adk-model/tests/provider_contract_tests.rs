@@ -1,4 +1,4 @@
-use adk_core::{AdkError, Content, Llm, LlmRequest, LlmResponse, Part, Result};
+use adk_core::{AdkError, Content, Llm, LlmRequest, LlmResponse, Part, Result, types::Role};
 use adk_model::RetryConfig;
 use futures::StreamExt;
 use serde_json::json;
@@ -81,7 +81,7 @@ fn required_env(var: &str) -> Result<String> {
 }
 
 fn base_request(model_name: &str, prompt: &str) -> LlmRequest {
-    let content = Content::new("user").with_text(prompt);
+    let content = Content::new(Role::User).with_text(prompt);
     LlmRequest::new(model_name, vec![content])
 }
 
@@ -109,10 +109,7 @@ fn tools_request(model_name: &str) -> LlmRequest {
 
 fn response_has_text(response: &LlmResponse) -> bool {
     response.content.as_ref().is_some_and(|content| {
-        content
-            .parts
-            .iter()
-            .any(|part| matches!(part, Part::Text { text } if !text.trim().is_empty()))
+        content.parts.iter().any(|part| matches!(part, Part::Text(text) if !text.trim().is_empty()))
     })
 }
 
@@ -161,7 +158,8 @@ fn assert_response_invariants(spec: ProviderSpec, mode: &str, responses: &[LlmRe
 
         if let Some(content) = &response.content {
             assert_eq!(
-                content.role, "model",
+                content.role,
+                Role::Model,
                 "{} {mode} chunk #{index} should use role=model when content is present",
                 spec.name
             );
@@ -631,7 +629,7 @@ provider_contract_tests!(azure_ai_cheapest_provider, azure_ai_cheapest_spec);
 
 #[test]
 fn llm_request_creation_is_provider_agnostic() {
-    let content = Content::new("user").with_text("Hello");
+    let content = Content::new(Role::User).with_text("Hello");
     let request = LlmRequest::new("test-model", vec![content]);
 
     assert_eq!(request.model, "test-model");

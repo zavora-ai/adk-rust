@@ -123,7 +123,7 @@ mod tests {
     impl TestContext {
         fn new() -> Self {
             Self {
-                content: Content::new("user"),
+                content: Content::new(crate::types::Role::User),
                 config: RunConfig::default(),
                 actions: Mutex::new(EventActions::default()),
             }
@@ -132,26 +132,22 @@ mod tests {
 
     #[async_trait]
     impl ReadonlyContext for TestContext {
-        fn invocation_id(&self) -> &str {
-            "test"
-        }
-        fn agent_name(&self) -> &str {
-            "test"
-        }
-        fn user_id(&self) -> &str {
-            "user"
-        }
-        fn app_name(&self) -> &str {
-            "app"
-        }
-        fn session_id(&self) -> &str {
-            "session"
-        }
-        fn branch(&self) -> &str {
-            ""
+        fn identity(&self) -> &crate::types::AdkIdentity {
+            static IDENTITY: std::sync::OnceLock<crate::types::AdkIdentity> =
+                std::sync::OnceLock::new();
+            IDENTITY.get_or_init(|| crate::types::AdkIdentity {
+                agent_name: "test".to_string(),
+                app_name: "app".to_string(),
+                ..Default::default()
+            })
         }
         fn user_content(&self) -> &Content {
             &self.content
+        }
+        fn metadata(&self) -> &std::collections::HashMap<String, String> {
+            static METADATA: std::sync::OnceLock<std::collections::HashMap<String, String>> =
+                std::sync::OnceLock::new();
+            METADATA.get_or_init(std::collections::HashMap::new)
         }
     }
 

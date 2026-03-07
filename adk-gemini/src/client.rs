@@ -69,6 +69,8 @@ pub enum Model {
     #[deprecated(note = "Use Model::Gemini25FlashImage instead")]
     #[serde(rename = "models/gemini-2.5-flash-image-preview")]
     Gemini25FlashImagePreview,
+    #[serde(rename = "models/gemini-2.5-flash-native-audio")]
+    Gemini25FlashLive,
     #[serde(rename = "models/gemini-2.5-flash-native-audio-preview-12-2025")]
     Gemini25FlashLive122025,
     #[serde(rename = "models/gemini-2.5-flash-native-audio-preview-09-2025")]
@@ -124,6 +126,7 @@ impl Model {
             Model::Gemini25FlashPreview092025 => "models/gemini-2.5-flash-preview-09-2025",
             Model::Gemini25FlashImage => "models/gemini-2.5-flash-image",
             Model::Gemini25FlashImagePreview => "models/gemini-2.5-flash-image-preview",
+            Model::Gemini25FlashLive => "models/gemini-2.5-flash-native-audio",
             Model::Gemini25FlashLive122025 => {
                 "models/gemini-2.5-flash-native-audio-preview-12-2025"
             }
@@ -156,6 +159,7 @@ impl Model {
             Model::Gemini25FlashPreview092025 => "gemini-2.5-flash-preview-09-2025",
             Model::Gemini25FlashImage => "gemini-2.5-flash-image",
             Model::Gemini25FlashImagePreview => "gemini-2.5-flash-image-preview",
+            Model::Gemini25FlashLive => "gemini-2.5-flash-native-audio",
             Model::Gemini25FlashLive122025 => "gemini-2.5-flash-native-audio-preview-12-2025",
             Model::Gemini25FlashLive092025 => "gemini-2.5-flash-native-audio-preview-09-2025",
             Model::Gemini25FlashPreviewTts => "gemini-2.5-flash-preview-tts",
@@ -199,6 +203,7 @@ impl From<String> for Model {
             "gemini-2.5-flash-preview-09-2025" => Self::Gemini25FlashPreview092025,
             "gemini-2.5-flash-image" => Self::Gemini25FlashImage,
             "gemini-2.5-flash-image-preview" => Self::Gemini25FlashImagePreview,
+            "gemini-2.5-flash-native-audio" => Self::Gemini25FlashLive,
             "gemini-2.5-flash-native-audio-preview-12-2025" => Self::Gemini25FlashLive122025,
             "gemini-2.5-flash-native-audio-preview-09-2025" => Self::Gemini25FlashLive092025,
             "gemini-2.5-flash-preview-tts" => Self::Gemini25FlashPreviewTts,

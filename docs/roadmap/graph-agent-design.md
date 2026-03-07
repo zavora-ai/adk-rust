@@ -1069,7 +1069,7 @@ async fn main() -> Result<()> {
     // Execute
     let result = graph.invoke(
         [("messages".to_string(), json!([{"role": "user", "content": "What's the weather?"}]))].into(),
-        ExecutionConfig::new("thread_1"),
+        ExecutionConfig::new("thread_1".to_string()),
     ).await?;
 
     println!("Result: {:?}", result);
@@ -1133,7 +1133,7 @@ let graph = StateGraph::with_channels(&["messages", "pending_action", "approved"
     .with_interrupt_after(&["plan"]); // Pause for approval
 
 // First run - will pause after planning
-let config = ExecutionConfig::new("approval_thread");
+let config = ExecutionConfig::new("approval_thread".to_string());
 let result = graph.invoke(input, config.clone()).await;
 
 match result {

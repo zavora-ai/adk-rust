@@ -21,6 +21,7 @@
 
 use adk_agent::LoopAgent;
 use adk_core::Tool;
+use adk_core::types::UserId;
 use anyhow::Result;
 use colored::Colorize;
 use std::sync::{Arc, Mutex};
@@ -78,7 +79,7 @@ async fn main() -> Result<()> {
     adk_cli::console::run_console(
         Arc::new(ralph),
         "ralph_app".to_string(),
-        "developer".to_string(),
+        UserId::new("developer").unwrap(),
     )
     .await?;
 

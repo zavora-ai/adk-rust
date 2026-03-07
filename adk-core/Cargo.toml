@@ -20,6 +20,14 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+bytes = "1.5"
+base64 = { version = "0.21", optional = true }
+derive_more = { version = "2.1.1", features = ["display", "as_ref", "from", "deref", "into"] }
+mime = "0.3.17"
+
+[features]
+default = ["base64"]
+base64 = ["dep:base64"]
 
 [dev-dependencies]
 async-stream = { workspace = true }

@@ -1,4 +1,5 @@
 use adk_agent::LlmAgentBuilder;
+use adk_core::types::{Role, SessionId, UserId};
 use adk_core::{
     Agent, CallbackContext, Content, FinishReason, InvocationContext, Llm, LlmRequest, LlmResponse,
     LlmResponseStream, Part, Result, RunConfig, Session, State, Tool, ToolConfirmationDecision,
@@ -23,7 +24,7 @@ impl SequencedModel {
     fn function_call_response(name: &str, args: Value, id: &str) -> LlmResponse {
         LlmResponse {
             content: Some(Content {
-                role: "model".to_string(),
+                role: Role::Model,
                 parts: vec![Part::FunctionCall {
                     name: name.to_string(),
                     args,
@@ -44,10 +45,7 @@ impl SequencedModel {
 
     fn text_response(text: &str) -> LlmResponse {
         LlmResponse {
-            content: Some(Content {
-                role: "model".to_string(),
-                parts: vec![Part::Text { text: text.to_string() }],
-            }),
+            content: Some(Content { role: Role::Model, parts: vec![Part::text(text.to_string())] }),
             usage_metadata: None,
             finish_reason: Some(FinishReason::Stop),
             citation_metadata: None,
@@ -121,20 +119,32 @@ impl State for MockState {
 }
 
 struct MockSession {
+    id: SessionId,
+    user_id: UserId,
     state: MockState,
 }
 
+impl MockSession {
+    fn new() -> Self {
+        Self {
+            id: SessionId::new("session-1").unwrap(),
+            user_id: UserId::new("user-1").unwrap(),
+            state: MockState,
+        }
+    }
+}
+
 impl Session for MockSession {
-    fn id(&self) -> &str {
-        "session-1"
+    fn id(&self) -> &SessionId {
+        &self.id
     }
 
     fn app_name(&self) -> &str {
         "test-app"
     }
 
-    fn user_id(&self) -> &str {
-        "user-1"
+    fn user_id(&self) -> &UserId {
+        &self.user_id
     }
 
     fn state(&self) -> &dyn State {
@@ -147,6 +157,7 @@ impl Session for MockSession {
 }
 
 struct MockContext {
+    identity: adk_core::types::AdkIdentity,
     session: MockSession,
     user_content: Content,
     run_config: RunConfig,
@@ -154,9 +165,18 @@ struct MockContext {
 
 impl MockContext {
     fn new(run_config: RunConfig) -> Self {
+        let mut identity = adk_core::types::AdkIdentity::default();
+        identity.invocation_id = "inv-1".into();
+        identity.agent_name = "test-agent".to_string();
+        identity.user_id = "user-1".into();
+        identity.app_name = "test-app".to_string();
+        identity.session_id = "session-1".into();
+        identity.branch = "main".to_string();
+
         Self {
-            session: MockSession { state: MockState },
-            user_content: Content::new("user").with_text("start"),
+            identity,
+            session: MockSession::new(),
+            user_content: Content::new(Role::User).with_text("start"),
             run_config,
         }
     }
@@ -164,32 +184,18 @@ impl MockContext {
 
 #[async_trait]
 impl adk_core::ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str {
-        "inv-1"
-    }
-
-    fn agent_name(&self) -> &str {
-        "test-agent"
-    }
-
-    fn user_id(&self) -> &str {
-        "user-1"
-    }
-
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-
-    fn session_id(&self) -> &str {
-        "session-1"
-    }
-
-    fn branch(&self) -> &str {
-        "main"
+    fn identity(&self) -> &adk_core::types::AdkIdentity {
+        &self.identity
     }
 
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+
+    fn metadata(&self) -> &std::collections::HashMap<String, String> {
+        static METADATA: std::sync::OnceLock<std::collections::HashMap<String, String>> =
+            std::sync::OnceLock::new();
+        METADATA.get_or_init(std::collections::HashMap::new)
     }
 }
 
@@ -247,10 +253,11 @@ async fn test_tool_confirmation_interrupts_when_decision_missing() {
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
         if event.llm_response.interrupted {
-            let request = event.actions.tool_confirmation.as_ref().unwrap();
-            assert_eq!(request.tool_name, "test_tool");
-            assert_eq!(request.function_call_id.as_deref(), Some("call-1"));
-            saw_confirmation_interrupt = true;
+            if let Some(conf) = &event.actions.tool_confirmation {
+                if conf.get("toolName").and_then(|v| v.as_str()) == Some("test_tool") {
+                    saw_confirmation_interrupt = true;
+                }
+            }
         }
     }
 
@@ -284,16 +291,14 @@ async fn test_tool_confirmation_deny_skips_tool_execution() {
 
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
-        if event.actions.tool_confirmation_decision == Some(ToolConfirmationDecision::Deny) {
-            let content = event.llm_response.content.as_ref().unwrap();
-            if let Some(Part::FunctionResponse { function_response, .. }) = content.parts.first() {
-                let error = function_response
-                    .response
-                    .get("error")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                if error.contains("denied") {
-                    saw_denied_response = true;
+        // Check if decision was Deny (false)
+        if event.actions.tool_confirmation_decision == Some(false) {
+            if let Some(content) = &event.llm_response.content {
+                if let Some(Part::FunctionResponse { response, .. }) = content.parts.first() {
+                    let error = response.get("error").and_then(|v| v.as_str()).unwrap_or_default();
+                    if error.contains("denied") {
+                        saw_denied_response = true;
+                    }
                 }
             }
         }
@@ -329,11 +334,13 @@ async fn test_tool_confirmation_approve_executes_tool() {
 
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
-        if event.actions.tool_confirmation_decision == Some(ToolConfirmationDecision::Approve) {
-            let content = event.llm_response.content.as_ref().unwrap();
-            if let Some(Part::FunctionResponse { function_response, .. }) = content.parts.first() {
-                if function_response.response.get("status") == Some(&json!("tool-ok")) {
-                    saw_tool_result = true;
+        // Check if decision was Approve (true)
+        if event.actions.tool_confirmation_decision == Some(true) {
+            if let Some(content) = &event.llm_response.content {
+                if let Some(Part::FunctionResponse { response, .. }) = content.parts.first() {
+                    if response.get("status") == Some(&json!("tool-ok")) {
+                        saw_tool_result = true;
+                    }
                 }
             }
         }

@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         model: "gpt-5-mini".to_string(),
         contents: vec![Content {
             role: "user".to_string(),
-            parts: vec![Part::Text { text: "What is 25 * 17?".to_string() }],
+            parts: vec![Part::text("What is 25 * 17?".to_string())],
         }],
         tools,
         config: None,
@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  parts ({}):", content.parts.len());
                     for (i, part) in content.parts.iter().enumerate() {
                         match part {
-                            Part::Text { text } => {
+                            Part::Text(text) => {
                                 println!("    [{}] Text: {}", i, text);
                             }
                             Part::FunctionCall { name, args, id, .. } => {

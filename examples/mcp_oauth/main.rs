@@ -16,7 +16,7 @@
 // - Requires a valid GitHub token with Copilot access
 
 use adk_agent::LlmAgentBuilder;
-use adk_core::{Content, ReadonlyContext, Toolset};
+use adk_core::{Content, ReadonlyContext, Toolset, types::AdkIdentity};
 use adk_model::GeminiModel;
 use adk_tool::{McpAuth, McpHttpClientBuilder};
 use anyhow::Result;
@@ -25,31 +25,30 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Minimal context for tool discovery
-struct SimpleContext;
+struct SimpleContext {
+    identity: AdkIdentity,
+    metadata: std::collections::HashMap<String, String>,
+}
+
+impl SimpleContext {
+    fn new() -> Self {
+        Self { identity: AdkIdentity::default(), metadata: std::collections::HashMap::new() }
+    }
+}
 
 #[async_trait::async_trait]
 impl ReadonlyContext for SimpleContext {
-    fn invocation_id(&self) -> &str {
-        "init"
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
-    fn agent_name(&self) -> &str {
-        "mcp-oauth-agent"
-    }
-    fn user_id(&self) -> &str {
-        "user"
-    }
-    fn app_name(&self) -> &str {
-        "mcp_oauth_example"
-    }
-    fn session_id(&self) -> &str {
-        "init"
-    }
-    fn branch(&self) -> &str {
-        "main"
-    }
+
     fn user_content(&self) -> &Content {
         static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
         CONTENT.get_or_init(|| Content::new("user").with_text("init"))
+    }
+
+    fn metadata(&self) -> &std::collections::HashMap<String, String> {
+        &self.metadata
     }
 }
 
@@ -133,7 +132,7 @@ where
     S: Service<rmcp::RoleClient> + Send + Sync + 'static,
 {
     // Create context for tool discovery
-    let ctx = Arc::new(SimpleContext) as Arc<dyn ReadonlyContext>;
+    let ctx = Arc::new(SimpleContext::new()) as Arc<dyn ReadonlyContext>;
 
     // Discover available tools
     match toolset.tools(ctx.clone()).await {
@@ -253,7 +252,7 @@ let oauth_config = OAuth2Config::new(
     "https://auth.example.com/oauth/token"
 )
 .with_secret("your-client-secret")
-.with_scopes(vec!["mcp:read".into(), "mcp:write".into()]);
+.with_scopes(vec!["mcp:read"), "mcp:write")]);
 
 let toolset = McpHttpClientBuilder::new("https://mcp.example.com/v1")
     .with_auth(McpAuth::oauth2(oauth_config))

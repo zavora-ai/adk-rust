@@ -7,6 +7,7 @@
 //!   cargo run --manifest-path examples/Cargo.toml --example skills_policy
 
 use adk_agent::LlmAgentBuilder;
+use adk_core::types::{SessionId, UserId};
 use adk_core::{Content, Part};
 use adk_model::gemini::GeminiModel;
 use adk_runner::{Runner, RunnerConfig};
@@ -78,7 +79,7 @@ async fn main() -> Result<()> {
 
     let session_service = Arc::new(InMemorySessionService::new());
     let runner = Runner::new(RunnerConfig {
-        app_name: "policy_demo".into(),
+        app_name: "policy_demo".to_string(),
         agent: Arc::new(agent),
         session_service: session_service.clone(),
         artifact_service: None,
@@ -93,9 +94,9 @@ async fn main() -> Result<()> {
     let user_id = "user".to_string();
     let session = session_service
         .create(CreateRequest {
-            app_name: "demo".into(),
-            user_id: user_id.clone(),
-            session_id: None,
+            app_name: "demo".to_string(),
+            user_id: UserId::new(user_id.clone()).unwrap(),
+            session_id: Some(SessionId::new("demo_session")?),
             state: HashMap::new(),
         })
         .await?;
@@ -103,9 +104,9 @@ async fn main() -> Result<()> {
     println!("Querying with 'Tell me about release notes' (Should NOT find security skill)...");
     let mut stream = runner
         .run(
-            user_id.clone(),
-            session.id().to_string(),
-            Content::new("user").with_text("Tell me about release notes"),
+            UserId::new(user_id.clone()).unwrap(),
+            session.id().clone(),
+            Content::new(adk_core::Role::User).with_text("Tell me about release notes"),
         )
         .await?;
 
@@ -116,7 +117,7 @@ async fn main() -> Result<()> {
                 .parts
                 .iter()
                 .filter_map(|p| match p {
-                    Part::Text { text } => Some(text.as_str()),
+                    Part::Text(text) => Some(text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()

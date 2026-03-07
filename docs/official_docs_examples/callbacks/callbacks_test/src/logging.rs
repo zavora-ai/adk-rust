@@ -6,6 +6,7 @@
 //!   cd doc-test/callbacks/callbacks_test
 //!   GOOGLE_API_KEY=your_key cargo run --bin logging
 
+use adk_core::types::UserId;
 use adk_rust::prelude::*;
 use std::sync::Arc;
 
@@ -44,7 +45,7 @@ async fn main() -> anyhow::Result<()> {
     adk_cli::console::run_console(
         Arc::new(agent),
         "callbacks_demo".to_string(),
-        "user".to_string(),
+        UserId::new("user").unwrap(),
     )
     .await?;
 

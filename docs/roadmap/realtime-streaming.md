@@ -11,7 +11,7 @@ This document outlines the architecture for adding real-time bidirectional audio
 - **Audio Input**: 16-bit PCM, 16kHz, mono
 - **Audio Output**: 24kHz sample rate
 - **Features**: VAD, interruptions, function calling, video input
-- **Model**: `gemini-2.5-flash-native-audio-preview`
+- **Model**: `gemini-2.5-flash-native-audio-preview-12-2025`
 - **Auth**: Ephemeral tokens for client-side, API key for server-side
 
 ### OpenAI Realtime API

@@ -23,6 +23,7 @@
 use adk_agent::LlmAgentBuilder;
 use adk_core::{
     Agent, Content, InvocationContext, Part, ReadonlyContext, RunConfig, Session, State, Toolset,
+    types::AdkIdentity,
 };
 use adk_model::GeminiModel;
 use adk_tool::{McpTaskConfig, McpToolset};
@@ -37,16 +38,31 @@ use std::time::Duration;
 use tokio::process::Command;
 
 // Mock session for the example
-struct MockSession;
+use adk_core::types::{SessionId, UserId};
+
+struct MockSession {
+    id: SessionId,
+    user_id: UserId,
+}
+
+impl MockSession {
+    fn new() -> Self {
+        Self {
+            id: SessionId::from("mcp-session".to_string()),
+            user_id: UserId::from("user".to_string()),
+        }
+    }
+}
+
 impl Session for MockSession {
-    fn id(&self) -> &str {
-        "mcp-session"
+    fn id(&self) -> &SessionId {
+        &self.id
     }
     fn app_name(&self) -> &str {
         "mcp-example"
     }
-    fn user_id(&self) -> &str {
-        "user"
+    fn user_id(&self) -> &UserId {
+        &self.user_id
     }
     fn state(&self) -> &dyn State {
         &MockState
@@ -68,44 +84,38 @@ impl State for MockState {
 }
 
 struct MockContext {
+    identity: AdkIdentity,
     session: MockSession,
     user_content: Content,
+    metadata: HashMap<String, String>,
 }
 
 impl MockContext {
     fn new(text: &str) -> Self {
         Self {
-            session: MockSession,
+            identity: AdkIdentity::default(),
+            session: MockSession::new(),
             user_content: Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: text.to_string() }],
+                role: adk_core::Role::Custom("user".to_string()),
+                parts: vec![Part::text(text.to_string())],
             },
+            metadata: HashMap::new(),
         }
     }
 }
 
 #[async_trait]
 impl ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str {
-        "mcp-inv"
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
-    fn agent_name(&self) -> &str {
-        "mcp-agent"
-    }
-    fn user_id(&self) -> &str {
-        "user"
-    }
-    fn app_name(&self) -> &str {
-        "mcp-example"
-    }
-    fn session_id(&self) -> &str {
-        "mcp-session"
-    }
-    fn branch(&self) -> &str {
-        "main"
-    }
+
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+
+    fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
     }
 }
 
@@ -235,7 +245,7 @@ async fn main() -> anyhow::Result<()> {
                             && let Some(content) = event.llm_response.content
                         {
                             for part in content.parts {
-                                if let Part::Text { text } = part {
+                                if let Some(text) = part.as_text() {
                                     print!("{}", text);
                                 }
                             }

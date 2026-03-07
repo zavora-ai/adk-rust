@@ -8,7 +8,7 @@
 //!
 //! - [`Runner`] - Manages agent execution with full context
 //! - [`RunnerConfig`] - Configuration for the runner
-//! - [`InvocationContext`] - Execution context implementation
+//! - [`RunnerContext`] - Execution context implementation
 //! - [`Callbacks`] - Hook points during execution
 //!
 //! ## Quick Start
@@ -43,8 +43,14 @@ mod runner;
 pub use callbacks::{
     AfterModelCallback, AfterToolCallback, BeforeModelCallback, BeforeToolCallback, Callbacks,
 };
-pub use context::{InvocationContext, MutableSession};
+pub use context::{MutableSession, RunnerContext};
 pub use runner::{Runner, RunnerConfig};
+
+#[deprecated(
+    since = "0.3.3",
+    note = "Renamed to RunnerContext to avoid confusion with adk_core::InvocationContext trait"
+)]
+pub type InvocationContext = RunnerContext;
 
 // Re-export compaction types for convenience
 pub use adk_core::{BaseEventsSummarizer, EventsCompactionConfig};

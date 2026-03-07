@@ -15,7 +15,7 @@
 //!
 //!     // Add models
 //!     let config1 = MistralRsConfig::builder()
-//!         .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+//!         .model_source(ModelSource::huggingface("mistralai/Magistral-Small-2509"))
 //!         .build();
 //!     multi_model.add_model("phi", config1).await?;
 //!
@@ -99,13 +99,12 @@ impl MistralRsMultiModel {
     ///
     /// ```rust,ignore
     /// let config = MistralRsConfig::builder()
-    ///     .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+    ///     .model_source(ModelSource::huggingface("mistralai/Magistral-Small-2509"))
     ///     .build();
     /// multi_model.add_model("phi", config).await?;
     /// ```
     pub async fn add_model(&self, name: impl Into<String>, config: MistralRsConfig) -> Result<()> {
-        let name = name.into();
-        info!("Adding model '{}' to multi-model instance", name);
+        let name = name.into();        info!("Adding model '{}' to multi-model instance", name);
 
         let model = MistralRsModel::new(config).await?;
         let model = Arc::new(model);
@@ -136,8 +135,7 @@ impl MistralRsMultiModel {
         name: impl Into<String>,
         model: MistralRsModel,
     ) -> Result<()> {
-        let name = name.into();
-        info!("Adding existing model '{}' to multi-model instance", name);
+        let name = name.into();        info!("Adding existing model '{}' to multi-model instance", name);
 
         let model = Arc::new(model);
         let mut models = self.models.write().await;
@@ -545,7 +543,7 @@ mod tests {
                 "in_situ_quant": "4"
             },
             "phi": {
-                "Plain": { "model_id": "microsoft/Phi-3.5-mini-instruct" }
+                "Plain": { "model_id": "mistralai/Magistral-Small-2509" }
             }
         }"#;
 

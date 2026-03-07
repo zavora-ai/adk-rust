@@ -102,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
                     let text: String = content
                         .parts
                         .iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("")
                         .to_lowercase();
@@ -131,8 +131,12 @@ async fn main() -> anyhow::Result<()> {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    let text: String = content
+                        .parts
+                        .iter()
+                        .filter_map(|p| p.as_text())
+                        .collect::<Vec<_>>()
+                        .join("");
                     if !text.is_empty() {
                         println!("[positive] Generated response");
                         updates.insert("response".to_string(), json!(text));
@@ -151,8 +155,12 @@ async fn main() -> anyhow::Result<()> {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    let text: String = content
+                        .parts
+                        .iter()
+                        .filter_map(|p| p.as_text())
+                        .collect::<Vec<_>>()
+                        .join("");
                     if !text.is_empty() {
                         println!("[negative] Generated response");
                         updates.insert("response".to_string(), json!(text));
@@ -171,8 +179,12 @@ async fn main() -> anyhow::Result<()> {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    let text: String = content
+                        .parts
+                        .iter()
+                        .filter_map(|p| p.as_text())
+                        .collect::<Vec<_>>()
+                        .join("");
                     if !text.is_empty() {
                         println!("[neutral] Generated response");
                         updates.insert("response".to_string(), json!(text));
@@ -224,7 +236,7 @@ async fn main() -> anyhow::Result<()> {
         let mut input = State::new();
         input.insert("message".to_string(), json!(message));
 
-        let result = graph.invoke(input, ExecutionConfig::new(&format!("test-{}", i))).await?;
+        let result = graph.invoke(input, ExecutionConfig::new(format!("test-{}", i))).await?;
 
         println!(
             "\nResponse:\n{}",

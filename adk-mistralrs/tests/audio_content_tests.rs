@@ -83,7 +83,7 @@ proptest! {
     /// Property: Text parts should not be converted to audio
     #[test]
     fn prop_text_part_not_audio(text in arb_text()) {
-        let part = Part::Text { text };
+        let part = Part::text(text);
         prop_assert!(audio_part_to_mistralrs(&part).is_none());
     }
 
@@ -158,8 +158,8 @@ fn test_audio_format_ogg() {
 #[test]
 fn test_audio_part_to_mistralrs_with_unsupported_mime() {
     let part = Part::InlineData {
-        mime_type: "application/octet-stream".to_string(),
-        data: vec![0, 1, 2, 3],
+        mime_type: "application/octet-stream".parse().unwrap(),
+        data: vec![0, 1, 2, 3].into(),
     };
 
     let result = audio_part_to_mistralrs(&part);

@@ -1,12 +1,16 @@
-use crate::InvocationContext;
 use crate::cache::CacheManager;
+use crate::context::RunnerContext;
 use adk_artifact::ArtifactService;
+use adk_core::types::InvocationId;
 use adk_core::{
     Agent, CacheCapable, Content, ContextCacheConfig, EventStream, Memory, Result, RunConfig,
+    types::{SessionId, UserId},
 };
 use adk_plugin::PluginManager;
 use adk_session::SessionService;
 use adk_skill::{SkillInjector, SkillInjectorConfig};
+#[cfg(feature = "telemetry")]
+use adk_telemetry::TraceContextExt;
 use async_stream::stream;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -93,8 +97,8 @@ impl Runner {
 
     pub async fn run(
         &self,
-        user_id: String,
-        session_id: String,
+        user_id: UserId,
+        session_id: SessionId,
         user_content: Content,
     ) -> Result<EventStream> {
         let app_name = self.app_name.clone();
@@ -154,8 +158,8 @@ impl Runner {
                 }
             }
 
-            let mut invocation_ctx = InvocationContext::new(
-                invocation_id.clone(),
+            let mut runner_ctx = RunnerContext::new(
+                InvocationId::from(invocation_id.clone()),
                 agent_to_run.clone(),
                 user_id.clone(),
                 app_name.clone(),
@@ -173,16 +177,16 @@ impl Runner {
                     user_id.clone(),
                     session_id.clone(),
                 );
-                invocation_ctx = invocation_ctx.with_artifacts(Arc::new(scoped));
+                runner_ctx = runner_ctx.with_artifacts(Arc::new(scoped));
             }
             if let Some(memory) = memory_service {
-                invocation_ctx = invocation_ctx.with_memory(memory);
+                runner_ctx = runner_ctx.with_memory(memory);
             }
 
             // Apply run config (streaming mode, etc.)
-            invocation_ctx = invocation_ctx.with_run_config(run_config.clone());
+            runner_ctx = runner_ctx.with_run_config(run_config.clone());
 
-            let mut ctx = Arc::new(invocation_ctx);
+            let mut ctx = Arc::new(runner_ctx);
 
             if let Some(manager) = plugin_manager.as_ref() {
                 match manager
@@ -190,7 +194,7 @@ impl Runner {
                     .await
                 {
                     Ok(Some(content)) => {
-                        let mut early_event = adk_core::Event::new(&invocation_id);
+                        let mut early_event = adk_core::Event::new(adk_core::types::InvocationId::from(invocation_id.as_str()));
                         early_event.author = agent_to_run.name().to_string();
                         early_event.llm_response.content = Some(content);
 
@@ -222,8 +226,8 @@ impl Runner {
                     Ok(Some(modified)) => {
                         effective_user_content = modified;
 
-                        let mut refreshed_ctx = InvocationContext::with_mutable_session(
-                            invocation_id.clone(),
+                        let mut refreshed_ctx = RunnerContext::with_mutable_session(
+                            InvocationId::from(invocation_id.clone()),
                             agent_to_run.clone(),
                             user_id.clone(),
                             app_name.clone(),
@@ -259,7 +263,7 @@ impl Runner {
             }
 
             // Append user message to session service (persistent storage)
-            let mut user_event = adk_core::Event::new(&invocation_id);
+            let mut user_event = adk_core::Event::new(adk_core::types::InvocationId::from(invocation_id.as_str()));
             user_event.author = "user".to_string();
             user_event.llm_response.content = Some(effective_user_content.clone());
 
@@ -317,8 +321,8 @@ impl Runner {
                     if let Some(cache_name) = cm.record_invocation() {
                         run_config.cached_content = Some(cache_name.to_string());
                         // Rebuild the invocation context with the updated run config
-                        let mut refreshed_ctx = InvocationContext::with_mutable_session(
-                            invocation_id.clone(),
+                        let mut refreshed_ctx = RunnerContext::with_mutable_session(
+                            InvocationId::from(invocation_id.clone()),
                             agent_to_run.clone(),
                             user_id.clone(),
                             app_name.clone(),
@@ -345,18 +349,22 @@ impl Runner {
             }
 
             // Run the agent with instrumentation (ADK-Go style attributes)
+            #[cfg(feature = "telemetry")]
+            let agent_span = ctx.agent_span();
+            #[cfg(feature = "telemetry")]
+            {
+                agent_span.record("adk.skills.selected_name", selected_skill_name);
+                agent_span.record("adk.skills.selected_id", selected_skill_id);
+            }
+            #[cfg(not(feature = "telemetry"))]
             let agent_span = tracing::info_span!(
                 "agent.execute",
-                "gcp.vertex.agent.invocation_id" = %invocation_id,
-                "gcp.vertex.agent.session_id" = %session_id,
-                "gcp.vertex.agent.event_id" = %invocation_id, // Use invocation_id as event_id for agent spans
-                "gen_ai.conversation.id" = %session_id,
                 "agent.name" = %agent_to_run.name(),
                 "adk.skills.selected_name" = %selected_skill_name,
                 "adk.skills.selected_id" = %selected_skill_id
             );
 
-            let mut agent_stream = match agent_to_run.run(ctx.clone()).instrument(agent_span).await {
+            let mut agent_stream = match agent_to_run.run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).instrument(agent_span).await {
                 Ok(s) => s,
                 Err(e) => {
                     if let Some(manager) = plugin_manager.as_ref() {
@@ -438,8 +446,8 @@ impl Runner {
                 if let Some(target_agent) = Self::find_agent(&root_agent, &target_name) {
                     // For transfers, we reuse the same mutable session to preserve state
                     let transfer_invocation_id = format!("inv-{}", uuid::Uuid::new_v4());
-                    let mut transfer_ctx = InvocationContext::with_mutable_session(
-                        transfer_invocation_id.clone(),
+                    let mut transfer_ctx = RunnerContext::with_mutable_session(
+                        InvocationId::from(transfer_invocation_id.clone()),
                         target_agent.clone(),
                         user_id.clone(),
                         app_name.clone(),
@@ -464,7 +472,7 @@ impl Runner {
                     let transfer_ctx = Arc::new(transfer_ctx);
 
                     // Run the transferred agent
-                    let mut transfer_stream = match target_agent.run(transfer_ctx.clone()).await {
+                    let mut transfer_stream = match target_agent.run(transfer_ctx.clone() as Arc<dyn adk_core::InvocationContext>).await {
                         Ok(s) => s,
                         Err(e) => {
                             if let Some(manager) = plugin_manager.as_ref() {

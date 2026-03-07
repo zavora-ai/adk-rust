@@ -1,4 +1,5 @@
 use super::surface::UiSurface;
+use adk_core::types::Role;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -77,7 +78,7 @@ pub struct AgUiTextMessageStartEvent {
     pub thread_id: String,
     pub run_id: String,
     pub message_id: String,
-    pub role: String,
+    pub role: Role,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,7 +233,7 @@ pub fn text_message_events(
     thread_id: impl Into<String>,
     run_id: impl Into<String>,
     message_id: impl Into<String>,
-    role: impl Into<String>,
+    role: impl Into<Role>,
     delta: impl Into<String>,
 ) -> Vec<AgUiEvent> {
     let thread_id = thread_id.into();
@@ -429,7 +430,8 @@ mod tests {
 
     #[test]
     fn text_message_helpers_emit_start_delta_end() {
-        let events = text_message_events("thread-1", "run-1", "msg-1", "assistant", "hello");
+        use adk_core::Role;
+        let events = text_message_events("thread-1", "run-1", "msg-1", Role::Model, "hello");
         assert_eq!(events.len(), 3);
 
         let start = serde_json::to_value(&events[0]).unwrap();

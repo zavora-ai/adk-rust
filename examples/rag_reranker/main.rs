@@ -61,7 +61,7 @@ impl Reranker for KeywordBoostReranker {
 fn policy_documents() -> Vec<Document> {
     vec![
         Document {
-            id: "pto_policy".into(),
+            id: "pto_policy",
             text: "# Paid Time Off (PTO) Policy\n\n\
                    ## Accrual\n\n\
                    Full-time employees accrue 20 days of PTO per year, prorated for the \
@@ -75,13 +75,12 @@ fn policy_documents() -> Vec<Document> {
                    ## Carryover\n\n\
                    Up to 5 unused PTO days carry over to the next calendar year. Days \
                    beyond the carryover limit expire on December 31. Employees are \
-                   encouraged to use their PTO throughout the year."
-                .into(),
-            metadata: HashMap::from([("policy".into(), "pto".into())]),
-            source_uri: Some("policies/pto.md".into()),
+                   encouraged to use their PTO throughout the year.",
+            metadata: HashMap::from([("policy", "pto".to_string())]),
+            source_uri: Some("policies/pto.md"),
         },
         Document {
-            id: "remote_work".into(),
+            id: "remote_work",
             text: "# Remote Work Policy\n\n\
                    ## Eligibility\n\n\
                    All employees who have completed their 90-day probation period are \
@@ -94,13 +93,12 @@ fn policy_documents() -> Vec<Document> {
                    ## Equipment\n\n\
                    The company provides a laptop, monitor, and $500 home office stipend \
                    for remote-eligible employees. Equipment must be returned upon separation. \
-                   IT support is available via Slack #it-help or the IT portal."
-                .into(),
-            metadata: HashMap::from([("policy".into(), "remote_work".into())]),
-            source_uri: Some("policies/remote_work.md".into()),
+                   IT support is available via Slack #it-help or the IT portal.",
+            metadata: HashMap::from([("policy", "remote_work".to_string())]),
+            source_uri: Some("policies/remote_work.md"),
         },
         Document {
-            id: "expense_policy".into(),
+            id: "expense_policy",
             text: "# Expense Reimbursement Policy\n\n\
                    ## Eligible Expenses\n\n\
                    Business travel, client meals, conference fees, and professional \
@@ -114,13 +112,12 @@ fn policy_documents() -> Vec<Document> {
                    Meals: $75/person for client dinners, $25/person for team lunches. \
                    Hotels: up to $250/night in standard markets, $350/night in high-cost \
                    cities (NYC, SF, London). Flights: economy class for trips under 6 hours, \
-                   business class for longer flights with VP approval."
-                .into(),
-            metadata: HashMap::from([("policy".into(), "expenses".into())]),
-            source_uri: Some("policies/expenses.md".into()),
+                   business class for longer flights with VP approval.",
+            metadata: HashMap::from([("policy", "expenses".to_string())]),
+            source_uri: Some("policies/expenses.md"),
         },
         Document {
-            id: "benefits".into(),
+            id: "benefits",
             text: "# Employee Benefits\n\n\
                    ## Health Insurance\n\n\
                    The company offers three health plans: Basic (100% company-paid), \
@@ -134,10 +131,9 @@ fn policy_documents() -> Vec<Document> {
                    ## Professional Development\n\n\
                    Each employee receives a $2,000 annual learning budget for courses, \
                    books, and conferences. Unused budget does not carry over. Submit \
-                   requests through the Learning Portal for pre-approval."
-                .into(),
-            metadata: HashMap::from([("policy".into(), "benefits".into())]),
-            source_uri: Some("policies/benefits.md".into()),
+                   requests through the Learning Portal for pre-approval.",
+            metadata: HashMap::from([("policy", "benefits".to_string())]),
+            source_uri: Some("policies/benefits.md"),
         },
     ]
 }
@@ -197,8 +193,12 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     println!("\nHR Policy Agent ready. Ask about PTO, remote work, expenses, or benefits.\n");
-    adk_cli::console::run_console(Arc::new(agent), "rag_reranker".into(), "employee1".into())
-        .await?;
+    adk_cli::console::run_console(
+        Arc::new(agent),
+        "rag_reranker".to_string(),
+        UserId::new("employee1").unwrap(),
+    )
+    .await?;
 
     Ok(())
 }

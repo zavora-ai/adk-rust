@@ -108,7 +108,7 @@ async fn replace_match(ctx: &dyn InvocationContext, content: &str) -> Result<Str
 
         match artifacts.load(file_name).await {
             Ok(part) => {
-                if let Some(text) = part.text() {
+                if let Some(text) = part.as_text() {
                     return Ok(text.to_string());
                 }
                 Ok(String::new())

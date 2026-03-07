@@ -11,6 +11,7 @@
 //!   cd doc-test/tools/mcp_test
 //!   GOOGLE_API_KEY=your_key cargo run --bin task_support
 
+use adk_core::types::UserId;
 use adk_core::{Content, ReadonlyContext, Toolset};
 use adk_rust::prelude::*;
 use adk_tool::{McpTaskConfig, McpToolset};
@@ -20,31 +21,25 @@ use std::time::Duration;
 use tokio::process::Command;
 
 /// Minimal context for tool discovery
-struct SimpleContext;
+#[derive(Default)]
+struct SimpleContext {
+    identity: adk_core::types::AdkIdentity,
+}
 
-#[async_trait::async_trait]
 impl ReadonlyContext for SimpleContext {
-    fn invocation_id(&self) -> &str {
-        "init"
+    fn identity(&self) -> &adk_core::types::AdkIdentity {
+        &self.identity
     }
-    fn agent_name(&self) -> &str {
-        "init"
-    }
-    fn user_id(&self) -> &str {
-        "user"
-    }
-    fn app_name(&self) -> &str {
-        "mcp"
-    }
-    fn session_id(&self) -> &str {
-        "init"
-    }
-    fn branch(&self) -> &str {
-        "main"
-    }
+
     fn user_content(&self) -> &Content {
         static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
-        CONTENT.get_or_init(|| Content::new("user").with_text("init"))
+        CONTENT.get_or_init(|| Content::user().with_text("init"))
+    }
+
+    fn metadata(&self) -> &std::collections::HashMap<String, String> {
+        static METADATA: std::sync::OnceLock<std::collections::HashMap<String, String>> =
+            std::sync::OnceLock::new();
+        METADATA.get_or_init(std::collections::HashMap::new)
     }
 }
 
@@ -85,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
     let cancel_token = toolset.cancellation_token().await;
 
     // 4. Discover tools
-    let ctx = Arc::new(SimpleContext) as Arc<dyn ReadonlyContext>;
+    let ctx = Arc::new(SimpleContext::default()) as Arc<dyn ReadonlyContext>;
     let tools = toolset.tools(ctx).await?;
 
     println!("Discovered {} tools with task support:", tools.len());
@@ -126,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
     let result = adk_cli::console::run_console(
         Arc::new(agent),
         "mcp_task_support".to_string(),
-        "user".to_string(),
+        UserId::new("user").unwrap(),
     )
     .await;
 

@@ -48,14 +48,16 @@ impl MockSession {
 }
 
 impl Session for MockSession {
-    fn id(&self) -> &str {
-        "session-1"
+    fn id(&self) -> &adk_core::types::SessionId {
+        static ID: std::sync::OnceLock<adk_core::types::SessionId> = std::sync::OnceLock::new();
+        ID.get_or_init(|| adk_core::types::SessionId::new("session-1").unwrap())
     }
     fn app_name(&self) -> &str {
         "test-app"
     }
-    fn user_id(&self) -> &str {
-        "user-1"
+    fn user_id(&self) -> &adk_core::types::UserId {
+        static ID: std::sync::OnceLock<adk_core::types::UserId> = std::sync::OnceLock::new();
+        ID.get_or_init(|| adk_core::types::UserId::new("user-1").unwrap())
     }
     fn state(&self) -> &dyn State {
         &self.state
@@ -75,7 +77,7 @@ impl Artifacts for MockArtifacts {
 
     async fn load(&self, name: &str) -> adk_core::Result<adk_core::Part> {
         if name == "welcome.txt" {
-            Ok(adk_core::Part::Text { text: "Welcome to ADK!".to_string() })
+            Ok(adk_core::Part::text("Welcome to ADK!".to_string()))
         } else {
             Err(AdkError::Agent("Artifact not found".to_string()))
         }
@@ -104,26 +106,27 @@ impl MockContext {
 
 #[async_trait]
 impl ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str {
-        "inv-1"
-    }
-    fn agent_name(&self) -> &str {
-        "test-agent"
-    }
-    fn user_id(&self) -> &str {
-        "user-1"
-    }
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-    fn session_id(&self) -> &str {
-        "session-1"
-    }
-    fn branch(&self) -> &str {
-        "main"
+    fn identity(&self) -> &adk_core::types::AdkIdentity {
+        static IDENTITY: std::sync::OnceLock<adk_core::types::AdkIdentity> =
+            std::sync::OnceLock::new();
+        IDENTITY.get_or_init(|| {
+            let mut id = adk_core::types::AdkIdentity::default();
+            id.invocation_id = adk_core::types::InvocationId::new("inv-1").unwrap();
+            id.agent_name = "test-agent".to_string();
+            id.user_id = adk_core::types::UserId::new("user-1").unwrap();
+            id.app_name = "test-app".to_string();
+            id.session_id = adk_core::types::SessionId::new("session-1").unwrap();
+            id.branch = "main".to_string();
+            id
+        })
     }
     fn user_content(&self) -> &Content {
-        unimplemented!()
+        static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
+        CONTENT.get_or_init(|| Content::user())
+    }
+    fn metadata(&self) -> &HashMap<String, String> {
+        static METADATA: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        METADATA.get_or_init(HashMap::new)
     }
 }
 

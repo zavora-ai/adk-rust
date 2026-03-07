@@ -94,8 +94,7 @@ proptest! {
         }
 
         // From<AnthropicApiError> for AdkError preserves context
-        let adk_err: AdkError = err.into();
-        let adk_display = adk_err.to_string();
+        let adk_err: AdkError = err.into();        let adk_display = adk_err.to_string();
         prop_assert!(
             adk_display.contains(&error_type),
             "AdkError missing error_type: {adk_display}"

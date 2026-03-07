@@ -1,14 +1,14 @@
 //! Type conversion utilities for DeepSeek API.
 
 use crate::attachment;
-use adk_core::{Content, FinishReason, LlmResponse, Part, UsageMetadata};
+use adk_core::{Content, FinishReason, LlmResponse, Part, Role, UsageMetadata};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// DeepSeek chat message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
-    pub role: String,
+    pub role: Role,
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -182,12 +182,12 @@ pub struct Usage {
 
 /// Convert ADK Content to DeepSeek Message.
 pub fn content_to_message(content: &Content) -> Message {
-    let role = match content.role.as_str() {
-        "model" | "assistant" => "assistant",
-        "user" => "user",
-        "system" => "system",
-        "tool" | "function" => "tool", // DeepSeek uses "tool" for function responses
-        other => other,
+    let role = match content.role {
+        Role::User => Role::User,
+        Role::Model | Role::System => Role::Model,
+        Role::Custom(ref s) if s == "assistant" => Role::Model,
+        Role::Tool => Role::Tool,
+        _ => Role::User,
     };
 
     let mut text_parts = Vec::new();
@@ -196,7 +196,7 @@ pub fn content_to_message(content: &Content) -> Message {
 
     for part in &content.parts {
         match part {
-            Part::Text { text } => text_parts.push(text.clone()),
+            Part::Text(text) => text_parts.push(text.clone()),
             Part::FunctionCall { name, args, id, .. } => {
                 tool_calls.push(ToolCall {
                     id: id.clone().unwrap_or_else(|| format!("call_{}", tool_calls.len())),
@@ -207,20 +207,19 @@ pub fn content_to_message(content: &Content) -> Message {
                     },
                 });
             }
-            Part::FunctionResponse { function_response, id } => {
+            Part::FunctionResponse { name: _, response, id } => {
                 // Tool response - set tool_call_id and content
                 tool_call_id = id.clone();
-                text_parts
-                    .push(serde_json::to_string(&function_response.response).unwrap_or_default());
+                text_parts.push(serde_json::to_string(&response).unwrap_or_default());
             }
             Part::InlineData { mime_type, data } => {
-                text_parts.push(attachment::inline_attachment_to_text(mime_type, data));
+                text_parts.push(attachment::inline_attachment_to_text(mime_type.as_ref(), data));
             }
             Part::FileData { mime_type, file_uri } => {
-                text_parts.push(attachment::file_attachment_to_text(mime_type, file_uri));
+                text_parts.push(attachment::file_attachment_to_text(mime_type.as_ref(), file_uri));
             }
-            Part::Thinking { thinking, .. } => {
-                text_parts.push(thinking.clone());
+            Part::Thinking { thought, .. } => {
+                text_parts.push(thought.clone());
             }
         }
     }
@@ -228,7 +227,7 @@ pub fn content_to_message(content: &Content) -> Message {
     let content_str = if text_parts.is_empty() { None } else { Some(text_parts.join("\n")) };
 
     Message {
-        role: role.to_string(),
+        role,
         content: content_str,
         name: None,
         tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
@@ -280,14 +279,14 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
             // Add reasoning content if present (thinking mode)
             if let Some(reasoning) = &msg.reasoning_content {
                 if !reasoning.is_empty() {
-                    parts.push(Part::Thinking { thinking: reasoning.clone(), signature: None });
+                    parts.push(Part::Thinking { thought: reasoning.clone(), signature: None });
                 }
             }
 
             // Add main content
             if let Some(text) = &msg.content {
                 if !text.is_empty() {
-                    parts.push(Part::Text { text: text.clone() });
+                    parts.push(Part::text(text.clone()));
                 }
             }
 
@@ -309,7 +308,7 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
                 if parts.is_empty() {
                     None
                 } else {
-                    Some(Content { role: "model".to_string(), parts })
+                    Some(Content { role: adk_core::types::Role::Model, parts })
                 },
                 finish,
             )
@@ -358,7 +357,7 @@ pub fn create_tool_call_response(
         .collect();
 
     LlmResponse {
-        content: Some(Content { role: "model".to_string(), parts }),
+        content: Some(Content { role: adk_core::types::Role::Model, parts }),
         usage_metadata: None,
         finish_reason,
         citation_metadata: None,
@@ -376,13 +375,10 @@ mod tests {
 
     #[test]
     fn content_to_message_keeps_inline_attachment_payload() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![Part::InlineData {
-                mime_type: "application/pdf".to_string(),
-                data: b"%PDF".to_vec(),
-            }],
-        };
+        let content = Content::user().with_part(Part::InlineData {
+            mime_type: "application/pdf".parse().unwrap(),
+            data: bytes::Bytes::from_static(b"%PDF"),
+        });
         let message = content_to_message(&content);
         let payload = message.content.unwrap_or_default();
         assert!(payload.contains("application/pdf"));
@@ -391,13 +387,10 @@ mod tests {
 
     #[test]
     fn content_to_message_keeps_file_attachment_payload() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![Part::FileData {
-                mime_type: "text/csv".to_string(),
-                file_uri: "https://example.com/data.csv".to_string(),
-            }],
-        };
+        let content = Content::user().with_part(Part::FileData {
+            mime_type: "text/csv".parse().unwrap(),
+            file_uri: "https://example.com/data.csv".to_string(),
+        });
         let message = content_to_message(&content);
         let payload = message.content.unwrap_or_default();
         assert!(payload.contains("text/csv"));

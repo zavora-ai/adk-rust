@@ -67,12 +67,12 @@ async fn send_request(
         if let Some(content) = &response.content {
             for part in &content.parts {
                 match part {
-                    Part::Thinking { thinking, .. } => {
+                    Part::Thinking { thought, .. } => {
                         if text.is_empty() {
-                            println!("  [thinking] {}", &thinking[..thinking.len().min(80)]);
+                            println!("  [thinking] {}", &thought[..thought.len().min(80)]);
                         }
                     }
-                    Part::Text { text: t } => text.push_str(t),
+                    Part::Text(t) => text.push_str(t),
                     _ => {}
                 }
             }

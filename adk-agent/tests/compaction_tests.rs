@@ -20,7 +20,7 @@ impl Llm for MockSummarizerLlm {
     }
 
     async fn generate_content(&self, _req: LlmRequest, _stream: bool) -> Result<LlmResponseStream> {
-        let content = Content::new("model").with_text(&self.summary_text);
+        let content = Content::new(adk_core::Role::Model).with_text(&self.summary_text);
         let response = LlmResponse::new(content);
         Ok(Box::pin(futures::stream::once(async { Ok(response) })))
     }
@@ -30,8 +30,8 @@ fn make_event(author: &str, text: &str) -> Event {
     let mut event = Event::new("inv-test");
     event.author = author.to_string();
     event.set_content(Content {
-        role: if author == "user" { "user" } else { "model" }.to_string(),
-        parts: vec![Part::Text { text: text.to_string() }],
+        role: if author == "user" { adk_core::Role::User } else { adk_core::Role::Model },
+        parts: vec![Part::Text(text.to_string())],
     });
     event
 }
@@ -71,9 +71,9 @@ async fn test_summarize_produces_compaction_event() {
     assert_eq!(compaction.end_timestamp, events[3].timestamp);
 
     // Compacted content should be the LLM summary
-    assert_eq!(compaction.compacted_content.role, "model");
+    assert_eq!(compaction.compacted_content.role, adk_core::Role::Model);
     let text = match &compaction.compacted_content.parts[0] {
-        Part::Text { text } => text.clone(),
+        Part::Text(text) => text.clone(),
         _ => panic!("Expected text part"),
     };
     assert!(text.contains("weather"));
@@ -92,7 +92,7 @@ async fn test_summarize_with_custom_prompt_template() {
 
     let compaction = result.unwrap().actions.compaction.unwrap();
     let text = match &compaction.compacted_content.parts[0] {
-        Part::Text { text } => text.clone(),
+        Part::Text(text) => text.clone(),
         _ => panic!("Expected text part"),
     };
     assert_eq!(text, "Custom summary output");
@@ -107,7 +107,7 @@ async fn test_summarize_skips_non_text_parts() {
     let mut fc_event = Event::new("inv-test");
     fc_event.author = "assistant".to_string();
     fc_event.set_content(Content {
-        role: "model".to_string(),
+        role: adk_core::Role::Model,
         parts: vec![Part::FunctionCall {
             name: "get_weather".to_string(),
             args: serde_json::json!({}),

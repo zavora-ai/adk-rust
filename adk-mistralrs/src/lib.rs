@@ -35,7 +35,7 @@
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
 //!     // Load a model from HuggingFace
-//!     let model = MistralRsModel::from_hf("microsoft/Phi-3.5-mini-instruct").await?;
+//!     let model = MistralRsModel::from_hf("mistralai/Magistral-Small-2509").await?;
 //!
 //!     // Use with ADK agents
 //!     let agent = LlmAgent::builder()
@@ -112,7 +112,7 @@
 //!
 //! // Add models
 //! multi.add_model("phi", MistralRsConfig::builder()
-//!     .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+//!     .model_source(ModelSource::huggingface("mistralai/Magistral-Small-2509"))
 //!     .build()
 //! ).await?;
 //!

@@ -97,6 +97,35 @@ pub use livekit::webrtc::audio_source::{
     AudioSourceOptions, RtcAudioSource, native::NativeAudioSource,
 };
 
+/// Configuration for connecting to a LiveKit room.
+#[derive(Debug, Clone)]
+pub struct LiveKitConfig {
+    /// LiveKit server WebSocket URL.
+    pub url: String,
+    /// LiveKit API key.
+    pub api_key: String,
+    /// LiveKit API secret.
+    pub api_secret: String,
+}
+
+impl LiveKitConfig {
+    /// Create a new configuration from environment variables.
+    ///
+    /// | Variable             | Default                 |
+    /// |----------------------|-------------------------|
+    /// | `LIVEKIT_URL`        | `ws://localhost:7880`  |
+    /// | `LIVEKIT_API_KEY`    | (Required)              |
+    /// | `LIVEKIT_API_SECRET` | (Required)              |
+    pub fn from_env() -> Self {
+        Self {
+            url: std::env::var("LIVEKIT_URL").unwrap_or_else(|_| "ws://localhost:7880".to_string()),
+            api_key: std::env::var("LIVEKIT_API_KEY").expect("LIVEKIT_API_KEY must be set"),
+            api_secret: std::env::var("LIVEKIT_API_SECRET")
+                .expect("LIVEKIT_API_SECRET must be set"),
+        }
+    }
+}
+
 // ── Authentication ──────────────────────────────────────────────────────
 //
 // Token generation for room access. These come from the `livekit-api`
@@ -125,6 +154,8 @@ pub mod prelude {
         ConnectionState,
         DataPacket,
         DataPacketKind,
+        // Configuration
+        LiveKitConfig,
         // Bridge utilities
         LiveKitEventHandler,
         // Tracks

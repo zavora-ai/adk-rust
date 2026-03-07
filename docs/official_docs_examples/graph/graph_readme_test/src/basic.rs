@@ -34,14 +34,18 @@ fn _agent_node_example() {
     let _node = AgentNode::new(Arc::new(agent))
         .with_input_mapper(|state| {
             let text = state.get("input").and_then(|v| v.as_str()).unwrap_or("");
-            Content::new("user").with_text(text)
+            Content::user().with_text(text)
         })
         .with_output_mapper(|events| {
             let mut updates = HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    let text: String = content
+                        .parts
+                        .iter()
+                        .filter_map(|p| p.as_text())
+                        .collect::<Vec<_>>()
+                        .join("");
                     if !text.is_empty() {
                         updates.insert("output".to_string(), json!(text));
                     }
@@ -70,7 +74,7 @@ fn _state_graph_example() {
 
 // Validate: ExecutionConfig
 fn _execution_config_example() {
-    let _config = ExecutionConfig::new("thread-1")
+    let _config = ExecutionConfig::new(adk_core::types::SessionId::new("thread-1").unwrap())
         .with_recursion_limit(10)
         .with_metadata("key", json!("value"));
 }

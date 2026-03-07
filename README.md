@@ -506,7 +506,7 @@ let agent = GraphAgent::builder("text_processor")
 // Execute
 let mut input = State::new();
 input.insert("input".to_string(), json!("AI is transforming how we work."));
-let result = agent.invoke(input, ExecutionConfig::new("thread-1")).await?;
+let result = agent.invoke(input, ExecutionConfig::new("thread-1".to_string())).await?;
 ```
 
 **Features**:

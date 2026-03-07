@@ -25,31 +25,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✓ PII with specific types works");
 
     // From docs: Content filtering - blocked keywords
-    let filter = ContentFilter::blocked_keywords(vec!["forbidden".into(), "banned".into()]);
-    let content = Content::new("user").with_text("This is forbidden content");
+    let filter =
+        ContentFilter::blocked_keywords(vec!["forbidden".to_string(), "banned".to_string()]);
+    let content = Content::user().with_text("This is forbidden content");
     let result = filter.validate(&content).await;
     assert!(result.is_fail());
     println!("✓ Blocked keywords filter works");
 
     // From docs: Content filtering - on topic
-    let filter =
-        ContentFilter::on_topic("cooking", vec!["recipe".into(), "cook".into(), "bake".into()]);
-    let content = Content::new("user").with_text("Give me a recipe");
+    let filter = ContentFilter::on_topic(
+        "cooking",
+        vec!["recipe".to_string(), "cook".to_string(), "bake".to_string()],
+    );
+    let content = Content::user().with_text("Give me a recipe");
     let result = filter.validate(&content).await;
     assert!(result.is_pass());
     println!("✓ On-topic filter works");
 
     // From docs: Content filtering - max length
     let filter = ContentFilter::max_length(10);
-    let content = Content::new("user").with_text("This is too long");
+    let content = Content::user().with_text("This is too long");
     let result = filter.validate(&content).await;
     assert!(result.is_fail());
     println!("✓ Max length filter works");
 
     // From docs: Custom ContentFilterConfig
     let config = ContentFilterConfig {
-        blocked_keywords: vec!["spam".into()],
-        required_topics: vec!["rust".into()],
+        blocked_keywords: vec!["spam".to_string()],
+        required_topics: vec!["rust".to_string()],
         max_length: Some(5000),
         min_length: Some(10),
         severity: Severity::High,
@@ -69,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let validator =
         SchemaValidator::new(&schema)?.with_name("user_schema").with_severity(Severity::High);
 
-    let content = Content::new("model").with_text(r#"{"name": "Alice", "age": 30}"#);
+    let content = Content::model().with_text(r#"{"name": "Alice", "age": 30}"#);
     let result = validator.validate(&content).await;
     assert!(result.is_pass());
     println!("✓ Schema validation works");
@@ -84,13 +87,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // From docs: GuardrailExecutor
     let guardrails = GuardrailSet::new().with(PiiRedactor::new());
-    let content = Content::new("user").with_text("Contact: test@example.com");
+    let content = Content::user().with_text("Contact: test@example.com");
     let result = GuardrailExecutor::run(&guardrails, &content).await?;
 
     assert!(result.passed);
     assert!(result.transformed_content.is_some());
     let transformed = result.transformed_content.unwrap();
-    let text: String = transformed.parts.iter().filter_map(|p| p.text()).collect();
+    let text: String = transformed.parts.iter().filter_map(|p| p.as_text()).collect();
     assert!(text.contains("[EMAIL REDACTED]"));
     println!("✓ GuardrailExecutor works");
 

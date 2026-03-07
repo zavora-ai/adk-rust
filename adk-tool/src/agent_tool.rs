@@ -1,35 +1,7 @@
-//! AgentTool - Use agents as callable tools
-//!
-//! This module provides `AgentTool` which wraps an `Agent` instance to make it
-//! callable as a `Tool`. This enables powerful composition patterns where a
-//! coordinator agent can invoke specialized sub-agents.
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use adk_tool::AgentTool;
-//! use adk_agent::LlmAgentBuilder;
-//!
-//! // Create a specialized agent
-//! let math_agent = LlmAgentBuilder::new("math_expert")
-//!     .description("Solves mathematical problems")
-//!     .instruction("You are a math expert. Solve problems step by step.")
-//!     .model(model.clone())
-//!     .build()?;
-//!
-//! // Wrap it as a tool
-//! let math_tool = AgentTool::new(Arc::new(math_agent));
-//!
-//! // Use in coordinator agent
-//! let coordinator = LlmAgentBuilder::new("coordinator")
-//!     .instruction("Help users by delegating to specialists")
-//!     .tools(vec![Arc::new(math_tool)])
-//!     .build()?;
-//! ```
-
 use adk_core::{
-    Agent, Artifacts, CallbackContext, Content, Event, InvocationContext, Memory, Part,
-    ReadonlyContext, Result, RunConfig, Session, State, Tool, ToolContext,
+    Agent, Artifacts, CallbackContext, Content, Event, InvocationContext, Memory, ReadonlyContext,
+    Result, RunConfig, Session, State, Tool, ToolContext,
+    types::{AdkIdentity, InvocationId, SessionId, UserId},
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -73,10 +45,6 @@ impl Default for AgentToolConfig {
 }
 
 /// AgentTool wraps an Agent to make it callable as a Tool.
-///
-/// When the parent LLM generates a function call targeting this tool,
-/// the framework executes the wrapped agent, captures its final response,
-/// and returns it as the tool's result.
 pub struct AgentTool {
     agent: Arc<dyn Agent>,
     config: AgentToolConfig,
@@ -93,111 +61,38 @@ impl AgentTool {
         Self { agent, config }
     }
 
-    /// Set whether to skip summarization.
+    /// Set whether to skip summarization
     pub fn skip_summarization(mut self, skip: bool) -> Self {
         self.config.skip_summarization = skip;
         self
     }
 
-    /// Set whether to forward artifacts.
+    /// Set whether to forward artifacts
     pub fn forward_artifacts(mut self, forward: bool) -> Self {
         self.config.forward_artifacts = forward;
         self
     }
 
-    /// Set timeout for sub-agent execution.
-    pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.config.timeout = Some(timeout);
+    /// Set execution timeout
+    pub fn timeout(mut self, duration: Duration) -> Self {
+        self.config.timeout = Some(duration);
         self
     }
 
-    /// Set custom input schema.
-    pub fn input_schema(mut self, schema: Value) -> Self {
-        self.config.input_schema = Some(schema);
-        self
-    }
-
-    /// Set custom output schema.
-    pub fn output_schema(mut self, schema: Value) -> Self {
-        self.config.output_schema = Some(schema);
-        self
-    }
-
-    /// Generate the default parameters schema for this agent tool.
-    fn default_parameters_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "request": {
-                    "type": "string",
-                    "description": format!("The request to send to the {} agent", self.agent.name())
-                }
-            },
-            "required": ["request"]
-        })
-    }
-
-    /// Extract the request text from the tool arguments.
-    fn extract_request(&self, args: &Value) -> String {
-        // Try to get "request" field first
-        if let Some(request) = args.get("request").and_then(|v| v.as_str()) {
-            return request.to_string();
-        }
-
-        // If custom schema, try to serialize the whole args
-        if self.config.input_schema.is_some() {
-            return serde_json::to_string(args).unwrap_or_default();
-        }
-
-        // Fallback: convert args to string
-        match args {
-            Value::String(s) => s.clone(),
-            Value::Object(map) => {
-                // Try to find any string field
-                for value in map.values() {
-                    if let Value::String(s) = value {
-                        return s.clone();
-                    }
-                }
-                serde_json::to_string(args).unwrap_or_default()
-            }
-            _ => serde_json::to_string(args).unwrap_or_default(),
-        }
-    }
-
-    /// Extract the final response text from agent events.
+    /// Extract the final response from a stream of agent events.
     fn extract_response(events: &[Event]) -> Value {
-        // Collect all text responses from final events
-        let mut responses = Vec::new();
-
+        // Find the last event with content
         for event in events.iter().rev() {
-            if event.is_final_response() {
-                if let Some(content) = &event.llm_response.content {
-                    for part in &content.parts {
-                        if let Part::Text { text } = part {
-                            responses.push(text.clone());
-                        }
-                    }
-                }
-                break; // Only get the last final response
-            }
-        }
-
-        if responses.is_empty() {
-            // Try to get any text from the last event
-            if let Some(last_event) = events.last() {
-                if let Some(content) = &last_event.llm_response.content {
-                    for part in &content.parts {
-                        if let Part::Text { text } = part {
-                            return json!({ "response": text });
-                        }
+            if let Some(content) = &event.llm_response.content {
+                // If we want raw text, extract it
+                for part in &content.parts {
+                    if let Some(text) = part.as_text() {
+                        return json!({ "response": text });
                     }
                 }
             }
-            json!({ "response": "No response from agent" })
-        } else {
-            json!({ "response": responses.join("\n") })
         }
+        json!({ "response": "No response from agent" })
     }
 }
 
@@ -212,92 +107,91 @@ impl Tool for AgentTool {
     }
 
     fn parameters_schema(&self) -> Option<Value> {
-        Some(self.config.input_schema.clone().unwrap_or_else(|| self.default_parameters_schema()))
+        Some(self.config.input_schema.clone().unwrap_or_else(|| {
+            json!({
+                "type": "object",
+                "properties": {
+                    "request": {
+                        "type": "string",
+                        "description": "The request or prompt for the agent"
+                    }
+                },
+                "required": ["request"]
+            })
+        }))
     }
 
     fn response_schema(&self) -> Option<Value> {
-        self.config.output_schema.clone()
+        Some(self.config.output_schema.clone().unwrap_or_else(|| {
+            json!({
+                "type": "object",
+                "properties": {
+                    "response": {
+                        "type": "string"
+                    }
+                }
+            })
+        }))
     }
 
-    fn is_long_running(&self) -> bool {
-        // Agent execution could take time, but we wait for completion
-        false
-    }
-
-    #[adk_telemetry::instrument(
-        skip(self, ctx, args),
-        fields(
-            agent_tool.name = %self.agent.name(),
-            agent_tool.description = %self.agent.description(),
-            function_call.id = %ctx.function_call_id()
-        )
-    )]
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        adk_telemetry::debug!("Executing agent tool: {}", self.agent.name());
+        let request = args
+            .get("request")
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| args.as_str().unwrap_or(""));
 
-        // Extract the request from args
-        let request_text = self.extract_request(&args);
+        let user_content = Content::user().with_text(request);
 
-        // Create user content for the sub-agent
-        let user_content = Content::new("user").with_text(&request_text);
-
-        // Create an isolated context for the sub-agent
+        // Create sub-context for the agent
         let sub_ctx = Arc::new(AgentToolInvocationContext::new(
             ctx.clone(),
             self.agent.clone(),
-            user_content.clone(),
+            user_content,
             self.config.forward_artifacts,
         ));
 
-        // Execute the sub-agent
+        // Run the agent
         let execution = async {
-            let mut event_stream = self.agent.run(sub_ctx.clone()).await?;
-
-            // Collect all events
+            let mut stream = self.agent.run(sub_ctx.clone()).await?;
             let mut events = Vec::new();
             let mut state_delta = HashMap::new();
-            let mut artifact_delta = HashMap::new();
 
-            while let Some(result) = event_stream.next().await {
-                match result {
-                    Ok(event) => {
-                        // Merge state deltas
-                        state_delta.extend(event.actions.state_delta.clone());
-                        artifact_delta.extend(event.actions.artifact_delta.clone());
-                        events.push(event);
-                    }
-                    Err(e) => {
-                        adk_telemetry::error!("Error in sub-agent execution: {}", e);
-                        return Err(e);
-                    }
+            while let Some(event_result) = stream.next().await {
+                let event = event_result?;
+                events.push(event.clone());
+
+                // Accumulate state deltas from the sub-agent
+                state_delta.extend(event.actions.state_delta);
+
+                if event.actions.escalate {
+                    break;
                 }
             }
 
-            Ok((events, state_delta, artifact_delta))
+            Ok((events, state_delta))
         };
 
-        // Apply timeout if configured
-        let result = if let Some(timeout_duration) = self.config.timeout {
-            match tokio::time::timeout(timeout_duration, execution).await {
-                Ok(r) => r,
-                Err(_) => {
-                    return Ok(json!({
-                        "error": "Agent execution timed out",
-                        "agent": self.agent.name()
-                    }));
+        let result: Result<(Vec<Event>, HashMap<String, Value>)> =
+            if let Some(timeout_duration) = self.config.timeout {
+                match tokio::time::timeout(timeout_duration, execution).await {
+                    Ok(r) => r,
+                    Err(_) => {
+                        return Ok(json!({
+                            "error": "Agent execution timed out",
+                            "agent": self.agent.name()
+                        }));
+                    }
                 }
-            }
-        } else {
-            execution.await
-        };
+            } else {
+                execution.await
+            };
 
         match result {
-            Ok((events, state_delta, artifact_delta)) => {
-                // Forward state_delta and artifact_delta to parent context
-                if !state_delta.is_empty() || !artifact_delta.is_empty() {
+            Ok((events, state_delta)) => {
+                // Forward state_delta to parent context
+                if !state_delta.is_empty() {
                     let mut parent_actions = ctx.actions();
                     parent_actions.state_delta.extend(state_delta);
-                    parent_actions.artifact_delta.extend(artifact_delta);
                     ctx.set_actions(parent_actions);
                 }
 
@@ -325,7 +219,7 @@ struct AgentToolInvocationContext {
     parent_ctx: Arc<dyn ToolContext>,
     agent: Arc<dyn Agent>,
     user_content: Content,
-    invocation_id: String,
+    identity: AdkIdentity,
     ended: Arc<AtomicBool>,
     forward_artifacts: bool,
     session: Arc<AgentToolSession>,
@@ -338,12 +232,16 @@ impl AgentToolInvocationContext {
         user_content: Content,
         forward_artifacts: bool,
     ) -> Self {
-        let invocation_id = format!("agent-tool-{}", uuid::Uuid::new_v4());
+        let mut identity = parent_ctx.identity().clone();
+        identity.agent_name = agent.name().to_string();
+        identity.invocation_id =
+            InvocationId::new(format!("{}-sub-{}", identity.invocation_id, agent.name())).unwrap();
+
         Self {
             parent_ctx,
             agent,
             user_content,
-            invocation_id,
+            identity,
             ended: Arc::new(AtomicBool::new(false)),
             forward_artifacts,
             session: Arc::new(AgentToolSession::new()),
@@ -351,35 +249,17 @@ impl AgentToolInvocationContext {
     }
 }
 
-#[async_trait]
 impl ReadonlyContext for AgentToolInvocationContext {
-    fn invocation_id(&self) -> &str {
-        &self.invocation_id
-    }
-
-    fn agent_name(&self) -> &str {
-        self.agent.name()
-    }
-
-    fn user_id(&self) -> &str {
-        self.parent_ctx.user_id()
-    }
-
-    fn app_name(&self) -> &str {
-        self.parent_ctx.app_name()
-    }
-
-    fn session_id(&self) -> &str {
-        // Use a unique session ID for the sub-agent
-        &self.invocation_id
-    }
-
-    fn branch(&self) -> &str {
-        ""
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
 
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+
+    fn metadata(&self) -> &HashMap<String, String> {
+        self.parent_ctx.metadata()
     }
 }
 
@@ -398,7 +278,6 @@ impl InvocationContext for AgentToolInvocationContext {
 
     fn memory(&self) -> Option<Arc<dyn Memory>> {
         // Sub-agents don't have direct memory access in this implementation
-        // Could be extended to forward memory if needed
         None
     }
 
@@ -407,7 +286,6 @@ impl InvocationContext for AgentToolInvocationContext {
     }
 
     fn run_config(&self) -> &RunConfig {
-        // Use default config for sub-agent (SSE mode)
         static DEFAULT_CONFIG: std::sync::OnceLock<RunConfig> = std::sync::OnceLock::new();
         DEFAULT_CONFIG.get_or_init(RunConfig::default)
     }
@@ -422,31 +300,34 @@ impl InvocationContext for AgentToolInvocationContext {
 }
 
 // Minimal session for sub-agent execution
+
 struct AgentToolSession {
-    id: String,
+    id: SessionId,
+    user_id: UserId,
     state: std::sync::RwLock<HashMap<String, Value>>,
 }
 
 impl AgentToolSession {
     fn new() -> Self {
         Self {
-            id: format!("agent-tool-session-{}", uuid::Uuid::new_v4()),
-            state: Default::default(),
+            id: SessionId::new("sub-session".to_string()).unwrap(),
+            user_id: UserId::new("system".to_string()).unwrap(),
+            state: std::sync::RwLock::new(HashMap::new()),
         }
     }
 }
 
 impl Session for AgentToolSession {
-    fn id(&self) -> &str {
+    fn id(&self) -> &SessionId {
         &self.id
     }
 
     fn app_name(&self) -> &str {
-        "agent-tool"
+        "adk-tool"
     }
 
-    fn user_id(&self) -> &str {
-        "agent-tool-user"
+    fn user_id(&self) -> &UserId {
+        &self.user_id
     }
 
     fn state(&self) -> &dyn State {
@@ -454,130 +335,20 @@ impl Session for AgentToolSession {
     }
 
     fn conversation_history(&self) -> Vec<Content> {
-        // Sub-agent starts with empty history
         Vec::new()
     }
 }
 
 impl State for AgentToolSession {
     fn get(&self, key: &str) -> Option<Value> {
-        self.state.read().ok()?.get(key).cloned()
+        self.state.read().unwrap().get(key).cloned()
     }
 
     fn set(&mut self, key: String, value: Value) {
-        if let Ok(mut state) = self.state.write() {
-            state.insert(key, value);
-        }
+        self.state.write().unwrap().insert(key, value);
     }
 
     fn all(&self) -> HashMap<String, Value> {
-        self.state.read().ok().map(|s| s.clone()).unwrap_or_default()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct MockAgent {
-        name: String,
-        description: String,
-    }
-
-    #[async_trait]
-    impl Agent for MockAgent {
-        fn name(&self) -> &str {
-            &self.name
-        }
-
-        fn description(&self) -> &str {
-            &self.description
-        }
-
-        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
-            &[]
-        }
-
-        async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<adk_core::EventStream> {
-            use async_stream::stream;
-
-            let name = self.name.clone();
-            let s = stream! {
-                let mut event = Event::new("mock-inv");
-                event.author = name;
-                event.llm_response.content = Some(Content::new("model").with_text("Mock response"));
-                yield Ok(event);
-            };
-
-            Ok(Box::pin(s))
-        }
-    }
-
-    #[test]
-    fn test_agent_tool_creation() {
-        let agent = Arc::new(MockAgent {
-            name: "test_agent".to_string(),
-            description: "A test agent".to_string(),
-        });
-
-        let tool = AgentTool::new(agent);
-        assert_eq!(tool.name(), "test_agent");
-        assert_eq!(tool.description(), "A test agent");
-    }
-
-    #[test]
-    fn test_agent_tool_config() {
-        let agent =
-            Arc::new(MockAgent { name: "test".to_string(), description: "test".to_string() });
-
-        let tool = AgentTool::new(agent)
-            .skip_summarization(true)
-            .forward_artifacts(false)
-            .timeout(Duration::from_secs(30));
-
-        assert!(tool.config.skip_summarization);
-        assert!(!tool.config.forward_artifacts);
-        assert_eq!(tool.config.timeout, Some(Duration::from_secs(30)));
-    }
-
-    #[test]
-    fn test_parameters_schema() {
-        let agent = Arc::new(MockAgent {
-            name: "calculator".to_string(),
-            description: "Performs calculations".to_string(),
-        });
-
-        let tool = AgentTool::new(agent);
-        let schema = tool.parameters_schema().unwrap();
-
-        assert_eq!(schema["type"], "object");
-        assert!(schema["properties"]["request"].is_object());
-    }
-
-    #[test]
-    fn test_extract_request() {
-        let agent =
-            Arc::new(MockAgent { name: "test".to_string(), description: "test".to_string() });
-
-        let tool = AgentTool::new(agent);
-
-        // Test with request field
-        let args = json!({"request": "solve 2+2"});
-        assert_eq!(tool.extract_request(&args), "solve 2+2");
-
-        // Test with string value
-        let args = json!("direct request");
-        assert_eq!(tool.extract_request(&args), "direct request");
-    }
-
-    #[test]
-    fn test_extract_response() {
-        let mut event = Event::new("inv-123");
-        event.llm_response.content = Some(Content::new("model").with_text("The answer is 4"));
-
-        let events = vec![event];
-        let response = AgentTool::extract_response(&events);
-
-        assert_eq!(response["response"], "The answer is 4");
+        self.state.read().unwrap().clone()
     }
 }

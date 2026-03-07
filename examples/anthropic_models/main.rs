@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let short_request = make_request(vec![Content {
         role: "user".to_string(),
-        parts: vec![Part::Text { text: "Hello, Claude!".to_string() }],
+        parts: vec![Part::text("Hello, Claude!".to_string())],
     }]);
 
     let count = client.count_tokens(&short_request).await?;
@@ -58,19 +58,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let long_request = make_request(vec![
         Content {
             role: "system".to_string(),
-            parts: vec![Part::Text {
-                text: "You are a helpful coding assistant specializing in Rust. \
+            parts: vec![Part::text(
+                "You are a helpful coding assistant specializing in Rust. \
                        Always provide idiomatic, well-documented code examples."
                     .to_string(),
-            }],
+            )],
         },
         Content {
             role: "user".to_string(),
-            parts: vec![Part::Text {
-                text: "Explain the difference between Box, Rc, and Arc in Rust. \
+            parts: vec![Part::text(
+                "Explain the difference between Box, Rc, and Arc in Rust. \
                        When should I use each one? Provide code examples for each."
                     .to_string(),
-            }],
+            )],
         },
     ]);
 

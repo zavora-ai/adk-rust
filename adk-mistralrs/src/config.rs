@@ -220,7 +220,7 @@ impl MistralRsConfigBuilder {
     /// use adk_mistralrs::{MistralRsConfig, McpClientConfig, McpServerConfig};
     ///
     /// let config = MistralRsConfig::builder()
-    ///     .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+    ///     .model_source(ModelSource::huggingface("mistralai/Magistral-Small-2509"))
     ///     .mcp_client(McpClientConfig::with_server(
     ///         McpServerConfig::process("Filesystem", "mcp-server-filesystem")
     ///             .with_args(vec!["--root".to_string(), "/tmp".to_string()])
@@ -528,7 +528,7 @@ impl AdapterConfig {
     /// ```
     pub fn lora_multi(adapters: impl IntoIterator<Item = impl Into<String>>) -> Self {
         let mut adapters: Vec<String> = adapters.into_iter().map(|s| s.into()).collect();
-        let primary = adapters.remove(0);
+        let primary = if adapters.is_empty() { String::new() } else { adapters.remove(0) };
         Self {
             adapter_type: AdapterType::LoRA,
             adapter_source: primary,

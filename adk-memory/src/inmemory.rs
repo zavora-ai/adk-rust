@@ -1,5 +1,6 @@
 use crate::service::*;
-use adk_core::{Part, Result};
+use adk_core::Result;
+use adk_core::types::{SessionId, UserId};
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -7,7 +8,7 @@ use std::sync::{Arc, RwLock};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct MemoryKey {
     app_name: String,
-    user_id: String,
+    user_id: UserId,
 }
 
 #[derive(Clone)]
@@ -16,7 +17,7 @@ struct StoredEntry {
     words: HashSet<String>,
 }
 
-type MemoryStore = HashMap<MemoryKey, HashMap<String, Vec<StoredEntry>>>;
+type MemoryStore = HashMap<MemoryKey, HashMap<SessionId, Vec<StoredEntry>>>;
 
 pub struct InMemoryMemoryService {
     store: Arc<RwLock<MemoryStore>>,
@@ -34,7 +35,7 @@ impl InMemoryMemoryService {
     fn extract_words_from_content(content: &adk_core::Content) -> HashSet<String> {
         let mut words = HashSet::new();
         for part in &content.parts {
-            if let Part::Text { text } = part {
+            if let Some(text) = part.as_text() {
                 words.extend(Self::extract_words(text));
             }
         }
@@ -60,11 +61,11 @@ impl MemoryService for InMemoryMemoryService {
     async fn add_session(
         &self,
         app_name: &str,
-        user_id: &str,
-        session_id: &str,
+        user_id: &UserId,
+        session_id: &SessionId,
         entries: Vec<MemoryEntry>,
     ) -> Result<()> {
-        let key = MemoryKey { app_name: app_name.to_string(), user_id: user_id.to_string() };
+        let key = MemoryKey { app_name: app_name.to_string(), user_id: user_id.clone() };
 
         let stored_entries: Vec<StoredEntry> = entries
             .into_iter()
@@ -81,7 +82,7 @@ impl MemoryService for InMemoryMemoryService {
 
         let mut store = self.store.write().unwrap();
         let sessions = store.entry(key).or_default();
-        sessions.insert(session_id.to_string(), stored_entries);
+        sessions.insert(session_id.clone(), stored_entries);
 
         Ok(())
     }

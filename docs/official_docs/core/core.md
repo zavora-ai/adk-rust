@@ -19,15 +19,15 @@ Every message in ADK flows through `Content` and `Part`. Understanding these typ
 use adk_core::Content;
 
 // Simple text message from user
-let user_msg = Content::new("user")
+let user_msg = Content::user()
     .with_text("What's the weather like?");
 
 // Model response
-let model_msg = Content::new("model")
+let model_msg = Content::model()
     .with_text("The weather is sunny and 72°F.");
 
 // Multiple text parts in one message
-let detailed_msg = Content::new("user")
+let detailed_msg = Content::user()
     .with_text("Here's my question:")
     .with_text("What is the capital of France?");
 ```
@@ -39,20 +39,20 @@ Content can include images, audio, PDFs, and other binary data alongside text:
 ```rust
 // Image from bytes (e.g., read from file)
 let image_bytes = std::fs::read("photo.jpg")?;
-let content = Content::new("user")
+let content = Content::user()
     .with_text("What's in this image?")
-    .with_inline_data("image/jpeg", image_bytes);
+    .with_inline_data("image/jpeg", image_bytes)?;
 
 // Image from URL (model fetches it)
-let content = Content::new("user")
+let content = Content::user()
     .with_text("Describe this image")
-    .with_file_uri("image/png", "https://example.com/chart.png");
+    .with_file_uri("image/png", "https://example.com/chart.png")?;
 
 // PDF document
 let pdf_bytes = std::fs::read("report.pdf")?;
-let content = Content::new("user")
+let content = Content::user()
     .with_text("Summarize this document")
-    .with_inline_data("application/pdf", pdf_bytes);
+    .with_inline_data("application/pdf", pdf_bytes)?;
 ```
 
 ### Part
@@ -61,20 +61,23 @@ let content = Content::new("user")
 
 ```rust
 pub enum Part {
-    // Plain text
-    Text { text: String },
+    // Plain text (Tuple Variant)
+    Text(String),
     
-    // Binary data embedded in the message
-    InlineData { mime_type: String, data: Vec<u8> },
+    // Binary data embedded in the message (Struct Variant)
+    InlineData { mime_type: Mime, data: Bytes },
     
-    // Reference to external file (URL or cloud storage)
-    FileData { mime_type: String, file_uri: String },
+    // Reference to external file (URL or cloud storage) (Struct Variant)
+    FileData { mime_type: Mime, file_uri: String },
     
     // Model requesting a tool call
-    FunctionCall { name: String, args: Value, id: Option<String> },
+    FunctionCall { name: String, args: Value, id: Option<String>, thought_signature: Option<String> },
     
     // Result of a tool execution
-    FunctionResponse { function_response: FunctionResponseData, id: Option<String> },
+    FunctionResponse { name: String, response: Value, id: Option<String> },
+
+    // Chain-of-thought or reasoning
+    Thinking { thought: String, signature: Option<String> },
 }
 ```
 
@@ -84,13 +87,13 @@ pub enum Part {
 use adk_core::Part;
 
 // Text part
-let text = Part::text_part("Hello, world!");
+let text = Part::text("Hello, world!");
 
 // Image from bytes
-let image = Part::inline_data("image/png", png_bytes);
+let image = Part::inline_data("image/png", png_bytes)?;
 
 // Image from URL
-let remote_image = Part::file_data("image/jpeg", "https://example.com/photo.jpg");
+let remote_image = Part::file_data("image/jpeg", "https://example.com/photo.jpg")?;
 ```
 
 **Inspecting Parts:**
@@ -122,7 +125,7 @@ if part.is_media() {
 ```rust
 for part in &content.parts {
     match part {
-        Part::Text { text } => println!("Text: {}", text),
+        Part::Text(text) => println!("Text: {}", text),
         Part::InlineData { mime_type, data } => {
             println!("Binary data: {} ({} bytes)", mime_type, data.len());
         }
@@ -132,11 +135,11 @@ for part in &content.parts {
         Part::FunctionCall { name, args, .. } => {
             println!("Tool call: {}({})", name, args);
         }
-        Part::FunctionResponse { function_response, .. } => {
-            println!("Tool result: {} -> {}", 
-                function_response.name, 
-                function_response.response
-            );
+        Part::FunctionResponse { name, response, .. } => {
+            println!("Tool result: {} -> {}", name, response);
+        }
+        Part::Thinking { thought, .. } => {
+            println!("Thinking: {}", thought);
         }
     }
 }
@@ -613,7 +616,7 @@ use serde_json::json;
 
 // Basic request
 let request = LlmRequest::new(vec![
-    Content::new("user").with_text("Hello!")
+    Content::user().with_text("Hello!")
 ]);
 
 // With system instruction

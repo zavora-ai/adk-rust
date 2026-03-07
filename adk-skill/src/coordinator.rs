@@ -155,9 +155,9 @@ impl ContextCoordinator {
     /// # Example
     /// ```rust,ignore
     /// coordinator.resolve(&[
-    ///     ResolutionStrategy::ByName("emergency".into()),
-    ///     ResolutionStrategy::ByQuery("I smell gas".into()),
-    ///     ResolutionStrategy::ByTag("fallback".into()),
+    ///     ResolutionStrategy::ByName("emergency")),
+    ///     ResolutionStrategy::ByQuery("I smell gas")),
+    ///     ResolutionStrategy::ByTag("fallback")),
     /// ]);
     /// ```
     pub fn resolve(&self, strategies: &[ResolutionStrategy]) -> Option<SkillContext> {

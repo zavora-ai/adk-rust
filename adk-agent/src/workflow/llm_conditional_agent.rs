@@ -28,9 +28,7 @@
 //!     .build()?;
 //! ```
 
-use adk_core::{
-    Agent, Content, Event, EventStream, InvocationContext, Llm, LlmRequest, Part, Result,
-};
+use adk_core::{Agent, Content, Event, EventStream, InvocationContext, Llm, LlmRequest, Result};
 use adk_skill::{SelectionPolicy, SkillIndex, load_skill_index};
 use async_stream::stream;
 use async_trait::async_trait;
@@ -218,14 +216,14 @@ impl Agent for LlmConditionalAgent {
         let instruction = self.instruction.clone();
         let routes = self.routes.clone();
         let default_agent = self.default_agent.clone();
-        let invocation_id = run_ctx.invocation_id().to_string();
+        let _invocation_id = run_ctx.invocation_id().to_string();
         let agent_name = self.name.clone();
 
         let s = stream! {
             // Build classification request
             let user_content = run_ctx.user_content().clone();
             let user_text: String = user_content.parts.iter()
-                .filter_map(|p| if let Part::Text { text } = p { Some(text.as_str()) } else { None })
+                .filter_map(|p| p.as_text())
                 .collect::<Vec<_>>()
                 .join(" ");
 
@@ -237,7 +235,7 @@ impl Agent for LlmConditionalAgent {
 
             let request = LlmRequest {
                 model: model.name().to_string(),
-                contents: vec![Content::new("user").with_text(&classification_prompt)],
+                contents: vec![Content::user().with_text(&classification_prompt)],
                 tools: HashMap::new(),
                 config: None,
             };
@@ -258,8 +256,8 @@ impl Agent for LlmConditionalAgent {
                     Ok(chunk) => {
                         if let Some(content) = chunk.content {
                             for part in content.parts {
-                                if let Part::Text { text } = part {
-                                    classification.push_str(&text);
+                                if let Some(text) = part.as_text() {
+                                    classification.push_str(text);
                                 }
                             }
                         }
@@ -275,10 +273,10 @@ impl Agent for LlmConditionalAgent {
             let classification = classification.trim().to_lowercase();
 
             // Emit routing event
-            let mut routing_event = Event::new(&invocation_id);
+            let mut routing_event = Event::new(run_ctx.invocation_id().clone());
             routing_event.author = agent_name.clone();
             routing_event.llm_response.content = Some(
-                Content::new("model").with_text(format!("[Routing to: {}]", classification))
+                Content::model().with_text(format!("[Routing to: {}]", classification))
             );
             yield Ok(routing_event);
 
@@ -302,10 +300,10 @@ impl Agent for LlmConditionalAgent {
                 }
             } else {
                 // No matching route and no default
-                let mut error_event = Event::new(&invocation_id);
+                let mut error_event = Event::new(run_ctx.invocation_id().clone());
                 error_event.author = agent_name;
                 error_event.llm_response.content = Some(
-                    Content::new("model").with_text(format!(
+                    Content::model().with_text(format!(
                         "No route found for classification '{}'. Available routes: {:?}",
                         classification,
                         routes.keys().collect::<Vec<_>>()

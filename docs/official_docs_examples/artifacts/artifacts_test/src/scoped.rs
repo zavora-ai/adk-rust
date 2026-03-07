@@ -7,6 +7,7 @@
 //!   cargo run --bin scoped
 
 use adk_artifact::{InMemoryArtifactService, ScopedArtifacts};
+use adk_core::types::{SessionId, UserId};
 use adk_core::{Artifacts, Part};
 use std::sync::Arc;
 
@@ -21,33 +22,33 @@ async fn main() -> anyhow::Result<()> {
     let session1 = ScopedArtifacts::new(
         service.clone(),
         "my_app".to_string(),
-        "user_123".to_string(),
-        "session_1".to_string(),
+        UserId::new("user_123").unwrap(),
+        SessionId::new("session_1").unwrap(),
     );
 
     let session2 = ScopedArtifacts::new(
         service.clone(),
         "my_app".to_string(),
-        "user_123".to_string(),
-        "session_2".to_string(),
+        UserId::new("user_123").unwrap(),
+        SessionId::new("session_2").unwrap(),
     );
 
     // --- Session-scoped artifacts (default) ---
     println!("1. Session-scoped artifacts (isolated):");
 
     // Save in session 1
-    session1.save("notes.txt", &Part::Text { text: "Session 1 notes".to_string() }).await?;
+    session1.save("notes.txt", &Part::Text("Session 1 notes".to_string())).await?;
     println!("   Session 1: Saved notes.txt");
 
     // Save in session 2
-    session2.save("notes.txt", &Part::Text { text: "Session 2 notes".to_string() }).await?;
+    session2.save("notes.txt", &Part::Text("Session 2 notes".to_string())).await?;
     println!("   Session 2: Saved notes.txt");
 
     // Load from each - they're isolated
     let s1_notes = session1.load("notes.txt").await?;
     let s2_notes = session2.load("notes.txt").await?;
 
-    if let (Part::Text { text: t1 }, Part::Text { text: t2 }) = (s1_notes, s2_notes) {
+    if let (Part::Text(t1), Part::Text(t2)) = (s1_notes, s2_notes) {
         println!("   Session 1 loaded: {}", t1);
         println!("   Session 2 loaded: {}", t2);
     }
@@ -62,14 +63,12 @@ async fn main() -> anyhow::Result<()> {
     println!("\n2. User-scoped artifacts (shared across sessions):");
 
     // Save user-scoped artifact from session 1
-    session1
-        .save("user:profile.json", &Part::Text { text: r#"{"name": "Alice"}"#.to_string() })
-        .await?;
+    session1.save("user:profile.json", &Part::Text(r#"{"name": "Alice"}"#.to_string())).await?;
     println!("   Session 1: Saved user:profile.json");
 
     // Load from session 2 - same artifact!
     let profile = session2.load("user:profile.json").await?;
-    if let Part::Text { text } = profile {
+    if let Some(text) = profile.as_text() {
         println!("   Session 2 loaded: {}", text);
     }
 
@@ -85,8 +84,8 @@ async fn main() -> anyhow::Result<()> {
     let artifacts = ScopedArtifacts::new(
         service.clone(),
         "demo_app".to_string(),
-        "demo_user".to_string(),
-        "demo_session".to_string(),
+        UserId::new("demo_user").unwrap(),
+        SessionId::new("demo_session").unwrap(),
     );
 
     // Save - just name and data
@@ -94,8 +93,8 @@ async fn main() -> anyhow::Result<()> {
         .save(
             "report.pdf",
             &Part::InlineData {
-                mime_type: "application/pdf".to_string(),
-                data: vec![0x25, 0x50, 0x44, 0x46], // PDF header
+                mime_type: "application/pdf".parse().unwrap(),
+                data: vec![0x25, 0x50, 0x44, 0x46].into(), // PDF header
             },
         )
         .await?;

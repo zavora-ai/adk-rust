@@ -4,6 +4,7 @@ use crate::audit::{AuditEvent, AuditOutcome, AuditSink};
 use crate::error::{AccessDenied, AuthError};
 use crate::permission::Permission;
 use crate::role::Role;
+use adk_core::types::UserId;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -13,7 +14,7 @@ pub struct AccessControl {
     /// Roles by name.
     roles: HashMap<String, Role>,
     /// User to role assignments.
-    user_roles: HashMap<String, Vec<String>>,
+    user_roles: HashMap<UserId, Vec<String>>,
     /// Optional audit sink.
     audit: Option<Arc<dyn AuditSink>>,
 }
@@ -25,7 +26,7 @@ impl AccessControl {
     }
 
     /// Check if a user has access to a permission.
-    pub fn check(&self, user: &str, permission: &Permission) -> Result<(), AccessDenied> {
+    pub fn check(&self, user: &UserId, permission: &Permission) -> Result<(), AccessDenied> {
         let role_names = self.user_roles.get(user);
 
         if let Some(role_names) = role_names {
@@ -38,13 +39,13 @@ impl AccessControl {
             }
         }
 
-        Err(AccessDenied::new(user, permission.to_string()))
+        Err(AccessDenied::new(user.as_str(), permission.to_string()))
     }
 
     /// Check and log the access attempt.
     pub async fn check_and_audit(
         &self,
-        user: &str,
+        user: &UserId,
         permission: &Permission,
     ) -> Result<(), AuthError> {
         let result = self.check(user, permission);
@@ -67,7 +68,7 @@ impl AccessControl {
     }
 
     /// Get all roles assigned to a user.
-    pub fn user_roles(&self, user: &str) -> Vec<&Role> {
+    pub fn user_roles(&self, user: &UserId) -> Vec<&Role> {
         self.user_roles
             .get(user)
             .map(|names| names.iter().filter_map(|name| self.roles.get(name)).collect())
@@ -89,7 +90,7 @@ impl AccessControl {
 #[derive(Default)]
 pub struct AccessControlBuilder {
     roles: HashMap<String, Role>,
-    user_roles: HashMap<String, Vec<String>>,
+    user_roles: HashMap<UserId, Vec<String>>,
     audit: Option<Arc<dyn AuditSink>>,
 }
 
@@ -101,7 +102,7 @@ impl AccessControlBuilder {
     }
 
     /// Assign a role to a user.
-    pub fn assign(mut self, user: impl Into<String>, role: impl Into<String>) -> Self {
+    pub fn assign(mut self, user: impl Into<UserId>, role: impl Into<String>) -> Self {
         self.user_roles.entry(user.into()).or_default().push(role.into());
         self
     }
@@ -144,8 +145,8 @@ mod tests {
         AccessControl::builder()
             .role(admin)
             .role(user)
-            .assign("alice", "admin")
-            .assign("bob", "user")
+            .assign(UserId::new("alice").unwrap(), "admin")
+            .assign(UserId::new("bob").unwrap(), "user")
             .build()
             .unwrap()
     }
@@ -153,33 +154,37 @@ mod tests {
     #[test]
     fn test_admin_has_full_access() {
         let ac = setup_ac();
-        assert!(ac.check("alice", &Permission::Tool("anything".into())).is_ok());
-        assert!(ac.check("alice", &Permission::AllTools).is_ok());
-        assert!(ac.check("alice", &Permission::Agent("any".into())).is_ok());
+        let alice = UserId::new("alice").unwrap();
+        assert!(ac.check(&alice, &Permission::Tool("anything".into())).is_ok());
+        assert!(ac.check(&alice, &Permission::AllTools).is_ok());
+        assert!(ac.check(&alice, &Permission::Agent("any".into())).is_ok());
     }
 
     #[test]
     fn test_user_limited_access() {
         let ac = setup_ac();
+        let bob = UserId::new("bob").unwrap();
         // Can access search
-        assert!(ac.check("bob", &Permission::Tool("search".into())).is_ok());
+        assert!(ac.check(&bob, &Permission::Tool("search".into())).is_ok());
         // Cannot access exec (denied)
-        assert!(ac.check("bob", &Permission::Tool("exec".into())).is_err());
+        assert!(ac.check(&bob, &Permission::Tool("exec".into())).is_err());
         // Cannot access other tools
-        assert!(ac.check("bob", &Permission::Tool("other".into())).is_err());
+        assert!(ac.check(&bob, &Permission::Tool("other".into())).is_err());
     }
 
     #[test]
     fn test_unknown_user_denied() {
         let ac = setup_ac();
-        assert!(ac.check("unknown", &Permission::Tool("search".into())).is_err());
+        assert!(
+            ac.check(&UserId::new("unknown").unwrap(), &Permission::Tool("search".into())).is_err()
+        );
     }
 
     #[test]
     fn test_invalid_role_assignment() {
         let result = AccessControl::builder()
             .role(Role::new("admin"))
-            .assign("alice", "nonexistent")
+            .assign(UserId::new("alice").unwrap(), "nonexistent")
             .build();
 
         assert!(result.is_err());
@@ -195,13 +200,14 @@ mod tests {
         let ac = AccessControl::builder()
             .role(roles[0].clone())
             .role(roles[1].clone())
-            .assign("bob", "reader")
-            .assign("bob", "writer")
+            .assign(UserId::new("bob").unwrap(), "reader")
+            .assign(UserId::new("bob").unwrap(), "writer")
             .build()
             .unwrap();
 
+        let bob = UserId::new("bob").unwrap();
         // Bob has both roles, can access both
-        assert!(ac.check("bob", &Permission::Tool("read".into())).is_ok());
-        assert!(ac.check("bob", &Permission::Tool("write".into())).is_ok());
+        assert!(ac.check(&bob, &Permission::Tool("read".into())).is_ok());
+        assert!(ac.check(&bob, &Permission::Tool("write".into())).is_ok());
     }
 }

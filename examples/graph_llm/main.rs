@@ -36,7 +36,7 @@ async fn call_llm(
             && let Some(content) = response.content
         {
             for part in content.parts {
-                if let Some(text) = part.text() {
+                if let Some(text) = part.as_text() {
                     result.push_str(text);
                 }
             }
@@ -139,7 +139,7 @@ async fn main() -> anyhow::Result<()> {
     let mut input = State::new();
     input.insert("topic".to_string(), json!(topic));
 
-    let result = graph.invoke(input, ExecutionConfig::new("content-pipeline")).await?;
+    let result = graph.invoke(input, ExecutionConfig::new("content-pipeline".to_string())).await?;
 
     println!("{}\n", "=".repeat(60));
     println!("FINAL ARTICLE:\n");

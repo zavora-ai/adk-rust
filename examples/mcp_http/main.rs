@@ -16,7 +16,7 @@
 // - https://remote.mcpservers.org/sequentialthinking/mcp - Structured thinking
 
 use adk_agent::LlmAgentBuilder;
-use adk_core::{Content, ReadonlyContext, Toolset};
+use adk_core::{Content, ReadonlyContext, Toolset, types::AdkIdentity};
 use adk_model::GeminiModel;
 use adk_tool::{McpHttpClientBuilder, McpTaskConfig};
 use anyhow::Result;
@@ -24,31 +24,31 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Minimal context for tool discovery (no unimplemented! methods)
-struct SimpleContext;
+struct SimpleContext {
+    identity: AdkIdentity,
+    metadata: std::collections::HashMap<String, String>,
+}
+
+impl SimpleContext {
+    fn new() -> Self {
+        Self { identity: AdkIdentity::default(), metadata: std::collections::HashMap::new() }
+    }
+}
 
 #[async_trait::async_trait]
+#[async_trait::async_trait]
 impl ReadonlyContext for SimpleContext {
-    fn invocation_id(&self) -> &str {
-        "init"
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
-    fn agent_name(&self) -> &str {
-        "mcp-http-agent"
-    }
-    fn user_id(&self) -> &str {
-        "user"
-    }
-    fn app_name(&self) -> &str {
-        "mcp_http_example"
-    }
-    fn session_id(&self) -> &str {
-        "init"
-    }
-    fn branch(&self) -> &str {
-        "main"
-    }
+
     fn user_content(&self) -> &Content {
         static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
         CONTENT.get_or_init(|| Content::new("user").with_text("init"))
+    }
+
+    fn metadata(&self) -> &std::collections::HashMap<String, String> {
+        &self.metadata
     }
 }
 
@@ -113,7 +113,7 @@ async fn main() -> Result<()> {
     };
 
     // Create a simple context for tool discovery
-    let ctx = Arc::new(SimpleContext) as Arc<dyn ReadonlyContext>;
+    let ctx = Arc::new(SimpleContext::new()) as Arc<dyn ReadonlyContext>;
 
     // Collect tools from connected servers
     let mut all_tools = Vec::new();

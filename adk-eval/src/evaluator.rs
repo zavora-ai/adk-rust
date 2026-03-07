@@ -259,7 +259,7 @@ impl Evaluator {
             if let Some(content) = event.content() {
                 for part in &content.parts {
                     // Extract text content
-                    if let Some(text) = part.text() {
+                    if let Some(text) = part.as_text() {
                         response_text.push_str(text);
                     }
                     // Extract function calls using pattern matching
@@ -614,55 +614,50 @@ impl Default for Evaluator {
 
 /// Minimal InvocationContext implementation for evaluation
 struct EvalInvocationContext {
-    invocation_id: String,
+    identity: adk_core::types::AdkIdentity,
     user_content: Content,
     agent: Arc<dyn Agent>,
     session: EvalSession,
     run_config: adk_core::RunConfig,
     ended: std::sync::atomic::AtomicBool,
+    metadata: std::collections::HashMap<String, String>,
 }
 
 impl EvalInvocationContext {
     fn new(invocation_id: String, user_content: Content, agent: Arc<dyn Agent>) -> Self {
         let session_id = format!("eval-session-{}", uuid::Uuid::new_v4());
+        let identity = adk_core::types::AdkIdentity {
+            invocation_id: adk_core::types::InvocationId::new(invocation_id).unwrap(),
+            session_id: adk_core::types::SessionId::new(session_id.clone()).unwrap(),
+            agent_name: agent.name().to_string(),
+            user_id: adk_core::types::UserId::new("eval_user".to_string()).unwrap(),
+            app_name: "eval_app".to_string(),
+            ..Default::default()
+        };
+
         Self {
-            invocation_id,
+            identity,
             user_content,
             agent,
             session: EvalSession::new(session_id),
             run_config: adk_core::RunConfig::default(),
             ended: std::sync::atomic::AtomicBool::new(false),
+            metadata: std::collections::HashMap::new(),
         }
     }
 }
 
 impl adk_core::ReadonlyContext for EvalInvocationContext {
-    fn invocation_id(&self) -> &str {
-        &self.invocation_id
-    }
-
-    fn agent_name(&self) -> &str {
-        self.agent.name()
-    }
-
-    fn user_id(&self) -> &str {
-        "eval_user"
-    }
-
-    fn app_name(&self) -> &str {
-        "eval_app"
-    }
-
-    fn session_id(&self) -> &str {
-        &self.session.id
-    }
-
-    fn branch(&self) -> &str {
-        "main"
+    fn identity(&self) -> &adk_core::types::AdkIdentity {
+        &self.identity
     }
 
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+
+    fn metadata(&self) -> &std::collections::HashMap<String, String> {
+        &self.metadata
     }
 }
 
@@ -700,20 +695,27 @@ impl adk_core::InvocationContext for EvalInvocationContext {
     }
 }
 
+use adk_core::types::{SessionId, UserId};
+
 /// Minimal Session implementation for evaluation
 struct EvalSession {
-    id: String,
+    id: SessionId,
+    user_id: UserId,
     state: EvalState,
 }
 
 impl EvalSession {
     fn new(id: String) -> Self {
-        Self { id, state: EvalState::new() }
+        Self {
+            id: SessionId::new(id).unwrap(),
+            user_id: UserId::new("eval_user".to_string()).unwrap(),
+            state: EvalState::new(),
+        }
     }
 }
 
 impl adk_core::Session for EvalSession {
-    fn id(&self) -> &str {
+    fn id(&self) -> &SessionId {
         &self.id
     }
 
@@ -721,8 +723,8 @@ impl adk_core::Session for EvalSession {
         "eval_app"
     }
 
-    fn user_id(&self) -> &str {
-        "eval_user"
+    fn user_id(&self) -> &UserId {
+        &self.user_id
     }
 
     fn state(&self) -> &dyn adk_core::State {

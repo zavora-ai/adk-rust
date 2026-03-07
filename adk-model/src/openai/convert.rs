@@ -10,126 +10,129 @@ use async_openai::types::{
     ChatCompletionRequestUserMessageArgs, ChatCompletionRequestUserMessageContent,
     ChatCompletionRequestUserMessageContentPart, ChatCompletionTool, ChatCompletionToolType,
     CreateChatCompletionResponse, CreateChatCompletionStreamResponse, FunctionCall, FunctionObject,
-    ImageUrl, InputAudio, InputAudioFormat,
+    ImageDetail, ImageUrl, InputAudio, InputAudioFormat,
 };
+use mime;
 use std::collections::HashMap;
 
 /// Convert ADK Content to OpenAI ChatCompletionRequestMessage.
 pub fn content_to_message(content: &Content) -> ChatCompletionRequestMessage {
-    match content.role.as_str() {
-        "user" => {
-            let has_attachments = content
+    if content.role.is_user() {
+        let has_attachments = content
+            .parts
+            .iter()
+            .any(|part| matches!(part, Part::InlineData { .. } | Part::FileData { .. }));
+        if has_attachments {
+            let content_parts: Vec<ChatCompletionRequestUserMessageContentPart> = content
                 .parts
                 .iter()
-                .any(|part| matches!(part, Part::InlineData { .. } | Part::FileData { .. }));
-            if has_attachments {
-                let content_parts: Vec<ChatCompletionRequestUserMessageContentPart> = content
-                    .parts
-                    .iter()
-                    .filter_map(|p| match p {
-                        Part::Text { text } => {
-                            Some(ChatCompletionRequestUserMessageContentPart::Text(
-                                ChatCompletionRequestMessageContentPartText { text: text.clone() },
+                .filter_map(|p| match p {
+                    Part::Text(text) => Some(ChatCompletionRequestUserMessageContentPart::Text(
+                        ChatCompletionRequestMessageContentPartText { text: text.clone() },
+                    )),
+                    Part::Thinking { thought: thinking, .. } => {
+                        Some(ChatCompletionRequestUserMessageContentPart::Text(
+                            ChatCompletionRequestMessageContentPartText { text: thinking.clone() },
+                        ))
+                    }
+                    Part::InlineData { mime_type, data } => {
+                        Some(inline_data_part_to_openai(mime_type.as_ref(), data))
+                    }
+                    Part::FileData { mime_type, file_uri } => {
+                        if mime_type.type_() == mime::IMAGE {
+                            Some(ChatCompletionRequestUserMessageContentPart::ImageUrl(
+                                ChatCompletionRequestMessageContentPartImage {
+                                    image_url: ImageUrl {
+                                        url: file_uri.clone(),
+                                        detail: Some(ImageDetail::Auto),
+                                    },
+                                },
                             ))
-                        }
-                        Part::Thinking { thinking, .. } => {
+                        } else {
                             Some(ChatCompletionRequestUserMessageContentPart::Text(
                                 ChatCompletionRequestMessageContentPartText {
-                                    text: thinking.clone(),
+                                    text: attachment::file_attachment_to_text(
+                                        mime_type.as_ref(),
+                                        file_uri,
+                                    ),
                                 },
                             ))
                         }
-                        Part::InlineData { mime_type, data } => {
-                            Some(inline_data_part_to_openai(mime_type, data))
-                        }
-                        Part::FileData { mime_type, file_uri } => {
-                            Some(ChatCompletionRequestUserMessageContentPart::Text(
-                                ChatCompletionRequestMessageContentPartText {
-                                    text: attachment::file_attachment_to_text(mime_type, file_uri),
-                                },
-                            ))
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                if content_parts.is_empty() {
-                    ChatCompletionRequestUserMessageArgs::default()
-                        .content(ChatCompletionRequestUserMessageContent::Text(extract_text(
-                            &content.parts,
-                        )))
-                        .build()
-                        .unwrap()
-                        .into()
-                } else {
-                    ChatCompletionRequestUserMessageArgs::default()
-                        .content(ChatCompletionRequestUserMessageContent::Array(content_parts))
-                        .build()
-                        .unwrap()
-                        .into()
-                }
-            } else {
-                let text = extract_text(&content.parts);
+                    }
+                    _ => None,
+                })
+                .collect();
+            if content_parts.is_empty() {
                 ChatCompletionRequestUserMessageArgs::default()
-                    .content(ChatCompletionRequestUserMessageContent::Text(text))
-                    .build()
-                    .unwrap()
-                    .into()
-            }
-        }
-        "model" | "assistant" => {
-            let mut builder = ChatCompletionRequestAssistantMessageArgs::default();
-
-            // Extract text content
-            let text_content = get_text_content(&content.parts);
-            if let Some(ref text) = text_content {
-                builder.content(text.clone());
-            }
-
-            // Extract tool calls
-            let tool_calls = extract_tool_calls(&content.parts);
-            if !tool_calls.is_empty() {
-                builder.tool_calls(tool_calls.clone());
-            }
-
-            // OpenAI requires assistant messages to have either content or tool_calls
-            // If both are empty, provide a placeholder to avoid 400 Bad Request
-            if text_content.is_none() && tool_calls.is_empty() {
-                builder.content(" ".to_string()); // Minimal non-empty content
-            }
-
-            builder.build().unwrap().into()
-        }
-        "system" => {
-            let text = extract_text(&content.parts);
-            ChatCompletionRequestSystemMessageArgs::default().content(text).build().unwrap().into()
-        }
-        "function" | "tool" => {
-            // Tool response message
-            if let Some(Part::FunctionResponse { function_response, id }) = content.parts.first() {
-                let tool_call_id = id.clone().unwrap_or_else(|| "unknown".to_string());
-                ChatCompletionRequestToolMessageArgs::default()
-                    .tool_call_id(tool_call_id)
-                    .content(serde_json::to_string(&function_response.response).unwrap_or_default())
+                    .content(ChatCompletionRequestUserMessageContent::Text(content.collect_text()))
                     .build()
                     .unwrap()
                     .into()
             } else {
-                // Fallback to user message
                 ChatCompletionRequestUserMessageArgs::default()
-                    .content(ChatCompletionRequestUserMessageContent::Text(String::new()))
+                    .content(ChatCompletionRequestUserMessageContent::Array(content_parts))
                     .build()
                     .unwrap()
                     .into()
             }
-        }
-        _ => {
-            let text = extract_text(&content.parts);
+        } else {
+            let text = content.collect_text();
             ChatCompletionRequestUserMessageArgs::default()
                 .content(ChatCompletionRequestUserMessageContent::Text(text))
                 .build()
                 .unwrap()
                 .into()
         }
+    } else if content.role.is_model() {
+        let mut builder = ChatCompletionRequestAssistantMessageArgs::default();
+
+        // Extract text content
+        let text_content = get_text_content(&content.parts);
+        if let Some(ref text) = text_content {
+            builder.content(text.clone());
+        }
+
+        // Extract tool calls
+        let tool_calls = extract_tool_calls(&content.parts);
+        if !tool_calls.is_empty() {
+            builder.tool_calls(tool_calls.clone());
+        }
+
+        // OpenAI requires assistant messages to have either content or tool_calls
+        // If both are empty, provide a placeholder to avoid 400 Bad Request
+        if text_content.is_none() && tool_calls.is_empty() {
+            builder.content(" ".to_string()); // Minimal non-empty content
+        }
+
+        builder.build().unwrap().into()
+    } else if content.role.is_system() {
+        let text = content.collect_text();
+        ChatCompletionRequestSystemMessageArgs::default().content(text).build().unwrap().into()
+    } else if content.role.is_tool() {
+        // Tool response message
+        if let Some(Part::FunctionResponse { name, response, id: _ }) = content.parts.first() {
+            let tool_call_id = name.clone();
+            ChatCompletionRequestToolMessageArgs::default()
+                .tool_call_id(tool_call_id)
+                .content(serde_json::to_string(response).unwrap_or_default())
+                .build()
+                .unwrap()
+                .into()
+        } else {
+            // Fallback to user message
+            ChatCompletionRequestUserMessageArgs::default()
+                .content(ChatCompletionRequestUserMessageContent::Text(String::new()))
+                .build()
+                .unwrap()
+                .into()
+        }
+    } else {
+        let text = content.collect_text();
+        ChatCompletionRequestUserMessageArgs::default()
+            .content(ChatCompletionRequestUserMessageContent::Text(text))
+            .build()
+            .unwrap()
+            .into()
     }
 }
 
@@ -141,7 +144,7 @@ fn inline_data_part_to_openai(
         let data_uri = format!("data:{mime_type};base64,{}", attachment::encode_base64(data));
         return ChatCompletionRequestUserMessageContentPart::ImageUrl(
             ChatCompletionRequestMessageContentPartImage {
-                image_url: ImageUrl { url: data_uri, detail: None },
+                image_url: ImageUrl { url: data_uri, detail: Some(ImageDetail::Auto) },
             },
         );
     }
@@ -158,7 +161,10 @@ fn inline_data_part_to_openai(
     }
 
     ChatCompletionRequestUserMessageContentPart::Text(ChatCompletionRequestMessageContentPartText {
-        text: attachment::inline_attachment_to_text(mime_type, data),
+        text: format!(
+            "<attachment mime_type=\"{mime_type}\" encoding=\"base64\">{}</attachment>",
+            attachment::encode_base64(data)
+        ),
     })
 }
 
@@ -175,8 +181,8 @@ fn extract_text(parts: &[Part]) -> String {
     parts
         .iter()
         .filter_map(|p| match p {
-            Part::Text { text } => Some(text.clone()),
-            Part::Thinking { thinking, .. } => Some(thinking.clone()),
+            Part::Text(text) => Some(text.clone()),
+            Part::Thinking { thought: thinking, .. } => Some(thinking.clone()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -240,7 +246,7 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
 
         // Add text content
         if let Some(text) = &choice.message.content {
-            parts.push(Part::Text { text: text.clone() });
+            parts.push(Part::text(text.clone()));
         }
 
         // Add tool calls with IDs
@@ -257,7 +263,7 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
             }
         }
 
-        Content { role: "model".to_string(), parts }
+        Content { role: adk_core::types::Role::Model, parts }
     });
 
     let usage_metadata = resp.usage.as_ref().map(|u| {
@@ -307,7 +313,7 @@ pub fn from_openai_chunk(chunk: &CreateChatCompletionStreamResponse) -> LlmRespo
         // Add text content from delta
         if let Some(text) = &choice.delta.content {
             if !text.is_empty() {
-                parts.push(Part::Text { text: text.clone() });
+                parts.push(Part::text(text.clone()));
             }
         }
 
@@ -336,7 +342,11 @@ pub fn from_openai_chunk(chunk: &CreateChatCompletionStreamResponse) -> LlmRespo
 
         // Only return content if there are actual parts
         // This prevents empty Content from being accumulated in conversation history
-        if parts.is_empty() { None } else { Some(Content { role: "model".to_string(), parts }) }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(Content { role: adk_core::types::Role::Model, parts })
+        }
     });
 
     let finish_reason = chunk.choices.first().and_then(|c| c.finish_reason).map(|fr| match fr {
@@ -368,25 +378,19 @@ mod tests {
 
     #[test]
     fn test_extract_text() {
-        let parts = vec![
-            Part::Text { text: "Hello".to_string() },
-            Part::Text { text: "World".to_string() },
-        ];
+        let parts = vec![Part::text("Hello".to_string()), Part::text("World".to_string())];
         assert_eq!(extract_text(&parts), "Hello\nWorld");
     }
 
     #[test]
     fn test_user_message_with_inline_data_produces_array_content() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![
-                Part::Text { text: "What is in this image?".to_string() },
-                Part::InlineData {
-                    mime_type: "image/png".to_string(),
-                    data: vec![0x89, 0x50, 0x4E, 0x47], // PNG magic bytes
-                },
-            ],
-        };
+        let content = Content::user().with_text("What is in this image?").with_part(
+            Part::inline_data(
+                "image/png",
+                bytes::Bytes::from_static(&[0x89, 0x50, 0x4E, 0x47]), // PNG magic bytes
+            )
+            .unwrap(),
+        );
         let msg = content_to_message(&content);
 
         // Should produce a user message with Array content (not Text)
@@ -415,14 +419,10 @@ mod tests {
 
     #[test]
     fn test_user_message_with_multiple_attachments() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![
-                Part::Text { text: "Compare these".to_string() },
-                Part::InlineData { mime_type: "image/jpeg".to_string(), data: vec![0xFF, 0xD8] },
-                Part::InlineData { mime_type: "image/png".to_string(), data: vec![0x89, 0x50] },
-            ],
-        };
+        let content = Content::user()
+            .with_text("Compare these")
+            .with_part(Part::inline_data("image/jpeg", bytes::Bytes::from_static(&[0xFF, 0xD8])).unwrap())
+            .with_part(Part::inline_data("image/png", bytes::Bytes::from_static(&[0x89, 0x50])).unwrap());
         let msg = content_to_message(&content);
 
         if let ChatCompletionRequestMessage::User(user_msg) = &msg {
@@ -438,16 +438,9 @@ mod tests {
 
     #[test]
     fn test_user_message_with_audio_inline_data_uses_input_audio_part() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![
-                Part::Text { text: "Transcribe this".to_string() },
-                Part::InlineData {
-                    mime_type: "audio/wav".to_string(),
-                    data: vec![0x52, 0x49, 0x46, 0x46],
-                },
-            ],
-        };
+        let content = Content::user().with_text("Transcribe this").with_part(
+            Part::inline_data("audio/wav", bytes::Bytes::from_static(&[0x52, 0x49, 0x46, 0x46])).unwrap(),
+        );
         let msg = content_to_message(&content);
 
         if let ChatCompletionRequestMessage::User(user_msg) = &msg {
@@ -467,13 +460,8 @@ mod tests {
 
     #[test]
     fn test_user_message_with_pdf_inline_data_falls_back_to_text_part() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![Part::InlineData {
-                mime_type: "application/pdf".to_string(),
-                data: b"%PDF".to_vec(),
-            }],
-        };
+        let content = Content::user()
+            .with_part(Part::inline_data("application/pdf", bytes::Bytes::from_static(b"%PDF")).unwrap());
         let msg = content_to_message(&content);
 
         if let ChatCompletionRequestMessage::User(user_msg) = &msg {
@@ -494,14 +482,34 @@ mod tests {
     }
 
     #[test]
+    fn test_user_message_with_file_data_image_uses_image_url_part() {
+        let content = Content::user()
+            .with_part(Part::file_data("image/jpeg", "https://example.com/photo.jpg".to_string()));
+        let msg = content_to_message(&content);
+
+        if let ChatCompletionRequestMessage::User(user_msg) = &msg {
+            if let ChatCompletionRequestUserMessageContent::Array(parts) = &user_msg.content {
+                assert_eq!(parts.len(), 1);
+                if let ChatCompletionRequestUserMessageContentPart::ImageUrl(img) = &parts[0] {
+                    assert_eq!(img.image_url.url, "https://example.com/photo.jpg");
+                    assert_eq!(img.image_url.detail, Some(ImageDetail::Auto));
+                } else {
+                    panic!("Expected ImageUrl part for file data with image mime type");
+                }
+            } else {
+                panic!("Expected Array content");
+            }
+        } else {
+            panic!("Expected User message");
+        }
+    }
+
+    #[test]
     fn test_user_message_with_file_data_falls_back_to_text_part() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![Part::FileData {
-                mime_type: "application/pdf".to_string(),
-                file_uri: "https://example.com/report.pdf".to_string(),
-            }],
-        };
+        let content = Content::user().with_part(Part::file_data(
+            "application/pdf",
+            "https://example.com/report.pdf".to_string(),
+        ));
         let msg = content_to_message(&content);
 
         if let ChatCompletionRequestMessage::User(user_msg) = &msg {
@@ -511,7 +519,7 @@ mod tests {
                     assert!(text_part.text.contains("https://example.com/report.pdf"));
                     assert!(text_part.text.contains("application/pdf"));
                 } else {
-                    panic!("Expected text part for file uri attachment");
+                    panic!("Expected Text part for file uri attachment");
                 }
             } else {
                 panic!("Expected Array content");
@@ -523,10 +531,7 @@ mod tests {
 
     #[test]
     fn test_user_message_text_only_stays_text_content() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![Part::Text { text: "Hello".to_string() }],
-        };
+        let content = Content::user().with_text("Hello");
         let msg = content_to_message(&content);
 
         if let ChatCompletionRequestMessage::User(user_msg) = &msg {

@@ -19,6 +19,7 @@
 //!
 //! ```rust,ignore
 //! use adk_auth::{Permission, Role, AccessControl};
+//! use adk_core::types::UserId;
 //!
 //! let admin = Role::new("admin")
 //!     .allow(Permission::AllTools)
@@ -31,10 +32,10 @@
 //! let ac = AccessControl::builder()
 //!     .role(admin)
 //!     .role(user)
-//!     .assign("alice@example.com", "admin")
+//!     .assign(UserId::new("alice@example.com").unwrap(), "admin")
 //!     .build()?;
 //!
-//! ac.check("alice@example.com", &Permission::AllTools)?;
+//! ac.check(&UserId::new("alice@example.com").unwrap(), &Permission::AllTools)?;
 //! ```
 
 mod access_control;

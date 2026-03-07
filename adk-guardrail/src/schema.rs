@@ -1,5 +1,5 @@
 use crate::{Guardrail, GuardrailError, GuardrailResult, Severity};
-use adk_core::{Content, Part};
+use adk_core::Content;
 use async_trait::async_trait;
 use jsonschema::Validator;
 use serde_json::Value;
@@ -34,7 +34,7 @@ impl SchemaValidator {
 
     fn extract_json(&self, content: &Content) -> Option<Value> {
         for part in &content.parts {
-            if let Part::Text { text } = part {
+            if let Some(text) = part.as_text() {
                 // Try to parse as JSON directly
                 if let Ok(json) = serde_json::from_str(text) {
                     return Some(json);

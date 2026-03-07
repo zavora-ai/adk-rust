@@ -89,12 +89,12 @@ impl Guardrail for PiiRedactor {
 
         for part in &content.parts {
             match part {
-                Part::Text { text } => {
+                Part::Text(text) => {
                     let (redacted, found) = self.redact(text);
                     if !found.is_empty() {
                         any_redacted = true;
                         redacted_types.extend(found);
-                        new_parts.push(Part::Text { text: redacted });
+                        new_parts.push(Part::text(redacted));
                     } else {
                         new_parts.push(part.clone());
                     }
@@ -180,7 +180,7 @@ mod tests {
 
         match result {
             GuardrailResult::Transform { new_content, .. } => {
-                let text = new_content.parts[0].text().unwrap();
+                let text = new_content.parts[0].as_text().unwrap();
                 assert!(text.contains("[EMAIL REDACTED]"));
             }
             _ => panic!("Expected Transform result"),

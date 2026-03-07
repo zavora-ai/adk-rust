@@ -1,19 +1,176 @@
-use crate::{Agent, Result, types::Content};
+use crate::{
+    Agent, Result,
+    types::{AdkIdentity, Content, InvocationId, SessionId, UserId},
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-#[async_trait]
+/// Foundation for all ADK contexts.
+///
+/// This trait provides read-only access to the foundational identifiers of an
+/// ADK execution. It is purposely NOT async to allow usage in hot paths and
+/// synchronization primitives without overhead.
 pub trait ReadonlyContext: Send + Sync {
-    fn invocation_id(&self) -> &str;
-    fn agent_name(&self) -> &str;
-    fn user_id(&self) -> &str;
-    fn app_name(&self) -> &str;
-    fn session_id(&self) -> &str;
-    fn branch(&self) -> &str;
+    /// Returns the consolidated identity capsule for this context.
+    fn identity(&self) -> &AdkIdentity;
+
+    /// Convenience: returns the invocation ID.
+    fn invocation_id(&self) -> &InvocationId {
+        &self.identity().invocation_id
+    }
+
+    /// Convenience: returns the agent name.
+    fn agent_name(&self) -> &str {
+        &self.identity().agent_name
+    }
+
+    /// Convenience: returns the user ID.
+    fn user_id(&self) -> &UserId {
+        &self.identity().user_id
+    }
+
+    /// Convenience: returns the app name.
+    fn app_name(&self) -> &str {
+        &self.identity().app_name
+    }
+
+    /// Convenience: returns the session ID.
+    fn session_id(&self) -> &SessionId {
+        &self.identity().session_id
+    }
+
+    /// Convenience: returns the branch name.
+    fn branch(&self) -> &str {
+        &self.identity().branch
+    }
+
+    /// Returns the initial user content that triggered this context.
     fn user_content(&self) -> &Content;
+
+    /// Returns the metadata map for platform-specific identifiers.
+    fn metadata(&self) -> &HashMap<String, String>;
+}
+
+impl<T: ?Sized + ReadonlyContext> ReadonlyContext for Arc<T> {
+    fn identity(&self) -> &AdkIdentity {
+        (**self).identity()
+    }
+    fn user_content(&self) -> &Content {
+        (**self).user_content()
+    }
+    fn metadata(&self) -> &HashMap<String, String> {
+        (**self).metadata()
+    }
+}
+
+/// A concrete, domain-focused implementation of `ReadonlyContext`.
+///
+/// This struct holds the foundational identifiers for an ADK execution (Invocation, Session, etc.)
+/// without being tied to any specific observability framework.
+///
+/// It is the standard, lightweight context implementation for use cases where the full `Runner`
+/// environment is not required (e.g., lightweight tools, simple agents, or tests).
+///
+/// # Extensibility
+///
+/// This struct is designed to be reusable and extendable. For example, high-fidelity observability
+/// can be added by importing the `TraceContextExt` trait from `adk-telemetry`, which implements
+/// tracing logic on top of any `ReadonlyContext`.
+///
+/// Tracing capabilities are provided as extension traits in `adk-telemetry`.
+#[derive(Debug, Clone, Default)]
+pub struct AdkContext {
+    identity: AdkIdentity,
+    user_content: Content,
+    /// Extensible metadata for any framework-specific attributes.
+    metadata: HashMap<String, String>,
+}
+
+impl AdkContext {
+    /// Create a new builder for `AdkContext`.
+    pub fn builder() -> AdkContextBuilder {
+        AdkContextBuilder::default()
+    }
+
+    /// Update the branch name.
+    pub fn set_branch(&mut self, branch: impl Into<String>) {
+        self.identity.branch = branch.into();
+    }
+}
+
+/// Fluent builder for `AdkContext` following Rust API guidelines.
+#[derive(Debug, Clone, Default)]
+pub struct AdkContextBuilder {
+    identity: AdkIdentity,
+    user_content: Option<Content>,
+    metadata: HashMap<String, String>,
+}
+
+impl AdkContextBuilder {
+    pub fn invocation_id(mut self, id: impl Into<InvocationId>) -> Self {
+        self.identity.invocation_id = id.into();
+        self
+    }
+
+    pub fn agent_name(mut self, name: impl Into<String>) -> Self {
+        self.identity.agent_name = name.into();
+        self
+    }
+
+    pub fn user_id(mut self, id: impl Into<UserId>) -> Self {
+        self.identity.user_id = id.into();
+        self
+    }
+
+    pub fn app_name(mut self, name: impl Into<String>) -> Self {
+        self.identity.app_name = name.into();
+        self
+    }
+
+    pub fn session_id(mut self, id: impl Into<SessionId>) -> Self {
+        self.identity.session_id = id.into();
+        self
+    }
+
+    pub fn branch(mut self, branch: impl Into<String>) -> Self {
+        self.identity.branch = branch.into();
+        self
+    }
+
+    pub fn user_content(mut self, content: impl Into<Content>) -> Self {
+        self.user_content = Some(content.into());
+        self
+    }
+
+    pub fn metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.metadata.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn build(self) -> AdkContext {
+        AdkContext {
+            identity: self.identity,
+            user_content: self.user_content.unwrap_or_default(),
+            metadata: self.metadata,
+        }
+    }
+}
+
+impl ReadonlyContext for AdkContext {
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
+    }
+
+    fn user_content(&self) -> &Content {
+        &self.user_content
+    }
+
+    fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
+    }
 }
 
 // State management traits
@@ -59,9 +216,9 @@ pub trait ReadonlyState: Send + Sync {
 
 // Session trait
 pub trait Session: Send + Sync {
-    fn id(&self) -> &str;
+    fn id(&self) -> &SessionId;
     fn app_name(&self) -> &str;
-    fn user_id(&self) -> &str;
+    fn user_id(&self) -> &UserId;
     fn state(&self) -> &dyn State;
     /// Returns the conversation history from this session as Content items
     fn conversation_history(&self) -> Vec<Content>;
@@ -273,5 +430,24 @@ mod tests {
     #[test]
     fn test_validate_state_key_null_byte() {
         assert!(validate_state_key("foo\0bar").is_err());
+    }
+
+    #[test]
+    fn test_adk_context_builder() {
+        let ctx = AdkContext::builder()
+            .invocation_id(crate::types::InvocationId::new("inv-123").unwrap())
+            .agent_name("test-agent")
+            .user_id(crate::types::UserId::new("user-456").unwrap())
+            .session_id(crate::types::SessionId::new("sess-789").unwrap())
+            .metadata("custom.key", "custom-value")
+            .build();
+
+        let id = ctx.identity();
+        assert_eq!(id.invocation_id.as_str(), "inv-123");
+        assert_eq!(id.agent_name, "test-agent");
+        assert_eq!(id.user_id.as_str(), "user-456");
+        assert_eq!(id.session_id.as_str(), "sess-789");
+        assert_eq!(ctx.app_name(), "adk-app"); // Default
+        assert_eq!(ctx.metadata().get("custom.key").unwrap(), "custom-value");
     }
 }

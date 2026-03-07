@@ -42,10 +42,8 @@ impl Agent for TestAgent {
             let mut event = adk_core::Event::new(invocation_id);
             event.author = agent_name;
             event.llm_response.content = Some(adk_core::Content {
-                role: "model".to_string(),
-                parts: vec![adk_core::Part::Text {
-                    text: "Hello from test agent!".to_string(),
-                }],
+                role: adk_core::Role::Model,
+                parts: vec![adk_core::Part::text("Hello from test agent!".to_string())],
             });
             event.llm_response.turn_complete = true;
             yield Ok(event);

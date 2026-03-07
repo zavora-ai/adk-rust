@@ -17,7 +17,7 @@
 //!     .init();
 //!
 //! // Now model operations will emit structured logs
-//! let model = MistralRsModel::from_hf("microsoft/Phi-3.5-mini-instruct").await?;
+//! let model = MistralRsModel::from_hf("mistralai/Magistral-Small-2509").await?;
 //! ```
 //!
 //! ## Log Levels
@@ -45,7 +45,7 @@ use tracing::{Level, Span, debug, info, span};
 /// # Example
 ///
 /// ```rust,ignore
-/// let _timer = TimingGuard::new("model_loading", "microsoft/Phi-3.5-mini-instruct");
+/// let _timer = TimingGuard::new("model_loading", "mistralai/Magistral-Small-2509");
 /// // ... loading operation ...
 /// // Duration is logged when _timer goes out of scope
 /// ```
@@ -64,8 +64,7 @@ impl TimingGuard {
     /// * `operation` - Name of the operation being timed
     /// * `context` - Additional context (e.g., model ID)
     pub fn new(operation: &'static str, context: impl Into<String>) -> Self {
-        let context = context.into();
-        let span = span!(Level::INFO, "timing", operation = operation, context = %context);
+        let context = context.into();        let span = span!(Level::INFO, "timing", operation = operation, context = %context);
 
         // Enter the span briefly to log the start
         {

@@ -143,7 +143,7 @@ async fn main() -> anyhow::Result<()> {
     let mut input = State::new();
     input.insert("input".to_string(), json!("AI is transforming how we work and live."));
 
-    let result = agent.invoke(input, ExecutionConfig::new("thread-1")).await?;
+    let result = agent.invoke(input, ExecutionConfig::new("thread-1".to_string())).await?;
 
     println!("Translation: {}", result.get("translation").and_then(|v| v.as_str()).unwrap_or(""));
     println!("Summary: {}", result.get("summary").and_then(|v| v.as_str()).unwrap_or(""));
@@ -272,7 +272,7 @@ let graph = StateGraph::with_channels(&["task", "plan", "risk_level", "approved"
     .with_checkpointer_arc(checkpointer.clone());
 
 // Execute - may pause for approval
-let result = graph.invoke(input, ExecutionConfig::new("task-001")).await;
+let result = graph.invoke(input, ExecutionConfig::new("task-001".to_string())).await;
 
 match result {
     Err(GraphError::Interrupted(interrupt)) => {
@@ -282,7 +282,7 @@ match result {
         graph.update_state("task-001", [("approved".to_string(), json!(true))]).await?;
 
         // Resume
-        let final_result = graph.invoke(State::new(), ExecutionConfig::new("task-001")).await?;
+        let final_result = graph.invoke(State::new(), ExecutionConfig::new("task-001".to_string())).await?;
     }
     Ok(result) => println!("Completed: {:?}", result),
     Err(e) => println!("Error: {}", e),

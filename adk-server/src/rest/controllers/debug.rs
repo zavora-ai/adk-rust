@@ -62,15 +62,23 @@ fn convert_to_span_data(attributes: &HashMap<String, String>) -> serde_json::Val
         "start_time": start_time,
         "end_time": end_time,
         "attributes": attributes,
-        "invoc_id": attributes.get("gcp.vertex.agent.invocation_id").map_or("", |v| v.as_str())
+        "invoc_id": attributes.get("adk.agent.invocation_id")
+            .or_else(|| attributes.get("gcp.vertex.agent.invocation_id"))
+            .map_or("", |v| v.as_str())
     });
 
     // Add LLM request/response if present (for UI display)
-    if let Some(llm_req) = attributes.get("gcp.vertex.agent.llm_request") {
-        obj["gcp.vertex.agent.llm_request"] = serde_json::Value::String(llm_req.clone());
+    if let Some(llm_req) = attributes
+        .get("adk.agent.llm_request")
+        .or_else(|| attributes.get("gcp.vertex.agent.llm_request"))
+    {
+        obj["adk.agent.llm_request"] = serde_json::Value::String(llm_req.clone());
     }
-    if let Some(llm_resp) = attributes.get("gcp.vertex.agent.llm_response") {
-        obj["gcp.vertex.agent.llm_response"] = serde_json::Value::String(llm_resp.clone());
+    if let Some(llm_resp) = attributes
+        .get("adk.agent.llm_response")
+        .or_else(|| attributes.get("gcp.vertex.agent.llm_response"))
+    {
+        obj["adk.agent.llm_response"] = serde_json::Value::String(llm_resp.clone());
     }
 
     obj
@@ -119,11 +127,16 @@ pub async fn get_event(
 
         // Find a trace with matching event_id
         for attrs in traces {
-            if let Some(stored_event_id) = attrs.get("gcp.vertex.agent.event_id") {
+            if let Some(stored_event_id) =
+                attrs.get("adk.agent.event_id").or_else(|| attrs.get("gcp.vertex.agent.event_id"))
+            {
                 if stored_event_id == &event_id {
                     // Found matching trace - return event-like structure
-                    let invocation_id =
-                        attrs.get("gcp.vertex.agent.invocation_id").cloned().unwrap_or_default();
+                    let invocation_id = attrs
+                        .get("adk.agent.invocation_id")
+                        .or_else(|| attrs.get("gcp.vertex.agent.invocation_id"))
+                        .cloned()
+                        .unwrap_or_default();
 
                     return Ok(Json(serde_json::json!({
                         "id": event_id,
@@ -131,8 +144,8 @@ pub async fn get_event(
                         "appName": app_name,
                         "sessionId": session_id,
                         "attributes": attrs,
-                        "gcp.vertex.agent.llm_request": attrs.get("gcp.vertex.agent.llm_request"),
-                        "gcp.vertex.agent.llm_response": attrs.get("gcp.vertex.agent.llm_response")
+                        "adk.agent.llm_request": attrs.get("adk.agent.llm_request").or_else(|| attrs.get("gcp.vertex.agent.llm_request")),
+                        "adk.agent.llm_response": attrs.get("adk.agent.llm_response").or_else(|| attrs.get("gcp.vertex.agent.llm_response"))
                     })));
                 }
             }

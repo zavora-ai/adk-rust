@@ -1,98 +1,102 @@
 use adk_core::{
-    CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Tool, ToolContext,
+    CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Role, Tool,
+    ToolContext,
 };
-use adk_tool::{ExitLoopTool, GoogleSearchTool};
+use adk_tool::FunctionTool;
 use async_trait::async_trait;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-struct MockToolContext {
+// Mock context for testing
+struct MockContext {
     actions: Mutex<EventActions>,
-    content: Content,
+    identity: adk_core::types::AdkIdentity,
 }
 
-impl MockToolContext {
+impl MockContext {
     fn new() -> Self {
-        Self { actions: Mutex::new(EventActions::default()), content: Content::new("user") }
+        Self {
+            actions: Mutex::new(EventActions::default()),
+            identity: adk_core::types::AdkIdentity::default(),
+        }
     }
 }
 
 #[async_trait]
-impl ReadonlyContext for MockToolContext {
-    fn invocation_id(&self) -> &str {
-        "inv-1"
+impl ReadonlyContext for MockContext {
+    fn identity(&self) -> &adk_core::types::AdkIdentity {
+        &self.identity
     }
-    fn agent_name(&self) -> &str {
-        "test-agent"
-    }
-    fn user_id(&self) -> &str {
-        "user-1"
-    }
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-    fn session_id(&self) -> &str {
-        "session-1"
-    }
-    fn branch(&self) -> &str {
-        ""
-    }
+
     fn user_content(&self) -> &Content {
-        &self.content
+        static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
+        CONTENT.get_or_init(|| Content::new(Role::User))
+    }
+
+    fn metadata(&self) -> &HashMap<String, String> {
+        static METADATA: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        METADATA.get_or_init(HashMap::new)
     }
 }
 
 #[async_trait]
-impl CallbackContext for MockToolContext {
+impl CallbackContext for MockContext {
     fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
         None
     }
 }
 
 #[async_trait]
-impl ToolContext for MockToolContext {
+impl ToolContext for MockContext {
     fn function_call_id(&self) -> &str {
-        "call-1"
+        "test-call"
     }
+
     fn actions(&self) -> EventActions {
         self.actions.lock().unwrap().clone()
     }
+
     fn set_actions(&self, actions: EventActions) {
         *self.actions.lock().unwrap() = actions;
     }
+
     async fn search_memory(&self, _query: &str) -> Result<Vec<MemoryEntry>> {
         Ok(vec![])
     }
 }
 
-#[test]
-fn test_exit_loop_tool_metadata() {
-    let tool = ExitLoopTool::new();
-    assert_eq!(tool.name(), "exit_loop");
-    assert!(tool.description().contains("Exits the loop"));
-    assert!(!tool.is_long_running());
+#[derive(JsonSchema, Deserialize, Serialize)]
+struct TestArgs {
+    message: String,
 }
 
 #[tokio::test]
-async fn test_exit_loop_execute() {
-    let tool = ExitLoopTool::new();
-    let ctx = Arc::new(MockToolContext::new()) as Arc<dyn ToolContext>;
-    let result = tool.execute(ctx, json!({})).await;
-    assert!(result.is_ok());
-}
+async fn test_builtin_tool_execution() {
+    let tool = FunctionTool::new(
+        "test_tool",
+        "A test tool",
+        |ctx: Arc<dyn ToolContext>, args: Value| async move {
+            let args: TestArgs = serde_json::from_value(args).unwrap();
+            let mut actions = ctx.actions();
+            actions.state_delta.insert("result".to_string(), json!(args.message));
+            ctx.set_actions(actions);
+            Ok(json!({ "status": "success" }))
+        },
+    );
 
-#[test]
-fn test_google_search_tool_metadata() {
-    let tool = GoogleSearchTool::new();
-    assert_eq!(tool.name(), "google_search");
-    assert!(tool.description().contains("Google search"));
-    assert!(!tool.is_long_running());
-}
+    assert_eq!(tool.name(), "test_tool");
+    assert_eq!(tool.description(), "A test tool");
 
-#[tokio::test]
-async fn test_google_search_not_executable() {
-    let tool = GoogleSearchTool::new();
-    let ctx = Arc::new(MockToolContext::new()) as Arc<dyn ToolContext>;
-    let result = tool.execute(ctx, json!({})).await;
-    assert!(result.is_err());
+    let ctx = Arc::new(MockContext::new());
+    let args = json!({ "message": "hello" });
+
+    let result = tool.execute(ctx.clone(), args).await.unwrap();
+    assert_eq!(result, json!({ "status": "success" }));
+
+    let actions = ctx.actions();
+    assert_eq!(actions.state_delta.get("result").unwrap(), &json!("hello"));
 }

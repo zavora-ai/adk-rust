@@ -13,7 +13,7 @@
 //!
 //! ```bash
 //! cargo test -p adk-realtime --features livekit \
-//!     --test livekit_bridge_integration_tests -- --ignored
+//!     --test livekit_openai_integration_tests -- --ignored
 //! ```
 
 #![cfg(feature = "livekit")]

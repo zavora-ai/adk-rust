@@ -6,6 +6,7 @@
 //!   cd doc-test/sessions/sessions_test
 //!   cargo run --bin state_scopes
 
+use adk_core::types::{SessionId, UserId};
 use adk_session::{
     CreateRequest, GetRequest, InMemorySessionService, KEY_PREFIX_APP, KEY_PREFIX_USER,
     SessionService,
@@ -30,8 +31,8 @@ async fn main() -> anyhow::Result<()> {
     let session1 = service
         .create(CreateRequest {
             app_name: "my_app".to_string(),
-            user_id: "alice".to_string(),
-            session_id: Some("s1".to_string()),
+            user_id: UserId::new("alice").unwrap(),
+            session_id: SessionId::new("s1").ok(),
             state: state1,
         })
         .await?;
@@ -49,8 +50,8 @@ async fn main() -> anyhow::Result<()> {
     let session2 = service
         .create(CreateRequest {
             app_name: "my_app".to_string(),
-            user_id: "alice".to_string(),
-            session_id: Some("s2".to_string()),
+            user_id: UserId::new("alice").unwrap(),
+            session_id: SessionId::new("s2").ok(),
             state: state2,
         })
         .await?;
@@ -69,8 +70,8 @@ async fn main() -> anyhow::Result<()> {
     let session3 = service
         .create(CreateRequest {
             app_name: "my_app".to_string(),
-            user_id: "bob".to_string(),
-            session_id: Some("s3".to_string()),
+            user_id: UserId::new("bob").unwrap(),
+            session_id: SessionId::new("s3").ok(),
             state: state3,
         })
         .await?;
@@ -87,8 +88,8 @@ async fn main() -> anyhow::Result<()> {
     let session1_refetch = service
         .get(GetRequest {
             app_name: "my_app".to_string(),
-            user_id: "alice".to_string(),
-            session_id: "s1".to_string(),
+            user_id: UserId::new("alice").unwrap(),
+            session_id: SessionId::new("s1").unwrap(),
             num_recent_events: None,
             after: None,
         })

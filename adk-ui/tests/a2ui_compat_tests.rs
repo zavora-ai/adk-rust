@@ -1,8 +1,9 @@
-use adk_core::{Content, EventActions, ReadonlyContext, Tool, ToolContext};
+use adk_core::{Content, EventActions, ReadonlyContext, Tool, ToolContext, types::AdkIdentity};
 use adk_ui::tools::{RenderPageTool, RenderScreenTool};
 use async_trait::async_trait;
 use jsonschema::{Resource, Validator, options};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 fn build_reference_validator() -> Validator {
@@ -38,38 +39,35 @@ fn validate_jsonl(validator: &Validator, jsonl: &str) {
 }
 
 struct TestContext {
+    identity: AdkIdentity,
     content: Content,
+    metadata: HashMap<String, String>,
     actions: Mutex<EventActions>,
 }
 
 impl TestContext {
     fn new() -> Self {
-        Self { content: Content::new("user"), actions: Mutex::new(EventActions::default()) }
+        Self {
+            identity: AdkIdentity::default(),
+            content: Content::new("user"),
+            metadata: HashMap::new(),
+            actions: Mutex::new(EventActions::default()),
+        }
     }
 }
 
 #[async_trait]
 impl ReadonlyContext for TestContext {
-    fn invocation_id(&self) -> &str {
-        "test"
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
-    fn agent_name(&self) -> &str {
-        "test"
-    }
-    fn user_id(&self) -> &str {
-        "user"
-    }
-    fn app_name(&self) -> &str {
-        "app"
-    }
-    fn session_id(&self) -> &str {
-        "session"
-    }
-    fn branch(&self) -> &str {
-        ""
-    }
+
     fn user_content(&self) -> &Content {
         &self.content
+    }
+
+    fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
     }
 }
 

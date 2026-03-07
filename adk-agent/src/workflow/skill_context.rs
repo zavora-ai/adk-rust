@@ -38,32 +38,16 @@ impl UserContentOverrideContext {
 
 #[async_trait]
 impl ReadonlyContext for UserContentOverrideContext {
-    fn invocation_id(&self) -> &str {
-        self.parent.invocation_id()
-    }
-
-    fn agent_name(&self) -> &str {
-        self.parent.agent_name()
-    }
-
-    fn user_id(&self) -> &str {
-        self.parent.user_id()
-    }
-
-    fn app_name(&self) -> &str {
-        self.parent.app_name()
-    }
-
-    fn session_id(&self) -> &str {
-        self.parent.session_id()
-    }
-
-    fn branch(&self) -> &str {
-        self.parent.branch()
+    fn identity(&self) -> &adk_core::types::AdkIdentity {
+        self.parent.identity()
     }
 
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+
+    fn metadata(&self) -> &std::collections::HashMap<String, String> {
+        self.parent.metadata()
     }
 }
 

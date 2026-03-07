@@ -57,7 +57,7 @@ fn main() -> anyhow::Result<()> {
     println!("==============================\n");
 
     // Define roles
-    let data_analyst = Role::new("data_analyst").allow(Permission::Tool("data_query".into()));
+    let data_analyst = Role::new("data_analyst").allow(Permission::Tool("data_query".to_string()));
 
     let guest = Role::new("guest"); // No permissions
 
@@ -95,12 +95,13 @@ fn main() -> anyhow::Result<()> {
     ];
 
     for (user, tool, expected) in checks {
-        let perm = Permission::Tool(tool.into());
-        let result = ac.check(user, &perm);
+        let perm = Permission::Tool(tool.to_string());
+        let user_id = adk_core::types::UserId::new(user).unwrap();
+        let result = ac.check(&user_id, &perm);
         let outcome = if result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
 
         // Create and log audit event
-        let event = AuditEvent::tool_access(user, tool, outcome.clone());
+        let event = AuditEvent::tool_access(&user_id, tool, outcome.clone());
         println!(
             "   {} {} -> {} ({:?})",
             if expected == result.is_ok() { "✅" } else { "❌" },
@@ -122,12 +123,14 @@ fn main() -> anyhow::Result<()> {
     // Simulate some events
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
+        let alice_id = adk_core::types::UserId::new("alice").unwrap();
+        let bob_id = adk_core::types::UserId::new("bob").unwrap();
         memory_audit
-            .log(AuditEvent::tool_access("alice", "search", AuditOutcome::Allowed))
+            .log(AuditEvent::tool_access(&alice_id, "search", AuditOutcome::Allowed))
             .await
             .unwrap();
         memory_audit
-            .log(AuditEvent::tool_access("bob", "admin", AuditOutcome::Denied))
+            .log(AuditEvent::tool_access(&bob_id, "admin", AuditOutcome::Denied))
             .await
             .unwrap();
     });

@@ -26,6 +26,9 @@ pub enum AdkError {
 
     #[error("Serialization error: {0}")]
     Serde(#[from] serde_json::Error),
+
+    #[error("Payload too large: {0} bytes (max 10MB)")]
+    PayloadTooLarge(usize),
 }
 
 pub type Result<T> = std::result::Result<T, AdkError>;

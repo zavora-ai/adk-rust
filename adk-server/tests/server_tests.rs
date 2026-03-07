@@ -34,7 +34,7 @@ struct MockSessionService;
 impl SessionService for MockSessionService {
     async fn create(&self, req: CreateRequest) -> adk_core::Result<Box<dyn Session>> {
         Ok(Box::new(MockSession {
-            id: req.session_id.unwrap_or_else(|| "generated-id".to_string()),
+            id: req.session_id.unwrap_or_else(|| SessionId::new("generated-id").unwrap()),
             app_name: req.app_name,
             user_id: req.user_id,
         }))
@@ -56,19 +56,25 @@ impl SessionService for MockSessionService {
         Ok(())
     }
 
-    async fn append_event(&self, _session_id: &str, _event: Event) -> adk_core::Result<()> {
+    async fn append_event(
+        &self,
+        _session_id: &adk_core::types::SessionId,
+        _event: Event,
+    ) -> adk_core::Result<()> {
         Ok(())
     }
 }
 
+use adk_core::types::{SessionId, UserId};
+
 struct MockSession {
-    id: String,
+    id: SessionId,
     app_name: String,
-    user_id: String,
+    user_id: UserId,
 }
 
 impl Session for MockSession {
-    fn id(&self) -> &str {
+    fn id(&self) -> &SessionId {
         &self.id
     }
 
@@ -76,7 +82,7 @@ impl Session for MockSession {
         &self.app_name
     }
 
-    fn user_id(&self) -> &str {
+    fn user_id(&self) -> &UserId {
         &self.user_id
     }
 
@@ -419,8 +425,8 @@ async fn test_run_path_honors_ui_protocol_header() {
     session_service
         .create(CreateRequest {
             app_name: "stream-test-agent".to_string(),
-            user_id: "user1".to_string(),
-            session_id: Some("session1".to_string()),
+            user_id: UserId::new("user1").unwrap(),
+            session_id: Some(SessionId::new("session1").unwrap()),
             state: std::collections::HashMap::new(),
         })
         .await

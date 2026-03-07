@@ -1,6 +1,7 @@
 use adk_agent::LlmAgentBuilder;
 use adk_core::{
     Agent, Content, InvocationContext, Part, ReadonlyContext, RunConfig, Session, State,
+    types::AdkIdentity,
 };
 use adk_model::GeminiModel;
 use async_trait::async_trait;
@@ -10,16 +11,31 @@ use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 
-struct MockSession;
+use adk_core::types::{SessionId, UserId};
+
+struct MockSession {
+    id: SessionId,
+    user_id: UserId,
+}
+
+impl MockSession {
+    fn new() -> Self {
+        Self {
+            id: SessionId::new("multi-agent-session".to_string()).unwrap(),
+            user_id: UserId::new("multi-agent-user".to_string()).unwrap(),
+        }
+    }
+}
+
 impl Session for MockSession {
-    fn id(&self) -> &str {
-        "multi-agent-session"
+    fn id(&self) -> &SessionId {
+        &self.id
     }
     fn app_name(&self) -> &str {
         "multi-agent-app"
     }
-    fn user_id(&self) -> &str {
-        "multi-agent-user"
+    fn user_id(&self) -> &UserId {
+        &self.user_id
     }
     fn state(&self) -> &dyn State {
         &MockState
@@ -43,42 +59,34 @@ impl State for MockState {
 struct MockContext {
     session: MockSession,
     user_content: Content,
+    identity: AdkIdentity,
+    metadata: HashMap<String, String>,
 }
 
 impl MockContext {
     fn new(text: &str) -> Self {
         Self {
-            session: MockSession,
+            session: MockSession::new(),
             user_content: Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: text.to_string() }],
+                role: adk_core::Role::User,
+                parts: vec![Part::text(text.to_string())],
             },
+            identity: AdkIdentity::default(),
+            metadata: HashMap::new(),
         }
     }
 }
 
 #[async_trait]
 impl ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str {
-        "multi-agent-inv"
-    }
-    fn agent_name(&self) -> &str {
-        "multi-agent"
-    }
-    fn user_id(&self) -> &str {
-        "multi-agent-user"
-    }
-    fn app_name(&self) -> &str {
-        "multi-agent-app"
-    }
-    fn session_id(&self) -> &str {
-        "multi-agent-session"
-    }
-    fn branch(&self) -> &str {
-        "main"
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+    fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
     }
 }
 
@@ -146,8 +154,8 @@ async fn test_multi_agent_workflow() {
         if let Ok(event) = result {
             if let Some(content) = event.llm_response.content {
                 for part in content.parts {
-                    if let Part::Text { text } = part {
-                        response_text.push_str(&text);
+                    if let Some(text) = part.as_text() {
+                        response_text.push_str(text);
                     }
                 }
             }
@@ -194,7 +202,7 @@ async fn test_agent_delegation() {
         if let Ok(event) = result {
             if let Some(content) = event.llm_response.content {
                 for part in content.parts {
-                    if let Part::Text { text } = part {
+                    if let Some(text) = part.as_text() {
                         if text.contains("345") {
                             has_answer = true;
                         }

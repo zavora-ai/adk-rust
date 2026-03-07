@@ -1,7 +1,7 @@
 use adk_agent::{CustomAgentBuilder, LlmAgentBuilder, SequentialAgent};
 use adk_core::{
     Agent, CallbackContext, Content, Event, InvocationContext, Memory, Part, ReadonlyContext,
-    Result, RunConfig, Session, State,
+    Result, RunConfig, Session, State, types::AdkIdentity,
 };
 use adk_model::gemini::GeminiModel;
 use async_trait::async_trait;
@@ -9,16 +9,31 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-struct TestSession;
+use adk_core::types::{SessionId, UserId};
+
+struct TestSession {
+    id: SessionId,
+    user_id: UserId,
+}
+
+impl TestSession {
+    fn new() -> Self {
+        Self {
+            id: SessionId::new("test-session".to_string()).unwrap(),
+            user_id: UserId::new("test-user".to_string()).unwrap(),
+        }
+    }
+}
+
 impl Session for TestSession {
-    fn id(&self) -> &str {
-        "test-session"
+    fn id(&self) -> &SessionId {
+        &self.id
     }
     fn app_name(&self) -> &str {
         "test-app"
     }
-    fn user_id(&self) -> &str {
-        "test-user"
+    fn user_id(&self) -> &UserId {
+        &self.user_id
     }
     fn state(&self) -> &dyn State {
         &TestState
@@ -41,44 +56,38 @@ impl State for TestState {
 
 // Simple test context
 struct TestContext {
+    identity: AdkIdentity,
     session: TestSession,
     user_content: Content,
+    metadata: HashMap<String, String>,
 }
 
 impl TestContext {
     fn new(text: &str) -> Self {
         Self {
-            session: TestSession,
+            identity: AdkIdentity::default(),
+            session: TestSession::new(),
             user_content: Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: text.to_string() }],
+                role: adk_core::Role::User,
+                parts: vec![Part::text(text.to_string())],
             },
+            metadata: HashMap::new(),
         }
     }
 }
 
 #[async_trait]
 impl ReadonlyContext for TestContext {
-    fn invocation_id(&self) -> &str {
-        "test-inv"
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
-    fn agent_name(&self) -> &str {
-        "test-agent"
-    }
-    fn user_id(&self) -> &str {
-        "test-user"
-    }
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-    fn session_id(&self) -> &str {
-        "test-session"
-    }
-    fn branch(&self) -> &str {
-        "main"
-    }
+
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+
+    fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
     }
 }
 
@@ -142,7 +151,7 @@ async fn main() -> Result<()> {
 
         if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
-                if let Part::Text { text } = part {
+                if let Some(text) = part.as_text() {
                     println!("Response: {}", text);
                 }
             }
@@ -196,7 +205,7 @@ async fn main() -> Result<()> {
 
         if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
-                if let Part::Text { text } = part {
+                if let Some(text) = part.as_text() {
                     println!("Response: {}", text);
                 }
             }
@@ -233,10 +242,8 @@ async fn main() -> Result<()> {
                     text.push_str(&format!("- {}: {}\n", key, value));
                 }
 
-                event.llm_response.content = Some(Content {
-                    role: "assistant".to_string(),
-                    parts: vec![Part::Text { text }],
-                });
+                event.llm_response.content =
+                    Some(Content { role: adk_core::Role::Model, parts: vec![Part::text(text)] });
 
                 Ok(Box::pin(futures::stream::iter(vec![Ok(event)])) as adk_core::EventStream)
             }
@@ -250,7 +257,7 @@ async fn main() -> Result<()> {
         let event = result?;
         if let Some(content) = &event.llm_response.content {
             for part in &content.parts {
-                if let Part::Text { text } = part {
+                if let Some(text) = part.as_text() {
                     println!("{}", text);
                 }
             }

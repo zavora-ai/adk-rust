@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use futures::stream;
 use mistralrs::{
     AutoDeviceMapParams, DeviceMapSetting, IsqType, PagedAttentionMetaBuilder, Response,
-    TextMessageRole, TextMessages, TextModelBuilder, Topology,
+    TextMessages, TextModelBuilder, Topology,
 };
 use tracing::{debug, info, instrument, warn};
 
@@ -31,7 +31,7 @@ use crate::tracing_utils::{
 /// ```rust,ignore
 /// use adk_mistralrs::{MistralRsModel, MistralRsConfig, ModelSource};
 ///
-/// let model = MistralRsModel::from_hf("microsoft/Phi-3.5-mini-instruct").await?;
+/// let model = MistralRsModel::from_hf("mistralai/Magistral-Small-2509").await?;
 /// ```
 pub struct MistralRsModel {
     /// The underlying mistral.rs model instance
@@ -53,7 +53,7 @@ impl MistralRsModel {
     ///
     /// ```rust,ignore
     /// let config = MistralRsConfig::builder()
-    ///     .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+    ///     .model_source(ModelSource::huggingface("mistralai/Magistral-Small-2509"))
     ///     .build();
     /// let model = MistralRsModel::new(config).await?;
     /// ```
@@ -176,12 +176,12 @@ impl MistralRsModel {
     ///
     /// # Arguments
     ///
-    /// * `model_id` - HuggingFace model ID (e.g., "microsoft/Phi-3.5-mini-instruct")
+    /// * `model_id` - HuggingFace model ID (e.g., "mistralai/Magistral-Small-2509")
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let model = MistralRsModel::from_hf("microsoft/Phi-3.5-mini-instruct").await?;
+    /// let model = MistralRsModel::from_hf("mistralai/Magistral-Small-2509").await?;
     /// ```
     pub async fn from_hf(model_id: &str) -> Result<Self> {
         let config =
@@ -245,7 +245,7 @@ impl MistralRsModel {
     /// ```rust,ignore
     /// let model = MistralRsModel::from_uqff(
     ///     "EricB/Phi-3.5-mini-instruct-UQFF",
-    ///     vec!["phi3.5-mini-instruct-q8_0.uqff".into()]
+    ///     vec!["phi3.5-mini-instruct-q8_0.uqff")]
     /// ).await?;
     /// ```
     pub async fn from_uqff(
@@ -254,8 +254,7 @@ impl MistralRsModel {
     ) -> Result<Self> {
         use mistralrs::UqffTextModelBuilder;
 
-        let model_id = model_id.into();
-        info!("Loading UQFF model: {} with files: {:?}", model_id, uqff_files);
+        let model_id = model_id.into();        info!("Loading UQFF model: {} with files: {:?}", model_id, uqff_files);
 
         if uqff_files.is_empty() {
             return Err(MistralRsError::invalid_config(
@@ -316,19 +315,14 @@ impl MistralRsModel {
         let mut messages = TextMessages::new();
 
         for content in &request.contents {
-            let role = match content.role.as_str() {
-                "user" => TextMessageRole::User,
-                "model" | "assistant" => TextMessageRole::Assistant,
-                "system" => TextMessageRole::System,
-                _ => TextMessageRole::User, // Default to user for unknown roles
-            };
+            let role = crate::convert::role_to_mistralrs(&content.role);
 
             // Extract text from parts
             let text: String = content
                 .parts
                 .iter()
                 .filter_map(|part| match part {
-                    Part::Text { text } => Some(text.as_str()),
+                    Part::Text(text) => Some(text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -361,7 +355,7 @@ impl MistralRsModel {
             response.choices.first().map(|choice| match choice.finish_reason.as_str() {
                 "stop" => FinishReason::Stop,
                 "length" => FinishReason::MaxTokens,
-                _ => FinishReason::Other,
+                other => FinishReason::Other(other.to_string()),
             });
 
         LlmResponse {

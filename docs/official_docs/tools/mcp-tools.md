@@ -84,15 +84,22 @@ struct SimpleContext;
 
 #[async_trait::async_trait]
 impl ReadonlyContext for SimpleContext {
-    fn invocation_id(&self) -> &str { "init" }
-    fn agent_name(&self) -> &str { "init" }
-    fn user_id(&self) -> &str { "user" }
-    fn app_name(&self) -> &str { "mcp" }
-    fn session_id(&self) -> &str { "init" }
-    fn branch(&self) -> &str { "main" }
+    fn identity(&self) -> &adk_core::types::AdkIdentity {
+        static IDENTITY: std::sync::OnceLock<adk_core::types::AdkIdentity> = std::sync::OnceLock::new();
+        IDENTITY.get_or_init(|| {
+            let mut id = adk_core::types::AdkIdentity::default();
+            id.user_id = "user".to_string();
+            id.app_name = "mcp".to_string();
+            id
+        })
+    }
     fn user_content(&self) -> &Content {
         static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
         CONTENT.get_or_init(|| Content::new("user").with_text("init"))
+    }
+    fn metadata(&self) -> &std::collections::HashMap<String, String> {
+        static METADATA: std::sync::OnceLock<std::collections::HashMap<String, String>> = std::sync::OnceLock::new();
+        METADATA.get_or_init(std::collections::HashMap::new)
     }
 }
 ```
@@ -326,15 +333,22 @@ struct SimpleContext;
 
 #[async_trait::async_trait]
 impl ReadonlyContext for SimpleContext {
-    fn invocation_id(&self) -> &str { "init" }
-    fn agent_name(&self) -> &str { "init" }
-    fn user_id(&self) -> &str { "user" }
-    fn app_name(&self) -> &str { "mcp" }
-    fn session_id(&self) -> &str { "init" }
-    fn branch(&self) -> &str { "main" }
+    fn identity(&self) -> &adk_core::types::AdkIdentity {
+        static IDENTITY: std::sync::OnceLock<adk_core::types::AdkIdentity> = std::sync::OnceLock::new();
+        IDENTITY.get_or_init(|| {
+            let mut id = adk_core::types::AdkIdentity::default();
+            id.user_id = "user".to_string();
+            id.app_name = "mcp".to_string();
+            id
+        })
+    }
     fn user_content(&self) -> &Content {
         static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
         CONTENT.get_or_init(|| Content::new("user").with_text("init"))
+    }
+    fn metadata(&self) -> &std::collections::HashMap<String, String> {
+        static METADATA: std::sync::OnceLock<std::collections::HashMap<String, String>> = std::sync::OnceLock::new();
+        METADATA.get_or_init(std::collections::HashMap::new)
     }
 }
 

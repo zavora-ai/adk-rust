@@ -1,0 +1,530 @@
+warning: unused import: `engine::general_purpose::STANDARD`
+ --> adk-core/src/types.rs:2:27
+  |
+2 | ..._, engine::general_purpose::STANDARD};
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `adk-core` (lib) generated 1 warning (run `cargo fix --lib -p adk-core` to apply 1 suggestion)
+    Checking adk-model v0.3.2 (/home/michael/src/voice_gateway/zenith/adk-rust/adk-model)
+warning: unused import: `bytes::Bytes`
+  --> adk-model/src/anthropic/convert.rs:13:5
+   |
+13 | use bytes::Bytes;
+   |     ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0432]: unresolved import `adk_core::FunctionResponseData`
+   --> adk-model/src/azure_ai/convert.rs:362:9
+    |
+362 | ...se adk_core::FunctionResponseData;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `FunctionResponseData` in the root
+    |
+help: consider importing this struct instead
+    |
+362 |     use adk_core::types::FunctionResponseData;
+    |                   +++++++
+
+error[E0432]: unresolved import `adk_core::FunctionResponseData`
+   --> adk-model/src/bedrock/convert.rs:493:9
+    |
+493 | ...se adk_core::FunctionResponseData;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `FunctionResponseData` in the root
+    |
+help: consider importing this struct instead
+    |
+493 |     use adk_core::types::FunctionResponseData;
+    |                   +++++++
+
+error[E0425]: cannot find value `signature` in this scope
+   --> adk-model/src/bedrock/convert.rs:718:28
+    |
+718 | ...q!(signature.as...
+    |       ^^^^^^^^^ not found in this scope
+
+error[E0433]: cannot find type `Bytes` in this scope
+   --> adk-model/src/deepseek/convert.rs:380:19
+    |
+380 | ...a: Bytes::f...
+    |       ^^^^^ use of undeclared type `Bytes`
+    |
+    = note: struct `crate::gemini::client::tests::Bytes` exists but is inaccessible
+help: consider importing one of these structs
+    |
+374 +     use std::io::Bytes;
+    |
+374 +     use std::str::Bytes;
+    |
+374 +     use bytes::Bytes;
+    |
+
+error[E0433]: cannot find type `Bytes` in this scope
+   --> adk-model/src/groq/convert.rs:344:19
+    |
+344 | ...a: Bytes::f...
+    |       ^^^^^ use of undeclared type `Bytes`
+    |
+    = note: struct `crate::gemini::client::tests::Bytes` exists but is inaccessible
+help: consider importing one of these structs
+    |
+338 +     use std::io::Bytes;
+    |
+338 +     use std::str::Bytes;
+    |
+338 +     use bytes::Bytes;
+    |
+
+error[E0433]: cannot find type `Bytes` in this scope
+   --> adk-model/src/ollama/convert.rs:142:50
+    |
+142 | ...", Bytes::f...
+    |       ^^^^^ use of undeclared type `Bytes`
+    |
+    = note: struct `crate::gemini::client::tests::Bytes` exists but is inaccessible
+help: consider importing one of these structs
+    |
+137 +     use std::io::Bytes;
+    |
+137 +     use std::str::Bytes;
+    |
+137 +     use bytes::Bytes;
+    |
+
+error[E0433]: cannot find type `Bytes` in this scope
+   --> adk-model/src/openai/convert.rs:387:17
+    |
+387 | ...   Bytes::f...
+    |       ^^^^^ use of undeclared type `Bytes`
+    |
+    = note: struct `crate::gemini::client::tests::Bytes` exists but is inaccessible
+help: consider importing one of these structs
+    |
+374 +     use std::io::Bytes;
+    |
+374 +     use std::str::Bytes;
+    |
+374 +     use bytes::Bytes;
+    |
+
+error[E0433]: cannot find type `Bytes` in this scope
+   --> adk-model/src/openai/convert.rs:419:56
+    |
+419 | ...", Bytes::f...
+    |       ^^^^^ use of undeclared type `Bytes`
+    |
+    = note: struct `crate::gemini::client::tests::Bytes` exists but is inaccessible
+help: consider importing one of these structs
+    |
+374 +     use std::io::Bytes;
+    |
+374 +     use std::str::Bytes;
+    |
+374 +     use bytes::Bytes;
+    |
+
+error[E0433]: cannot find type `Bytes` in this scope
+   --> adk-model/src/openai/convert.rs:420:55
+    |
+420 | ...", Bytes::f...
+    |       ^^^^^ use of undeclared type `Bytes`
+    |
+    = note: struct `crate::gemini::client::tests::Bytes` exists but is inaccessible
+help: consider importing one of these structs
+    |
+374 +     use std::io::Bytes;
+    |
+374 +     use std::str::Bytes;
+    |
+374 +     use bytes::Bytes;
+    |
+
+error[E0433]: cannot find type `Bytes` in this scope
+   --> adk-model/src/openai/convert.rs:437:44
+    |
+437 | ...", Bytes::f...
+    |       ^^^^^ use of undeclared type `Bytes`
+    |
+    = note: struct `crate::gemini::client::tests::Bytes` exists but is inaccessible
+help: consider importing one of these structs
+    |
+374 +     use std::io::Bytes;
+    |
+374 +     use std::str::Bytes;
+    |
+374 +     use bytes::Bytes;
+    |
+
+error[E0433]: cannot find type `Bytes` in this scope
+   --> adk-model/src/openai/convert.rs:459:50
+    |
+459 | ...", Bytes::f...
+    |       ^^^^^ use of undeclared type `Bytes`
+    |
+    = note: struct `crate::gemini::client::tests::Bytes` exists but is inaccessible
+help: consider importing one of these structs
+    |
+374 +     use std::io::Bytes;
+    |
+374 +     use std::str::Bytes;
+    |
+374 +     use bytes::Bytes;
+    |
+
+error[E0063]: missing field `signature` in initializer of `adk_core::Part`
+   --> adk-model/src/bedrock/client.rs:287:49
+    |
+287 | ...c![adk_core::Part::Thinking { ...
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^ missing `signature`
+
+error[E0027]: pattern does not mention field `signature`
+   --> adk-model/src/gemini/client.rs:311:29
+    |
+311 | ...   Part::Thinking { thought: thinking } => {
+    |       ^^^^^^^^^^^^^^^^^^^^^...eld `signature`
+    |
+help: include the missing field in the pattern
+    |
+311 |                             Part::Thinking { thought: thinking, signature } => {
+    |                                                               +++++++++++
+help: if you don't care about this missing field, you can explicitly ignore it
+    |
+311 |                             Part::Thinking { thought: thinking, signature: _ } => {
+    |                                                               ++++++++++++++
+help: or always ignore missing fields here
+    |
+311 |                             Part::Thinking { thought: thinking, .. } => {
+    |                                                               ++++
+
+error[E0308]: mismatched types
+   --> adk-model/src/gemini/client.rs:322:52
+    |
+322 | ...e: mime_type.clone(),
+    |       ^^^^^^^^^^^^^^^^^ expected `String`, found `Mime`
+    |
+help: try using a conversion method
+    |
+322 -                                         mime_type: mime_type.clone(),
+322 +                                         mime_type: mime_type.to_string(),
+    |
+
+error[E0308]: mismatched types
+   --> adk-model/src/gemini/client.rs:329:79
+    |
+329 | ...t: attachment::file_attachment_to_text(mime_type, f...
+    |       -----------------------------------...`, found `&Mime`
+    |       |
+    |       arguments to this function are incorrect
+    |
+    = note: expected reference `&str`
+               found reference `&Mime`
+note: function defined here
+   --> adk-model/src/attachment.rs:24:15
+    |
+ 24 | ...fn file_attachment_to_text(mime_type: &str, f...
+    |       ^^^^^^^^^^^^^^^^^^^^^^^ ---------------
+
+error[E0027]: pattern does not mention field `signature`
+   --> adk-model/src/gemini/client.rs:360:29
+    |
+360 | ...   Part::Thinking { thought: thinking } => {
+    |       ^^^^^^^^^^^^^^^^^^^^^...eld `signature`
+    |
+help: include the missing field in the pattern
+    |
+360 |                             Part::Thinking { thought: thinking, signature } => {
+    |                                                               +++++++++++
+help: if you don't care about this missing field, you can explicitly ignore it
+    |
+360 |                             Part::Thinking { thought: thinking, signature: _ } => {
+    |                                                               ++++++++++++++
+help: or always ignore missing fields here
+    |
+360 |                             Part::Thinking { thought: thinking, .. } => {
+    |                                                               ++++
+
+error[E0599]: no method named `as_str` found for reference `&Mime` in the current scope
+  --> adk-model/src/anthropic/convert.rs:70:50
+   |
+70 | ...pe.as_str() {
+   |       ^^^^^^ method not found in `&Mime`
+
+error[E0063]: missing field `signature` in initializer of `adk_core::Part`
+   --> adk-model/src/anthropic/convert.rs:172:32
+    |
+172 | ...sh(Part::Thinking { ...
+    |       ^^^^^^^^^^^^^^ missing `signature`
+
+error[E0063]: missing field `signature` in initializer of `adk_core::Part`
+   --> adk-model/src/anthropic/convert.rs:243:25
+    |
+243 | ...c![Part::Thinking { ...
+    |       ^^^^^^^^^^^^^^ missing `signature`
+
+error[E0063]: missing field `signature` in initializer of `adk_core::Part`
+   --> adk-model/src/azure_ai/convert.rs:193:28
+    |
+193 | ...sh(Part::Thinking { ...
+    |       ^^^^^^^^^^^^^^ missing `signature`
+
+error[E0063]: missing field `signature` in initializer of `adk_core::Part`
+   --> adk-model/src/azure_ai/convert.rs:281:28
+    |
+281 | ...sh(Part::Thinking { ...
+    |       ^^^^^^^^^^^^^^ missing `signature`
+
+error[E0164]: expected tuple struct or tuple variant, found associated function `Part::text`
+  --> adk-model/src/bedrock/convert.rs:54:25
+   |
+54 | ...   Part::text(text) if...
+   |       ^^^^^^^^^^^^^^^^ `fn` calls are not allowed in patterns
+   |
+   = help: for more information, visit https://doc.rust-lang.org/book/ch19-00-patterns.html
+
+error[E0063]: missing field `signature` in initializer of `adk_core::Part`
+   --> adk-model/src/bedrock/convert.rs:287:61
+    |
+287 | ...me(Part::Thinking { ...
+    |       ^^^^^^^^^^^^^^ missing `signature`
+
+error[E0063]: missing field `signature` in initializer of `adk_core::Part`
+   --> adk-model/src/bedrock/convert.rs:402:41
+    |
+402 | ...c![Part::Thinking { ...
+    |       ^^^^^^^^^^^^^^ missing `signature`
+
+error[E0063]: missing field `signature` in initializer of `adk_core::Part`
+   --> adk-model/src/deepseek/client.rs:214:77
+    |
+214 | ...c![Part::Thinking { ...
+    |       ^^^^^^^^^^^^^^ missing `signature`
+
+error[E0308]: mismatched types
+   --> adk-model/src/azure_ai/convert.rs:457:29
+    |
+457 | ...e: "assistant".to_string(), p...
+    |       ^^^^^^^^^^^^^^^^^^^^^^^ expected `Role`, found `String`
+    |
+help: try wrapping the expression in `adk_core::Role::Custom`
+    |
+457 |             Content { role: adk_core::Role::Custom("assistant".to_string()), parts: vec![Part::text("Sure".to_string())] };
+    |                             +++++++++++++++++++++++                       +
+
+error[E0308]: mismatched types
+   --> adk-model/src/azure_ai/convert.rs:485:19
+    |
+485 | ...e: "tool".to_string(),
+    |       ^^^^^^^^^^^^^^^^^^ expected `Role`, found `String`
+    |
+help: try wrapping the expression in `adk_core::Role::Custom`
+    |
+485 |             role: adk_core::Role::Custom("tool".to_string()),
+    |                   +++++++++++++++++++++++                  +
+
+error[E0559]: variant `adk_core::Part::FunctionResponse` has no field named `function_response`
+   --> adk-model/src/azure_ai/convert.rs:487:17
+    |
+487 | ...   function_response: F...
+    |       ^^^^^^^^^^^^^^^^^ `adk_core::Part::FunctionResponse` does not have this field
+    |
+    = note: available fields are: `name`, `response`
+
+error[E0308]: mismatched types
+   --> adk-model/src/azure_ai/convert.rs:746:19
+    |
+746 | ...e: "tool".to_string(),
+    |       ^^^^^^^^^^^^^^^^^^ expected `Role`, found `String`
+    |
+help: try wrapping the expression in `adk_core::Role::Custom`
+    |
+746 |             role: adk_core::Role::Custom("tool".to_string()),
+    |                   +++++++++++++++++++++++                  +
+
+error[E0559]: variant `adk_core::Part::FunctionResponse` has no field named `function_response`
+   --> adk-model/src/azure_ai/convert.rs:748:17
+    |
+748 | ...   function_response: F...
+    |       ^^^^^^^^^^^^^^^^^ `adk_core::Part::FunctionResponse` does not have this field
+    |
+    = note: available fields are: `name`, `response`
+
+error[E0063]: missing field `signature` in initializer of `adk_core::Part`
+   --> adk-model/src/azure_ai/convert.rs:763:25
+    |
+763 | ...c![Part::Thinking { ...
+    |       ^^^^^^^^^^^^^^ missing `signature`
+
+error[E0063]: missing field `signature` in initializer of `adk_core::Part`
+   --> adk-model/src/azure_ai/convert.rs:775:17
+    |
+775 | ...   Part::Thinking { ...
+    |       ^^^^^^^^^^^^^^ missing `signature`
+
+error[E0599]: no method named `thinking_text` found for enum `adk_core::Part` in the current scope
+   --> adk-model/src/azure_ai/convert.rs:807:37
+    |
+807 | ...0].thinking_text()....
+    |       ^^^^^^^^^^^^^
+    |
+help: there is a method `to_text` with a similar name
+    |
+807 -         assert_eq!(content.parts[0].thinking_text().unwrap(), "Let me think step by step...");
+807 +         assert_eq!(content.parts[0].to_text().unwrap(), "Let me think step by step...");
+    |
+
+error[E0599]: no method named `thinking_text` found for enum `adk_core::Part` in the current scope
+   --> adk-model/src/azure_ai/convert.rs:865:37
+    |
+865 | ...0].thinking_text()....
+    |       ^^^^^^^^^^^^^
+    |
+help: there is a method `to_text` with a similar name
+    |
+865 -         assert_eq!(content.parts[0].thinking_text().unwrap(), "Thinking about this...");
+865 +         assert_eq!(content.parts[0].to_text().unwrap(), "Thinking about this...");
+    |
+
+error[E0599]: no method named `thinking_text` found for enum `adk_core::Part` in the current scope
+   --> adk-model/src/azure_ai/convert.rs:885:37
+    |
+885 | ...0].thinking_text()....
+    |       ^^^^^^^^^^^^^
+    |
+help: there is a method `to_text` with a similar name
+    |
+885 -         assert_eq!(content.parts[0].thinking_text().unwrap(), "Step 1...");
+885 +         assert_eq!(content.parts[0].to_text().unwrap(), "Step 1...");
+    |
+
+error[E0308]: mismatched types
+   --> adk-model/src/bedrock/convert.rs:547:23
+    |
+547 | ...e: "assistant".to_string(),
+    |       ^^^^^^^^^^^^^^^^^^^^^^^ expected `Role`, found `String`
+    |
+help: try wrapping the expression in `adk_core::Role::Custom`
+    |
+547 |                 role: adk_core::Role::Custom("assistant".to_string()),
+    |                       +++++++++++++++++++++++                       +
+
+error[E0559]: variant `adk_core::Part::FunctionResponse` has no field named `function_response`
+   --> adk-model/src/bedrock/convert.rs:584:17
+    |
+584 | ...   function_response: F...
+    |       ^^^^^^^^^^^^^^^^^ `adk_core::Part::FunctionResponse` does not have this field
+    |
+    = note: available fields are: `name`, `response`
+
+error[E0599]: no method named `thinking_text` found for enum `adk_core::Part` in the current scope
+   --> adk-model/src/bedrock/convert.rs:699:29
+    |
+699 | ...0].thinking_text()....
+    |       ^^^^^^^^^^^^^
+    |
+help: there is a method `to_text` with a similar name
+    |
+699 -         assert_eq!(parts[0].thinking_text().unwrap(), "Let me think step by step...");
+699 +         assert_eq!(parts[0].to_text().unwrap(), "Let me think step by step...");
+    |
+
+error[E0027]: pattern does not mention field `signature`
+   --> adk-model/src/bedrock/convert.rs:716:13
+    |
+716 | ...   Part:...ing } => {
+    |       ^^^^^...^^^^^ missing field `signature`
+    |
+help: include the missing field in the pattern
+    |
+716 |             Part::Thinking { thought: thinking, signature } => {
+    |                                               +++++++++++
+help: if you don't care about this missing field, you can explicitly ignore it
+    |
+716 |             Part::Thinking { thought: thinking, signature: _ } => {
+    |                                               ++++++++++++++
+help: or always ignore missing fields here
+    |
+716 |             Part::Thinking { thought: thinking, .. } => {
+    |                                               ++++
+
+error[E0599]: no method named `thinking_text` found for enum `adk_core::Part` in the current scope
+   --> adk-model/src/bedrock/convert.rs:760:29
+    |
+760 | ...0].thinking_text()....
+    |       ^^^^^^^^^^^^^
+    |
+help: there is a method `to_text` with a similar name
+    |
+760 -         assert_eq!(parts[0].thinking_text().unwrap(), "Thinking...");
+760 +         assert_eq!(parts[0].to_text().unwrap(), "Thinking...");
+    |
+
+error[E0599]: no method named `thinking_text` found for enum `adk_core::Part` in the current scope
+   --> adk-model/src/bedrock/convert.rs:776:37
+    |
+776 | ...0].thinking_text()....
+    |       ^^^^^^^^^^^^^
+    |
+help: there is a method `to_text` with a similar name
+    |
+776 -         assert_eq!(content.parts[0].thinking_text().unwrap(), "reasoning chunk");
+776 +         assert_eq!(content.parts[0].to_text().unwrap(), "reasoning chunk");
+    |
+
+error[E0599]: no method named `thinking_text` found for enum `adk_core::Part` in the current scope
+   --> adk-model/src/bedrock/convert.rs:820:37
+    |
+820 | ...0].thinking_text()....
+    |       ^^^^^^^^^^^^^
+    |
+help: there is a method `to_text` with a similar name
+    |
+820 -         assert_eq!(content.parts[0].thinking_text().unwrap(), "Step 1: analyze input");
+820 +         assert_eq!(content.parts[0].to_text().unwrap(), "Step 1: analyze input");
+    |
+
+error[E0308]: mismatched types
+   --> adk-model/src/deepseek/convert.rs:379:24
+    |
+379 | ...e: "application/pdf".to_string(),
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Mime`, found `String`
+
+error[E0308]: mismatched types
+   --> adk-model/src/deepseek/convert.rs:391:24
+    |
+391 | ...e: "text/csv".to_string(),
+    |       ^^^^^^^^^^^^^^^^^^^^^^ expected `Mime`, found `String`
+
+error[E0308]: mismatched types
+   --> adk-model/src/groq/convert.rs:343:24
+    |
+343 | ...e: "application/octet-stream".to_string(),
+    |       ^^^^^^^^^^^^^^^^...ted `Mime`, found `String`
+
+error[E0308]: mismatched types
+   --> adk-model/src/groq/convert.rs:355:24
+    |
+355 | ...e: "application/pdf".to_string(),
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Mime`, found `String`
+
+error[E0599]: no variant or associated item named `text` found for enum `ChatCompletionRequestUserMessageContentPart` in the current scope
+   --> adk-model/src/openai/convert.rs:399:70
+    |
+399 | ...t::text(t)...
+    |       ^^^^ variant or associated item not found in `ChatCompletionRequestUserMessageContentPart`
+    |
+    = note: the full name for the type has been written to '/home/michael/src/voice_gateway/zenith/adk-rust/target/debug/deps/adk_model-3b4f841bf6d683d0.long-type-11926535683477347568.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: there is a variant with a similar name
+    |
+399 -                         ChatCompletionRequestUserMessageContentPart::text(t) if t.text == "What is in this image?"
+399 +                         ChatCompletionRequestUserMessageContentPart::Text(t) if t.text == "What is in this image?"
+    |
+
+Some errors have detailed explanations: E0027, E0063, E0164, E0308, E0599.
+For more information about an error, try `rustc --explain E0027`.
+warning: `adk-model` (lib) generated 1 warning
+error: could not compile `adk-model` (lib) due to 14 previous errors; 1 warning emitted
+warning: build failed, waiting for other jobs to finish...
+Some errors have detailed explanations: E0027, E0063, E0164, E0308, E0425, E0432, E0433, E0559, E0599.
+error: could not compile `adk-model` (lib test) due to 47 previous errors

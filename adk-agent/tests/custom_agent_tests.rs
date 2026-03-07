@@ -1,23 +1,38 @@
 use adk_agent::CustomAgent;
 use adk_core::{
     Agent, CallbackContext, Content, Event, InvocationContext, Memory, Part, ReadonlyContext,
-    RunConfig, Session,
+    RunConfig, Session, types::AdkIdentity,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-struct MockSession;
+use adk_core::types::{SessionId, UserId};
+
+struct MockSession {
+    id: SessionId,
+    user_id: UserId,
+}
+
+impl MockSession {
+    fn new() -> Self {
+        Self {
+            id: SessionId::new("test-session".to_string()).unwrap(),
+            user_id: UserId::new("test-user".to_string()).unwrap(),
+        }
+    }
+}
 
 impl Session for MockSession {
-    fn id(&self) -> &str {
-        "test-session"
+    fn id(&self) -> &SessionId {
+        &self.id
     }
     fn app_name(&self) -> &str {
         "test-app"
     }
-    fn user_id(&self) -> &str {
-        "test-user"
+    fn user_id(&self) -> &UserId {
+        &self.user_id
     }
     fn state(&self) -> &dyn adk_core::State {
         unimplemented!()
@@ -32,46 +47,40 @@ struct MockContext {
     content: Content,
     session: MockSession,
     user_content: Content,
+    identity: AdkIdentity,
+    metadata: HashMap<String, String>,
 }
 
 impl MockContext {
     fn new() -> Self {
+        let mut identity = AdkIdentity::default();
+        identity.invocation_id = adk_core::types::InvocationId::new("inv-1").unwrap();
         Self {
             content: Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: "test".to_string() }],
+                role: adk_core::Role::User,
+                parts: vec![Part::text("test".to_string())],
             },
-            session: MockSession,
+            session: MockSession::new(),
             user_content: Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: "test".to_string() }],
+                role: adk_core::Role::User,
+                parts: vec![Part::text("test".to_string())],
             },
+            identity,
+            metadata: HashMap::new(),
         }
     }
 }
 
 #[async_trait]
 impl ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str {
-        "test-inv"
-    }
-    fn agent_name(&self) -> &str {
-        "test-agent"
-    }
-    fn user_id(&self) -> &str {
-        "test-user"
-    }
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-    fn session_id(&self) -> &str {
-        "test-session"
-    }
-    fn branch(&self) -> &str {
-        "main"
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+    fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
     }
 }
 
@@ -125,7 +134,7 @@ async fn test_custom_agent_run() {
     let agent = CustomAgent::builder("echo_agent")
         .description("Echoes input")
         .handler(|ctx| async move {
-            let mut event = Event::new(ctx.invocation_id());
+            let mut event = Event::new(ctx.invocation_id().to_string());
             event.llm_response.content = Some(ctx.user_content().clone());
 
             let stream = async_stream::stream! {

@@ -22,7 +22,7 @@ impl SequencedModel {
     fn function_call_response(name: &str, args: Value, id: &str) -> LlmResponse {
         LlmResponse {
             content: Some(Content {
-                role: "model".to_string(),
+                role: adk_core::Role::Model,
                 parts: vec![Part::FunctionCall {
                     name: name.to_string(),
                     args,
@@ -44,8 +44,8 @@ impl SequencedModel {
     fn text_response(text: &str) -> LlmResponse {
         LlmResponse {
             content: Some(Content {
-                role: "model".to_string(),
-                parts: vec![Part::Text { text: text.to_string() }],
+                role: adk_core::Role::Model,
+                parts: vec![Part::text(text.to_string())],
             }),
             usage_metadata: None,
             finish_reason: Some(FinishReason::Stop),
@@ -113,19 +113,33 @@ impl Tool for CountingTool {
     }
 }
 
-struct MockSession;
+use adk_core::types::{SessionId, UserId};
+
+struct MockSession {
+    id: SessionId,
+    user_id: UserId,
+}
+
+impl MockSession {
+    fn new() -> Self {
+        Self {
+            id: SessionId::new("session-1".to_string()).unwrap(),
+            user_id: UserId::new("user-1".to_string()).unwrap(),
+        }
+    }
+}
 
 impl Session for MockSession {
-    fn id(&self) -> &str {
-        "session-1"
+    fn id(&self) -> &SessionId {
+        &self.id
     }
 
     fn app_name(&self) -> &str {
         "test-app"
     }
 
-    fn user_id(&self) -> &str {
-        "user-1"
+    fn user_id(&self) -> &UserId {
+        &self.user_id
     }
 
     fn state(&self) -> &dyn State {
@@ -152,44 +166,43 @@ impl State for MockState {
 }
 
 struct MockContext {
+    identity: adk_core::types::AdkIdentity,
     session: MockSession,
     user_content: Content,
 }
 
 impl MockContext {
     fn new() -> Self {
-        Self { session: MockSession, user_content: Content::new("user").with_text("start") }
+        let mut identity = adk_core::types::AdkIdentity::default();
+        identity.invocation_id = "inv-1".into();
+        identity.agent_name = "test-agent".to_string();
+        identity.user_id = "user-1".into();
+        identity.app_name = "test-app".to_string();
+        identity.session_id = "session-1".into();
+        identity.branch = "main".to_string();
+
+        Self {
+            identity,
+            session: MockSession::new(),
+            user_content: Content::new("user").with_text("start"),
+        }
     }
 }
 
 #[async_trait]
 impl adk_core::ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str {
-        "inv-1"
-    }
-
-    fn agent_name(&self) -> &str {
-        "test-agent"
-    }
-
-    fn user_id(&self) -> &str {
-        "user-1"
-    }
-
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-
-    fn session_id(&self) -> &str {
-        "session-1"
-    }
-
-    fn branch(&self) -> &str {
-        "main"
+    fn identity(&self) -> &adk_core::types::AdkIdentity {
+        &self.identity
     }
 
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+
+    fn metadata(&self) -> &std::collections::HashMap<String, String> {
+        static METADATA: std::sync::OnceLock<std::collections::HashMap<String, String>> =
+            std::sync::OnceLock::new();
+        METADATA.get_or_init(std::collections::HashMap::new)
     }
 }
 
@@ -241,8 +254,8 @@ async fn test_before_tool_callback_short_circuits_tool_execution() {
         .before_tool_callback(Box::new(|_ctx| {
             Box::pin(async move {
                 Ok(Some(Content {
-                    role: "function".to_string(),
-                    parts: vec![Part::Text { text: "blocked".to_string() }],
+                    role: adk_core::Role::Custom("function".to_string()),
+                    parts: vec![Part::text("blocked".to_string())],
                 }))
             })
         }))
@@ -256,7 +269,7 @@ async fn test_before_tool_callback_short_circuits_tool_execution() {
         let event = result.unwrap();
         if let Some(content) = event.llm_response.content {
             for part in content.parts {
-                if let Part::Text { text } = part {
+                if let Some(text) = part.as_text() {
                     if text == "blocked" {
                         saw_blocked = true;
                     }
@@ -297,8 +310,8 @@ async fn test_after_tool_callback_overrides_result_and_order() {
             Box::pin(async move {
                 after_order.lock().unwrap().push("after_tool".to_string());
                 Ok(Some(Content {
-                    role: "function".to_string(),
-                    parts: vec![Part::Text { text: "after-override".to_string() }],
+                    role: adk_core::Role::Custom("function".to_string()),
+                    parts: vec![Part::text("after-override".to_string())],
                 }))
             })
         }))
@@ -312,7 +325,7 @@ async fn test_after_tool_callback_overrides_result_and_order() {
         let event = result.unwrap();
         if let Some(content) = event.llm_response.content {
             for part in content.parts {
-                if let Part::Text { text } = part {
+                if let Some(text) = part.as_text() {
                     if text == "after-override" {
                         saw_override = true;
                     }

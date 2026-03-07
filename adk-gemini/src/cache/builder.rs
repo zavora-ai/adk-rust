@@ -57,13 +57,13 @@ impl CacheBuilder {
 
     /// Add a user message to the cached content.
     pub fn with_user_message<S: Into<String>>(mut self, message: S) -> Self {
-        self.contents.push(crate::Message::user(message.into()).content);
+        self.contents.push(crate::Message::user(message).content);
         self
     }
 
     /// Add a model message to the cached content.
     pub fn with_model_message<S: Into<String>>(mut self, message: S) -> Self {
-        self.contents.push(crate::Message::model(message.into()).content);
+        self.contents.push(crate::Message::model(message).content);
         self
     }
 

@@ -8,8 +8,9 @@ use claudius::{
     Base64ImageSource, Base64PdfSource, CacheControlEphemeral, ContentBlock, DocumentBlock,
     ImageBlock, Message, MessageCreateParams, MessageParam, MessageRole, Model, PlainTextSource,
     StopReason, SystemPrompt, TextBlock, ToolParam, ToolResultBlock, ToolResultBlockContent,
-    ToolUnionParam, ToolUseBlock, UrlPdfSource,
+    ToolUnionParam, ToolUseBlock,
 };
+
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -24,27 +25,22 @@ pub fn content_to_message(
     content: &Content,
     prompt_caching: bool,
 ) -> Result<MessageParam, ConversionError> {
-    let role = match content.role.as_str() {
-        "user" | "function" | "tool" => MessageRole::User,
-        "model" | "assistant" => MessageRole::Assistant,
-        _ => MessageRole::User,
-    };
+    let role = if content.role.is_model() { MessageRole::Assistant } else { MessageRole::User };
 
     let cache = if prompt_caching { Some(CacheControlEphemeral::new()) } else { None };
 
-    let blocks: Vec<ContentBlock> = content
-        .parts
-        .iter()
-        .filter_map(|part| match part {
-            Part::Text { text } => {
+    let mut blocks = Vec::new();
+    for part in &content.parts {
+        let result_block = match part {
+            Part::Text(text) => {
                 if text.is_empty() {
-                    None
+                    Ok(None)
                 } else {
                     let mut block = TextBlock::new(text.clone());
                     if let Some(ref cc) = cache {
                         block = block.with_cache_control(cc.clone());
                     }
-                    Some(ContentBlock::Text(block))
+                    Ok(Some(ContentBlock::Text(block)))
                 }
             }
             Part::FunctionCall { name, args, id, .. } => {
@@ -57,20 +53,20 @@ pub fn content_to_message(
                 if let Some(ref cc) = cache {
                     block = block.with_cache_control(cc.clone());
                 }
-                Some(ContentBlock::ToolUse(block))
+                Ok(Some(ContentBlock::ToolUse(block)))
             }
-            Part::FunctionResponse { function_response, id } => {
-                Some(ContentBlock::ToolResult(ToolResultBlock {
+            Part::FunctionResponse { name: _, response, id } => {
+                Ok(Some(ContentBlock::ToolResult(ToolResultBlock {
                     tool_use_id: id.clone().unwrap_or_else(|| "unknown".to_string()),
                     content: Some(ToolResultBlockContent::String(
-                        serde_json::to_string(&function_response.response).unwrap_or_default(),
+                        serde_json::to_string(&response).unwrap_or_default(),
                     )),
                     is_error: None,
                     cache_control: None,
-                }))
+                })))
             }
             Part::InlineData { mime_type, data } => {
-                let media_type = match mime_type.as_str() {
+                let media_type = match mime_type.as_ref() {
                     "image/jpeg" => Some(ImageMediaType::Jpeg),
                     "image/png" => Some(ImageMediaType::Png),
                     "image/gif" => Some(ImageMediaType::Gif),
@@ -79,49 +75,47 @@ pub fn content_to_message(
                 };
                 if let Some(media_type) = media_type {
                     let encoded = attachment::encode_base64(data);
-                    Some(ContentBlock::Image(ImageBlock::new_with_base64(Base64ImageSource::new(
-                        encoded, media_type,
+                    Ok(Some(ContentBlock::Image(ImageBlock::new_with_base64(
+                        Base64ImageSource::new(encoded, media_type),
                     ))))
-                } else if mime_type == "application/pdf" {
+                } else if mime_type.as_ref() == "application/pdf" {
                     let encoded = attachment::encode_base64(data);
-                    Some(ContentBlock::Document(DocumentBlock::new_with_base64_pdf(
+                    Ok(Some(ContentBlock::Document(DocumentBlock::new_with_base64_pdf(
                         Base64PdfSource::new(encoded),
-                    )))
-                } else if mime_type.starts_with("text/") {
-                    match String::from_utf8(data.clone()) {
-                        Ok(text) => Some(ContentBlock::Document(
+                    ))))
+                } else if mime_type.as_ref().starts_with("text/") {
+                    match String::from_utf8(data.to_vec()) {
+                        Ok(text) => Ok(Some(ContentBlock::Document(
                             DocumentBlock::new_with_plain_text(PlainTextSource::new(text)),
-                        )),
-                        Err(_) => Some(ContentBlock::Text(TextBlock::new(
-                            attachment::inline_attachment_to_text(mime_type, data),
                         ))),
+                        Err(_) => Ok(Some(ContentBlock::Text(TextBlock::new(part.to_text())))),
                     }
                 } else {
-                    Some(ContentBlock::Text(TextBlock::new(attachment::inline_attachment_to_text(
-                        mime_type, data,
-                    ))))
+                    Ok(Some(ContentBlock::Text(TextBlock::new(part.to_text()))))
                 }
             }
-            Part::FileData { mime_type, file_uri } => {
-                if mime_type == "application/pdf" {
-                    Some(ContentBlock::Document(DocumentBlock::new_with_url_pdf(
-                        UrlPdfSource::new(file_uri.clone()),
-                    )))
-                } else {
-                    Some(ContentBlock::Text(TextBlock::new(attachment::file_attachment_to_text(
-                        mime_type, file_uri,
-                    ))))
-                }
+            Part::FileData { .. } => {
+                // Anthropic API requires inline base64 for files, not URLs.
+                // We return an error to prevent the 'PDF Parsing Trap'.
+                Err(ConversionError::UnsupportedFileData)
             }
-            Part::Thinking { thinking, .. } => {
+            Part::Thinking { thought: thinking, .. } => {
                 if thinking.is_empty() {
-                    None
+                    Ok(None)
                 } else {
-                    Some(ContentBlock::Text(TextBlock::new(thinking.clone())))
+                    // Fallback to text if dedicated Thinking blocks are not supported in this claudius version
+                    Ok(Some(ContentBlock::Text(TextBlock::new(format!(
+                        "<thinking>{}</thinking>",
+                        thinking
+                    )))))
                 }
             }
-        })
-        .collect();
+        }?;
+
+        if let Some(block) = result_block {
+            blocks.push(block);
+        }
+    }
 
     // If no blocks, add a placeholder for assistant messages
     let blocks = if blocks.is_empty() && role == MessageRole::Assistant {
@@ -165,7 +159,7 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
         match block {
             ContentBlock::Text(text_block) => {
                 if !text_block.text.is_empty() {
-                    parts.push(Part::Text { text: text_block.text.clone() });
+                    parts.push(Part::text(text_block.text.clone()));
                 }
             }
             ContentBlock::ToolUse(tool_use) => {
@@ -179,12 +173,8 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
             ContentBlock::Thinking(thinking_block) => {
                 if !thinking_block.thinking.is_empty() {
                     parts.push(Part::Thinking {
-                        thinking: thinking_block.thinking.clone(),
-                        signature: if thinking_block.signature.is_empty() {
-                            None
-                        } else {
-                            Some(thinking_block.signature.clone())
-                        },
+                        thought: thinking_block.thinking.clone(),
+                        signature: Some(thinking_block.signature.clone()),
                     });
                 }
             }
@@ -192,8 +182,11 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
         }
     }
 
-    let content =
-        if parts.is_empty() { None } else { Some(Content { role: "model".to_string(), parts }) };
+    let content = if parts.is_empty() {
+        None
+    } else {
+        Some(Content { role: adk_core::types::Role::Model, parts })
+    };
 
     let usage_metadata = Some(UsageMetadata {
         prompt_token_count: message.usage.input_tokens,
@@ -234,8 +227,8 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
 pub fn from_text_delta(text: &str) -> LlmResponse {
     LlmResponse {
         content: Some(Content {
-            role: "model".to_string(),
-            parts: vec![Part::Text { text: text.to_string() }],
+            role: adk_core::types::Role::Model,
+            parts: vec![Part::text(text.to_string())],
         }),
         usage_metadata: None,
         finish_reason: None,
@@ -252,8 +245,8 @@ pub fn from_text_delta(text: &str) -> LlmResponse {
 pub fn from_thinking_delta(thinking_text: &str) -> LlmResponse {
     LlmResponse {
         content: Some(Content {
-            role: "model".to_string(),
-            parts: vec![Part::Thinking { thinking: thinking_text.to_string(), signature: None }],
+            role: adk_core::types::Role::Model,
+            parts: vec![Part::Thinking { thought: thinking_text.to_string(), signature: None }],
         }),
         partial: true,
         turn_complete: false,
@@ -304,7 +297,7 @@ pub fn create_tool_call_response(
         .collect();
 
     LlmResponse {
-        content: Some(Content { role: "model".to_string(), parts }),
+        content: Some(Content { role: adk_core::types::Role::Model, parts }),
         usage_metadata: None,
         finish_reason,
         citation_metadata: None,
@@ -371,36 +364,23 @@ mod tests {
 
     #[test]
     fn test_content_to_message_user() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![Part::Text { text: "Hello".to_string() }],
-        };
+        let content = Content::user().with_text("Hello");
         let msg = content_to_message(&content, false).unwrap();
         assert!(matches!(msg.role, MessageRole::User));
     }
 
     #[test]
     fn test_content_to_message_assistant() {
-        let content = Content {
-            role: "model".to_string(),
-            parts: vec![Part::Text { text: "Hi there".to_string() }],
-        };
+        let content = Content::model().with_text("Hi there");
         let msg = content_to_message(&content, false).unwrap();
         assert!(matches!(msg.role, MessageRole::Assistant));
     }
 
     #[test]
     fn test_content_to_message_with_inline_image() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![
-                Part::Text { text: "What is in this image?".to_string() },
-                Part::InlineData {
-                    mime_type: "image/png".to_string(),
-                    data: vec![0x89, 0x50, 0x4E, 0x47],
-                },
-            ],
-        };
+        let content = Content::user().with_text("What is in this image?").with_part(
+            Part::inline_data("image/png", bytes::Bytes::from_static(&[0x89, 0x50, 0x4E, 0x47])).unwrap(),
+        );
         let msg = content_to_message(&content, false).unwrap();
         assert!(matches!(msg.role, MessageRole::User));
 
@@ -419,16 +399,9 @@ mod tests {
 
     #[test]
     fn test_content_to_message_unsupported_mime_type_falls_back_to_text() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![
-                Part::Text { text: "Check this".to_string() },
-                Part::InlineData {
-                    mime_type: "audio/wav".to_string(), // Not supported by Anthropic images
-                    data: vec![0x52, 0x49, 0x46, 0x46],
-                },
-            ],
-        };
+        let content = Content::user().with_text("Check this").with_part(
+            Part::inline_data("audio/wav", bytes::Bytes::from_static(&[0x52, 0x49, 0x46, 0x46])).unwrap(),
+        );
         let msg = content_to_message(&content, false).unwrap();
 
         // Audio part should be preserved as textual attachment fallback.
@@ -442,14 +415,10 @@ mod tests {
 
     #[test]
     fn test_content_to_message_multiple_images() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![
-                Part::Text { text: "Compare".to_string() },
-                Part::InlineData { mime_type: "image/jpeg".to_string(), data: vec![0xFF, 0xD8] },
-                Part::InlineData { mime_type: "image/webp".to_string(), data: vec![0x52, 0x49] },
-            ],
-        };
+        let content = Content::user()
+            .with_text("Compare")
+            .with_part(Part::inline_data("image/jpeg", bytes::Bytes::from_static(&[0xFF, 0xD8])).unwrap())
+            .with_part(Part::inline_data("image/webp", bytes::Bytes::from_static(&[0x52, 0x49])).unwrap());
         let msg = content_to_message(&content, false).unwrap();
 
         let json = serde_json::to_value(&msg).unwrap();
@@ -461,13 +430,9 @@ mod tests {
 
     #[test]
     fn test_content_to_message_pdf_inline_data_maps_to_document_block() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![Part::InlineData {
-                mime_type: "application/pdf".to_string(),
-                data: b"%PDF-1.4".to_vec(),
-            }],
-        };
+        let content = Content::user().with_part(
+            Part::inline_data("application/pdf", bytes::Bytes::from_static(b"%PDF-1.4")).unwrap(),
+        );
         let msg = content_to_message(&content, false).unwrap();
 
         let json = serde_json::to_value(&msg).unwrap();
@@ -479,22 +444,11 @@ mod tests {
     }
 
     #[test]
-    fn test_content_to_message_pdf_file_uri_maps_to_document_block() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![Part::FileData {
-                mime_type: "application/pdf".to_string(),
-                file_uri: "https://example.com/test.pdf".to_string(),
-            }],
-        };
-        let msg = content_to_message(&content, false).unwrap();
-
-        let json = serde_json::to_value(&msg).unwrap();
-        let content_blocks = json["content"].as_array().unwrap();
-        assert_eq!(content_blocks.len(), 1);
-        assert_eq!(content_blocks[0]["type"], "document");
-        assert_eq!(content_blocks[0]["source"]["type"], "url");
-        assert_eq!(content_blocks[0]["source"]["url"], "https://example.com/test.pdf");
+    fn test_content_to_message_pdf_file_uri_errors() {
+        let content = Content::user()
+            .with_part(Part::file_data("application/pdf", "https://example.com/test.pdf"));
+        let result = content_to_message(&content, false);
+        assert!(matches!(result, Err(ConversionError::UnsupportedFileData)));
     }
 
     #[test]
@@ -550,14 +504,11 @@ mod tests {
 
         // First part should be Thinking
         assert!(content.parts[0].is_thinking());
-        assert_eq!(
-            content.parts[0].thinking_text(),
-            Some("Let me reason through this step by step...")
-        );
+        assert_eq!(content.parts[0].as_text(), Some("Let me reason through this step by step..."));
 
         // Second part should be Text
         assert!(!content.parts[1].is_thinking());
-        assert_eq!(content.parts[1].text(), Some("The answer is 42."));
+        assert_eq!(content.parts[1].as_text(), Some("The answer is 42."));
     }
 
     #[test]
@@ -588,6 +539,6 @@ mod tests {
         let content = response.content.expect("should have content");
         // Empty thinking block should be skipped
         assert_eq!(content.parts.len(), 1);
-        assert_eq!(content.parts[0].text(), Some("Just text."));
+        assert_eq!(content.parts[0].as_text(), Some("Just text."));
     }
 }

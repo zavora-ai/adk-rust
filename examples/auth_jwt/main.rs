@@ -51,11 +51,11 @@ fn main() -> anyhow::Result<()> {
     println!();
 
     let claims = TokenClaims {
-        sub: "user-12345".into(),
-        iss: "https://accounts.google.com".into(),
-        email: Some("alice@example.com".into()),
-        name: Some("Alice Smith".into()),
-        groups: vec!["Engineering".into(), "Admins".into()],
+        sub: "user-12345",
+        iss: "https://accounts.google.com",
+        email: Some("alice@example.com"),
+        name: Some("Alice Smith"),
+        groups: vec!["Engineering", "Admins"],
         exp: 1735700000,
         iat: 1735696400,
         ..Default::default()
@@ -86,11 +86,11 @@ fn main() -> anyhow::Result<()> {
         TokenError::Expired,
         TokenError::InvalidSignature,
         TokenError::InvalidIssuer {
-            expected: "https://expected.com".into(),
-            actual: "https://actual.com".into(),
+            expected: "https://expected.com",
+            actual: "https://actual.com",
         },
-        TokenError::MissingClaim("email".into()),
-        TokenError::KeyNotFound("key-123".into()),
+        TokenError::MissingClaim("email"),
+        TokenError::KeyNotFound("key-123"),
     ];
 
     for err in errors {

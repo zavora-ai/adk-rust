@@ -28,7 +28,7 @@ use std::time::Duration;
 ///     .with_auth(McpAuth::oauth2(
 ///         OAuth2Config::new("client-id", "https://auth.example.com/token")
 ///             .with_secret("client-secret")
-///             .with_scopes(vec!["mcp:read".into()])
+///             .with_scopes(vec!["mcp:read")])
 ///     ))
 ///     .timeout(Duration::from_secs(60))
 ///     .connect()

@@ -1,3 +1,4 @@
+use adk_core::types::UserId;
 use adk_core::{Agent, Content, Part};
 use adk_runner::{Runner, RunnerConfig};
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
@@ -10,14 +11,14 @@ use std::io::{self, Write};
 use std::sync::Arc;
 
 #[allow(dead_code)] // Part of CLI API, not currently used
-pub async fn run_console(agent: Arc<dyn Agent>, app_name: String, user_id: String) -> Result<()> {
+pub async fn run_console(agent: Arc<dyn Agent>, app_name: String, user_id: UserId) -> Result<()> {
     let session_service = Arc::new(InMemorySessionService::new());
 
     let session = session_service
         .create(CreateRequest {
             app_name: app_name.clone(),
             user_id: user_id.clone(),
-            session_id: None,
+            session_id: None, // auto-generated
             state: HashMap::new(),
         })
         .await?;
@@ -51,12 +52,12 @@ pub async fn run_console(agent: Arc<dyn Agent>, app_name: String, user_id: Strin
 
                 rl.add_history_entry(&line)?;
 
-                let user_content = Content::new("user").with_text(line);
+                let user_content = Content::user().with_text(line);
 
                 print!("\nAgent -> ");
 
-                let session_id = session.id().to_string();
-                let mut events = runner.run(user_id.clone(), session_id, user_content).await?;
+                let mut events =
+                    runner.run(user_id.clone(), session.id().clone(), user_content).await?;
 
                 let mut stream_printer = StreamPrinter::default();
 
@@ -109,17 +110,21 @@ struct StreamPrinter {
 impl StreamPrinter {
     fn handle_part(&mut self, part: &Part) {
         match part {
-            Part::Text { text } => self.handle_text_chunk(text),
-            Part::Thinking { thinking, .. } => {
-                print!("\n[thinking] {}\n", thinking);
+            Part::Text(text) => self.handle_text_chunk(text),
+            Part::Thinking { thought, .. } => {
+                print!("\n[thinking] {}\n", thought);
                 let _ = io::stdout().flush();
             }
             Part::FunctionCall { name, args, .. } => self.print_tool_call(name, args),
-            Part::FunctionResponse { function_response, .. } => {
-                self.print_tool_response(&function_response.name, &function_response.response)
+            Part::FunctionResponse { name, response, .. } => {
+                self.print_tool_response(name, response)
             }
-            Part::InlineData { mime_type, data } => self.print_inline_data(mime_type, data.len()),
-            Part::FileData { mime_type, file_uri } => self.print_file_data(mime_type, file_uri),
+            Part::InlineData { mime_type, data } => {
+                self.print_inline_data(mime_type.as_ref(), data.len())
+            }
+            Part::FileData { mime_type, file_uri } => {
+                self.print_file_data(mime_type.as_ref(), file_uri)
+            }
         }
     }
 

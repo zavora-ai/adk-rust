@@ -56,8 +56,8 @@ fn arb_audio_mime_type() -> impl Strategy<Value = String> {
 /// Generate a content with only text parts
 fn arb_text_only_content() -> impl Strategy<Value = Content> {
     (arb_text(), arb_text()).prop_map(|(text1, text2)| Content {
-        role: "user".to_string(),
-        parts: vec![Part::Text { text: text1 }, Part::Text { text: text2 }],
+        role: adk_core::types::Role::User,
+        parts: vec![Part::text(text1), Part::text(text2)],
     })
 }
 
@@ -66,8 +66,8 @@ fn arb_text_and_image_content() -> impl Strategy<Value = Content> {
     (arb_text(), arb_image_mime_type()).prop_map(|(text, mime_type)| {
         let png_data = generate_minimal_png();
         Content {
-            role: "user".to_string(),
-            parts: vec![Part::Text { text }, Part::InlineData { mime_type, data: png_data }],
+            role: adk_core::types::Role::User,
+            parts: vec![Part::text(text), Part::InlineData { mime_type: mime_type.parse().unwrap(), data: png_data.into() }],
         }
     })
 }
@@ -77,12 +77,12 @@ fn arb_text_and_audio_content() -> impl Strategy<Value = Content> {
     (arb_text(), arb_audio_mime_type()).prop_map(|(text, mime_type)| {
         // Use empty audio data - we're testing extraction logic, not decoding
         Content {
-            role: "user".to_string(),
+            role: adk_core::types::Role::User,
             parts: vec![
-                Part::Text { text },
+                Part::text(text),
                 Part::InlineData {
-                    mime_type,
-                    data: vec![0u8; 44], // Minimal WAV header size
+                    mime_type: mime_type.parse().unwrap(),
+                    data: vec![0u8; 44].into(), // Minimal WAV header size
                 },
             ],
         }
@@ -95,11 +95,11 @@ fn arb_multimodal_content() -> impl Strategy<Value = Content> {
         |(text, image_mime, audio_mime)| {
             let png_data = generate_minimal_png();
             Content {
-                role: "user".to_string(),
+                role: adk_core::types::Role::User,
                 parts: vec![
-                    Part::Text { text },
-                    Part::InlineData { mime_type: image_mime, data: png_data },
-                    Part::InlineData { mime_type: audio_mime, data: vec![0u8; 44] },
+                    Part::text(text),
+                    Part::InlineData { mime_type: image_mime.parse().unwrap(), data: png_data.into() },
+                    Part::InlineData { mime_type: audio_mime.parse().unwrap(), data: vec![0u8; 44].into() },
                 ],
             }
         },
@@ -165,7 +165,7 @@ proptest! {
 
         // Audio part should be identified by MIME type (even if decoding fails)
         let has_audio_part = content.parts.iter().any(|part| {
-            matches!(part, Part::InlineData { mime_type, .. } if AudioFormat::is_supported_mime_type(mime_type))
+            matches!(part, Part::InlineData { mime_type, .. } if AudioFormat::is_supported_mime_type(mime_type.as_ref()))
         });
         prop_assert!(has_audio_part, "Audio part should be present in content");
     }
@@ -186,13 +186,13 @@ proptest! {
 
         // Audio part should be identified by MIME type
         let has_audio_part = content.parts.iter().any(|part| {
-            matches!(part, Part::InlineData { mime_type, .. } if AudioFormat::is_supported_mime_type(mime_type))
+            matches!(part, Part::InlineData { mime_type, .. } if AudioFormat::is_supported_mime_type(mime_type.as_ref()))
         });
         prop_assert!(has_audio_part, "Audio part should be present in multimodal content");
 
         // Image part should be identified by MIME type
         let has_image_part = content.parts.iter().any(|part| {
-            matches!(part, Part::InlineData { mime_type, .. } if ImageFormat::is_supported_mime_type(mime_type))
+            matches!(part, Part::InlineData { mime_type, .. } if ImageFormat::is_supported_mime_type(mime_type.as_ref()))
         });
         prop_assert!(has_image_part, "Image part should be present in multimodal content");
     }
@@ -202,12 +202,12 @@ proptest! {
     /// **Validates: Requirements 6.1, 17.1**
     #[test]
     fn prop_content_part_count(content in arb_multimodal_content()) {
-        let text_parts: Vec<_> = content.parts.iter().filter(|p| matches!(p, Part::Text { .. })).collect();
+        let text_parts: Vec<_> = content.parts.iter().filter(|p| matches!(p, Part::Text(..))).collect();
         let image_parts: Vec<_> = content.parts.iter().filter(|p| {
-            matches!(p, Part::InlineData { mime_type, .. } if ImageFormat::is_supported_mime_type(mime_type))
+            matches!(p, Part::InlineData { mime_type, .. } if ImageFormat::is_supported_mime_type(mime_type.as_ref()))
         }).collect();
         let audio_parts: Vec<_> = content.parts.iter().filter(|p| {
-            matches!(p, Part::InlineData { mime_type, .. } if AudioFormat::is_supported_mime_type(mime_type))
+            matches!(p, Part::InlineData { mime_type, .. } if AudioFormat::is_supported_mime_type(mime_type.as_ref()))
         }).collect();
 
         // Verify we have the expected number of each part type
@@ -224,7 +224,7 @@ proptest! {
     /// **Validates: Requirements 6.1**
     #[test]
     fn prop_role_preservation(
-        role in prop_oneof![
+        role_str in prop_oneof![
             Just("user".to_string()),
             Just("assistant".to_string()),
             Just("model".to_string()),
@@ -233,12 +233,12 @@ proptest! {
         text in arb_text()
     ) {
         let content = Content {
-            role: role.clone(),
-            parts: vec![Part::Text { text }],
+            role: adk_core::types::Role::Custom(role_str.clone()),
+            parts: vec![Part::text(text)],
         };
 
         // Role should be preserved
-        prop_assert_eq!(&content.role, &role, "Role should be preserved");
+        prop_assert_eq!(&content.role, &adk_core::types::Role::Custom(role_str.clone()), "Role should be preserved");
     }
 }
 
@@ -248,7 +248,7 @@ proptest! {
 
 #[test]
 fn test_empty_content_extraction() {
-    let content = Content { role: "user".to_string(), parts: vec![] };
+    let content = Content { role: adk_core::types::Role::User, parts: vec![] };
 
     let text = extract_text_from_content(&content);
     let images = extract_images_from_content(&content);
@@ -263,12 +263,12 @@ fn test_empty_content_extraction() {
 fn test_mixed_valid_invalid_images() {
     let png_data = generate_minimal_png();
     let content = Content {
-        role: "user".to_string(),
+        role: adk_core::types::Role::User,
         parts: vec![
-            Part::InlineData { mime_type: "image/png".to_string(), data: png_data },
+            Part::InlineData { mime_type: "image/png".parse().unwrap(), data: png_data.into() },
             Part::InlineData {
-                mime_type: "image/jpeg".to_string(),
-                data: vec![0, 1, 2, 3], // Invalid JPEG data
+                mime_type: "image/jpeg".parse().unwrap(),
+                data: vec![0, 1, 2, 3].into(), // Invalid JPEG data
             },
         ],
     };
@@ -281,11 +281,11 @@ fn test_mixed_valid_invalid_images() {
 #[test]
 fn test_multiple_text_parts_joined() {
     let content = Content {
-        role: "user".to_string(),
+        role: adk_core::types::Role::User,
         parts: vec![
-            Part::Text { text: "Hello".to_string() },
-            Part::Text { text: "World".to_string() },
-            Part::Text { text: "Test".to_string() },
+            Part::text("Hello".to_string()),
+            Part::text("World".to_string()),
+            Part::text("Test".to_string()),
         ],
     };
 
@@ -300,11 +300,11 @@ fn test_multimodal_with_multiple_images() {
     let png_data1 = generate_minimal_png();
     let png_data2 = generate_minimal_png();
     let content = Content {
-        role: "user".to_string(),
+        role: adk_core::types::Role::User,
         parts: vec![
-            Part::Text { text: "Describe these images".to_string() },
-            Part::InlineData { mime_type: "image/png".to_string(), data: png_data1 },
-            Part::InlineData { mime_type: "image/png".to_string(), data: png_data2 },
+            Part::text("Describe these images".to_string()),
+            Part::InlineData { mime_type: "image/png".parse().unwrap(), data: png_data1.into() },
+            Part::InlineData { mime_type: "image/png".parse().unwrap(), data: png_data2.into() },
         ],
     };
 
@@ -318,14 +318,14 @@ fn test_multimodal_with_multiple_images() {
 #[test]
 fn test_unsupported_mime_type_ignored() {
     let content = Content {
-        role: "user".to_string(),
+        role: adk_core::types::Role::User,
         parts: vec![
-            Part::Text { text: "Test".to_string() },
+            Part::text("Test".to_string()),
             Part::InlineData {
-                mime_type: "application/octet-stream".to_string(),
-                data: vec![0, 1, 2, 3],
+                mime_type: "application/octet-stream".parse().unwrap(),
+                data: vec![0, 1, 2, 3].into(),
             },
-            Part::InlineData { mime_type: "video/mp4".to_string(), data: vec![0, 1, 2, 3] },
+            Part::InlineData { mime_type: "video/mp4".parse().unwrap(), data: vec![0, 1, 2, 3].into() },
         ],
     };
 

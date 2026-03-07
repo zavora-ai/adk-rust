@@ -29,7 +29,7 @@ impl Tool for WeatherTool {
         "Get the current weather."
     }
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
-        Ok(Value::String("Sunny, 25°C".into()))
+        Ok(Value::String("Sunny, 25°C".to_string()))
     }
 }
 
@@ -43,7 +43,7 @@ impl Tool for SearchTool {
         "Search the knowledge base."
     }
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
-        Ok(Value::String("Found 3 matches for your query.".into()))
+        Ok(Value::String("Found 3 matches for your query.".to_string()))
     }
 }
 
@@ -114,8 +114,8 @@ async fn main() -> anyhow::Result<()> {
     let index = Arc::new(load_skill_index(&skills_root)?);
 
     let mut tools: HashMap<String, Arc<dyn Tool>> = HashMap::new();
-    tools.insert("weather".into(), Arc::new(WeatherTool));
-    tools.insert("knowledge".into(), Arc::new(SearchTool));
+    tools.insert("weather".to_string(), Arc::new(WeatherTool));
+    tools.insert("knowledge".to_string(), Arc::new(SearchTool));
     let registry = Arc::new(MyToolRegistry { tools });
 
     println!("--- Tier 3 Skill Coordination Demo ---\n");
@@ -127,7 +127,8 @@ async fn main() -> anyhow::Result<()> {
         CoordinatorConfig { validation_mode: ValidationMode::Permissive, ..Default::default() },
     );
 
-    let strategies = vec![ResolutionStrategy::ByQuery("What's the weather like today?".into())];
+    let strategies =
+        vec![ResolutionStrategy::ByQuery("What's the weather like today?".to_string())];
 
     println!("Resolving intent: 'What's the weather like today?'");
     if let Some(ctx) = coordinator.resolve(&strategies) {
@@ -141,8 +142,8 @@ async fn main() -> anyhow::Result<()> {
 
     // 2. Success Case: Multi-Strategy Resolution
     let strategies = vec![
-        ResolutionStrategy::ByName("nonexistent".into()), // Should skip
-        ResolutionStrategy::ByTag("advanced".into()),     // Should match researcher
+        ResolutionStrategy::ByName("nonexistent".to_string()), // Should skip
+        ResolutionStrategy::ByTag("advanced".to_string()),     // Should match researcher
     ];
 
     println!("Resolving multi-strategy: [ByName('nonexistent'), ByTag('advanced')]");
@@ -165,7 +166,7 @@ async fn main() -> anyhow::Result<()> {
         },
     );
 
-    let strategies = vec![ResolutionStrategy::ByName("broken_skill".into())];
+    let strategies = vec![ResolutionStrategy::ByName("broken_skill".to_string())];
 
     println!("Resolving 'broken_skill' in Strict mode...");
     // Since resolve() uses try_resolve().ok(), it returns None on validation failure.

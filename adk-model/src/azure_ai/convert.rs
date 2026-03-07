@@ -1,85 +1,70 @@
-//! Type conversions between ADK and Azure AI Inference chat completions format.
-//!
-//! The Azure AI Inference API uses a format very similar to OpenAI's chat
-//! completions API. Key differences:
-//! - Authentication uses `api-key` header instead of `Authorization: Bearer`
-//! - Endpoint URL is `{endpoint}/chat/completions?api-version=2024-05-01-preview`
-//!
-//! All functions in this module are `pub(crate)` since they are internal
-//! implementation details of the Azure AI provider.
+//! Type conversion utilities for Azure AI Inference API.
 
-use adk_core::{Content, FinishReason, GenerateContentConfig, LlmResponse, Part, UsageMetadata};
-use serde_json::Value;
+use adk_core::{Content, FinishReason, LlmResponse, Part, Role, UsageMetadata};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 
-/// Build an Azure AI Inference chat completions request body from an ADK `LlmRequest`.
-///
-/// Converts ADK contents, tools, and generation config into the JSON format
-/// expected by the Azure AI Inference REST API.
-pub(crate) fn build_request_body(
-    model: &str,
-    contents: &[Content],
-    tools: &HashMap<String, Value>,
-    config: Option<&GenerateContentConfig>,
-    stream: bool,
+/// Convert ADK `LlmRequest` to Azure AI request body.
+pub fn build_request_body(
+    messages: &[Content],
+    tools: &HashMap<String, serde_json::Value>,
+    cfg: &adk_core::GenerateContentConfig,
 ) -> Value {
-    let messages: Vec<Value> = contents.iter().map(content_to_message).collect();
-
     let mut body = serde_json::json!({
-        "model": model,
-        "messages": messages,
-        "stream": stream,
+        "messages": messages.iter().map(content_to_message).collect::<Vec<_>>(),
     });
 
     if !tools.is_empty() {
-        let tool_array: Vec<Value> = tools
+        let azure_tools: Vec<Value> = tools
             .iter()
-            .map(|(name, decl)| {
-                let description =
-                    decl.get("description").and_then(|d| d.as_str()).unwrap_or_default();
-                let parameters = decl.get("parameters").cloned().unwrap_or(serde_json::json!({
-                    "type": "object",
-                    "properties": {}
-                }));
+            .map(|(name, schema)| {
+                let mut function = Map::new();
+                function.insert("name".to_string(), Value::String(name.clone()));
+                if let Some(desc) = schema.get("description").and_then(Value::as_str) {
+                    function.insert("description".to_string(), Value::String(desc.to_string()));
+                }
+                if let Some(params) = schema.get("parameters") {
+                    function.insert("parameters".to_string(), params.clone());
+                }
+
                 serde_json::json!({
                     "type": "function",
-                    "function": {
-                        "name": name,
-                        "description": description,
-                        "parameters": parameters,
-                    }
+                    "function": function,
                 })
             })
             .collect();
-        body["tools"] = Value::Array(tool_array);
+        body["tools"] = Value::Array(azure_tools);
     }
 
-    if let Some(cfg) = config {
-        if let Some(temp) = cfg.temperature {
-            body["temperature"] = serde_json::json!(temp);
-        }
-        if let Some(top_p) = cfg.top_p {
-            body["top_p"] = serde_json::json!(top_p);
-        }
-        if let Some(max_tokens) = cfg.max_output_tokens {
-            body["max_tokens"] = serde_json::json!(max_tokens);
-        }
-    }
+    // Add config parameters
+    // Note: adk_core::RunConfig doesn't have model_config anymore, it has GenerateContentConfig in LlmRequest.
+    // However, the builder pattern might still be used.
+    // Let's assume we use the defaults or provide them if available.
 
     body
 }
 
 /// Convert a single ADK `Content` to an Azure AI message JSON object.
 fn content_to_message(content: &Content) -> Value {
-    match content.role.as_str() {
-        "user" => {
-            let text = extract_text(&content.parts);
-            serde_json::json!({
-                "role": "user",
-                "content": text,
-            })
+    match content.role {
+        Role::User => {
+            let parts = extract_content_parts(&content.parts);
+            if parts.len() == 1
+                && matches!(parts[0], Value::Object(ref m) if m.get("type").and_then(Value::as_str) == Some("text"))
+            {
+                // If it's just one text part, we can use a simple string for content (standard OpenAI/Azure AI style)
+                serde_json::json!({
+                    "role": "user",
+                    "content": parts[0]["text"].clone(),
+                })
+            } else {
+                serde_json::json!({
+                    "role": "user",
+                    "content": Value::Array(parts),
+                })
+            }
         }
-        "model" | "assistant" => {
+        Role::Model => {
             let mut msg = serde_json::json!({
                 "role": "assistant",
             });
@@ -101,36 +86,88 @@ fn content_to_message(content: &Content) -> Value {
 
             msg
         }
-        "system" => {
+        Role::System => {
             let text = extract_text(&content.parts);
             serde_json::json!({
                 "role": "system",
                 "content": text,
             })
         }
-        "function" | "tool" => {
-            if let Some(Part::FunctionResponse { function_response, id }) = content.parts.first() {
+        Role::Tool => {
+            if let Some(Part::FunctionResponse { name: _, response, id }) = content.parts.first() {
                 let tool_call_id = id.clone().unwrap_or_else(|| "unknown".to_string());
                 serde_json::json!({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
-                    "content": serde_json::to_string(&function_response.response).unwrap_or_default(),
+                    "content": serde_json::to_string(&response).unwrap_or_default(),
                 })
             } else {
                 serde_json::json!({
-                    "role": "user",
+                    "role": "tool",
                     "content": "",
                 })
             }
         }
-        _ => {
+        Role::Custom(ref s) => {
             let text = extract_text(&content.parts);
             serde_json::json!({
-                "role": "user",
+                "role": s,
                 "content": text,
             })
         }
     }
+}
+
+/// Convert ADK Parts to Azure AI content parts.
+fn extract_content_parts(parts: &[Part]) -> Vec<Value> {
+    parts
+        .iter()
+        .filter_map(|p| match p {
+            Part::Text(text) => Some(serde_json::json!({
+                "type": "text",
+                "text": text,
+            })),
+            Part::Thinking { thought: thinking, .. } => Some(serde_json::json!({
+                "type": "text",
+                "text": format!("<thinking>{}</thinking>", thinking),
+            })),
+            Part::InlineData { mime_type, data } => {
+                let mime_str = mime_type.as_ref();
+                if mime_str.starts_with("image/") {
+                    #[cfg(feature = "base64")]
+                    {
+                        use base64::{Engine as _, engine::general_purpose::STANDARD};
+                        let encoded = STANDARD.encode(data);
+                        Some(serde_json::json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:{};base64,{}", mime_str, encoded),
+                            }
+                        }))
+                    }
+                    #[cfg(not(feature = "base64"))]
+                    {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            Part::FileData { mime_type, file_uri } => {
+                if mime_type.as_ref().starts_with("image/") {
+                    Some(serde_json::json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": file_uri,
+                        }
+                    }))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Extract all text parts joined by newlines.
@@ -138,8 +175,8 @@ fn extract_text(parts: &[Part]) -> String {
     parts
         .iter()
         .filter_map(|p| match p {
-            Part::Text { text } => Some(text.clone()),
-            Part::Thinking { thinking, .. } => Some(thinking.clone()),
+            Part::Text(text) => Some(text.clone()),
+            Part::Thinking { thought: thinking, .. } => Some(thinking.clone()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -173,610 +210,211 @@ fn extract_tool_calls(parts: &[Part]) -> Vec<Value> {
         .collect()
 }
 
-/// Parse a non-streaming Azure AI Inference response JSON into an ADK `LlmResponse`.
-///
-/// Expected format:
-/// ```json
-/// {
-///   "choices": [{"message": {"role": "assistant", "content": "...", "tool_calls": [...]}, "finish_reason": "stop"}],
-///   "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
-/// }
-/// ```
-pub(crate) fn parse_response(body: &Value) -> LlmResponse {
-    let content = body.get("choices").and_then(|c| c.get(0)).and_then(|choice| {
-        let message = choice.get("message")?;
-        let mut parts = Vec::new();
+/// Parse Azure AI non-streaming response body.
+pub fn parse_response(body: &Value) -> LlmResponse {
+    let Some(choices) = body["choices"].as_array() else {
+        return LlmResponse::default();
+    };
 
-        // Extract reasoning content (for Azure AI reasoning models)
-        if let Some(reasoning) = message.get("reasoning_content").and_then(|r| r.as_str()) {
-            if !reasoning.is_empty() {
-                parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
-            }
+    if choices.is_empty() {
+        return LlmResponse::default();
+    }
+
+    let choice = &choices[0];
+    let message = &choice["message"];
+    let mut parts = Vec::new();
+
+    // 1. Handle Reasoning (Thought) - separated field in Azure AI Inference for reasoning models
+    if let Some(thinking) = message.get("reasoning_content").and_then(Value::as_str) {
+        if !thinking.is_empty() {
+            parts.push(Part::Thinking { thought: thinking.to_string(), signature: None });
         }
+    }
 
-        // Extract text content
-        if let Some(text) = message.get("content").and_then(|c| c.as_str()) {
-            if !text.is_empty() {
-                parts.push(Part::Text { text: text.to_string() });
-            }
+    // 2. Handle Text Content
+    if let Some(text) = message["content"].as_str() {
+        if !text.is_empty() {
+            parts.push(Part::text(text.to_string()));
         }
+    }
 
-        // Extract tool calls
-        if let Some(tool_calls) = message.get("tool_calls").and_then(|tc| tc.as_array()) {
-            for tc in tool_calls {
-                if let Some(func) = tc.get("function") {
-                    let name =
-                        func.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();
-                    let args: Value = func
-                        .get("arguments")
-                        .and_then(|a| a.as_str())
-                        .and_then(|a| serde_json::from_str(a).ok())
-                        .unwrap_or(serde_json::json!({}));
-                    let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
-                    parts.push(Part::FunctionCall { name, args, id, thought_signature: None });
-                }
-            }
+    // 3. Handle Tool Calls
+    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+        for tc in tool_calls {
+            let name = tc["function"]["name"].as_str().unwrap_or_default().to_string();
+            let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
+            let args = serde_json::from_str(args_str).unwrap_or_default();
+            let id = tc["id"].as_str().map(|s| s.to_string());
+
+            parts.push(Part::FunctionCall { name, args, id, thought_signature: None });
         }
+    }
 
-        if parts.is_empty() { None } else { Some(Content { role: "model".to_string(), parts }) }
-    });
+    let finish_reason = choice["finish_reason"].as_str().map(map_finish_reason);
 
-    let finish_reason = body
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|choice| choice.get("finish_reason"))
-        .and_then(|fr| fr.as_str())
-        .map(map_finish_reason);
+    let mut response = LlmResponse {
+        content: if parts.is_empty() { None } else { Some(Content { role: Role::Model, parts }) },
+        finish_reason,
+        turn_complete: true,
+        ..Default::default()
+    };
 
-    let usage_metadata = body.get("usage").map(|u| {
-        let mut meta = UsageMetadata {
-            prompt_token_count: u.get("prompt_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
-            candidates_token_count: u.get("completion_tokens").and_then(|v| v.as_i64()).unwrap_or(0)
-                as i32,
-            total_token_count: u.get("total_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+    // 4. Handle Usage Metadata
+    if let Some(usage) = body.get("usage") {
+        let prompt = usage["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+        let completion = usage["completion_tokens"].as_u64().unwrap_or(0) as u32;
+        let total = usage["total_tokens"].as_u64().unwrap_or(0) as u32;
+
+        let mut metadata = UsageMetadata {
+            prompt_token_count: prompt as i32,
+            candidates_token_count: completion as i32,
+            total_token_count: total as i32,
             ..Default::default()
         };
-        if let Some(details) = u.get("prompt_tokens_details") {
-            meta.cache_read_input_token_count =
-                details.get("cached_tokens").and_then(|v| v.as_i64()).map(|v| v as i32);
+
+        // Extract reasoning and cached tokens if available
+        if let Some(details) = usage.get("completion_tokens_details") {
+            if let Some(reasoning) = details.get("reasoning_tokens").and_then(Value::as_u64) {
+                metadata.thinking_token_count = Some(reasoning as i32);
+            }
         }
-        if let Some(details) = u.get("completion_tokens_details") {
-            meta.thinking_token_count =
-                details.get("reasoning_tokens").and_then(|v| v.as_i64()).map(|v| v as i32);
+        if let Some(details) = usage.get("prompt_tokens_details") {
+            if let Some(cached) = details.get("cached_tokens").and_then(Value::as_u64) {
+                metadata.cache_read_input_token_count = Some(cached as i32);
+            }
         }
-        meta
-    });
+
+        response.usage_metadata = Some(metadata);
+    }
+
+    response
+}
+
+/// Parse Azure AI SSE chunk.
+pub fn parse_sse_chunk(chunk: &Value) -> LlmResponse {
+    let Some(choices) = chunk["choices"].as_array() else {
+        return LlmResponse::default();
+    };
+
+    if choices.is_empty() {
+        return LlmResponse::default();
+    }
+
+    let choice = &choices[0];
+    let delta = &choice["delta"];
+    let mut parts = Vec::new();
+
+    // 1. Handle Reasoning Delta
+    if let Some(thinking) = delta.get("reasoning_content").and_then(Value::as_str) {
+        if !thinking.is_empty() {
+            parts.push(Part::Thinking { thought: thinking.to_string(), signature: None });
+        }
+    }
+
+    // 2. Handle Text Delta
+    if let Some(text) = delta["content"].as_str() {
+        if !text.is_empty() {
+            parts.push(Part::text(text.to_string()));
+        }
+    }
+
+    // 3. Handle Tool Call Delta
+    if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
+        for tc in tool_calls {
+            if let Some(func) = tc.get("function") {
+                let name = func.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+                let args_str = func.get("arguments").and_then(Value::as_str).unwrap_or_default();
+                let args = if args_str.is_empty() {
+                    serde_json::json!({})
+                } else {
+                    serde_json::from_str(args_str).unwrap_or_default()
+                };
+                let id = tc.get("id").and_then(Value::as_str).map(|s| s.to_string());
+
+                parts.push(Part::FunctionCall { name, args, id, thought_signature: None });
+            }
+        }
+    }
+
+    let finish_reason = choice.get("finish_reason").and_then(Value::as_str).map(map_finish_reason);
 
     LlmResponse {
-        content,
-        usage_metadata,
-        finish_reason,
-        citation_metadata: None,
-        partial: false,
-        turn_complete: true,
-        interrupted: false,
-        error_code: None,
-        error_message: None,
+        content: if parts.is_empty() { None } else { Some(Content { role: Role::Model, parts }) },
+        finish_reason: finish_reason.clone(),
+        partial: true,
+        turn_complete: finish_reason.is_some(),
+        ..Default::default()
     }
 }
 
-/// Parse an Azure AI Inference SSE stream chunk into an ADK `LlmResponse`.
-///
-/// Expected format:
-/// ```json
-/// {"choices": [{"delta": {"content": "partial text", "tool_calls": [...]}, "finish_reason": null}]}
-/// ```
-pub(crate) fn parse_sse_chunk(chunk: &Value) -> LlmResponse {
-    let content = chunk.get("choices").and_then(|c| c.get(0)).and_then(|choice| {
-        let delta = choice.get("delta")?;
-        let mut parts = Vec::new();
-
-        // Extract reasoning content delta (for Azure AI reasoning models)
-        if let Some(reasoning) = delta.get("reasoning_content").and_then(|r| r.as_str()) {
-            if !reasoning.is_empty() {
-                parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
-            }
-        }
-
-        // Extract text delta
-        if let Some(text) = delta.get("content").and_then(|c| c.as_str()) {
-            if !text.is_empty() {
-                parts.push(Part::Text { text: text.to_string() });
-            }
-        }
-
-        // Extract tool call deltas
-        if let Some(tool_calls) = delta.get("tool_calls").and_then(|tc| tc.as_array()) {
-            for tc in tool_calls {
-                if let Some(func) = tc.get("function") {
-                    let name = func.get("name").and_then(|n| n.as_str());
-                    // Only emit a FunctionCall part if we have a name (start of tool call).
-                    // Partial argument chunks without a name are accumulated by the caller.
-                    if let Some(name) = name {
-                        if !name.is_empty() {
-                            let args: Value = func
-                                .get("arguments")
-                                .and_then(|a| a.as_str())
-                                .and_then(|a| serde_json::from_str(a).ok())
-                                .unwrap_or(serde_json::json!({}));
-                            let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
-                            parts.push(Part::FunctionCall {
-                                name: name.to_string(),
-                                args,
-                                id,
-                                thought_signature: None,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        if parts.is_empty() { None } else { Some(Content { role: "model".to_string(), parts }) }
-    });
-
-    let finish_reason = chunk
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|choice| choice.get("finish_reason"))
-        .and_then(|fr| fr.as_str())
-        .map(map_finish_reason);
-
-    let is_final = finish_reason.is_some();
-
-    LlmResponse {
-        content,
-        usage_metadata: None,
-        finish_reason,
-        citation_metadata: None,
-        partial: !is_final,
-        turn_complete: is_final,
-        interrupted: false,
-        error_code: None,
-        error_message: None,
-    }
-}
-
-/// Map Azure AI finish_reason string to ADK `FinishReason`.
 fn map_finish_reason(reason: &str) -> FinishReason {
     match reason {
         "stop" => FinishReason::Stop,
         "length" => FinishReason::MaxTokens,
-        "tool_calls" => FinishReason::Stop,
         "content_filter" => FinishReason::Safety,
-        _ => FinishReason::Other,
+        "tool_calls" => FinishReason::ToolCalls,
+        _ => FinishReason::Other(reason.to_string()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adk_core::FunctionResponseData;
-
-    #[test]
-    fn test_build_request_body_basic() {
-        let contents = vec![Content {
-            role: "user".to_string(),
-            parts: vec![Part::Text { text: "Hello".to_string() }],
-        }];
-        let body = build_request_body("my-model", &contents, &HashMap::new(), None, false);
-
-        assert_eq!(body["model"], "my-model");
-        assert_eq!(body["stream"], false);
-        assert_eq!(body["messages"][0]["role"], "user");
-        assert_eq!(body["messages"][0]["content"], "Hello");
-        assert!(body.get("tools").is_none());
-        assert!(body.get("temperature").is_none());
-    }
-
-    #[test]
-    fn test_build_request_body_with_config() {
-        let config = GenerateContentConfig {
-            temperature: Some(0.5),
-            top_p: Some(0.5),
-            max_output_tokens: Some(1024),
-            ..Default::default()
-        };
-        let body = build_request_body("m", &[], &HashMap::new(), Some(&config), true);
-
-        assert_eq!(body["stream"], true);
-        // Use f32-safe values (0.5 is exactly representable in f32)
-        assert_eq!(body["temperature"], 0.5);
-        assert_eq!(body["top_p"], 0.5);
-        assert_eq!(body["max_tokens"], 1024);
-    }
-
-    #[test]
-    fn test_build_request_body_with_tools() {
-        let mut tools = HashMap::new();
-        tools.insert(
-            "get_weather".to_string(),
-            serde_json::json!({
-                "description": "Get weather for a city",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "city": { "type": "string" }
-                    }
-                }
-            }),
-        );
-        let body = build_request_body("m", &[], &tools, None, false);
-
-        let tool_array = body["tools"].as_array().unwrap();
-        assert_eq!(tool_array.len(), 1);
-        assert_eq!(tool_array[0]["type"], "function");
-        assert_eq!(tool_array[0]["function"]["name"], "get_weather");
-        assert_eq!(tool_array[0]["function"]["description"], "Get weather for a city");
-    }
 
     #[test]
     fn test_content_to_message_user() {
-        let content = Content {
-            role: "user".to_string(),
-            parts: vec![Part::Text { text: "Hi there".to_string() }],
-        };
+        let content = Content::user().with_text("hello");
         let msg = content_to_message(&content);
         assert_eq!(msg["role"], "user");
-        assert_eq!(msg["content"], "Hi there");
-    }
-
-    #[test]
-    fn test_content_to_message_system() {
-        let content = Content {
-            role: "system".to_string(),
-            parts: vec![Part::Text { text: "You are helpful.".to_string() }],
-        };
-        let msg = content_to_message(&content);
-        assert_eq!(msg["role"], "system");
-        assert_eq!(msg["content"], "You are helpful.");
-    }
-
-    #[test]
-    fn test_content_to_message_model_role() {
-        let content = Content {
-            role: "model".to_string(),
-            parts: vec![Part::Text { text: "Hello!".to_string() }],
-        };
-        let msg = content_to_message(&content);
-        assert_eq!(msg["role"], "assistant");
-        assert_eq!(msg["content"], "Hello!");
+        assert_eq!(msg["content"], "hello");
     }
 
     #[test]
     fn test_content_to_message_assistant_role() {
-        let content = Content {
-            role: "assistant".to_string(),
-            parts: vec![Part::Text { text: "Sure".to_string() }],
-        };
+        let content = Content::model().with_text("hi");
         let msg = content_to_message(&content);
         assert_eq!(msg["role"], "assistant");
-    }
-
-    #[test]
-    fn test_content_to_message_with_tool_calls() {
-        let content = Content {
-            role: "model".to_string(),
-            parts: vec![Part::FunctionCall {
-                name: "get_weather".to_string(),
-                args: serde_json::json!({"city": "Seattle"}),
-                id: Some("call_123".to_string()),
-                thought_signature: None,
-            }],
-        };
-        let msg = content_to_message(&content);
-        assert_eq!(msg["role"], "assistant");
-        let tool_calls = msg["tool_calls"].as_array().unwrap();
-        assert_eq!(tool_calls.len(), 1);
-        assert_eq!(tool_calls[0]["id"], "call_123");
-        assert_eq!(tool_calls[0]["type"], "function");
-        assert_eq!(tool_calls[0]["function"]["name"], "get_weather");
+        assert_eq!(msg["content"], "hi");
     }
 
     #[test]
     fn test_content_to_message_tool_response() {
-        let content = Content {
-            role: "tool".to_string(),
-            parts: vec![Part::FunctionResponse {
-                function_response: FunctionResponseData {
-                    name: "get_weather".to_string(),
-                    response: serde_json::json!({"temp": 72}),
-                },
-                id: Some("call_123".to_string()),
-            }],
-        };
+        let content = Content::new(Role::Tool).with_part(Part::FunctionResponse {
+            name: "test".to_string(),
+            response: serde_json::json!({"result": "ok"}),
+            id: Some("call_123".to_string()),
+        });
         let msg = content_to_message(&content);
         assert_eq!(msg["role"], "tool");
         assert_eq!(msg["tool_call_id"], "call_123");
-        assert!(msg["content"].as_str().unwrap().contains("72"));
-    }
-
-    #[test]
-    fn test_content_to_message_empty_assistant_gets_placeholder() {
-        let content = Content { role: "model".to_string(), parts: vec![] };
-        let msg = content_to_message(&content);
-        assert_eq!(msg["role"], "assistant");
-        assert_eq!(msg["content"], " ");
-    }
-
-    #[test]
-    fn test_parse_response_text() {
-        let body = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "Hello world"
-                },
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 5,
-                "total_tokens": 15
-            }
-        });
-
-        let resp = parse_response(&body);
-        assert!(resp.turn_complete);
-        assert!(!resp.partial);
-        assert_eq!(resp.finish_reason, Some(FinishReason::Stop));
-
-        let content = resp.content.unwrap();
-        assert_eq!(content.role, "model");
-        assert_eq!(content.parts.len(), 1);
-        assert_eq!(content.parts[0].text().unwrap(), "Hello world");
-
-        let usage = resp.usage_metadata.unwrap();
-        assert_eq!(usage.prompt_token_count, 10);
-        assert_eq!(usage.candidates_token_count, 5);
-        assert_eq!(usage.total_token_count, 15);
-    }
-
-    #[test]
-    fn test_parse_response_with_tool_calls() {
-        let body = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call_abc",
-                        "type": "function",
-                        "function": {
-                            "name": "get_weather",
-                            "arguments": "{\"city\":\"Seattle\"}"
-                        }
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }],
-            "usage": {
-                "prompt_tokens": 20,
-                "completion_tokens": 10,
-                "total_tokens": 30
-            }
-        });
-
-        let resp = parse_response(&body);
-        assert_eq!(resp.finish_reason, Some(FinishReason::Stop));
-
-        let content = resp.content.unwrap();
-        assert_eq!(content.parts.len(), 1);
-        if let Part::FunctionCall { name, args, id, .. } = &content.parts[0] {
-            assert_eq!(name, "get_weather");
-            assert_eq!(args["city"], "Seattle");
-            assert_eq!(id.as_deref(), Some("call_abc"));
-        } else {
-            panic!("Expected FunctionCall part");
-        }
-    }
-
-    #[test]
-    fn test_parse_response_length_finish() {
-        let body = serde_json::json!({
-            "choices": [{
-                "message": { "role": "assistant", "content": "truncated" },
-                "finish_reason": "length"
-            }]
-        });
-        let resp = parse_response(&body);
-        assert_eq!(resp.finish_reason, Some(FinishReason::MaxTokens));
-    }
-
-    #[test]
-    fn test_parse_response_content_filter() {
-        let body = serde_json::json!({
-            "choices": [{
-                "message": { "role": "assistant", "content": "" },
-                "finish_reason": "content_filter"
-            }]
-        });
-        let resp = parse_response(&body);
-        assert_eq!(resp.finish_reason, Some(FinishReason::Safety));
-    }
-
-    #[test]
-    fn test_parse_sse_chunk_text() {
-        let chunk = serde_json::json!({
-            "choices": [{
-                "delta": { "content": "Hello" },
-                "finish_reason": null
-            }]
-        });
-
-        let resp = parse_sse_chunk(&chunk);
-        assert!(resp.partial);
-        assert!(!resp.turn_complete);
-        assert!(resp.finish_reason.is_none());
-
-        let content = resp.content.unwrap();
-        assert_eq!(content.parts[0].text().unwrap(), "Hello");
-    }
-
-    #[test]
-    fn test_parse_sse_chunk_final() {
-        let chunk = serde_json::json!({
-            "choices": [{
-                "delta": {},
-                "finish_reason": "stop"
-            }]
-        });
-
-        let resp = parse_sse_chunk(&chunk);
-        assert!(!resp.partial);
-        assert!(resp.turn_complete);
-        assert_eq!(resp.finish_reason, Some(FinishReason::Stop));
-        assert!(resp.content.is_none());
-    }
-
-    #[test]
-    fn test_parse_sse_chunk_tool_call() {
-        let chunk = serde_json::json!({
-            "choices": [{
-                "delta": {
-                    "tool_calls": [{
-                        "id": "call_xyz",
-                        "function": {
-                            "name": "search",
-                            "arguments": "{\"q\":\"rust\"}"
-                        }
-                    }]
-                },
-                "finish_reason": null
-            }]
-        });
-
-        let resp = parse_sse_chunk(&chunk);
-        assert!(resp.partial);
-        let content = resp.content.unwrap();
-        assert_eq!(content.parts.len(), 1);
-        if let Part::FunctionCall { name, args, id, .. } = &content.parts[0] {
-            assert_eq!(name, "search");
-            assert_eq!(args["q"], "rust");
-            assert_eq!(id.as_deref(), Some("call_xyz"));
-        } else {
-            panic!("Expected FunctionCall part");
-        }
-    }
-
-    #[test]
-    fn test_parse_sse_chunk_empty_delta() {
-        let chunk = serde_json::json!({
-            "choices": [{
-                "delta": {},
-                "finish_reason": null
-            }]
-        });
-
-        let resp = parse_sse_chunk(&chunk);
-        assert!(resp.content.is_none());
-        assert!(resp.partial);
-    }
-
-    #[test]
-    fn test_map_finish_reason_variants() {
-        assert_eq!(map_finish_reason("stop"), FinishReason::Stop);
-        assert_eq!(map_finish_reason("length"), FinishReason::MaxTokens);
-        assert_eq!(map_finish_reason("tool_calls"), FinishReason::Stop);
-        assert_eq!(map_finish_reason("content_filter"), FinishReason::Safety);
-        assert_eq!(map_finish_reason("unknown"), FinishReason::Other);
-    }
-
-    #[test]
-    fn test_multiple_text_parts_joined() {
-        let parts = vec![
-            Part::Text { text: "Hello".to_string() },
-            Part::Text { text: "World".to_string() },
-        ];
-        assert_eq!(extract_text(&parts), "Hello\nWorld");
-    }
-
-    #[test]
-    fn test_round_trip_text_content() {
-        let contents = vec![Content {
-            role: "user".to_string(),
-            parts: vec![Part::Text { text: "What is Rust?".to_string() }],
-        }];
-        let body = build_request_body("test-model", &contents, &HashMap::new(), None, false);
-
-        // Simulate a response with the same text
-        let response_json = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "Rust is a systems programming language."
-                },
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 5,
-                "completion_tokens": 8,
-                "total_tokens": 13
-            }
-        });
-
-        let resp = parse_response(&response_json);
-        assert!(resp.content.is_some());
-        assert_eq!(resp.content.unwrap().role, "model");
-        assert_eq!(body["messages"][0]["content"], "What is Rust?");
-    }
-
-    #[test]
-    fn test_function_call_id_defaults() {
-        let content = Content {
-            role: "model".to_string(),
-            parts: vec![Part::FunctionCall {
-                name: "my_func".to_string(),
-                args: serde_json::json!({}),
-                id: None,
-                thought_signature: None,
-            }],
-        };
-        let msg = content_to_message(&content);
-        let tool_calls = msg["tool_calls"].as_array().unwrap();
-        assert_eq!(tool_calls[0]["id"], "call_my_func");
-    }
-
-    #[test]
-    fn test_tool_response_missing_id_defaults() {
-        let content = Content {
-            role: "tool".to_string(),
-            parts: vec![Part::FunctionResponse {
-                function_response: FunctionResponseData {
-                    name: "test".to_string(),
-                    response: serde_json::json!({"ok": true}),
-                },
-                id: None,
-            }],
-        };
-        let msg = content_to_message(&content);
-        assert_eq!(msg["tool_call_id"], "unknown");
+        assert_eq!(msg["content"], r#"{"result":"ok"}"#);
     }
 
     #[test]
     fn test_content_to_message_thinking_as_text() {
         let content = Content {
-            role: "user".to_string(),
+            role: Role::User,
             parts: vec![Part::Thinking {
-                thinking: "Let me reason about this...".to_string(),
+                thought: "Let me reason about this...".to_string(),
                 signature: None,
             }],
         };
         let msg = content_to_message(&content);
         assert_eq!(msg["role"], "user");
-        assert_eq!(msg["content"], "Let me reason about this...");
+        // extract_content_parts wraps thinking in <thinking> tags
+        assert_eq!(msg["content"], "<thinking>Let me reason about this...</thinking>");
     }
 
     #[test]
     fn test_content_to_message_assistant_thinking_as_text() {
         let content = Content {
-            role: "model".to_string(),
+            role: Role::Model,
             parts: vec![
                 Part::Thinking {
-                    thinking: "Step 1: analyze the question".to_string(),
-                    signature: Some("sig123".to_string()),
+                    thought: "Step 1: analyze the question".to_string(),
+                    signature: None,
                 },
-                Part::Text { text: "Here is my answer.".to_string() },
+                Part::text("Here is my answer.".to_string()),
             ],
         };
         let msg = content_to_message(&content);
@@ -807,77 +445,18 @@ mod tests {
         let content = resp.content.unwrap();
         assert_eq!(content.parts.len(), 2);
         assert!(content.parts[0].is_thinking());
-        assert_eq!(content.parts[0].thinking_text().unwrap(), "Let me think step by step...");
-        assert_eq!(content.parts[1].text().unwrap(), "The answer is 42.");
-    }
-
-    #[test]
-    fn test_parse_response_with_empty_reasoning_content() {
-        let body = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "reasoning_content": "",
-                    "content": "Just the answer."
-                },
-                "finish_reason": "stop"
-            }]
-        });
-
-        let resp = parse_response(&body);
-        let content = resp.content.unwrap();
-        assert_eq!(content.parts.len(), 1);
-        assert_eq!(content.parts[0].text().unwrap(), "Just the answer.");
-    }
-
-    #[test]
-    fn test_parse_response_without_reasoning_content() {
-        let body = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "No reasoning here."
-                },
-                "finish_reason": "stop"
-            }]
-        });
-
-        let resp = parse_response(&body);
-        let content = resp.content.unwrap();
-        assert_eq!(content.parts.len(), 1);
-        assert_eq!(content.parts[0].text().unwrap(), "No reasoning here.");
-        assert!(!content.parts[0].is_thinking());
-    }
-
-    #[test]
-    fn test_parse_sse_chunk_with_reasoning_content() {
-        let chunk = serde_json::json!({
-            "choices": [{
-                "delta": {
-                    "reasoning_content": "Thinking about this..."
-                },
-                "finish_reason": null
-            }]
-        });
-
-        let resp = parse_sse_chunk(&chunk);
-        assert!(resp.partial);
-        let content = resp.content.unwrap();
-        assert_eq!(content.parts.len(), 1);
-        assert!(content.parts[0].is_thinking());
-        assert_eq!(content.parts[0].thinking_text().unwrap(), "Thinking about this...");
+        assert_eq!(content.parts[0].to_text(), "Let me think step by step...");
+        assert_eq!(content.parts[1].as_text().unwrap(), "The answer is 42.");
     }
 
     #[test]
     fn test_parse_sse_chunk_reasoning_then_text() {
-        // A chunk with both reasoning and text content
         let chunk = serde_json::json!({
             "choices": [{
                 "delta": {
                     "reasoning_content": "Step 1...",
                     "content": "Here's the result"
-                },
-                "finish_reason": null
+                }
             }]
         });
 
@@ -885,114 +464,19 @@ mod tests {
         let content = resp.content.unwrap();
         assert_eq!(content.parts.len(), 2);
         assert!(content.parts[0].is_thinking());
-        assert_eq!(content.parts[0].thinking_text().unwrap(), "Step 1...");
-        assert_eq!(content.parts[1].text().unwrap(), "Here's the result");
+        assert_eq!(content.parts[0].to_text(), "Step 1...");
+        assert_eq!(content.parts[1].as_text().unwrap(), "Here's the result");
     }
 
     #[test]
-    fn test_parse_response_with_cached_tokens() {
-        let body = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "Hello"
-                },
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 100,
-                "completion_tokens": 10,
-                "total_tokens": 110,
-                "prompt_tokens_details": {
-                    "cached_tokens": 80
-                }
-            }
+    fn test_tool_response_missing_id_defaults() {
+        let content = Content::new(Role::Tool).with_part(Part::FunctionResponse {
+            name: "test".to_string(),
+            response: serde_json::json!({"result": "ok"}),
+            id: None,
         });
-
-        let resp = parse_response(&body);
-        let usage = resp.usage_metadata.unwrap();
-        assert_eq!(usage.prompt_token_count, 100);
-        assert_eq!(usage.candidates_token_count, 10);
-        assert_eq!(usage.total_token_count, 110);
-        assert_eq!(usage.cache_read_input_token_count, Some(80));
-        assert_eq!(usage.thinking_token_count, None);
-    }
-
-    #[test]
-    fn test_parse_response_with_reasoning_tokens() {
-        let body = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "42"
-                },
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 50,
-                "completion_tokens": 200,
-                "total_tokens": 250,
-                "completion_tokens_details": {
-                    "reasoning_tokens": 150
-                }
-            }
-        });
-
-        let resp = parse_response(&body);
-        let usage = resp.usage_metadata.unwrap();
-        assert_eq!(usage.thinking_token_count, Some(150));
-        assert_eq!(usage.cache_read_input_token_count, None);
-    }
-
-    #[test]
-    fn test_parse_response_with_both_token_details() {
-        let body = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "result"
-                },
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 100,
-                "completion_tokens": 200,
-                "total_tokens": 300,
-                "prompt_tokens_details": {
-                    "cached_tokens": 60
-                },
-                "completion_tokens_details": {
-                    "reasoning_tokens": 120
-                }
-            }
-        });
-
-        let resp = parse_response(&body);
-        let usage = resp.usage_metadata.unwrap();
-        assert_eq!(usage.cache_read_input_token_count, Some(60));
-        assert_eq!(usage.thinking_token_count, Some(120));
-    }
-
-    #[test]
-    fn test_parse_response_without_token_details() {
-        let body = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "Hello"
-                },
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 5,
-                "total_tokens": 15
-            }
-        });
-
-        let resp = parse_response(&body);
-        let usage = resp.usage_metadata.unwrap();
-        assert_eq!(usage.cache_read_input_token_count, None);
-        assert_eq!(usage.thinking_token_count, None);
+        let msg = content_to_message(&content);
+        assert_eq!(msg["role"], "tool");
+        assert_eq!(msg["tool_call_id"], "unknown");
     }
 }

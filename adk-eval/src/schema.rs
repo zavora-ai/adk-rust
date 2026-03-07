@@ -114,29 +114,27 @@ pub struct Turn {
     pub intermediate_data: Option<IntermediateData>,
 }
 
+use adk_core::types::Role;
+
 /// Content data structure (matches ADK Content)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContentData {
     /// Content parts
     pub parts: Vec<Part>,
     /// Role (user, model, tool)
-    #[serde(default = "default_role")]
-    pub role: String,
-}
-
-fn default_role() -> String {
-    "user".to_string()
+    #[serde(default)]
+    pub role: Role,
 }
 
 impl ContentData {
     /// Create content from text
     pub fn text(text: &str) -> Self {
-        Self { parts: vec![Part::Text { text: text.to_string() }], role: "user".to_string() }
+        Self { parts: vec![Part::Text { text: text.to_string() }], role: Role::User }
     }
 
     /// Create model response content
     pub fn model_response(text: &str) -> Self {
-        Self { parts: vec![Part::Text { text: text.to_string() }], role: "model".to_string() }
+        Self { parts: vec![Part::Text { text: text.to_string() }], role: Role::Model }
     }
 
     /// Get all text parts concatenated
@@ -144,7 +142,7 @@ impl ContentData {
         self.parts
             .iter()
             .filter_map(|p| match p {
-                Part::Text { text } => Some(text.as_str()),
+                Part::Text { text, .. } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -153,10 +151,10 @@ impl ContentData {
 
     /// Convert to ADK Content
     pub fn to_adk_content(&self) -> adk_core::Content {
-        let mut content = adk_core::Content::new(&self.role);
+        let mut content = adk_core::Content::new(self.role.clone());
         for part in &self.parts {
             match part {
-                Part::Text { text } => {
+                Part::Text { text, .. } => {
                     content = content.with_text(text);
                 }
                 Part::FunctionCall { .. } | Part::FunctionResponse { .. } => {
@@ -313,9 +311,9 @@ mod tests {
     fn test_content_data() {
         let content = ContentData::text("Hello world");
         assert_eq!(content.get_text(), "Hello world");
-        assert_eq!(content.role, "user");
+        assert_eq!(content.role, Role::User);
 
         let model = ContentData::model_response("Hi there!");
-        assert_eq!(model.role, "model");
+        assert_eq!(model.role, Role::Model);
     }
 }

@@ -12,7 +12,7 @@
 //!   OLLAMA_MODEL=qwen2.5:7b cargo run --example ollama_mcp --features ollama
 
 use adk_agent::LlmAgentBuilder;
-use adk_core::{Content, Part, ReadonlyContext, Toolset};
+use adk_core::{Content, Part, ReadonlyContext, Toolset, types::AdkIdentity};
 use adk_model::ollama::{OllamaConfig, OllamaModel};
 use adk_tool::McpToolset;
 use async_trait::async_trait;
@@ -22,34 +22,34 @@ use tokio::process::Command;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Simple context for getting tools from the toolset
-struct SimpleContext;
+struct SimpleContext {
+    identity: AdkIdentity,
+    metadata: std::collections::HashMap<String, String>,
+}
+
+impl SimpleContext {
+    fn new() -> Self {
+        Self { identity: AdkIdentity::default(), metadata: std::collections::HashMap::new() }
+    }
+}
 
 #[async_trait]
+#[async_trait]
 impl ReadonlyContext for SimpleContext {
-    fn invocation_id(&self) -> &str {
-        "init"
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
-    fn agent_name(&self) -> &str {
-        "init"
-    }
-    fn user_id(&self) -> &str {
-        "user"
-    }
-    fn app_name(&self) -> &str {
-        "ollama-mcp"
-    }
-    fn session_id(&self) -> &str {
-        "init"
-    }
-    fn branch(&self) -> &str {
-        "main"
-    }
+
     fn user_content(&self) -> &Content {
         static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
         CONTENT.get_or_init(|| Content {
             role: "user".to_string(),
-            parts: vec![Part::Text { text: "init".to_string() }],
+            parts: vec![Part::text("init".to_string())],
         })
+    }
+
+    fn metadata(&self) -> &std::collections::HashMap<String, String> {
+        &self.metadata
     }
 }
 
@@ -58,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
     // Initialize tracing (only show warnings by default to reduce noise)
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "warn,adk_agent=info".into()),
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "warn,adk_agent=info"),
         ))
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -89,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
     // Get cancellation token to cleanly shutdown the MCP server later
     let mcp_cancel = toolset.cancellation_token().await;
 
-    let ctx = Arc::new(SimpleContext) as Arc<dyn ReadonlyContext>;
+    let ctx = Arc::new(SimpleContext::new()) as Arc<dyn ReadonlyContext>;
     let tools = toolset.tools(ctx).await?;
 
     println!("Discovered {} MCP tools:", tools.len());

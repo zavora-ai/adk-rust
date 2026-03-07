@@ -1,36 +1,66 @@
 # =============================================================================
 # ADK-Rust Development Environment (devenv.nix)
 # =============================================================================
-# Reproducible dev environment using devenv.sh (https://devenv.sh)
-#
-# Setup:
-#   1. Install devenv: https://devenv.sh/getting-started/
-#   2. Run: devenv shell
-#   3. Everything is ready — cargo, sccache, mold, cmake, protobuf, node, etc.
-#
-# This gives identical toolchains on Linux, macOS, and CI.
+# Optimized for monorepo scale to fix "Argument list too long" (ARG_MAX) errors.
+# Merged with upstream feature set (pnpm, just, ws-summary).
 # =============================================================================
 
 { pkgs, lib, config, ... }:
 
-{
-  # --------------------------------------------------------------------------
-  # Core Configuration
-  # --------------------------------------------------------------------------
+let
+  llvm = pkgs.llvmPackages_latest;
+  
+  # Consolidated environment to fix "Argument list too long" (ARG_MAX) errors
+  # by replacing dozens of individual store paths with a single search path.
+  adkBuildEnv = pkgs.buildEnv {
+    name = "adk-build-env";
+    paths = [
+      pkgs.pkg-config
+      pkgs.openssl
+      pkgs.cmake
+      pkgs.protobuf
+      pkgs.glib
+      pkgs.glib.dev
+      pkgs.libva
+      pkgs.libvdpau
+      pkgs.libxcb
+      pkgs.libx11
+      pkgs.libxcursor
+      pkgs.libxext
+      pkgs.libxi
+      pkgs.libxrender
+      pkgs.libxkbcommon
+      pkgs.fontconfig
+      pkgs.freetype
+      pkgs.pipewire
+      pkgs.wayland
+      pkgs.dbus
+      pkgs.libcap
+      pkgs.systemd
+      pkgs.bzip2
+      pkgs.zlib
+      pkgs.lz4
+      pkgs.zstd
+      pkgs.snappy
+      pkgs.libopus
+      # Lower priority for xorgproto to avoid header collisions with libX11
+      (lib.lowPrio pkgs.xorgproto)
+    ];
+  };
+
+in {
   name = "adk-rust";
 
   # Enable Cachix binary cache
   cachix.pull = [ "devenv" ];
 
-  # Load .env file automatically
-  dotenv.enable = builtins.pathExists ./.env;
-
   # --------------------------------------------------------------------------
-  # Core Languages
+  # https://devenv.sh/languages/
   # --------------------------------------------------------------------------
   languages.rust = {
     enable = true;
     channel = "stable";
+    components = [ "rustc" "cargo" "clippy" "rustfmt" "rust-analyzer" ];
   };
 
   languages.javascript = {
@@ -41,84 +71,82 @@
   languages.nix.enable = true;
 
   # --------------------------------------------------------------------------
-  # System packages available in the dev shell
+  # System packages
   # --------------------------------------------------------------------------
-  packages = with pkgs; [
-    # Build essentials
-    cmake              # Required for audiopus (openai-webrtc feature)
-    pkg-config
-    openssl
-    coreutils
-
-    # Fast linkers (Linux)
-    mold
-    pkgs.wild          # Advanced Linker
-    clang
-    lld
-
-    # Compilation cache — dramatically speeds up rebuilds and CI
-    sccache
-
-    # System libraries required by livekit-webrtc
-    glib
+  packages = [ 
+    pkgs.git
+    pkgs.jq
+    pkgs.curl
+    pkgs.bun
+    pkgs.nodePackages.pnpm
+    pkgs.just
+    pkgs.sccache
+    pkgs.mold
+    pkgs.wild
+    
+    # System libraries (redundant but safe for pkg-config)
+    pkgs.glib
     pkgs.glib.dev
-    libva
-
-    # Protobuf (for gRPC codegen if needed)
-    protobuf
-
-    # Frontend tooling (ADK Studio UI)
-    nodePackages.pnpm
-
-    # Utilities
-    just               # Modern make alternative (optional)
-    git
-    jq
-    curl
-  ]
-  ++ lib.optionals pkgs.stdenv.isLinux [
-    # Linux-only: faster linking, perf tools
-    valgrind
+    pkgs.libva
+    
+    # Core build environment
+    adkBuildEnv
+    
+    # LLVM toolchain
+    llvm.clang
+    llvm.libclang
+    llvm.lld
+  ] ++ lib.optionals pkgs.stdenv.isLinux [
+    pkgs.valgrind
   ];
 
   # --------------------------------------------------------------------------
   # Environment variables
   # --------------------------------------------------------------------------
   env = {
+    # Centralized Build Search Paths
+    CPATH = "${adkBuildEnv}/include";
+    LIBRARY_PATH = "${adkBuildEnv}/lib";
+    PKG_CONFIG_PATH = "${adkBuildEnv}/lib/pkgconfig";
+    
+    # Rust/LLVM configuration
+    LIBCLANG_PATH = "${llvm.libclang.lib}/lib";
+    PROTOC = "${adkBuildEnv}/bin/protoc";
+    
+    # Global Sccache Wrappers (C, C++, Assembly)
+    CC = "sccache ${llvm.clang}/bin/clang";
+    CXX = "sccache ${llvm.clang}/bin/clang++";
+    
+    # Provide clang with the correct include paths for C++ headers
+    BINDGEN_EXTRA_CLANG_ARGS = "-I${llvm.libclang.lib}/lib/clang/${lib.getVersion llvm.clang}/include";
+
+    # CMake Sccache Integration
+    CMAKE_C_COMPILER_LAUNCHER = "sccache";
+    CMAKE_CXX_COMPILER_LAUNCHER = "sccache";
+    
+    # Linker configuration
+    LD = "lld";
+    
+    # Optimization
+    RUSTC_WRAPPER = "sccache";
+    SCCACHE_CACHE_SIZE = "50G";
+    WILD_INCREMENTAL = "1";
+    CMAKE_POLICY_VERSION_MINIMUM = "3.5";
+    
     # ADK Root Reference
     ADK_RUST_ROOT = lib.mkDefault config.devenv.root;
-
-    # cmake 4.x compat for audiopus builds
-    CMAKE_POLICY_VERSION_MINIMUM = "3.5";
-
-    # CARGO_INCREMENTAL is managed in .cargo/config.toml
     CARGO_REGISTRIES_CRATES_IO_PROTOCOL = "sparse";
-
-    # Wild Linker incremental support
-    WILD_INCREMENTAL = "1";
-
-    # Explicitly set PROTOC for build-scripts (e.g., lance-encoding)
-    PROTOC = "${pkgs.protobuf}/bin/protoc";
-
-    # Ensure pkg-config can find glib
-    PKG_CONFIG_PATH = "${pkgs.glib.dev}/lib/pkgconfig:$PKG_CONFIG_PATH";
   };
 
   # --------------------------------------------------------------------------
-  # Task System & Scripts
+  # https://devenv.sh/scripts/
   # --------------------------------------------------------------------------
-  tasks = {
-    "ci:test" = {
-      description = "Run full workspace checks.";
-      exec = "cargo check && cargo test";
-    };
-  };
-
   scripts = {
     ws-fmt.exec = "cargo fmt --all $@";
-    ws-check.exec = "RUSTC_WRAPPER=sccache cargo check --workspace $@";
-    ws-test.exec = "RUSTC_WRAPPER=sccache cargo test --workspace $@";
-    ws-clippy.exec = "RUSTC_WRAPPER=sccache cargo clippy --workspace $@ -- -D warnings";
+    ws-check.exec = "cargo check --all-features $@";
+    ws-test.exec = "cargo test --all-features $@";
+    ws-clippy.exec = "cargo clippy --all-features -- -D warnings $@";
+    
     ws-summary.exec = ''
       if [ -n "$GITHUB_STEP_SUMMARY" ]; then
         echo "## 🚀 CI Summary" >> "$GITHUB_STEP_SUMMARY"
@@ -168,22 +196,17 @@
   };
 
   # --------------------------------------------------------------------------
-  # Test & Shell Hooks
+  # Quality Gates
   # --------------------------------------------------------------------------
-  enterTest = "ws-test"; # Runs the 'ws-test' script above
+  enterTest = "ws-test";
 
-  # --------------------------------------------------------------------------
-  # Quality Gates (Git-Hooks)
-  # --------------------------------------------------------------------------
   git-hooks.hooks = {
     rustfmt.enable = true;
     clippy.enable = true;
+    clippy.settings.allFeatures = true;
     shellcheck.enable = true;
   };
 
-  # --------------------------------------------------------------------------
-  # Shell hooks — run on entering the dev shell
-  # --------------------------------------------------------------------------
   enterShell = ''
     echo "🚀 Welcome to the ADK-Rust Development Environment!"
     echo "   Rust:    $(rustc --version)"
@@ -191,6 +214,6 @@
     echo "   sccache: $(sccache --version 2>/dev/null || echo 'not found')"
     echo "   Node:    $(node --version)"
     echo ""
-    echo "💡 Run 'devenv tasks list' or use the scripts: fmt, check, test, clippy."
+    echo "💡 Run 'devenv tasks list' or use the scripts: ws-fmt, ws-check, ws-test, ws-clippy."
   '';
 }

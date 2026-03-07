@@ -1,0 +1,105 @@
+--- adk-graph/src/node.rs
++++ adk-graph/src/node.rs
+@@ -6,7 +6,7 @@
+ use crate::stream::StreamEvent;
+ use async_trait::async_trait;
+ use serde_json::Value;
+ use std::collections::HashMap;
+ use std::future::Future;
+ use std::pin::Pin;
+ use std::sync::Arc;
++use adk_core::types::{InvocationId, SessionId, UserId};
+
+ /// Configuration passed to nodes during execution
+ #[derive(Clone)]
+@@ -439,7 +440,10 @@
+
+ /// Internal implementation of InvocationContext for GraphNodes
+ struct GraphInvocationContext {
+-    invocation_id: String,
++    invocation_id: InvocationId,
++    user_id: UserId,
++    session_id: SessionId,
+     user_content: Content,
+     agent: Arc<dyn adk_core::Agent>,
+     session: Arc<GraphSession>,
+@@ -451,10 +455,12 @@
+         session_id: String,
+         user_content: Content,
+         agent: Arc<dyn adk_core::Agent>,
+     ) -> Self {
+-        let invocation_id = format!("graph-inv-{}", uuid::Uuid::new_v4());
++        let invocation_id = InvocationId::new(format!("graph-inv-{}", uuid::Uuid::new_v4())).unwrap();
+         let session = Arc::new(GraphSession::new(session_id.clone()));
+         Self {
+             invocation_id,
++            user_id: UserId::new("graph_user").unwrap(),
++            session_id: SessionId::new(session_id).unwrap(),
+             user_content,
+             agent,
+             session,
+@@ -463,7 +469,7 @@
+
+ #[async_trait]
+ impl adk_core::ReadonlyContext for GraphInvocationContext {
+-    fn invocation_id(&self) -> &str {
+-        &self.invocation_id
++    fn invocation_id(&self) -> &InvocationId {
++        &self.invocation_id
+     }
+
+@@ -471,7 +477,7 @@
+         self.agent.name()
+     }
+
+-    fn user_id(&self) -> &str {
+-        "graph_user"
++    fn user_id(&self) -> &UserId {
++        &self.user_id
+     }
+
+@@ -479,7 +485,7 @@
+         "graph_execution"
+     }
+
+-    fn session_id(&self) -> &str {
+-        &self.session.id
++    fn session_id(&self) -> &SessionId {
++        &self.session_id
+     }
+
+@@ -555,7 +561,8 @@
+
+ /// Basic session implementation for graph context
+ struct GraphSession {
+-    id: String,
++    id: SessionId,
++    user_id: UserId,
+     state: GraphState,
+     history: std::sync::RwLock<Vec<Content>>,
+ }
+@@ -558,7 +565,12 @@
+
+ impl GraphSession {
+     fn new(id: String) -> Self {
+-        Self { id, state: GraphState::new(), history: std::sync::RwLock::new(Vec::new()) }
++        Self {
++            id: SessionId::new(id).unwrap(),
++            user_id: UserId::new("graph_user").unwrap(),
++            state: GraphState::new(),
++            history: std::sync::RwLock::new(Vec::new())
++        }
+     }
+ }
+
+@@ -567,11 +579,11 @@
+-    fn id(&self) -> &str {
++    fn id(&self) -> &SessionId {
+         &self.id
+     }
+
+-    fn user_id(&self) -> &str {
+-        "graph_user"
++    fn user_id(&self) -> &UserId {
++        &self.user_id
+     }

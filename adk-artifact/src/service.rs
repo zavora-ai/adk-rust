@@ -1,11 +1,12 @@
+use adk_core::types::{SessionId, UserId};
 use adk_core::{Part, Result};
 use async_trait::async_trait;
 
 #[derive(Debug, Clone)]
 pub struct SaveRequest {
     pub app_name: String,
-    pub user_id: String,
-    pub session_id: String,
+    pub user_id: UserId,
+    pub session_id: SessionId,
     pub file_name: String,
     pub part: Part,
     pub version: Option<i64>,
@@ -19,8 +20,8 @@ pub struct SaveResponse {
 #[derive(Debug, Clone)]
 pub struct LoadRequest {
     pub app_name: String,
-    pub user_id: String,
-    pub session_id: String,
+    pub user_id: UserId,
+    pub session_id: SessionId,
     pub file_name: String,
     pub version: Option<i64>,
 }
@@ -33,8 +34,8 @@ pub struct LoadResponse {
 #[derive(Debug, Clone)]
 pub struct DeleteRequest {
     pub app_name: String,
-    pub user_id: String,
-    pub session_id: String,
+    pub user_id: UserId,
+    pub session_id: SessionId,
     pub file_name: String,
     pub version: Option<i64>,
 }
@@ -42,8 +43,8 @@ pub struct DeleteRequest {
 #[derive(Debug, Clone)]
 pub struct ListRequest {
     pub app_name: String,
-    pub user_id: String,
-    pub session_id: String,
+    pub user_id: UserId,
+    pub session_id: SessionId,
 }
 
 #[derive(Debug, Clone)]
@@ -54,8 +55,8 @@ pub struct ListResponse {
 #[derive(Debug, Clone)]
 pub struct VersionsRequest {
     pub app_name: String,
-    pub user_id: String,
-    pub session_id: String,
+    pub user_id: UserId,
+    pub session_id: SessionId,
     pub file_name: String,
 }
 

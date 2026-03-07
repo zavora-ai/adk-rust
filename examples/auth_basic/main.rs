@@ -62,14 +62,14 @@ fn main() -> anyhow::Result<()> {
     let admin = Role::new("admin").allow(Permission::AllTools).allow(Permission::AllAgents);
 
     let analyst = Role::new("analyst")
-        .allow(Permission::Tool("search".into()))
-        .deny(Permission::Tool("code_exec".into()))
-        .deny(Permission::Tool("admin_panel".into()));
+        .allow(Permission::Tool("search".to_string()))
+        .deny(Permission::Tool("code_exec".to_string()))
+        .deny(Permission::Tool("admin_panel".to_string()));
 
     let developer = Role::new("developer")
-        .allow(Permission::Tool("search".into()))
-        .allow(Permission::Tool("code_exec".into()))
-        .deny(Permission::Tool("admin_panel".into()));
+        .allow(Permission::Tool("search".to_string()))
+        .allow(Permission::Tool("code_exec".to_string()))
+        .deny(Permission::Tool("admin_panel".to_string()));
 
     // Build access control
     let ac = AccessControl::builder()
@@ -102,8 +102,9 @@ fn main() -> anyhow::Result<()> {
 
     println!("Permission checks:");
     for (user, tool) in test_cases {
-        let perm = Permission::Tool(tool.into());
-        let result = ac.check(user, &perm);
+        let perm = Permission::Tool(tool.to_string());
+        let user_id = adk_core::types::UserId::new(user).unwrap();
+        let result = ac.check(&user_id, &perm);
         let status = if result.is_ok() { "✅" } else { "❌" };
         println!("  {} {} -> {}", status, user, tool);
     }

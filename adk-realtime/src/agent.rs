@@ -1,84 +1,27 @@
-//! RealtimeAgent - an Agent implementation for real-time voice interactions.
-//!
-//! This module provides `RealtimeAgent`, which implements the `adk_core::Agent` trait
-//! and provides the same callback/tool/instruction features as `LlmAgent`, but uses
-//! real-time bidirectional audio streaming instead of text-based LLM calls.
-//!
-//! # Architecture
-//!
-//! ```text
-//!                     ┌─────────────────────────────────────────┐
-//!                     │              Agent Trait                │
-//!                     │  (name, description, run, sub_agents)   │
-//!                     └────────────────┬────────────────────────┘
-//!                                      │
-//!              ┌───────────────────────┼───────────────────────┐
-//!              │                       │                       │
-//!     ┌────────▼────────┐    ┌─────────▼─────────┐   ┌─────────▼─────────┐
-//!     │    LlmAgent     │    │  RealtimeAgent    │   │  SequentialAgent  │
-//!     │  (text-based)   │    │  (voice-based)    │   │   (workflow)      │
-//!     └─────────────────┘    └───────────────────┘   └───────────────────┘
-//! ```
-//!
-//! # Shared Features with LlmAgent
-//!
-//! - **Tools**: Function tools that can be called during conversation
-//! - **Callbacks**: before_agent, after_agent, before_tool, after_tool
-//! - **Instructions**: Static or dynamic instruction providers
-//! - **Sub-agents**: Agent handoff/transfer support
-//! - **Context**: Full access to InvocationContext (session, memory, artifacts)
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use adk_realtime::RealtimeAgent;
-//! use adk_realtime::openai::OpenAIRealtimeModel;
-//!
-//! let model = OpenAIRealtimeModel::new(api_key, "gpt-4o-realtime-preview-2024-12-17");
-//!
-//! let agent = RealtimeAgent::builder("voice_assistant")
-//!     .model(Box::new(model))
-//!     .instruction("You are a helpful voice assistant.")
-//!     .voice("alloy")
-//!     .tool(Arc::new(weather_tool))
-//!     .before_agent_callback(|ctx| async move {
-//!         println!("Starting voice session for user: {}", ctx.user_id());
-//!         Ok(None)
-//!     })
-//!     .build()?;
-//!
-//! // Run through standard ADK runner
-//! let runner = Runner::new(agent);
-//! runner.run(session, user_content).await?;
-//! ```
-
 use crate::config::{RealtimeConfig, ToolDefinition, VadConfig, VadMode};
 use crate::events::{ServerEvent, ToolResponse};
 use adk_core::{
     AdkError, AfterAgentCallback, AfterToolCallback, Agent, BeforeAgentCallback,
     BeforeToolCallback, CallbackContext, Content, Event, EventActions, EventStream,
     GlobalInstructionProvider, InstructionProvider, InvocationContext, MemoryEntry, Part,
-    ReadonlyContext, Result, Tool, ToolContext,
+    ReadonlyContext, Result, Tool, ToolContext, types::AdkIdentity,
 };
 use async_stream::stream;
 use async_trait::async_trait;
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// Shared realtime model type (thread-safe for async usage).
 pub type BoxedRealtimeModel = Arc<dyn crate::model::RealtimeModel>;
 
 /// A real-time voice agent that implements the ADK Agent trait.
-///
-/// `RealtimeAgent` provides bidirectional audio streaming while maintaining
-/// compatibility with the standard ADK agent ecosystem. It supports the same
-/// callbacks, tools, and instruction patterns as `LlmAgent`.
 pub struct RealtimeAgent {
     name: String,
     description: String,
     model: BoxedRealtimeModel,
 
-    // Instructions (same as LlmAgent)
+    // Instructions
     instruction: Option<String>,
     instruction_provider: Option<Arc<InstructionProvider>>,
     global_instruction: Option<String>,
@@ -89,11 +32,11 @@ pub struct RealtimeAgent {
     vad_config: Option<VadConfig>,
     modalities: Vec<String>,
 
-    // Tools (same as LlmAgent)
+    // Tools
     tools: Vec<Arc<dyn Tool>>,
     sub_agents: Vec<Arc<dyn Agent>>,
 
-    // Callbacks (same as LlmAgent)
+    // Callbacks
     before_callbacks: Arc<Vec<BeforeAgentCallback>>,
     after_callbacks: Arc<Vec<AfterAgentCallback>>,
     before_tool_callbacks: Arc<Vec<BeforeToolCallback>>,
@@ -189,55 +132,46 @@ impl RealtimeAgentBuilder {
         }
     }
 
-    /// Set the agent description.
     pub fn description(mut self, desc: impl Into<String>) -> Self {
         self.description = Some(desc.into());
         self
     }
 
-    /// Set the realtime model.
     pub fn model(mut self, model: BoxedRealtimeModel) -> Self {
         self.model = Some(model);
         self
     }
 
-    /// Set a static instruction.
     pub fn instruction(mut self, instruction: impl Into<String>) -> Self {
         self.instruction = Some(instruction.into());
         self
     }
 
-    /// Set a dynamic instruction provider.
     pub fn instruction_provider(mut self, provider: InstructionProvider) -> Self {
         self.instruction_provider = Some(Arc::new(provider));
         self
     }
 
-    /// Set a static global instruction.
     pub fn global_instruction(mut self, instruction: impl Into<String>) -> Self {
         self.global_instruction = Some(instruction.into());
         self
     }
 
-    /// Set a dynamic global instruction provider.
     pub fn global_instruction_provider(mut self, provider: GlobalInstructionProvider) -> Self {
         self.global_instruction_provider = Some(Arc::new(provider));
         self
     }
 
-    /// Set the voice for audio output.
     pub fn voice(mut self, voice: impl Into<String>) -> Self {
         self.voice = Some(voice.into());
         self
     }
 
-    /// Set voice activity detection configuration.
     pub fn vad(mut self, config: VadConfig) -> Self {
         self.vad_config = Some(config);
         self
     }
 
-    /// Enable server-side VAD with default settings.
     pub fn server_vad(mut self) -> Self {
         self.vad_config = Some(VadConfig {
             mode: VadMode::ServerVad,
@@ -250,73 +184,61 @@ impl RealtimeAgentBuilder {
         self
     }
 
-    /// Set output modalities (e.g., ["text", "audio"]).
     pub fn modalities(mut self, modalities: Vec<String>) -> Self {
         self.modalities = modalities;
         self
     }
 
-    /// Add a tool.
     pub fn tool(mut self, tool: Arc<dyn Tool>) -> Self {
         self.tools.push(tool);
         self
     }
 
-    /// Add a sub-agent for handoffs.
     pub fn sub_agent(mut self, agent: Arc<dyn Agent>) -> Self {
         self.sub_agents.push(agent);
         self
     }
 
-    /// Add a before-agent callback.
     pub fn before_agent_callback(mut self, callback: BeforeAgentCallback) -> Self {
         self.before_callbacks.push(callback);
         self
     }
 
-    /// Add an after-agent callback.
     pub fn after_agent_callback(mut self, callback: AfterAgentCallback) -> Self {
         self.after_callbacks.push(callback);
         self
     }
 
-    /// Add a before-tool callback.
     pub fn before_tool_callback(mut self, callback: BeforeToolCallback) -> Self {
         self.before_tool_callbacks.push(callback);
         self
     }
 
-    /// Add an after-tool callback.
     pub fn after_tool_callback(mut self, callback: AfterToolCallback) -> Self {
         self.after_tool_callbacks.push(callback);
         self
     }
 
-    /// Set callback for audio output events.
     pub fn on_audio(mut self, callback: AudioCallback) -> Self {
         self.on_audio = Some(callback);
         self
     }
 
-    /// Set callback for transcript events.
     pub fn on_transcript(mut self, callback: TranscriptCallback) -> Self {
         self.on_transcript = Some(callback);
         self
     }
 
-    /// Set callback for speech started events.
     pub fn on_speech_started(mut self, callback: SpeechCallback) -> Self {
         self.on_speech_started = Some(callback);
         self
     }
 
-    /// Set callback for speech stopped events.
     pub fn on_speech_stopped(mut self, callback: SpeechCallback) -> Self {
         self.on_speech_stopped = Some(callback);
         self
     }
 
-    /// Build the RealtimeAgent.
     pub fn build(self) -> Result<RealtimeAgent> {
         let model =
             self.model.ok_or_else(|| AdkError::Agent("RealtimeModel is required".to_string()))?;
@@ -347,36 +269,17 @@ impl RealtimeAgentBuilder {
 }
 
 impl RealtimeAgent {
-    /// Create a new builder.
     pub fn builder(name: impl Into<String>) -> RealtimeAgentBuilder {
         RealtimeAgentBuilder::new(name)
     }
 
-    /// Get the static instruction, if set.
-    pub fn instruction(&self) -> Option<&String> {
-        self.instruction.as_ref()
+    pub fn instruction(&self) -> Option<&str> {
+        self.instruction.as_deref()
     }
 
-    /// Get the voice setting, if set.
-    pub fn voice(&self) -> Option<&String> {
-        self.voice.as_ref()
-    }
-
-    /// Get the VAD configuration, if set.
-    pub fn vad_config(&self) -> Option<&VadConfig> {
-        self.vad_config.as_ref()
-    }
-
-    /// Get the list of tools.
-    pub fn tools(&self) -> &[Arc<dyn Tool>] {
-        &self.tools
-    }
-
-    /// Build the realtime configuration from agent settings.
     async fn build_config(&self, ctx: &Arc<dyn InvocationContext>) -> Result<RealtimeConfig> {
         let mut config = RealtimeConfig::default();
 
-        // Build instruction from providers or static value
         if let Some(provider) = &self.global_instruction_provider {
             let global_inst = provider(ctx.clone() as Arc<dyn ReadonlyContext>).await?;
             if !global_inst.is_empty() {
@@ -387,7 +290,6 @@ impl RealtimeAgent {
             config.instruction = Some(processed);
         }
 
-        // Add agent-specific instruction
         if let Some(provider) = &self.instruction_provider {
             let inst = provider(ctx.clone() as Arc<dyn ReadonlyContext>).await?;
             if !inst.is_empty() {
@@ -408,12 +310,10 @@ impl RealtimeAgent {
             }
         }
 
-        // Voice settings
         config.voice = self.voice.clone();
         config.turn_detection = self.vad_config.clone();
         config.modalities = Some(self.modalities.clone());
 
-        // Convert ADK tools to realtime tool definitions
         let tool_defs: Vec<ToolDefinition> = self
             .tools
             .iter()
@@ -428,7 +328,6 @@ impl RealtimeAgent {
             config.tools = Some(tool_defs);
         }
 
-        // Add transfer_to_agent tool if sub-agents exist
         if !self.sub_agents.is_empty() {
             let mut tools = config.tools.unwrap_or_default();
             tools.push(ToolDefinition {
@@ -437,10 +336,7 @@ impl RealtimeAgent {
                 parameters: Some(serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "agent_name": {
-                            "type": "string",
-                            "description": "The name of the agent to transfer to."
-                        }
+                        "agent_name": { "type": "string", "description": "The name of the agent to transfer to." }
                     },
                     "required": ["agent_name"]
                 })),
@@ -450,60 +346,6 @@ impl RealtimeAgent {
 
         Ok(config)
     }
-
-    /// Execute a tool call.
-    #[allow(dead_code)]
-    async fn execute_tool(
-        &self,
-        ctx: &Arc<dyn InvocationContext>,
-        call_id: &str,
-        name: &str,
-        arguments: &str,
-    ) -> (serde_json::Value, EventActions) {
-        // Find the tool
-        let tool = self.tools.iter().find(|t| t.name() == name);
-
-        if let Some(tool) = tool {
-            let args: serde_json::Value =
-                serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
-
-            // Create tool context
-            let tool_ctx: Arc<dyn ToolContext> =
-                Arc::new(RealtimeToolContext::new(ctx.clone(), call_id.to_string()));
-
-            // Execute before_tool callbacks
-            for callback in self.before_tool_callbacks.as_ref() {
-                if let Err(e) = callback(ctx.clone() as Arc<dyn CallbackContext>).await {
-                    return (
-                        serde_json::json!({ "error": e.to_string() }),
-                        EventActions::default(),
-                    );
-                }
-            }
-
-            // Execute the tool
-            let result = match tool.execute(tool_ctx.clone(), args).await {
-                Ok(result) => result,
-                Err(e) => serde_json::json!({ "error": e.to_string() }),
-            };
-
-            let actions = tool_ctx.actions();
-
-            // Execute after_tool callbacks
-            for callback in self.after_tool_callbacks.as_ref() {
-                if let Err(e) = callback(ctx.clone() as Arc<dyn CallbackContext>).await {
-                    return (serde_json::json!({ "error": e.to_string() }), actions);
-                }
-            }
-
-            (result, actions)
-        } else {
-            (
-                serde_json::json!({ "error": format!("Tool {} not found", name) }),
-                EventActions::default(),
-            )
-        }
-    }
 }
 
 #[async_trait]
@@ -511,299 +353,188 @@ impl Agent for RealtimeAgent {
     fn name(&self) -> &str {
         &self.name
     }
-
     fn description(&self) -> &str {
         &self.description
     }
-
     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
         &self.sub_agents
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
         let agent_name = self.name.clone();
-        let invocation_id = ctx.invocation_id().to_string();
+        let invocation_id = ctx.invocation_id().clone();
         let model = self.model.clone();
-        let _sub_agents = self.sub_agents.clone();
 
-        // Clone callback refs
         let before_callbacks = self.before_callbacks.clone();
         let after_callbacks = self.after_callbacks.clone();
         let before_tool_callbacks = self.before_tool_callbacks.clone();
         let after_tool_callbacks = self.after_tool_callbacks.clone();
         let tools = self.tools.clone();
 
-        // Clone realtime callbacks
         let on_audio = self.on_audio.clone();
         let on_transcript = self.on_transcript.clone();
         let on_speech_started = self.on_speech_started.clone();
         let on_speech_stopped = self.on_speech_stopped.clone();
 
-        // Build config
         let config = self.build_config(&ctx).await?;
 
         let s = stream! {
-            // ===== BEFORE AGENT CALLBACKS =====
             for callback in before_callbacks.as_ref() {
                 match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
-                        let mut early_event = Event::new(&invocation_id);
+                        let mut early_event = Event::new(invocation_id.clone());
                         early_event.author = agent_name.clone();
                         early_event.llm_response.content = Some(content);
                         yield Ok(early_event);
                         return;
                     }
                     Ok(None) => continue,
-                    Err(e) => {
-                        yield Err(e);
-                        return;
-                    }
+                    Err(e) => { yield Err(e); return; }
                 }
             }
 
-            // ===== CONNECT TO REALTIME SESSION =====
             let session = match model.connect(config).await {
                 Ok(s) => s,
-                Err(e) => {
-                    yield Err(AdkError::Model(format!("Failed to connect: {}", e)));
-                    return;
-                }
+                Err(e) => { yield Err(AdkError::Model(format!("Failed to connect: {}", e))); return; }
             };
 
-            // Yield session started event
-            let mut start_event = Event::new(&invocation_id);
+            let mut start_event = Event::new(invocation_id.clone());
             start_event.author = agent_name.clone();
             start_event.llm_response.content = Some(Content {
-                role: "system".to_string(),
-                parts: vec![Part::Text {
-                    text: format!("Realtime session started: {}", session.session_id()),
-                }],
+                role: adk_core::types::Role::System,
+                parts: vec![Part::text(format!("Realtime session started: {}", session.session_id()))],
             });
             yield Ok(start_event);
 
-            // ===== SEND INITIAL USER CONTENT =====
-            // If user provided text input, send it to start the conversation
-            let user_content = ctx.user_content();
-            for part in &user_content.parts {
-                if let Part::Text { text } = part {
+            for part in &ctx.user_content().parts {
+                if let Some(text) = part.as_text() {
                     if let Err(e) = session.send_text(text).await {
-                        yield Err(AdkError::Model(format!("Failed to send text: {}", e)));
-                        return;
+                        yield Err(AdkError::Model(format!("Failed to send text: {}", e))); return;
                     }
-                    // Request a response
                     if let Err(e) = session.create_response().await {
-                        yield Err(AdkError::Model(format!("Failed to create response: {}", e)));
-                        return;
+                        yield Err(AdkError::Model(format!("Failed to create response: {}", e))); return;
                     }
                 }
             }
 
-            // ===== PROCESS REALTIME EVENTS =====
             loop {
                 let event = session.next_event().await;
-
                 match event {
                     Some(Ok(server_event)) => {
                         match server_event {
                             ServerEvent::AudioDelta { delta, item_id, .. } => {
-                                // Call audio callback if set
-                                if let Some(ref cb) = on_audio {
-                                    cb(&delta, &item_id).await;
-                                }
-
-                                // Yield audio event (delta is already raw bytes)
-                                let mut audio_event = Event::new(&invocation_id);
+                                if let Some(ref cb) = on_audio { cb(&delta, &item_id).await; }
+                                let mut audio_event = Event::new(invocation_id.clone());
                                 audio_event.author = agent_name.clone();
                                 audio_event.llm_response.content = Some(Content {
-                                    role: "model".to_string(),
-                                    parts: vec![Part::InlineData {
-                                        mime_type: "audio/pcm".to_string(),
-                                        data: delta,
-                                    }],
+                                    role: adk_core::types::Role::Model,
+                                    parts: vec![Part::InlineData { mime_type: "audio/pcm".parse().unwrap(), data: delta.into() }],
                                 });
                                 yield Ok(audio_event);
                             }
-
                             ServerEvent::TextDelta { delta, .. } => {
-                                let mut text_event = Event::new(&invocation_id);
+                                let mut text_event = Event::new(invocation_id.clone());
                                 text_event.author = agent_name.clone();
                                 text_event.llm_response.content = Some(Content {
-                                    role: "model".to_string(),
-                                    parts: vec![Part::Text { text: delta.clone() }],
+                                    role: adk_core::types::Role::Model,
+                                    parts: vec![Part::text(delta.clone())],
                                 });
                                 yield Ok(text_event);
                             }
-
                             ServerEvent::TranscriptDelta { delta, item_id, .. } => {
-                                if let Some(ref cb) = on_transcript {
-                                    cb(&delta, &item_id).await;
-                                }
+                                if let Some(ref cb) = on_transcript { cb(&delta, &item_id).await; }
                             }
-
                             ServerEvent::SpeechStarted { audio_start_ms, .. } => {
-                                if let Some(ref cb) = on_speech_started {
-                                    cb(audio_start_ms).await;
-                                }
+                                if let Some(ref cb) = on_speech_started { cb(audio_start_ms).await; }
                             }
-
                             ServerEvent::SpeechStopped { audio_end_ms, .. } => {
-                                if let Some(ref cb) = on_speech_stopped {
-                                    cb(audio_end_ms).await;
-                                }
+                                if let Some(ref cb) = on_speech_stopped { cb(audio_end_ms).await; }
                             }
-
-                            ServerEvent::FunctionCallDone {
-                                call_id,
-                                name,
-                                arguments,
-                                ..
-                            } => {
-                                // Handle transfer_to_agent
+                            ServerEvent::FunctionCallDone { call_id, name, arguments, .. } => {
                                 if name == "transfer_to_agent" {
-                                    let args: serde_json::Value = serde_json::from_str(&arguments)
-                                        .unwrap_or(serde_json::json!({}));
-                                    let target = args.get("agent_name")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or_default()
-                                        .to_string();
-
-                                    let mut transfer_event = Event::new(&invocation_id);
+                                    let args: serde_json::Value = serde_json::from_str(&arguments).unwrap_or(serde_json::json!({}));
+                                    let target = args.get("agent_name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                                    let mut transfer_event = Event::new(invocation_id.clone());
                                     transfer_event.author = agent_name.clone();
                                     transfer_event.actions.transfer_to_agent = Some(target);
                                     yield Ok(transfer_event);
-
                                     let _ = session.close().await;
                                     return;
                                 }
 
-                                // Execute tool
                                 let tool = tools.iter().find(|t| t.name() == name);
-
                                 let (result, actions) = if let Some(tool) = tool {
-                                    let args: serde_json::Value = serde_json::from_str(&arguments)
-                                        .unwrap_or(serde_json::json!({}));
-
-                                    let tool_ctx: Arc<dyn ToolContext> = Arc::new(
-                                        RealtimeToolContext::new(ctx.clone(), call_id.clone())
-                                    );
-
-                                    // Execute before_tool callbacks
+                                    let args: serde_json::Value = serde_json::from_str(&arguments).unwrap_or(serde_json::json!({}));
+                                    let tool_ctx: Arc<dyn ToolContext> = Arc::new(RealtimeToolContext::new(ctx.clone(), call_id.clone()));
                                     for callback in before_tool_callbacks.as_ref() {
                                         if let Err(e) = callback(ctx.clone() as Arc<dyn CallbackContext>).await {
-                                            let error_result = serde_json::json!({ "error": e.to_string() });
-                                            (error_result, EventActions::default())
-                                        } else {
-                                            continue;
-                                        };
+                                            tracing::warn!("Before tool callback failed: {}", e);
+                                        }
                                     }
-
                                     let result = match tool.execute(tool_ctx.clone(), args).await {
                                         Ok(r) => r,
                                         Err(e) => serde_json::json!({ "error": e.to_string() }),
                                     };
-
                                     let actions = tool_ctx.actions();
-
-                                    // Execute after_tool callbacks
                                     for callback in after_tool_callbacks.as_ref() {
                                         let _ = callback(ctx.clone() as Arc<dyn CallbackContext>).await;
                                     }
-
                                     (result, actions)
                                 } else {
-                                    (
-                                        serde_json::json!({ "error": format!("Tool {} not found", name) }),
-                                        EventActions::default(),
-                                    )
+                                    (serde_json::json!({ "error": format!("Tool {} not found", name) }), EventActions::default())
                                 };
 
-                                // Yield tool event
-                                let mut tool_event = Event::new(&invocation_id);
+                                let mut tool_event = Event::new(invocation_id.clone());
                                 tool_event.author = agent_name.clone();
                                 tool_event.actions = actions.clone();
                                 tool_event.llm_response.content = Some(Content {
-                                    role: "function".to_string(),
+                                    role: adk_core::types::Role::Custom("function".to_string()),
                                     parts: vec![Part::FunctionResponse {
-                                        function_response: adk_core::FunctionResponseData {
-                                            name: name.clone(),
-                                            response: result.clone(),
-                                        },
+                                        name: name.clone(),
+                                        response: result.clone(),
                                         id: Some(call_id.clone()),
                                     }],
                                 });
                                 yield Ok(tool_event);
 
-                                // Check for escalation
                                 if actions.escalate || actions.skip_summarization {
                                     let _ = session.close().await;
                                     return;
                                 }
 
-                                // Send tool response back to session
-                                let response = ToolResponse {
-                                    call_id,
-                                    output: result,
-                                };
+                                let response = ToolResponse { call_id: call_id.clone(), output: result.clone() };
                                 if let Err(e) = session.send_tool_response(response).await {
                                     yield Err(AdkError::Model(format!("Failed to send tool response: {}", e)));
                                     let _ = session.close().await;
                                     return;
                                 }
                             }
-
-                            ServerEvent::ResponseDone { .. } => {
-                                // Response complete, continue listening
-                            }
-
-                            ServerEvent::Error { error, .. } => {
-                                yield Err(AdkError::Model(format!(
-                                    "Realtime error: {} - {}",
-                                    error.code.unwrap_or_default(),
-                                    error.message
-                                )));
-                            }
-
-
-                            _ => {
-                                // Ignore other events
-                            }
+                            _ => {}
                         }
                     }
-                    Some(Err(e)) => {
-                        yield Err(AdkError::Model(format!("Session error: {}", e)));
-                        break;
-                    }
-                    None => {
-                        // Session closed
-                        break;
-                    }
+                    Some(Err(e)) => { yield Err(AdkError::Model(format!("Session error: {}", e))); break; }
+                    None => break,
                 }
             }
 
-            // ===== AFTER AGENT CALLBACKS =====
             for callback in after_callbacks.as_ref() {
                 match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
                     Ok(Some(content)) => {
-                        let mut after_event = Event::new(&invocation_id);
+                        let mut after_event = Event::new(invocation_id.clone());
                         after_event.author = agent_name.clone();
                         after_event.llm_response.content = Some(content);
                         yield Ok(after_event);
                         break;
                     }
                     Ok(None) => continue,
-                    Err(e) => {
-                        yield Err(e);
-                        return;
-                    }
+                    Err(e) => { yield Err(e); return; }
                 }
             }
         };
-
         Ok(Box::pin(s))
     }
 }
 
-/// Tool context for realtime agent tool execution.
 struct RealtimeToolContext {
     parent_ctx: Arc<dyn InvocationContext>,
     function_call_id: String,
@@ -818,32 +549,14 @@ impl RealtimeToolContext {
 
 #[async_trait]
 impl ReadonlyContext for RealtimeToolContext {
-    fn invocation_id(&self) -> &str {
-        self.parent_ctx.invocation_id()
+    fn identity(&self) -> &AdkIdentity {
+        self.parent_ctx.identity()
     }
-
-    fn agent_name(&self) -> &str {
-        self.parent_ctx.agent_name()
-    }
-
-    fn user_id(&self) -> &str {
-        self.parent_ctx.user_id()
-    }
-
-    fn app_name(&self) -> &str {
-        self.parent_ctx.app_name()
-    }
-
-    fn session_id(&self) -> &str {
-        self.parent_ctx.session_id()
-    }
-
-    fn branch(&self) -> &str {
-        self.parent_ctx.branch()
-    }
-
     fn user_content(&self) -> &Content {
         self.parent_ctx.user_content()
+    }
+    fn metadata(&self) -> &HashMap<String, String> {
+        self.parent_ctx.metadata()
     }
 }
 
@@ -859,20 +572,13 @@ impl ToolContext for RealtimeToolContext {
     fn function_call_id(&self) -> &str {
         &self.function_call_id
     }
-
     fn actions(&self) -> EventActions {
         self.actions.lock().unwrap().clone()
     }
-
     fn set_actions(&self, actions: EventActions) {
         *self.actions.lock().unwrap() = actions;
     }
-
     async fn search_memory(&self, query: &str) -> Result<Vec<MemoryEntry>> {
-        if let Some(memory) = self.parent_ctx.memory() {
-            memory.search(query).await
-        } else {
-            Ok(vec![])
-        }
+        if let Some(m) = self.parent_ctx.memory() { m.search(query).await } else { Ok(vec![]) }
     }
 }

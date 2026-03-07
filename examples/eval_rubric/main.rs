@@ -236,9 +236,9 @@ let criteria = EvaluationCriteria::default()
         Rubric::new("Accuracy", "Factually correct")
             .with_weight(0.4)
             .with_levels(vec![
-                RubricLevel {{ score: 1.0, description: "Perfect accuracy".into() }},
-                RubricLevel {{ score: 0.5, description: "Minor errors".into() }},
-                RubricLevel {{ score: 0.0, description: "Major errors".into() }},
+                RubricLevel {{ score: 1.0, description: "Perfect accuracy") }},
+                RubricLevel {{ score: 0.5, description: "Minor errors") }},
+                RubricLevel {{ score: 0.0, description: "Major errors") }},
             ]),
         Rubric::new("Helpfulness", "Addresses user needs")
             .with_weight(0.4),

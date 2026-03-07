@@ -7,6 +7,7 @@
 //!   GOOGLE_API_KEY (or GEMINI_API_KEY)
 
 use adk_agent::LlmAgentBuilder;
+use adk_core::types::{SessionId, UserId};
 use adk_core::{Content, Part};
 use adk_model::gemini::GeminiModel;
 use adk_runner::{Runner, RunnerConfig};
@@ -69,17 +70,17 @@ async fn main() -> Result<()> {
         .build()?;
 
     let app_name = "skills_conventions_llm".to_string();
-    let user_id = "user".to_string();
+    let user_id = UserId::new("user")?;
     let session_service = Arc::new(InMemorySessionService::new());
     let session = session_service
         .create(CreateRequest {
             app_name: app_name.clone(),
             user_id: user_id.clone(),
-            session_id: None,
+            session_id: Some(SessionId::new("skills_convention_session")?),
             state: HashMap::new(),
         })
         .await?;
-    let session_id = session.id().to_string();
+    let session_id = session.id().clone();
 
     let runner = Runner::new(RunnerConfig {
         app_name,
@@ -98,7 +99,7 @@ async fn main() -> Result<()> {
         .run(
             user_id,
             session_id,
-            Content::new("user")
+            Content::new(adk_core::Role::User)
                 .with_text("How should I configure Gemini access for this project?"),
         )
         .await?;
@@ -109,11 +110,11 @@ async fn main() -> Result<()> {
             let text = event
                 .llm_response
                 .content
-                .unwrap_or_else(|| Content { role: "model".to_string(), parts: vec![] })
+                .unwrap_or_else(|| Content { role: adk_core::Role::Model, parts: vec![] })
                 .parts
                 .iter()
                 .filter_map(|p| match p {
-                    Part::Text { text } => Some(text.as_str()),
+                    Part::Text(text) => Some(text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()

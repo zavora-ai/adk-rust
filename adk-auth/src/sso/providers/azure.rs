@@ -19,7 +19,7 @@ impl AzureADProvider {
     /// Create a new Azure AD provider.
     ///
     /// # Arguments
-    /// * `tenant_id` - Azure AD tenant ID (directory ID)
+    /// * `domain` - The domain for the OIDC provider (e.g., your Okta domain)
     /// * `client_id` - Application (client) ID
     #[cfg(feature = "sso")]
     pub fn new(tenant_id: impl Into<String>, client_id: impl Into<String>) -> Self {
@@ -39,11 +39,11 @@ impl AzureADProvider {
     /// Create for multi-tenant applications.
     #[cfg(feature = "sso")]
     pub fn multi_tenant(client_id: impl Into<String>) -> Self {
-        let issuer = "https://login.microsoftonline.com/common/v2.0".into();
+        let issuer = "https://login.microsoftonline.com/common/v2.0".to_string();
         let jwks_uri = "https://login.microsoftonline.com/common/discovery/v2.0/keys";
 
         Self {
-            tenant_id: "common".into(),
+            tenant_id: "common".to_string(),
             client_id: client_id.into(),
             issuer,
             jwks_cache: Arc::new(JwksCache::new(jwks_uri)),
@@ -67,7 +67,7 @@ impl TokenValidator for AzureADProvider {
     async fn validate(&self, token: &str) -> Result<TokenClaims, TokenError> {
         // Decode header to get key ID
         let header = jsonwebtoken::decode_header(token)?;
-        let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".into()))?;
+        let kid = header.kid.ok_or_else(|| TokenError::MissingClaim("kid".to_string()))?;
 
         // Get decoding key from JWKS cache
         let key = self.jwks_cache.get_key(&kid).await?;

@@ -63,6 +63,7 @@ version = "0.3.2"
 dependencies = [
  "adk-core",
  "async-trait",
+ "moka",
  "tokio",
 ]
 
@@ -91,6 +92,7 @@ dependencies = [
  "adk-core",
  "async-trait",
  "base64 0.22.1",
+ "mime",
  "serde",
  "serde_json",
  "thirtyfour",
@@ -129,8 +131,12 @@ version = "0.3.2"
 dependencies = [
  "async-stream",
  "async-trait",
+ "base64 0.21.7",
+ "bytes",
  "chrono",
+ "derive_more",
  "futures",
+ "mime",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -325,8 +331,10 @@ dependencies = [
  "aws-sdk-bedrockruntime",
  "aws-smithy-types",
  "base64 0.21.7",
+ "bytes",
  "claudius",
  "futures",
+ "mime",
  "ollama-rs",
  "proptest",
  "reqwest 0.12.28",
@@ -379,6 +387,7 @@ version = "0.3.2"
 dependencies = [
  "adk-core",
  "adk-gemini",
+ "adk-telemetry",
  "async-openai",
  "async-stream",
  "async-trait",
@@ -392,6 +401,7 @@ dependencies = [
  "google-cloud-auth",
  "livekit",
  "livekit-api",
+ "mime",
  "proptest",
  "reqwest 0.12.28",
  "serde",
@@ -414,6 +424,7 @@ dependencies = [
  "adk-plugin",
  "adk-session",
  "adk-skill",
+ "adk-telemetry",
  "async-stream",
  "async-trait",
  "chrono",
@@ -480,6 +491,7 @@ dependencies = [
  "futures",
  "http-body-util",
  "hyper 1.8.1",
+ "mime",
  "mime_guess",
  "reqwest 0.12.28",
  "rust-embed",
@@ -544,7 +556,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "axum 0.7.9",
+ "axum 0.8.8",
  "base64 0.22.1",
  "chrono",
  "cron",
@@ -581,6 +593,8 @@ dependencies = [
 name = "adk-telemetry"
 version = "0.3.2"
 dependencies = [
+ "adk-core",
+ "langsmith-rust",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -1385,6 +1399,7 @@ name = "auth_test"
 version = "0.1.0"
 dependencies = [
  "adk-auth",
+ "adk-core",
 ]
 
 [[package]]
@@ -1716,7 +1731,7 @@ dependencies = [
  "pin-project-lite",
  "rustls 0.21.12",
  "rustls 0.23.36",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.3",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls 0.26.4",
@@ -1879,14 +1894,11 @@ checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
 dependencies = [
  "async-trait",
  "axum-core 0.4.5",
- "base64 0.22.1",
  "bytes",
  "futures-util",
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.8.1",
- "hyper-util",
  "itoa",
  "matchit 0.7.3",
  "memchr",
@@ -1895,17 +1907,10 @@ dependencies = [
  "pin-project-lite",
  "rustversion",
  "serde",
- "serde_json",
- "serde_path_to_error",
- "serde_urlencoded",
- "sha1",
  "sync_wrapper 1.0.2",
- "tokio",
- "tokio-tungstenite 0.24.0",
  "tower 0.5.3",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]
@@ -1916,6 +1921,7 @@ checksum = "8b52af3cb4058c895d37317bb27508dccc8e5f2d39454016b297bf4a400597b8"
 dependencies = [
  "axum-core 0.5.6",
  "axum-macros",
+ "base64 0.22.1",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -1934,8 +1940,10 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
+ "sha1",
  "sync_wrapper 1.0.2",
  "tokio",
+ "tokio-tungstenite 0.28.0",
  "tower 0.5.3",
  "tower-layer",
  "tower-service",
@@ -1977,7 +1985,6 @@ dependencies = [
  "sync_wrapper 1.0.2",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]
@@ -6006,7 +6013,7 @@ dependencies = [
  "hyper 1.8.1",
  "hyper-util",
  "rustls 0.23.36",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.3",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls 0.26.4",
@@ -7194,6 +7201,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "langsmith-rust"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8aa075a005e5c29a2b5df87717f5a2d348af16e14ea28beba5f4f5d00c1ce765"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dotenvy",
+ "once_cell",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "launcher_test"
 version = "0.1.0"
 dependencies = [
@@ -7486,12 +7511,14 @@ dependencies = [
  "prost 0.12.6",
  "rand 0.9.2",
  "reqwest 0.12.28",
+ "rustls-native-certs 0.6.3",
  "scopeguard",
  "serde",
  "serde_json",
  "sha2",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-rustls 0.24.1",
  "tokio-tungstenite 0.20.1",
  "url",
 ]
@@ -7527,6 +7554,8 @@ dependencies = [
 name = "llm_agent_test"
 version = "0.1.0"
 dependencies = [
+ "adk-agent",
+ "adk-core",
  "adk-rust",
  "dotenvy",
  "serde_json",
@@ -7991,10 +8020,10 @@ dependencies = [
  "libc",
  "log",
  "openssl",
- "openssl-probe",
+ "openssl-probe 0.2.1",
  "openssl-sys",
  "schannel",
- "security-framework",
+ "security-framework 3.7.0",
  "security-framework-sys",
  "tempfile",
 ]
@@ -8452,6 +8481,12 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "openssl-probe"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 
 [[package]]
 name = "openssl-probe"
@@ -10110,7 +10145,7 @@ dependencies = [
  "pin-project-lite",
  "quinn",
  "rustls 0.23.36",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.3",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -10662,14 +10697,26 @@ dependencies = [
 
 [[package]]
 name = "rustls-native-certs"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9aace74cb666635c918e9c12bc0d348266037aa8eb599b5cba565709a8dff00"
+dependencies = [
+ "openssl-probe 0.1.6",
+ "rustls-pemfile 1.0.4",
+ "schannel",
+ "security-framework 2.11.1",
+]
+
+[[package]]
+name = "rustls-native-certs"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "612460d5f7bea540c490b2b6395d8e34a953e52b491accd6c86c8164c5932a63"
 dependencies = [
- "openssl-probe",
+ "openssl-probe 0.2.1",
  "rustls-pki-types",
  "schannel",
- "security-framework",
+ "security-framework 3.7.0",
 ]
 
 [[package]]
@@ -10712,10 +10759,10 @@ dependencies = [
  "log",
  "once_cell",
  "rustls 0.23.36",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.3",
  "rustls-platform-verifier-android",
  "rustls-webpki 0.103.9",
- "security-framework",
+ "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
  "windows-sys 0.61.2",
@@ -10967,6 +11014,19 @@ checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
 dependencies = [
  "serde",
  "zeroize",
+]
+
+[[package]]
+name = "security-framework"
+version = "2.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "897b2245f0b511c87893af39b033e5ca9cce68824c4d7e7630b5a1d339658d02"
+dependencies = [
+ "bitflags 2.11.0",
+ "core-foundation 0.9.4",
+ "core-foundation-sys",
+ "libc",
+ "security-framework-sys",
 ]
 
 [[package]]
@@ -11827,7 +11887,7 @@ name = "studio_test"
 version = "0.1.0"
 dependencies = [
  "adk-studio",
- "axum 0.7.9",
+ "axum 0.8.8",
  "tokio",
 ]
 
@@ -12676,20 +12736,11 @@ checksum = "212d5dcb2a1ce06d81107c3d0ffa3121fe974b73f068c8282cb1c32328113b6c"
 dependencies = [
  "futures-util",
  "log",
+ "rustls 0.21.12",
+ "rustls-native-certs 0.6.3",
  "tokio",
+ "tokio-rustls 0.24.1",
  "tungstenite 0.20.1",
-]
-
-[[package]]
-name = "tokio-tungstenite"
-version = "0.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
-dependencies = [
- "futures-util",
- "log",
- "tokio",
- "tungstenite 0.24.0",
 ]
 
 [[package]]
@@ -12701,7 +12752,7 @@ dependencies = [
  "futures-util",
  "log",
  "rustls 0.23.36",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.3",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls 0.26.4",
@@ -12884,7 +12935,7 @@ dependencies = [
  "percent-encoding",
  "pin-project",
  "prost 0.13.5",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.3",
  "rustls-pemfile 2.2.0",
  "socket2 0.5.10",
  "tokio",
@@ -12915,7 +12966,7 @@ dependencies = [
  "hyper-util",
  "percent-encoding",
  "pin-project",
- "rustls-native-certs",
+ "rustls-native-certs 0.8.3",
  "socket2 0.6.2",
  "sync_wrapper 1.0.2",
  "tokio",
@@ -13141,27 +13192,10 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.8.5",
+ "rustls 0.21.12",
  "sha1",
  "thiserror 1.0.69",
  "url",
- "utf-8",
-]
-
-[[package]]
-name = "tungstenite"
-version = "0.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18e5b8366ee7a95b16d32197d0b2604b43a0be89dc5fac9f8e96ccafbaedda8a"
-dependencies = [
- "byteorder",
- "bytes",
- "data-encoding",
- "http 1.4.0",
- "httparse",
- "log",
- "rand 0.8.5",
- "sha1",
- "thiserror 1.0.69",
  "utf-8",
 ]
 

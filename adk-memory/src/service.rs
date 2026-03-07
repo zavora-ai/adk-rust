@@ -1,3 +1,4 @@
+use adk_core::types::{SessionId, UserId};
 use adk_core::{Content, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -12,7 +13,7 @@ pub struct MemoryEntry {
 #[derive(Debug, Clone)]
 pub struct SearchRequest {
     pub query: String,
-    pub user_id: String,
+    pub user_id: UserId,
     pub app_name: String,
 }
 
@@ -26,8 +27,8 @@ pub trait MemoryService: Send + Sync {
     async fn add_session(
         &self,
         app_name: &str,
-        user_id: &str,
-        session_id: &str,
+        user_id: &UserId,
+        session_id: &SessionId,
         entries: Vec<MemoryEntry>,
     ) -> Result<()>;
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse>;

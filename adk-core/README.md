@@ -88,10 +88,10 @@ pub trait Llm: Send + Sync {
 
 ```rust
 // Message content with role and parts
-let content = Content::new("user")
-    .with_text("Hello!")
-    .with_inline_data("image/png", image_bytes)
-    .with_file_uri("image/jpeg", "https://example.com/image.jpg");
+let content = Content::user()
+    .with_text("What's in this image?")
+    .with_inline_data("image/png", image_bytes).unwrap()
+    .with_file_uri("application/pdf", "https://example.com/doc.pdf").unwrap();
 
 // Part variants
 enum Part {

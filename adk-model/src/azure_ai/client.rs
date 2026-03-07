@@ -97,11 +97,9 @@ impl Llm for AzureAIClient {
         let retry_config = self.retry_config.clone();
 
         let body = convert::build_request_body(
-            &model,
             &request.contents,
             &request.tools,
-            request.config.as_ref(),
-            stream,
+            &request.config.unwrap_or_default(),
         );
 
         let response_stream = try_stream! {
@@ -190,7 +188,7 @@ impl Llm for AzureAIClient {
 
                                             yield LlmResponse {
                                                 content: Some(adk_core::Content {
-                                                    role: "model".to_string(),
+                                                    role: adk_core::types::Role::Model,
                                                     parts,
                                                 }),
                                                 finish_reason: llm_resp.finish_reason,

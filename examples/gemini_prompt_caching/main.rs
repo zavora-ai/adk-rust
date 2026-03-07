@@ -19,6 +19,7 @@
 //! ```
 
 use adk_agent::LlmAgentBuilder;
+use adk_core::types::{SessionId, UserId};
 use adk_core::{Content, ContextCacheConfig, Part};
 use adk_model::gemini::GeminiModel;
 use adk_runner::{CachePerformanceAnalyzer, Runner, RunnerConfig};
@@ -248,14 +249,15 @@ Compliance certifications and features:
 /// Run a single turn and print the response with usage metadata.
 async fn ask(
     runner: &Runner,
-    session_id: &str,
+    session_id: &SessionId,
     question: &str,
     turn: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!(">> Turn {turn}: {question}\n");
 
     let content = Content::new("user").with_text(question);
-    let mut stream = runner.run("user_1".to_string(), session_id.to_string(), content).await?;
+    let mut stream =
+        runner.run(UserId::new("user_1").unwrap(), session_id.clone(), content).await?;
 
     print!("   Assistant: ");
     let mut last_usage = None;
@@ -263,7 +265,7 @@ async fn ask(
         if let Ok(e) = event {
             if let Some(content) = e.llm_response.content {
                 for part in content.parts {
-                    if let Part::Text { text } = part {
+                    if let Some(text) = part.as_text() {
                         print!("{text}");
                     }
                 }
@@ -320,8 +322,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let session = session_service
         .create(CreateRequest {
             app_name: "gemini_prompt_caching".to_string(),
-            user_id: "user_1".to_string(),
-            session_id: None,
+            user_id: UserId::new("user_1").unwrap(),
+            session_id: Some(SessionId::new("new_session").unwrap()),
             state: HashMap::new(),
         })
         .await?;
@@ -356,21 +358,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Watch for `cache read` tokens increasing after the first turn.\n");
 
     // Turn 1 — cache miss, populates cache
-    ask(&runner, &session_id, "How do I authenticate with OAuth 2.0 client credentials?", 1)
+    let session_id_typed = SessionId::new(session_id.clone()).unwrap();
+    ask(&runner, &session_id_typed, "How do I authenticate with OAuth 2.0 client credentials?", 1)
         .await?;
 
     // Turn 2 — should see cache hits
-    ask(&runner, &session_id, "What database services are available and what versions?", 2).await?;
+    ask(&runner, &session_id_typed, "What database services are available and what versions?", 2)
+        .await?;
 
     // Turn 3 — more cache hits
-    ask(&runner, &session_id, "Explain the auto-scaling configuration for services.", 3).await?;
+    ask(&runner, &session_id_typed, "Explain the auto-scaling configuration for services.", 3)
+        .await?;
 
     // Analyze cache performance from session events
     let session = session_service
         .get(GetRequest {
             app_name: "gemini_prompt_caching".to_string(),
-            user_id: "user_1".to_string(),
-            session_id: session_id.clone(),
+            user_id: UserId::new("user_1").unwrap(),
+            session_id: session_id_typed.clone(),
             num_recent_events: None,
             after: None,
         })

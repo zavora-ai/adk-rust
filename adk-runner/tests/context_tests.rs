@@ -1,9 +1,9 @@
+use adk_core::types::{InvocationId, SessionId, UserId};
 use adk_core::{
-    Agent, CallbackContext, Content, Event, FunctionResponseData,
-    InvocationContext as InvocationContextTrait, Part, ReadonlyContext, RunConfig,
-    Session as CoreSession, StreamingMode,
+    Agent, CallbackContext, Content, Event, InvocationContext as InvocationContextTrait, Part,
+    ReadonlyContext, RunConfig, Session as CoreSession, StreamingMode,
 };
-use adk_runner::{InvocationContext, MutableSession};
+use adk_runner::{MutableSession, RunnerContext};
 use adk_session::{Events, Session, State};
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -39,30 +39,40 @@ impl State for MockSessionStateView {
 
 // MockSession that supports returning a reference to state
 struct MockSessionWithState {
+    session_id: SessionId,
+    user_id: UserId,
     state_view: MockSessionStateView,
 }
 
 impl MockSessionWithState {
     fn new() -> Self {
         let state_arc = std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
-        Self { state_view: MockSessionStateView(state_arc) }
+        Self {
+            session_id: SessionId::new("session-789").unwrap(),
+            user_id: UserId::new("user-456").unwrap(),
+            state_view: MockSessionStateView(state_arc),
+        }
     }
 
     fn with_state(state: HashMap<String, serde_json::Value>) -> Self {
         let state_arc = std::sync::Arc::new(std::sync::RwLock::new(state));
-        Self { state_view: MockSessionStateView(state_arc) }
+        Self {
+            session_id: SessionId::new("session-789").unwrap(),
+            user_id: UserId::new("user-456").unwrap(),
+            state_view: MockSessionStateView(state_arc),
+        }
     }
 }
 
 impl Session for MockSessionWithState {
-    fn id(&self) -> &str {
-        "session-789"
+    fn id(&self) -> &SessionId {
+        &self.session_id
     }
     fn app_name(&self) -> &str {
         "test-app"
     }
-    fn user_id(&self) -> &str {
-        "user-456"
+    fn user_id(&self) -> &UserId {
+        &self.user_id
     }
     fn state(&self) -> &dyn State {
         &self.state_view
@@ -108,25 +118,25 @@ fn test_context_creation() {
     let agent = Arc::new(MockAgent { name: "test_agent".to_string() });
 
     let content =
-        Content { role: "user".to_string(), parts: vec![Part::Text { text: "Hello".to_string() }] };
+        Content { role: adk_core::Role::User, parts: vec![Part::Text("Hello".to_string())] };
 
-    let ctx = InvocationContext::new(
-        "inv-123".to_string(),
+    let ctx = RunnerContext::new(
+        InvocationId::new("inv-123").unwrap(),
         agent.clone(),
-        "user-456".to_string(),
+        UserId::new("user-456").unwrap(),
         "test-app".to_string(),
-        "session-789".to_string(),
+        SessionId::new("session-789").unwrap(),
         content.clone(),
         Arc::new(MockSessionWithState::new()),
     );
 
-    assert_eq!(ctx.invocation_id(), "inv-123");
+    assert_eq!(ctx.invocation_id().as_str(), "inv-123");
     assert_eq!(ctx.agent_name(), "test_agent");
-    assert_eq!(ctx.user_id(), "user-456");
+    assert_eq!(ctx.user_id().as_str(), "user-456");
     assert_eq!(ctx.app_name(), "test-app");
-    assert_eq!(ctx.session_id(), "session-789");
-    assert_eq!(ctx.branch(), "");
-    assert_eq!(ctx.user_content().role, "user");
+    assert_eq!(ctx.session_id().as_str(), "session-789");
+    assert_eq!(ctx.branch(), "main");
+    assert_eq!(ctx.user_content().role, adk_core::Role::User);
 }
 
 #[test]
@@ -135,12 +145,12 @@ fn test_context_with_branch() {
 
     let content = Content::new("user");
 
-    let ctx = InvocationContext::new(
-        "inv-123".to_string(),
+    let ctx = RunnerContext::new(
+        InvocationId::new("inv-123").unwrap(),
         agent,
-        "user-456".to_string(),
+        UserId::new("user-456").unwrap(),
         "test-app".to_string(),
-        "session-789".to_string(),
+        SessionId::new("session-789").unwrap(),
         content,
         Arc::new(MockSessionWithState::new()),
     )
@@ -157,12 +167,12 @@ fn test_context_with_run_config() {
 
     let config = RunConfig { streaming_mode: StreamingMode::SSE, ..RunConfig::default() };
 
-    let ctx = InvocationContext::new(
-        "inv-123".to_string(),
+    let ctx = RunnerContext::new(
+        InvocationId::new("inv-123").unwrap(),
         agent,
-        "user-456".to_string(),
+        UserId::new("user-456").unwrap(),
         "test-app".to_string(),
-        "session-789".to_string(),
+        SessionId::new("session-789").unwrap(),
         content,
         Arc::new(MockSessionWithState::new()),
     )
@@ -177,12 +187,12 @@ fn test_context_end_invocation() {
 
     let content = Content::new("user");
 
-    let ctx = InvocationContext::new(
-        "inv-123".to_string(),
+    let ctx = RunnerContext::new(
+        InvocationId::new("inv-123").unwrap(),
         agent,
-        "user-456".to_string(),
+        UserId::new("user-456").unwrap(),
         "test-app".to_string(),
-        "session-789".to_string(),
+        SessionId::new("session-789").unwrap(),
         content,
         Arc::new(MockSessionWithState::new()),
     );
@@ -198,12 +208,12 @@ fn test_context_agent_access() {
 
     let content = Content::new("user");
 
-    let ctx = InvocationContext::new(
-        "inv-123".to_string(),
+    let ctx = RunnerContext::new(
+        InvocationId::new("inv-123").unwrap(),
         agent.clone(),
-        "user-456".to_string(),
+        UserId::new("user-456").unwrap(),
         "test-app".to_string(),
-        "session-789".to_string(),
+        SessionId::new("session-789").unwrap(),
         content,
         Arc::new(MockSessionWithState::new()),
     );
@@ -218,12 +228,12 @@ fn test_context_optional_services() {
 
     let content = Content::new("user");
 
-    let ctx = InvocationContext::new(
-        "inv-123".to_string(),
+    let ctx = RunnerContext::new(
+        InvocationId::new("inv-123").unwrap(),
         agent,
-        "user-456".to_string(),
+        UserId::new("user-456").unwrap(),
         "test-app".to_string(),
-        "session-789".to_string(),
+        SessionId::new("session-789").unwrap(),
         content,
         Arc::new(MockSessionWithState::new()),
     );
@@ -287,12 +297,12 @@ fn test_mutable_session_shared_across_contexts() {
     let content = Content::new("user");
 
     // Create first context
-    let ctx1 = InvocationContext::new(
-        "inv-1".to_string(),
+    let ctx1 = RunnerContext::new(
+        InvocationId::new("inv-1").unwrap(),
         agent.clone(),
-        "user-456".to_string(),
+        UserId::new("user-456").unwrap(),
         "test-app".to_string(),
-        "session-789".to_string(),
+        SessionId::new("session-789").unwrap(),
         content.clone(),
         Arc::new(MockSessionWithState::new()),
     );
@@ -303,12 +313,12 @@ fn test_mutable_session_shared_across_contexts() {
     ctx1.mutable_session().apply_state_delta(&delta);
 
     // Create second context sharing the same MutableSession
-    let ctx2 = InvocationContext::with_mutable_session(
-        "inv-2".to_string(),
+    let ctx2 = RunnerContext::with_mutable_session(
+        InvocationId::new("inv-2").unwrap(),
         agent.clone(),
-        "user-456".to_string(),
+        UserId::new("user-456").unwrap(),
         "test-app".to_string(),
-        "session-789".to_string(),
+        SessionId::new("session-789").unwrap(),
         content,
         ctx1.mutable_session().clone(),
     );
@@ -342,17 +352,15 @@ fn test_mutable_session_event_accumulation() {
     // Append some events
     let mut event1 = Event::new("inv-1");
     event1.author = "user".to_string();
-    event1.llm_response.content = Some(Content {
-        role: "user".to_string(),
-        parts: vec![Part::Text { text: "Hello".to_string() }],
-    });
+    event1.llm_response.content =
+        Some(Content { role: adk_core::Role::User, parts: vec![Part::Text("Hello".to_string())] });
     mutable.append_event(event1);
 
     let mut event2 = Event::new("inv-1");
     event2.author = "assistant".to_string();
     event2.llm_response.content = Some(Content {
-        role: "model".to_string(),
-        parts: vec![Part::Text { text: "Hi there!".to_string() }],
+        role: adk_core::Role::Model,
+        parts: vec![Part::Text("Hi there!".to_string())],
     });
     mutable.append_event(event2);
 
@@ -390,17 +398,15 @@ fn conversation_history_preserves_tool_role() {
     // Simulate: user message
     let mut user_event = Event::new("inv-1");
     user_event.author = "user".to_string();
-    user_event.llm_response.content = Some(Content {
-        role: "user".to_string(),
-        parts: vec![Part::Text { text: "hello".into() }],
-    });
+    user_event.llm_response.content =
+        Some(Content { role: adk_core::Role::User, parts: vec![Part::Text("hello".into())] });
     mutable.append_event(user_event);
 
     // Simulate: assistant with tool call
     let mut assistant_event = Event::new("inv-1");
     assistant_event.author = "my_agent".to_string();
     assistant_event.llm_response.content = Some(Content {
-        role: "model".to_string(),
+        role: adk_core::Role::Model,
         parts: vec![Part::FunctionCall {
             name: "browser_navigate".into(),
             args: serde_json::json!({"url": "https://example.com"}),
@@ -414,12 +420,10 @@ fn conversation_history_preserves_tool_role() {
     let mut tool_event = Event::new("inv-1");
     tool_event.author = "my_agent".to_string();
     tool_event.llm_response.content = Some(Content {
-        role: "function".to_string(),
+        role: adk_core::Role::Custom("function".to_string()),
         parts: vec![Part::FunctionResponse {
-            function_response: FunctionResponseData {
-                name: "browser_navigate".into(),
-                response: serde_json::json!({"success": true}),
-            },
+            name: "browser_navigate".into(),
+            response: serde_json::json!({"success": true}),
             id: Some("call_1".into()),
         }],
     });
@@ -429,7 +433,7 @@ fn conversation_history_preserves_tool_role() {
     assert_eq!(history.len(), 3);
     assert_eq!(history[0].role, "user");
     assert_eq!(history[1].role, "model");
-    assert_eq!(history[2].role, "function"); // NOT "model"
+    assert_eq!(history[2].role, adk_core::Role::Custom("function".to_string())); // NOT "model"
 }
 
 #[test]
@@ -441,8 +445,8 @@ fn conversation_history_maps_agent_events_to_model() {
     let mut event = Event::new("inv-1");
     event.author = "my_agent".to_string();
     event.llm_response.content = Some(Content {
-        role: "model".to_string(),
-        parts: vec![Part::Text { text: "here are the results".into() }],
+        role: adk_core::Role::Model,
+        parts: vec![Part::Text("here are the results".into())],
     });
     mutable.append_event(event);
 

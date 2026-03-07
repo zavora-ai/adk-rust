@@ -1,5 +1,7 @@
+use adk_agent::Agent;
 use adk_agent::LlmAgentBuilder;
-use adk_core::{Agent, Content, InvocationContext, Part, RunConfig, Session, State};
+use adk_core::types::{AdkIdentity, InvocationId, Role, SessionId, UserId};
+use adk_core::{Content, InvocationContext, Part, ReadonlyContext, Session, State};
 use adk_model::GeminiModel;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -10,16 +12,20 @@ use std::sync::Arc;
 
 // --- Mocks ---
 
-struct MockSession;
+struct MockSession {
+    session_id: SessionId,
+    user_id: UserId,
+}
+
 impl Session for MockSession {
-    fn id(&self) -> &str {
-        "session-real"
+    fn id(&self) -> &SessionId {
+        &self.session_id
     }
     fn app_name(&self) -> &str {
         "test-app"
     }
-    fn user_id(&self) -> &str {
-        "user-real"
+    fn user_id(&self) -> &UserId {
+        &self.user_id
     }
     fn state(&self) -> &dyn State {
         &MockState
@@ -41,48 +47,44 @@ impl State for MockState {
 }
 
 struct MockContext {
+    identity: AdkIdentity,
     session: MockSession,
     user_content: Content,
+    metadata: HashMap<String, String>,
 }
 
 impl MockContext {
     fn new(text: &str) -> Self {
+        let identity = AdkIdentity {
+            invocation_id: InvocationId::new("inv-real").unwrap(),
+            user_id: UserId::new("user-real").unwrap(),
+            session_id: SessionId::new("session-real").unwrap(),
+            ..Default::default()
+        };
         Self {
-            session: MockSession,
-            user_content: Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: text.to_string() }],
+            identity,
+            session: MockSession {
+                session_id: SessionId::new("session-real").unwrap(),
+                user_id: UserId::new("user-real").unwrap(),
             },
+            user_content: Content { role: Role::User, parts: vec![Part::Text(text.to_string())] },
+            metadata: HashMap::new(),
         }
     }
 }
 
-#[async_trait]
-impl adk_core::ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str {
-        "inv-real"
+impl ReadonlyContext for MockContext {
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
-    fn agent_name(&self) -> &str {
-        "gemini-agent"
-    }
-    fn user_id(&self) -> &str {
-        "user-real"
-    }
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-    fn session_id(&self) -> &str {
-        "session-real"
-    }
-    fn branch(&self) -> &str {
-        "main"
+    fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
     }
     fn user_content(&self) -> &Content {
         &self.user_content
     }
 }
 
-#[async_trait]
 impl adk_core::CallbackContext for MockContext {
     fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
         None
@@ -91,18 +93,18 @@ impl adk_core::CallbackContext for MockContext {
 
 #[async_trait]
 impl InvocationContext for MockContext {
+    fn session(&self) -> &dyn Session {
+        &self.session
+    }
     fn agent(&self) -> Arc<dyn Agent> {
         unimplemented!()
     }
     fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
         None
     }
-    fn session(&self) -> &dyn Session {
-        &self.session
-    }
-    fn run_config(&self) -> &RunConfig {
-        static RUN_CONFIG: std::sync::OnceLock<RunConfig> = std::sync::OnceLock::new();
-        RUN_CONFIG.get_or_init(RunConfig::default)
+    fn run_config(&self) -> &adk_core::RunConfig {
+        static RUN_CONFIG: std::sync::OnceLock<adk_core::RunConfig> = std::sync::OnceLock::new();
+        RUN_CONFIG.get_or_init(adk_core::RunConfig::default)
     }
     fn end_invocation(&self) {}
     fn ended(&self) -> bool {
@@ -140,7 +142,7 @@ async fn test_real_gemini_interaction() {
             Ok(event) => {
                 if let Some(content) = event.llm_response.content {
                     for part in content.parts {
-                        if let Part::Text { text } = part {
+                        if let Part::Text(text) = part {
                             print!("{}", text);
                             full_response.push_str(&text);
                         }

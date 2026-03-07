@@ -6,7 +6,7 @@
 //!   cd doc-test/callbacks/callbacks_test
 //!   GOOGLE_API_KEY=your_key cargo run --bin guardrails
 
-use adk_core::Part;
+use adk_core::types::UserId;
 use adk_rust::prelude::*;
 use std::sync::Arc;
 
@@ -30,16 +30,13 @@ async fn main() -> anyhow::Result<()> {
                 // Check user input for blocked content
                 let user_content = ctx.user_content();
                 for part in &user_content.parts {
-                    if let Part::Text { text } = part {
+                    if let Some(text) = part.as_text() {
                         if text.to_lowercase().contains("blocked_word") {
                             println!("[GUARDRAIL] Blocked content detected!");
                             // Return early with rejection message
-                            return Ok(Some(Content {
-                                role: "model".to_string(),
-                                parts: vec![Part::Text {
-                                    text: "I cannot process that request.".to_string(),
-                                }],
-                            }));
+                            return Ok(Some(
+                                Content::model().with_text("I cannot process that request."),
+                            ));
                         }
                     }
                 }
@@ -52,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     adk_cli::console::run_console(
         Arc::new(agent),
         "guardrails_demo".to_string(),
-        "user".to_string(),
+        UserId::new("user").unwrap(),
     )
     .await?;
 

@@ -6,6 +6,7 @@ use crate::server::events::ResumeEvent;
 use crate::server::graph_runner::{INTERRUPTED_SESSIONS, deserialize_interrupt_response};
 use crate::server::sse::send_resume_response;
 use crate::server::state::AppState;
+use adk_core::types::SessionId;
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -562,6 +563,7 @@ pub async fn resume_session(
     Path(session_id): Path<String>,
     Json(req): Json<ResumeRequest>,
 ) -> ApiResult<ResumeResponse> {
+    let session_id = SessionId::try_from(session_id.as_str()).unwrap();
     // Task 10.1: Get the interrupted session state
     let interrupted_state = INTERRUPTED_SESSIONS.get(&session_id).await.ok_or_else(|| {
         err(StatusCode::NOT_FOUND, format!("Session '{}' not found or not interrupted", session_id))
@@ -633,7 +635,7 @@ pub struct WebhookTriggerResponse {
     /// Whether the webhook was accepted
     pub success: bool,
     /// Session ID for streaming the workflow execution
-    pub session_id: String,
+    pub session_id: SessionId,
     /// Message describing the result
     pub message: String,
     /// The webhook path that was triggered
@@ -732,7 +734,7 @@ pub async fn webhook_trigger(
     }
 
     // Generate a session ID for this webhook execution
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = SessionId::new(uuid::Uuid::new_v4().to_string()).unwrap();
 
     // Store the webhook payload in a temporary location for the stream handler
     // The stream handler will inject this into the workflow state
@@ -827,7 +829,7 @@ pub async fn webhook_trigger_get(
     }
 
     // Generate a session ID for this webhook execution
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = SessionId::new(uuid::Uuid::new_v4().to_string()).unwrap();
 
     // Convert query params to JSON payload
     let payload = serde_json::to_value(&params).unwrap_or(serde_json::Value::Null);
@@ -912,7 +914,7 @@ pub struct WebhookExecuteResponse {
     /// Error message if execution failed
     pub error: Option<String>,
     /// Session ID for this execution
-    pub session_id: String,
+    pub session_id: SessionId,
     /// Execution duration in milliseconds
     pub duration_ms: u64,
 }
@@ -973,13 +975,13 @@ pub async fn webhook_execute(
             success: false,
             response: None,
             error: Some("Project not built. Build the project first using the UI.".to_string()),
-            session_id: String::new(),
+            session_id: SessionId::new(String::new()).unwrap(),
             duration_ms: start_time.elapsed().as_millis() as u64,
         }));
     }
 
     // Generate a session ID
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = SessionId::new(uuid::Uuid::new_v4().to_string()).unwrap();
 
     tracing::info!(
         project_id = %id,
@@ -1236,7 +1238,7 @@ pub struct WebhookPayload {
 
 /// Store a webhook payload for later retrieval by the stream handler.
 async fn store_webhook_payload(
-    session_id: &str,
+    session_id: &SessionId,
     path: &str,
     method: &str,
     payload: serde_json::Value,
@@ -1257,17 +1259,17 @@ async fn store_webhook_payload(
 }
 
 /// Retrieve and remove a webhook payload by session ID.
-pub async fn get_webhook_payload(session_id: &str) -> Option<WebhookPayload> {
+pub async fn get_webhook_payload(session_id: &SessionId) -> Option<WebhookPayload> {
     let mut payloads = WEBHOOK_PAYLOADS.write().await;
-    payloads.remove(session_id)
+    payloads.remove(&session_id.to_string())
 }
 
 /// Check if a session has a pending webhook payload.
 /// Check if a webhook payload exists for a session
 #[allow(dead_code)]
-pub async fn has_webhook_payload(session_id: &str) -> bool {
+pub async fn has_webhook_payload(session_id: &SessionId) -> bool {
     let payloads = WEBHOOK_PAYLOADS.read().await;
-    payloads.contains_key(session_id)
+    payloads.contains_key(&session_id.to_string())
 }
 
 // ============================================
@@ -1285,7 +1287,7 @@ lazy_static::lazy_static! {
 #[derive(Debug, Clone, Serialize)]
 pub struct WebhookNotification {
     /// Session ID for this webhook execution
-    pub session_id: String,
+    pub session_id: SessionId,
     /// The webhook path that was triggered
     pub path: String,
     /// HTTP method (POST/GET)
@@ -1352,7 +1354,7 @@ pub struct EventTriggerResponse {
     /// Whether the event was accepted
     pub success: bool,
     /// Session ID for streaming the workflow execution
-    pub session_id: String,
+    pub session_id: SessionId,
     /// Message describing the result
     pub message: String,
     /// The event source that was matched
@@ -1531,7 +1533,7 @@ pub async fn event_trigger(
     }
 
     // Generate a session ID for this event execution
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = SessionId::new(uuid::Uuid::new_v4().to_string()).unwrap();
 
     // Build the full event payload
     let event_payload = serde_json::json!({

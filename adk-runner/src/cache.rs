@@ -161,6 +161,7 @@ impl CachePerformanceAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adk_core::types::InvocationId;
 
     fn default_config() -> ContextCacheConfig {
         ContextCacheConfig { min_tokens: 4096, ttl_seconds: 600, cache_intervals: 3 }
@@ -299,22 +300,20 @@ mod tests {
 
     // --- CachePerformanceAnalyzer tests ---
 
-    use adk_core::{LlmResponse, UsageMetadata};
-
     fn event_with_usage(
-        prompt: i32,
-        candidates: i32,
-        cache_read: Option<i32>,
-        cache_creation: Option<i32>,
+        prompt: u32,
+        candidates: u32,
+        cache_read: Option<u32>,
+        cache_creation: Option<u32>,
     ) -> Event {
-        let mut event = Event::new("test-invocation");
-        event.llm_response = LlmResponse {
-            usage_metadata: Some(UsageMetadata {
-                prompt_token_count: prompt,
-                candidates_token_count: candidates,
-                total_token_count: prompt + candidates,
-                cache_read_input_token_count: cache_read,
-                cache_creation_input_token_count: cache_creation,
+        let mut event = Event::new(InvocationId::new("test-invocation").unwrap());
+        event.llm_response = adk_core::event::LlmResponse {
+            usage_metadata: Some(adk_core::event::UsageMetadata {
+                prompt_token_count: prompt as i32,
+                candidates_token_count: candidates as i32,
+                total_token_count: (prompt + candidates) as i32,
+                cache_read_input_token_count: cache_read.map(|x| x as i32),
+                cache_creation_input_token_count: cache_creation.map(|x| x as i32),
                 ..Default::default()
             }),
             ..Default::default()
@@ -323,7 +322,7 @@ mod tests {
     }
 
     fn event_without_usage() -> Event {
-        Event::new("test-invocation")
+        Event::new(InvocationId::new("test-invocation").unwrap())
     }
 
     #[test]

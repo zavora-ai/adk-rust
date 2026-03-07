@@ -1,8 +1,9 @@
 //! Tests for context compaction integration in the runner.
 
+use adk_core::types::{SessionId, UserId};
 use adk_core::{
     Agent, BaseEventsSummarizer, Content, Event, EventActions, EventCompaction, EventStream,
-    EventsCompactionConfig, InvocationContext, Part, Result,
+    EventsCompactionConfig, InvocationContext, Part, Result, Role,
 };
 use adk_runner::{MutableSession, Runner, RunnerConfig};
 use adk_session::{Events, GetRequest, Session, SessionService, State};
@@ -30,13 +31,14 @@ impl Agent for MockAgent {
     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
         &[]
     }
-    async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
         let text = self.response_text.clone();
         let name = self.name.clone();
+        let invocation_id = ctx.invocation_id().clone();
         Ok(Box::pin(futures::stream::once(async move {
-            let mut event = Event::new("inv-mock");
+            let mut event = Event::new(invocation_id);
             event.author = name;
-            event.set_content(Content::new("model").with_text(&text));
+            event.set_content(Content::new(Role::Model).with_text(&text));
             Ok(event)
         })))
     }
@@ -80,21 +82,21 @@ impl State for MockState {
 }
 
 struct MockSession {
-    id: String,
+    id: SessionId,
     app_name: String,
-    user_id: String,
+    user_id: UserId,
     events: MockEvents,
     state: MockState,
 }
 
 impl Session for MockSession {
-    fn id(&self) -> &str {
+    fn id(&self) -> &SessionId {
         &self.id
     }
     fn app_name(&self) -> &str {
         &self.app_name
     }
-    fn user_id(&self) -> &str {
+    fn user_id(&self) -> &UserId {
         &self.user_id
     }
     fn state(&self) -> &dyn State {
@@ -143,7 +145,7 @@ impl SessionService for TrackingSessionService {
     async fn delete(&self, _req: adk_session::DeleteRequest) -> Result<()> {
         Ok(())
     }
-    async fn append_event(&self, _session_id: &str, event: Event) -> Result<()> {
+    async fn append_event(&self, _session_id: &SessionId, event: Event) -> Result<()> {
         self.appended_events.lock().unwrap().push(event);
         Ok(())
     }
@@ -174,17 +176,19 @@ impl BaseEventsSummarizer for MockSummarizer {
             return Ok(None);
         }
 
-        let summary_content = Content::new("model").with_text(&self.summary);
-        let start_timestamp = events.first().unwrap().timestamp;
-        let end_timestamp = events.last().unwrap().timestamp;
+        let summary_content = Content::new(Role::Model).with_text(&self.summary);
+        let first_event = events.first().unwrap();
+        let last_event = events.last().unwrap();
 
-        let mut event = Event::new("compaction");
+        let mut event = Event::new(first_event.invocation_id.clone());
         event.author = "system".to_string();
         event.actions = EventActions {
             compaction: Some(EventCompaction {
-                start_timestamp,
-                end_timestamp,
+                truncate_before_id: last_event.id.clone(),
+                summary: Some(self.summary.clone()),
                 compacted_content: summary_content,
+                end_timestamp: last_event.timestamp,
+                start_timestamp: first_event.timestamp,
             }),
             ..Default::default()
         };
@@ -206,22 +210,22 @@ fn test_conversation_history_respects_compaction() {
     let mut old_event_1 = Event::new("inv-1");
     old_event_1.author = "user".to_string();
     old_event_1.timestamp = base_time;
-    old_event_1.set_content(Content::new("user").with_text("Old message 1"));
+    old_event_1.set_content(Content::new(Role::User).with_text("Old message 1"));
 
     let mut old_event_2 = Event::new("inv-1");
     old_event_2.author = "assistant".to_string();
     old_event_2.timestamp = base_time + Duration::seconds(1);
-    old_event_2.set_content(Content::new("model").with_text("Old response 1"));
+    old_event_2.set_content(Content::new(Role::Model).with_text("Old response 1"));
 
     let mut old_event_3 = Event::new("inv-2");
     old_event_3.author = "user".to_string();
     old_event_3.timestamp = base_time + Duration::seconds(2);
-    old_event_3.set_content(Content::new("user").with_text("Old message 2"));
+    old_event_3.set_content(Content::new(Role::User).with_text("Old message 2"));
 
     let mut old_event_4 = Event::new("inv-2");
     old_event_4.author = "assistant".to_string();
     old_event_4.timestamp = base_time + Duration::seconds(3);
-    old_event_4.set_content(Content::new("model").with_text("Old response 2"));
+    old_event_4.set_content(Content::new(Role::Model).with_text("Old response 2"));
 
     // Compaction event summarizing events 1-4
     let mut compaction_event = Event::new("compaction");
@@ -229,9 +233,11 @@ fn test_conversation_history_respects_compaction() {
     compaction_event.timestamp = base_time + Duration::seconds(4);
     compaction_event.actions = EventActions {
         compaction: Some(EventCompaction {
-            start_timestamp: old_event_1.timestamp,
+            truncate_before_id: old_event_4.id.clone(),
+            summary: Some("Summary".to_string()),
+            compacted_content: Content::new(Role::Model).with_text("Summary of old conversation"),
             end_timestamp: old_event_4.timestamp,
-            compacted_content: Content::new("model").with_text("Summary of old conversation"),
+            start_timestamp: old_event_1.timestamp,
         }),
         ..Default::default()
     };
@@ -240,18 +246,18 @@ fn test_conversation_history_respects_compaction() {
     let mut new_event_1 = Event::new("inv-3");
     new_event_1.author = "user".to_string();
     new_event_1.timestamp = base_time + Duration::seconds(5);
-    new_event_1.set_content(Content::new("user").with_text("New message"));
+    new_event_1.set_content(Content::new(Role::User).with_text("New message"));
 
     let mut new_event_2 = Event::new("inv-3");
     new_event_2.author = "assistant".to_string();
     new_event_2.timestamp = base_time + Duration::seconds(6);
-    new_event_2.set_content(Content::new("model").with_text("New response"));
+    new_event_2.set_content(Content::new(Role::Model).with_text("New response"));
 
     // Create a mock session with these events
     let mock_session: Arc<dyn adk_session::Session> = Arc::new(MockSession {
-        id: "sess-1".to_string(),
+        id: SessionId::new("sess-1").unwrap(),
         app_name: "test".to_string(),
-        user_id: "user-1".to_string(),
+        user_id: UserId::new("user-1").unwrap(),
         events: MockEvents {
             events: vec![
                 old_event_1,
@@ -274,21 +280,21 @@ fn test_conversation_history_respects_compaction() {
 
     // First entry should be the compacted summary
     let summary_text = match &history[0].parts[0] {
-        Part::Text { text } => text.clone(),
+        Part::Text(text) => text.clone(),
         _ => panic!("Expected text part"),
     };
     assert_eq!(summary_text, "Summary of old conversation");
 
     // Second entry should be the new user message
-    assert_eq!(history[1].role, "user");
+    assert_eq!(history[1].role, Role::User);
     let new_msg = match &history[1].parts[0] {
-        Part::Text { text } => text.clone(),
+        Part::Text(text) => text.clone(),
         _ => panic!("Expected text part"),
     };
     assert_eq!(new_msg, "New message");
 
     // Third entry should be the new model response
-    assert_eq!(history[2].role, "model");
+    assert_eq!(history[2].role, Role::Model);
 }
 
 /// Test that conversation_history works normally when no compaction exists.
@@ -296,16 +302,16 @@ fn test_conversation_history_respects_compaction() {
 fn test_conversation_history_without_compaction() {
     let mut event_1 = Event::new("inv-1");
     event_1.author = "user".to_string();
-    event_1.set_content(Content::new("user").with_text("Hello"));
+    event_1.set_content(Content::new(Role::User).with_text("Hello"));
 
     let mut event_2 = Event::new("inv-1");
     event_2.author = "assistant".to_string();
-    event_2.set_content(Content::new("model").with_text("Hi there"));
+    event_2.set_content(Content::new(Role::Model).with_text("Hi there"));
 
     let mock_session: Arc<dyn adk_session::Session> = Arc::new(MockSession {
-        id: "sess-1".to_string(),
+        id: SessionId::new("sess-1").unwrap(),
         app_name: "test".to_string(),
-        user_id: "user-1".to_string(),
+        user_id: UserId::new("user-1").unwrap(),
         events: MockEvents { events: vec![event_1, event_2] },
         state: MockState,
     });
@@ -314,8 +320,8 @@ fn test_conversation_history_without_compaction() {
     let history = adk_core::Session::conversation_history(&mutable);
 
     assert_eq!(history.len(), 2);
-    assert_eq!(history[0].role, "user");
-    assert_eq!(history[1].role, "model");
+    assert_eq!(history[0].role, Role::User);
+    assert_eq!(history[1].role, Role::Model);
 }
 
 /// Integration test: runner triggers compaction after reaching the interval.
@@ -349,8 +355,11 @@ async fn test_runner_triggers_compaction_at_interval() {
     })
     .unwrap();
 
-    let content = Content::new("user").with_text("Hello");
-    let mut stream = runner.run("user-1".to_string(), "sess-1".to_string(), content).await.unwrap();
+    let content = Content::new(Role::User).with_text("Hello");
+    let mut stream = runner
+        .run(UserId::new("user-1").unwrap(), SessionId::new("sess-1").unwrap(), content)
+        .await
+        .unwrap();
 
     // Drain the stream
     while let Some(result) = stream.next().await {
@@ -369,7 +378,7 @@ async fn test_runner_triggers_compaction_at_interval() {
 
     let compaction = compaction_events[0].actions.compaction.as_ref().unwrap();
     let summary_text = match &compaction.compacted_content.parts[0] {
-        Part::Text { text } => text.clone(),
+        Part::Text(text) => text.clone(),
         _ => panic!("Expected text part"),
     };
     assert_eq!(summary_text, "Compacted summary");
@@ -406,8 +415,11 @@ async fn test_runner_no_compaction_before_interval() {
     })
     .unwrap();
 
-    let content = Content::new("user").with_text("Hello");
-    let mut stream = runner.run("user-1".to_string(), "sess-1".to_string(), content).await.unwrap();
+    let content = Content::new(Role::User).with_text("Hello");
+    let mut stream = runner
+        .run(UserId::new("user-1").unwrap(), SessionId::new("sess-1").unwrap(), content)
+        .await
+        .unwrap();
 
     while let Some(result) = stream.next().await {
         assert!(result.is_ok());

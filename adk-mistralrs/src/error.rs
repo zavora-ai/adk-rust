@@ -284,16 +284,13 @@ impl MistralRsError {
 
     /// Create a model loading error with context.
     pub fn model_load(model_id: impl Into<String>, reason: impl Into<String>) -> Self {
-        let model_id = model_id.into();
-        let reason = reason.into();
-        let suggestion = Self::suggest_model_load_fix(&reason);
+        let model_id = model_id.into();        let reason = reason.into();        let suggestion = Self::suggest_model_load_fix(&reason);
         Self::ModelLoad { model_id, reason, suggestion }
     }
 
     /// Create a model not found error.
     pub fn model_not_found(path: impl Into<String>) -> Self {
-        let path = path.into();
-        let suggestion = "Verify the path exists and is accessible. For HuggingFace models, ensure the model ID is correct (e.g., 'microsoft/Phi-3.5-mini-instruct').".to_string();
+        let path = path.into();        let suggestion = "Verify the path exists and is accessible. For HuggingFace models, ensure the model ID is correct (e.g., 'mistralai/Magistral-Small-2509').".to_string();
         Self::ModelNotFound { path, suggestion }
     }
 
@@ -311,8 +308,7 @@ impl MistralRsError {
 
     /// Create a device not available error.
     pub fn device_not_available(device: impl Into<String>) -> Self {
-        let device = device.into();
-        let suggestion = Self::suggest_device_fix(&device);
+        let device = device.into();        let suggestion = Self::suggest_device_fix(&device);
         Self::DeviceNotAvailable { device, suggestion }
     }
 
@@ -331,7 +327,7 @@ impl MistralRsError {
 
     /// Create an inference error.
     pub fn inference(model_id: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::Inference { model_id: model_id.into(), reason: reason.into() }
+        Self::Inference { model_id: model_id.into(), reason: reason.into()}
     }
 
     /// Create an invalid configuration error.
@@ -349,17 +345,17 @@ impl MistralRsError {
 
     /// Create an image processing error.
     pub fn image_processing(reason: impl Into<String>) -> Self {
-        Self::ImageProcessing { reason: reason.into() }
+        Self::ImageProcessing { reason: reason.into()}
     }
 
     /// Create an audio processing error.
     pub fn audio_processing(reason: impl Into<String>) -> Self {
-        Self::AudioProcessing { reason: reason.into() }
+        Self::AudioProcessing { reason: reason.into()}
     }
 
     /// Create a tool conversion error.
     pub fn tool_conversion(tool_name: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::ToolConversion { tool_name: tool_name.into(), reason: reason.into() }
+        Self::ToolConversion { tool_name: tool_name.into(), reason: reason.into()}
     }
 
     /// Create a chat template error.
@@ -372,9 +368,7 @@ impl MistralRsError {
 
     /// Create an adapter loading error.
     pub fn adapter_load(adapter_name: impl Into<String>, reason: impl Into<String>) -> Self {
-        let adapter_name = adapter_name.into();
-        let reason = reason.into();
-        let suggestion = "Verify the adapter path/ID is correct. For HuggingFace adapters, ensure the adapter is compatible with the base model.".to_string();
+        let adapter_name = adapter_name.into();        let reason = reason.into();        let suggestion = "Verify the adapter path/ID is correct. For HuggingFace adapters, ensure the adapter is compatible with the base model.".to_string();
         Self::AdapterLoad { adapter_name, reason, suggestion }
     }
 
@@ -385,22 +379,22 @@ impl MistralRsError {
 
     /// Create an MCP client error.
     pub fn mcp_client(server: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::McpClient { server: server.into(), reason: reason.into() }
+        Self::McpClient { server: server.into(), reason: reason.into()}
     }
 
     /// Create an embedding error.
     pub fn embedding(reason: impl Into<String>) -> Self {
-        Self::Embedding { reason: reason.into() }
+        Self::Embedding { reason: reason.into()}
     }
 
     /// Create a speech generation error.
     pub fn speech(reason: impl Into<String>) -> Self {
-        Self::Speech { reason: reason.into() }
+        Self::Speech { reason: reason.into()}
     }
 
     /// Create a diffusion/image generation error.
     pub fn diffusion(reason: impl Into<String>) -> Self {
-        Self::Diffusion { reason: reason.into() }
+        Self::Diffusion { reason: reason.into()}
     }
 
     /// Create a multi-model routing error.
@@ -410,12 +404,12 @@ impl MistralRsError {
 
     /// Create a UQFF validation error.
     pub fn uqff_validation(path: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::UqffValidation { path: path.into(), reason: reason.into() }
+        Self::UqffValidation { path: path.into(), reason: reason.into()}
     }
 
     /// Create a topology file error.
     pub fn topology_file(path: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::TopologyFile { path: path.into(), reason: reason.into() }
+        Self::TopologyFile { path: path.into(), reason: reason.into()}
     }
 
     // =========================================================================

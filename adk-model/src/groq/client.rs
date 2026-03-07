@@ -261,7 +261,7 @@ impl Llm for GroqClient {
                                             if let Some(delta) = &choice.delta {
                                                 if let Some(text) = &delta.content {
                                                     if !text.is_empty() {
-                                                        parts.push(Part::Text { text: text.clone() });
+                                                        parts.push(Part::text(text.clone()));
                                                     }
                                                 }
                                             }
@@ -271,7 +271,7 @@ impl Llm for GroqClient {
                                                     None
                                                 } else {
                                                     Some(adk_core::Content {
-                                                        role: "model".to_string(),
+                                                        role: adk_core::types::Role::Model,
                                                         parts,
                                                     })
                                                 },
@@ -305,10 +305,8 @@ impl Llm for GroqClient {
                                                     if !text.is_empty() {
                                                         yield LlmResponse {
                                                             content: Some(adk_core::Content {
-                                                                role: "model".to_string(),
-                                                                parts: vec![Part::Text {
-                                                                    text: text.clone(),
-                                                                }],
+                                                                role: adk_core::types::Role::Model,
+                                                                parts: vec![Part::text(text.clone())],
                                                             }),
                                                             usage_metadata: None,
                                                             finish_reason: None,

@@ -1,4 +1,4 @@
-use adk_core::{Content, EventActions, ReadonlyContext, ToolContext};
+use adk_core::{Content, EventActions, ReadonlyContext, ToolContext, types::AdkIdentity};
 use adk_ui::{UiToolset, column, text};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -7,44 +7,35 @@ use std::error::Error;
 use std::sync::{Arc, Mutex};
 
 struct DemoContext {
+    identity: AdkIdentity,
     content: Content,
+    metadata: HashMap<String, String>,
     actions: Mutex<EventActions>,
 }
 
 impl DemoContext {
     fn new() -> Self {
-        Self { content: Content::new("user"), actions: Mutex::new(EventActions::default()) }
+        Self {
+            identity: AdkIdentity::default(),
+            content: Content::new("user"),
+            metadata: HashMap::new(),
+            actions: Mutex::new(EventActions::default()),
+        }
     }
 }
 
 #[async_trait]
 impl ReadonlyContext for DemoContext {
-    fn invocation_id(&self) -> &str {
-        "ui-protocol-profiles"
-    }
-
-    fn agent_name(&self) -> &str {
-        "ui-protocol-demo"
-    }
-
-    fn user_id(&self) -> &str {
-        "user1"
-    }
-
-    fn app_name(&self) -> &str {
-        "adk-examples"
-    }
-
-    fn session_id(&self) -> &str {
-        "session1"
-    }
-
-    fn branch(&self) -> &str {
-        ""
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
 
     fn user_content(&self) -> &Content {
         &self.content
+    }
+
+    fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
     }
 }
 

@@ -71,11 +71,12 @@ impl From<jsonwebtoken::errors::Error> for TokenError {
             ErrorKind::ImmatureSignature => TokenError::NotYetValid,
             ErrorKind::InvalidSignature => TokenError::InvalidSignature,
             ErrorKind::InvalidAudience => {
-                TokenError::InvalidAudience { expected: "expected".into(), actual: vec![] }
+                TokenError::InvalidAudience { expected: "expected".to_string(), actual: vec![] }
             }
-            ErrorKind::InvalidIssuer => {
-                TokenError::InvalidIssuer { expected: "expected".into(), actual: "actual".into() }
-            }
+            ErrorKind::InvalidIssuer => TokenError::InvalidIssuer {
+                expected: "expected".to_string(),
+                actual: "actual".to_string(),
+            },
             _ => TokenError::DecodingError(err.to_string()),
         }
     }

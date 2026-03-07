@@ -128,7 +128,7 @@ async fn main() -> anyhow::Result<()> {
                     let text: String = content
                         .parts
                         .iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("")
                         .to_lowercase();
@@ -159,8 +159,12 @@ async fn main() -> anyhow::Result<()> {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    let text: String = content
+                        .parts
+                        .iter()
+                        .filter_map(|p| p.as_text())
+                        .collect::<Vec<_>>()
+                        .join("");
                     if !text.is_empty() {
                         updates.insert("research_output".to_string(), json!(text));
                     }
@@ -180,8 +184,12 @@ async fn main() -> anyhow::Result<()> {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    let text: String = content
+                        .parts
+                        .iter()
+                        .filter_map(|p| p.as_text())
+                        .collect::<Vec<_>>()
+                        .join("");
                     if !text.is_empty() {
                         updates.insert("written_content".to_string(), json!(text));
                     }
@@ -199,8 +207,12 @@ async fn main() -> anyhow::Result<()> {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+                    let text: String = content
+                        .parts
+                        .iter()
+                        .filter_map(|p| p.as_text())
+                        .collect::<Vec<_>>()
+                        .join("");
                     if !text.is_empty() {
                         updates.insert("code_output".to_string(), json!(text));
                     }
@@ -302,7 +314,8 @@ async fn main() -> anyhow::Result<()> {
         input.insert("task".to_string(), json!(task));
         input.insert("history".to_string(), json!([]));
 
-        let result = graph.invoke(input, ExecutionConfig::new("supervisor-thread")).await?;
+        let result =
+            graph.invoke(input, ExecutionConfig::new("supervisor-thread".to_string())).await?;
 
         println!("\n{}", "=".repeat(70));
         println!("{}", result.get("final_result").and_then(|v| v.as_str()).unwrap_or("No result"));

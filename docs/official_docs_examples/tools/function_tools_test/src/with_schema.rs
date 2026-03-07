@@ -53,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
                 Operation::Subtract => params.a - params.b,
                 Operation::Multiply => params.a * params.b,
                 Operation::Divide if params.b != 0.0 => params.a / params.b,
-                Operation::Divide => return Err(adk_core::AdkError::Tool("Cannot divide by zero".into())),
+                Operation::Divide => return Err(adk_core::AdkError::Tool("Cannot divide by zero"))),
             };
             let op_str = match params.operation {
                 Operation::Add => "+",

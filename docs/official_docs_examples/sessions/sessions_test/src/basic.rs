@@ -6,6 +6,7 @@
 //!   cd doc-test/sessions/sessions_test
 //!   cargo run --bin basic
 
+use adk_core::types::UserId;
 use adk_session::{
     CreateRequest, DeleteRequest, Event, GetRequest, InMemorySessionService, KEY_PREFIX_USER,
     ListRequest, SessionService,
@@ -29,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
     let session = service
         .create(CreateRequest {
             app_name: "demo".to_string(),
-            user_id: "alice".to_string(),
+            user_id: UserId::new("alice").unwrap(),
             session_id: None, // Auto-generate
             state: initial_state,
         })
@@ -47,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 3. Append an event
     println!("\n3. Appending event...");
-    let event = Event::new("inv_001");
+    let event = Event::new(adk_core::types::InvocationId::new("inv_001").unwrap());
     service.append_event(session.id(), event).await?;
     println!("   Event appended");
 
@@ -56,8 +57,8 @@ async fn main() -> anyhow::Result<()> {
     let session = service
         .get(GetRequest {
             app_name: "demo".to_string(),
-            user_id: "alice".to_string(),
-            session_id: session.id().to_string(),
+            user_id: UserId::new("alice").unwrap(),
+            session_id: session.id().clone(),
             num_recent_events: None,
             after: None,
         })
@@ -69,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
     // 5. List all sessions
     println!("\n5. Listing sessions...");
     let sessions = service
-        .list(ListRequest { app_name: "demo".to_string(), user_id: "alice".to_string() })
+        .list(ListRequest { app_name: "demo".to_string(), user_id: UserId::new("alice").unwrap() })
         .await?;
 
     println!("   Total sessions: {}", sessions.len());
@@ -79,11 +80,11 @@ async fn main() -> anyhow::Result<()> {
 
     // 6. Delete session
     println!("\n6. Deleting session...");
-    let session_id = session.id().to_string();
+    let session_id = session.id().clone();
     service
         .delete(DeleteRequest {
             app_name: "demo".to_string(),
-            user_id: "alice".to_string(),
+            user_id: UserId::new("alice").unwrap(),
             session_id,
         })
         .await?;
@@ -91,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Verify deletion
     let sessions = service
-        .list(ListRequest { app_name: "demo".to_string(), user_id: "alice".to_string() })
+        .list(ListRequest { app_name: "demo".to_string(), user_id: UserId::new("alice").unwrap() })
         .await?;
     println!("   Remaining sessions: {}", sessions.len());
 

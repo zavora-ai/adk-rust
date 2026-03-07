@@ -199,7 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut state = State::new();
         state.insert("input".to_string(), json!(input));
 
-        let result = graph.invoke(state, ExecutionConfig::new(&format!("test-{}", i))).await?;
+        let result = graph.invoke(state, ExecutionConfig::new(format!("test-{}", i))).await?;
 
         // Get actual trajectory
         let actual_trajectory = recorder.get_trajectory();
@@ -264,7 +264,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut state = State::new();
         state.insert("input".to_string(), json!(input));
 
-        let result = graph.invoke(state, ExecutionConfig::new("quality-test")).await?;
+        let result = graph.invoke(state, ExecutionConfig::new("quality-test".to_string())).await?;
 
         let actual_output = result.get("output").and_then(|v| v.as_str()).unwrap_or("");
         let similarity = response_scorer.score(expected_output, actual_output);
@@ -325,7 +325,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut state = State::new();
         state.insert("input".to_string(), json!(test_input));
 
-        let result = graph.invoke(state, ExecutionConfig::new("llm-eval")).await?;
+        let result = graph.invoke(state, ExecutionConfig::new("llm-eval".to_string())).await?;
 
         let actual_output = result.get("output").and_then(|v| v.as_str()).unwrap_or("");
         let context = format!(

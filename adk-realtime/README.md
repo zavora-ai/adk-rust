@@ -315,7 +315,10 @@ Transport-specific error variants with actionable context:
 cargo run --example vertex_live_voice --features vertex-live
 
 # LiveKit bridge with OpenAI model (requires LiveKit server)
-cargo run --example livekit_bridge --features "livekit,openai"
+cargo run --example livekit_openai --features "livekit,openai"
+
+# LiveKit bridge with Gemini model (requires LiveKit server)
+cargo run --example livekit_gemini --features "livekit,gemini"
 
 # OpenAI WebRTC low-latency session (requires cmake + API key)
 CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo run --example openai_webrtc --features openai-webrtc

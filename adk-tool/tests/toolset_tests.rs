@@ -1,40 +1,37 @@
-use adk_core::{Content, ReadonlyContext, Tool, Toolset};
+use adk_core::{Content, ReadonlyContext, Tool, Toolset, types::AdkIdentity};
 use adk_tool::{BasicToolset, ExitLoopTool, GoogleSearchTool, string_predicate};
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 struct MockContext {
+    identity: AdkIdentity,
     content: Content,
+    metadata: HashMap<String, String>,
 }
 
 impl MockContext {
     fn new() -> Self {
-        Self { content: Content::new("user") }
+        Self {
+            identity: AdkIdentity::default(),
+            content: Content::new("user"),
+            metadata: HashMap::new(),
+        }
     }
 }
 
 #[async_trait]
 impl ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str {
-        "inv-1"
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
-    fn agent_name(&self) -> &str {
-        "test-agent"
-    }
-    fn user_id(&self) -> &str {
-        "user-1"
-    }
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-    fn session_id(&self) -> &str {
-        "session-1"
-    }
-    fn branch(&self) -> &str {
-        ""
-    }
+
     fn user_content(&self) -> &Content {
         &self.content
+    }
+
+    fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
     }
 }
 

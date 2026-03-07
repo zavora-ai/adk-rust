@@ -19,11 +19,11 @@
 //! use adk_agent::LlmAgentBuilder;
 //! use std::sync::Arc;
 //!
-//! // LLM Agent requires a model (from adk-model)
-//! // let agent = LlmAgentBuilder::new("assistant")
-//! //     .description("Helpful AI assistant")
-//! //     .model(Arc::new(model))
-//! //     .build()?;
+//! //! LLM Agent requires a model (from adk-model)
+//! //! let agent = LlmAgentBuilder::new("assistant")
+//! //!     .description("Helpful AI assistant")
+//! //!     .model(Arc::new(model))
+//! //!     .build()?;
 //! ```
 //!
 //! ## Workflow Agents
@@ -31,13 +31,13 @@
 //! Combine agents for complex workflows:
 //!
 //! ```rust,ignore
-//! // Sequential: A -> B -> C
+//! //! Sequential: A -> B -> C
 //! let seq = SequentialAgent::new("pipeline", vec![a, b, c]);
 //!
-//! // Parallel: A, B, C simultaneously
+//! //! Parallel: A, B, C simultaneously
 //! let par = ParallelAgent::new("team", vec![a, b, c]);
 //!
-//! // Loop: repeat until exit
+//! //! Loop: repeat until exit
 //! let loop_agent = LoopAgent::new("iterator", worker, 10);
 //! ```
 //!
@@ -62,6 +62,7 @@ mod custom_agent;
 pub mod guardrails;
 mod llm_agent;
 pub mod tool_call_markup;
+pub mod util;
 mod workflow;
 
 pub use adk_core::Agent;

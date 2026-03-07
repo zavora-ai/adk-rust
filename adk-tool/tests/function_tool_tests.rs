@@ -1,46 +1,45 @@
 use adk_core::{
-    CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Tool, ToolContext,
+    CallbackContext, Content, EventActions, MemoryEntry, ReadonlyContext, Result, Tool,
+    ToolContext, types::AdkIdentity,
 };
 use adk_tool::FunctionTool;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 struct MockToolContext {
-    actions: Mutex<EventActions>,
+    identity: AdkIdentity,
     content: Content,
+    metadata: HashMap<String, String>,
+    actions: Mutex<EventActions>,
 }
 
 impl MockToolContext {
     fn new() -> Self {
-        Self { actions: Mutex::new(EventActions::default()), content: Content::new("user") }
+        Self {
+            identity: AdkIdentity::default(),
+            content: Content::new("user"),
+            metadata: HashMap::new(),
+            actions: Mutex::new(EventActions::default()),
+        }
     }
 }
 
 #[async_trait]
 impl ReadonlyContext for MockToolContext {
-    fn invocation_id(&self) -> &str {
-        "inv-1"
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
-    fn agent_name(&self) -> &str {
-        "test-agent"
-    }
-    fn user_id(&self) -> &str {
-        "user-1"
-    }
-    fn app_name(&self) -> &str {
-        "test-app"
-    }
-    fn session_id(&self) -> &str {
-        "session-1"
-    }
-    fn branch(&self) -> &str {
-        ""
-    }
+
     fn user_content(&self) -> &Content {
         &self.content
+    }
+
+    fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
     }
 }
 

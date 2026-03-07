@@ -53,14 +53,14 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let task = state.get("task").and_then(|v| v.as_str()).unwrap_or("");
             println!("📋 Planning task: {}", task);
-            adk_core::Content::new("user").with_text(task)
+            adk_core::Content::user().with_text(task)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("");
 
@@ -82,14 +82,14 @@ async fn main() -> anyhow::Result<()> {
         .with_input_mapper(|state| {
             let plan = state.get("plan").and_then(|v| v.as_str()).unwrap_or("");
             println!("⚡ Executing approved plan...");
-            adk_core::Content::new("user").with_text(&format!("Execute this plan: {}", plan))
+            adk_core::Content::user().with_text(&format!("Execute this plan: {}", plan))
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
             for event in events {
                 if let Some(content) = event.content() {
                     let text: String = content.parts.iter()
-                        .filter_map(|p| p.text())
+                        .filter_map(|p| p.as_text())
                         .collect::<Vec<_>>()
                         .join("");
                     updates.insert("result".to_string(), json!(text));
@@ -155,7 +155,7 @@ async fn main() -> anyhow::Result<()> {
         input.insert("task".to_string(), json!(task));
         
         let thread_id = format!("task-{}", task.replace(" ", "-"));
-        let result = graph.invoke(input, ExecutionConfig::new(&thread_id)).await;
+        let result = graph.invoke(input, ExecutionConfig::new(SessionId::new(&thread_id).unwrap())).await;
 
         match result {
             Err(GraphError::Interrupted(interrupt)) => {
@@ -178,7 +178,7 @@ async fn main() -> anyhow::Result<()> {
                     graph.update_state(&thread_id, [("approved".to_string(), json!(true))]).await?;
                     
                     // Resume execution
-                    let final_result = graph.invoke(State::new(), ExecutionConfig::new(&thread_id)).await?;
+                    let final_result = graph.invoke(State::new(), ExecutionConfig::new(SessionId::new(&thread_id).unwrap())).await?;
                     println!("✅ Task completed: {}", final_result.get("result").and_then(|v| v.as_str()).unwrap_or("N/A"));
                 } else {
                     println!("❌ Task rejected - execution stopped");

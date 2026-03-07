@@ -236,43 +236,41 @@ Use field types: text, email, password, number, select, textarea. Set required=t
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adk_core::{Content, EventActions, ReadonlyContext};
+    use adk_core::{Content, EventActions, ReadonlyContext, types::AdkIdentity};
     use async_trait::async_trait;
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
     struct TestContext {
+        identity: AdkIdentity,
         content: Content,
+        metadata: HashMap<String, String>,
         actions: Mutex<EventActions>,
     }
 
     impl TestContext {
         fn new() -> Self {
-            Self { content: Content::new("user"), actions: Mutex::new(EventActions::default()) }
+            Self {
+                identity: AdkIdentity::default(),
+                content: Content::new("user"),
+                metadata: HashMap::new(),
+                actions: Mutex::new(EventActions::default()),
+            }
         }
     }
 
     #[async_trait]
     impl ReadonlyContext for TestContext {
-        fn invocation_id(&self) -> &str {
-            "test"
+        fn identity(&self) -> &AdkIdentity {
+            &self.identity
         }
-        fn agent_name(&self) -> &str {
-            "test"
-        }
-        fn user_id(&self) -> &str {
-            "user"
-        }
-        fn app_name(&self) -> &str {
-            "app"
-        }
-        fn session_id(&self) -> &str {
-            "session"
-        }
-        fn branch(&self) -> &str {
-            ""
-        }
+
         fn user_content(&self) -> &Content {
             &self.content
+        }
+
+        fn metadata(&self) -> &HashMap<String, String> {
+            &self.metadata
         }
     }
 

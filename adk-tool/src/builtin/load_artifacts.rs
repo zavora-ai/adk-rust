@@ -73,7 +73,7 @@ impl Tool for LoadArtifactsTool {
             match artifact_service.load(name).await {
                 Ok(part) => {
                     let content = match part {
-                        adk_core::Part::Text { text } => json!({
+                        adk_core::Part::Text(text) => json!({
                             "type": "text",
                             "text": text,
                         }),
@@ -82,7 +82,7 @@ impl Tool for LoadArtifactsTool {
                             let encoded = STANDARD.encode(&data);
                             json!({
                                 "type": "inline_data",
-                                "mime_type": mime_type,
+                                "mime_type": mime_type.to_string(),
                                 "data_base64": encoded,
                                 "size_bytes": data.len(),
                             })

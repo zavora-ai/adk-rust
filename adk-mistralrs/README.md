@@ -115,7 +115,7 @@ use adk_core::{Llm, LlmRequest, Content};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Load a model from HuggingFace
-    let model = MistralRsModel::from_hf("microsoft/Phi-3.5-mini-instruct").await?;
+    let model = MistralRsModel::from_hf("mistralai/Magistral-Small-2509").await?;
     
     // Create a request
     let request = LlmRequest {
@@ -339,7 +339,7 @@ let multi_model = MistralRsMultiModel::from_config("models.toml").await?;
 
 // Or configure programmatically
 let config = MultiModelConfig::new()
-    .add_model("phi", ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+    .add_model("magistral-small", ModelSource::huggingface("mistralai/Magistral-Small-2509"))
     .add_model("mistral", ModelSource::huggingface("mistralai/Mistral-7B-v0.1"))
     .default_model("phi");
 
@@ -387,7 +387,7 @@ Connect to MCP servers for external tools:
 use adk_mistralrs::{MistralRsConfig, ModelSource, McpClientConfig, McpServerConfig};
 
 let config = MistralRsConfig::builder()
-    .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+    .model_source(ModelSource::huggingface("mistralai/Magistral-Small-2509"))
     .mcp_client(McpClientConfig::with_server(
         McpServerConfig::process("Filesystem", "mcp-server-filesystem")
             .with_args(vec!["--root".to_string(), "/tmp".to_string()])

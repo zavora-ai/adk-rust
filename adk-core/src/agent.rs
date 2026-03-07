@@ -68,14 +68,16 @@ mod tests {
 
     struct MockSession;
     impl Session for MockSession {
-        fn id(&self) -> &str {
-            "session"
+        fn id(&self) -> &crate::types::SessionId {
+            static ID: std::sync::OnceLock<crate::types::SessionId> = std::sync::OnceLock::new();
+            ID.get_or_init(|| crate::types::SessionId::new("session").unwrap())
         }
         fn app_name(&self) -> &str {
             "app"
         }
-        fn user_id(&self) -> &str {
-            "user"
+        fn user_id(&self) -> &crate::types::UserId {
+            static ID: std::sync::OnceLock<crate::types::UserId> = std::sync::OnceLock::new();
+            ID.get_or_init(|| crate::types::UserId::new("user").unwrap())
         }
         fn state(&self) -> &dyn State {
             &MockState
@@ -96,7 +98,7 @@ mod tests {
     impl TestContext {
         fn new() -> Self {
             Self {
-                content: Content::new("user"),
+                content: Content::new(crate::types::Role::User),
                 config: RunConfig::default(),
                 session: MockSession,
             }
@@ -105,26 +107,22 @@ mod tests {
 
     #[async_trait]
     impl ReadonlyContext for TestContext {
-        fn invocation_id(&self) -> &str {
-            "test"
-        }
-        fn agent_name(&self) -> &str {
-            "test"
-        }
-        fn user_id(&self) -> &str {
-            "user"
-        }
-        fn app_name(&self) -> &str {
-            "app"
-        }
-        fn session_id(&self) -> &str {
-            "session"
-        }
-        fn branch(&self) -> &str {
-            ""
+        fn identity(&self) -> &crate::types::AdkIdentity {
+            static IDENTITY: std::sync::OnceLock<crate::types::AdkIdentity> =
+                std::sync::OnceLock::new();
+            IDENTITY.get_or_init(|| crate::types::AdkIdentity {
+                agent_name: "test".to_string(),
+                app_name: "app".to_string(),
+                ..Default::default()
+            })
         }
         fn user_content(&self) -> &Content {
             &self.content
+        }
+        fn metadata(&self) -> &std::collections::HashMap<String, String> {
+            static METADATA: std::sync::OnceLock<std::collections::HashMap<String, String>> =
+                std::sync::OnceLock::new();
+            METADATA.get_or_init(std::collections::HashMap::new)
         }
     }
 
@@ -171,7 +169,8 @@ mod tests {
 
         async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
             let s = stream! {
-                yield Ok(Event::new("test"));
+                let id = crate::types::InvocationId::new("test").unwrap();
+                yield Ok(Event::new(id));
             };
             Ok(Box::pin(s))
         }

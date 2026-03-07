@@ -1,52 +1,44 @@
-use adk_core::{Content, EventActions, ReadonlyContext, ToolContext};
+use adk_core::{Content, EventActions, ReadonlyContext, ToolContext, types::AdkIdentity};
 use adk_ui::{UiToolset, column, text};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 struct TestContext {
+    identity: AdkIdentity,
     content: Content,
+    metadata: HashMap<String, String>,
     actions: Mutex<EventActions>,
 }
 
 impl TestContext {
     fn new() -> Self {
-        Self { content: Content::new("user"), actions: Mutex::new(EventActions::default()) }
+        Self {
+            identity: AdkIdentity::default(),
+            content: Content::new("user"),
+            metadata: HashMap::new(),
+            actions: Mutex::new(EventActions::default()),
+        }
     }
 }
 
 #[async_trait]
 impl ReadonlyContext for TestContext {
-    fn invocation_id(&self) -> &str {
-        "matrix-test"
-    }
-
-    fn agent_name(&self) -> &str {
-        "matrix-agent"
-    }
-
-    fn user_id(&self) -> &str {
-        "user"
-    }
-
-    fn app_name(&self) -> &str {
-        "app"
-    }
-
-    fn session_id(&self) -> &str {
-        "session"
-    }
-
-    fn branch(&self) -> &str {
-        ""
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
 
     fn user_content(&self) -> &Content {
         &self.content
+    }
+
+    fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
     }
 }
 

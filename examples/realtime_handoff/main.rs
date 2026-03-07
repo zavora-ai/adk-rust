@@ -158,10 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Get the instruction from the agent
-    let instruction = receptionist
-        .instruction()
-        .map(|s| s.as_str())
-        .unwrap_or("You are a friendly receptionist.");
+    let instruction = receptionist.instruction().unwrap_or("You are a friendly receptionist.");
 
     // Connect the receptionist agent with the transfer tool
     let config = RealtimeConfig::default()

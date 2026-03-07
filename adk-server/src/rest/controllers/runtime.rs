@@ -1,4 +1,8 @@
 use crate::ServerConfig;
+use adk_core::{
+    Role,
+    types::{SessionId, UserId},
+};
 use adk_ui::{SUPPORTED_UI_PROTOCOLS, UI_PROTOCOL_CAPABILITIES, normalize_runtime_ui_protocol};
 use axum::{
     Json,
@@ -11,6 +15,7 @@ use futures::{
     StreamExt,
     stream::{self, Stream},
 };
+use mime_guess::mime;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::convert::Infallible;
@@ -56,8 +61,8 @@ pub struct RunRequest {
 #[serde(rename_all = "camelCase")]
 pub struct RunSseRequest {
     pub app_name: String,
-    pub user_id: String,
-    pub session_id: String,
+    pub user_id: UserId,
+    pub session_id: SessionId,
     pub new_message: NewMessage,
     #[serde(default = "default_streaming_true")]
     pub streaming: bool,
@@ -69,7 +74,7 @@ pub struct RunSseRequest {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NewMessage {
-    pub role: String,
+    pub role: Role,
     pub parts: Vec<MessagePart>,
 }
 
@@ -188,10 +193,10 @@ fn build_content_with_attachments(
     text: &str,
     attachments: &[Attachment],
 ) -> Result<adk_core::Content, RuntimeError> {
-    let mut content = adk_core::Content::new("user");
+    let mut content = adk_core::Content::user();
 
     // Add the text part
-    content.parts.push(adk_core::Part::Text { text: text.to_string() });
+    content.parts.push(adk_core::Part::text(text.to_string()));
 
     // Add attachment parts
     for attachment in attachments {
@@ -208,8 +213,12 @@ fn build_content_with_attachments(
                     ));
                 }
                 content.parts.push(adk_core::Part::InlineData {
-                    mime_type: attachment.mime_type.clone(),
-                    data,
+                    mime_type: attachment
+                        .mime_type
+                        .clone()
+                        .parse()
+                        .unwrap_or(mime::APPLICATION_OCTET_STREAM),
+                    data: data.into(),
                 });
             }
             Err(e) => {
@@ -226,12 +235,12 @@ fn build_content_with_attachments(
 
 /// Build Content from message parts (for /run_sse endpoint)
 fn build_content_from_parts(parts: &[MessagePart]) -> Result<adk_core::Content, RuntimeError> {
-    let mut content = adk_core::Content::new("user");
+    let mut content = adk_core::Content::user();
 
     for part in parts {
         // Add text part if present
         if let Some(text) = &part.text {
-            content.parts.push(adk_core::Part::Text { text: text.clone() });
+            content.parts.push(adk_core::Part::text(text.clone()));
         }
 
         // Add inline data part if present
@@ -248,8 +257,12 @@ fn build_content_from_parts(parts: &[MessagePart]) -> Result<adk_core::Content, 
                         ));
                     }
                     content.parts.push(adk_core::Part::InlineData {
-                        mime_type: inline_data.mime_type.clone(),
-                        data,
+                        mime_type: inline_data
+                            .mime_type
+                            .clone()
+                            .parse()
+                            .unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
+                        data: data.into(),
                     });
                 }
                 Err(e) => {
@@ -287,8 +300,8 @@ pub async fn run_sse(
             .session_service
             .get(adk_session::GetRequest {
                 app_name: app_name.clone(),
-                user_id: user_id.clone(),
-                session_id: session_id.clone(),
+                user_id: UserId::new(user_id.clone()).unwrap(),
+                session_id: SessionId::new(session_id.clone()).unwrap(),
                 num_recent_events: None,
                 after: None,
             })
@@ -326,7 +339,7 @@ pub async fn run_sse(
 
         // Run agent
         let event_stream = runner
-            .run(user_id, session_id, content)
+            .run(UserId::new(user_id).unwrap(), SessionId::new(session_id).unwrap(), content)
             .await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to run agent".to_string()))?;
 
@@ -390,8 +403,8 @@ pub async fn run_sse_compat(
         .session_service
         .get(adk_session::GetRequest {
             app_name: app_name.clone(),
-            user_id: user_id.clone(),
-            session_id: session_id.clone(),
+            user_id: UserId::new(user_id.clone()).unwrap(),
+            session_id: SessionId::new(session_id.clone()).unwrap(),
             num_recent_events: None,
             after: None,
         })
@@ -404,8 +417,8 @@ pub async fn run_sse_compat(
             .session_service
             .create(adk_session::CreateRequest {
                 app_name: app_name.clone(),
-                user_id: user_id.clone(),
-                session_id: Some(session_id.clone()),
+                user_id: UserId::new(user_id.clone()).unwrap(),
+                session_id: Some(SessionId::new(session_id.clone()).unwrap()),
                 state: std::collections::HashMap::new(),
             })
             .await
@@ -442,7 +455,7 @@ pub async fn run_sse_compat(
 
     // Run agent with full content (text + inline data)
     let event_stream = runner
-        .run(user_id, session_id, content)
+        .run(UserId::new(user_id).unwrap(), SessionId::new(session_id).unwrap(), content)
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to run agent".to_string()))?;
 

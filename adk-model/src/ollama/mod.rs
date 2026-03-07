@@ -8,7 +8,7 @@
 //! use adk_model::ollama::{OllamaModel, OllamaConfig};
 //!
 //! let model = OllamaModel::new(OllamaConfig {
-//!     model: "llama3.2".into(),
+//!     model: "llama3.2"),
 //!     ..Default::default()
 //! })?;
 //! ```

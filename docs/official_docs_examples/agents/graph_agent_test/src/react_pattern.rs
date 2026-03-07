@@ -80,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
                 println!("🔄 Iteration {}: Continuing reasoning...", iteration);
             }
             
-            adk_core::Content::new("user").with_text(question)
+            adk_core::Content::user().with_text(question)
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
@@ -95,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
                                 println!("🔧 Tool called: {}", name);
                                 has_tool_calls = true;
                             }
-                            Part::Text { text } => {
+                            Part::Text(text) => {
                                 response.push_str(text);
                             }
                             _ => {}
@@ -153,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
     input.insert("question".to_string(), json!("What's the weather in Paris and what's 15 + 25?"));
 
     println!("🚀 Starting ReAct reasoning cycle...\n");
-    let result = graph.invoke(input, ExecutionConfig::new("react-1")).await?;
+    let result = graph.invoke(input, ExecutionConfig::new(SessionId::new("react-1").unwrap())).await?;
     
     println!("\n🎯 Final Results:");
     println!("Answer: {}", result.get("response").and_then(|v| v.as_str()).unwrap_or(""));

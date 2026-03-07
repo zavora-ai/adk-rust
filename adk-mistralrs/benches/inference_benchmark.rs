@@ -149,8 +149,8 @@ fn conversion_benchmark(c: &mut Criterion) {
 
     // Simple content conversion
     let simple_content = Content {
-        role: "user".to_string(),
-        parts: vec![Part::Text { text: "Hello, world!".to_string() }],
+        role: adk_core::Role::User,
+        parts: vec![Part::text("Hello, world!".to_string())],
     };
 
     group.bench_function("content_to_message_simple", |b| {
@@ -159,9 +159,9 @@ fn conversion_benchmark(c: &mut Criterion) {
 
     // Complex content with function call
     let complex_content = Content {
-        role: "model".to_string(),
+        role: adk_core::Role::Model,
         parts: vec![
-            Part::Text { text: "I'll help you with that.".to_string() },
+            Part::text("I'll help you with that.".to_string()),
             Part::FunctionCall {
                 id: Some("call_123".to_string()),
                 name: "get_weather".to_string(),
@@ -316,13 +316,13 @@ mod real_benchmarks {
     use tokio::runtime::Runtime;
 
     /// Benchmark inference with a small model.
-    /// Requires: microsoft/Phi-3.5-mini-instruct to be accessible
+    /// Requires: mistralai/Magistral-Small-2509 to be accessible
     fn inference_benchmark(c: &mut Criterion) {
         let rt = Runtime::new().unwrap();
 
         // Load model once for all benchmarks
         let model =
-            rt.block_on(async { MistralRsModel::from_hf("microsoft/Phi-3.5-mini-instruct").await });
+            rt.block_on(async { MistralRsModel::from_hf("mistralai/Magistral-Small-2509").await });
 
         let model = match model {
             Ok(m) => m,
@@ -342,8 +342,8 @@ mod real_benchmarks {
         group.bench_function("short_prompt", |b| {
             let request = LlmRequest {
                 contents: vec![Content {
-                    role: "user".to_string(),
-                    parts: vec![Part::Text { text: config.short_prompt.to_string() }],
+                    role: adk_core::Role::User,
+                    parts: vec![Part::text(config.short_prompt.to_string())],
                 }],
                 ..Default::default()
             };
@@ -358,8 +358,8 @@ mod real_benchmarks {
         group.bench_function("medium_prompt", |b| {
             let request = LlmRequest {
                 contents: vec![Content {
-                    role: "user".to_string(),
-                    parts: vec![Part::Text { text: config.medium_prompt.to_string() }],
+                    role: adk_core::Role::User,
+                    parts: vec![Part::text(config.medium_prompt.to_string())],
                 }],
                 ..Default::default()
             };
@@ -379,7 +379,7 @@ mod real_benchmarks {
 
         let model = rt.block_on(async {
             let config = MistralRsConfig::builder()
-                .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+                .model_source(ModelSource::huggingface("mistralai/Magistral-Small-2509"))
                 .isq(QuantizationLevel::Q4K)
                 .build();
             MistralRsModel::new(config).await
@@ -400,8 +400,8 @@ mod real_benchmarks {
         group.bench_function("q4k_short_prompt", |b| {
             let request = LlmRequest {
                 contents: vec![Content {
-                    role: "user".to_string(),
-                    parts: vec![Part::Text { text: "What is 2 + 2?".to_string() }],
+                    role: adk_core::Role::User,
+                    parts: vec![Part::text("What is 2 + 2?".to_string())],
                 }],
                 ..Default::default()
             };

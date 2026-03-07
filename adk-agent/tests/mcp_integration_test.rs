@@ -7,7 +7,7 @@
 use adk_agent::LlmAgentBuilder;
 use adk_core::{
     Agent, Content, InvocationContext, Part, ReadonlyContext, RunConfig, Session, State, Tool,
-    ToolContext,
+    ToolContext, types::AdkIdentity,
 };
 use adk_model::GeminiModel;
 use async_trait::async_trait;
@@ -17,16 +17,31 @@ use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 
-struct MockSession;
+use adk_core::types::{SessionId, UserId};
+
+struct MockSession {
+    id: SessionId,
+    user_id: UserId,
+}
+
+impl MockSession {
+    fn new() -> Self {
+        Self {
+            id: SessionId::new("mcp-session".to_string()).unwrap(),
+            user_id: UserId::new("mcp-user".to_string()).unwrap(),
+        }
+    }
+}
+
 impl Session for MockSession {
-    fn id(&self) -> &str {
-        "mcp-session"
+    fn id(&self) -> &SessionId {
+        &self.id
     }
     fn app_name(&self) -> &str {
         "mcp-app"
     }
-    fn user_id(&self) -> &str {
-        "mcp-user"
+    fn user_id(&self) -> &UserId {
+        &self.user_id
     }
     fn state(&self) -> &dyn State {
         &MockState
@@ -48,44 +63,38 @@ impl State for MockState {
 }
 
 struct MockContext {
+    identity: AdkIdentity,
     session: MockSession,
     user_content: Content,
+    metadata: HashMap<String, String>,
 }
 
 impl MockContext {
     fn new(text: &str) -> Self {
         Self {
-            session: MockSession,
+            identity: AdkIdentity::default(),
+            session: MockSession::new(),
             user_content: Content {
-                role: "user".to_string(),
-                parts: vec![Part::Text { text: text.to_string() }],
+                role: adk_core::Role::User,
+                parts: vec![Part::text(text.to_string())],
             },
+            metadata: HashMap::new(),
         }
     }
 }
 
 #[async_trait]
 impl ReadonlyContext for MockContext {
-    fn invocation_id(&self) -> &str {
-        "mcp-inv"
+    fn identity(&self) -> &AdkIdentity {
+        &self.identity
     }
-    fn agent_name(&self) -> &str {
-        "mcp-agent"
-    }
-    fn user_id(&self) -> &str {
-        "mcp-user"
-    }
-    fn app_name(&self) -> &str {
-        "mcp-app"
-    }
-    fn session_id(&self) -> &str {
-        "mcp-session"
-    }
-    fn branch(&self) -> &str {
-        "main"
-    }
+
     fn user_content(&self) -> &Content {
         &self.user_content
+    }
+
+    fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
     }
 }
 

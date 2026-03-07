@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
     adk_cli::console::run_console(
         Arc::new(loop_agent),
         "loop_app".to_string(),
-        "user1".to_string(),
+        adk_core::types::UserId::new("user1").unwrap(),
     )
     .await?;
 

@@ -40,7 +40,7 @@
 //!     .build()?;
 //!
 //! // Execute
-//! let result = agent.invoke(State::new(), ExecutionConfig::new("thread_1")).await?;
+//! let result = agent.invoke(State::new(), ExecutionConfig::new("thread_1".to_string())).await?;
 //! ```
 //!
 //! ## ReAct Pattern

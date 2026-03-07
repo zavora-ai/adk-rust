@@ -20,7 +20,9 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
+      with:
+        submodules: recursive
 
     - name: Free disk space
       run: |
@@ -28,21 +30,24 @@ jobs:
         sudo rm -rf /usr/share/dotnet
         df -h
 
-    # 1. Install Nix
-    - uses: cachix/install-nix-action@v30
+    # 1. Install Nix with experimental features
+    - uses: cachix/install-nix-action@v31
       with:
-        nix_path: nixpkgs=channel:nixos-unstable
+        extra_nix_config: |
+          experimental-features = nix-command flakes
+          trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= devenv.cachix.org-1:w1cLUi8dv3hnoSPGAuibQv+f9TZLr6cv/Hm9XgU50cw=
+          substituters = https://cache.nixos.org https://devenv.cachix.org
 
-    # 2. Use the 'devenv' cache (Crucial for devenv-nixpkgs)
-    - uses: cachix/cachix-action@v15
+    # 2. Use the 'devenv' cache
+    - uses: cachix/cachix-action@v16
       with:
         name: devenv
 
     # 3. Install devenv CLI
     - name: Install devenv.sh
-      run: nix profile install nixpkgs#devenv
+      run: nix profile add nixpkgs#devenv
 
-    - name: Cache Devenv/Cargo artifacts
+    - name: Cache Cargo artifacts
       uses: actions/cache@v4
       with:
         path: |
