@@ -36,7 +36,7 @@ fn test_llm_request_creation() {
 fn test_config_for_llm_creation() {
     // Test that config can be built for model creation
     let config = MistralRsConfig::builder()
-        .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+        .model_source(ModelSource::huggingface("mistralai/Magistral-Small-2509"))
         .temperature(0.7)
         .max_tokens(1024)
         .build();
@@ -53,7 +53,7 @@ fn test_config_for_llm_creation() {
 async fn test_llm_generate_content_integration() {
     // This test requires an actual model to be downloaded
     // It validates Property 1: Llm Trait Implementation Completeness
-    let model = MistralRsModel::from_hf("microsoft/Phi-3.5-mini-instruct")
+    let model = MistralRsModel::from_hf("mistralai/Magistral-Small-2509")
         .await
         .expect("Failed to load model");
 

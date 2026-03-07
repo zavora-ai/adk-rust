@@ -258,7 +258,7 @@ mod unit_tests {
             "phi".to_string(),
             MultiModelEntry {
                 model_type: MultiModelType::Plain {
-                    model_id: "microsoft/Phi-3.5-mini-instruct".to_string(),
+                    model_id: "mistralai/Magistral-Small-2509".to_string(),
                 },
                 in_situ_quant: None,
                 default: false,

@@ -31,7 +31,7 @@ use crate::tracing_utils::{
 /// ```rust,ignore
 /// use adk_mistralrs::{MistralRsModel, MistralRsConfig, ModelSource};
 ///
-/// let model = MistralRsModel::from_hf("microsoft/Phi-3.5-mini-instruct").await?;
+/// let model = MistralRsModel::from_hf("mistralai/Magistral-Small-2509").await?;
 /// ```
 pub struct MistralRsModel {
     /// The underlying mistral.rs model instance
@@ -53,7 +53,7 @@ impl MistralRsModel {
     ///
     /// ```rust,ignore
     /// let config = MistralRsConfig::builder()
-    ///     .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+    ///     .model_source(ModelSource::huggingface("mistralai/Magistral-Small-2509"))
     ///     .build();
     /// let model = MistralRsModel::new(config).await?;
     /// ```
@@ -176,12 +176,12 @@ impl MistralRsModel {
     ///
     /// # Arguments
     ///
-    /// * `model_id` - HuggingFace model ID (e.g., "microsoft/Phi-3.5-mini-instruct")
+    /// * `model_id` - HuggingFace model ID (e.g., "mistralai/Magistral-Small-2509")
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let model = MistralRsModel::from_hf("microsoft/Phi-3.5-mini-instruct").await?;
+    /// let model = MistralRsModel::from_hf("mistralai/Magistral-Small-2509").await?;
     /// ```
     pub async fn from_hf(model_id: &str) -> Result<Self> {
         let config =

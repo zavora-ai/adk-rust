@@ -25,7 +25,7 @@
 //! };
 //!
 //! let config = MistralRsConfig::builder()
-//!     .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+//!     .model_source(ModelSource::huggingface("mistralai/Magistral-Small-2509"))
 //!     .mcp_client(mcp_config)
 //!     .build();
 //! ```

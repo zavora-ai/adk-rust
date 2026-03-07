@@ -316,13 +316,13 @@ mod real_benchmarks {
     use tokio::runtime::Runtime;
 
     /// Benchmark inference with a small model.
-    /// Requires: microsoft/Phi-3.5-mini-instruct to be accessible
+    /// Requires: mistralai/Magistral-Small-2509 to be accessible
     fn inference_benchmark(c: &mut Criterion) {
         let rt = Runtime::new().unwrap();
 
         // Load model once for all benchmarks
         let model =
-            rt.block_on(async { MistralRsModel::from_hf("microsoft/Phi-3.5-mini-instruct").await });
+            rt.block_on(async { MistralRsModel::from_hf("mistralai/Magistral-Small-2509").await });
 
         let model = match model {
             Ok(m) => m,
@@ -379,7 +379,7 @@ mod real_benchmarks {
 
         let model = rt.block_on(async {
             let config = MistralRsConfig::builder()
-                .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+                .model_source(ModelSource::huggingface("mistralai/Magistral-Small-2509"))
                 .isq(QuantizationLevel::Q4K)
                 .build();
             MistralRsModel::new(config).await

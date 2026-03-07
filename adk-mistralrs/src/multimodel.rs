@@ -15,7 +15,7 @@
 //!
 //!     // Add models
 //!     let config1 = MistralRsConfig::builder()
-//!         .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+//!         .model_source(ModelSource::huggingface("mistralai/Magistral-Small-2509"))
 //!         .build();
 //!     multi_model.add_model("phi", config1).await?;
 //!
@@ -99,7 +99,7 @@ impl MistralRsMultiModel {
     ///
     /// ```rust,ignore
     /// let config = MistralRsConfig::builder()
-    ///     .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+    ///     .model_source(ModelSource::huggingface("mistralai/Magistral-Small-2509"))
     ///     .build();
     /// multi_model.add_model("phi", config).await?;
     /// ```
@@ -543,7 +543,7 @@ mod tests {
                 "in_situ_quant": "4"
             },
             "phi": {
-                "Plain": { "model_id": "microsoft/Phi-3.5-mini-instruct" }
+                "Plain": { "model_id": "mistralai/Magistral-Small-2509" }
             }
         }"#;
 

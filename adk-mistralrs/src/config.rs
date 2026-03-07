@@ -220,7 +220,7 @@ impl MistralRsConfigBuilder {
     /// use adk_mistralrs::{MistralRsConfig, McpClientConfig, McpServerConfig};
     ///
     /// let config = MistralRsConfig::builder()
-    ///     .model_source(ModelSource::huggingface("microsoft/Phi-3.5-mini-instruct"))
+    ///     .model_source(ModelSource::huggingface("mistralai/Magistral-Small-2509"))
     ///     .mcp_client(McpClientConfig::with_server(
     ///         McpServerConfig::process("Filesystem", "mcp-server-filesystem")
     ///             .with_args(vec!["--root".to_string(), "/tmp".to_string()])

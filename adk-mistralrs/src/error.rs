@@ -290,7 +290,7 @@ impl MistralRsError {
 
     /// Create a model not found error.
     pub fn model_not_found(path: impl Into<String>) -> Self {
-        let path = path.into();        let suggestion = "Verify the path exists and is accessible. For HuggingFace models, ensure the model ID is correct (e.g., 'microsoft/Phi-3.5-mini-instruct').".to_string();
+        let path = path.into();        let suggestion = "Verify the path exists and is accessible. For HuggingFace models, ensure the model ID is correct (e.g., 'mistralai/Magistral-Small-2509').".to_string();
         Self::ModelNotFound { path, suggestion }
     }
 
