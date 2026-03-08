@@ -13,6 +13,8 @@ pub struct SecurityConfig {
     pub request_timeout: Duration,
     /// Whether to include detailed error messages in responses (default: false for production)
     pub expose_error_details: bool,
+    /// Whether to expose admin-only debug endpoints when auth is configured.
+    pub expose_admin_debug: bool,
 }
 
 impl Default for SecurityConfig {
@@ -22,6 +24,7 @@ impl Default for SecurityConfig {
             max_body_size: 10 * 1024 * 1024, // 10MB
             request_timeout: Duration::from_secs(30),
             expose_error_details: false,
+            expose_admin_debug: false,
         }
     }
 }
@@ -34,6 +37,7 @@ impl SecurityConfig {
             max_body_size: 10 * 1024 * 1024,
             request_timeout: Duration::from_secs(60),
             expose_error_details: true,
+            expose_admin_debug: true,
         }
     }
 
@@ -44,6 +48,7 @@ impl SecurityConfig {
             max_body_size: 10 * 1024 * 1024,
             request_timeout: Duration::from_secs(30),
             expose_error_details: false,
+            expose_admin_debug: false,
         }
     }
 }

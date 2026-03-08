@@ -126,6 +126,14 @@ pub trait Artifacts: Send + Sync {
 #[async_trait]
 pub trait Memory: Send + Sync {
     async fn search(&self, query: &str) -> Result<Vec<MemoryEntry>>;
+
+    /// Verify backend connectivity.
+    ///
+    /// The default implementation succeeds, which is suitable for in-memory
+    /// implementations and adapters without an external dependency.
+    async fn health_check(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]

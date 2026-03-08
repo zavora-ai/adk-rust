@@ -71,4 +71,12 @@ pub trait ArtifactService: Send + Sync {
     async fn delete(&self, req: DeleteRequest) -> Result<()>;
     async fn list(&self, req: ListRequest) -> Result<ListResponse>;
     async fn versions(&self, req: VersionsRequest) -> Result<VersionsResponse>;
+
+    /// Verify backend connectivity.
+    ///
+    /// The default implementation succeeds, which is appropriate for
+    /// in-memory backends.
+    async fn health_check(&self) -> Result<()> {
+        Ok(())
+    }
 }

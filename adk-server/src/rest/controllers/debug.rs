@@ -1,6 +1,6 @@
 use crate::ServerConfig;
 use axum::{
-    Json,
+    Extension, Json,
     extract::{Path, State},
     http::StatusCode,
 };
@@ -24,11 +24,26 @@ pub struct GraphResponse {
     pub dot_src: String,
 }
 
+fn authorize_path_user_id(
+    request_context: &Option<adk_core::RequestContext>,
+    user_id: &str,
+) -> Result<(), StatusCode> {
+    match request_context {
+        Some(context) if context.user_id != user_id => Err(StatusCode::FORBIDDEN),
+        _ => Ok(()),
+    }
+}
+
 // ADK-Go compatible trace response (attributes map)
 pub async fn get_trace_by_event_id(
     State(controller): State<DebugController>,
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Path(event_id): Path<String>,
 ) -> Result<Json<HashMap<String, String>>, StatusCode> {
+    if request_context.is_some() && !controller.config.security.expose_admin_debug {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
     if let Some(exporter) = &controller.config.span_exporter {
         // First try direct lookup by event_id
         if let Some(attributes) = exporter.get_trace_by_event_id(&event_id) {
@@ -79,10 +94,20 @@ fn convert_to_span_data(attributes: &HashMap<String, String>) -> serde_json::Val
 // Get all spans for a session (UI-compatible format)
 pub async fn get_session_traces(
     State(controller): State<DebugController>,
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Path(session_id): Path<String>,
 ) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
     if let Some(exporter) = &controller.config.span_exporter {
         let traces = exporter.get_session_trace(&session_id);
+        if let Some(context) = request_context.as_ref() {
+            for trace in &traces {
+                if let Some(owner) = trace.get("adk.user_id") {
+                    if owner != &context.user_id {
+                        return Err(StatusCode::FORBIDDEN);
+                    }
+                }
+            }
+        }
         let span_data: Vec<serde_json::Value> = traces.iter().map(convert_to_span_data).collect();
         return Ok(Json(span_data));
     }
@@ -92,8 +117,11 @@ pub async fn get_session_traces(
 
 pub async fn get_graph(
     State(_controller): State<DebugController>,
-    Path((_app_name, _user_id, _session_id, _event_id)): Path<(String, String, String, String)>,
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
+    Path((_app_name, user_id, _session_id, _event_id)): Path<(String, String, String, String)>,
 ) -> Result<Json<GraphResponse>, StatusCode> {
+    authorize_path_user_id(&request_context, &user_id)?;
+
     // Stub: Return a simple DOT graph
     let dot_src = "digraph G { Agent -> User [label=\"response\"]; }".to_string();
     Ok(Json(GraphResponse { dot_src }))
@@ -102,6 +130,7 @@ pub async fn get_graph(
 /// Get evaluation sets for an app (stub - returns empty array)
 pub async fn get_eval_sets(
     State(_controller): State<DebugController>,
+    Extension(_request_context): Extension<Option<adk_core::RequestContext>>,
     Path(_app_name): Path<String>,
 ) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
     // Stub: Return empty array - eval sets not yet implemented
@@ -111,8 +140,11 @@ pub async fn get_eval_sets(
 /// Get event data by event_id - returns event with invocationId for trace linking
 pub async fn get_event(
     State(controller): State<DebugController>,
-    Path((app_name, _user_id, session_id, event_id)): Path<(String, String, String, String)>,
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
+    Path((app_name, user_id, session_id, event_id)): Path<(String, String, String, String)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    authorize_path_user_id(&request_context, &user_id)?;
+
     // Try to find trace data for this event_id
     if let Some(exporter) = &controller.config.span_exporter {
         let traces = exporter.get_session_trace(&session_id);

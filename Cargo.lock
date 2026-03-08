@@ -63,6 +63,8 @@ version = "0.3.2"
 dependencies = [
  "adk-core",
  "async-trait",
+ "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -468,6 +470,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -535,6 +538,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tower 0.4.13",
  "tower-http",
  "tracing",
@@ -14185,6 +14189,7 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

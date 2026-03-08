@@ -27,10 +27,12 @@
 //! - Cache intermediate results
 //! - Share binary data between agent turns
 
+pub mod file;
 pub mod inmemory;
 pub mod scoped;
 pub mod service;
 
+pub use file::FileArtifactService;
 pub use inmemory::InMemoryArtifactService;
 pub use scoped::ScopedArtifacts;
 pub use service::{

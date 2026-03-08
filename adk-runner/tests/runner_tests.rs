@@ -162,6 +162,7 @@ fn test_runner_creation() {
         context_cache_config: None,
         cache_capable: None,
         request_context: None,
+        cancellation_token: None,
     });
 
     assert!(runner.is_ok());
@@ -185,6 +186,7 @@ async fn test_runner_run() {
         context_cache_config: None,
         cache_capable: None,
         request_context: None,
+        cancellation_token: None,
     })
     .unwrap();
 
@@ -407,6 +409,7 @@ async fn test_plugin_callback_order_and_mutation() {
         context_cache_config: None,
         cache_capable: None,
         request_context: None,
+        cancellation_token: None,
     })
     .unwrap();
 
@@ -464,6 +467,7 @@ async fn test_plugin_error_propagates_from_on_user_message() {
         context_cache_config: None,
         cache_capable: None,
         request_context: None,
+        cancellation_token: None,
     })
     .unwrap();
 
@@ -513,6 +517,7 @@ async fn test_skill_injector_plugin_mutates_user_prompt() {
         context_cache_config: None,
         cache_capable: None,
         request_context: None,
+        cancellation_token: None,
     })
     .unwrap();
 
@@ -563,6 +568,7 @@ async fn test_runner_with_auto_skills_mutates_user_prompt() {
         context_cache_config: None,
         cache_capable: None,
         request_context: None,
+        cancellation_token: None,
     })
     .unwrap()
     .with_auto_skills(

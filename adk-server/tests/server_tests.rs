@@ -1,12 +1,14 @@
-use adk_server::create_app;
+use adk_artifact::InMemoryArtifactService;
+use adk_server::{RequestContextError, RequestContextExtractor, create_app};
 use adk_session::{
     CreateRequest, DeleteRequest, Event, GetRequest, ListRequest, Session, SessionService,
 };
 use adk_ui::{TOOL_ENVELOPE_VERSION, UI_DEFAULT_PROTOCOL, UI_PROTOCOL_CAPABILITIES};
 use async_trait::async_trait;
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{Request, StatusCode, request::Parts};
 use futures::stream;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -58,6 +60,35 @@ impl SessionService for MockSessionService {
 
     async fn append_event(&self, _session_id: &str, _event: Event) -> adk_core::Result<()> {
         Ok(())
+    }
+}
+
+struct UnhealthySessionService;
+
+#[async_trait]
+impl SessionService for UnhealthySessionService {
+    async fn create(&self, req: CreateRequest) -> adk_core::Result<Box<dyn Session>> {
+        MockSessionService.create(req).await
+    }
+
+    async fn get(&self, req: GetRequest) -> adk_core::Result<Box<dyn Session>> {
+        MockSessionService.get(req).await
+    }
+
+    async fn list(&self, req: ListRequest) -> adk_core::Result<Vec<Box<dyn Session>>> {
+        MockSessionService.list(req).await
+    }
+
+    async fn delete(&self, req: DeleteRequest) -> adk_core::Result<()> {
+        MockSessionService.delete(req).await
+    }
+
+    async fn append_event(&self, session_id: &str, event: Event) -> adk_core::Result<()> {
+        MockSessionService.append_event(session_id, event).await
+    }
+
+    async fn health_check(&self) -> adk_core::Result<()> {
+        Err(adk_core::AdkError::Session("backend unavailable".to_string()))
     }
 }
 
@@ -149,6 +180,31 @@ impl adk_core::Agent for StreamingTestAgent {
     }
 }
 
+struct HeaderExtractor;
+
+#[async_trait]
+impl RequestContextExtractor for HeaderExtractor {
+    async fn extract(
+        &self,
+        parts: &Parts,
+    ) -> Result<adk_core::RequestContext, RequestContextError> {
+        let value = parts
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .ok_or(RequestContextError::MissingAuth)?;
+        let user_id = value.strip_prefix("Bearer ").ok_or_else(|| {
+            RequestContextError::InvalidToken("expected bearer token".to_string())
+        })?;
+
+        Ok(adk_core::RequestContext {
+            user_id: user_id.to_string(),
+            scopes: vec!["read".to_string()],
+            metadata: HashMap::new(),
+        })
+    }
+}
+
 #[tokio::test]
 async fn test_health_check() {
     let config =
@@ -161,6 +217,147 @@ async fn test_health_check() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    let request_id = response.headers().get("x-request-id").unwrap().to_str().unwrap();
+    uuid::Uuid::parse_str(request_id).unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "healthy");
+    assert_eq!(json["components"]["session"]["status"], "healthy");
+    assert_eq!(json["components"]["memory"]["status"], "not_configured");
+    assert_eq!(json["components"]["artifact"]["status"], "not_configured");
+}
+
+#[tokio::test]
+async fn test_health_check_reports_unhealthy_backend() {
+    let config =
+        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(UnhealthySessionService));
+    let app = create_app(config);
+
+    let response = app
+        .oneshot(Request::builder().uri("/api/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "unhealthy");
+    assert_eq!(json["components"]["session"]["status"], "unhealthy");
+    assert_eq!(json["components"]["session"]["error"], "Session error: backend unavailable");
+}
+
+#[tokio::test]
+async fn test_session_route_requires_auth_when_extractor_is_configured() {
+    let config =
+        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(MockSessionService))
+            .with_request_context(Arc::new(HeaderExtractor));
+    let app = create_app(config);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/sessions/test-app/user123/session456")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_session_route_forbids_mismatched_authenticated_user() {
+    let config =
+        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(MockSessionService))
+            .with_request_context(Arc::new(HeaderExtractor));
+    let app = create_app(config);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/sessions/test-app/other-user/session456")
+                .header("authorization", "Bearer user123")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_create_session_uses_authenticated_user_id() {
+    let config =
+        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(MockSessionService))
+            .with_request_context(Arc::new(HeaderExtractor));
+    let app = create_app(config);
+
+    let body = serde_json::json!({
+        "appName": "test-app",
+        "userId": "spoofed-user",
+        "sessionId": "session456"
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sessions")
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer user123")
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["userId"], "user123");
+}
+
+#[tokio::test]
+async fn test_artifact_route_requires_auth_when_extractor_is_configured() {
+    let config =
+        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(MockSessionService))
+            .with_artifact_service(Arc::new(InMemoryArtifactService::new()))
+            .with_request_context(Arc::new(HeaderExtractor));
+    let app = create_app(config);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/sessions/test-app/user123/session456/artifacts")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_debug_route_requires_auth_when_extractor_is_configured() {
+    let config =
+        adk_server::ServerConfig::new(Arc::new(MockAgentLoader), Arc::new(MockSessionService))
+            .with_request_context(Arc::new(HeaderExtractor));
+    let app = create_app(config);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/debug/trace/session/session456")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

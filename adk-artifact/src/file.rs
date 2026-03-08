@@ -1,0 +1,285 @@
+use crate::service::*;
+use adk_core::{Part, Result};
+use async_trait::async_trait;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::fs;
+
+const USER_SCOPED_DIR: &str = "_user_scoped_";
+
+/// Persist artifacts on the local filesystem.
+pub struct FileArtifactService {
+    base_dir: PathBuf,
+}
+
+impl FileArtifactService {
+    /// Create a new filesystem-backed artifact service rooted at `base_dir`.
+    pub fn new(base_dir: impl Into<PathBuf>) -> Self {
+        Self { base_dir: base_dir.into() }
+    }
+
+    fn validate_file_name(file_name: &str) -> Result<()> {
+        if file_name.is_empty() {
+            return Err(adk_core::AdkError::Artifact(
+                "invalid artifact file name: empty name".to_string(),
+            ));
+        }
+
+        if file_name.contains('/')
+            || file_name.contains('\\')
+            || file_name == "."
+            || file_name == ".."
+            || file_name.contains("..")
+        {
+            return Err(adk_core::AdkError::Artifact(format!(
+                "invalid artifact file name '{}': path separators and traversal patterns are not allowed",
+                file_name
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn is_user_scoped(file_name: &str) -> bool {
+        file_name.starts_with("user:")
+    }
+
+    fn artifact_dir(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        file_name: &str,
+    ) -> PathBuf {
+        if Self::is_user_scoped(file_name) {
+            self.base_dir.join(app_name).join(user_id).join(USER_SCOPED_DIR).join(file_name)
+        } else {
+            self.base_dir.join(app_name).join(user_id).join(session_id).join(file_name)
+        }
+    }
+
+    fn version_path(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        file_name: &str,
+        version: i64,
+    ) -> PathBuf {
+        self.artifact_dir(app_name, user_id, session_id, file_name).join(format!("v{version}.json"))
+    }
+
+    async fn read_versions(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        file_name: &str,
+    ) -> Result<Vec<i64>> {
+        let dir = self.artifact_dir(app_name, user_id, session_id, file_name);
+        let mut entries = match fs::read_dir(&dir).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(adk_core::AdkError::Artifact("artifact not found".into()));
+            }
+            Err(error) => return Err(error.into()),
+        };
+
+        let mut versions = Vec::new();
+        while let Some(entry) = entries.next_entry().await? {
+            let Some(file_name) = entry.file_name().to_str().map(ToString::to_string) else {
+                continue;
+            };
+            let Some(raw) =
+                file_name.strip_prefix('v').and_then(|value| value.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            if let Ok(version) = raw.parse::<i64>() {
+                versions.push(version);
+            }
+        }
+
+        if versions.is_empty() {
+            return Err(adk_core::AdkError::Artifact("artifact not found".into()));
+        }
+
+        versions.sort_by(|left, right| right.cmp(left));
+        Ok(versions)
+    }
+
+    async fn list_scope_dir(path: &Path) -> Result<BTreeSet<String>> {
+        let mut names = BTreeSet::new();
+        let mut entries = match fs::read_dir(path).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(names),
+            Err(error) => return Err(error.into()),
+        };
+
+        while let Some(entry) = entries.next_entry().await? {
+            if entry.file_type().await?.is_dir() {
+                if let Some(name) = entry.file_name().to_str() {
+                    names.insert(name.to_string());
+                }
+            }
+        }
+
+        Ok(names)
+    }
+}
+
+#[async_trait]
+impl ArtifactService for FileArtifactService {
+    async fn save(&self, req: SaveRequest) -> Result<SaveResponse> {
+        Self::validate_file_name(&req.file_name)?;
+
+        let version = match req.version {
+            Some(version) => version,
+            None => self
+                .read_versions(&req.app_name, &req.user_id, &req.session_id, &req.file_name)
+                .await
+                .map(|versions| versions[0] + 1)
+                .unwrap_or(1),
+        };
+
+        let dir = self.artifact_dir(&req.app_name, &req.user_id, &req.session_id, &req.file_name);
+        fs::create_dir_all(&dir).await?;
+        let path = self.version_path(
+            &req.app_name,
+            &req.user_id,
+            &req.session_id,
+            &req.file_name,
+            version,
+        );
+        let payload = serde_json::to_vec(&req.part)
+            .map_err(|error| adk_core::AdkError::Artifact(error.to_string()))?;
+        fs::write(path, payload).await?;
+
+        Ok(SaveResponse { version })
+    }
+
+    async fn load(&self, req: LoadRequest) -> Result<LoadResponse> {
+        Self::validate_file_name(&req.file_name)?;
+
+        let version = match req.version {
+            Some(version) => version,
+            None => {
+                self.read_versions(&req.app_name, &req.user_id, &req.session_id, &req.file_name)
+                    .await?[0]
+            }
+        };
+
+        let payload = fs::read(self.version_path(
+            &req.app_name,
+            &req.user_id,
+            &req.session_id,
+            &req.file_name,
+            version,
+        ))
+        .await
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                adk_core::AdkError::Artifact("artifact not found".into())
+            } else {
+                error.into()
+            }
+        })?;
+
+        let part = serde_json::from_slice::<Part>(&payload)
+            .map_err(|error| adk_core::AdkError::Artifact(error.to_string()))?;
+
+        Ok(LoadResponse { part })
+    }
+
+    async fn delete(&self, req: DeleteRequest) -> Result<()> {
+        Self::validate_file_name(&req.file_name)?;
+
+        if let Some(version) = req.version {
+            let path = self.version_path(
+                &req.app_name,
+                &req.user_id,
+                &req.session_id,
+                &req.file_name,
+                version,
+            );
+            match fs::remove_file(path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        } else {
+            let dir =
+                self.artifact_dir(&req.app_name, &req.user_id, &req.session_id, &req.file_name);
+            match fs::remove_dir_all(dir).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn list(&self, req: ListRequest) -> Result<ListResponse> {
+        let session_dir =
+            self.base_dir.join(&req.app_name).join(&req.user_id).join(&req.session_id);
+        let user_dir = self.base_dir.join(&req.app_name).join(&req.user_id).join(USER_SCOPED_DIR);
+
+        let mut names = Self::list_scope_dir(&session_dir).await?;
+        names.extend(Self::list_scope_dir(&user_dir).await?);
+
+        Ok(ListResponse { file_names: names.into_iter().collect() })
+    }
+
+    async fn versions(&self, req: VersionsRequest) -> Result<VersionsResponse> {
+        Self::validate_file_name(&req.file_name)?;
+        let versions = self
+            .read_versions(&req.app_name, &req.user_id, &req.session_id, &req.file_name)
+            .await?;
+        Ok(VersionsResponse { versions })
+    }
+
+    async fn health_check(&self) -> Result<()> {
+        fs::create_dir_all(&self.base_dir).await?;
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+        let path = self.base_dir.join(format!(".healthcheck-{nonce}"));
+        fs::write(&path, b"ok").await?;
+        fs::remove_file(path).await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn user_scoped_artifacts_are_visible_across_sessions() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let service = FileArtifactService::new(tempdir.path());
+
+        service
+            .save(SaveRequest {
+                app_name: "app".into(),
+                user_id: "user".into(),
+                session_id: "s1".into(),
+                file_name: "user:shared.txt".into(),
+                part: Part::Text { text: "hello".into() },
+                version: None,
+            })
+            .await
+            .unwrap();
+
+        let list = service
+            .list(ListRequest {
+                app_name: "app".into(),
+                user_id: "user".into(),
+                session_id: "s2".into(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(list.file_names, vec!["user:shared.txt".to_string()]);
+    }
+}

@@ -365,6 +365,7 @@ pub async fn run_sse(
             context_cache_config: None,
             cache_capable: None,
             request_context,
+            cancellation_token: None,
         })
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create runner".to_string()))?;
 
@@ -498,6 +499,7 @@ pub async fn run_sse_compat(
         context_cache_config: None,
         cache_capable: None,
         request_context,
+        cancellation_token: None,
     })
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create runner".to_string()))?;
 

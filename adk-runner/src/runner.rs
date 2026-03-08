@@ -9,6 +9,7 @@ use adk_session::SessionService;
 use adk_skill::{SkillInjector, SkillInjectorConfig};
 use async_stream::stream;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 pub struct RunnerConfig {
@@ -37,6 +38,8 @@ pub struct RunnerConfig {
     /// When set, the runner passes it to `InvocationContext` so that
     /// `user_scopes()` and `user_id()` reflect the authenticated identity.
     pub request_context: Option<adk_core::RequestContext>,
+    /// Optional cooperative cancellation token for externally managed runs.
+    pub cancellation_token: Option<CancellationToken>,
 }
 
 pub struct Runner {
@@ -53,6 +56,7 @@ pub struct Runner {
     cache_capable: Option<Arc<dyn CacheCapable>>,
     cache_manager: Option<Arc<tokio::sync::Mutex<CacheManager>>>,
     request_context: Option<adk_core::RequestContext>,
+    cancellation_token: Option<CancellationToken>,
 }
 
 impl Runner {
@@ -75,6 +79,7 @@ impl Runner {
             cache_capable: config.cache_capable,
             cache_manager,
             request_context: config.request_context,
+            cancellation_token: config.cancellation_token,
         })
     }
 
@@ -116,6 +121,7 @@ impl Runner {
         let cache_capable = self.cache_capable.clone();
         let cache_manager_ref = self.cache_manager.clone();
         let request_context = self.request_context.clone();
+        let cancellation_token = self.cancellation_token.clone();
 
         let s = stream! {
             // Get or create session
@@ -369,6 +375,8 @@ impl Runner {
                 "gcp.vertex.agent.session_id" = %session_id,
                 "gcp.vertex.agent.event_id" = %invocation_id, // Use invocation_id as event_id for agent spans
                 "gen_ai.conversation.id" = %session_id,
+                "adk.app_name" = %app_name,
+                "adk.user_id" = %user_id,
                 "agent.name" = %agent_to_run.name(),
                 "adk.skills.selected_name" = %selected_skill_name,
                 "adk.skills.selected_id" = %selected_skill_id
@@ -389,7 +397,17 @@ impl Runner {
             use futures::StreamExt;
             let mut transfer_target: Option<String> = None;
 
-            while let Some(result) = agent_stream.next().await {
+            while let Some(result) = {
+                if let Some(token) = cancellation_token.as_ref() {
+                    if token.is_cancelled() {
+                        if let Some(manager) = plugin_manager.as_ref() {
+                            manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                        }
+                        return;
+                    }
+                }
+                agent_stream.next().await
+            } {
                 match result {
                     Ok(event) => {
                         let mut event = event;
@@ -546,7 +564,17 @@ impl Runner {
                 };
 
                 // Stream events from the transferred agent, capturing any further transfer
-                while let Some(result) = transfer_stream.next().await {
+                while let Some(result) = {
+                    if let Some(token) = cancellation_token.as_ref() {
+                        if token.is_cancelled() {
+                            if let Some(manager) = plugin_manager.as_ref() {
+                                manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                            }
+                            return;
+                        }
+                    }
+                    transfer_stream.next().await
+                } {
                     match result {
                         Ok(event) => {
                             let mut event = event;

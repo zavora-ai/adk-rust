@@ -30,11 +30,13 @@
 //! ```
 
 use adk_artifact::ArtifactService;
-use adk_core::{Agent, AgentLoader, Result, RunConfig, StreamingMode};
-use adk_server::{ServerConfig, create_app};
-use adk_session::InMemorySessionService;
+use adk_core::{Agent, AgentLoader, Memory, Result, RunConfig, StreamingMode};
+use adk_server::{
+    RequestContextExtractor, SecurityConfig, ServerConfig, create_app, shutdown_signal,
+};
+use adk_session::{InMemorySessionService, SessionService};
 use clap::{Parser, Subcommand};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 /// CLI arguments for the launcher
 #[derive(Parser)]
@@ -90,14 +92,29 @@ impl AgentLoader for SingleAgentLoader {
 pub struct Launcher {
     agent: Arc<dyn Agent>,
     app_name: Option<String>,
+    session_service: Option<Arc<dyn SessionService>>,
     artifact_service: Option<Arc<dyn ArtifactService>>,
+    memory_service: Option<Arc<dyn Memory>>,
+    security_config: Option<SecurityConfig>,
+    request_context_extractor: Option<Arc<dyn RequestContextExtractor>>,
+    shutdown_grace_period: Duration,
     run_config: Option<RunConfig>,
 }
 
 impl Launcher {
     /// Create a new launcher with the given agent.
     pub fn new(agent: Arc<dyn Agent>) -> Self {
-        Self { agent, app_name: None, artifact_service: None, run_config: None }
+        Self {
+            agent,
+            app_name: None,
+            session_service: None,
+            artifact_service: None,
+            memory_service: None,
+            security_config: None,
+            request_context_extractor: None,
+            shutdown_grace_period: Duration::from_secs(30),
+            run_config: None,
+        }
     }
 
     /// Set a custom application name (defaults to agent name).
@@ -109,6 +126,39 @@ impl Launcher {
     /// Set a custom artifact service.
     pub fn with_artifact_service(mut self, service: Arc<dyn ArtifactService>) -> Self {
         self.artifact_service = Some(service);
+        self
+    }
+
+    /// Set a custom session service.
+    pub fn with_session_service(mut self, service: Arc<dyn SessionService>) -> Self {
+        self.session_service = Some(service);
+        self
+    }
+
+    /// Set a custom memory service.
+    pub fn with_memory_service(mut self, service: Arc<dyn Memory>) -> Self {
+        self.memory_service = Some(service);
+        self
+    }
+
+    /// Set custom server security settings.
+    pub fn with_security_config(mut self, config: SecurityConfig) -> Self {
+        self.security_config = Some(config);
+        self
+    }
+
+    /// Set a request context extractor for authenticated deployments.
+    pub fn with_request_context_extractor(
+        mut self,
+        extractor: Arc<dyn RequestContextExtractor>,
+    ) -> Self {
+        self.request_context_extractor = Some(extractor);
+        self
+    }
+
+    /// Set the maximum graceful shutdown window for the web server.
+    pub fn with_shutdown_grace_period(mut self, grace_period: Duration) -> Self {
+        self.shutdown_grace_period = grace_period;
         self
     }
 
@@ -134,7 +184,7 @@ impl Launcher {
     /// Run in interactive console mode.
     async fn run_console(self) -> Result<()> {
         use adk_runner::{Runner, RunnerConfig};
-        use adk_session::{CreateRequest, SessionService};
+        use adk_session::CreateRequest;
         use futures::StreamExt;
         use std::collections::HashMap;
         use std::io::{self, BufRead, Write};
@@ -142,7 +192,8 @@ impl Launcher {
         let app_name = self.app_name.unwrap_or_else(|| self.agent.name().to_string());
         let user_id = "user".to_string();
 
-        let session_service = Arc::new(InMemorySessionService::new());
+        let session_service =
+            self.session_service.unwrap_or_else(|| Arc::new(InMemorySessionService::new()));
 
         // Create session
         let session = session_service
@@ -169,6 +220,7 @@ impl Launcher {
             context_cache_config: None,
             cache_capable: None,
             request_context: None,
+            cancellation_token: None,
         })?;
 
         println!("🤖 Agent ready! Type your questions (or 'exit' to quit).\n");
@@ -259,11 +311,24 @@ impl Launcher {
             }
         };
 
-        let session_service = Arc::new(InMemorySessionService::new());
+        let session_service =
+            self.session_service.unwrap_or_else(|| Arc::new(InMemorySessionService::new()));
         let agent_loader = Arc::new(SingleAgentLoader::new(self.agent));
 
         let mut config = ServerConfig::new(agent_loader, session_service)
             .with_artifact_service_opt(self.artifact_service);
+
+        if let Some(memory_service) = self.memory_service {
+            config = config.with_memory_service(memory_service);
+        }
+
+        if let Some(security) = self.security_config {
+            config = config.with_security(security);
+        }
+
+        if let Some(extractor) = self.request_context_extractor {
+            config = config.with_request_context(extractor);
+        }
 
         if let Some(exporter) = span_exporter {
             config = config.with_span_exporter(exporter);
@@ -278,7 +343,46 @@ impl Launcher {
         println!("📱 Open http://localhost:{} in your browser", port);
         println!("Press Ctrl+C to stop\n");
 
-        axum::serve(listener, app).await?;
+        let server = axum::serve(listener, app);
+        let grace_period = self.shutdown_grace_period;
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            let _ = shutdown_tx.send(true);
+        });
+
+        let mut graceful_rx = shutdown_rx.clone();
+        let graceful = server.with_graceful_shutdown(async move {
+            loop {
+                if *graceful_rx.borrow() {
+                    break;
+                }
+                if graceful_rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let mut deadline_rx = shutdown_rx.clone();
+        tokio::select! {
+            result = graceful => {
+                result?;
+            }
+            _ = async move {
+                loop {
+                    if *deadline_rx.borrow() {
+                        break;
+                    }
+                    if deadline_rx.changed().await.is_err() {
+                        return;
+                    }
+                }
+                tokio::time::sleep(grace_period).await;
+            } => {
+                eprintln!("Warning: shutdown grace period expired; exiting with active connections");
+            }
+        }
 
         Ok(())
     }

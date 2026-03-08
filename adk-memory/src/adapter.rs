@@ -63,4 +63,8 @@ impl adk_core::Memory for MemoryServiceAdapter {
             .map(|m| adk_core::MemoryEntry { content: m.content, author: m.author })
             .collect())
     }
+
+    async fn health_check(&self) -> adk_core::Result<()> {
+        self.inner.health_check().await
+    }
 }

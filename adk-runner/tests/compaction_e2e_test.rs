@@ -131,6 +131,7 @@ async fn test_e2e_compaction_with_inmemory_session() {
         context_cache_config: None,
         cache_capable: None,
         request_context: None,
+        cancellation_token: None,
     })
     .unwrap();
 

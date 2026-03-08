@@ -45,4 +45,5 @@ pub use auth_bridge::{RequestContext, RequestContextError, RequestContextExtract
 pub use config::{SecurityConfig, ServerConfig};
 pub use rest::{
     A2aController, RuntimeController, SessionController, create_app, create_app_with_a2a,
+    shutdown_signal,
 };

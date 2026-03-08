@@ -1,5 +1,5 @@
 use axum::{
-    Json,
+    Extension, Json,
     extract::{Path, State},
     http::StatusCode,
 };
@@ -41,6 +41,24 @@ impl SessionController {
     }
 }
 
+fn authorize_user_id(
+    request_context: &Option<adk_core::RequestContext>,
+    user_id: &str,
+) -> Result<String, StatusCode> {
+    match request_context {
+        Some(context) if context.user_id != user_id => Err(StatusCode::FORBIDDEN),
+        Some(context) => Ok(context.user_id.clone()),
+        None => Ok(user_id.to_string()),
+    }
+}
+
+fn effective_user_id(request_context: &Option<adk_core::RequestContext>, user_id: &str) -> String {
+    request_context
+        .as_ref()
+        .map(|context| context.user_id.clone())
+        .unwrap_or_else(|| user_id.to_string())
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct CreateSessionRequest {
     #[serde(rename = "appName")]
@@ -64,11 +82,14 @@ pub struct SessionResponse {
 
 pub async fn create_session(
     State(controller): State<SessionController>,
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<Json<SessionResponse>, StatusCode> {
+    let user_id = effective_user_id(&request_context, &req.user_id);
+
     info!(
         app_name = %req.app_name,
-        user_id = %req.user_id,
+        user_id = %user_id,
         session_id = ?req.session_id,
         "POST /sessions - Creating session"
     );
@@ -80,7 +101,7 @@ pub async fn create_session(
         .session_service
         .create(adk_session::CreateRequest {
             app_name: req.app_name.clone(),
-            user_id: req.user_id.clone(),
+            user_id,
             session_id: Some(session_id),
             state: std::collections::HashMap::new(),
         })
@@ -96,8 +117,11 @@ pub async fn create_session(
 
 pub async fn get_session(
     State(controller): State<SessionController>,
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Path((app_name, user_id, session_id)): Path<(String, String, String)>,
 ) -> Result<Json<SessionResponse>, StatusCode> {
+    let user_id = authorize_user_id(&request_context, &user_id)?;
+
     let session = controller
         .session_service
         .get(adk_session::GetRequest {
@@ -115,8 +139,11 @@ pub async fn get_session(
 
 pub async fn delete_session(
     State(controller): State<SessionController>,
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Path((app_name, user_id, session_id)): Path<(String, String, String)>,
 ) -> Result<StatusCode, StatusCode> {
+    let user_id = authorize_user_id(&request_context, &user_id)?;
+
     controller
         .session_service
         .delete(adk_session::DeleteRequest { app_name, user_id, session_id })
@@ -183,16 +210,18 @@ pub struct SessionPathParams {
 /// POST /apps/{app_name}/users/{user_id}/sessions/{session_id}
 pub async fn create_session_from_path(
     State(controller): State<SessionController>,
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Path(params): Path<SessionPathParams>,
     body: Option<Json<CreateSessionBodyRequest>>,
 ) -> Result<Json<SessionResponse>, StatusCode> {
+    let user_id = authorize_user_id(&request_context, &params.user_id)?;
     let session_id = params.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let session = controller
         .session_service
         .create(adk_session::CreateRequest {
             app_name: params.app_name.clone(),
-            user_id: params.user_id.clone(),
+            user_id,
             session_id: Some(session_id),
             state: match body {
                 Some(b) => {
@@ -215,15 +244,17 @@ pub async fn create_session_from_path(
 /// Get session from URL path parameters (adk-go compatible)
 pub async fn get_session_from_path(
     State(controller): State<SessionController>,
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Path(params): Path<SessionPathParams>,
 ) -> Result<Json<SessionResponse>, StatusCode> {
     let session_id = params.session_id.ok_or(StatusCode::BAD_REQUEST)?;
+    let user_id = authorize_user_id(&request_context, &params.user_id)?;
 
     let session = controller
         .session_service
         .get(adk_session::GetRequest {
             app_name: params.app_name,
-            user_id: params.user_id,
+            user_id,
             session_id,
             num_recent_events: None,
             after: None,
@@ -237,17 +268,15 @@ pub async fn get_session_from_path(
 /// Delete session from URL path parameters (adk-go compatible)
 pub async fn delete_session_from_path(
     State(controller): State<SessionController>,
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Path(params): Path<SessionPathParams>,
 ) -> Result<StatusCode, StatusCode> {
     let session_id = params.session_id.ok_or(StatusCode::BAD_REQUEST)?;
+    let user_id = authorize_user_id(&request_context, &params.user_id)?;
 
     controller
         .session_service
-        .delete(adk_session::DeleteRequest {
-            app_name: params.app_name,
-            user_id: params.user_id,
-            session_id,
-        })
+        .delete(adk_session::DeleteRequest { app_name: params.app_name, user_id, session_id })
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -257,19 +286,18 @@ pub async fn delete_session_from_path(
 /// List sessions for a user (adk-go compatible)
 pub async fn list_sessions(
     State(controller): State<SessionController>,
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Path(params): Path<SessionPathParams>,
 ) -> Result<Json<Vec<SessionResponse>>, StatusCode> {
-    tracing::info!(
-        "list_sessions called with app_name: {}, user_id: {}",
-        params.app_name,
-        params.user_id
-    );
+    let user_id = authorize_user_id(&request_context, &params.user_id)?;
+
+    tracing::info!("list_sessions called with app_name: {}, user_id: {}", params.app_name, user_id);
 
     let sessions = controller
         .session_service
         .list(adk_session::ListRequest {
             app_name: params.app_name.clone(),
-            user_id: params.user_id.clone(),
+            user_id,
             limit: None,
             offset: None,
         })

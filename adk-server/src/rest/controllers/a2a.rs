@@ -1,8 +1,8 @@
 use crate::ServerConfig;
 use crate::a2a::{
-    AgentCard, Executor, ExecutorConfig, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
-    MessageSendParams, Task, TaskState, TaskStatus, TasksCancelParams, TasksGetParams, UpdateEvent,
-    build_agent_card, jsonrpc,
+    AgentCard, Executor, ExecutorConfig, JsonRpcError, JsonRpcRequest, JsonRpcResponse, Message,
+    MessageSendParams, Task, TaskState, TaskStatus, TaskStatusUpdateEvent, TasksCancelParams,
+    TasksGetParams, UpdateEvent, build_agent_card, jsonrpc,
 };
 use adk_runner::RunnerConfig;
 use axum::{
@@ -16,7 +16,8 @@ use axum::{
 use futures::stream::Stream;
 use serde_json::Value;
 use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 /// In-memory task storage
 #[derive(Default)]
@@ -42,12 +43,26 @@ impl TaskStore {
     }
 }
 
+#[derive(Clone)]
+struct ActiveTask {
+    token: CancellationToken,
+    abort_handle: tokio::task::AbortHandle,
+    completion: Arc<Notify>,
+    context_id: String,
+}
+
+enum StreamTaskMessage {
+    Update(UpdateEvent),
+    Error(String),
+}
+
 /// Controller for A2A protocol endpoints
 #[derive(Clone)]
 pub struct A2aController {
     config: ServerConfig,
     agent_card: AgentCard,
     task_store: Arc<TaskStore>,
+    active_tasks: Arc<Mutex<HashMap<String, ActiveTask>>>,
 }
 
 impl A2aController {
@@ -56,8 +71,167 @@ impl A2aController {
         let invoke_url = format!("{}/a2a", base_url.trim_end_matches('/'));
         let agent_card = build_agent_card(root_agent.as_ref(), &invoke_url);
 
-        Self { config, agent_card, task_store: Arc::new(TaskStore::new()) }
+        Self {
+            config,
+            agent_card,
+            task_store: Arc::new(TaskStore::new()),
+            active_tasks: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
+}
+
+fn build_runner_config(
+    controller: &A2aController,
+    root_agent: Arc<dyn adk_core::Agent>,
+    cancellation_token: Option<CancellationToken>,
+) -> Arc<RunnerConfig> {
+    Arc::new(RunnerConfig {
+        app_name: root_agent.name().to_string(),
+        agent: root_agent,
+        session_service: controller.config.session_service.clone(),
+        artifact_service: controller.config.artifact_service.clone(),
+        memory_service: controller.config.memory_service.clone(),
+        plugin_manager: None,
+        run_config: None,
+        compaction_config: None,
+        context_cache_config: None,
+        cache_capable: None,
+        request_context: None,
+        cancellation_token,
+    })
+}
+
+fn build_task_from_events(task_id: &str, context_id: &str, events: &[UpdateEvent]) -> Task {
+    let mut task = Task {
+        id: task_id.to_string(),
+        context_id: Some(context_id.to_string()),
+        status: TaskStatus { state: TaskState::Completed, message: None },
+        artifacts: Some(vec![]),
+        history: None,
+    };
+
+    for event in events {
+        match event {
+            UpdateEvent::TaskStatusUpdate(status) => {
+                task.status = status.status.clone();
+            }
+            UpdateEvent::TaskArtifactUpdate(artifact) => {
+                if let Some(ref mut artifacts) = task.artifacts {
+                    artifacts.push(artifact.artifact.clone());
+                }
+            }
+        }
+    }
+
+    task
+}
+
+fn build_failed_task(task_id: &str, context_id: &str, message: impl Into<String>) -> Task {
+    Task {
+        id: task_id.to_string(),
+        context_id: Some(context_id.to_string()),
+        status: TaskStatus { state: TaskState::Failed, message: Some(message.into()) },
+        artifacts: None,
+        history: None,
+    }
+}
+
+fn build_canceled_task(task_id: &str, context_id: &str) -> Task {
+    Task {
+        id: task_id.to_string(),
+        context_id: Some(context_id.to_string()),
+        status: TaskStatus { state: TaskState::Canceled, message: None },
+        artifacts: None,
+        history: None,
+    }
+}
+
+fn sanitize_internal_error(config: &ServerConfig, error: &adk_core::AdkError) -> String {
+    if config.security.expose_error_details {
+        error.to_string()
+    } else {
+        "Internal server error".to_string()
+    }
+}
+
+async fn start_task(
+    controller: &A2aController,
+    context_id: String,
+    task_id: String,
+    message: Message,
+    stream_updates: bool,
+) -> (oneshot::Receiver<adk_core::Result<Task>>, Option<mpsc::Receiver<StreamTaskMessage>>) {
+    let token = CancellationToken::new();
+    let completion = Arc::new(Notify::new());
+    let (task_tx, task_rx) = oneshot::channel();
+    let (stream_tx, stream_rx) = if stream_updates {
+        let (tx, rx) = mpsc::channel(32);
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+
+    let root_agent = controller.config.agent_loader.root_agent();
+    let executor = Executor::new(ExecutorConfig {
+        app_name: root_agent.name().to_string(),
+        runner_config: build_runner_config(controller, root_agent, Some(token.clone())),
+        cancellation_token: Some(token.clone()),
+    });
+
+    let controller_clone = controller.clone();
+    let completion_clone = completion.clone();
+    let task_id_for_task = task_id.clone();
+    let context_id_for_task = context_id.clone();
+    let stream_tx_for_task = stream_tx.clone();
+
+    let join_handle = tokio::spawn(async move {
+        let result = executor.execute(&context_id_for_task, &task_id_for_task, &message).await;
+
+        match result {
+            Ok(events) => {
+                if let Some(sender) = stream_tx_for_task {
+                    for event in &events {
+                        if sender.send(StreamTaskMessage::Update(event.clone())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+
+                let task = build_task_from_events(&task_id_for_task, &context_id_for_task, &events);
+                controller_clone.task_store.store(task.clone()).await;
+                let _ = task_tx.send(Ok(task));
+            }
+            Err(error) => {
+                if let Some(sender) = stream_tx_for_task {
+                    let _ = sender
+                        .send(StreamTaskMessage::Error(sanitize_internal_error(
+                            &controller_clone.config,
+                            &error,
+                        )))
+                        .await;
+                }
+                controller_clone
+                    .task_store
+                    .store(build_failed_task(
+                        &task_id_for_task,
+                        &context_id_for_task,
+                        error.to_string(),
+                    ))
+                    .await;
+                let _ = task_tx.send(Err(error));
+            }
+        }
+
+        controller_clone.active_tasks.lock().await.remove(&task_id_for_task);
+        completion_clone.notify_waiters();
+    });
+
+    controller.active_tasks.lock().await.insert(
+        task_id,
+        ActiveTask { token, abort_handle: join_handle.abort_handle(), completion, context_id },
+    );
+
+    (task_rx, stream_rx)
 }
 
 /// GET /.well-known/agent.json - Serve the agent card
@@ -168,28 +342,23 @@ fn create_message_stream(
             .clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        let root_agent = controller.config.agent_loader.root_agent();
+        let (_task_rx, maybe_stream_rx) = start_task(
+            &controller,
+            context_id.clone(),
+            task_id.clone(),
+            params.message.clone(),
+            true,
+        )
+        .await;
 
-        let executor = Executor::new(ExecutorConfig {
-            app_name: root_agent.name().to_string(),
-            runner_config: Arc::new(RunnerConfig {
-                app_name: root_agent.name().to_string(),
-                agent: root_agent,
-                session_service: controller.config.session_service.clone(),
-                artifact_service: controller.config.artifact_service.clone(),
-                memory_service: controller.config.memory_service.clone(),
-                plugin_manager: None,
-                run_config: None,
-        compaction_config: None,
-                context_cache_config: None,
-                cache_capable: None,
-                request_context: None,
-            }),
-        });
+        let Some(mut stream_rx) = maybe_stream_rx else {
+            yield Ok(Event::default().event("done").data(""));
+            return;
+        };
 
-        match executor.execute(&context_id, &task_id, &params.message).await {
-            Ok(events) => {
-                for event in events {
+        while let Some(message) = stream_rx.recv().await {
+            match message {
+                StreamTaskMessage::Update(event) => {
                     let event_data = match &event {
                         UpdateEvent::TaskStatusUpdate(status) => {
                             serde_json::to_string(&JsonRpcResponse::success(
@@ -209,17 +378,14 @@ fn create_message_stream(
                         yield Ok(Event::default().data(data));
                     }
                 }
-            }
-            Err(e) => {
-                let error_response = JsonRpcResponse::error(
-                    request_id.clone(),
-                    JsonRpcError::internal_error_sanitized(
-                        &e,
-                        controller.config.security.expose_error_details,
-                    ),
-                );
-                if let Ok(data) = serde_json::to_string(&error_response) {
-                    yield Ok(Event::default().data(data));
+                StreamTaskMessage::Error(message) => {
+                    let error_response = JsonRpcResponse::error(
+                        request_id.clone(),
+                        JsonRpcError::internal_error(message),
+                    );
+                    if let Ok(data) = serde_json::to_string(&error_response) {
+                        yield Ok(Event::default().data(data));
+                    }
                 }
             }
         }
@@ -257,61 +423,23 @@ async fn handle_message_send(
     let task_id =
         params.message.task_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let root_agent = controller.config.agent_loader.root_agent();
+    let (task_rx, _) =
+        start_task(controller, context_id.clone(), task_id.clone(), params.message, false).await;
 
-    let executor = Executor::new(ExecutorConfig {
-        app_name: root_agent.name().to_string(),
-        runner_config: Arc::new(RunnerConfig {
-            app_name: root_agent.name().to_string(),
-            agent: root_agent,
-            session_service: controller.config.session_service.clone(),
-            artifact_service: controller.config.artifact_service.clone(),
-            memory_service: controller.config.memory_service.clone(),
-            plugin_manager: None,
-            run_config: None,
-            compaction_config: None,
-            context_cache_config: None,
-            cache_capable: None,
-            request_context: None,
-        }),
-    });
-
-    match executor.execute(&context_id, &task_id, &params.message).await {
-        Ok(events) => {
-            // Build task from events
-            let mut task = Task {
-                id: task_id,
-                context_id: Some(context_id),
-                status: TaskStatus { state: TaskState::Completed, message: None },
-                artifacts: Some(vec![]),
-                history: None,
-            };
-
-            for event in events {
-                match event {
-                    UpdateEvent::TaskStatusUpdate(status) => {
-                        task.status = status.status;
-                    }
-                    UpdateEvent::TaskArtifactUpdate(artifact) => {
-                        if let Some(ref mut artifacts) = task.artifacts {
-                            artifacts.push(artifact.artifact);
-                        }
-                    }
-                }
-            }
-
-            // Store task for later retrieval
-            controller.task_store.store(task.clone()).await;
-
+    match task_rx.await {
+        Ok(Ok(task)) => {
             Json(JsonRpcResponse::success(id, serde_json::to_value(task).unwrap_or_default()))
         }
-        Err(e) => Json(JsonRpcResponse::error(
+        Ok(Err(e)) => Json(JsonRpcResponse::error(
             id,
             JsonRpcError::internal_error_sanitized(
                 &e,
                 controller.config.security.expose_error_details,
             ),
         )),
+        Err(_) => {
+            Json(JsonRpcResponse::error(id, JsonRpcError::internal_error("Task execution aborted")))
+        }
     }
 }
 
@@ -337,6 +465,18 @@ async fn handle_tasks_get(
             ));
         }
     };
+
+    if let Some(active_task) = controller.active_tasks.lock().await.get(&params.task_id).cloned() {
+        let task = Task {
+            id: params.task_id.clone(),
+            context_id: Some(active_task.context_id),
+            status: TaskStatus { state: TaskState::Working, message: None },
+            artifacts: None,
+            history: None,
+        };
+
+        return Json(JsonRpcResponse::success(id, serde_json::to_value(task).unwrap_or_default()));
+    }
 
     match controller.task_store.get(&params.task_id).await {
         Some(task) => {
@@ -372,38 +512,42 @@ async fn handle_tasks_cancel(
         }
     };
 
-    let root_agent = controller.config.agent_loader.root_agent();
+    let active_task = controller.active_tasks.lock().await.get(&params.task_id).cloned();
 
-    let executor = Executor::new(ExecutorConfig {
-        app_name: root_agent.name().to_string(),
-        runner_config: Arc::new(RunnerConfig {
-            app_name: root_agent.name().to_string(),
-            agent: root_agent,
-            session_service: controller.config.session_service.clone(),
-            artifact_service: controller.config.artifact_service.clone(),
-            memory_service: controller.config.memory_service.clone(),
-            plugin_manager: None,
-            run_config: None,
-            compaction_config: None,
-            context_cache_config: None,
-            cache_capable: None,
-            request_context: None,
-        }),
-    });
+    if let Some(active_task) = active_task {
+        active_task.token.cancel();
 
-    // Use a default context_id for cancel
-    let context_id = uuid::Uuid::new_v4().to_string();
-
-    match executor.cancel(&context_id, &params.task_id).await {
-        Ok(status) => {
-            Json(JsonRpcResponse::success(id, serde_json::to_value(status).unwrap_or_default()))
+        if tokio::time::timeout(Duration::from_secs(5), active_task.completion.notified())
+            .await
+            .is_err()
+        {
+            active_task.abort_handle.abort();
+            controller.active_tasks.lock().await.remove(&params.task_id);
+            controller
+                .task_store
+                .store(build_canceled_task(&params.task_id, &active_task.context_id))
+                .await;
         }
-        Err(e) => Json(JsonRpcResponse::error(
+
+        let status = TaskStatusUpdateEvent {
+            task_id: params.task_id,
+            context_id: Some(active_task.context_id),
+            status: TaskStatus { state: TaskState::Canceled, message: None },
+            final_update: true,
+        };
+
+        return Json(JsonRpcResponse::success(
             id,
-            JsonRpcError::internal_error_sanitized(
-                &e,
-                controller.config.security.expose_error_details,
-            ),
-        )),
+            serde_json::to_value(status).unwrap_or_default(),
+        ));
     }
+
+    let status = TaskStatusUpdateEvent {
+        task_id: params.task_id,
+        context_id: Some(uuid::Uuid::new_v4().to_string()),
+        status: TaskStatus { state: TaskState::Canceled, message: None },
+        final_update: true,
+    };
+
+    Json(JsonRpcResponse::success(id, serde_json::to_value(status).unwrap_or_default()))
 }

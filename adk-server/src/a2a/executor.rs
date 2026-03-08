@@ -7,10 +7,12 @@ use adk_runner::{Runner, RunnerConfig};
 use adk_session::{CreateRequest, GetRequest};
 use futures::StreamExt;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 pub struct ExecutorConfig {
     pub app_name: String,
     pub runner_config: Arc<RunnerConfig>,
+    pub cancellation_token: Option<CancellationToken>,
 }
 
 pub struct Executor {
@@ -29,6 +31,7 @@ impl Executor {
         message: &Message,
     ) -> Result<Vec<UpdateEvent>> {
         let meta = to_invocation_meta(&self.config.app_name, context_id, None);
+        let cancellation_token = self.config.cancellation_token.clone();
 
         // Prepare session
         self.prepare_session(&meta.user_id, &meta.session_id).await?;
@@ -50,6 +53,7 @@ impl Executor {
             context_cache_config: self.config.runner_config.context_cache_config.clone(),
             cache_capable: self.config.runner_config.cache_capable.clone(),
             request_context: self.config.runner_config.request_context.clone(),
+            cancellation_token: cancellation_token.clone(),
         })?;
 
         // Create processor
@@ -85,6 +89,16 @@ impl Executor {
 
         // Process events
         while let Some(result) = event_stream.next().await {
+            if cancellation_token.as_ref().is_some_and(CancellationToken::is_cancelled) {
+                results.push(UpdateEvent::TaskStatusUpdate(TaskStatusUpdateEvent {
+                    task_id: task_id.to_string(),
+                    context_id: Some(context_id.to_string()),
+                    status: TaskStatus { state: TaskState::Canceled, message: None },
+                    final_update: true,
+                }));
+                return Ok(results);
+            }
+
             match result {
                 Ok(adk_event) => {
                     if let Some(artifact_event) = processor.process(&adk_event)? {
@@ -105,6 +119,16 @@ impl Executor {
                     return Ok(results);
                 }
             }
+        }
+
+        if cancellation_token.as_ref().is_some_and(CancellationToken::is_cancelled) {
+            results.push(UpdateEvent::TaskStatusUpdate(TaskStatusUpdateEvent {
+                task_id: task_id.to_string(),
+                context_id: Some(context_id.to_string()),
+                status: TaskStatus { state: TaskState::Canceled, message: None },
+                final_update: true,
+            }));
+            return Ok(results);
         }
 
         // Send terminal events
