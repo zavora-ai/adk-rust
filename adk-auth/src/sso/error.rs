@@ -70,11 +70,8 @@ impl From<jsonwebtoken::errors::Error> for TokenError {
             ErrorKind::ExpiredSignature => TokenError::Expired,
             ErrorKind::ImmatureSignature => TokenError::NotYetValid,
             ErrorKind::InvalidSignature => TokenError::InvalidSignature,
-            ErrorKind::InvalidAudience => {
-                TokenError::InvalidAudience { expected: "expected".into(), actual: vec![] }
-            }
-            ErrorKind::InvalidIssuer => {
-                TokenError::InvalidIssuer { expected: "expected".into(), actual: "actual".into() }
+            ErrorKind::InvalidAudience | ErrorKind::InvalidIssuer => {
+                TokenError::ValidationError(err.to_string())
             }
             _ => TokenError::DecodingError(err.to_string()),
         }

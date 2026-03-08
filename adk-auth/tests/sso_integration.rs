@@ -24,6 +24,7 @@ fn test_token_claims_user_id() {
     let claims = TokenClaims {
         sub: "user-123".into(),
         email: Some("alice@example.com".into()),
+        email_verified: Some(true),
         ..Default::default()
     };
 
@@ -110,6 +111,7 @@ fn test_claims_mapper_user_id_from_email() {
     let claims = TokenClaims {
         sub: "user-123".into(),
         email: Some("alice@example.com".into()),
+        email_verified: Some(true),
         ..Default::default()
     };
 

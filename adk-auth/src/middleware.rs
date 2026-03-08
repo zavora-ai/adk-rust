@@ -10,6 +10,111 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 
+macro_rules! impl_protected_tool {
+    ($wrapper:ident<$generic:ident>, $self_ident:ident => $inner:expr) => {
+        #[async_trait]
+        impl<$generic: Tool + Send + Sync> Tool for $wrapper<$generic> {
+            fn name(&self) -> &str {
+                let $self_ident = self;
+                ($inner).name()
+            }
+
+            fn description(&self) -> &str {
+                let $self_ident = self;
+                ($inner).description()
+            }
+
+            fn enhanced_description(&self) -> String {
+                let $self_ident = self;
+                ($inner).enhanced_description()
+            }
+
+            fn is_long_running(&self) -> bool {
+                let $self_ident = self;
+                ($inner).is_long_running()
+            }
+
+            fn parameters_schema(&self) -> Option<Value> {
+                let $self_ident = self;
+                ($inner).parameters_schema()
+            }
+
+            fn response_schema(&self) -> Option<Value> {
+                let $self_ident = self;
+                ($inner).response_schema()
+            }
+
+            fn required_scopes(&self) -> &[&str] {
+                let $self_ident = self;
+                ($inner).required_scopes()
+            }
+
+            async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+                let $self_ident = self;
+                execute_protected_tool(
+                    ($inner),
+                    self.access_control.as_ref(),
+                    self.audit_sink.as_ref(),
+                    ctx,
+                    args,
+                )
+                .await
+            }
+        }
+    };
+    ($wrapper:ty, $self_ident:ident => $inner:expr) => {
+        #[async_trait]
+        impl Tool for $wrapper {
+            fn name(&self) -> &str {
+                let $self_ident = self;
+                ($inner).name()
+            }
+
+            fn description(&self) -> &str {
+                let $self_ident = self;
+                ($inner).description()
+            }
+
+            fn enhanced_description(&self) -> String {
+                let $self_ident = self;
+                ($inner).enhanced_description()
+            }
+
+            fn is_long_running(&self) -> bool {
+                let $self_ident = self;
+                ($inner).is_long_running()
+            }
+
+            fn parameters_schema(&self) -> Option<Value> {
+                let $self_ident = self;
+                ($inner).parameters_schema()
+            }
+
+            fn response_schema(&self) -> Option<Value> {
+                let $self_ident = self;
+                ($inner).response_schema()
+            }
+
+            fn required_scopes(&self) -> &[&str] {
+                let $self_ident = self;
+                ($inner).required_scopes()
+            }
+
+            async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+                let $self_ident = self;
+                execute_protected_tool(
+                    ($inner),
+                    self.access_control.as_ref(),
+                    self.audit_sink.as_ref(),
+                    ctx,
+                    args,
+                )
+                .await
+            }
+        }
+    };
+}
+
 /// A tool wrapper that enforces access control and optionally logs audit events.
 ///
 /// Wraps any tool and checks permissions before execution.
@@ -32,6 +137,37 @@ pub struct ProtectedTool<T: Tool> {
     audit_sink: Option<Arc<dyn AuditSink>>,
 }
 
+async fn authorize_tool_access(
+    tool_name: &str,
+    access_control: &AccessControl,
+    audit_sink: Option<&Arc<dyn AuditSink>>,
+    ctx: &Arc<dyn ToolContext>,
+) -> Result<()> {
+    let permission = Permission::Tool(tool_name.to_string());
+    let check_result = access_control.check(ctx.user_id(), &permission);
+
+    if let Some(sink) = audit_sink {
+        let outcome =
+            if check_result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
+        let event = AuditEvent::tool_access(ctx.user_id(), tool_name, outcome)
+            .with_session(ctx.session_id());
+        let _ = sink.log(event).await;
+    }
+
+    check_result.map_err(|err| adk_core::AdkError::Tool(err.to_string()))
+}
+
+async fn execute_protected_tool(
+    inner: &dyn Tool,
+    access_control: &AccessControl,
+    audit_sink: Option<&Arc<dyn AuditSink>>,
+    ctx: Arc<dyn ToolContext>,
+    args: Value,
+) -> Result<Value> {
+    authorize_tool_access(inner.name(), access_control, audit_sink, &ctx).await?;
+    inner.execute(ctx, args).await
+}
+
 impl<T: Tool> ProtectedTool<T> {
     /// Create a new protected tool.
     pub fn new(tool: T, access_control: Arc<AccessControl>) -> Self {
@@ -48,62 +184,7 @@ impl<T: Tool> ProtectedTool<T> {
     }
 }
 
-#[async_trait]
-impl<T: Tool + Send + Sync> Tool for ProtectedTool<T> {
-    fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    fn description(&self) -> &str {
-        self.inner.description()
-    }
-
-    fn enhanced_description(&self) -> String {
-        self.inner.enhanced_description()
-    }
-
-    fn is_long_running(&self) -> bool {
-        self.inner.is_long_running()
-    }
-
-    fn parameters_schema(&self) -> Option<Value> {
-        self.inner.parameters_schema()
-    }
-
-    fn response_schema(&self) -> Option<Value> {
-        self.inner.response_schema()
-    }
-
-    fn required_scopes(&self) -> &[&str] {
-        self.inner.required_scopes()
-    }
-
-    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let user_id = ctx.user_id();
-        let tool_name = self.name();
-        let permission = Permission::Tool(tool_name.to_string());
-
-        // Check permission
-        let check_result = self.access_control.check(user_id, &permission);
-
-        // Log audit event if sink is configured
-        if let Some(sink) = &self.audit_sink {
-            let outcome =
-                if check_result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
-            let event =
-                AuditEvent::tool_access(user_id, tool_name, outcome).with_session(ctx.session_id());
-
-            // Log asynchronously (don't block on audit failure)
-            let _ = sink.log(event).await;
-        }
-
-        // Return error if access denied
-        check_result.map_err(|e| adk_core::AdkError::Tool(e.to_string()))?;
-
-        // Execute the tool
-        self.inner.execute(ctx, args).await
-    }
-}
+impl_protected_tool!(ProtectedTool<T>, wrapper => &wrapper.inner);
 
 /// Extension trait for easily wrapping tools with access control.
 pub trait ToolExt: Tool + Sized {
@@ -196,62 +277,7 @@ impl ProtectedToolDyn {
     }
 }
 
-#[async_trait]
-impl Tool for ProtectedToolDyn {
-    fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    fn description(&self) -> &str {
-        self.inner.description()
-    }
-
-    fn enhanced_description(&self) -> String {
-        self.inner.enhanced_description()
-    }
-
-    fn is_long_running(&self) -> bool {
-        self.inner.is_long_running()
-    }
-
-    fn parameters_schema(&self) -> Option<Value> {
-        self.inner.parameters_schema()
-    }
-
-    fn response_schema(&self) -> Option<Value> {
-        self.inner.response_schema()
-    }
-
-    fn required_scopes(&self) -> &[&str] {
-        self.inner.required_scopes()
-    }
-
-    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let user_id = ctx.user_id();
-        let tool_name = self.name();
-        let permission = Permission::Tool(tool_name.to_string());
-
-        // Check permission
-        let check_result = self.access_control.check(user_id, &permission);
-
-        // Log audit event if sink is configured
-        if let Some(sink) = &self.audit_sink {
-            let outcome =
-                if check_result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
-            let event =
-                AuditEvent::tool_access(user_id, tool_name, outcome).with_session(ctx.session_id());
-
-            // Log asynchronously (don't block on audit failure)
-            let _ = sink.log(event).await;
-        }
-
-        // Return error if access denied
-        check_result.map_err(|e| adk_core::AdkError::Tool(e.to_string()))?;
-
-        // Execute the tool
-        self.inner.execute(ctx, args).await
-    }
-}
+impl_protected_tool!(ProtectedToolDyn, wrapper => wrapper.inner.as_ref());
 
 #[cfg(test)]
 mod tests {

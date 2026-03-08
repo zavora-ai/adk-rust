@@ -51,6 +51,7 @@ impl OidcProvider {
 
         let config: OidcConfig =
             response.json().await.map_err(|e| TokenError::DiscoveryError(e.to_string()))?;
+        ensure_discovery_issuer(&issuer, &config.issuer)?;
 
         Ok(Self {
             issuer: config.issuer,
@@ -84,6 +85,7 @@ impl TokenValidator for OidcProvider {
         validation.set_issuer(&[&self.issuer]);
         validation.set_audience(&[&self.client_id]);
         validation.validate_exp = true;
+        validation.validate_nbf = true;
 
         // Validate and decode token
         let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)?;
@@ -108,6 +110,21 @@ struct OidcConfig {
     token_endpoint: Option<String>,
 }
 
+#[cfg(feature = "sso")]
+fn ensure_discovery_issuer(expected: &str, actual: &str) -> Result<(), TokenError> {
+    let normalized_expected = expected.trim_end_matches('/');
+    let normalized_actual = actual.trim_end_matches('/');
+
+    if normalized_expected == normalized_actual {
+        Ok(())
+    } else {
+        Err(TokenError::InvalidIssuer {
+            expected: normalized_expected.to_string(),
+            actual: normalized_actual.to_string(),
+        })
+    }
+}
+
 // Stub for when SSO is not enabled
 #[cfg(not(feature = "sso"))]
 impl OidcProvider {
@@ -121,5 +138,25 @@ impl OidcProvider {
             client_id: client_id.into(),
             jwks_cache: Arc::new(JwksCache::new("")),
         }
+    }
+}
+
+#[cfg(all(test, feature = "sso"))]
+mod tests {
+    use super::ensure_discovery_issuer;
+    use crate::sso::TokenError;
+
+    #[test]
+    fn test_discovery_issuer_must_match_requested_issuer() {
+        assert!(
+            ensure_discovery_issuer("https://issuer.example.com", "https://issuer.example.com/")
+                .is_ok()
+        );
+
+        let err =
+            ensure_discovery_issuer("https://issuer.example.com", "https://other.example.com")
+                .unwrap_err();
+
+        assert!(matches!(err, TokenError::InvalidIssuer { .. }));
     }
 }

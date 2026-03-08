@@ -57,6 +57,7 @@ impl TokenValidator for Auth0Provider {
         validation.set_issuer(&[&self.issuer]);
         validation.set_audience(&[&self.audience]);
         validation.validate_exp = true;
+        validation.validate_nbf = true;
 
         let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)?;
 

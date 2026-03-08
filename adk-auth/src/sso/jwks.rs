@@ -8,6 +8,8 @@ use jsonwebtoken::DecodingKey;
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "sso")]
 use std::time::Duration;
+#[cfg(feature = "sso")]
+use tokio::sync::Mutex;
 
 use super::TokenError;
 
@@ -27,6 +29,10 @@ pub struct JwksCache {
     last_refresh: AtomicU64,
     /// Refresh interval.
     refresh_interval: Duration,
+    /// Maximum number of keys to cache from a JWKS response.
+    max_keys: usize,
+    /// Ensures only one refresh runs at a time.
+    refresh_lock: Mutex<()>,
     /// HTTP client.
     client: reqwest::Client,
 }
@@ -40,6 +46,8 @@ impl JwksCache {
             jwks_uri: jwks_uri.into(),
             last_refresh: AtomicU64::new(0),
             refresh_interval: Duration::from_secs(3600), // 1 hour
+            max_keys: 100,
+            refresh_lock: Mutex::new(()),
             client: reqwest::Client::new(),
         }
     }
@@ -47,6 +55,12 @@ impl JwksCache {
     /// Create with custom refresh interval.
     pub fn with_refresh_interval(mut self, interval: Duration) -> Self {
         self.refresh_interval = interval;
+        self
+    }
+
+    /// Create with a custom maximum number of cached keys.
+    pub fn with_max_keys(mut self, max_keys: usize) -> Self {
+        self.max_keys = max_keys.max(1);
         self
     }
 
@@ -82,7 +96,13 @@ impl JwksCache {
             return Ok(());
         }
 
-        tracing::debug!("Fetching JWKS from {}", self.jwks_uri);
+        let _refresh_guard = self.refresh_lock.lock().await;
+        let last = self.last_refresh.load(Ordering::Relaxed);
+        if last > 0 && now - last < interval_secs / 2 {
+            return Ok(());
+        }
+
+        tracing::debug!(jwks.uri = %self.jwks_uri, "fetching jwks");
 
         let response = self
             .client
@@ -96,8 +116,9 @@ impl JwksCache {
             response.json().await.map_err(|e| TokenError::JwksParseError(e.to_string()))?;
 
         // Clear old keys and add new ones
+        let total_keys = jwks.keys.len();
         self.keys.clear();
-        for key in jwks.keys {
+        for key in jwks.keys.into_iter().take(self.max_keys) {
             if let Some(kid) = &key.kid {
                 if let Ok(decoding_key) = key.to_decoding_key() {
                     self.keys.insert(kid.clone(), decoding_key);
@@ -105,8 +126,17 @@ impl JwksCache {
             }
         }
 
+        if total_keys > self.max_keys {
+            tracing::warn!(
+                jwks.uri = %self.jwks_uri,
+                jwks.keys_total = total_keys,
+                jwks.keys_cached = self.max_keys,
+                "jwks response exceeded cache key limit"
+            );
+        }
+
         self.last_refresh.store(now, Ordering::Relaxed);
-        tracing::debug!("JWKS cache refreshed with {} keys", self.keys.len());
+        tracing::debug!(jwks.keys_cached = self.keys.len(), "jwks cache refreshed");
 
         Ok(())
     }

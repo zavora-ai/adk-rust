@@ -121,6 +121,27 @@ impl JwtValidatorBuilder {
             self.algorithms
         };
 
+        for algorithm in &algorithms {
+            match algorithm {
+                jsonwebtoken::Algorithm::RS256
+                | jsonwebtoken::Algorithm::RS384
+                | jsonwebtoken::Algorithm::RS512
+                | jsonwebtoken::Algorithm::PS256
+                | jsonwebtoken::Algorithm::PS384
+                | jsonwebtoken::Algorithm::PS512
+                | jsonwebtoken::Algorithm::ES256
+                | jsonwebtoken::Algorithm::ES384 => {}
+                jsonwebtoken::Algorithm::HS256
+                | jsonwebtoken::Algorithm::HS384
+                | jsonwebtoken::Algorithm::HS512
+                | jsonwebtoken::Algorithm::EdDSA => {
+                    return Err(TokenError::ValidationError(format!(
+                        "algorithm '{algorithm:?}' is not supported with JWKS-based validation. Use an RSA or EC algorithm instead."
+                    )));
+                }
+            }
+        }
+
         Ok(JwtValidator {
             issuer,
             audience: self.audience,

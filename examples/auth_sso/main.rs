@@ -126,6 +126,7 @@ fn create_claims(email: &str, groups: Vec<&str>) -> TokenClaims {
     TokenClaims {
         sub: format!("user-{}", email.split('@').next().unwrap()),
         email: Some(email.to_string()),
+        email_verified: Some(true),
         groups: groups.into_iter().map(String::from).collect(),
         ..Default::default()
     }

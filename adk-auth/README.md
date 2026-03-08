@@ -13,14 +13,17 @@ Access control and authentication for Rust Agent Development Kit (ADK-Rust).
 - **Declarative Scope-Based Security** - Tools declare required scopes, framework enforces automatically
 - **Role-Based Access** - Define roles with tool/agent permissions (allow/deny, deny precedence)
 - **Audit Logging** - Log all access attempts to JSONL files
-- **SSO/OAuth** - JWT validation with Google, Azure AD, Okta, Auth0 providers
+- **SSO/OAuth** - JWT validation with Google, Azure AD, Okta, Auth0, and generic OIDC providers
+- **Auth Bridge** - Flow authenticated identity from HTTP requests into agent execution via `adk-server`
 
 ## Features
 
+Core Role Based Access Control (RBAC), scope-based security, and audit logging are always available with no feature flags required.
+
 | Feature | Description |
 |---------|-------------|
-| `default` | Core RBAC + scope-based security + audit logging |
-| `sso` | JWT/OIDC providers (Google, Azure AD, Okta, Auth0) |
+| `sso` | JWT/OIDC providers (Google, Azure AD, Okta, Auth0, generic OIDC) |
+| `auth-bridge` | `JwtRequestContextExtractor` for `adk-server` identity flow (implies `sso`) |
 
 ## Declarative Scope-Based Security
 
@@ -58,6 +61,8 @@ Pluggable resolvers:
 | `StaticScopeResolver` | Fixed scopes — useful for testing |
 | Custom `impl ScopeResolver` | Any async source (database, external IdP, etc.) |
 
+For resolvers that call external services, cache the resolved scopes at the request or session layer to avoid repeated lookups during multi-tool runs.
+
 ## Role-Based Access Control
 
 ```rust
@@ -80,6 +85,20 @@ let ac = AccessControl::builder()
 // Protect tools
 let middleware = AuthMiddleware::new(ac);
 let protected_tools = middleware.protect_all(tools);
+```
+
+## Combining RBAC + Scopes
+
+Use RBAC for coarse tool/agent entitlement and scopes for request-level constraints:
+
+```rust
+use std::sync::Arc;
+use adk_auth::{AuthMiddleware, ContextScopeResolver, ScopeGuard};
+
+let rbac = AuthMiddleware::new(ac);
+let scoped = ScopeGuard::new(ContextScopeResolver);
+
+let protected = scoped.protect(rbac.protect(transfer_tool));
 ```
 
 ## SSO Integration
@@ -108,18 +127,42 @@ let sso = SsoAccessControl::builder()
 
 // Validate token and check permission
 let claims = sso.check_token(token, &Permission::Tool("search".into())).await?;
-println!("User: {}", claims.email.unwrap());
+println!("User: {}", claims.user_id());
 ```
+
+`user_id_from_email()` only uses the email claim when `email_verified == true`; otherwise it falls back to `sub`.
 
 ## Providers
 
 | Provider | Usage |
 |----------|-------|
 | **Google** | `GoogleProvider::new(client_id)` |
-| **Azure AD** | `AzureADProvider::new(tenant_id, client_id)` |
-| **Okta** | `OktaProvider::new(domain, client_id)` |
+| **Azure AD** | `AzureADProvider::new(tenant_id, client_id)` or `::multi_tenant(client_id).with_allowed_tenants(["tenant-id"])` |
+| **Okta** | `OktaProvider::new(domain, client_id)` or `::with_auth_server(domain, server_id, client_id)` |
 | **Auth0** | `Auth0Provider::new(domain, audience)` |
-| **Generic OIDC** | `OidcProvider::from_discovery(issuer, client_id).await` |
+| **Generic OIDC** | `OidcProvider::from_discovery(issuer, client_id).await` or `::new(issuer, client_id, jwks_uri)` |
+
+`AzureADProvider::multi_tenant()` accepts tokens from any tenant targeting the configured audience unless you restrict it with `with_allowed_tenants(...)`.
+
+## Auth Bridge
+
+Enable with `features = ["auth-bridge"]` to validate Bearer tokens directly into `adk-server` request contexts:
+
+```rust
+use adk_auth::auth_bridge::JwtRequestContextExtractor;
+use adk_auth::sso::{ClaimsMapper, GoogleProvider};
+
+let extractor = JwtRequestContextExtractor::builder()
+    .validator(GoogleProvider::new("your-client-id"))
+    .mapper(ClaimsMapper::builder().user_id_from_email().build())
+    .build()?;
+```
+
+The extractor maps:
+
+- `user_id` from the configured `ClaimsMapper`
+- `scopes` from JWT `scope` and `scp` claims
+- `metadata` including issuer, subject, email, and tenant ID when present
 
 ## Audit Logging
 
@@ -132,18 +175,19 @@ let middleware = AuthMiddleware::with_audit(ac, audit);
 
 Output:
 ```json
-{"timestamp":"2025-01-01T10:30:00Z","user":"bob","resource":"search","outcome":"allowed"}
+{"timestamp":"2025-01-01T10:30:00Z","user":"bob","event_type":"tool_access","resource":"search","outcome":"allowed"}
 ```
 
 ## Examples
 
 ```bash
-cargo run --example auth_basic          # RBAC basics
-cargo run --example auth_audit          # Audit logging
-cargo run --example auth_sso --features sso     # SSO integration
-cargo run --example auth_jwt --features sso     # JWT validation
-cargo run --example auth_oidc --features sso    # OIDC discovery
-cargo run --example auth_google --features sso  # Google Identity
+cargo run -p adk-examples --example auth_basic                  # RBAC basics
+cargo run -p adk-examples --example auth_audit                  # Audit logging
+cargo run -p adk-examples --example auth_bridge                 # Auth bridge with server
+cargo run -p adk-examples --example auth_sso --features sso     # SSO integration
+cargo run -p adk-examples --example auth_jwt --features sso     # JWT validation
+cargo run -p adk-examples --example auth_oidc --features sso    # OIDC discovery
+cargo run -p adk-examples --example auth_google --features sso  # Google Identity
 ```
 
 ## License
@@ -153,3 +197,10 @@ Apache-2.0
 ## Part of ADK-Rust
 
 This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.
+
+## Security Notes
+
+- Prefer short-lived access tokens and rotate signing keys regularly.
+- The JWKS cache refreshes hourly by default; lower the refresh interval if your IdP rotates keys aggressively.
+- `OidcProvider::from_discovery()` now rejects discovery documents whose `issuer` does not match the requested issuer URL.
+- Token revocation and blacklist checks are not built in. If you need immediate revocation, enforce it in a custom `TokenValidator` or request extractor.

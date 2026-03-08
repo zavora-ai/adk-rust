@@ -4,7 +4,7 @@ Enterprise-grade access control for AI agents using `adk-auth`.
 
 ## Overview
 
-`adk-auth` provides role-based access control (RBAC) with audit logging and SSO support for ADK agents. It enables secure, fine-grained control over which users can access which tools.
+`adk-auth` provides role-based access control (RBAC), scope-based authorization, audit logging, and SSO support for ADK agents. It enables secure, fine-grained control over which users can access which tools.
 
 ## Architecture
 
@@ -190,6 +190,31 @@ let middleware = AuthMiddleware::new(ac);
 let protected_tools = middleware.protect_all(tools);
 ```
 
+### ScopeGuard
+
+Use scopes for request-level authorization that comes from JWT claims or session state:
+
+```rust
+use adk_auth::{ContextScopeResolver, ScopeGuard};
+
+let guard = ScopeGuard::new(ContextScopeResolver);
+let protected = guard.protect(my_tool);
+```
+
+### Combining RBAC + Scopes
+
+RBAC answers "may this user access the tool at all?" Scopes answer "is this specific request authorized right now?"
+
+```rust
+use std::sync::Arc;
+use adk_auth::{AuthMiddleware, ContextScopeResolver, ScopeGuard};
+
+let rbac = AuthMiddleware::new(ac);
+let scoped = ScopeGuard::new(ContextScopeResolver);
+
+let protected = scoped.protect(rbac.protect(transfer_tool));
+```
+
 ## SSO Integration
 
 ### Supported Providers
@@ -197,10 +222,12 @@ let protected_tools = middleware.protect_all(tools);
 | Provider | Constructor | Issuer |
 |----------|-------------|--------|
 | Google | `GoogleProvider::new(client_id)` | accounts.google.com |
-| Azure AD | `AzureADProvider::new(tenant, client)` | login.microsoftonline.com |
+| Azure AD | `AzureADProvider::new(tenant, client)` or `AzureADProvider::multi_tenant(client).with_allowed_tenants(["tenant-id"])` | login.microsoftonline.com |
 | Okta | `OktaProvider::new(domain, client)` | {domain}/oauth2/default |
 | Auth0 | `Auth0Provider::new(domain, audience)` | {domain}/ |
 | Generic | `OidcProvider::from_discovery(issuer, client)` | Any OIDC provider |
+
+`AzureADProvider::multi_tenant()` accepts any tenant for the configured audience unless you explicitly restrict it with `with_allowed_tenants(...)`.
 
 ### TokenClaims
 
@@ -231,6 +258,8 @@ let mapper = ClaimsMapper::builder()
     .user_id_from_email()
     .build();
 ```
+
+`user_id_from_email()` only uses the email claim when `email_verified == true`; otherwise it falls back to `sub`.
 
 ### SsoAccessControl
 
@@ -311,6 +340,26 @@ cargo run --example auth_google --features sso  # Google Identity
 | **Use HTTPS** | JWKS endpoints require secure connections |
 | **Rotate keys** | JWKS cache auto-refreshes every hour |
 | **Limit token lifetime** | Use short-lived access tokens |
+| **Restrict Azure tenants** | For multi-tenant Azure apps, configure `with_allowed_tenants(...)` |
+| **Verify email before identity mapping** | `user_id_from_email()` now falls back to `sub` when email is unverified |
+| **Plan for revocation** | Token revocation is not built in; enforce it in a custom validator if you need immediate cut-off |
+| **Cache expensive scope lookups** | If your `ScopeResolver` calls external systems, cache the result per request/session |
+
+## Auth Bridge
+
+Enable `auth-bridge` when you want `adk-auth` to provide a reusable JWT-based request extractor for `adk-server`:
+
+```rust
+use adk_auth::auth_bridge::JwtRequestContextExtractor;
+use adk_auth::sso::{ClaimsMapper, GoogleProvider};
+
+let extractor = JwtRequestContextExtractor::builder()
+    .validator(GoogleProvider::new("client-id"))
+    .mapper(ClaimsMapper::builder().user_id_from_email().build())
+    .build()?;
+```
+
+The extractor validates the Bearer token, maps `user_id` with `ClaimsMapper`, and forwards JWT `scope` / `scp` claims into `RequestContext.scopes`.
 
 ## Error Handling
 

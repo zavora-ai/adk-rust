@@ -85,9 +85,19 @@ pub struct TokenClaims {
 }
 
 impl TokenClaims {
-    /// Get the user identifier, preferring email over sub.
+    /// Get the user identifier, preferring a verified email over sub.
     pub fn user_id(&self) -> &str {
-        self.email.as_deref().unwrap_or(&self.sub)
+        self.verified_email().unwrap_or(&self.sub)
+    }
+
+    /// Returns true when the token contains a verified email address.
+    pub fn email_is_verified(&self) -> bool {
+        self.email_verified.unwrap_or(false) && self.email.as_deref().is_some()
+    }
+
+    /// Get the verified email address if available.
+    pub fn verified_email(&self) -> Option<&str> {
+        self.email_is_verified().then_some(self.email.as_deref()).flatten()
     }
 
     /// Get all groups and roles combined.
@@ -105,6 +115,38 @@ impl TokenClaims {
     /// Get a custom claim by key.
     pub fn get_custom<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
         self.custom.get(key).and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+
+    /// Get granted scopes from the standard `scope` or `scp` claims.
+    pub fn scopes(&self) -> Vec<String> {
+        let mut scopes = Vec::new();
+        self.extend_scopes(&mut scopes, "scope");
+        self.extend_scopes(&mut scopes, "scp");
+        scopes
+    }
+
+    fn extend_scopes(&self, scopes: &mut Vec<String>, claim: &str) {
+        let Some(value) = self.custom.get(claim) else {
+            return;
+        };
+
+        match value {
+            serde_json::Value::String(scope_string) => {
+                for scope in scope_string.split_whitespace() {
+                    if !scopes.iter().any(|existing| existing == scope) {
+                        scopes.push(scope.to_string());
+                    }
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for scope in values.iter().filter_map(serde_json::Value::as_str) {
+                    if !scopes.iter().any(|existing| existing == scope) {
+                        scopes.push(scope.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -173,6 +215,7 @@ mod tests {
         let claims = TokenClaims {
             sub: "user-123".into(),
             email: Some("alice@example.com".into()),
+            email_verified: Some(true),
             ..Default::default()
         };
         assert_eq!(claims.user_id(), "alice@example.com");
@@ -180,6 +223,28 @@ mod tests {
         let claims_no_email =
             TokenClaims { sub: "user-123".into(), email: None, ..Default::default() };
         assert_eq!(claims_no_email.user_id(), "user-123");
+    }
+
+    #[test]
+    fn test_token_claims_unverified_email_falls_back_to_sub() {
+        let claims = TokenClaims {
+            sub: "user-123".into(),
+            email: Some("alice@example.com".into()),
+            email_verified: Some(false),
+            ..Default::default()
+        };
+
+        assert_eq!(claims.user_id(), "user-123");
+        assert_eq!(claims.verified_email(), None);
+    }
+
+    #[test]
+    fn test_token_claims_scopes_from_scope_and_scp() {
+        let mut claims = TokenClaims::default();
+        claims.custom.insert("scope".into(), serde_json::json!("read write"));
+        claims.custom.insert("scp".into(), serde_json::json!(["write", "admin"]));
+
+        assert_eq!(claims.scopes(), vec!["read", "write", "admin"]);
     }
 
     #[test]

@@ -126,7 +126,10 @@ impl AuditSink for FileAuditSink {
         let line = serde_json::to_string(&event)
             .map_err(|e| crate::AuthError::AuditError(e.to_string()))?;
 
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = self.writer.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(path = %self.path.display(), "audit writer lock poisoned, recovering");
+            poisoned.into_inner()
+        });
         writeln!(writer, "{}", line)?;
         writer.flush()?;
 

@@ -49,7 +49,9 @@ impl ClaimsMapper {
     pub fn get_user_id(&self, claims: &TokenClaims) -> String {
         match &self.user_id_claim {
             UserIdClaim::Sub => claims.sub.clone(),
-            UserIdClaim::Email => claims.email.clone().unwrap_or_else(|| claims.sub.clone()),
+            UserIdClaim::Email => {
+                claims.verified_email().map(str::to_string).unwrap_or_else(|| claims.sub.clone())
+            }
             UserIdClaim::PreferredUsername => {
                 claims.preferred_username.clone().unwrap_or_else(|| claims.sub.clone())
             }
@@ -155,6 +157,7 @@ mod tests {
         TokenClaims {
             sub: "user-123".into(),
             email: Some("alice@example.com".into()),
+            email_verified: Some(true),
             preferred_username: Some("alice".into()),
             groups: vec!["AdminGroup".into(), "Users".into()],
             ..Default::default()
@@ -194,5 +197,18 @@ mod tests {
     fn test_user_id_from_sub() {
         let mapper = ClaimsMapper::builder().user_id_from_sub().build();
         assert_eq!(mapper.get_user_id(&test_claims()), "user-123");
+    }
+
+    #[test]
+    fn test_user_id_from_email_requires_verified_email() {
+        let mapper = ClaimsMapper::builder().user_id_from_email().build();
+        let claims = TokenClaims {
+            sub: "user-123".into(),
+            email: Some("alice@example.com".into()),
+            email_verified: Some(false),
+            ..Default::default()
+        };
+
+        assert_eq!(mapper.get_user_id(&claims), "user-123");
     }
 }

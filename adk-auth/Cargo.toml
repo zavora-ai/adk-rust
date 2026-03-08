@@ -15,7 +15,7 @@ readme = "README.md"
 [features]
 default = []
 sso = ["jsonwebtoken", "reqwest", "dashmap", "base64"]
-auth-bridge = ["sso", "adk-server"]
+auth-bridge = ["sso", "adk-server", "axum"]
 
 [dependencies]
 adk-core.workspace = true
@@ -27,6 +27,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
+axum = { version = "0.8", optional = true }
 
 # SSO dependencies (optional)
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"], optional = true }
@@ -36,3 +37,4 @@ base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+proptest = "1.5"

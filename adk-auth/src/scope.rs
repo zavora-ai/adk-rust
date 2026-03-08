@@ -33,6 +33,111 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+macro_rules! impl_scoped_tool {
+    ($wrapper:ident<$generic:ident>, $self_ident:ident => $inner:expr) => {
+        #[async_trait]
+        impl<$generic: Tool + Send + Sync> Tool for $wrapper<$generic> {
+            fn name(&self) -> &str {
+                let $self_ident = self;
+                ($inner).name()
+            }
+
+            fn description(&self) -> &str {
+                let $self_ident = self;
+                ($inner).description()
+            }
+
+            fn enhanced_description(&self) -> String {
+                let $self_ident = self;
+                ($inner).enhanced_description()
+            }
+
+            fn is_long_running(&self) -> bool {
+                let $self_ident = self;
+                ($inner).is_long_running()
+            }
+
+            fn parameters_schema(&self) -> Option<Value> {
+                let $self_ident = self;
+                ($inner).parameters_schema()
+            }
+
+            fn response_schema(&self) -> Option<Value> {
+                let $self_ident = self;
+                ($inner).response_schema()
+            }
+
+            fn required_scopes(&self) -> &[&str] {
+                let $self_ident = self;
+                ($inner).required_scopes()
+            }
+
+            async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+                let $self_ident = self;
+                execute_scoped_tool(
+                    ($inner),
+                    self.resolver.as_ref(),
+                    self.audit_sink.as_ref(),
+                    ctx,
+                    args,
+                )
+                .await
+            }
+        }
+    };
+    ($wrapper:ty, $self_ident:ident => $inner:expr) => {
+        #[async_trait]
+        impl Tool for $wrapper {
+            fn name(&self) -> &str {
+                let $self_ident = self;
+                ($inner).name()
+            }
+
+            fn description(&self) -> &str {
+                let $self_ident = self;
+                ($inner).description()
+            }
+
+            fn enhanced_description(&self) -> String {
+                let $self_ident = self;
+                ($inner).enhanced_description()
+            }
+
+            fn is_long_running(&self) -> bool {
+                let $self_ident = self;
+                ($inner).is_long_running()
+            }
+
+            fn parameters_schema(&self) -> Option<Value> {
+                let $self_ident = self;
+                ($inner).parameters_schema()
+            }
+
+            fn response_schema(&self) -> Option<Value> {
+                let $self_ident = self;
+                ($inner).response_schema()
+            }
+
+            fn required_scopes(&self) -> &[&str] {
+                let $self_ident = self;
+                ($inner).required_scopes()
+            }
+
+            async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+                let $self_ident = self;
+                execute_scoped_tool(
+                    ($inner),
+                    self.resolver.as_ref(),
+                    self.audit_sink.as_ref(),
+                    ctx,
+                    args,
+                )
+                .await
+            }
+        }
+    };
+}
+
 /// Resolves the set of scopes granted to the current user.
 ///
 /// Implementations can pull scopes from session state, JWT claims,
@@ -197,64 +302,52 @@ pub struct ScopedTool<T: Tool> {
     audit_sink: Option<Arc<dyn AuditSink>>,
 }
 
-#[async_trait]
-impl<T: Tool + Send + Sync> Tool for ScopedTool<T> {
-    fn name(&self) -> &str {
-        self.inner.name()
+async fn authorize_tool_scopes(
+    tool: &dyn Tool,
+    resolver: &dyn ScopeResolver,
+    audit_sink: Option<&Arc<dyn AuditSink>>,
+    ctx: &Arc<dyn ToolContext>,
+) -> Result<()> {
+    let required = tool.required_scopes();
+    if required.is_empty() {
+        return Ok(());
     }
 
-    fn description(&self) -> &str {
-        self.inner.description()
+    let granted = resolver.resolve(ctx.as_ref()).await;
+    let result = check_scopes(required, &granted);
+
+    if let Some(sink) = audit_sink {
+        let outcome = if result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
+        let event = AuditEvent::tool_access(ctx.user_id(), tool.name(), outcome)
+            .with_session(ctx.session_id());
+        let _ = sink.log(event).await;
     }
 
-    fn enhanced_description(&self) -> String {
-        self.inner.enhanced_description()
+    if let Err(denied) = result {
+        tracing::warn!(
+            tool.name = %tool.name(),
+            user.id = %ctx.user_id(),
+            missing_scopes = ?denied.missing,
+            "scope check failed"
+        );
+        return Err(adk_core::AdkError::Tool(denied.to_string()));
     }
 
-    fn is_long_running(&self) -> bool {
-        self.inner.is_long_running()
-    }
-
-    fn parameters_schema(&self) -> Option<Value> {
-        self.inner.parameters_schema()
-    }
-
-    fn response_schema(&self) -> Option<Value> {
-        self.inner.response_schema()
-    }
-
-    fn required_scopes(&self) -> &[&str] {
-        self.inner.required_scopes()
-    }
-
-    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let required = self.inner.required_scopes();
-        if !required.is_empty() {
-            let granted = self.resolver.resolve(ctx.as_ref()).await;
-            let result = check_scopes(required, &granted);
-
-            if let Some(sink) = &self.audit_sink {
-                let outcome =
-                    if result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
-                let event = AuditEvent::tool_access(ctx.user_id(), self.name(), outcome)
-                    .with_session(ctx.session_id());
-                let _ = sink.log(event).await;
-            }
-
-            if let Err(denied) = result {
-                tracing::warn!(
-                    tool.name = %self.name(),
-                    user.id = %ctx.user_id(),
-                    missing_scopes = ?denied.missing,
-                    "scope check failed"
-                );
-                return Err(adk_core::AdkError::Tool(denied.to_string()));
-            }
-        }
-
-        self.inner.execute(ctx, args).await
-    }
+    Ok(())
 }
+
+async fn execute_scoped_tool(
+    inner: &dyn Tool,
+    resolver: &dyn ScopeResolver,
+    audit_sink: Option<&Arc<dyn AuditSink>>,
+    ctx: Arc<dyn ToolContext>,
+    args: Value,
+) -> Result<Value> {
+    authorize_tool_scopes(inner, resolver, audit_sink, &ctx).await?;
+    inner.execute(ctx, args).await
+}
+
+impl_scoped_tool!(ScopedTool<T>, wrapper => &wrapper.inner);
 
 /// Dynamic version of [`ScopedTool`] for `Arc<dyn Tool>`.
 pub struct ScopedToolDyn {
@@ -263,64 +356,7 @@ pub struct ScopedToolDyn {
     audit_sink: Option<Arc<dyn AuditSink>>,
 }
 
-#[async_trait]
-impl Tool for ScopedToolDyn {
-    fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    fn description(&self) -> &str {
-        self.inner.description()
-    }
-
-    fn enhanced_description(&self) -> String {
-        self.inner.enhanced_description()
-    }
-
-    fn is_long_running(&self) -> bool {
-        self.inner.is_long_running()
-    }
-
-    fn parameters_schema(&self) -> Option<Value> {
-        self.inner.parameters_schema()
-    }
-
-    fn response_schema(&self) -> Option<Value> {
-        self.inner.response_schema()
-    }
-
-    fn required_scopes(&self) -> &[&str] {
-        self.inner.required_scopes()
-    }
-
-    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let required = self.inner.required_scopes();
-        if !required.is_empty() {
-            let granted = self.resolver.resolve(ctx.as_ref()).await;
-            let result = check_scopes(required, &granted);
-
-            if let Some(sink) = &self.audit_sink {
-                let outcome =
-                    if result.is_ok() { AuditOutcome::Allowed } else { AuditOutcome::Denied };
-                let event = AuditEvent::tool_access(ctx.user_id(), self.name(), outcome)
-                    .with_session(ctx.session_id());
-                let _ = sink.log(event).await;
-            }
-
-            if let Err(denied) = result {
-                tracing::warn!(
-                    tool.name = %self.name(),
-                    user.id = %ctx.user_id(),
-                    missing_scopes = ?denied.missing,
-                    "scope check failed"
-                );
-                return Err(adk_core::AdkError::Tool(denied.to_string()));
-            }
-        }
-
-        self.inner.execute(ctx, args).await
-    }
-}
+impl_scoped_tool!(ScopedToolDyn, wrapper => wrapper.inner.as_ref());
 
 /// Extension trait for easily wrapping tools with scope enforcement.
 pub trait ScopeToolExt: Tool + Sized {

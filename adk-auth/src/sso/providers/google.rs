@@ -46,6 +46,7 @@ impl TokenValidator for GoogleProvider {
         validation.set_issuer(&["https://accounts.google.com", "accounts.google.com"]);
         validation.set_audience(&[&self.client_id]);
         validation.validate_exp = true;
+        validation.validate_nbf = true;
 
         let token_data = jsonwebtoken::decode::<TokenClaims>(token, &key, &validation)?;
 

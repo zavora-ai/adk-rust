@@ -26,19 +26,15 @@ impl AccessControl {
 
     /// Check if a user has access to a permission.
     pub fn check(&self, user: &str, permission: &Permission) -> Result<(), AccessDenied> {
-        let role_names = self.user_roles.get(user);
+        let Some(role_names) = self.user_roles.get(user) else {
+            return Err(AccessDenied::new(user, permission.to_string()));
+        };
 
-        if let Some(role_names) = role_names {
-            for role_name in role_names {
-                if let Some(role) = self.roles.get(role_name) {
-                    if role.can_access(permission) {
-                        return Ok(());
-                    }
-                }
-            }
+        if self.check_roles(role_names, permission) {
+            Ok(())
+        } else {
+            Err(AccessDenied::new(user, permission.to_string()))
         }
-
-        Err(AccessDenied::new(user, permission.to_string()))
     }
 
     /// Check and log the access attempt.
@@ -82,6 +78,21 @@ impl AccessControl {
     /// Get a role by name.
     pub fn get_role(&self, name: &str) -> Option<&Role> {
         self.roles.get(name)
+    }
+
+    pub(crate) fn check_roles(&self, role_names: &[String], permission: &Permission) -> bool {
+        let roles: Vec<&Role> =
+            role_names.iter().filter_map(|role_name| self.roles.get(role_name)).collect();
+
+        for role in &roles {
+            if role.denied_permissions().iter().any(|denied| denied.covers(permission)) {
+                return false;
+            }
+        }
+
+        roles
+            .into_iter()
+            .any(|role| role.allowed_permissions().iter().any(|allowed| allowed.covers(permission)))
     }
 }
 
@@ -203,5 +214,32 @@ mod tests {
         // Bob has both roles, can access both
         assert!(ac.check("bob", &Permission::Tool("read".into())).is_ok());
         assert!(ac.check("bob", &Permission::Tool("write".into())).is_ok());
+    }
+
+    #[test]
+    fn test_multi_role_deny_precedence_is_order_independent() {
+        let editor = Role::new("editor").allow(Permission::AllTools);
+        let restricted = Role::new("restricted").deny(Permission::Tool("code_exec".into()));
+
+        let editor_first = AccessControl::builder()
+            .role(editor.clone())
+            .role(restricted.clone())
+            .assign("bob", "editor")
+            .assign("bob", "restricted")
+            .build()
+            .unwrap();
+
+        let restricted_first = AccessControl::builder()
+            .role(editor)
+            .role(restricted)
+            .assign("bob", "restricted")
+            .assign("bob", "editor")
+            .build()
+            .unwrap();
+
+        assert!(editor_first.check("bob", &Permission::Tool("code_exec".into())).is_err());
+        assert!(restricted_first.check("bob", &Permission::Tool("code_exec".into())).is_err());
+        assert!(editor_first.check("bob", &Permission::Tool("search".into())).is_ok());
+        assert!(restricted_first.check("bob", &Permission::Tool("search".into())).is_ok());
     }
 }

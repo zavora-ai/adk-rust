@@ -70,24 +70,80 @@ impl SsoAccessControl {
         roles: &[String],
         permission: &Permission,
     ) -> Result<(), SsoError> {
-        // Check if any of the user's roles grant the permission
-        for role_name in roles {
-            if let Some(role) = self.access_control.get_role(role_name) {
-                if role.can_access(permission) {
-                    return Ok(());
-                }
-            }
+        if self.access_control.check_roles(roles, permission) {
+            Ok(())
+        } else {
+            Err(SsoError::AccessDenied {
+                user: user_id.to_string(),
+                permission: permission.to_string(),
+            })
         }
-
-        Err(SsoError::AccessDenied {
-            user: user_id.to_string(),
-            permission: permission.to_string(),
-        })
     }
 
     /// Get the underlying access control.
     pub fn access_control(&self) -> &AccessControl {
         &self.access_control
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Role;
+    use async_trait::async_trait;
+
+    struct DummyValidator;
+
+    #[async_trait]
+    impl TokenValidator for DummyValidator {
+        async fn validate(&self, _token: &str) -> Result<TokenClaims, TokenError> {
+            Err(TokenError::ValidationError("not used in unit test".into()))
+        }
+
+        fn issuer(&self) -> &str {
+            "test-issuer"
+        }
+    }
+
+    #[test]
+    fn test_check_with_roles_honors_deny_precedence() {
+        let access_control = AccessControl::builder()
+            .role(Role::new("editor").allow(Permission::AllTools))
+            .role(Role::new("restricted").deny(Permission::Tool("code_exec".into())))
+            .build()
+            .unwrap();
+
+        let sso = SsoAccessControl {
+            validator: Arc::new(DummyValidator),
+            mapper: ClaimsMapper::builder().build(),
+            access_control,
+            audit_sink: None,
+        };
+
+        assert!(
+            sso.check_with_roles(
+                "bob",
+                &["editor".to_string(), "restricted".to_string()],
+                &Permission::Tool("code_exec".into())
+            )
+            .is_err()
+        );
+        assert!(
+            sso.check_with_roles(
+                "bob",
+                &["restricted".to_string(), "editor".to_string()],
+                &Permission::Tool("code_exec".into())
+            )
+            .is_err()
+        );
+        assert!(
+            sso.check_with_roles(
+                "bob",
+                &["editor".to_string(), "restricted".to_string()],
+                &Permission::Tool("search".into())
+            )
+            .is_ok()
+        );
     }
 }
 

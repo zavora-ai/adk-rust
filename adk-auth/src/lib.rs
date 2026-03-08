@@ -9,11 +9,13 @@
 //! - [`Permission`] - Tool and agent permissions
 //! - [`Role`] - Role with allow/deny rules
 //! - [`AccessControl`] - Permission checking
+//! - [`ScopeGuard`] - Declarative scope-based tool authorization
 //! - [`AuditSink`] - Audit logging trait
 //!
 //! ## Features
 //!
 //! - `sso` - Enable SSO/OAuth/OIDC support
+//! - `auth-bridge` - Enable JWT request context extraction for `adk-server`
 //!
 //! ## Quick Start
 //!
@@ -45,6 +47,9 @@ mod permission;
 mod role;
 pub mod scope;
 
+#[cfg(feature = "auth-bridge")]
+pub mod auth_bridge;
+
 // SSO module (feature-gated)
 #[cfg(feature = "sso")]
 pub mod sso;
@@ -59,3 +64,6 @@ pub use scope::{
     ContextScopeResolver, ScopeDenied, ScopeGuard, ScopeResolver, ScopeToolExt, ScopedTool,
     ScopedToolDyn, StaticScopeResolver, check_scopes,
 };
+
+#[cfg(feature = "auth-bridge")]
+pub use auth_bridge::{JwtRequestContextExtractor, JwtRequestContextExtractorBuilder};

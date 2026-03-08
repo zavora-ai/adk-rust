@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### adk-auth
+- **Cross-role deny precedence**: `AccessControl` and `SsoAccessControl` now evaluate deny rules across all assigned roles before allowing access. Previously, the first allowing role could bypass a deny from another role, making authorization depend on role assignment order.
+- **Verified email identity mapping**: `ClaimsMapper::user_id_from_email()` and `TokenClaims::user_id()` now require `email_verified == true` before using an email claim as the effective identity. Unverified emails fall back to `sub`.
+- **SSO validation hardening**: OIDC discovery now rejects issuer mismatches, provider validators now enforce `nbf`, JWKS refreshes are single-flight with a cache key cap, and Azure multi-tenant validation can be restricted with `with_allowed_tenants(...)`.
+- **Auth bridge implementation**: The `auth-bridge` feature now provides `JwtRequestContextExtractor` for `adk-server`, mapping Bearer tokens into `RequestContext` with validated user IDs and JWT scopes.
+
 #### adk-gemini
 - **FunctionCall serialization**: Fixed `thought_signature` leaking inside the `functionCall` JSON object when serializing `Part::FunctionCall`. The Gemini API expects `thoughtSignature` at the Part level only, not inside `functionCall`. The conversion layer in `adk-model` now correctly places the signature at the Part level and omits it from the inner `FunctionCall` struct.
 - **Broken serde attributes**: Restored missing `#[serde(skip_serializing_if = "Option::is_none")]` attributes on `FunctionDeclaration`, `FunctionCall`, `FunctionResponse`, and `ToolConfig` fields that had been replaced with invalid placeholder text, causing compilation failures.
