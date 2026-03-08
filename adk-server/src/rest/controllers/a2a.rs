@@ -52,7 +52,7 @@ struct ActiveTask {
 }
 
 enum StreamTaskMessage {
-    Update(UpdateEvent),
+    Update(Box<UpdateEvent>),
     Error(String),
 }
 
@@ -191,7 +191,11 @@ async fn start_task(
             Ok(events) => {
                 if let Some(sender) = stream_tx_for_task {
                     for event in &events {
-                        if sender.send(StreamTaskMessage::Update(event.clone())).await.is_err() {
+                        if sender
+                            .send(StreamTaskMessage::Update(Box::new(event.clone())))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -359,7 +363,7 @@ fn create_message_stream(
         while let Some(message) = stream_rx.recv().await {
             match message {
                 StreamTaskMessage::Update(event) => {
-                    let event_data = match &event {
+                    let event_data = match event.as_ref() {
                         UpdateEvent::TaskStatusUpdate(status) => {
                             serde_json::to_string(&JsonRpcResponse::success(
                                 request_id.clone(),

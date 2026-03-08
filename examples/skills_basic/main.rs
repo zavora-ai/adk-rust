@@ -92,6 +92,7 @@ async fn main() -> Result<()> {
         context_cache_config: None,
         cache_capable: None,
         request_context: None,
+        cancellation_token: None,
     })?
     .with_auto_skills(&skills_root, SkillInjectorConfig::default())?; // <-- Active discovery and injection
 

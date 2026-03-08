@@ -81,6 +81,7 @@ async fn main() -> anyhow::Result<()> {
         context_cache_config: None,
         cache_capable: None,
         request_context: None,
+        cancellation_token: None,
     })?;
 
     // --- Step 2: Run the agent to generate narration text ---

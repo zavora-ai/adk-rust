@@ -56,6 +56,7 @@ async fn main() -> Result<()> {
             context_cache_config: None,
             cache_capable: None,
             request_context: None,
+            cancellation_token: None,
         })?;
         println!("   Runner created successfully");
     } else {

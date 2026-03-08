@@ -11,7 +11,7 @@ fn arb_json_value() -> impl Strategy<Value = Value> {
         Just(Value::Null),
         any::<bool>().prop_map(Value::Bool),
         any::<i64>().prop_map(|n| Value::Number(n.into())),
-        "[a-zA-Z0-9 _-]{0,20}".prop_map(|s| Value::String(s)),
+        "[a-zA-Z0-9 _-]{0,20}".prop_map(Value::String),
     ]
 }
 
