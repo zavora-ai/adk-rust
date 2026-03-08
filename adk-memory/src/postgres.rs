@@ -2,6 +2,16 @@
 //!
 //! Provides [`PostgresMemoryService`], a `MemoryService` backed by PostgreSQL
 //! with pgvector cosine similarity search and tsvector keyword fallback.
+//!
+//! ## High-dimensional embeddings (>2000 dims)
+//!
+//! pgvector limits both HNSW and IVFFlat indexes to 2000 dimensions on
+//! the `vector` type. When the embedding provider reports more than 2000
+//! dimensions (e.g. Gemini `embedding-001` at 3072), the service
+//! automatically uses `halfvec` expression indexing — storing full-precision
+//! `vector(N)` data but indexing and querying via `halfvec(N)` casts.
+//! `halfvec` supports HNSW up to 4000 dimensions with negligible recall
+//! loss and 50% storage savings on the index.
 
 use crate::embedding::EmbeddingProvider;
 use crate::service::*;
@@ -11,10 +21,18 @@ use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use tracing::instrument;
 
+/// Maximum dimensions for a direct `vector` index in pgvector.
+/// Beyond this, we use `halfvec` expression indexing.
+const PGVECTOR_MAX_DIRECT_INDEX_DIMS: usize = 2000;
+
+/// Maximum dimensions for a `halfvec` index in pgvector.
+const PGVECTOR_MAX_HALFVEC_INDEX_DIMS: usize = 4000;
+
 /// pgvector index algorithm for the embedding column.
 ///
-/// Defaults to [`Hnsw`](VectorIndexType::Hnsw), which has no dimension
-/// limit and generally provides better recall than IVFFlat.
+/// Defaults to [`Hnsw`](VectorIndexType::Hnsw). When the embedding
+/// dimension exceeds 2000, the index is automatically built using
+/// `halfvec` expression indexing (supports up to 4000 dimensions).
 ///
 /// # Example
 ///
@@ -30,8 +48,8 @@ use tracing::instrument;
 pub enum VectorIndexType {
     /// HNSW (Hierarchical Navigable Small World) index.
     ///
-    /// No dimension limit. Recommended for high-dimensional embeddings
-    /// such as Gemini's 3072-dimensional vectors.
+    /// Supports up to 2000 dimensions directly, or up to 4000 dimensions
+    /// via automatic `halfvec` expression indexing. Recommended default.
     Hnsw {
         /// Maximum number of connections per node (default: 16).
         m: u32,
@@ -40,16 +58,17 @@ pub enum VectorIndexType {
     },
     /// IVFFlat (Inverted File with Flat compression) index.
     ///
-    /// Limited to 2000 dimensions by pgvector. Use only when you need
-    /// faster index build times on lower-dimensional embeddings.
+    /// Supports up to 2000 dimensions directly, or up to 4000 dimensions
+    /// via automatic `halfvec` expression indexing. Faster index builds
+    /// than HNSW but lower recall.
     IvfFlat {
         /// Number of inverted lists (default: 100).
         lists: u32,
     },
     /// Skip vector index creation entirely.
     ///
-    /// Useful when you want to manage indexes manually or when the
-    /// table has too few rows for an index to help.
+    /// Queries use exact sequential scan. Fine for small datasets
+    /// (<100k rows) or when you manage indexes manually.
     None,
 }
 
@@ -66,6 +85,9 @@ impl Default for VectorIndexType {
 /// Without a provider, search falls back to PostgreSQL full-text
 /// search (`tsvector`/`tsquery`).
 ///
+/// For embeddings with more than 2000 dimensions, the service
+/// automatically uses `halfvec` expression indexing and query casts.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -81,6 +103,8 @@ pub struct PostgresMemoryService {
     pool: PgPool,
     embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
     vector_index: VectorIndexType,
+    /// True when dims > 2000 and we use halfvec expression indexing.
+    use_halfvec: bool,
 }
 
 /// Builder for [`PostgresMemoryService`] with configurable vector index.
@@ -90,14 +114,14 @@ pub struct PostgresMemoryService {
 /// ```rust,ignore
 /// use adk_memory::{PostgresMemoryService, VectorIndexType};
 ///
-/// // HNSW (default) — works with any dimension count
+/// // HNSW (default) — auto-uses halfvec for >2000 dims
 /// let service = PostgresMemoryService::builder("postgres://...", None)
 ///     .build()
 ///     .await?;
 ///
-/// // IVFFlat — only for ≤2000 dimensions
+/// // IVFFlat with custom lists
 /// let service = PostgresMemoryService::builder("postgres://...", None)
-///     .vector_index(VectorIndexType::IvfFlat { lists: 100 })
+///     .vector_index(VectorIndexType::IvfFlat { lists: 200 })
 ///     .build()
 ///     .await?;
 /// ```
@@ -119,19 +143,27 @@ impl PostgresMemoryServiceBuilder {
         let pool = PgPool::connect(&self.database_url).await.map_err(|e| {
             adk_core::AdkError::Memory(format!("memory database connection failed: {e}"))
         })?;
+        let use_halfvec = needs_halfvec(&self.embedding_provider);
         Ok(PostgresMemoryService {
             pool,
             embedding_provider: self.embedding_provider,
             vector_index: self.vector_index,
+            use_halfvec,
         })
     }
+}
+
+/// Returns true when the provider's dimensions exceed the direct index limit.
+fn needs_halfvec(provider: &Option<Arc<dyn EmbeddingProvider>>) -> bool {
+    provider.as_ref().is_some_and(|p| p.dimensions() > PGVECTOR_MAX_DIRECT_INDEX_DIMS)
 }
 
 impl PostgresMemoryService {
     /// Connect to PostgreSQL for memory storage.
     ///
-    /// Uses HNSW vector indexing by default. For IVFFlat or custom
-    /// index settings, use [`builder`](Self::builder) instead.
+    /// Uses HNSW vector indexing by default. Automatically switches to
+    /// `halfvec` expression indexing when the embedding provider reports
+    /// more than 2000 dimensions.
     pub async fn new(
         database_url: &str,
         embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
@@ -139,7 +171,8 @@ impl PostgresMemoryService {
         let pool = PgPool::connect(database_url).await.map_err(|e| {
             adk_core::AdkError::Memory(format!("memory database connection failed: {e}"))
         })?;
-        Ok(Self { pool, embedding_provider, vector_index: VectorIndexType::default() })
+        let use_halfvec = needs_halfvec(&embedding_provider);
+        Ok(Self { pool, embedding_provider, vector_index: VectorIndexType::default(), use_halfvec })
     }
 
     /// Create a builder for fine-grained configuration.
@@ -164,11 +197,9 @@ impl PostgresMemoryService {
     }
 
     /// Create a memory service from an existing connection pool.
-    ///
-    /// Uses HNSW vector indexing by default. To configure the index
-    /// type on an existing pool, use [`from_pool_with_index`](Self::from_pool_with_index).
     pub fn from_pool(pool: PgPool, embedding_provider: Option<Arc<dyn EmbeddingProvider>>) -> Self {
-        Self { pool, embedding_provider, vector_index: VectorIndexType::default() }
+        let use_halfvec = needs_halfvec(&embedding_provider);
+        Self { pool, embedding_provider, vector_index: VectorIndexType::default(), use_halfvec }
     }
 
     /// Create a memory service from an existing pool with a specific index type.
@@ -177,25 +208,34 @@ impl PostgresMemoryService {
         embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
         vector_index: VectorIndexType,
     ) -> Self {
-        Self { pool, embedding_provider, vector_index }
+        let use_halfvec = needs_halfvec(&embedding_provider);
+        Self { pool, embedding_provider, vector_index, use_halfvec }
     }
 
     /// Create the pgvector extension, `memory_entries` table, and indexes.
     ///
-    /// The vector column dimension is set to the embedding provider's
-    /// `dimensions()` value. If no provider is configured, the column
-    /// is created as `vector(1536)` (a common default) but will remain
-    /// NULL for all rows.
+    /// The vector column uses the embedding provider's `dimensions()` value.
+    /// If no provider is configured, defaults to `vector(1536)`.
     ///
-    /// The vector index type defaults to HNSW (no dimension limit).
-    /// Use [`builder`](Self::builder) to select IVFFlat or skip indexing.
+    /// When dimensions exceed 2000, the index is built using `halfvec`
+    /// expression indexing (`(embedding::halfvec(N))`) which supports
+    /// up to 4000 dimensions.
     pub async fn migrate(&self) -> Result<()> {
         let dims = self.embedding_provider.as_ref().map(|p| p.dimensions()).unwrap_or(1536);
+
+        if self.use_halfvec && dims > PGVECTOR_MAX_HALFVEC_INDEX_DIMS {
+            return Err(adk_core::AdkError::Memory(format!(
+                "embedding dimension {dims} exceeds pgvector halfvec index limit of \
+                 {PGVECTOR_MAX_HALFVEC_INDEX_DIMS}. Reduce dimensions in your embedding provider \
+                 or use VectorIndexType::None for exact search."
+            )));
+        }
 
         sqlx::query("CREATE EXTENSION IF NOT EXISTS vector").execute(&self.pool).await.map_err(
             |e| adk_core::AdkError::Memory(format!("pgvector extension creation failed: {e}")),
         )?;
 
+        // Store embeddings at full precision regardless of index type
         let create_table = format!(
             r#"
             CREATE TABLE IF NOT EXISTS memory_entries (
@@ -225,29 +265,7 @@ impl PostgresMemoryService {
         .await
         .map_err(|e| adk_core::AdkError::Memory(format!("index creation failed: {e}")))?;
 
-        match &self.vector_index {
-            VectorIndexType::Hnsw { m, ef_construction } => {
-                let idx = format!(
-                    "CREATE INDEX IF NOT EXISTS idx_memory_embedding \
-                     ON memory_entries USING hnsw (embedding vector_cosine_ops) \
-                     WITH (m = {m}, ef_construction = {ef_construction})"
-                );
-                sqlx::query(&idx).execute(&self.pool).await.map_err(|e| {
-                    adk_core::AdkError::Memory(format!("HNSW index creation failed: {e}"))
-                })?;
-            }
-            VectorIndexType::IvfFlat { lists } => {
-                let idx = format!(
-                    "CREATE INDEX IF NOT EXISTS idx_memory_embedding \
-                     ON memory_entries USING ivfflat (embedding vector_cosine_ops) \
-                     WITH (lists = {lists})"
-                );
-                sqlx::query(&idx).execute(&self.pool).await.map_err(|e| {
-                    adk_core::AdkError::Memory(format!("IVFFlat index creation failed: {e}"))
-                })?;
-            }
-            VectorIndexType::None => {}
-        }
+        self.create_vector_index(dims).await?;
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_memory_search_text \
@@ -256,6 +274,50 @@ impl PostgresMemoryService {
         .execute(&self.pool)
         .await
         .map_err(|e| adk_core::AdkError::Memory(format!("index creation failed: {e}")))?;
+
+        Ok(())
+    }
+
+    /// Build the appropriate vector index DDL based on index type and dimensions.
+    async fn create_vector_index(&self, dims: usize) -> Result<()> {
+        let idx_sql = match &self.vector_index {
+            VectorIndexType::Hnsw { m, ef_construction } => {
+                if self.use_halfvec {
+                    // Expression index: cast vector → halfvec for >2000 dims
+                    format!(
+                        "CREATE INDEX IF NOT EXISTS idx_memory_embedding \
+                         ON memory_entries USING hnsw ((embedding::halfvec({dims})) halfvec_cosine_ops) \
+                         WITH (m = {m}, ef_construction = {ef_construction})"
+                    )
+                } else {
+                    format!(
+                        "CREATE INDEX IF NOT EXISTS idx_memory_embedding \
+                         ON memory_entries USING hnsw (embedding vector_cosine_ops) \
+                         WITH (m = {m}, ef_construction = {ef_construction})"
+                    )
+                }
+            }
+            VectorIndexType::IvfFlat { lists } => {
+                if self.use_halfvec {
+                    format!(
+                        "CREATE INDEX IF NOT EXISTS idx_memory_embedding \
+                         ON memory_entries USING ivfflat ((embedding::halfvec({dims})) halfvec_cosine_ops) \
+                         WITH (lists = {lists})"
+                    )
+                } else {
+                    format!(
+                        "CREATE INDEX IF NOT EXISTS idx_memory_embedding \
+                         ON memory_entries USING ivfflat (embedding vector_cosine_ops) \
+                         WITH (lists = {lists})"
+                    )
+                }
+            }
+            VectorIndexType::None => return Ok(()),
+        };
+
+        sqlx::query(&idx_sql).execute(&self.pool).await.map_err(|e| {
+            adk_core::AdkError::Memory(format!("vector index creation failed: {e}"))
+        })?;
 
         Ok(())
     }
@@ -328,9 +390,7 @@ impl MemoryService for PostgresMemoryService {
                 .bind(text)
                 .execute(&self.pool)
                 .await
-                .map_err(|e| {
-                    adk_core::AdkError::Memory(format!("insert failed: {e}"))
-                })?;
+                .map_err(|e| adk_core::AdkError::Memory(format!("insert failed: {e}")))?;
             } else {
                 sqlx::query(
                     r#"
@@ -373,22 +433,45 @@ impl MemoryService for PostgresMemoryService {
                     )
                 })?);
 
-            sqlx::query(
-                r#"
-                SELECT content, author, timestamp, (embedding <=> $3) AS distance
-                FROM memory_entries
-                WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
-                ORDER BY embedding <=> $3
-                LIMIT $4
-                "#,
-            )
-            .bind(&req.app_name)
-            .bind(&req.user_id)
-            .bind(query_vec)
-            .bind(limit)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("search failed: {e}")))?
+            if self.use_halfvec {
+                // Cast both sides to halfvec so the expression index is used
+                let dims = provider.dimensions();
+                let sql = format!(
+                    r#"
+                    SELECT content, author, timestamp,
+                           (embedding::halfvec({dims}) <=> $3::halfvec({dims})) AS distance
+                    FROM memory_entries
+                    WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
+                    ORDER BY embedding::halfvec({dims}) <=> $3::halfvec({dims})
+                    LIMIT $4
+                    "#
+                );
+                sqlx::query(&sql)
+                    .bind(&req.app_name)
+                    .bind(&req.user_id)
+                    .bind(&query_vec)
+                    .bind(limit)
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| adk_core::AdkError::Memory(format!("search failed: {e}")))?
+            } else {
+                sqlx::query(
+                    r#"
+                    SELECT content, author, timestamp, (embedding <=> $3) AS distance
+                    FROM memory_entries
+                    WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
+                    ORDER BY embedding <=> $3
+                    LIMIT $4
+                    "#,
+                )
+                .bind(&req.app_name)
+                .bind(&req.user_id)
+                .bind(query_vec)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| adk_core::AdkError::Memory(format!("search failed: {e}")))?
+            }
         } else {
             // Full-text search fallback
             sqlx::query(
@@ -415,8 +498,6 @@ impl MemoryService for PostgresMemoryService {
             rows.iter()
                 .filter(|row| {
                     if let Some(threshold) = min_score {
-                        // For vector search, distance is lower = better; convert to similarity
-                        // For text search, rank_score is higher = better
                         let score: f32 = row
                             .try_get::<f32, _>("distance")
                             .map(|d| 1.0 - d)
