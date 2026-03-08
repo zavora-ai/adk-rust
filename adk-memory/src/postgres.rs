@@ -11,6 +11,54 @@ use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use tracing::instrument;
 
+/// pgvector index algorithm for the embedding column.
+///
+/// Defaults to [`Hnsw`](VectorIndexType::Hnsw), which has no dimension
+/// limit and generally provides better recall than IVFFlat.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use adk_memory::{PostgresMemoryService, VectorIndexType};
+///
+/// let service = PostgresMemoryService::builder("postgres://...", None)
+///     .vector_index(VectorIndexType::IvfFlat { lists: 100 })
+///     .build()
+///     .await?;
+/// ```
+#[derive(Debug, Clone)]
+pub enum VectorIndexType {
+    /// HNSW (Hierarchical Navigable Small World) index.
+    ///
+    /// No dimension limit. Recommended for high-dimensional embeddings
+    /// such as Gemini's 3072-dimensional vectors.
+    Hnsw {
+        /// Maximum number of connections per node (default: 16).
+        m: u32,
+        /// Size of the dynamic candidate list during construction (default: 64).
+        ef_construction: u32,
+    },
+    /// IVFFlat (Inverted File with Flat compression) index.
+    ///
+    /// Limited to 2000 dimensions by pgvector. Use only when you need
+    /// faster index build times on lower-dimensional embeddings.
+    IvfFlat {
+        /// Number of inverted lists (default: 100).
+        lists: u32,
+    },
+    /// Skip vector index creation entirely.
+    ///
+    /// Useful when you want to manage indexes manually or when the
+    /// table has too few rows for an index to help.
+    None,
+}
+
+impl Default for VectorIndexType {
+    fn default() -> Self {
+        Self::Hnsw { m: 16, ef_construction: 64 }
+    }
+}
+
 /// PostgreSQL-backed memory service with optional vector search.
 ///
 /// When an [`EmbeddingProvider`] is supplied, entries are stored with
@@ -32,13 +80,58 @@ use tracing::instrument;
 pub struct PostgresMemoryService {
     pool: PgPool,
     embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
+    vector_index: VectorIndexType,
+}
+
+/// Builder for [`PostgresMemoryService`] with configurable vector index.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use adk_memory::{PostgresMemoryService, VectorIndexType};
+///
+/// // HNSW (default) — works with any dimension count
+/// let service = PostgresMemoryService::builder("postgres://...", None)
+///     .build()
+///     .await?;
+///
+/// // IVFFlat — only for ≤2000 dimensions
+/// let service = PostgresMemoryService::builder("postgres://...", None)
+///     .vector_index(VectorIndexType::IvfFlat { lists: 100 })
+///     .build()
+///     .await?;
+/// ```
+pub struct PostgresMemoryServiceBuilder {
+    database_url: String,
+    embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
+    vector_index: VectorIndexType,
+}
+
+impl PostgresMemoryServiceBuilder {
+    /// Set the vector index algorithm used during migration.
+    pub fn vector_index(mut self, index: VectorIndexType) -> Self {
+        self.vector_index = index;
+        self
+    }
+
+    /// Connect and build the service.
+    pub async fn build(self) -> Result<PostgresMemoryService> {
+        let pool = PgPool::connect(&self.database_url).await.map_err(|e| {
+            adk_core::AdkError::Memory(format!("memory database connection failed: {e}"))
+        })?;
+        Ok(PostgresMemoryService {
+            pool,
+            embedding_provider: self.embedding_provider,
+            vector_index: self.vector_index,
+        })
+    }
 }
 
 impl PostgresMemoryService {
     /// Connect to PostgreSQL for memory storage.
     ///
-    /// Creates a new pool with default settings. For production use,
-    /// prefer [`from_pool`](Self::from_pool) to share a tuned pool.
+    /// Uses HNSW vector indexing by default. For IVFFlat or custom
+    /// index settings, use [`builder`](Self::builder) instead.
     pub async fn new(
         database_url: &str,
         embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
@@ -46,29 +139,45 @@ impl PostgresMemoryService {
         let pool = PgPool::connect(database_url).await.map_err(|e| {
             adk_core::AdkError::Memory(format!("memory database connection failed: {e}"))
         })?;
-        Ok(Self { pool, embedding_provider })
+        Ok(Self { pool, embedding_provider, vector_index: VectorIndexType::default() })
     }
 
-    /// Create a memory service from an existing connection pool.
-    ///
-    /// Use this to share a pool with tuned settings (max connections,
-    /// idle timeout, etc.) across multiple services.
+    /// Create a builder for fine-grained configuration.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// use sqlx::postgres::PgPoolOptions;
-    ///
-    /// let pool = PgPoolOptions::new()
-    ///     .max_connections(20)
-    ///     .min_connections(5)
-    ///     .connect("postgres://user:pass@localhost/mydb")
+    /// let service = PostgresMemoryService::builder("postgres://...", Some(provider))
+    ///     .vector_index(VectorIndexType::Hnsw { m: 32, ef_construction: 128 })
+    ///     .build()
     ///     .await?;
-    ///
-    /// let service = PostgresMemoryService::from_pool(pool, Some(embedding_provider));
     /// ```
+    pub fn builder(
+        database_url: impl Into<String>,
+        embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
+    ) -> PostgresMemoryServiceBuilder {
+        PostgresMemoryServiceBuilder {
+            database_url: database_url.into(),
+            embedding_provider,
+            vector_index: VectorIndexType::default(),
+        }
+    }
+
+    /// Create a memory service from an existing connection pool.
+    ///
+    /// Uses HNSW vector indexing by default. To configure the index
+    /// type on an existing pool, use [`from_pool_with_index`](Self::from_pool_with_index).
     pub fn from_pool(pool: PgPool, embedding_provider: Option<Arc<dyn EmbeddingProvider>>) -> Self {
-        Self { pool, embedding_provider }
+        Self { pool, embedding_provider, vector_index: VectorIndexType::default() }
+    }
+
+    /// Create a memory service from an existing pool with a specific index type.
+    pub fn from_pool_with_index(
+        pool: PgPool,
+        embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
+        vector_index: VectorIndexType,
+    ) -> Self {
+        Self { pool, embedding_provider, vector_index }
     }
 
     /// Create the pgvector extension, `memory_entries` table, and indexes.
@@ -77,6 +186,9 @@ impl PostgresMemoryService {
     /// `dimensions()` value. If no provider is configured, the column
     /// is created as `vector(1536)` (a common default) but will remain
     /// NULL for all rows.
+    ///
+    /// The vector index type defaults to HNSW (no dimension limit).
+    /// Use [`builder`](Self::builder) to select IVFFlat or skip indexing.
     pub async fn migrate(&self) -> Result<()> {
         let dims = self.embedding_provider.as_ref().map(|p| p.dimensions()).unwrap_or(1536);
 
@@ -113,14 +225,29 @@ impl PostgresMemoryService {
         .await
         .map_err(|e| adk_core::AdkError::Memory(format!("index creation failed: {e}")))?;
 
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_memory_embedding \
-             ON memory_entries USING ivfflat (embedding vector_cosine_ops) \
-             WITH (lists = 100)",
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Memory(format!("index creation failed: {e}")))?;
+        match &self.vector_index {
+            VectorIndexType::Hnsw { m, ef_construction } => {
+                let idx = format!(
+                    "CREATE INDEX IF NOT EXISTS idx_memory_embedding \
+                     ON memory_entries USING hnsw (embedding vector_cosine_ops) \
+                     WITH (m = {m}, ef_construction = {ef_construction})"
+                );
+                sqlx::query(&idx).execute(&self.pool).await.map_err(|e| {
+                    adk_core::AdkError::Memory(format!("HNSW index creation failed: {e}"))
+                })?;
+            }
+            VectorIndexType::IvfFlat { lists } => {
+                let idx = format!(
+                    "CREATE INDEX IF NOT EXISTS idx_memory_embedding \
+                     ON memory_entries USING ivfflat (embedding vector_cosine_ops) \
+                     WITH (lists = {lists})"
+                );
+                sqlx::query(&idx).execute(&self.pool).await.map_err(|e| {
+                    adk_core::AdkError::Memory(format!("IVFFlat index creation failed: {e}"))
+                })?;
+            }
+            VectorIndexType::None => {}
+        }
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_memory_search_text \

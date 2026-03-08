@@ -56,7 +56,7 @@ pub use mongodb::MongoMemoryService;
 #[cfg(feature = "neo4j-memory")]
 pub use neo4j::Neo4jMemoryService;
 #[cfg(feature = "database-memory")]
-pub use postgres::PostgresMemoryService;
+pub use postgres::{PostgresMemoryService, PostgresMemoryServiceBuilder, VectorIndexType};
 #[cfg(feature = "redis-memory")]
 pub use redis::{RedisMemoryConfig, RedisMemoryService};
 #[cfg(feature = "sqlite-memory")]
