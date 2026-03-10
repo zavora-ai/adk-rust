@@ -6,7 +6,7 @@ use adk_session::*;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔍 Verifying existing database...\n");
 
-    let service = DatabaseSessionService::new("sqlite:test_adk.db").await?;
+    let service = SqliteSessionService::new("sqlite:test_adk.db").await?;
 
     // List all sessions
     let sessions = service

@@ -71,48 +71,169 @@ impl Neo4jSessionService {
         &self.graph
     }
 
-    /// Create constraints and indexes for the Neo4j graph schema.
+    /// Registry node label for tracking applied migration versions.
+    const REGISTRY_LABEL: &'static str = "_AdkSessionMigration";
+
+    /// Compiled-in Neo4j migration steps.
     ///
-    /// Creates:
-    /// - Uniqueness constraint on `Session(app_name, user_id, session_id)`
-    /// - Index on `Event(session_id, timestamp)`
-    /// - Uniqueness constraint on `AppState(app_name)`
-    /// - Uniqueness constraint on `UserState(app_name, user_id)`
+    /// Each entry is `(version, description, &[cypher_statements])`. All Cypher
+    /// statements use `IF NOT EXISTS` for idempotent execution.
+    const NEO4J_SESSION_MIGRATIONS: &'static [(i64, &'static str, &'static [&'static str])] = &[(
+        1,
+        "create initial constraints and indexes",
+        &[
+            "CREATE CONSTRAINT session_unique IF NOT EXISTS \
+             FOR (s:Session) REQUIRE (s.app_name, s.user_id, s.session_id) IS UNIQUE",
+            "CREATE INDEX event_session_ts IF NOT EXISTS \
+             FOR (e:Event) ON (e.session_id, e.timestamp)",
+            "CREATE CONSTRAINT app_state_unique IF NOT EXISTS \
+             FOR (a:AppState) REQUIRE (a.app_name) IS UNIQUE",
+            "CREATE CONSTRAINT user_state_unique IF NOT EXISTS \
+             FOR (u:UserState) REQUIRE (u.app_name, u.user_id) IS UNIQUE",
+        ],
+    )];
+
+    /// Run versioned migrations for Neo4j session storage.
     ///
-    /// Safe to call multiple times — all statements use `IF NOT EXISTS`.
+    /// The runner:
+    /// 1. Creates a uniqueness constraint on registry nodes.
+    /// 2. Detects baseline — if `session_unique` constraint exists but
+    ///    registry is empty, records v1 as already applied.
+    /// 3. Reads the maximum applied version from the registry.
+    /// 4. Returns an error if the database version exceeds the compiled-in max.
+    /// 5. Executes each unapplied step idempotently and records it.
     pub async fn migrate(&self) -> Result<()> {
+        // Step 1: Ensure registry has a uniqueness constraint on `version`
         self.graph
-            .run(neo4rs::query(
-                "CREATE CONSTRAINT session_unique IF NOT EXISTS \
-                 FOR (s:Session) REQUIRE (s.app_name, s.user_id, s.session_id) IS UNIQUE",
+            .run(neo4rs::query(&format!(
+                "CREATE CONSTRAINT {}_version_unique IF NOT EXISTS \
+                 FOR (m:{}) REQUIRE (m.version) IS UNIQUE",
+                Self::REGISTRY_LABEL.to_lowercase(),
+                Self::REGISTRY_LABEL,
+            )))
+            .await
+            .map_err(|e| {
+                adk_core::AdkError::Session(format!("migration registry creation failed: {e}"))
+            })?;
+
+        // Step 2: Read current max applied version
+        let mut max_applied = self.read_max_applied_version().await?;
+
+        // Step 3: Baseline detection — if registry is empty but session_unique
+        // constraint already exists, record v1 as applied.
+        if max_applied == 0 {
+            let existing = self.detect_existing_tables().await?;
+            if existing {
+                if let Some(&(version, description, _)) = Self::NEO4J_SESSION_MIGRATIONS.first() {
+                    self.record_migration(version, description).await?;
+                    max_applied = version;
+                }
+            }
+        }
+
+        // Step 4: Compiled-in max version
+        let max_compiled = Self::NEO4J_SESSION_MIGRATIONS.last().map(|s| s.0).unwrap_or(0);
+
+        // Step 5: Version mismatch check
+        if max_applied > max_compiled {
+            return Err(adk_core::AdkError::Session(format!(
+                "schema version mismatch: database is at v{max_applied} \
+                 but code only knows up to v{max_compiled}. \
+                 Upgrade your ADK version."
+            )));
+        }
+
+        // Step 6: Execute unapplied steps idempotently
+        for &(version, description, cypher_statements) in Self::NEO4J_SESSION_MIGRATIONS {
+            if version <= max_applied {
+                continue;
+            }
+
+            for cypher in cypher_statements {
+                self.graph.run(neo4rs::query(cypher)).await.map_err(|e| {
+                    adk_core::AdkError::Session(format!(
+                        "{}",
+                        crate::migration::MigrationError {
+                            version,
+                            description: description.to_string(),
+                            cause: e.to_string(),
+                        }
+                    ))
+                })?;
+            }
+
+            self.record_migration(version, description).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Returns the highest applied migration version, or 0 if no registry
+    /// exists or the registry is empty.
+    pub async fn schema_version(&self) -> Result<i64> {
+        self.read_max_applied_version().await
+    }
+
+    /// Read the maximum applied version from the registry nodes.
+    async fn read_max_applied_version(&self) -> Result<i64> {
+        let query_str =
+            format!("OPTIONAL MATCH (m:{}) RETURN max(m.version) AS max_v", Self::REGISTRY_LABEL,);
+        let mut row_stream = self.graph.execute(neo4rs::query(&query_str)).await.map_err(|e| {
+            adk_core::AdkError::Session(format!("migration registry read failed: {e}"))
+        })?;
+
+        if let Some(row) = row_stream.next().await.map_err(|e| {
+            adk_core::AdkError::Session(format!("migration registry read failed: {e}"))
+        })? {
+            // max() returns null when no nodes exist; treat as 0
+            Ok(row.get::<i64>("max_v").unwrap_or(0))
+        } else {
+            Ok(0)
+        }
+    }
+
+    /// Detect whether the `session_unique` constraint already exists (baseline).
+    async fn detect_existing_tables(&self) -> Result<bool> {
+        let mut row_stream = self
+            .graph
+            .execute(neo4rs::query(
+                "SHOW CONSTRAINTS YIELD name WHERE name = 'session_unique' RETURN name",
             ))
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::Session(format!("baseline detection failed: {e}")))?;
 
-        self.graph
-            .run(neo4rs::query(
-                "CREATE INDEX event_session_ts IF NOT EXISTS \
-                 FOR (e:Event) ON (e.session_id, e.timestamp)",
-            ))
+        let found = row_stream
+            .next()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::Session(format!("baseline detection failed: {e}")))?
+            .is_some();
 
+        Ok(found)
+    }
+
+    /// Record a successfully applied migration step as a registry node.
+    async fn record_migration(&self, version: i64, description: &str) -> Result<()> {
+        let query_str = format!(
+            "CREATE (m:{} {{version: $version, description: $description, applied_at: datetime()}})",
+            Self::REGISTRY_LABEL,
+        );
         self.graph
-            .run(neo4rs::query(
-                "CREATE CONSTRAINT app_state_unique IF NOT EXISTS \
-                 FOR (a:AppState) REQUIRE (a.app_name) IS UNIQUE",
-            ))
+            .run(
+                neo4rs::query(&query_str)
+                    .param("version", version)
+                    .param("description", description.to_string()),
+            )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {e}")))?;
-
-        self.graph
-            .run(neo4rs::query(
-                "CREATE CONSTRAINT user_state_unique IF NOT EXISTS \
-                 FOR (u:UserState) REQUIRE (u.app_name, u.user_id) IS UNIQUE",
-            ))
-            .await
-            .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {e}")))?;
-
+            .map_err(|e| {
+                adk_core::AdkError::Session(format!(
+                    "{}",
+                    crate::migration::MigrationError {
+                        version,
+                        description: description.to_string(),
+                        cause: format!("registry record failed: {e}"),
+                    }
+                ))
+            })?;
         Ok(())
     }
 }

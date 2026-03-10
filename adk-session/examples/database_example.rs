@@ -9,7 +9,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = "test_adk.db";
     println!("🔧 Creating SQLite database at {}", db_path);
 
-    let service = DatabaseSessionService::new(&format!("sqlite:{}", db_path)).await?;
+    let service = SqliteSessionService::new(&format!("sqlite:{}", db_path)).await?;
     service.migrate().await?;
 
     println!("✅ Database created and migrated");

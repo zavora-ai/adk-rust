@@ -242,7 +242,7 @@ cargo run -- serve --port 8080
 2. **Error Handling**: Use proper error handling with `Result` types
 3. **Graceful Shutdown**: The Launcher handles Ctrl+C gracefully in both modes
 4. **Port Selection**: Choose ports that don't conflict with other services (default 8080)
-5. **Session Management**: In production, consider using `DatabaseSessionService` instead of in-memory sessions
+5. **Session Management**: In production, consider using `PostgresSessionService` or `SqliteSessionService` instead of in-memory sessions
 
 ## Related
 

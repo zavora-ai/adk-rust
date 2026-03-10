@@ -124,7 +124,18 @@ let request = DeleteRequest {
 
 ## SessionService Implementations
 
-ADK-Rust provides two session service implementations:
+ADK-Rust provides multiple session service implementations:
+
+| Implementation | Feature Flag | Use Case |
+|----------------|-------------|----------|
+| `InMemorySessionService` | _(none)_ | Development, testing, single-instance |
+| `SqliteSessionService` | `sqlite` | Single-node persistence |
+| `PostgresSessionService` | `postgres` | Production relational persistence |
+| `RedisSessionService` | `redis` | Low-latency in-memory persistence |
+| `MongoSessionService` | `mongodb` | Document-oriented persistence |
+| `Neo4jSessionService` | `neo4j` | Graph database persistence |
+| `FirestoreSessionService` | `firestore` | Google Cloud Firestore |
+| `VertexAiSessionService` | `vertex-session` | Vertex AI Session API |
 
 ### InMemorySessionService
 
@@ -155,18 +166,18 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-### DatabaseSessionService
+### SqliteSessionService
 
-Stores sessions in a SQLite database. Suitable for production deployments requiring persistence.
+Stores sessions in a SQLite database. Suitable for development and single-node deployments requiring persistence.
 
 ```rust
-use adk_session::{DatabaseSessionService, SessionService, CreateRequest};
+use adk_session::{SqliteSessionService, SessionService, CreateRequest};
 use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Connect to database
-    let session_service = DatabaseSessionService::new("sqlite:sessions.db").await?;
+    let session_service = SqliteSessionService::new("sqlite:sessions.db").await?;
     
     // Run migrations to create tables
     session_service.migrate().await?;
@@ -185,10 +196,92 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-> **Note**: The `DatabaseSessionService` requires the `database` feature flag:
+> **Note**: The `SqliteSessionService` requires the `sqlite` feature flag:
 > ```toml
-> adk-session = { version = "0.3", features = ["database"] }
+> adk-session = { version = "0.3", features = ["sqlite"] }
 > ```
+
+### PostgresSessionService
+
+Stores sessions in PostgreSQL. Suitable for production multi-node deployments.
+
+```rust
+use adk_session::{PostgresSessionService, SessionService, CreateRequest};
+use std::collections::HashMap;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let session_service = PostgresSessionService::new(
+        "postgres://user:pass@localhost:5432/mydb"
+    ).await?;
+    
+    session_service.migrate().await?;
+    
+    let session = session_service.create(CreateRequest {
+        app_name: "my_app".to_string(),
+        user_id: "user_123".to_string(),
+        session_id: None,
+        state: HashMap::new(),
+    }).await?;
+    
+    println!("Session persisted: {}", session.id());
+    Ok(())
+}
+```
+
+> **Note**: Requires the `postgres` feature flag:
+> ```toml
+> adk-session = { version = "0.3", features = ["postgres"] }
+> ```
+
+### RedisSessionService
+
+Stores sessions in Redis. Ideal for low-latency, high-throughput deployments.
+
+```rust
+use adk_session::{RedisSessionService, RedisSessionConfig};
+
+let config = RedisSessionConfig::new("redis://localhost:6379");
+let session_service = RedisSessionService::new(config).await?;
+```
+
+> **Note**: Requires the `redis` feature flag:
+> ```toml
+> adk-session = { version = "0.3", features = ["redis"] }
+> ```
+
+## Schema Migrations
+
+All database-backed session services (SQLite, PostgreSQL, MongoDB, Neo4j) include a versioned, forward-only migration system. Migrations are tracked in a `_schema_migrations` registry table.
+
+### Running Migrations
+
+Call `migrate()` after constructing any database-backed service. It is idempotent — safe to call on every startup:
+
+```rust
+use adk_session::SqliteSessionService;
+
+let service = SqliteSessionService::new("sqlite:sessions.db").await?;
+service.migrate().await?;
+```
+
+### Checking Schema Version
+
+```rust
+let version = service.schema_version().await?;
+println!("Current schema version: {version}");
+```
+
+### Baseline Detection
+
+If you have an existing database created before the migration system was added, `migrate()` detects the pre-existing tables and registers them as already applied. This avoids destructive re-creation and allows incremental adoption.
+
+### Migration Guarantees
+
+- **Forward-only**: Migrations are applied in order and never rolled back
+- **Idempotent**: Running `migrate()` multiple times is safe
+- **Checksummed**: Each migration is tracked with a SHA-256 checksum to detect tampering
+- **Atomic**: PostgreSQL migrations use advisory locks to prevent concurrent execution
 
 ## Session Lifecycle
 
@@ -441,6 +534,7 @@ async fn main() -> anyhow::Result<()> {
 ## Related
 
 - [State Management](state.md) - Managing session state with prefixes
+- [Context Compaction](context-compaction.md) - Reducing LLM context size
 - [Events](../events/events.md) - Event structure and actions
 - [Runner](../deployment/launcher.md) - Agent execution with sessions
 

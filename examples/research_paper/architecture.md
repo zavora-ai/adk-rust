@@ -252,7 +252,7 @@ graph TB
 
 ### Recommended Production Changes
 
-1. **Session Storage**: Use `DatabaseSessionService` with PostgreSQL
+1. **Session Storage**: Use `PostgresSessionService` for production
 2. **Artifact Storage**: Use GCS or S3 for PDF storage
 3. **Caching**: Add Redis for session caching
 4. **Load Balancing**: Multiple server instances behind load balancer

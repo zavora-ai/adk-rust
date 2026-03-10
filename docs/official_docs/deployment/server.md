@@ -411,7 +411,7 @@ Launcher::new(Arc::new(agent))
 For production deployments, use a persistent session service:
 
 ```rust
-use adk_session::DatabaseSessionService;
+use adk_session::SqliteSessionService;
 
 // Note: This requires implementing a custom server setup
 // The Launcher uses InMemorySessionService by default
@@ -463,7 +463,7 @@ RUST_LOG=debug cargo run -- serve
 2. **Error Handling**: Check HTTP status codes and handle errors appropriately
 3. **Streaming**: Use SSE for real-time responses; parse events line by line
 4. **Security**: In production, implement authentication and restrict CORS
-5. **Persistence**: Use `DatabaseSessionService` for production deployments
+5. **Persistence**: Use `SqliteSessionService` or `PostgresSessionService` for production deployments
 6. **Monitoring**: Enable telemetry and monitor logs for issues
 
 ## Full-Stack Example

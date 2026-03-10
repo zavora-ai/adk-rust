@@ -10,7 +10,7 @@ The VertexAI Session Service will provide persistent, cloud-based session storag
 
 ## The Problem
 
-The current `InMemorySessionService` and `DatabaseSessionService` have limitations:
+The current `InMemorySessionService` and `SqliteSessionService` have limitations:
 
 - **InMemory**: Sessions lost on restart, not suitable for production
 - **Database**: Requires self-managed database infrastructure
@@ -215,14 +215,14 @@ let session_service = Arc::new(VertexAISessionService::new(VertexAIConfig {
 // No other code changes needed!
 ```
 
-### From DatabaseSessionService
+### From SqliteSessionService
 
 ```rust,ignore
 // Migration script to export from database and import to Vertex AI
-use adk_session::{DatabaseSessionService, VertexAISessionService};
+use adk_session::{SqliteSessionService, VertexAISessionService};
 
 async fn migrate_sessions(
-    db_service: &DatabaseSessionService,
+    db_service: &SqliteSessionService,
     vertex_service: &VertexAISessionService,
 ) -> Result<()> {
     // List all sessions from database

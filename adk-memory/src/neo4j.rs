@@ -57,6 +57,29 @@ pub struct Neo4jMemoryService {
 }
 
 impl Neo4jMemoryService {
+    /// Registry node label for tracking applied migration versions.
+    const REGISTRY_LABEL: &'static str = "_AdkMemoryMigration";
+
+    /// Compiled-in Neo4j migration steps for memory storage.
+    ///
+    /// Each entry is `(version, description, &[cypher_statements])`. All Cypher
+    /// statements use `IF NOT EXISTS` for idempotent execution.
+    ///
+    /// The vector index step is handled separately in [`migrate`](Self::migrate)
+    /// because it depends on the configured embedding dimensions.
+    const NEO4J_MEMORY_MIGRATIONS: &'static [(i64, &'static str, &'static [&'static str])] = &[(
+        1,
+        "create initial constraints and indexes",
+        &[
+            "CREATE CONSTRAINT memory_entry_unique IF NOT EXISTS \
+             FOR (m:MemoryEntry) REQUIRE (m.id) IS UNIQUE",
+            "CREATE INDEX memory_app_user IF NOT EXISTS \
+             FOR (m:MemoryEntry) ON (m.app_name, m.user_id)",
+            "CREATE FULLTEXT INDEX memory_content IF NOT EXISTS \
+             FOR (m:MemoryEntry) ON EACH [m.content_text]",
+        ],
+    )];
+
     /// Create a Neo4j memory service from an existing graph connection.
     ///
     /// # Arguments
@@ -88,44 +111,83 @@ impl Neo4jMemoryService {
         &self.graph
     }
 
-    /// Create constraints, indexes, and optional vector index for the memory graph schema.
+    /// Run versioned migrations for Neo4j memory storage.
     ///
-    /// Creates:
-    /// - Uniqueness constraint on `MemoryEntry(id)`
-    /// - Composite index on `MemoryEntry(app_name, user_id)` for filtered queries
-    /// - Vector index on `MemoryEntry(embedding)` with cosine similarity
-    ///   (only if an embedding provider is configured)
-    /// - Full-text index on `MemoryEntry(content)` for fallback text search
-    ///
-    /// Safe to call multiple times — all statements use `IF NOT EXISTS`.
+    /// The runner:
+    /// 1. Creates a uniqueness constraint on registry nodes.
+    /// 2. Detects baseline — if `memory_entry_unique` constraint exists but
+    ///    registry is empty, records v1 as already applied.
+    /// 3. Reads the maximum applied version from the registry.
+    /// 4. Returns an error if the database version exceeds the compiled-in max.
+    /// 5. Executes each unapplied step idempotently and records it.
+    /// 6. Creates the vector index if an embedding provider is configured
+    ///    (always idempotent, runs after migration steps).
     pub async fn migrate(&self) -> adk_core::Result<()> {
-        // Uniqueness constraint on MemoryEntry(id)
+        // Step 1: Ensure registry has a uniqueness constraint on `version`
         self.graph
-            .run(neo4rs::query(
-                "CREATE CONSTRAINT memory_entry_unique IF NOT EXISTS \
-                 FOR (m:MemoryEntry) REQUIRE (m.id) IS UNIQUE",
-            ))
+            .run(neo4rs::query(&format!(
+                "CREATE CONSTRAINT {}_version_unique IF NOT EXISTS \
+                 FOR (m:{}) REQUIRE (m.version) IS UNIQUE",
+                Self::REGISTRY_LABEL.to_lowercase(),
+                Self::REGISTRY_LABEL,
+            )))
             .await
             .map_err(|e| {
-                adk_core::AdkError::Memory(format!(
-                    "migration failed: uniqueness constraint creation failed: {e}"
-                ))
+                adk_core::AdkError::Memory(format!("migration registry creation failed: {e}"))
             })?;
 
-        // Composite index on MemoryEntry(app_name, user_id)
-        self.graph
-            .run(neo4rs::query(
-                "CREATE INDEX memory_app_user IF NOT EXISTS \
-                 FOR (m:MemoryEntry) ON (m.app_name, m.user_id)",
-            ))
-            .await
-            .map_err(|e| {
-                adk_core::AdkError::Memory(format!(
-                    "migration failed: composite index creation failed: {e}"
-                ))
-            })?;
+        // Step 2: Read current max applied version
+        let mut max_applied = self.read_max_applied_version().await?;
 
-        // Vector index on MemoryEntry(embedding) — only if embedding provider is configured
+        // Step 3: Baseline detection — if registry is empty but memory_entry_unique
+        // constraint already exists, record v1 as applied.
+        if max_applied == 0 {
+            let existing = self.detect_existing_tables().await?;
+            if existing {
+                if let Some(&(version, description, _)) = Self::NEO4J_MEMORY_MIGRATIONS.first() {
+                    self.record_migration(version, description).await?;
+                    max_applied = version;
+                }
+            }
+        }
+
+        // Step 4: Compiled-in max version
+        let max_compiled = Self::NEO4J_MEMORY_MIGRATIONS.last().map(|s| s.0).unwrap_or(0);
+
+        // Step 5: Version mismatch check
+        if max_applied > max_compiled {
+            return Err(adk_core::AdkError::Memory(format!(
+                "schema version mismatch: database is at v{max_applied} \
+                 but code only knows up to v{max_compiled}. \
+                 Upgrade your ADK version."
+            )));
+        }
+
+        // Step 6: Execute unapplied steps idempotently
+        for &(version, description, cypher_statements) in Self::NEO4J_MEMORY_MIGRATIONS {
+            if version <= max_applied {
+                continue;
+            }
+
+            for cypher in cypher_statements {
+                self.graph.run(neo4rs::query(cypher)).await.map_err(|e| {
+                    adk_core::AdkError::Memory(format!(
+                        "{}",
+                        crate::migration::MigrationError {
+                            version,
+                            description: description.to_string(),
+                            cause: e.to_string(),
+                        }
+                    ))
+                })?;
+            }
+
+            self.record_migration(version, description).await?;
+        }
+
+        // Step 7: Vector index — depends on embedding provider dimensions,
+        // so it runs outside the versioned step list. Always idempotent via
+        // `IF NOT EXISTS`.
         if let Some(provider) = &self.embedding_provider {
             let dims = provider.dimensions();
             let vector_index_query = format!(
@@ -141,19 +203,75 @@ impl Neo4jMemoryService {
             })?;
         }
 
-        // Full-text index on MemoryEntry(content_text) for fallback search
-        self.graph
-            .run(neo4rs::query(
-                "CREATE FULLTEXT INDEX memory_content IF NOT EXISTS \
-                 FOR (m:MemoryEntry) ON EACH [m.content_text]",
+        Ok(())
+    }
+
+    /// Returns the highest applied migration version, or 0 if no registry
+    /// exists or the registry is empty.
+    pub async fn schema_version(&self) -> Result<i64> {
+        self.read_max_applied_version().await
+    }
+
+    /// Read the maximum applied version from the registry nodes.
+    async fn read_max_applied_version(&self) -> Result<i64> {
+        let query_str =
+            format!("OPTIONAL MATCH (m:{}) RETURN max(m.version) AS max_v", Self::REGISTRY_LABEL);
+        let mut row_stream = self.graph.execute(neo4rs::query(&query_str)).await.map_err(|e| {
+            adk_core::AdkError::Memory(format!("migration registry read failed: {e}"))
+        })?;
+
+        if let Some(row) = row_stream.next().await.map_err(|e| {
+            adk_core::AdkError::Memory(format!("migration registry read failed: {e}"))
+        })? {
+            // max() returns null when no nodes exist; treat as 0
+            Ok(row.get::<i64>("max_v").unwrap_or(0))
+        } else {
+            Ok(0)
+        }
+    }
+
+    /// Detect whether the `memory_entry_unique` constraint already exists (baseline).
+    async fn detect_existing_tables(&self) -> Result<bool> {
+        let mut row_stream = self
+            .graph
+            .execute(neo4rs::query(
+                "SHOW CONSTRAINTS YIELD name WHERE name = 'memory_entry_unique' RETURN name",
             ))
+            .await
+            .map_err(|e| adk_core::AdkError::Memory(format!("baseline detection failed: {e}")))?;
+
+        let found = row_stream
+            .next()
+            .await
+            .map_err(|e| adk_core::AdkError::Memory(format!("baseline detection failed: {e}")))?
+            .is_some();
+
+        Ok(found)
+    }
+
+    /// Record a successfully applied migration step as a registry node.
+    async fn record_migration(&self, version: i64, description: &str) -> Result<()> {
+        let query_str = format!(
+            "CREATE (m:{} {{version: $version, description: $description, applied_at: datetime()}})",
+            Self::REGISTRY_LABEL,
+        );
+        self.graph
+            .run(
+                neo4rs::query(&query_str)
+                    .param("version", version)
+                    .param("description", description.to_string()),
+            )
             .await
             .map_err(|e| {
                 adk_core::AdkError::Memory(format!(
-                    "migration failed: full-text index creation failed: {e}"
+                    "{}",
+                    crate::migration::MigrationError {
+                        version,
+                        description: description.to_string(),
+                        cause: format!("registry record failed: {e}"),
+                    }
                 ))
             })?;
-
         Ok(())
     }
 

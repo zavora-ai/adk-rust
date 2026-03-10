@@ -371,7 +371,7 @@ async fn auth_middleware(
 2. **Research APIs**: Integrate with real research databases (Google Scholar, arXiv, PubMed)
 3. **Authentication**: Add JWT or OAuth for user authentication
 4. **Rate Limiting**: Implement rate limiting to prevent abuse
-5. **Persistent Storage**: Use `DatabaseSessionService` and cloud storage for artifacts
+5. **Persistent Storage**: Use `SqliteSessionService` and cloud storage for artifacts
 6. **Error Handling**: Add comprehensive error handling and retry logic
 7. **Monitoring**: Add telemetry and logging for production monitoring
 8. **CORS**: Configure CORS properly for your frontend domain

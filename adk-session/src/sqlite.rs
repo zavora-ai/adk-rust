@@ -10,11 +10,14 @@ use sqlx::{Row, sqlite::SqlitePool};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-pub struct DatabaseSessionService {
+pub struct SqliteSessionService {
     pool: SqlitePool,
 }
 
-impl DatabaseSessionService {
+impl SqliteSessionService {
+    /// Connect to SQLite and create a connection pool.
+    ///
+    /// Enables foreign keys via `PRAGMA foreign_keys = ON`.
     pub async fn new(database_url: &str) -> Result<Self> {
         let pool = SqlitePool::connect(database_url).await.map_err(|e| {
             adk_core::AdkError::Session(format!("database connection failed: {}", e))
@@ -25,83 +28,106 @@ impl DatabaseSessionService {
         Ok(Self { pool })
     }
 
+    /// Create a session service from an existing connection pool.
+    ///
+    /// Use this to share a pool with tuned settings across multiple
+    /// services, or in tests where you need direct pool access.
+    ///
+    /// **Note:** The caller is responsible for enabling foreign keys
+    /// (`PRAGMA foreign_keys = ON`) on the pool if needed.
+    pub fn from_pool(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+
+    /// Returns a reference to the underlying connection pool.
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
+    /// The registry table used to track applied migration versions.
+    const REGISTRY_TABLE: &'static str = "_adk_session_migrations";
+
+    /// Compiled-in migration steps for the SQLite session backend.
+    ///
+    /// Each entry is `(version, description, sql)`. Version 1 is the baseline
+    /// that creates the initial schema matching the original `CREATE TABLE IF
+    /// NOT EXISTS` statements.
+    const SQLITE_SESSION_MIGRATIONS: &'static [(i64, &'static str, &'static str)] = &[(
+        1,
+        "create initial session tables",
+        "\
+CREATE TABLE IF NOT EXISTS sessions (\
+    app_name TEXT NOT NULL, \
+    user_id TEXT NOT NULL, \
+    session_id TEXT NOT NULL, \
+    state TEXT NOT NULL, \
+    created_at TEXT NOT NULL, \
+    updated_at TEXT NOT NULL, \
+    PRIMARY KEY (app_name, user_id, session_id)\
+);\
+CREATE TABLE IF NOT EXISTS events (\
+    id TEXT NOT NULL, \
+    app_name TEXT NOT NULL, \
+    user_id TEXT NOT NULL, \
+    session_id TEXT NOT NULL, \
+    invocation_id TEXT NOT NULL, \
+    branch TEXT NOT NULL, \
+    author TEXT NOT NULL, \
+    timestamp TEXT NOT NULL, \
+    llm_response TEXT NOT NULL, \
+    actions TEXT NOT NULL, \
+    long_running_tool_ids TEXT NOT NULL, \
+    PRIMARY KEY (id, app_name, user_id, session_id), \
+    FOREIGN KEY (app_name, user_id, session_id) \
+        REFERENCES sessions(app_name, user_id, session_id) \
+        ON DELETE CASCADE\
+);\
+CREATE TABLE IF NOT EXISTS app_states (\
+    app_name TEXT PRIMARY KEY, \
+    state TEXT NOT NULL, \
+    updated_at TEXT NOT NULL\
+);\
+CREATE TABLE IF NOT EXISTS user_states (\
+    app_name TEXT NOT NULL, \
+    user_id TEXT NOT NULL, \
+    state TEXT NOT NULL, \
+    updated_at TEXT NOT NULL, \
+    PRIMARY KEY (app_name, user_id)\
+);",
+    )];
+
     pub async fn migrate(&self) -> Result<()> {
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS sessions (
-                app_name TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                state TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (app_name, user_id, session_id)
-            )
-            "#,
+        let pool = &self.pool;
+        crate::migration::sqlite_runner::run_sql_migrations(
+            pool,
+            Self::REGISTRY_TABLE,
+            Self::SQLITE_SESSION_MIGRATIONS,
+            || async {
+                let row = sqlx::query(
+                    "SELECT COUNT(*) AS cnt FROM sqlite_master \
+                     WHERE type='table' AND name='sessions'",
+                )
+                .fetch_one(pool)
+                .await
+                .map_err(|e| {
+                    adk_core::AdkError::Session(format!("baseline detection failed: {e}"))
+                })?;
+                let count: i64 = row.try_get("cnt").unwrap_or(0);
+                Ok(count > 0)
+            },
         )
-        .execute(&self.pool)
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {}", e)))?;
+    }
 
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS events (
-                id TEXT NOT NULL,
-                app_name TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                invocation_id TEXT NOT NULL,
-                branch TEXT NOT NULL,
-                author TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                llm_response TEXT NOT NULL,
-                actions TEXT NOT NULL,
-                long_running_tool_ids TEXT NOT NULL,
-                PRIMARY KEY (id, app_name, user_id, session_id),
-                FOREIGN KEY (app_name, user_id, session_id)
-                    REFERENCES sessions(app_name, user_id, session_id)
-                    ON DELETE CASCADE
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {}", e)))?;
-
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS app_states (
-                app_name TEXT PRIMARY KEY,
-                state TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {}", e)))?;
-
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS user_states (
-                app_name TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                state TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (app_name, user_id)
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {}", e)))?;
-
-        Ok(())
+    /// Returns the highest applied migration version, or 0 if no registry
+    /// exists or the registry is empty.
+    pub async fn schema_version(&self) -> Result<i64> {
+        crate::migration::sqlite_runner::sql_schema_version(&self.pool, Self::REGISTRY_TABLE).await
     }
 }
 
 #[async_trait]
-impl SessionService for DatabaseSessionService {
+impl SessionService for SqliteSessionService {
     async fn create(&self, req: CreateRequest) -> Result<Box<dyn Session>> {
         let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         let now = Utc::now();

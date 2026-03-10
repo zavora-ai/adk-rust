@@ -60,81 +60,238 @@ impl MongoSessionService {
         Ok(Self { db })
     }
 
-    /// Create collections and indexes for session storage.
+    /// Registry collection name for tracking applied migration versions.
+    const REGISTRY_COLLECTION: &'static str = "_adk_session_migrations";
+
+    /// Compiled-in MongoDB migration steps.
     ///
-    /// Creates the following indexes:
-    /// - `sessions`: unique compound index on `(app_name, user_id, session_id)`
-    /// - `events`: index on `(session_id, timestamp)`
-    /// - `app_states`: unique index on `app_name`
-    /// - `user_states`: unique compound index on `(app_name, user_id)`
+    /// Each entry is `(version, description)`. The actual migration logic is
+    /// dispatched by version number in [`run_mongo_session_step`].
+    const MONGO_SESSION_MIGRATIONS: &'static [(i64, &'static str)] =
+        &[(1, "create initial indexes")];
+
+    /// Run versioned migrations for MongoDB session storage.
+    ///
+    /// The runner:
+    /// 1. Creates the registry collection with a unique index on `version`.
+    /// 2. Detects baseline — if `sessions` collection exists but registry is
+    ///    empty, records v1 as already applied.
+    /// 3. Reads the maximum applied version from the registry.
+    /// 4. Returns an error if the database version exceeds the compiled-in max.
+    /// 5. Executes each unapplied step idempotently and records it.
     pub async fn migrate(&self) -> Result<()> {
-        // sessions collection: unique compound index on (app_name, user_id, session_id)
+        // Step 1: Ensure registry collection has a unique index on `version`
         self.db
-            .collection::<Document>("sessions")
+            .collection::<Document>(Self::REGISTRY_COLLECTION)
             .create_index(
                 IndexModel::builder()
-                    .keys(doc! { "app_name": 1, "user_id": 1, "session_id": 1 })
+                    .keys(doc! { "version": 1 })
                     .options(
                         IndexOptions::builder()
                             .unique(true)
-                            .name("idx_sessions_unique".to_string())
+                            .name("idx_migration_version_unique".to_string())
                             .build(),
                     )
                     .build(),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {e}")))?;
+            .map_err(|e| {
+                adk_core::AdkError::Session(format!("migration registry creation failed: {e}"))
+            })?;
 
-        // events collection: index on (session_id, timestamp)
-        self.db
-            .collection::<Document>("events")
-            .create_index(
-                IndexModel::builder()
-                    .keys(doc! { "session_id": 1, "timestamp": 1 })
-                    .options(
-                        IndexOptions::builder().name("idx_events_session_ts".to_string()).build(),
-                    )
-                    .build(),
-            )
-            .await
-            .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {e}")))?;
+        // Step 2: Read current max applied version
+        let mut max_applied = self.read_max_applied_version().await?;
 
-        // app_states collection: unique index on app_name
-        self.db
-            .collection::<Document>("app_states")
-            .create_index(
-                IndexModel::builder()
-                    .keys(doc! { "app_name": 1 })
-                    .options(
-                        IndexOptions::builder()
-                            .unique(true)
-                            .name("idx_app_states_unique".to_string())
-                            .build(),
-                    )
-                    .build(),
-            )
-            .await
-            .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {e}")))?;
+        // Step 3: Baseline detection — if registry is empty but sessions
+        // collection already exists, record v1 as applied.
+        if max_applied == 0 {
+            let existing = self.detect_existing_tables().await?;
+            if existing {
+                if let Some(&(version, description)) = Self::MONGO_SESSION_MIGRATIONS.first() {
+                    self.record_migration(version, description).await?;
+                    max_applied = version;
+                }
+            }
+        }
 
-        // user_states collection: unique compound index on (app_name, user_id)
-        self.db
-            .collection::<Document>("user_states")
-            .create_index(
-                IndexModel::builder()
-                    .keys(doc! { "app_name": 1, "user_id": 1 })
-                    .options(
-                        IndexOptions::builder()
-                            .unique(true)
-                            .name("idx_user_states_unique".to_string())
-                            .build(),
-                    )
-                    .build(),
-            )
-            .await
-            .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {e}")))?;
+        // Step 4: Compiled-in max version
+        let max_compiled = Self::MONGO_SESSION_MIGRATIONS.last().map(|s| s.0).unwrap_or(0);
+
+        // Step 5: Version mismatch check
+        if max_applied > max_compiled {
+            return Err(adk_core::AdkError::Session(format!(
+                "schema version mismatch: database is at v{max_applied} \
+                 but code only knows up to v{max_compiled}. \
+                 Upgrade your ADK version."
+            )));
+        }
+
+        // Step 6: Execute unapplied steps idempotently
+        for &(version, description) in Self::MONGO_SESSION_MIGRATIONS {
+            if version <= max_applied {
+                continue;
+            }
+
+            run_mongo_session_step(&self.db, version).await.map_err(|e| {
+                adk_core::AdkError::Session(format!(
+                    "{}",
+                    crate::migration::MigrationError {
+                        version,
+                        description: description.to_string(),
+                        cause: e.to_string(),
+                    }
+                ))
+            })?;
+
+            self.record_migration(version, description).await?;
+        }
 
         Ok(())
     }
+
+    /// Returns the highest applied migration version, or 0 if no registry
+    /// exists or the registry is empty.
+    pub async fn schema_version(&self) -> Result<i64> {
+        // Check if registry collection exists
+        let collections = self.db.list_collection_names().await.map_err(|e| {
+            adk_core::AdkError::Session(format!("schema version query failed: {e}"))
+        })?;
+        if !collections.contains(&Self::REGISTRY_COLLECTION.to_string()) {
+            return Ok(0);
+        }
+
+        self.read_max_applied_version().await
+    }
+
+    /// Read the maximum applied version from the registry collection.
+    async fn read_max_applied_version(&self) -> Result<i64> {
+        use mongodb::options::FindOneOptions;
+
+        let registry = self.db.collection::<Document>(Self::REGISTRY_COLLECTION);
+        let opts = FindOneOptions::builder().sort(doc! { "version": -1 }).build();
+        let result = registry.find_one(doc! {}).with_options(opts).await.map_err(|e| {
+            adk_core::AdkError::Session(format!("migration registry read failed: {e}"))
+        })?;
+
+        match result {
+            Some(doc) => {
+                let version = doc.get_i64("version").unwrap_or(0);
+                Ok(version)
+            }
+            None => Ok(0),
+        }
+    }
+
+    /// Detect whether the `sessions` collection already exists (baseline).
+    async fn detect_existing_tables(&self) -> Result<bool> {
+        let collections =
+            self.db.list_collection_names().await.map_err(|e| {
+                adk_core::AdkError::Session(format!("baseline detection failed: {e}"))
+            })?;
+        Ok(collections.contains(&"sessions".to_string()))
+    }
+
+    /// Record a successfully applied migration step in the registry.
+    async fn record_migration(&self, version: i64, description: &str) -> Result<()> {
+        let registry = self.db.collection::<Document>(Self::REGISTRY_COLLECTION);
+        let now = chrono_to_bson_dt(Utc::now());
+        registry
+            .insert_one(doc! {
+                "version": version,
+                "description": description,
+                "applied_at": now,
+            })
+            .await
+            .map_err(|e| {
+                adk_core::AdkError::Session(format!(
+                    "{}",
+                    crate::migration::MigrationError {
+                        version,
+                        description: description.to_string(),
+                        cause: format!("registry record failed: {e}"),
+                    }
+                ))
+            })?;
+        Ok(())
+    }
+}
+
+/// Execute a single MongoDB session migration step by version number.
+///
+/// Each step is idempotent — re-running a step that has already been applied
+/// completes without error (MongoDB's `create_index` is a no-op if the index
+/// already exists with the same specification).
+async fn run_mongo_session_step(db: &Database, version: i64) -> Result<()> {
+    match version {
+        1 => mongo_session_v1(db).await,
+        _ => Err(adk_core::AdkError::Session(format!("unknown migration version: {version}"))),
+    }
+}
+
+/// V1: Create initial indexes on sessions, events, app_states, and user_states.
+///
+/// This matches the original `migrate()` index creation logic.
+async fn mongo_session_v1(db: &Database) -> Result<()> {
+    // sessions: unique compound index on (app_name, user_id, session_id)
+    db.collection::<Document>("sessions")
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! { "app_name": 1, "user_id": 1, "session_id": 1 })
+                .options(
+                    IndexOptions::builder()
+                        .unique(true)
+                        .name("idx_sessions_unique".to_string())
+                        .build(),
+                )
+                .build(),
+        )
+        .await
+        .map_err(|e| adk_core::AdkError::Session(format!("index creation failed: {e}")))?;
+
+    // events: index on (session_id, timestamp)
+    db.collection::<Document>("events")
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! { "session_id": 1, "timestamp": 1 })
+                .options(IndexOptions::builder().name("idx_events_session_ts".to_string()).build())
+                .build(),
+        )
+        .await
+        .map_err(|e| adk_core::AdkError::Session(format!("index creation failed: {e}")))?;
+
+    // app_states: unique index on app_name
+    db.collection::<Document>("app_states")
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! { "app_name": 1 })
+                .options(
+                    IndexOptions::builder()
+                        .unique(true)
+                        .name("idx_app_states_unique".to_string())
+                        .build(),
+                )
+                .build(),
+        )
+        .await
+        .map_err(|e| adk_core::AdkError::Session(format!("index creation failed: {e}")))?;
+
+    // user_states: unique compound index on (app_name, user_id)
+    db.collection::<Document>("user_states")
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! { "app_name": 1, "user_id": 1 })
+                .options(
+                    IndexOptions::builder()
+                        .unique(true)
+                        .name("idx_user_states_unique".to_string())
+                        .build(),
+                )
+                .build(),
+        )
+        .await
+        .map_err(|e| adk_core::AdkError::Session(format!("index creation failed: {e}")))?;
+
+    Ok(())
 }
 
 /// Convert a `HashMap<String, Value>` to a BSON `Document`.

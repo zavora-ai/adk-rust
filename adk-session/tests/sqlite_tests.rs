@@ -1,4 +1,4 @@
-#[cfg(feature = "database")]
+#[cfg(feature = "sqlite")]
 mod tests {
     use adk_session::*;
     use chrono::{Duration, Utc};
@@ -6,8 +6,8 @@ mod tests {
     use std::collections::HashMap;
 
     #[tokio::test]
-    async fn test_database_create_session() {
-        let service = DatabaseSessionService::new(":memory:").await.unwrap();
+    async fn test_sqlite_create_session() {
+        let service = SqliteSessionService::new(":memory:").await.unwrap();
         service.migrate().await.unwrap();
 
         let req = CreateRequest {
@@ -24,8 +24,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_database_get_session() {
-        let service = DatabaseSessionService::new(":memory:").await.unwrap();
+    async fn test_sqlite_get_session() {
+        let service = SqliteSessionService::new(":memory:").await.unwrap();
         service.migrate().await.unwrap();
 
         service
@@ -53,8 +53,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_database_list_sessions() {
-        let service = DatabaseSessionService::new(":memory:").await.unwrap();
+    async fn test_sqlite_list_sessions() {
+        let service = SqliteSessionService::new(":memory:").await.unwrap();
         service.migrate().await.unwrap();
 
         service
@@ -91,8 +91,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_database_delete_session() {
-        let service = DatabaseSessionService::new(":memory:").await.unwrap();
+    async fn test_sqlite_delete_session() {
+        let service = SqliteSessionService::new(":memory:").await.unwrap();
         service.migrate().await.unwrap();
 
         service
@@ -128,8 +128,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_database_append_event_persists_state_and_identity() {
-        let service = DatabaseSessionService::new(":memory:").await.unwrap();
+    async fn test_sqlite_append_event_persists_state_and_identity() {
+        let service = SqliteSessionService::new(":memory:").await.unwrap();
         service.migrate().await.unwrap();
 
         service
@@ -187,8 +187,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_database_delete_cleans_up_events_for_recreated_session() {
-        let service = DatabaseSessionService::new(":memory:").await.unwrap();
+    async fn test_sqlite_delete_cleans_up_events_for_recreated_session() {
+        let service = SqliteSessionService::new(":memory:").await.unwrap();
         service.migrate().await.unwrap();
 
         service

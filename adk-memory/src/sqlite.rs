@@ -61,71 +61,72 @@ impl SqliteMemoryService {
         Self { pool }
     }
 
+    /// The registry table used to track applied migration versions.
+    const REGISTRY_TABLE: &'static str = "_adk_memory_migrations";
+
+    /// Compiled-in migration steps for the SQLite memory backend.
+    ///
+    /// Each entry is `(version, description, sql)`. Version 1 is the baseline
+    /// that creates the initial schema matching the original `CREATE TABLE IF
+    /// NOT EXISTS` / FTS5 / trigger statements.
+    const SQLITE_MEMORY_MIGRATIONS: &'static [(i64, &'static str, &'static str)] = &[(
+        1,
+        "create memory_entries table, FTS5 virtual table, and sync triggers",
+        "\
+CREATE TABLE IF NOT EXISTS memory_entries (\
+    id INTEGER PRIMARY KEY AUTOINCREMENT, \
+    app_name TEXT NOT NULL, \
+    user_id TEXT NOT NULL, \
+    session_id TEXT NOT NULL, \
+    content TEXT NOT NULL, \
+    content_text TEXT NOT NULL, \
+    author TEXT NOT NULL, \
+    timestamp TEXT NOT NULL\
+);\
+CREATE INDEX IF NOT EXISTS idx_memory_app_user \
+    ON memory_entries(app_name, user_id);\
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_entries_fts \
+    USING fts5(content_text, content='memory_entries', content_rowid='id');\
+CREATE TRIGGER IF NOT EXISTS memory_entries_ai AFTER INSERT ON memory_entries BEGIN \
+    INSERT INTO memory_entries_fts(rowid, content_text) VALUES (new.id, new.content_text); \
+END;\
+CREATE TRIGGER IF NOT EXISTS memory_entries_ad AFTER DELETE ON memory_entries BEGIN \
+    INSERT INTO memory_entries_fts(memory_entries_fts, rowid, content_text) VALUES('delete', old.id, old.content_text); \
+END;",
+    )];
+
     /// Create the `memory_entries` table and FTS5 virtual table.
     ///
-    /// Safe to call multiple times — uses `IF NOT EXISTS`.
+    /// Uses the versioned migration runner to apply schema changes
+    /// incrementally. Safe to call multiple times — already-applied
+    /// steps are skipped.
     pub async fn migrate(&self) -> Result<()> {
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS memory_entries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                app_name TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                content TEXT NOT NULL,
-                content_text TEXT NOT NULL,
-                author TEXT NOT NULL,
-                timestamp TEXT NOT NULL
-            )
-            "#,
+        let pool = &self.pool;
+        crate::migration::sqlite_runner::run_sql_migrations(
+            pool,
+            Self::REGISTRY_TABLE,
+            Self::SQLITE_MEMORY_MIGRATIONS,
+            || async {
+                let row = sqlx::query(
+                    "SELECT COUNT(*) AS cnt FROM sqlite_master \
+                     WHERE type='table' AND name='memory_entries'",
+                )
+                .fetch_one(pool)
+                .await
+                .map_err(|e| {
+                    adk_core::AdkError::Memory(format!("baseline detection failed: {e}"))
+                })?;
+                let count: i64 = row.try_get("cnt").unwrap_or(0);
+                Ok(count > 0)
+            },
         )
-        .execute(&self.pool)
         .await
-        .map_err(|e| adk_core::AdkError::Memory(format!("migration failed: {e}")))?;
+    }
 
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_memory_app_user \
-             ON memory_entries(app_name, user_id)",
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Memory(format!("index creation failed: {e}")))?;
-
-        // FTS5 virtual table for full-text search
-        sqlx::query(
-            r#"
-            CREATE VIRTUAL TABLE IF NOT EXISTS memory_entries_fts
-            USING fts5(content_text, content='memory_entries', content_rowid='id')
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Memory(format!("FTS5 table creation failed: {e}")))?;
-
-        // Triggers to keep FTS index in sync
-        sqlx::query(
-            r#"
-            CREATE TRIGGER IF NOT EXISTS memory_entries_ai AFTER INSERT ON memory_entries BEGIN
-                INSERT INTO memory_entries_fts(rowid, content_text) VALUES (new.id, new.content_text);
-            END
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Memory(format!("trigger creation failed: {e}")))?;
-
-        sqlx::query(
-            r#"
-            CREATE TRIGGER IF NOT EXISTS memory_entries_ad AFTER DELETE ON memory_entries BEGIN
-                INSERT INTO memory_entries_fts(memory_entries_fts, rowid, content_text) VALUES('delete', old.id, old.content_text);
-            END
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Memory(format!("trigger creation failed: {e}")))?;
-
-        Ok(())
+    /// Returns the highest applied migration version, or 0 if no registry
+    /// exists or the registry is empty.
+    pub async fn schema_version(&self) -> Result<i64> {
+        crate::migration::sqlite_runner::sql_schema_version(&self.pool, Self::REGISTRY_TABLE).await
     }
 
     /// Extract plain text from content parts.

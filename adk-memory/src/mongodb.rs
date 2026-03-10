@@ -19,7 +19,9 @@ use crate::embedding::EmbeddingProvider;
 use crate::service::*;
 use adk_core::{Part, Result};
 use async_trait::async_trait;
+use chrono::Utc;
 use mongodb::bson::{DateTime as BsonDateTime, Document, doc};
+use mongodb::options::IndexOptions;
 use mongodb::{Client, Database, IndexModel};
 use std::sync::Arc;
 use tracing::instrument;
@@ -59,33 +61,163 @@ impl MongoMemoryService {
         Ok(Self { db, embedding_provider })
     }
 
-    /// Create the `memory_entries` collection with required indexes.
+    /// Registry collection name for tracking applied migration versions.
+    const REGISTRY_COLLECTION: &'static str = "_adk_memory_migrations";
+
+    /// Compiled-in MongoDB migration steps.
     ///
-    /// Creates:
-    /// - Compound index on `(app_name, user_id)` for filtered queries
-    /// - Text index on `content_text` field for fallback text search
+    /// Each entry is `(version, description)`. The actual migration logic is
+    /// dispatched by version number in [`run_mongo_memory_step`].
+    const MONGO_MEMORY_MIGRATIONS: &'static [(i64, &'static str)] =
+        &[(1, "create initial indexes")];
+
+    /// Run versioned migrations for MongoDB memory storage.
+    ///
+    /// The runner:
+    /// 1. Creates the registry collection with a unique index on `version`.
+    /// 2. Detects baseline — if `memory_entries` collection exists but registry
+    ///    is empty, records v1 as already applied.
+    /// 3. Reads the maximum applied version from the registry.
+    /// 4. Returns an error if the database version exceeds the compiled-in max.
+    /// 5. Executes each unapplied step idempotently and records it.
     ///
     /// **Note:** Atlas Vector Search index on the `embedding` field must be
     /// created separately via the Atlas UI or API. The index should be named
     /// `memory_embedding_index` with cosine similarity on the `embedding` path.
     pub async fn migrate(&self) -> Result<()> {
-        let collection = self.db.collection::<Document>("memory_entries");
+        // Step 1: Ensure registry collection has a unique index on `version`
+        self.db
+            .collection::<Document>(Self::REGISTRY_COLLECTION)
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! { "version": 1 })
+                    .options(
+                        IndexOptions::builder()
+                            .unique(true)
+                            .name("idx_migration_version_unique".to_string())
+                            .build(),
+                    )
+                    .build(),
+            )
+            .await
+            .map_err(|e| {
+                adk_core::AdkError::Memory(format!("migration registry creation failed: {e}"))
+            })?;
 
-        // Compound index on (app_name, user_id)
-        let app_user_index =
-            IndexModel::builder().keys(doc! { "app_name": 1, "user_id": 1 }).build();
+        // Step 2: Read current max applied version
+        let mut max_applied = self.read_max_applied_version().await?;
 
-        collection.create_index(app_user_index).await.map_err(|e| {
-            adk_core::AdkError::Memory(format!("migration failed: index creation failed: {e}"))
+        // Step 3: Baseline detection — if registry is empty but memory_entries
+        // collection already exists, record v1 as applied.
+        if max_applied == 0 {
+            let existing = self.detect_existing_tables().await?;
+            if existing {
+                if let Some(&(version, description)) = Self::MONGO_MEMORY_MIGRATIONS.first() {
+                    self.record_migration(version, description).await?;
+                    max_applied = version;
+                }
+            }
+        }
+
+        // Step 4: Compiled-in max version
+        let max_compiled = Self::MONGO_MEMORY_MIGRATIONS.last().map(|s| s.0).unwrap_or(0);
+
+        // Step 5: Version mismatch check
+        if max_applied > max_compiled {
+            return Err(adk_core::AdkError::Memory(format!(
+                "schema version mismatch: database is at v{max_applied} \
+                 but code only knows up to v{max_compiled}. \
+                 Upgrade your ADK version."
+            )));
+        }
+
+        // Step 6: Execute unapplied steps idempotently
+        for &(version, description) in Self::MONGO_MEMORY_MIGRATIONS {
+            if version <= max_applied {
+                continue;
+            }
+
+            run_mongo_memory_step(&self.db, version).await.map_err(|e| {
+                adk_core::AdkError::Memory(format!(
+                    "{}",
+                    crate::migration::MigrationError {
+                        version,
+                        description: description.to_string(),
+                        cause: e.to_string(),
+                    }
+                ))
+            })?;
+
+            self.record_migration(version, description).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Returns the highest applied migration version, or 0 if no registry
+    /// exists or the registry is empty.
+    pub async fn schema_version(&self) -> Result<i64> {
+        // Check if registry collection exists
+        let collections =
+            self.db.list_collection_names().await.map_err(|e| {
+                adk_core::AdkError::Memory(format!("schema version query failed: {e}"))
+            })?;
+        if !collections.contains(&Self::REGISTRY_COLLECTION.to_string()) {
+            return Ok(0);
+        }
+
+        self.read_max_applied_version().await
+    }
+
+    /// Read the maximum applied version from the registry collection.
+    async fn read_max_applied_version(&self) -> Result<i64> {
+        use mongodb::options::FindOneOptions;
+
+        let registry = self.db.collection::<Document>(Self::REGISTRY_COLLECTION);
+        let opts = FindOneOptions::builder().sort(doc! { "version": -1 }).build();
+        let result = registry.find_one(doc! {}).with_options(opts).await.map_err(|e| {
+            adk_core::AdkError::Memory(format!("migration registry read failed: {e}"))
         })?;
 
-        // Text index on content_text for fallback search
-        let text_index = IndexModel::builder().keys(doc! { "content_text": "text" }).build();
+        match result {
+            Some(doc) => {
+                let version = doc.get_i64("version").unwrap_or(0);
+                Ok(version)
+            }
+            None => Ok(0),
+        }
+    }
 
-        collection.create_index(text_index).await.map_err(|e| {
-            adk_core::AdkError::Memory(format!("migration failed: text index creation failed: {e}"))
-        })?;
+    /// Detect whether the `memory_entries` collection already exists (baseline).
+    async fn detect_existing_tables(&self) -> Result<bool> {
+        let collections =
+            self.db.list_collection_names().await.map_err(|e| {
+                adk_core::AdkError::Memory(format!("baseline detection failed: {e}"))
+            })?;
+        Ok(collections.contains(&"memory_entries".to_string()))
+    }
 
+    /// Record a successfully applied migration step in the registry.
+    async fn record_migration(&self, version: i64, description: &str) -> Result<()> {
+        let registry = self.db.collection::<Document>(Self::REGISTRY_COLLECTION);
+        let now = BsonDateTime::from_millis(Utc::now().timestamp_millis());
+        registry
+            .insert_one(doc! {
+                "version": version,
+                "description": description,
+                "applied_at": now,
+            })
+            .await
+            .map_err(|e| {
+                adk_core::AdkError::Memory(format!(
+                    "{}",
+                    crate::migration::MigrationError {
+                        version,
+                        description: description.to_string(),
+                        cause: format!("registry record failed: {e}"),
+                    }
+                ))
+            })?;
         Ok(())
     }
 
@@ -101,6 +233,55 @@ impl MongoMemoryService {
             .collect::<Vec<_>>()
             .join(" ")
     }
+}
+
+/// Execute a single MongoDB memory migration step by version number.
+///
+/// Each step is idempotent — re-running a step that has already been applied
+/// completes without error (MongoDB's `create_index` is a no-op if the index
+/// already exists with the same specification).
+async fn run_mongo_memory_step(db: &Database, version: i64) -> Result<()> {
+    match version {
+        1 => mongo_memory_v1(db).await,
+        _ => Err(adk_core::AdkError::Memory(format!("unknown migration version: {version}"))),
+    }
+}
+
+/// V1: Create initial indexes on memory_entries collection.
+///
+/// This matches the original `migrate()` index creation logic:
+/// - Compound index on `(app_name, user_id)` for filtered queries
+/// - Text index on `content_text` field for fallback text search
+async fn mongo_memory_v1(db: &Database) -> Result<()> {
+    let collection = db.collection::<Document>("memory_entries");
+
+    // Compound index on (app_name, user_id)
+    collection
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! { "app_name": 1, "user_id": 1 })
+                .options(
+                    IndexOptions::builder().name("idx_memory_entries_app_user".to_string()).build(),
+                )
+                .build(),
+        )
+        .await
+        .map_err(|e| adk_core::AdkError::Memory(format!("index creation failed: {e}")))?;
+
+    // Text index on content_text for fallback search
+    collection
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! { "content_text": "text" })
+                .options(
+                    IndexOptions::builder().name("idx_memory_entries_text".to_string()).build(),
+                )
+                .build(),
+        )
+        .await
+        .map_err(|e| adk_core::AdkError::Memory(format!("text index creation failed: {e}")))?;
+
+    Ok(())
 }
 
 #[async_trait]

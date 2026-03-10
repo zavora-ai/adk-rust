@@ -62,98 +62,131 @@ impl PostgresSessionService {
         Self { pool }
     }
 
+    /// The registry table used to track applied migration versions.
+    const REGISTRY_TABLE: &'static str = "_adk_session_migrations";
+
+    /// Advisory lock key derived from the registry table name.
+    ///
+    /// This is a fixed `i64` used with `pg_advisory_lock` /
+    /// `pg_advisory_unlock` to prevent concurrent migration races.
+    /// The value is a simple hash of the registry table name bytes.
+    const ADVISORY_LOCK_KEY: i64 = {
+        // Simple FNV-1a-style hash of "_adk_session_migrations" at compile time
+        let bytes = Self::REGISTRY_TABLE.as_bytes();
+        let mut hash: u64 = 0xcbf29ce484222325;
+        let mut i = 0;
+        while i < bytes.len() {
+            hash ^= bytes[i] as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+            i += 1;
+        }
+        hash as i64
+    };
+
+    /// Compiled-in migration steps for the PostgreSQL session backend.
+    ///
+    /// Each entry is `(version, description, sql)`. Version 1 is the baseline
+    /// that creates the initial schema with PostgreSQL-native types (`JSONB`,
+    /// `TIMESTAMPTZ`) and indexes for common query patterns.
+    const PG_SESSION_MIGRATIONS: &'static [(i64, &'static str, &'static str)] = &[(
+        1,
+        "create initial session tables",
+        "\
+CREATE TABLE IF NOT EXISTS sessions (\
+    app_name TEXT NOT NULL, \
+    user_id TEXT NOT NULL, \
+    session_id TEXT NOT NULL, \
+    state JSONB NOT NULL DEFAULT '{}', \
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
+    PRIMARY KEY (app_name, user_id, session_id)\
+);\
+CREATE TABLE IF NOT EXISTS events (\
+    id TEXT NOT NULL, \
+    app_name TEXT NOT NULL, \
+    user_id TEXT NOT NULL, \
+    session_id TEXT NOT NULL, \
+    invocation_id TEXT NOT NULL, \
+    branch TEXT NOT NULL, \
+    author TEXT NOT NULL, \
+    timestamp TIMESTAMPTZ NOT NULL, \
+    llm_response JSONB NOT NULL, \
+    actions JSONB NOT NULL, \
+    long_running_tool_ids JSONB NOT NULL, \
+    PRIMARY KEY (id, app_name, user_id, session_id), \
+    FOREIGN KEY (app_name, user_id, session_id) \
+        REFERENCES sessions(app_name, user_id, session_id) \
+        ON DELETE CASCADE\
+);\
+CREATE TABLE IF NOT EXISTS app_states (\
+    app_name TEXT PRIMARY KEY, \
+    state JSONB NOT NULL DEFAULT '{}', \
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\
+);\
+CREATE TABLE IF NOT EXISTS user_states (\
+    app_name TEXT NOT NULL, \
+    user_id TEXT NOT NULL, \
+    state JSONB NOT NULL DEFAULT '{}', \
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
+    PRIMARY KEY (app_name, user_id)\
+);\
+CREATE INDEX IF NOT EXISTS idx_sessions_app_user ON sessions(app_name, user_id);\
+CREATE INDEX IF NOT EXISTS idx_events_session_ts ON events(session_id, timestamp);",
+    )];
+
     /// Create the required tables and indexes if they do not exist.
     ///
     /// Tables created: `sessions`, `events`, `app_states`, `user_states`.
     /// Uses PostgreSQL-native types (`JSONB`, `TIMESTAMPTZ`) and standard
     /// foreign key constraints with `ON DELETE CASCADE`.
+    ///
+    /// Migrations are protected by a PostgreSQL advisory lock to prevent
+    /// concurrent migration races from multiple application instances.
     pub async fn migrate(&self) -> Result<()> {
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS sessions (
-                app_name TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                state JSONB NOT NULL DEFAULT '{}',
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (app_name, user_id, session_id)
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {e}")))?;
+        let pool = &self.pool;
 
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS events (
-                id TEXT NOT NULL,
-                app_name TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                invocation_id TEXT NOT NULL,
-                branch TEXT NOT NULL,
-                author TEXT NOT NULL,
-                timestamp TIMESTAMPTZ NOT NULL,
-                llm_response JSONB NOT NULL,
-                actions JSONB NOT NULL,
-                long_running_tool_ids JSONB NOT NULL,
-                PRIMARY KEY (id, app_name, user_id, session_id),
-                FOREIGN KEY (app_name, user_id, session_id)
-                    REFERENCES sessions(app_name, user_id, session_id)
-                    ON DELETE CASCADE
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {e}")))?;
+        // Acquire advisory lock to prevent concurrent migration races
+        sqlx::query(&format!("SELECT pg_advisory_lock({})", Self::ADVISORY_LOCK_KEY))
+            .execute(pool)
+            .await
+            .map_err(|e| {
+                adk_core::AdkError::Session(format!("advisory lock acquisition failed: {e}"))
+            })?;
 
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS app_states (
-                app_name TEXT PRIMARY KEY,
-                state JSONB NOT NULL DEFAULT '{}',
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            "#,
+        let result = crate::migration::pg_runner::run_sql_migrations(
+            pool,
+            Self::REGISTRY_TABLE,
+            Self::PG_SESSION_MIGRATIONS,
+            || async {
+                let row = sqlx::query(
+                    "SELECT EXISTS(\
+                         SELECT 1 FROM information_schema.tables \
+                         WHERE table_name = 'sessions'\
+                     ) AS exists_flag",
+                )
+                .fetch_one(pool)
+                .await
+                .map_err(|e| {
+                    adk_core::AdkError::Session(format!("baseline detection failed: {e}"))
+                })?;
+                let exists: bool = row.try_get("exists_flag").unwrap_or(false);
+                Ok(exists)
+            },
         )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {e}")))?;
+        .await;
 
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS user_states (
-                app_name TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                state JSONB NOT NULL DEFAULT '{}',
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (app_name, user_id)
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {e}")))?;
+        // Release advisory lock regardless of migration outcome
+        let _ = sqlx::query(&format!("SELECT pg_advisory_unlock({})", Self::ADVISORY_LOCK_KEY))
+            .execute(pool)
+            .await;
 
-        // Indexes for common query patterns
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_sessions_app_user ON sessions(app_name, user_id)",
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {e}")))?;
+        result
+    }
 
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_events_session_ts ON events(session_id, timestamp)",
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Session(format!("migration failed: {e}")))?;
-
-        Ok(())
+    /// Returns the highest applied migration version, or 0 if no registry
+    /// exists or the registry is empty.
+    pub async fn schema_version(&self) -> Result<i64> {
+        crate::migration::pg_runner::sql_schema_version(&self.pool, Self::REGISTRY_TABLE).await
     }
 }
 

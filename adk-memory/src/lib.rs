@@ -30,6 +30,7 @@
 
 pub mod adapter;
 pub mod inmemory;
+pub mod migration;
 pub mod service;
 
 #[cfg(any(feature = "database-memory", feature = "mongodb-memory", feature = "neo4j-memory"))]

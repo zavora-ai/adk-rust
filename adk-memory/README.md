@@ -11,9 +11,14 @@ Semantic memory and search for Rust Agent Development Kit (ADK-Rust) agents.
 `adk-memory` provides long-term memory capabilities for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)):
 
 - **InMemoryMemoryService** - Simple in-memory memory storage
+- **SqliteMemoryService** - SQLite-backed persistence (`sqlite-memory` feature)
+- **PostgresMemoryService** - PostgreSQL + pgvector persistence (`database-memory` feature)
+- **MongoMemoryService** - MongoDB-backed persistence (`mongodb-memory` feature)
+- **Neo4jMemoryService** - Neo4j-backed persistence (`neo4j-memory` feature)
+- **RedisMemoryService** - Redis-backed persistence (`redis-memory` feature)
 - **MemoryService** - Trait for custom storage backends
 - **Semantic Search** - Query memories by content similarity
-- **Memory Entries** - Structured memory with content and metadata
+- **Schema Migrations** - Versioned, forward-only migrations for all database backends
 
 ## Installation
 
@@ -36,10 +41,8 @@ use adk_memory::{InMemoryMemoryService, MemoryService, MemoryEntry, SearchReques
 use adk_core::Content;
 use chrono::Utc;
 
-// Create memory service
 let service = InMemoryMemoryService::new();
 
-// Add memories from a session
 let entries = vec![
     MemoryEntry {
         content: Content::new("user").with_text("User prefers dark mode"),
@@ -48,14 +51,8 @@ let entries = vec![
     },
 ];
 
-service.add_session(
-    "my_app",
-    "user_123",
-    "session_456",
-    entries,
-).await?;
+service.add_session("my_app", "user_123", "session_456", entries).await?;
 
-// Search memories
 let response = service.search(SearchRequest {
     query: "what theme does the user like?".to_string(),
     user_id: "user_123".to_string(),
@@ -67,14 +64,39 @@ for memory in response.memories {
 }
 ```
 
-## Memory Entry Structure
+## Feature Flags
+
+| Feature | Backend | Description |
+|---------|---------|-------------|
+| `sqlite-memory` | SQLite | Single-node persistence via sqlx |
+| `database-memory` | PostgreSQL | pgvector-backed semantic search |
+| `redis-memory` | Redis | Low-latency in-memory persistence via fred |
+| `mongodb-memory` | MongoDB | Document-oriented persistence |
+| `neo4j-memory` | Neo4j | Graph database persistence |
+
+```toml
+# SQLite
+adk-memory = { version = "0.3.2", features = ["sqlite-memory"] }
+
+# PostgreSQL + pgvector
+adk-memory = { version = "0.3.2", features = ["database-memory"] }
+```
+
+## Schema Migrations
+
+All database backends (SQLite, PostgreSQL, MongoDB, Neo4j) include a versioned migration system. Migrations are forward-only, idempotent, and tracked in a `_schema_migrations` registry table.
 
 ```rust
-pub struct MemoryEntry {
-    pub content: Content,           // Message content with parts
-    pub author: String,             // Who created this memory
-    pub timestamp: DateTime<Utc>,   // When it was created
-}
+use adk_memory::SqliteMemoryService;
+
+let service = SqliteMemoryService::new("sqlite:memory.db").await?;
+
+// Run all pending migrations
+service.migrate().await?;
+
+// Check current schema version
+let version = service.schema_version().await?;
+println!("Schema version: {version}");
 ```
 
 ## MemoryService Trait
@@ -94,18 +116,12 @@ pub trait MemoryService: Send + Sync {
 }
 ```
 
-## Features
-
-- Per-user memory isolation
-- Simple keyword-based search
-- Timestamp tracking
-- Pluggable storage backends
-
 ## Related Crates
 
 - [adk-rust](https://crates.io/crates/adk-rust) - Meta-crate with all components
 - [adk-core](https://crates.io/crates/adk-core) - Core `Memory` trait
 - [adk-runner](https://crates.io/crates/adk-runner) - Memory injection during execution
+- [adk-rag](https://crates.io/crates/adk-rag) - RAG pipeline with vector stores
 
 ## License
 

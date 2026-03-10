@@ -272,7 +272,7 @@ For advanced scenarios, use Runner directly:
 
 ```rust
 use adk_runner::{Runner, RunnerConfig};
-use adk_session::DatabaseSessionService;
+use adk_session::SqliteSessionService;
 use adk_artifact::S3ArtifactService;
 use adk_memory::QdrantMemoryService;
 
@@ -280,7 +280,7 @@ use adk_memory::QdrantMemoryService;
 let config = RunnerConfig {
     app_name: "production_app".to_string(),
     agent: my_agent,
-    session_service: Arc::new(DatabaseSessionService::new(db_pool)),
+    session_service: Arc::new(SqliteSessionService::new(db_pool)),
     artifact_service: Some(Arc::new(S3ArtifactService::new(s3_client))),
     memory_service: Some(Arc::new(QdrantMemoryService::new(qdrant_client))),
     plugin_manager: None,

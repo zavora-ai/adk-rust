@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### adk-session
+- **Schema migrations**: Versioned, forward-only migration system for all database backends (SQLite, PostgreSQL, MongoDB, Neo4j). Each backend tracks applied migrations in a `_schema_migrations` registry table with checksums and timestamps. Migrations are idempotent — calling `migrate()` on an already-current database is a no-op.
+- **Baseline detection**: `migrate()` detects pre-existing tables created before the migration system and registers them as already applied, avoiding destructive re-creation.
+- **`schema_version()` method**: All database backends expose `schema_version()` returning the current migration version (0 if no migrations applied).
+- **`from_pool()` / `pool()` methods on `SqliteSessionService`**: Parity with other backends for constructing from an existing connection pool and accessing the inner pool.
+
+#### adk-memory
+- **Schema migrations**: Same versioned migration system as `adk-session`, applied to all `adk-memory` database backends (SQLite, PostgreSQL, MongoDB, Neo4j). Each backend has its own migration registry and version tracking.
+- **`schema_version()` method**: All database backends expose `schema_version()`.
+
+### Changed
+
+#### adk-session
+- **`DatabaseSessionService` renamed to `SqliteSessionService`**: The struct, source file (`database.rs` → `sqlite.rs`), and test file (`database_tests.rs` → `sqlite_tests.rs`) have been renamed to accurately reflect the SQLite-only backend. A deprecated type alias `DatabaseSessionService` is provided for backward compatibility. The `database` feature flag remains as an alias for `sqlite`.
+
+#### adk-realtime
+- **LiveKit re-exports**: Replaced glob `pub use livekit::prelude::*` with explicit type re-exports in `adk_realtime::livekit` module, eliminating semver hazard from upstream prelude changes
+- **Breaking**: Removed crate-level `pub use ::livekit` and `pub use ::livekit_api` re-exports that collided with the `livekit` module namespace — use `adk_realtime::livekit::{AccessToken, VideoGrants}` instead of `adk_realtime::livekit_api::access_token::{AccessToken, VideoGrants}`
+- Added `AudioFrame` re-export to `adk_realtime::livekit` for downstream audio processing
+
 ### Fixed
 
 #### adk-auth
@@ -14,10 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Verified email identity mapping**: `ClaimsMapper::user_id_from_email()` and `TokenClaims::user_id()` now require `email_verified == true` before using an email claim as the effective identity. Unverified emails fall back to `sub`.
 - **SSO validation hardening**: OIDC discovery now rejects issuer mismatches, provider validators now enforce `nbf`, JWKS refreshes are single-flight with a cache key cap, and Azure multi-tenant validation can be restricted with `with_allowed_tenants(...)`.
 - **Auth bridge implementation**: The `auth-bridge` feature now provides `JwtRequestContextExtractor` for `adk-server`, mapping Bearer tokens into `RequestContext` with validated user IDs and JWT scopes.
+- **FileAuditSink mutex poisoning**: `FileAuditSink` now recovers from poisoned mutex instead of panicking, using `unwrap_or_else` to reclaim the lock guard.
+- **TokenError placeholder**: `TokenError::placeholder()` now returns a proper error variant instead of a debug-only stub that could mask real token validation failures.
+- **ScopedTool/ProtectedTool macro consolidation**: Eliminated duplicated trait implementations between `ScopedTool` and `ProtectedTool` by extracting shared logic into macros, reducing maintenance surface.
 
 #### adk-gemini
 - **FunctionCall serialization**: Fixed `thought_signature` leaking inside the `functionCall` JSON object when serializing `Part::FunctionCall`. The Gemini API expects `thoughtSignature` at the Part level only, not inside `functionCall`. The conversion layer in `adk-model` now correctly places the signature at the Part level and omits it from the inner `FunctionCall` struct.
 - **Broken serde attributes**: Restored missing `#[serde(skip_serializing_if = "Option::is_none")]` attributes on `FunctionDeclaration`, `FunctionCall`, `FunctionResponse`, and `ToolConfig` fields that had been replaced with invalid placeholder text, causing compilation failures.
+- **Non-object tool responses**: Gemini-backed agents now normalize array/scalar tool outputs into a valid object payload before sending `functionResponse.response`. This fixes Gemini tool-calling flows for tools like `RagTool` that naturally return lists of results.
 
 #### adk-agent / adk-runner / adk-core
 - **Multi-agent transfer round-trip**: Sub-agents can now transfer back to their parent and peer agents. The runner computes valid transfer targets (parent + peers) and passes them via `RunConfig::transfer_targets`. Previously, sub-agents with no children had an empty valid-agents list, making all transfers fail.
@@ -25,13 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Sub-agent conversation history isolation**: When a sub-agent is invoked via transfer, it now receives filtered conversation history that excludes other agents' events. Previously, the sub-agent's LLM saw the parent's tool calls mapped as "model" role, causing it to think work was already done and return immediately.
 - **Transfer tool schema**: The `transfer_to_agent` tool declaration now includes valid target names as an `enum` in the JSON schema and lists them in the description, so the LLM knows which agents it can transfer to.
 - **`disallow_transfer_to_parent` / `disallow_transfer_to_peers`**: These `LlmAgent` builder flags are now wired up and actively filter the transfer targets list. Previously they were stored but never checked.
+- **Agent runtime hardening**: `LlmAgent` now enforces configured input/output guardrails at runtime, normalizes XML tool-call markup before tool dispatch, preserves unique `function_call_id` values per tool invocation, and rejects duplicate sub-agent names during builder validation.
+- **Workflow agent contract fixes**: `ParallelAgent` and `ConditionalAgent` now execute their registered before/after callbacks, `IncludeContents::None` now keeps only the current user turn plus injected instructions, and `LoopAgent` maintains local conversation history for direct workflow use outside `adk-runner`.
+- **Deterministic LLM routing**: `LlmConditionalAgent` now resolves overlapping route labels deterministically, preferring exact matches and then the longest matching label.
 
-### Changed
-
-#### adk-realtime
-- **LiveKit re-exports**: Replaced glob `pub use livekit::prelude::*` with explicit type re-exports in `adk_realtime::livekit` module, eliminating semver hazard from upstream prelude changes
-- **Breaking**: Removed crate-level `pub use ::livekit` and `pub use ::livekit_api` re-exports that collided with the `livekit` module namespace — use `adk_realtime::livekit::{AccessToken, VideoGrants}` instead of `adk_realtime::livekit_api::access_token::{AccessToken, VideoGrants}`
-- Added `AudioFrame` re-export to `adk_realtime::livekit` for downstream audio processing
+#### adk-agent (Added)
+- **Regression test suite**: New `review_regression_tests.rs` with 10 targeted tests covering guardrail runtime enforcement, parallel/conditional agent callbacks, function_call_id uniqueness, `IncludeContents::None` filtering, deterministic LLM routing, sub-agent name uniqueness validation, and tool_call_markup normalization.
+- **README accuracy**: Updated README to reflect all current builder methods, correct examples, and accurate feature descriptions.
+- **Guardrail example update**: Removed outdated caveat from `guardrail_agent` example that incorrectly stated guardrails were builder-only; example now documents that guardrails are enforced at runtime.
 
 ## [0.3.2] - 2026-02-17
 

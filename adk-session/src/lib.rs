@@ -35,13 +35,12 @@
 
 pub mod event;
 pub mod inmemory;
+pub mod migration;
 pub mod service;
 pub mod session;
 pub mod state;
 pub mod state_utils;
 
-#[cfg(feature = "sqlite")]
-pub mod database;
 #[cfg(feature = "firestore")]
 pub mod firestore;
 #[cfg(feature = "mongodb")]
@@ -52,6 +51,8 @@ pub mod neo4j;
 pub mod postgres;
 #[cfg(feature = "redis")]
 pub mod redis;
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
 #[cfg(feature = "vertex-session")]
 pub mod vertex;
 
@@ -63,7 +64,12 @@ pub use state::{ReadonlyState, State};
 pub use state_utils::{extract_state_deltas, merge_states};
 
 #[cfg(feature = "sqlite")]
-pub use database::DatabaseSessionService;
+pub use sqlite::SqliteSessionService;
+
+/// Deprecated alias — use [`SqliteSessionService`] instead.
+#[cfg(feature = "sqlite")]
+#[deprecated(since = "0.4.0", note = "renamed to SqliteSessionService")]
+pub type DatabaseSessionService = SqliteSessionService;
 #[cfg(feature = "firestore")]
 pub use firestore::{
     FirestoreSessionConfig, FirestoreSessionService, app_state_path as firestore_app_state_path,

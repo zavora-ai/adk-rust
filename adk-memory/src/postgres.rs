@@ -14,6 +14,7 @@
 //! loss and 50% storage savings on the index.
 
 use crate::embedding::EmbeddingProvider;
+use crate::migration::pg_runner;
 use crate::service::*;
 use adk_core::{Part, Result};
 use async_trait::async_trait;
@@ -212,15 +213,32 @@ impl PostgresMemoryService {
         Self { pool, embedding_provider, vector_index, use_halfvec }
     }
 
-    /// Create the pgvector extension, `memory_entries` table, and indexes.
+    /// The registry table used to track applied migration versions.
+    const REGISTRY_TABLE: &'static str = "_adk_memory_migrations";
+
+    /// Advisory lock key derived from the registry table name.
     ///
-    /// The vector column uses the embedding provider's `dimensions()` value.
-    /// If no provider is configured, defaults to `vector(1536)`.
+    /// This is a fixed `i64` used with `pg_advisory_lock` /
+    /// `pg_advisory_unlock` to prevent concurrent migration races.
+    /// The value is a compile-time FNV-1a hash of the registry table name.
+    const ADVISORY_LOCK_KEY: i64 = {
+        let bytes = Self::REGISTRY_TABLE.as_bytes();
+        let mut hash: u64 = 0xcbf29ce484222325;
+        let mut i = 0;
+        while i < bytes.len() {
+            hash ^= bytes[i] as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+            i += 1;
+        }
+        hash as i64
+    };
+
+    /// Build the v1 migration SQL dynamically based on embedding dimensions
+    /// and vector index configuration.
     ///
-    /// When dimensions exceed 2000, the index is built using `halfvec`
-    /// expression indexing (`(embedding::halfvec(N))`) which supports
-    /// up to 4000 dimensions.
-    pub async fn migrate(&self) -> Result<()> {
+    /// The SQL creates the pgvector extension, `memory_entries` table with
+    /// vector and tsvector columns, and all required indexes.
+    fn build_v1_migration_sql(&self) -> Result<String> {
         let dims = self.embedding_provider.as_ref().map(|p| p.dimensions()).unwrap_or(1536);
 
         if self.use_halfvec && dims > PGVECTOR_MAX_HALFVEC_INDEX_DIMS {
@@ -231,95 +249,131 @@ impl PostgresMemoryService {
             )));
         }
 
-        sqlx::query("CREATE EXTENSION IF NOT EXISTS vector").execute(&self.pool).await.map_err(
-            |e| adk_core::AdkError::Memory(format!("pgvector extension creation failed: {e}")),
-        )?;
+        let mut sql = String::new();
 
-        // Store embeddings at full precision regardless of index type
-        let create_table = format!(
-            r#"
-            CREATE TABLE IF NOT EXISTS memory_entries (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                app_name TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                content JSONB NOT NULL,
-                author TEXT NOT NULL,
-                timestamp TIMESTAMPTZ NOT NULL,
-                embedding vector({dims}),
-                search_text TSVECTOR
-            )
-            "#
+        // pgvector extension
+        sql.push_str("CREATE EXTENSION IF NOT EXISTS vector;\n");
+
+        // Main table
+        sql.push_str(&format!(
+            "CREATE TABLE IF NOT EXISTS memory_entries (\
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(), \
+                app_name TEXT NOT NULL, \
+                user_id TEXT NOT NULL, \
+                session_id TEXT NOT NULL, \
+                content JSONB NOT NULL, \
+                author TEXT NOT NULL, \
+                timestamp TIMESTAMPTZ NOT NULL, \
+                embedding vector({dims}), \
+                search_text TSVECTOR\
+            );\n"
+        ));
+
+        // Composite index on app_name + user_id
+        sql.push_str(
+            "CREATE INDEX IF NOT EXISTS idx_memory_app_user \
+             ON memory_entries(app_name, user_id);\n",
         );
 
-        sqlx::query(&create_table)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("migration failed: {e}")))?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_memory_app_user \
-             ON memory_entries(app_name, user_id)",
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Memory(format!("index creation failed: {e}")))?;
-
-        self.create_vector_index(dims).await?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_memory_search_text \
-             ON memory_entries USING gin(search_text)",
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| adk_core::AdkError::Memory(format!("index creation failed: {e}")))?;
-
-        Ok(())
-    }
-
-    /// Build the appropriate vector index DDL based on index type and dimensions.
-    async fn create_vector_index(&self, dims: usize) -> Result<()> {
-        let idx_sql = match &self.vector_index {
+        // Vector index (depends on index type and halfvec)
+        match &self.vector_index {
             VectorIndexType::Hnsw { m, ef_construction } => {
                 if self.use_halfvec {
-                    // Expression index: cast vector → halfvec for >2000 dims
-                    format!(
+                    sql.push_str(&format!(
                         "CREATE INDEX IF NOT EXISTS idx_memory_embedding \
                          ON memory_entries USING hnsw ((embedding::halfvec({dims})) halfvec_cosine_ops) \
-                         WITH (m = {m}, ef_construction = {ef_construction})"
-                    )
+                         WITH (m = {m}, ef_construction = {ef_construction});\n"
+                    ));
                 } else {
-                    format!(
+                    sql.push_str(&format!(
                         "CREATE INDEX IF NOT EXISTS idx_memory_embedding \
                          ON memory_entries USING hnsw (embedding vector_cosine_ops) \
-                         WITH (m = {m}, ef_construction = {ef_construction})"
-                    )
+                         WITH (m = {m}, ef_construction = {ef_construction});\n"
+                    ));
                 }
             }
             VectorIndexType::IvfFlat { lists } => {
                 if self.use_halfvec {
-                    format!(
+                    sql.push_str(&format!(
                         "CREATE INDEX IF NOT EXISTS idx_memory_embedding \
                          ON memory_entries USING ivfflat ((embedding::halfvec({dims})) halfvec_cosine_ops) \
-                         WITH (lists = {lists})"
-                    )
+                         WITH (lists = {lists});\n"
+                    ));
                 } else {
-                    format!(
+                    sql.push_str(&format!(
                         "CREATE INDEX IF NOT EXISTS idx_memory_embedding \
                          ON memory_entries USING ivfflat (embedding vector_cosine_ops) \
-                         WITH (lists = {lists})"
-                    )
+                         WITH (lists = {lists});\n"
+                    ));
                 }
             }
-            VectorIndexType::None => return Ok(()),
-        };
+            VectorIndexType::None => {}
+        }
 
-        sqlx::query(&idx_sql).execute(&self.pool).await.map_err(|e| {
-            adk_core::AdkError::Memory(format!("vector index creation failed: {e}"))
-        })?;
+        // GIN index on tsvector for full-text search
+        sql.push_str(
+            "CREATE INDEX IF NOT EXISTS idx_memory_search_text \
+             ON memory_entries USING gin(search_text);\n",
+        );
 
-        Ok(())
+        Ok(sql)
+    }
+
+    /// Create the pgvector extension, `memory_entries` table, and indexes.
+    ///
+    /// The vector column uses the embedding provider's `dimensions()` value.
+    /// If no provider is configured, defaults to `vector(1536)`.
+    ///
+    /// When dimensions exceed 2000, the index is built using `halfvec`
+    /// expression indexing (`(embedding::halfvec(N))`) which supports
+    /// up to 4000 dimensions.
+    ///
+    /// Migrations are protected by a PostgreSQL advisory lock to prevent
+    /// concurrent migration races from multiple application instances.
+    pub async fn migrate(&self) -> Result<()> {
+        let pool = &self.pool;
+
+        // Build the v1 SQL dynamically (parameterized by dims + index type)
+        let v1_sql = self.build_v1_migration_sql()?;
+
+        let steps: &[(i64, &str, &str)] =
+            &[(1, "create memory_entries table with vector and tsvector columns", &v1_sql)];
+
+        // Acquire advisory lock to prevent concurrent migration races
+        sqlx::query(&format!("SELECT pg_advisory_lock({})", Self::ADVISORY_LOCK_KEY))
+            .execute(pool)
+            .await
+            .map_err(|e| {
+                adk_core::AdkError::Memory(format!("advisory lock acquisition failed: {e}"))
+            })?;
+
+        let result = pg_runner::run_sql_migrations(pool, Self::REGISTRY_TABLE, steps, || async {
+            let row = sqlx::query(
+                "SELECT EXISTS(\
+                     SELECT 1 FROM information_schema.tables \
+                     WHERE table_name = 'memory_entries'\
+                 ) AS exists_flag",
+            )
+            .fetch_one(pool)
+            .await
+            .map_err(|e| adk_core::AdkError::Memory(format!("baseline detection failed: {e}")))?;
+            let exists: bool = row.try_get("exists_flag").unwrap_or(false);
+            Ok(exists)
+        })
+        .await;
+
+        // Release advisory lock regardless of migration outcome
+        let _ = sqlx::query(&format!("SELECT pg_advisory_unlock({})", Self::ADVISORY_LOCK_KEY))
+            .execute(pool)
+            .await;
+
+        result
+    }
+
+    /// Returns the highest applied migration version, or 0 if no registry
+    /// exists or the registry is empty.
+    pub async fn schema_version(&self) -> Result<i64> {
+        pg_runner::sql_schema_version(&self.pool, Self::REGISTRY_TABLE).await
     }
 
     /// Extract plain text from a `Content` value for full-text search indexing.
