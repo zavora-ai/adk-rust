@@ -24,6 +24,7 @@ impl GeminiModel {
         Ok(Self { client, model_name, retry_config: RetryConfig::default() })
     }
 
+    #[cfg(feature = "gemini-vertex")]
     pub fn new_google_cloud(
         api_key: impl Into<String>,
         project_id: impl AsRef<str>,
@@ -42,6 +43,7 @@ impl GeminiModel {
         Ok(Self { client, model_name, retry_config: RetryConfig::default() })
     }
 
+    #[cfg(feature = "gemini-vertex")]
     pub fn new_google_cloud_service_account(
         service_account_json: &str,
         project_id: impl AsRef<str>,
@@ -60,6 +62,7 @@ impl GeminiModel {
         Ok(Self { client, model_name, retry_config: RetryConfig::default() })
     }
 
+    #[cfg(feature = "gemini-vertex")]
     pub fn new_google_cloud_adc(
         project_id: impl AsRef<str>,
         location: impl AsRef<str>,
@@ -76,6 +79,7 @@ impl GeminiModel {
         Ok(Self { client, model_name, retry_config: RetryConfig::default() })
     }
 
+    #[cfg(feature = "gemini-vertex")]
     pub fn new_google_cloud_wif(
         wif_json: &str,
         project_id: impl AsRef<str>,

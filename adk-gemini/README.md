@@ -32,6 +32,20 @@ Rust client library for Google's Gemini API — content generation, streaming, f
 adk-gemini = "0.3.2"
 ```
 
+### Feature Flags
+
+By default, both AI Studio and Vertex AI backends are enabled. You can disable Vertex AI support to reduce compilation time and dependencies:
+
+```toml
+[dependencies]
+# AI Studio only (faster compilation, no Google Cloud dependencies)
+adk-gemini = { version = "0.3.2", default-features = false, features = ["studio"] }
+```
+
+Available features:
+- `studio` (default) — AI Studio REST API backend
+- `vertex` (default) — Vertex AI backend with Google Cloud dependencies
+
 Or through `adk-model`:
 
 ```toml
