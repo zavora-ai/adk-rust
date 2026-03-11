@@ -22,20 +22,28 @@ pub struct OpenAIClient {
 impl OpenAIClient {
     /// Create a new OpenAI client.
     pub fn new(config: OpenAIConfig) -> Result<Self, AdkError> {
-        let OpenAIConfig { api_key, model, organization_id, project_id, base_url } = config;
+        let reasoning_effort = config.reasoning_effort.map(|e| match e {
+            super::config::ReasoningEffort::Low => async_openai::types::ReasoningEffort::Low,
+            super::config::ReasoningEffort::Medium => async_openai::types::ReasoningEffort::Medium,
+            super::config::ReasoningEffort::High => async_openai::types::ReasoningEffort::High,
+        });
 
-        let mut config = OpenAICompatibleConfig::new(api_key, model).with_provider_name("openai");
-        if let Some(base_url) = base_url {
-            config = config.with_base_url(base_url);
+        let mut compat_config =
+            OpenAICompatibleConfig::new(config.api_key, config.model).with_provider_name("openai");
+        if let Some(base_url) = config.base_url {
+            compat_config = compat_config.with_base_url(base_url);
         }
-        if let Some(org_id) = organization_id {
-            config = config.with_organization(org_id);
+        if let Some(org_id) = config.organization_id {
+            compat_config = compat_config.with_organization(org_id);
         }
-        if let Some(project_id) = project_id {
-            config = config.with_project(project_id);
+        if let Some(project_id) = config.project_id {
+            compat_config = compat_config.with_project(project_id);
+        }
+        if let Some(effort) = reasoning_effort {
+            compat_config = compat_config.with_reasoning_effort(effort);
         }
 
-        Ok(Self { inner: OpenAICompatible::new(config)? })
+        Ok(Self { inner: OpenAICompatible::new(compat_config)? })
     }
 
     /// Create a client for an OpenAI-compatible API.

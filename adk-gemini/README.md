@@ -170,11 +170,27 @@ let response = client
     .await?;
 ```
 
-### Thinking Mode (Gemini 2.5 / Gemini 3 Pro)
+### Thinking Mode (Gemini 2.5 / Gemini 3)
+
+#### Gemini 3: Level-Based Thinking
 
 ```rust
-let client = Gemini::pro(api_key)?;
+use adk_gemini::{ThinkingLevel, ThinkingConfig};
 
+let response = client
+    .generate_content()
+    .with_user_message("Solve: what is the integral of x^2 * e^x dx?")
+    .with_thinking_level(ThinkingLevel::High)
+    .with_thoughts_included(true)
+    .execute()
+    .await?;
+```
+
+Available levels: `Minimal`, `Low`, `Medium`, `High`.
+
+#### Gemini 2.5: Budget-Based Thinking
+
+```rust
 let response = client
     .generate_content()
     .with_user_message("Solve: what is the integral of x^2 * e^x dx?")
@@ -389,11 +405,15 @@ let response2 = client
 ### Vertex AI (Google Cloud)
 
 ```rust
-// API key auth
+// API key auth (regional endpoint)
 let client = Gemini::with_google_cloud(api_key, "my-project", "us-central1")?;
 
-// Application Default Credentials
+// Application Default Credentials (regional endpoint)
 let client = Gemini::with_google_cloud_adc("my-project", "us-central1")?;
+
+// Global endpoint — uses https://aiplatform.googleapis.com
+// No custom base URL workaround needed for Gemini 3 models.
+let client = Gemini::with_google_cloud_adc("my-project", "global")?;
 
 // Service account
 let sa_json = std::fs::read_to_string("service-account.json")?;
@@ -407,6 +427,8 @@ let client = Gemini::with_google_cloud_wif_json(
     &wif_json, "my-project", "us-central1", "gemini-2.5-flash",
 )?;
 ```
+
+When `location` is `"global"`, the endpoint resolves to `https://aiplatform.googleapis.com`. For any other location (e.g., `"us-central1"`, `"europe-west4"`), the regional format `https://{location}-aiplatform.googleapis.com` is used.
 
 ### Generation Config
 

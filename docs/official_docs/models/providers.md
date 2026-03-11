@@ -70,7 +70,7 @@ export GROQ_API_KEY="your-key"        # Groq
 > **Key highlights**:
 > - 🖼️ Native multimodal (images, video, audio, PDF)
 > - 📚 Up to 2M token context window
-> - 🧠 Thinking mode with thought signatures for multi-turn reasoning (Gemini 2.5+)
+> - 🧠 Thinking mode: level-based (Gemini 3) and budget-based (Gemini 2.5) with thought signatures
 > - 💰 Competitive pricing
 > - ⚡ Fast inference
 
@@ -110,6 +110,28 @@ async fn main() -> anyhow::Result<()> {
 | `gemini-2.5-flash-lite` | Ultra-fast for high-volume | 1M tokens |
 | `gemini-2.0-flash` | Previous generation (retiring March 2026) | 1M tokens |
 
+### Thinking Mode
+
+Gemini 3 models support level-based thinking, while Gemini 2.5 uses budget-based thinking:
+
+```rust
+use adk_gemini::{Gemini, ThinkingLevel};
+
+// Gemini 3: level-based thinking
+let response = client.generate_content()
+    .with_user_message("Solve this step by step")
+    .with_thinking_level(ThinkingLevel::High)
+    .with_thoughts_included(true)
+    .execute().await?;
+
+// Gemini 2.5: budget-based thinking
+let response = client.generate_content()
+    .with_user_message("Solve this step by step")
+    .with_thinking_budget(2048)
+    .with_thoughts_included(true)
+    .execute().await?;
+```
+
 ### Example Output
 
 ```
@@ -132,6 +154,7 @@ It has green eyes and distinctive striped markings typical of tabby cats.
 > - 📖 Best documentation & ecosystem
 > - 🎯 Consistent, predictable outputs
 > - 📋 **Structured output** with JSON schema enforcement
+> - 🧠 **Reasoning effort** control for o1/o3 reasoning models
 
 ### Complete Working Example
 
@@ -208,6 +231,20 @@ For strict mode with nested objects, include `additionalProperties: false` at ea
 }))
 ```
 
+### Reasoning Effort (o1, o3 Models)
+
+For OpenAI reasoning models, control how much reasoning effort the model applies:
+
+```rust
+use adk_model::openai::{OpenAIClient, OpenAIConfig, ReasoningEffort};
+
+let config = OpenAIConfig::new(&api_key, "o3-mini")
+    .with_reasoning_effort(ReasoningEffort::High);
+let model = OpenAIClient::new(config)?;
+```
+
+Available levels: `Low`, `Medium`, `High`. Higher effort produces more thorough reasoning at the cost of latency and tokens.
+
 ### OpenAI-Compatible Local APIs
 
 Use `OpenAIConfig::compatible()` to connect to local servers (Ollama, vLLM, LM Studio):
@@ -223,6 +260,20 @@ let model = OpenAIClient::new(config)?;
 ```
 
 > **Note**: Structured output (`output_schema`) requires backend support. Native OpenAI fully supports it; local servers may have limited support.
+
+### Reasoning Effort (o1, o3 Models)
+
+Control how much reasoning effort the model applies with `ReasoningEffort`:
+
+```rust
+use adk_model::openai::{OpenAIClient, OpenAIConfig, ReasoningEffort};
+
+let config = OpenAIConfig::new(&api_key, "o3-mini")
+    .with_reasoning_effort(ReasoningEffort::High);
+let model = OpenAIClient::new(config)?;
+```
+
+Available levels: `Low` (fastest), `Medium` (balanced), `High` (most thorough).
 
 ### Available Models
 

@@ -2,6 +2,21 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Reasoning effort level for OpenAI reasoning models (e.g., o1, o3).
+///
+/// Controls how much reasoning effort the model applies. Maps directly to
+/// the OpenAI `reasoning_effort` API field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    /// Minimal reasoning — fastest, cheapest.
+    Low,
+    /// Balanced reasoning (default for most reasoning models).
+    Medium,
+    /// Maximum reasoning — most thorough but slowest.
+    High,
+}
+
 /// Configuration for OpenAI API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenAIConfig {
@@ -18,6 +33,12 @@ pub struct OpenAIConfig {
     /// Optional custom base URL for OpenAI-compatible APIs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    /// Reasoning effort for OpenAI reasoning models (o1, o3, etc.).
+    ///
+    /// When set, the `reasoning_effort` field is included in the API request.
+    /// Only applicable to reasoning-capable models.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl Default for OpenAIConfig {
@@ -28,6 +49,7 @@ impl Default for OpenAIConfig {
             organization_id: None,
             project_id: None,
             base_url: None,
+            reasoning_effort: None,
         }
     }
 }
@@ -61,6 +83,12 @@ impl OpenAIConfig {
     /// Set the project ID.
     pub fn with_project(mut self, project_id: impl Into<String>) -> Self {
         self.project_id = Some(project_id.into());
+        self
+    }
+
+    /// Set the reasoning effort for reasoning models (o1, o3, etc.).
+    pub fn with_reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(effort);
         self
     }
 }

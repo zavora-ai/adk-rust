@@ -139,7 +139,10 @@ pub fn print_help() {
     println!("OPTIONS:");
     println!("    -p, --port <PORT>      Server port [default: 3000]");
     println!("    -h, --host <HOST>      Server host [default: 127.0.0.1]");
-    println!("    -d, --dir <DIR>        Projects directory");
+    println!("    -d, --dir <DIR>        Projects directory [default: user-local]");
+    println!(
+        "                             Use --dir ./.adk-studio/projects for repo-local storage"
+    );
     println!("    -s, --static <DIR>     Static files directory");
     println!("    -V, --version          Print version and exit");
     println!("        --help             Print this help message and exit");

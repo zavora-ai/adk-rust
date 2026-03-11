@@ -7,6 +7,7 @@
 //! Inspired by [PR #74](https://github.com/zavora-ai/adk-rust/pull/74) by @mikefaille.
 
 pub mod studio;
+#[cfg(feature = "vertex")]
 pub mod vertex;
 
 use crate::{

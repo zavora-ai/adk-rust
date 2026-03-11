@@ -31,6 +31,9 @@ pub struct OpenAICompatibleConfig {
     /// Optional project ID for providers that support it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    /// Optional reasoning effort for OpenAI reasoning models.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<async_openai::types::ReasoningEffort>,
 }
 
 impl OpenAICompatibleConfig {
@@ -43,6 +46,7 @@ impl OpenAICompatibleConfig {
             base_url: None,
             organization_id: None,
             project_id: None,
+            reasoning_effort: None,
         }
     }
 
@@ -69,6 +73,12 @@ impl OpenAICompatibleConfig {
         self.project_id = Some(project_id.into());
         self
     }
+
+    /// Set reasoning effort for reasoning models.
+    pub fn with_reasoning_effort(mut self, effort: async_openai::types::ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(effort);
+        self
+    }
 }
 
 /// Shared OpenAI-compatible client implementation.
@@ -77,6 +87,7 @@ pub struct OpenAICompatible {
     model: String,
     provider_name: String,
     retry_config: RetryConfig,
+    reasoning_effort: Option<async_openai::types::ReasoningEffort>,
 }
 
 impl OpenAICompatible {
@@ -97,6 +108,7 @@ impl OpenAICompatible {
             model: config.model,
             provider_name: config.provider_name,
             retry_config: RetryConfig::default(),
+            reasoning_effort: config.reasoning_effort,
         })
     }
 
@@ -131,6 +143,7 @@ impl Llm for OpenAICompatible {
         let client = self.client.clone();
         let retry_config = self.retry_config.clone();
         let request_for_retry = request.clone();
+        let reasoning_effort = self.reasoning_effort.clone();
 
         let stream = try_stream! {
             // Retries only cover request setup/execution. Stream failures after start are surfaced
@@ -140,6 +153,7 @@ impl Llm for OpenAICompatible {
                 let provider_name = provider_name.clone();
                 let client = client.clone();
                 let request = request_for_retry.clone();
+                let reasoning_effort = reasoning_effort.clone();
                 async move {
                     let messages: Vec<_> = request
                         .contents
@@ -153,6 +167,10 @@ impl Llm for OpenAICompatible {
                     if !request.tools.is_empty() {
                         let tools = convert::convert_tools(&request.tools);
                         request_builder.tools(tools);
+                    }
+
+                    if let Some(effort) = reasoning_effort {
+                        request_builder.reasoning_effort(effort);
                     }
 
                     if let Some(config) = &request.config {

@@ -106,6 +106,7 @@ impl<'de> Deserialize<'de> for FinishReason {
 #[serde(rename_all = "camelCase")]
 pub struct CitationMetadata {
     /// The citation sources
+    #[serde(default)]
     pub citation_sources: Vec<CitationSource>,
 }
 
@@ -543,11 +544,42 @@ pub struct GenerateContentRequest {
     pub cached_content: Option<String>,
 }
 
-/// Configuration for thinking (Gemini 2.5 series only)
+/// Native thinking level for Gemini 3 models.
+///
+/// Controls the amount of reasoning effort the model applies. This is the
+/// Gemini 3 native thinking control — for Gemini 2.5 budget-based thinking,
+/// use [`ThinkingConfig::with_thinking_budget`] instead.
+///
+/// Serializes as lowercase per the Gemini API contract
+/// (e.g., `"low"`, `"high"`).
+///
+/// Available levels (model support varies):
+/// - `Minimal` — matches "no thinking" for most queries; model may still
+///   think minimally for complex coding tasks. Not supported on Gemini 3.1 Pro.
+/// - `Low` — minimizes latency and cost; best for simple tasks.
+/// - `Medium` — balanced thinking for most tasks.
+/// - `High` — maximizes reasoning depth (default for Gemini 3 Flash and 3.1 Pro).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingLevel {
+    /// Minimal reasoning effort. Matches "no thinking" for most queries.
+    /// Not supported on Gemini 3.1 Pro.
+    Minimal,
+    /// Low reasoning effort. Best for simple instruction following and chat.
+    Low,
+    /// Medium reasoning effort. Balanced thinking for most tasks.
+    Medium,
+    /// High reasoning effort — maximizes reasoning depth (default).
+    High,
+}
+
+/// Configuration for thinking (Gemini 2.5 and 3 series)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThinkingConfig {
     /// The thinking budget (number of thinking tokens)
+    ///
+    /// This is the Gemini 2.5 budget-based thinking control.
     ///
     /// - Set to 0 to disable thinking
     /// - Set to -1 for dynamic thinking (model decides)
@@ -566,6 +598,13 @@ pub struct ThinkingConfig {
     /// raw thoughts, providing insights into the reasoning process.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_thoughts: Option<bool>,
+
+    /// Native thinking level for Gemini 3 models.
+    ///
+    /// When set, the model uses level-based reasoning instead of a token budget.
+    /// Do not combine with `thinking_budget` — use one or the other.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<ThinkingLevel>,
 }
 
 impl ThinkingConfig {
@@ -575,10 +614,10 @@ impl ThinkingConfig {
 
     /// Create a new thinking config with default settings
     pub fn new() -> Self {
-        Self { thinking_budget: None, include_thoughts: None }
+        Self { thinking_budget: None, include_thoughts: None, thinking_level: None }
     }
 
-    /// Set the thinking budget
+    /// Set the thinking budget (Gemini 2.5 budget-based control)
     pub fn with_thinking_budget(mut self, budget: i32) -> Self {
         self.thinking_budget = Some(budget);
         self
@@ -596,9 +635,18 @@ impl ThinkingConfig {
         self
     }
 
+    /// Set the thinking level (Gemini 3 native level-based control).
+    ///
+    /// This is the preferred control for Gemini 3 models. Do not combine
+    /// with `with_thinking_budget` — use one or the other.
+    pub fn with_thinking_level(mut self, level: ThinkingLevel) -> Self {
+        self.thinking_level = Some(level);
+        self
+    }
+
     /// Create a thinking config that enables dynamic thinking with thoughts included
     pub fn dynamic_thinking() -> Self {
-        Self { thinking_budget: Some(-1), include_thoughts: Some(true) }
+        Self { thinking_budget: Some(-1), include_thoughts: Some(true), thinking_level: None }
     }
 }
 

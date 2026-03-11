@@ -525,6 +525,54 @@ fn parse_citation_metadata() {
     assert_eq!(citations[0].license.as_deref(), Some("CC-BY-4.0"));
 }
 
+#[test]
+fn parse_citation_metadata_without_citation_sources() {
+    let json = json!({
+        "candidates": [{
+            "content": {"parts": [{"text": "grounded text"}], "role": "model"},
+            "finishReason": "STOP",
+            "citationMetadata": {}
+        }]
+    });
+
+    let resp: GenerationResponse = serde_json::from_value(json).unwrap();
+    let meta = resp.candidates[0].citation_metadata.as_ref().unwrap();
+    assert!(meta.citation_sources.is_empty());
+}
+
+#[test]
+fn parse_citation_metadata_with_populated_citation_sources() {
+    let json = json!({
+        "candidates": [{
+            "content": {"parts": [{"text": "cited text"}], "role": "model"},
+            "finishReason": "STOP",
+            "citationMetadata": {
+                "citationSources": [
+                    {
+                        "uri": "https://example.com/a",
+                        "title": "Article A",
+                        "startIndex": 0,
+                        "endIndex": 5
+                    },
+                    {
+                        "uri": "https://example.com/b",
+                        "startIndex": 6,
+                        "endIndex": 12
+                    }
+                ]
+            }
+        }]
+    });
+
+    let resp: GenerationResponse = serde_json::from_value(json).unwrap();
+    let citations = &resp.candidates[0].citation_metadata.as_ref().unwrap().citation_sources;
+    assert_eq!(citations.len(), 2);
+    assert_eq!(citations[0].uri.as_deref(), Some("https://example.com/a"));
+    assert_eq!(citations[0].title.as_deref(), Some("Article A"));
+    assert_eq!(citations[1].uri.as_deref(), Some("https://example.com/b"));
+    assert_eq!(citations[1].title, None);
+}
+
 // ── Round-trip serialization ────────────────────────────────────────
 
 #[test]

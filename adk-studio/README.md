@@ -339,6 +339,35 @@ ADK Studio includes curated workflow templates:
 - **Email Sentiment Analysis** - Analyze emails and update spreadsheet
 - **API Data Pipeline** - Fetch, transform, and store data
 
+## Team Collaboration: Repo-Local Projects
+
+By default, projects are stored in a user-local directory. For teams that want to
+version-control Studio projects alongside source code, use a repo-local directory:
+
+```bash
+# Recommended convention: .adk-studio/projects at repo root
+adk-studio --dir ./.adk-studio/projects
+```
+
+```
+my-repo/
+├── .adk-studio/
+│   └── projects/       # Studio project JSON files
+├── src/
+├── Cargo.toml
+└── .gitignore
+```
+
+Add to `.gitignore` to keep build artifacts out of version control:
+
+```gitignore
+.adk-studio/projects/*/build/
+.adk-studio/projects/*/target/
+```
+
+Each team member launches Studio with the same `--dir` flag. Project JSON files are the
+source of truth — generated Rust code can always be regenerated.
+
 ## Related Crates
 
 - [adk-rust](https://crates.io/crates/adk-rust) - Meta-crate with all components

@@ -406,6 +406,54 @@ Studio includes pre-built templates:
 - **Support Router** - Multi-agent routing
 - **Code Assistant** - Agent with code tools
 
+## Team Collaboration: Repo-Local Projects
+
+By default, ADK Studio stores projects in a user-local directory
+(`~/.local/share/adk-studio/projects` on Linux, `~/Library/Application Support/adk-studio/projects` on macOS).
+This works well for individual use, but teams that want to version-control and share
+Studio projects alongside their source code can use a repo-local projects directory instead.
+
+### Recommended Convention
+
+Store projects in `.adk-studio/projects` at the root of your repository:
+
+```
+my-repo/
+├── .adk-studio/
+│   └── projects/       # Studio project JSON files
+├── src/
+├── Cargo.toml
+└── .gitignore
+```
+
+Launch Studio against the repo-local directory:
+
+```bash
+adk-studio --dir ./.adk-studio/projects
+```
+
+### .gitignore Guidance
+
+Decide what to commit based on your workflow:
+
+```gitignore
+# Option A: Version-control project definitions, ignore build artifacts
+.adk-studio/projects/*/build/
+.adk-studio/projects/*/target/
+
+# Option B: Ignore all Studio data (treat as local-only)
+.adk-studio/
+```
+
+Option A is recommended for teams — it lets you share agent designs while keeping
+compiled outputs out of version control.
+
+### Tips
+
+- Each team member launches Studio with the same `--dir` flag to work on shared projects.
+- Project JSON files are the source of truth; generated Rust code can be regenerated from them.
+- The user-local default path is unaffected — omitting `--dir` still uses the system default.
+
 ## Best Practices
 
 | Practice | Description |
@@ -413,7 +461,7 @@ Studio includes pre-built templates:
 | **Start simple** | Begin with single LLM agent, add complexity |
 | **Test often** | Use chat panel to validate behavior |
 | **Review code** | Check generated code before deploying |
-| **Version projects** | Export and version control project JSON |
+| **Version projects** | Store projects in `.adk-studio/projects` for team collaboration |
 | **Use templates** | Start from templates for common patterns |
 
 ---

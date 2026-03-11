@@ -1,9 +1,10 @@
 //! Vertex AI backend for the Gemini API.
 //!
-//! This backend communicates with `{region}-aiplatform.googleapis.com` using
-//! Google Cloud credentials (ADC, service account, WIF, or API key).
-//! It uses the gRPC SDK for non-streaming requests (with REST fallback on
-//! transport errors) and REST SSE for streaming.
+//! This backend communicates with `{region}-aiplatform.googleapis.com` for
+//! regional endpoints, or `aiplatform.googleapis.com` when the location is
+//! `global`. It uses Google Cloud credentials (ADC, service account, WIF, or
+//! API key), the gRPC SDK for non-streaming requests (with REST fallback on
+//! transport errors), and REST SSE for streaming.
 //!
 //! Streaming support inspired by [PR #74](https://github.com/zavora-ai/adk-rust/pull/74)
 //! by @mikefaille.

@@ -86,6 +86,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+#### OpenAI Reasoning Effort
+
+For reasoning models (o1, o3, etc.), control how much reasoning effort the model applies:
+
+```rust
+use adk_model::openai::{OpenAIClient, OpenAIConfig, ReasoningEffort};
+
+let config = OpenAIConfig::new(api_key, "o3-mini")
+    .with_reasoning_effort(ReasoningEffort::High);
+let model = OpenAIClient::new(config)?;
+```
+
+Available levels: `Low`, `Medium`, `High`.
+
 ### Anthropic (Claude)
 
 ```rust

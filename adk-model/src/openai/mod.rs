@@ -20,4 +20,4 @@ pub(crate) mod convert;
 
 pub use crate::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig};
 pub use client::{AzureOpenAIClient, OpenAIClient};
-pub use config::{AzureConfig, OpenAIConfig};
+pub use config::{AzureConfig, OpenAIConfig, ReasoningEffort};

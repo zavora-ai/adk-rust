@@ -328,3 +328,67 @@ fn test_vertex_numeric_enum_deserialization() {
     let modality: Modality = serde_json::from_value(json!(4)).unwrap();
     assert_eq!(modality, Modality::Audio);
 }
+
+#[test]
+fn test_thinking_level_serialization() {
+    use crate::ThinkingLevel;
+
+    // ThinkingLevel serializes as lowercase
+    let level = ThinkingLevel::Low;
+    let json = serde_json::to_value(&level).unwrap();
+    assert_eq!(json, json!("low"));
+
+    let level = ThinkingLevel::High;
+    let json = serde_json::to_value(&level).unwrap();
+    assert_eq!(json, json!("high"));
+
+    // Round-trip all variants
+    for (variant, expected) in [
+        (ThinkingLevel::Minimal, "minimal"),
+        (ThinkingLevel::Low, "low"),
+        (ThinkingLevel::Medium, "medium"),
+        (ThinkingLevel::High, "high"),
+    ] {
+        let serialized = serde_json::to_string(&variant).unwrap();
+        assert_eq!(serialized, format!("\"{expected}\""));
+        let deserialized: ThinkingLevel = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, variant);
+    }
+}
+
+#[test]
+fn test_thinking_config_with_level() {
+    use crate::{ThinkingConfig, ThinkingLevel};
+
+    // Builder method sets thinking_level
+    let config = ThinkingConfig::new()
+        .with_thinking_level(ThinkingLevel::Medium)
+        .with_thoughts_included(true);
+
+    assert_eq!(config.thinking_level, Some(ThinkingLevel::Medium));
+    assert_eq!(config.include_thoughts, Some(true));
+    assert_eq!(config.thinking_budget, None);
+
+    // Serializes correctly with camelCase
+    let json = serde_json::to_value(&config).unwrap();
+    assert_eq!(json["thinkingLevel"], json!("medium"));
+    assert_eq!(json["includeThoughts"], json!(true));
+    assert!(json.get("thinkingBudget").is_none());
+}
+
+#[test]
+fn test_thinking_config_budget_and_level_independent() {
+    use crate::{ThinkingConfig, ThinkingLevel};
+
+    // Budget-only config (Gemini 2.5 style)
+    let budget_config = ThinkingConfig::new().with_thinking_budget(2048);
+    let json = serde_json::to_value(&budget_config).unwrap();
+    assert_eq!(json["thinkingBudget"], json!(2048));
+    assert!(json.get("thinkingLevel").is_none());
+
+    // Level-only config (Gemini 3 style)
+    let level_config = ThinkingConfig::new().with_thinking_level(ThinkingLevel::High);
+    let json = serde_json::to_value(&level_config).unwrap();
+    assert_eq!(json["thinkingLevel"], json!("high"));
+    assert!(json.get("thinkingBudget").is_none());
+}

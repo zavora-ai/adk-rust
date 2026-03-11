@@ -7,7 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### adk-gemini
+- **Citation metadata deserialization**: `CitationMetadata` now deserializes correctly when Gemini returns `citationMetadata` without a `citationSources` field. Previously this caused a deserialization error for grounded responses using Google Search or URL context tools. ([#178](https://github.com/zavora-ai/adk-rust/issues/178))
+- **Vertex AI global endpoint**: The Vertex endpoint builder now correctly produces `https://aiplatform.googleapis.com` when `location` is `"global"`, instead of the invalid `https://global-aiplatform.googleapis.com`. No custom base URL workaround is needed for Gemini 3 models on the global endpoint. ([#179](https://github.com/zavora-ai/adk-rust/issues/179))
+- **Feature-gated Google Cloud dependencies**: `google-cloud-aiplatform-v1`, `google-cloud-auth`, and `google-cloud-gax` are now optional dependencies behind the `vertex` feature flag. Users who only need the Gemini Developer API (AI Studio) can compile with `--no-default-features --features studio` to avoid pulling in heavy Google Cloud crates. Default features include `vertex` for backward compatibility. ([#181](https://github.com/zavora-ai/adk-rust/issues/181))
+
 ### Added
+
+#### adk-gemini
+- **Gemini 3 thinking level**: `ThinkingLevel` enum (`Minimal`, `Low`, `Medium`, `High`) and `thinking_level` field on `ThinkingConfig` for native Gemini 3 level-based reasoning control. Builder method `with_thinking_level()` available on both `ThinkingConfig` and `ContentBuilder`. Existing Gemini 2.5 budget-based APIs (`with_thinking_budget`, `with_dynamic_thinking`) are unchanged. ([#177](https://github.com/zavora-ai/adk-rust/issues/177))
+
+#### adk-model
+- **OpenAI reasoning effort**: `ReasoningEffort` enum (`Low`, `Medium`, `High`) and `reasoning_effort` field on `OpenAIConfig` for OpenAI reasoning models (o1, o3, etc.). Builder method `with_reasoning_effort()` wires through to the `reasoning_effort` API field. Also available on `OpenAICompatibleConfig` for compatible providers. ([#177](https://github.com/zavora-ai/adk-rust/issues/177))
+
+#### adk-core
+- **`ToolOutcome` struct**: Structured metadata for tool execution results — carries tool name, arguments, success/failure, execution duration, optional error message, and retry attempt number. Available via `CallbackContext::tool_outcome()` in after-tool callbacks.
+- **`tool_outcome()` default method on `CallbackContext`**: Returns `Option<ToolOutcome>`, defaulting to `None` for full backward compatibility with existing implementors.
+- **`RetryBudget` struct**: Configurable retry policy with `max_retries` and `delay` for automatic tool retry on transient failures.
+- **`OnToolErrorCallback` type**: Promoted to `adk-core` as the canonical, framework-level tool-error callback type. Previously defined locally in `adk-agent` and `adk-plugin`.
+- **`AfterToolCallbackFull` type**: V2 rich after-tool callback aligned with Python/Go ADK model. Receives `(CallbackContext, Tool, args, response)` and can inspect or replace the tool response sent to the LLM.
+
+#### adk-agent
+- **`.toolset()` builder method**: `LlmAgentBuilder` now accepts `Arc<dyn Toolset>` for dynamic per-invocation tool resolution. Toolsets are resolved at the start of each `run()` call using the current `ReadonlyContext`, enabling context-dependent tools (e.g., per-user browser sessions). Static `.tool()` and dynamic `.toolset()` can be mixed freely.
+- **`.default_retry_budget()` and `.tool_retry_budget()`**: Configure automatic retry for transient tool failures. Per-tool budgets override the default. When retries are exhausted, the final failure is reported to the LLM.
+- **`.circuit_breaker_threshold()`**: Tracks consecutive tool failures per tool name within an invocation. After the configured threshold, the tool is temporarily disabled with an immediate error response to the LLM. Resets at the start of each new invocation.
+- **`.on_tool_error()` callback**: Register fallback handlers invoked when a tool fails (after retries are exhausted). Callbacks can return a substitute `Value` used as the function response, or `None` to pass through to the next handler. If no handler provides a fallback, the original error is reported to the LLM.
+- **`ToolOutcome` in after-tool callbacks**: `CallbackContext::tool_outcome()` returns structured execution metadata (success, duration, error, attempt number) without requiring JSON error parsing.
+- **`.after_tool_callback_full()` builder method**: V2 rich after-tool callback that receives the tool, arguments, and response. Runs after the legacy `AfterToolCallback` chain. Aligned with Python/Go ADK model for first-class tool result handling.
+
+#### adk-realtime
+- **`.toolset()` builder method on `RealtimeAgentBuilder`**: Dynamic per-invocation tool resolution for realtime voice agents, matching `LlmAgentBuilder` parity. Toolsets are resolved before the realtime session connects, with the same duplicate detection (static-vs-toolset, toolset-vs-toolset) as `LlmAgent`. Static `.tool()` and dynamic `.toolset()` can be mixed freely. Fully backward compatible.
+
+#### adk-tool
+- **Toolset composition utilities**: Three reusable toolset wrappers for complex agent configurations:
+  - `FilteredToolset` — wraps any toolset and filters tools by predicate (allow-list via `string_predicate()` or custom `ToolPredicate`)
+  - `MergedToolset` — combines multiple toolsets into one with first-wins deduplication and `tracing::warn` on name conflicts
+  - `PrefixedToolset` — namespaces all tool names with a configurable prefix to avoid collisions across toolsets
+  All three implement `Toolset` and compose with any toolset implementation including `McpToolset` and `BrowserToolset`.
+
+#### adk-browser
+- **Pool-backed `BrowserToolset`**: `BrowserToolset::with_pool()` and `BrowserToolset::with_pool_and_profile()` constructors resolve per-user browser sessions from `BrowserSessionPool` using the invocation's `user_id`. This is the production path for multi-tenant browser agents. Existing `new()` and `with_profile()` constructors are unchanged.
+- **`try_all_tools()`**: Explicit error handling for pool-backed toolsets where `all_tools()` cannot resolve without context.
+- **`ensure_started()` auto-recovery**: All public `BrowserSession` methods that access the WebDriver now go through a centralized lifecycle-safe path that auto-starts or reconnects stale sessions. Tools no longer fail with "Browser session not started" errors. Explicit `start()` and `stop()` remain for manual lifecycle control.
+- **Navigation tool page context**: `NavigateTool`, `BackTool`, `ForwardTool`, and `RefreshTool` now include a `"page"` field in responses with the current page context (URL, title, truncated text), matching the format used by interaction tools. If page context capture fails, a `"page_context_error"` field is included instead.
+
+#### Examples
+- **`browser_pool`**: Multi-tenant pool-backed `BrowserToolset` with per-user session isolation, `.toolset()` API, and `ensure_started()` auto-recovery. Requires `--features browser`.
+- **`resilient_agent`**: Retry budgets, circuit breakers, `on_tool_error` fallback callbacks, and `ToolOutcome` metadata in after-tool callbacks. Uses mock flaky/broken/reliable tools.
+- **`toolset_composition`**: `FilteredToolset`, `MergedToolset`, `PrefixedToolset`, `BasicToolset`, `string_predicate`, and full composition chains.
+- **`server_compaction`**: `ServerConfig::with_compaction()`, `EventsCompactionConfig`, and custom `BaseEventsSummarizer`.
 
 #### adk-session
 - **Schema migrations**: Versioned, forward-only migration system for all database backends (SQLite, PostgreSQL, MongoDB, Neo4j). Each backend tracks applied migrations in a `_schema_migrations` registry table with checksums and timestamps. Migrations are idempotent — calling `migrate()` on an already-current database is a no-op.
@@ -18,6 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### adk-memory
 - **Schema migrations**: Same versioned migration system as `adk-session`, applied to all `adk-memory` database backends (SQLite, PostgreSQL, MongoDB, Neo4j). Each backend has its own migration registry and version tracking.
 - **`schema_version()` method**: All database backends expose `schema_version()`.
+
+#### adk-cli / adk-server
+- **Production app builder path**: `Launcher` now exposes `build_app()` and `build_app_with_a2a(...)`, making it possible to reuse ADK server wiring while still owning the Axum router, middleware stack, and serve loop in production applications.
+- **Launcher A2A and telemetry configuration**: `Launcher` now supports `with_a2a_base_url(...)` and `with_telemetry(...)`, so A2A routes and telemetry initialization are configurable instead of hardcoded in serve mode.
+- **Server runtime passthrough**: `ServerConfig` now exposes `with_compaction(...)` and `with_context_cache(...)`, and the SSE + A2A runtime controllers now forward those settings into `RunnerConfig`.
 
 ### Changed
 
@@ -101,7 +156,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.2] - 2026-02-17
 
 ### ⭐ Highlights
-- **8 New LLM Providers**: Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova (OpenAI-compatible), Amazon Bedrock (AWS SDK), and Azure AI Inference (reqwest) — all feature-gated with contract tests
+- **9 New LLM Providers**: xAI, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova (OpenAI-compatible), Amazon Bedrock (AWS SDK), and Azure AI Inference (reqwest) — all feature-gated with contract tests
 - **adk-rag**: New RAG crate with modular pipeline, 6 vector store backends (InMemory, Qdrant, LanceDB, pgvector, SurrealDB), 3 chunking strategies, and agentic retrieval via `RagTool`
 - **Generation Config on Agents**: `LlmAgentBuilder` now supports `temperature()`, `top_p()`, `top_k()`, `max_output_tokens()` convenience methods and full `generate_content_config()` for agent-level LLM tuning
 - **Gemini Model URL Fix**: `Model::Custom` variant now correctly prefixes `models/` in API URLs, fixing `PerformRequestNew` errors for all Gemini tool-calling examples

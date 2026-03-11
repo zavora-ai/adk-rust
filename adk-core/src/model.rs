@@ -154,6 +154,7 @@ pub struct UsageMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CitationMetadata {
+    #[serde(default)]
     pub citation_sources: Vec<CitationSource>,
 }
 

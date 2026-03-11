@@ -261,6 +261,7 @@ pub mod openai;
 pub mod openai_compatible;
 #[cfg(feature = "perplexity")]
 pub mod perplexity;
+pub mod provider;
 pub mod retry;
 #[cfg(feature = "sambanova")]
 pub mod sambanova;
@@ -291,11 +292,12 @@ pub use mock::MockLlm;
 #[cfg(feature = "ollama")]
 pub use ollama::{OllamaConfig, OllamaModel};
 #[cfg(feature = "openai")]
-pub use openai::{AzureConfig, AzureOpenAIClient, OpenAIClient, OpenAIConfig};
+pub use openai::{AzureConfig, AzureOpenAIClient, OpenAIClient, OpenAIConfig, ReasoningEffort};
 #[cfg(feature = "openai")]
 pub use openai_compatible::{OpenAICompatible, OpenAICompatibleConfig};
 #[cfg(feature = "perplexity")]
 pub use perplexity::{PerplexityClient, PerplexityConfig};
+pub use provider::ModelProvider;
 pub use retry::RetryConfig;
 pub use retry::ServerRetryHint;
 #[cfg(feature = "sambanova")]

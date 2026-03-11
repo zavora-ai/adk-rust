@@ -85,7 +85,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     info!("method 2: fully matching curl example structure");
 
     let thinking_config =
-        ThinkingConfig { thinking_budget: Some(1024), include_thoughts: Some(true) };
+        ThinkingConfig::new().with_thinking_budget(1024).with_thoughts_included(true);
 
     let generation_config =
         GenerationConfig { thinking_config: Some(thinking_config), ..Default::default() };

@@ -7,6 +7,7 @@ use crate::{
     Message, Role, Tool,
     cache::CachedContentHandle,
     client::{Error as ClientError, GeminiClient},
+    generation::model::ThinkingLevel,
     generation::{GenerateContentRequest, SpeakerVoiceConfig, SpeechConfig, ThinkingConfig},
     tools::{FunctionCallingConfig, ToolConfig},
 };
@@ -271,6 +272,19 @@ impl ContentBuilder {
             .thinking_config
             .get_or_insert_with(Default::default)
             .include_thoughts = Some(include);
+        self
+    }
+
+    /// Sets the thinking level for Gemini 3 models.
+    ///
+    /// This is the native level-based reasoning control for Gemini 3. For Gemini 2.5
+    /// budget-based thinking, use [`with_thinking_budget`](Self::with_thinking_budget).
+    pub fn with_thinking_level(mut self, level: ThinkingLevel) -> Self {
+        self.generation_config
+            .get_or_insert_with(Default::default)
+            .thinking_config
+            .get_or_insert_with(Default::default)
+            .thinking_level = Some(level);
         self
     }
 

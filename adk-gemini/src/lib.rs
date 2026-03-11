@@ -91,7 +91,8 @@ pub use generation::{
     model::GroundingMetadata, model::GroundingSegment, model::GroundingSupport,
     model::MultiSpeakerVoiceConfig, model::PrebuiltVoiceConfig, model::PromptFeedback,
     model::PromptTokenDetails, model::SpeakerVoiceConfig, model::SpeechConfig,
-    model::ThinkingConfig, model::UsageMetadata, model::VoiceConfig, model::WebGroundingChunk,
+    model::ThinkingConfig, model::ThinkingLevel, model::UsageMetadata, model::VoiceConfig,
+    model::WebGroundingChunk,
 };
 
 // ========== Text Embeddings ==========

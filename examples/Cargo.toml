@@ -644,8 +644,36 @@ name = "gemini_thinking"
 path = "gemini_thinking/main.rs"
 
 [[example]]
+name = "gemini_thinking_level"
+path = "gemini_thinking_level/main.rs"
+
+[[example]]
+name = "openai_reasoning"
+path = "openai_reasoning/main.rs"
+required-features = ["openai"]
+
+[[example]]
 name = "multi_turn_tool"
 path = "multi_turn_tool/main.rs"
+
+# --- Browser Production Hardening examples ---
+
+[[example]]
+name = "browser_pool"
+path = "browser_pool/main.rs"
+required-features = ["browser"]
+
+[[example]]
+name = "resilient_agent"
+path = "resilient_agent/main.rs"
+
+[[example]]
+name = "toolset_composition"
+path = "toolset_composition/main.rs"
+
+[[example]]
+name = "server_compaction"
+path = "server_compaction/main.rs"
 
 # Note: audio examples are now in the audio crate at examples/audio/
 # Run with: cargo run -p audio-examples --example <name> --features <flags>

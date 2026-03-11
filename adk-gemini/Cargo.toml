@@ -22,9 +22,9 @@ license = "Apache-2.0"
 repository = "https://github.com/zavora-ai/adk-rust"
 
 [features]
-default = ["studio"]
+default = ["studio", "vertex"]
 studio = []
-vertex = []
+vertex = ["dep:google-cloud-aiplatform-v1", "dep:google-cloud-auth", "dep:google-cloud-gax"]
 
 [lib]
 name = "adk_gemini"
@@ -224,15 +224,18 @@ version = "^0.3"
 version = "1.7.0"
 features = ["prediction-service", "default-rustls-provider"]
 default-features = false
+optional = true
 
 [dependencies.google-cloud-auth]
 version = "1.4.0"
 default-features = false
 features = ["default-rustls-provider"]
+optional = true
 
 [dependencies.google-cloud-gax]
 version = "1.7.0"
 default-features = false
+optional = true
 
 [dependencies.mime]
 version = "0.3"
