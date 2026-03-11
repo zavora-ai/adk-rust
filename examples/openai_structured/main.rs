@@ -43,7 +43,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     "description": "3-day forecast summary"
                 }
             },
-            "required": ["location", "temperature", "conditions"]
+            "required": ["location", "temperature", "conditions", "forecast"],
+            "additionalProperties": false
         }))
         .build()?;
 

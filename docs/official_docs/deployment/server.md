@@ -12,6 +12,15 @@ The server is built on Axum and provides:
 - **CORS Support**: Cross-origin requests enabled
 - **Telemetry**: Built-in observability with tracing
 
+`ServerConfig` also exposes runner-level passthrough for long-running
+deployments:
+
+```rust
+let config = ServerConfig::new(agent_loader, session_service)
+    .with_compaction(compaction_config)
+    .with_context_cache(context_cache_config, cache_capable_model);
+```
+
 ## Starting the Server
 
 Use the Launcher to start the server:

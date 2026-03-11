@@ -3,6 +3,8 @@
 //! These tests exercise the full migration lifecycle against in-memory SQLite:
 //! fresh database, idempotence, schema_version, baseline detection, and CRUD.
 
+#![cfg(feature = "sqlite")]
+
 use adk_session::SqliteSessionService;
 use adk_session::service::{CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService};
 use sqlx::{Row, SqlitePool};

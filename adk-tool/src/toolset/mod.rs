@@ -2,6 +2,11 @@ use adk_core::{ReadonlyContext, Result, Tool, ToolPredicate, Toolset};
 use async_trait::async_trait;
 use std::sync::Arc;
 
+mod compose;
+
+pub use compose::{FilteredToolset, MergedToolset, PrefixedToolset};
+
+/// A simple toolset that wraps a static list of tools with optional filtering.
 pub struct BasicToolset {
     name: String,
     tools: Vec<Arc<dyn Tool>>,
@@ -34,7 +39,7 @@ impl Toolset for BasicToolset {
     }
 }
 
-/// Creates a predicate that allows only tools with names in the provided list
+/// Creates a predicate that allows only tools with names in the provided list.
 pub fn string_predicate(allowed_tools: Vec<String>) -> ToolPredicate {
     let allowed_set: std::collections::HashSet<String> = allowed_tools.into_iter().collect();
     Box::new(move |tool: &dyn Tool| allowed_set.contains(tool.name()))

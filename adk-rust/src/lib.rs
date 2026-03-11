@@ -661,12 +661,11 @@ pub mod doc_audit {
 ///
 /// Quick way to run agents in console or server mode:
 /// - [`Launcher`] - Main entry point for CLI apps
-/// - [`SingleAgentLoader`] - Load a single agent
 ///
 /// Available with feature: `cli`
 #[cfg(feature = "cli")]
 #[cfg_attr(docsrs, doc(cfg(feature = "cli")))]
-pub use adk_cli::{Launcher, SingleAgentLoader};
+pub use adk_cli::Launcher;
 
 /// Real-time bidirectional streaming (voice, video).
 ///

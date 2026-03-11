@@ -20,6 +20,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _app: Router<()> = Router::new().nest("/api", api_routes()).with_state(state);
     println!("✓ api_routes() works");
 
+    // From docs: Repo-local project storage convention
+    // Validates that FileStorage works with a relative repo-local path
+    let repo_local_dir = temp_dir.join(".adk-studio/projects");
+    std::fs::create_dir_all(&repo_local_dir)?;
+    let repo_local_storage = FileStorage::new(repo_local_dir).await?;
+    println!("✓ FileStorage::new works with repo-local path (.adk-studio/projects)");
+
+    let _repo_local_state = AppState::new(repo_local_storage);
+    println!("✓ AppState::new works with repo-local storage");
+
     // Cleanup
     std::fs::remove_dir_all(&temp_dir).ok();
 

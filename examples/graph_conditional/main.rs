@@ -97,27 +97,26 @@ async fn main() -> anyhow::Result<()> {
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
-            for event in events {
-                if let Some(content) = event.content() {
-                    let text: String = content
-                        .parts
-                        .iter()
-                        .filter_map(|p| p.text())
-                        .collect::<Vec<_>>()
-                        .join("")
-                        .to_lowercase();
+            let text = events
+                .iter()
+                .filter_map(|event| event.content())
+                .flat_map(|content| content.parts.iter())
+                .filter_map(|part| part.text())
+                .collect::<Vec<_>>()
+                .join("")
+                .to_lowercase();
 
-                    let sentiment = if text.contains("positive") {
-                        "positive"
-                    } else if text.contains("negative") {
-                        "negative"
-                    } else {
-                        "neutral"
-                    };
+            if !text.is_empty() {
+                let sentiment = if text.contains("positive") {
+                    "positive"
+                } else if text.contains("negative") {
+                    "negative"
+                } else {
+                    "neutral"
+                };
 
-                    println!("[classifier] Detected sentiment: {}", sentiment);
-                    updates.insert("sentiment".to_string(), json!(sentiment));
-                }
+                println!("[classifier] Detected sentiment: {}", sentiment);
+                updates.insert("sentiment".to_string(), json!(sentiment));
             }
             updates
         });
@@ -129,15 +128,16 @@ async fn main() -> anyhow::Result<()> {
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
-            for event in events {
-                if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
-                    if !text.is_empty() {
-                        println!("[positive] Generated response");
-                        updates.insert("response".to_string(), json!(text));
-                    }
-                }
+            let text: String = events
+                .iter()
+                .filter_map(|event| event.content())
+                .flat_map(|content| content.parts.iter())
+                .filter_map(|part| part.text())
+                .collect::<Vec<_>>()
+                .join("");
+            if !text.is_empty() {
+                println!("[positive] Generated response");
+                updates.insert("response".to_string(), json!(text));
             }
             updates
         });
@@ -149,15 +149,16 @@ async fn main() -> anyhow::Result<()> {
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
-            for event in events {
-                if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
-                    if !text.is_empty() {
-                        println!("[negative] Generated response");
-                        updates.insert("response".to_string(), json!(text));
-                    }
-                }
+            let text: String = events
+                .iter()
+                .filter_map(|event| event.content())
+                .flat_map(|content| content.parts.iter())
+                .filter_map(|part| part.text())
+                .collect::<Vec<_>>()
+                .join("");
+            if !text.is_empty() {
+                println!("[negative] Generated response");
+                updates.insert("response".to_string(), json!(text));
             }
             updates
         });
@@ -169,15 +170,16 @@ async fn main() -> anyhow::Result<()> {
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
-            for event in events {
-                if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
-                    if !text.is_empty() {
-                        println!("[neutral] Generated response");
-                        updates.insert("response".to_string(), json!(text));
-                    }
-                }
+            let text: String = events
+                .iter()
+                .filter_map(|event| event.content())
+                .flat_map(|content| content.parts.iter())
+                .filter_map(|part| part.text())
+                .collect::<Vec<_>>()
+                .join("");
+            if !text.is_empty() {
+                println!("[neutral] Generated response");
+                updates.insert("response".to_string(), json!(text));
             }
             updates
         });

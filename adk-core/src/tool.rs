@@ -70,6 +70,43 @@ pub trait ToolContext: CallbackContext {
     }
 }
 
+/// Configuration for automatic tool retry on failure.
+///
+/// Controls how many times a failed tool execution is retried before
+/// propagating the error. Applied as a flat delay between attempts
+/// (no exponential backoff in V1).
+///
+/// # Example
+///
+/// ```rust
+/// use std::time::Duration;
+/// use adk_core::RetryBudget;
+///
+/// // Retry up to 2 times with 500ms between attempts (3 total attempts)
+/// let budget = RetryBudget::new(2, Duration::from_millis(500));
+/// assert_eq!(budget.max_retries, 2);
+/// ```
+#[derive(Debug, Clone)]
+pub struct RetryBudget {
+    /// Maximum number of retry attempts (not counting the initial attempt).
+    /// E.g., `max_retries: 2` means up to 3 total attempts.
+    pub max_retries: u32,
+    /// Delay between retries. Applied as a flat delay (no backoff in V1).
+    pub delay: std::time::Duration,
+}
+
+impl RetryBudget {
+    /// Create a new retry budget.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_retries` - Maximum retry attempts (not counting the initial attempt)
+    /// * `delay` - Flat delay between retry attempts
+    pub fn new(max_retries: u32, delay: std::time::Duration) -> Self {
+        Self { max_retries, delay }
+    }
+}
+
 #[async_trait]
 pub trait Toolset: Send + Sync {
     fn name(&self) -> &str;

@@ -7,9 +7,30 @@ use adk_core::{
 };
 use async_trait::async_trait;
 use futures::stream;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-struct MockSession;
+struct MockState;
+
+impl adk_core::State for MockState {
+    fn get(&self, _key: &str) -> Option<serde_json::Value> {
+        None
+    }
+    fn set(&mut self, _key: String, _value: serde_json::Value) {}
+    fn all(&self) -> HashMap<String, serde_json::Value> {
+        HashMap::new()
+    }
+}
+
+struct MockSession {
+    state: MockState,
+}
+
+impl MockSession {
+    fn new() -> Self {
+        Self { state: MockState }
+    }
+}
 
 impl adk_core::Session for MockSession {
     fn id(&self) -> &str {
@@ -22,7 +43,7 @@ impl adk_core::Session for MockSession {
         "test-user"
     }
     fn state(&self) -> &dyn adk_core::State {
-        unimplemented!()
+        &self.state
     }
     fn conversation_history(&self) -> Vec<adk_core::Content> {
         Vec::new()
@@ -43,7 +64,7 @@ impl TestContext {
                 parts: vec![Part::Text { text: message.to_string() }],
             },
             config: RunConfig::default(),
-            session: MockSession,
+            session: MockSession::new(),
         }
     }
 }

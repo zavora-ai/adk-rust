@@ -77,11 +77,12 @@ async fn main() -> Result<()> {
         .model(model)
         .build()?;
 
+    let app_name = "skills_basic_demo".to_string();
     let session_service = Arc::new(InMemorySessionService::new());
 
     // Create a runner that automatically injects skills based on user messages
     let runner = Runner::new(RunnerConfig {
-        app_name: "skills_basic_demo".into(),
+        app_name: app_name.clone(),
         agent: Arc::new(base_agent),
         session_service: session_service.clone(),
         artifact_service: None,
@@ -99,7 +100,7 @@ async fn main() -> Result<()> {
     let user_id = "user123".to_string();
     let session = session_service
         .create(CreateRequest {
-            app_name: "demo".into(),
+            app_name,
             user_id: user_id.clone(),
             session_id: None,
             state: HashMap::new(),

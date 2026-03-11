@@ -2,8 +2,9 @@
 //!
 //! Defines the callback function signatures used by plugins.
 
+pub use adk_core::OnToolErrorCallback;
 use adk_core::{
-    CallbackContext, Content, Event, InvocationContext, LlmRequest, LlmResponse, Result, Tool,
+    CallbackContext, Content, Event, InvocationContext, LlmRequest, LlmResponse, Result,
 };
 use std::future::Future;
 use std::pin::Pin;
@@ -67,22 +68,6 @@ pub type OnModelErrorCallback = Box<
             LlmRequest,
             String, // error message
         ) -> Pin<Box<dyn Future<Output = Result<Option<LlmResponse>>> + Send>>
-        + Send
-        + Sync,
->;
-
-/// Callback invoked when a tool error occurs.
-///
-/// Can handle or transform tool errors.
-/// Return `Ok(Some(result))` to provide a fallback result.
-/// Return `Ok(None)` to propagate the original error.
-pub type OnToolErrorCallback = Box<
-    dyn Fn(
-            Arc<dyn CallbackContext>,
-            Arc<dyn Tool>,
-            serde_json::Value, // args
-            String,            // error message
-        ) -> Pin<Box<dyn Future<Output = Result<Option<serde_json::Value>>> + Send>>
         + Send
         + Sync,
 >;

@@ -4,7 +4,7 @@ Callbacks in ADK-Rust provide hooks to observe, customize, and control agent beh
 
 ## Overview
 
-ADK-Rust supports six callback types that intercept different stages of agent execution:
+ADK-Rust supports eight callback types that intercept different stages of agent execution:
 
 | Callback Type | When Executed | Use Cases |
 |--------------|---------------|-----------|
@@ -13,7 +13,9 @@ ADK-Rust supports six callback types that intercept different stages of agent ex
 | `before_model` | Before LLM call | Request modification, caching, rate limiting |
 | `after_model` | After LLM response | Response filtering, logging, caching |
 | `before_tool` | Before tool execution | Permission checks, parameter validation |
-| `after_tool` | After tool execution | Result modification, logging |
+| `after_tool` | After tool execution | Result modification, logging, `ToolOutcome` inspection |
+| `after_tool_full` | After tool execution (V2 rich) | Inspect/modify tool args and response directly |
+| `on_tool_error` | After tool failure (retries exhausted) | Fallback results, error recovery |
 
 ## Callback Types
 
@@ -90,7 +92,20 @@ type AfterToolCallback = Box<
         -> Pin<Box<dyn Future<Output = Result<Option<Content>>> + Send>> 
     + Send + Sync
 >;
+
+// AfterToolCallbackFull (V2) - receives tool, args, and response
+type AfterToolCallbackFull = Box<
+    dyn Fn(
+            Arc<dyn CallbackContext>,
+            Arc<dyn Tool>,          // the tool that was executed
+            serde_json::Value,      // args passed to the tool
+            serde_json::Value,      // tool response (success or error JSON)
+        ) -> Pin<Box<dyn Future<Output = Result<Option<serde_json::Value>>> + Send>>
+    + Send + Sync
+>;
 ```
+
+`AfterToolCallbackFull` is the V2 rich after-tool callback aligned with the Python/Go ADK model. Unlike `AfterToolCallback` (which only receives `CallbackContext`), it receives the tool reference, the arguments it was called with, and the response it produced. Return `Ok(None)` to keep the original response, or `Ok(Some(value))` to replace the function response sent to the LLM.
 
 ## Return Value Semantics
 
@@ -175,6 +190,10 @@ use adk_rust::prelude::*;
 pub trait CallbackContext: ReadonlyContext {
     /// Access artifact storage (if configured)
     fn artifacts(&self) -> Option<Arc<dyn Artifacts>>;
+
+    /// Structured metadata about the most recent tool execution.
+    /// Available in after-tool callbacks. Returns `None` outside tool context.
+    fn tool_outcome(&self) -> Option<ToolOutcome> { None }
 }
 
 // CallbackContext extends ReadonlyContext
@@ -202,6 +221,23 @@ pub trait ReadonlyContext: Send + Sync {
     fn user_content(&self) -> &Content;
 }
 ```
+
+### ToolOutcome
+
+`ToolOutcome` carries structured metadata about a completed tool execution. It is available via `ctx.tool_outcome()` in after-tool callbacks:
+
+```rust
+pub struct ToolOutcome {
+    pub tool_name: String,
+    pub tool_args: serde_json::Value,
+    pub success: bool,
+    pub duration: std::time::Duration,
+    pub error_message: Option<String>,
+    pub attempt: u32,  // 0-based retry attempt number
+}
+```
+
+The `success` field is derived from the Rust `Result` path, not from JSON content inspection. A tool that returns `Ok(json!({"error": "..."}))` will have `success: true`.
 
 ## Common Patterns
 
@@ -417,11 +453,85 @@ let agent = LlmAgentBuilder::new("tool_logged_agent")
         Box::pin(async move {
             println!("[TOOL LOG] Tool executed for agent: {}", ctx.agent_name());
             println!("[TOOL LOG] Session: {}", ctx.session_id());
+            // Inspect structured outcome metadata
+            if let Some(outcome) = ctx.tool_outcome() {
+                println!(
+                    "[TOOL LOG] {} {} in {:?}",
+                    outcome.tool_name,
+                    if outcome.success { "OK" } else { "FAIL" },
+                    outcome.duration,
+                );
+            }
             Ok(None) // Keep original result
         })
     }))
     .build()?;
 ```
+
+### Tool Error Fallback (On Tool Error)
+
+Provide a fallback result when a tool fails:
+
+```rust
+use adk_rust::prelude::*;
+use serde_json::json;
+use std::sync::Arc;
+
+let agent = LlmAgentBuilder::new("fallback_agent")
+    .model(model)
+    .tool(Arc::new(my_tool))
+    .on_tool_error(Box::new(|_ctx, tool, _args, error| {
+        Box::pin(async move {
+            // Return a fallback result instead of the error
+            if tool.name() == "weather_api" {
+                Ok(Some(json!({ "error": "Weather service unavailable", "fallback": true })))
+            } else {
+                Ok(None) // No fallback — propagate original error to LLM
+            }
+        })
+    }))
+    .build()?;
+```
+
+The `on_tool_error` callback is invoked after retries are exhausted (if a retry budget is configured). Return `Some(value)` to substitute a fallback, or `None` to let the original error reach the LLM.
+
+### Rich After-Tool Inspection (V2)
+
+Inspect and optionally modify tool results with full context:
+
+```rust
+use adk_rust::prelude::*;
+use serde_json::json;
+use std::sync::Arc;
+
+let agent = LlmAgentBuilder::new("audited_agent")
+    .model(model)
+    .tool(Arc::new(my_tool))
+    .after_tool_callback_full(Box::new(|_ctx, tool, args, response| {
+        Box::pin(async move {
+            // Log the full tool execution details
+            println!(
+                "[AUDIT] Tool '{}' called with {} returned {}",
+                tool.name(), args, response
+            );
+
+            // Optionally modify the response
+            if tool.name() == "sensitive_api" {
+                // Redact sensitive fields before the LLM sees them
+                let mut redacted = response.clone();
+                if let Some(obj) = redacted.as_object_mut() {
+                    obj.remove("secret_token");
+                }
+                Ok(Some(redacted))
+            } else {
+                Ok(None) // Keep original response
+            }
+        })
+    }))
+    .build()?;
+```
+
+`after_tool_callback_full` runs after the legacy `after_tool_callback` chain. Both can coexist on the same agent.
 
 ## Multiple Callbacks
 

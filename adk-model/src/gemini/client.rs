@@ -244,6 +244,14 @@ impl GeminiModel {
         })
     }
 
+    fn gemini_function_response_payload(response: serde_json::Value) -> serde_json::Value {
+        match response {
+            // Gemini functionResponse.response must be a JSON object.
+            serde_json::Value::Object(_) => response,
+            other => serde_json::json!({ "result": other }),
+        }
+    }
+
     fn stream_chunks_from_response(
         mut response: LlmResponse,
         saw_partial_chunk: bool,
@@ -399,7 +407,9 @@ impl GeminiModel {
                             builder = builder
                                 .with_function_response(
                                     &function_response.name,
-                                    function_response.response.clone(),
+                                    Self::gemini_function_response_payload(
+                                        function_response.response.clone(),
+                                    ),
                                 )
                                 .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
                         }
@@ -841,5 +851,26 @@ mod tests {
                     if mime_type == "image/png" && data.as_slice() == image_bytes.as_slice()
             )
         }));
+    }
+
+    #[test]
+    fn gemini_function_response_payload_preserves_objects() {
+        let value = serde_json::json!({
+            "documents": [
+                { "id": "pricing", "score": 0.91 }
+            ]
+        });
+
+        let payload = GeminiModel::gemini_function_response_payload(value.clone());
+
+        assert_eq!(payload, value);
+    }
+
+    #[test]
+    fn gemini_function_response_payload_wraps_arrays() {
+        let payload =
+            GeminiModel::gemini_function_response_payload(serde_json::json!([{ "id": "pricing" }]));
+
+        assert_eq!(payload, serde_json::json!({ "result": [{ "id": "pricing" }] }));
     }
 }

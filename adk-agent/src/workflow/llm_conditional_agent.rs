@@ -18,7 +18,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! let router = LlmConditionalAgent::new("router", model)
+//! let router = LlmConditionalAgent::builder("router", model)
 //!     .instruction("Classify as 'technical', 'general', or 'creative'.
 //!                   Respond with ONLY the category name.")
 //!     .route("technical", Arc::new(tech_agent))
@@ -48,7 +48,7 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```rust,ignore
-/// let router = LlmConditionalAgent::new("router", model)
+/// let router = LlmConditionalAgent::builder("router", model)
 ///     .instruction("Classify as 'technical', 'general', or 'creative'.")
 ///     .route("technical", tech_agent)
 ///     .route("general", general_agent.clone())
@@ -191,6 +191,23 @@ impl LlmConditionalAgent {
     pub fn builder(name: impl Into<String>, model: Arc<dyn Llm>) -> LlmConditionalAgentBuilder {
         LlmConditionalAgentBuilder::new(name, model)
     }
+
+    fn resolve_route(
+        classification: &str,
+        routes: &HashMap<String, Arc<dyn Agent>>,
+    ) -> Option<Arc<dyn Agent>> {
+        if let Some(agent) = routes.get(classification) {
+            return Some(agent.clone());
+        }
+
+        let mut labels = routes.keys().collect::<Vec<_>>();
+        labels.sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
+
+        labels
+            .into_iter()
+            .find(|label| classification.contains(label.as_str()))
+            .and_then(|label| routes.get(label).cloned())
+    }
 }
 
 #[async_trait]
@@ -283,10 +300,7 @@ impl Agent for LlmConditionalAgent {
             yield Ok(routing_event);
 
             // Find matching route
-            let target_agent = routes.iter()
-                .find(|(label, _)| classification.contains(label.as_str()))
-                .map(|(_, agent)| agent.clone())
-                .or(default_agent);
+            let target_agent = Self::resolve_route(&classification, &routes).or(default_agent);
 
             // Execute target agent
             if let Some(agent) = target_agent {

@@ -58,7 +58,7 @@ use adk_core::{
     AdkError, AfterAgentCallback, AfterToolCallback, Agent, BeforeAgentCallback,
     BeforeToolCallback, CallbackContext, Content, Event, EventActions, EventStream,
     GlobalInstructionProvider, InstructionProvider, InvocationContext, MemoryEntry, Part,
-    ReadonlyContext, Result, Tool, ToolContext,
+    ReadonlyContext, Result, Tool, ToolContext, Toolset,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -91,6 +91,7 @@ pub struct RealtimeAgent {
 
     // Tools (same as LlmAgent)
     tools: Vec<Arc<dyn Tool>>,
+    toolsets: Vec<Arc<dyn Toolset>>,
     sub_agents: Vec<Arc<dyn Agent>>,
 
     // Callbacks (same as LlmAgent)
@@ -133,6 +134,7 @@ impl std::fmt::Debug for RealtimeAgent {
             .field("model", &self.model.model_id())
             .field("voice", &self.voice)
             .field("tools_count", &self.tools.len())
+            .field("toolsets_count", &self.toolsets.len())
             .field("sub_agents_count", &self.sub_agents.len())
             .finish()
     }
@@ -151,6 +153,7 @@ pub struct RealtimeAgentBuilder {
     vad_config: Option<VadConfig>,
     modalities: Vec<String>,
     tools: Vec<Arc<dyn Tool>>,
+    toolsets: Vec<Arc<dyn Toolset>>,
     sub_agents: Vec<Arc<dyn Agent>>,
     before_callbacks: Vec<BeforeAgentCallback>,
     after_callbacks: Vec<AfterAgentCallback>,
@@ -177,6 +180,7 @@ impl RealtimeAgentBuilder {
             vad_config: None,
             modalities: vec!["text".to_string(), "audio".to_string()],
             tools: Vec::new(),
+            toolsets: Vec::new(),
             sub_agents: Vec::new(),
             before_callbacks: Vec::new(),
             after_callbacks: Vec::new(),
@@ -262,6 +266,16 @@ impl RealtimeAgentBuilder {
         self
     }
 
+    /// Register a dynamic toolset for per-invocation tool resolution.
+    ///
+    /// Toolsets are resolved at the start of each `run()` call using the
+    /// invocation's `ReadonlyContext`. This enables context-dependent tools
+    /// like per-user browser sessions from a pool.
+    pub fn toolset(mut self, toolset: Arc<dyn Toolset>) -> Self {
+        self.toolsets.push(toolset);
+        self
+    }
+
     /// Add a sub-agent for handoffs.
     pub fn sub_agent(mut self, agent: Arc<dyn Agent>) -> Self {
         self.sub_agents.push(agent);
@@ -333,6 +347,7 @@ impl RealtimeAgentBuilder {
             vad_config: self.vad_config,
             modalities: self.modalities,
             tools: self.tools,
+            toolsets: self.toolsets,
             sub_agents: self.sub_agents,
             before_callbacks: Arc::new(self.before_callbacks),
             after_callbacks: Arc::new(self.after_callbacks),
@@ -373,7 +388,11 @@ impl RealtimeAgent {
     }
 
     /// Build the realtime configuration from agent settings.
-    async fn build_config(&self, ctx: &Arc<dyn InvocationContext>) -> Result<RealtimeConfig> {
+    async fn build_config(
+        &self,
+        ctx: &Arc<dyn InvocationContext>,
+        resolved_tools: &[Arc<dyn Tool>],
+    ) -> Result<RealtimeConfig> {
         let mut config = RealtimeConfig::default();
 
         // Build instruction from providers or static value
@@ -414,8 +433,7 @@ impl RealtimeAgent {
         config.modalities = Some(self.modalities.clone());
 
         // Convert ADK tools to realtime tool definitions
-        let tool_defs: Vec<ToolDefinition> = self
-            .tools
+        let tool_defs: Vec<ToolDefinition> = resolved_tools
             .iter()
             .map(|t| ToolDefinition {
                 name: t.name().to_string(),
@@ -532,6 +550,7 @@ impl Agent for RealtimeAgent {
         let before_tool_callbacks = self.before_tool_callbacks.clone();
         let after_tool_callbacks = self.after_tool_callbacks.clone();
         let tools = self.tools.clone();
+        let toolsets = self.toolsets.clone();
 
         // Clone realtime callbacks
         let on_audio = self.on_audio.clone();
@@ -539,8 +558,39 @@ impl Agent for RealtimeAgent {
         let on_speech_started = self.on_speech_started.clone();
         let on_speech_stopped = self.on_speech_stopped.clone();
 
-        // Build config
-        let config = self.build_config(&ctx).await?;
+        // ===== RESOLVE TOOLSETS =====
+        let mut resolved_tools: Vec<Arc<dyn Tool>> = tools.clone();
+        let static_tool_names: std::collections::HashSet<String> =
+            tools.iter().map(|t| t.name().to_string()).collect();
+        let mut toolset_source: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
+        for toolset in &toolsets {
+            let toolset_tools = toolset.tools(ctx.clone() as Arc<dyn ReadonlyContext>).await?;
+            for tool in &toolset_tools {
+                let name = tool.name().to_string();
+                if static_tool_names.contains(&name) {
+                    return Err(AdkError::Agent(format!(
+                        "Duplicate tool name '{}': conflict between static tool and toolset '{}'",
+                        name,
+                        toolset.name()
+                    )));
+                }
+                if let Some(other_toolset_name) = toolset_source.get(&name) {
+                    return Err(AdkError::Agent(format!(
+                        "Duplicate tool name '{}': conflict between toolset '{}' and toolset '{}'",
+                        name,
+                        other_toolset_name,
+                        toolset.name()
+                    )));
+                }
+                toolset_source.insert(name, toolset.name().to_string());
+                resolved_tools.push(tool.clone());
+            }
+        }
+
+        // Build config with resolved tools
+        let config = self.build_config(&ctx, &resolved_tools).await?;
 
         let s = stream! {
             // ===== BEFORE AGENT CALLBACKS =====
@@ -677,7 +727,7 @@ impl Agent for RealtimeAgent {
                                 }
 
                                 // Execute tool
-                                let tool = tools.iter().find(|t| t.name() == name);
+                                let tool = resolved_tools.iter().find(|t| t.name() == name);
 
                                 let (result, actions) = if let Some(tool) = tool {
                                     let args: serde_json::Value = serde_json::from_str(&arguments)

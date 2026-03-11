@@ -67,8 +67,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let red_pixel_png: Vec<u8> = vec![
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
         0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
-        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8,
-        0xCF, 0xC0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC, 0x33, 0x00, 0x00, 0x00,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xC9, 0xFE, 0x92, 0xEF, 0x00, 0x00, 0x00,
         0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
     ];
 
@@ -102,22 +102,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }]);
     print_response(&client, request).await?;
 
-    // --- Example 4: Unsupported MIME type error handling ---
-    println!("\n=== Example 4: Unsupported MIME type (graceful error) ===\n");
+    // --- Example 4: Unsupported MIME type fallback ---
+    println!("\n=== Example 4: Unsupported MIME type fallback ===\n");
 
     let request = make_request(vec![Content {
         role: "user".to_string(),
         parts: vec![Part::InlineData { mime_type: "audio/wav".to_string(), data: vec![0; 10] }],
     }]);
 
-    // The error surfaces when the stream is polled, not when generate_content is called
+    println!("Unsupported inline attachments are converted into text placeholders for Anthropic.");
     match client.generate_content(request, false).await {
         Ok(mut stream) => match stream.next().await {
-            Some(Err(e)) => println!("  Expected error: {e}"),
-            Some(Ok(_)) => println!("  Unexpected success"),
+            Some(Ok(response)) => {
+                if let Some(content) = &response.content {
+                    for part in &content.parts {
+                        if let Part::Text { text } = part {
+                            println!("{text}");
+                        }
+                    }
+                }
+            }
+            Some(Err(e)) => println!("  Unexpected error: {e}"),
             None => println!("  Empty stream"),
         },
-        Err(e) => println!("  Expected error: {e}"),
+        Err(e) => println!("  Unexpected error: {e}"),
     }
 
     println!("\nDone!");

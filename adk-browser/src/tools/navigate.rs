@@ -69,11 +69,21 @@ impl Tool for NavigateTool {
         let current_url = self.browser.current_url().await.unwrap_or_default();
         let title = self.browser.title().await.unwrap_or_default();
 
-        Ok(json!({
-            "success": true,
-            "url": current_url,
-            "title": title
-        }))
+        // Include page context like interaction tools do
+        match self.browser.page_context().await {
+            Ok(page) => Ok(json!({
+                "success": true,
+                "url": current_url,
+                "title": title,
+                "page": page
+            })),
+            Err(e) => Ok(json!({
+                "success": true,
+                "url": current_url,
+                "title": title,
+                "page_context_error": e.to_string()
+            })),
+        }
     }
 }
 
@@ -111,11 +121,21 @@ impl Tool for BackTool {
         let url = self.browser.current_url().await.unwrap_or_default();
         let title = self.browser.title().await.unwrap_or_default();
 
-        Ok(json!({
-            "success": true,
-            "url": url,
-            "title": title
-        }))
+        // Include page context like interaction tools do
+        match self.browser.page_context().await {
+            Ok(page) => Ok(json!({
+                "success": true,
+                "url": url,
+                "title": title,
+                "page": page
+            })),
+            Err(e) => Ok(json!({
+                "success": true,
+                "url": url,
+                "title": title,
+                "page_context_error": e.to_string()
+            })),
+        }
     }
 }
 
@@ -153,11 +173,21 @@ impl Tool for ForwardTool {
         let url = self.browser.current_url().await.unwrap_or_default();
         let title = self.browser.title().await.unwrap_or_default();
 
-        Ok(json!({
-            "success": true,
-            "url": url,
-            "title": title
-        }))
+        // Include page context like interaction tools do
+        match self.browser.page_context().await {
+            Ok(page) => Ok(json!({
+                "success": true,
+                "url": url,
+                "title": title,
+                "page": page
+            })),
+            Err(e) => Ok(json!({
+                "success": true,
+                "url": url,
+                "title": title,
+                "page_context_error": e.to_string()
+            })),
+        }
     }
 }
 
@@ -195,10 +225,20 @@ impl Tool for RefreshTool {
         let url = self.browser.current_url().await.unwrap_or_default();
         let title = self.browser.title().await.unwrap_or_default();
 
-        Ok(json!({
-            "success": true,
-            "url": url,
-            "title": title
-        }))
+        // Include page context like interaction tools do
+        match self.browser.page_context().await {
+            Ok(page) => Ok(json!({
+                "success": true,
+                "url": url,
+                "title": title,
+                "page": page
+            })),
+            Err(e) => Ok(json!({
+                "success": true,
+                "url": url,
+                "title": title,
+                "page_context_error": e.to_string()
+            })),
+        }
     }
 }

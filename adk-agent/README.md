@@ -85,6 +85,11 @@ let agent = LlmAgentBuilder::new("assistant")
 | `after_model_callback(fn)` | Add after-model callback |
 | `before_tool_callback(fn)` | Add before-tool callback |
 | `after_tool_callback(fn)` | Add after-tool callback |
+| `toolset(toolset)` | Add a dynamic toolset for per-invocation tool resolution |
+| `default_retry_budget(budget)` | Set default retry policy for all tools |
+| `tool_retry_budget(name, budget)` | Set retry policy for a specific tool |
+| `circuit_breaker_threshold(n)` | Disable tools after N consecutive failures |
+| `on_tool_error(callback)` | Add fallback handler for tool failures |
 | `build()` | Build the LlmAgent |
 
 ### Backward Compatibility
@@ -143,15 +148,20 @@ use adk_agent::{ConditionalAgent, LlmConditionalAgent};
 // Function-based condition
 let conditional = ConditionalAgent::new(
     "router",
-    |ctx| async move { ctx.user_content().text().contains("urgent") },
+    |ctx| ctx
+        .user_content()
+        .parts
+        .iter()
+        .find_map(|part| part.text())
+        .is_some_and(|text| text.contains("urgent")),
     urgent_agent,
-).with_else_agent(normal_agent);
+).with_else(normal_agent);
 
 // LLM-powered routing
-let llm_router = LlmConditionalAgent::new("smart_router", model)
+let llm_router = LlmConditionalAgent::builder("smart_router", model)
     .instruction("Route to the appropriate specialist based on the query.")
-    .add_route("support", support_agent, "Technical support questions")
-    .add_route("sales", sales_agent, "Sales and pricing inquiries")
+    .route("support", support_agent)
+    .route("sales", sales_agent)
     .build()?;
 ```
 
@@ -190,16 +200,103 @@ use adk_agent::CustomAgentBuilder;
 
 let custom = CustomAgentBuilder::new("processor")
     .description("Custom data processor")
-    .handler(|ctx| async move {
+    .handler(|_ctx| async move {
         // Custom logic here
-        Ok(Content::new("model").with_text("Processed!"))
+        let mut event = Event::new("custom-invocation");
+        event.author = "processor".to_string();
+        event.llm_response.content = Some(Content::new("model").with_text("Processed!"));
+        Ok(Box::pin(futures::stream::iter(vec![Ok(event)])) as adk_core::EventStream)
     })
     .build()?;
 ```
 
+### Toolset Support
+
+Use `.toolset()` for context-dependent tools that need per-invocation resolution — for example, per-user browser sessions from a pool. Toolsets are resolved at the start of each `run()` call using the invocation's `ReadonlyContext`.
+
+```rust,ignore
+use adk_agent::LlmAgentBuilder;
+use adk_browser::{BrowserToolset, BrowserSessionPool, BrowserProfile};
+use std::sync::Arc;
+
+let pool = Arc::new(BrowserSessionPool::new(config, 10));
+
+// Pool-backed toolset: each user gets their own browser session
+let browser_toolset = BrowserToolset::with_pool_and_profile(
+    pool.clone(),
+    BrowserProfile::Full,
+);
+
+let agent = LlmAgentBuilder::new("browser_agent")
+    .description("Multi-tenant browser agent")
+    .instruction("Help users browse the web.")
+    .model(model)
+    .toolset(Arc::new(browser_toolset))
+    .build()?;
+```
+
+Static tools (`.tool()`) and dynamic toolsets (`.toolset()`) can be mixed on the same agent. Duplicate tool names across static tools and toolsets produce a deterministic error at resolution time.
+
+### Retry Budget
+
+Configure automatic retries for transient tool failures with `RetryBudget`. Set a default policy for all tools and override per tool name:
+
+```rust,ignore
+use adk_core::RetryBudget;
+use std::time::Duration;
+
+let agent = LlmAgentBuilder::new("resilient_agent")
+    .model(model)
+    .tool(Arc::new(my_tool))
+    .default_retry_budget(RetryBudget::new(2, Duration::from_secs(1)))
+    .tool_retry_budget("browser_navigate", RetryBudget::new(3, Duration::from_millis(500)))
+    .build()?;
+```
+
+Per-tool budgets take precedence over the default. When no budget is configured, tools execute once (current behavior).
+
+### Circuit Breaker
+
+Temporarily disable tools after repeated consecutive failures within an invocation. This prevents the agent from wasting LLM iterations on a consistently failing tool:
+
+```rust,ignore
+let agent = LlmAgentBuilder::new("guarded_agent")
+    .model(model)
+    .toolset(Arc::new(browser_toolset))
+    .circuit_breaker_threshold(5)
+    .build()?;
+```
+
+After 5 consecutive failures for a given tool, the circuit breaker opens and returns an immediate error to the LLM without executing the tool. The breaker resets at the start of each new invocation.
+
+### Tool Error Callbacks
+
+Register `on_tool_error` callbacks to provide fallback results when tools fail (after retries are exhausted):
+
+```rust,ignore
+let agent = LlmAgentBuilder::new("fallback_agent")
+    .model(model)
+    .tool(Arc::new(my_tool))
+    .on_tool_error(Box::new(|ctx, tool, args, error| {
+        Box::pin(async move {
+            tracing::warn!(tool = tool.name(), error = %error, "tool failed");
+            // Return Ok(Some(value)) to substitute a fallback result
+            // Return Ok(None) to propagate the original error to the LLM
+            Ok(None)
+        })
+    }))
+    .build()?;
+```
+
+Multiple callbacks can be registered. They are tried in order — the first to return `Some(value)` wins.
+
 ## Features
 
+- Dynamic toolset resolution for per-invocation tool provisioning
 - Automatic tool execution loop (with configurable timeout: `DEFAULT_TOOL_TIMEOUT` = 5 min)
+- Configurable retry budgets (default and per-tool)
+- Circuit breaker for consecutive tool failures
+- Tool error callbacks with fallback result substitution
 - Configurable max iterations (`DEFAULT_MAX_ITERATIONS` = 100 for LlmAgent, `DEFAULT_LOOP_MAX_ITERATIONS` = 1000 for LoopAgent)
 - Agent transfer between sub-agents (with validation against registered sub-agents)
 - Streaming event output

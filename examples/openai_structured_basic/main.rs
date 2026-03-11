@@ -32,16 +32,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "properties": {
                 "name": { "type": "string", "description": "Full name of the person" },
                 "age": { "type": "number", "description": "Age in years" },
-                "email": { "type": "string", "description": "Email address if mentioned" }
+                "email": {
+                    "type": ["string", "null"],
+                    "description": "Email address if mentioned, otherwise null"
+                }
             },
-            "required": ["name", "age"]
+            "required": ["name", "age", "email"],
+            "additionalProperties": false
         }))
         .build()?;
 
     println!("OpenAI Structured Output - Basic Example");
     println!("Agent: {}", agent.name());
     println!("Model: {}", model_name);
-    println!("\nTry: 'John Doe is 30 years old and can be reached at john@example.com'\n");
+    println!("\nTry: 'John Doe is 30 years old and can be reached at john@example.com'");
+    println!("If an email is not present, the agent should return null for email.\n");
 
     Launcher::new(Arc::new(agent)).run().await?;
 

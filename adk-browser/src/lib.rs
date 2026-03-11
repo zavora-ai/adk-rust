@@ -161,14 +161,18 @@
 //! ```
 
 mod config;
+mod escape;
+mod pool;
 mod session;
 pub mod tools;
 mod toolset;
 
 // Re-export main types
 pub use config::{BrowserConfig, BrowserType};
+pub use escape::escape_js_string;
+pub use pool::BrowserSessionPool;
 pub use session::{BrowserSession, ElementState, shared_session};
-pub use toolset::{BrowserToolset, minimal_browser_tools, readonly_browser_tools};
+pub use toolset::{BrowserProfile, BrowserToolset, minimal_browser_tools, readonly_browser_tools};
 
 // Re-export individual tools for selective use
 pub use tools::{
@@ -233,6 +237,9 @@ pub use tools::{
 /// Prelude module for convenient imports.
 pub mod prelude {
     pub use crate::config::{BrowserConfig, BrowserType};
+    pub use crate::pool::BrowserSessionPool;
     pub use crate::session::{BrowserSession, shared_session};
-    pub use crate::toolset::{BrowserToolset, minimal_browser_tools, readonly_browser_tools};
+    pub use crate::toolset::{
+        BrowserProfile, BrowserToolset, minimal_browser_tools, readonly_browser_tools,
+    };
 }

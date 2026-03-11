@@ -65,14 +65,15 @@ async fn main() -> anyhow::Result<()> {
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
-            for event in events {
-                if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
-                    if !text.is_empty() {
-                        updates.insert("translation".to_string(), json!(text));
-                    }
-                }
+            let text: String = events
+                .iter()
+                .filter_map(|event| event.content())
+                .flat_map(|content| content.parts.iter())
+                .filter_map(|part| part.text())
+                .collect::<Vec<_>>()
+                .join("");
+            if !text.is_empty() {
+                updates.insert("translation".to_string(), json!(text));
             }
             updates
         });
@@ -84,14 +85,15 @@ async fn main() -> anyhow::Result<()> {
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
-            for event in events {
-                if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
-                    if !text.is_empty() {
-                        updates.insert("summary".to_string(), json!(text));
-                    }
-                }
+            let text: String = events
+                .iter()
+                .filter_map(|event| event.content())
+                .flat_map(|content| content.parts.iter())
+                .filter_map(|part| part.text())
+                .collect::<Vec<_>>()
+                .join("");
+            if !text.is_empty() {
+                updates.insert("summary".to_string(), json!(text));
             }
             updates
         });

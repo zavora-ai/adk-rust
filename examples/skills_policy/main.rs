@@ -76,9 +76,10 @@ async fn main() -> Result<()> {
         .with_skill_policy(policy)
         .build()?;
 
+    let app_name = "policy_demo".to_string();
     let session_service = Arc::new(InMemorySessionService::new());
     let runner = Runner::new(RunnerConfig {
-        app_name: "policy_demo".into(),
+        app_name: app_name.clone(),
         agent: Arc::new(agent),
         session_service: session_service.clone(),
         artifact_service: None,
@@ -95,7 +96,7 @@ async fn main() -> Result<()> {
     let user_id = "user".to_string();
     let session = session_service
         .create(CreateRequest {
-            app_name: "demo".into(),
+            app_name,
             user_id: user_id.clone(),
             session_id: None,
             state: HashMap::new(),

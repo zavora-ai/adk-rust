@@ -78,26 +78,27 @@ async fn main() -> anyhow::Result<()> {
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
-            for event in events {
-                if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
+            let text: String = events
+                .iter()
+                .filter_map(|event| event.content())
+                .flat_map(|content| content.parts.iter())
+                .filter_map(|part| part.text())
+                .collect::<Vec<_>>()
+                .join("");
 
-                    if !text.is_empty() {
-                        // Extract risk level from response
-                        let risk_level = if text.to_lowercase().contains("risk: high") {
-                            "high"
-                        } else if text.to_lowercase().contains("risk: medium") {
-                            "medium"
-                        } else {
-                            "low"
-                        };
+            if !text.is_empty() {
+                // Extract risk level from response
+                let risk_level = if text.to_lowercase().contains("risk: high") {
+                    "high"
+                } else if text.to_lowercase().contains("risk: medium") {
+                    "medium"
+                } else {
+                    "low"
+                };
 
-                        println!("[planner] Risk level: {}", risk_level);
-                        updates.insert("plan".to_string(), json!(text));
-                        updates.insert("risk_level".to_string(), json!(risk_level));
-                    }
-                }
+                println!("[planner] Risk level: {}", risk_level);
+                updates.insert("plan".to_string(), json!(text));
+                updates.insert("risk_level".to_string(), json!(risk_level));
             }
             updates
         });
@@ -110,14 +111,15 @@ async fn main() -> anyhow::Result<()> {
         })
         .with_output_mapper(|events| {
             let mut updates = std::collections::HashMap::new();
-            for event in events {
-                if let Some(content) = event.content() {
-                    let text: String =
-                        content.parts.iter().filter_map(|p| p.text()).collect::<Vec<_>>().join("");
-                    if !text.is_empty() {
-                        updates.insert("result".to_string(), json!(text));
-                    }
-                }
+            let text: String = events
+                .iter()
+                .filter_map(|event| event.content())
+                .flat_map(|content| content.parts.iter())
+                .filter_map(|part| part.text())
+                .collect::<Vec<_>>()
+                .join("");
+            if !text.is_empty() {
+                updates.insert("result".to_string(), json!(text));
             }
             updates
         });
@@ -240,18 +242,15 @@ async fn main() -> anyhow::Result<()> {
             })
             .with_output_mapper(|events| {
                 let mut updates = std::collections::HashMap::new();
-                for event in events {
-                    if let Some(content) = event.content() {
-                        let text: String = content
-                            .parts
-                            .iter()
-                            .filter_map(|p| p.text())
-                            .collect::<Vec<_>>()
-                            .join("");
-                        if !text.is_empty() {
-                            updates.insert("plan".to_string(), json!(text));
-                        }
-                    }
+                let text: String = events
+                    .iter()
+                    .filter_map(|event| event.content())
+                    .flat_map(|content| content.parts.iter())
+                    .filter_map(|part| part.text())
+                    .collect::<Vec<_>>()
+                    .join("");
+                if !text.is_empty() {
+                    updates.insert("plan".to_string(), json!(text));
                 }
                 updates
             }),

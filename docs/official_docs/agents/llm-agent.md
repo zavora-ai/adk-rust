@@ -461,7 +461,7 @@ Control conversation history visibility:
 // Full history (default)
 .include_contents(IncludeContents::Default)
 
-// Stateless - only sees current input
+// Stateless - sees only injected instructions plus the current user turn
 .include_contents(IncludeContents::None)
 ```
 
@@ -509,11 +509,17 @@ Intercept agent behavior:
 | `model(Arc<dyn Llm>)` | Sets the LLM (required) |
 | `description(text)` | Agent description |
 | `instruction(text)` | System prompt |
-| `tool(Arc<dyn Tool>)` | Adds a tool |
+| `tool(Arc<dyn Tool>)` | Adds a static tool |
+| `toolset(Arc<dyn Toolset>)` | Adds a dynamic toolset resolved per invocation |
 | `output_schema(json)` | JSON schema for structured output |
 | `output_key(key)` | Saves response to state |
 | `include_contents(mode)` | History visibility |
 | `max_iterations(n)` | Maximum LLM round-trips (default: 100) |
+| `default_retry_budget(RetryBudget)` | Retry failed tools up to N times with delay |
+| `tool_retry_budget(name, RetryBudget)` | Per-tool retry override |
+| `circuit_breaker_threshold(u32)` | Disable tool after N consecutive failures |
+| `on_tool_error(callback)` | Register fallback handler for tool failures |
+| `after_tool_callback_full(callback)` | V2 rich after-tool callback with tool, args, and response |
 | `build()` | Creates the agent |
 
 ### Iteration Control
@@ -533,6 +539,104 @@ let agent = LlmAgentBuilder::new("bounded_agent")
 ```
 
 The default is 100 iterations, which is sufficient for most use cases. Lower values (5-20) are recommended for simple Q&A agents, while higher values may be needed for complex multi-step reasoning tasks.
+
+---
+
+## Dynamic Toolsets
+
+For tools that depend on invocation context (e.g., per-user browser sessions), use `.toolset()` instead of `.tool()`. Toolsets are resolved at the start of each `run()` call:
+
+```rust
+use adk_browser::{BrowserSessionPool, BrowserToolset, BrowserConfig};
+use adk_agent::LlmAgentBuilder;
+use std::sync::Arc;
+
+let pool = Arc::new(BrowserSessionPool::new(BrowserConfig::new(), 10));
+let toolset = Arc::new(BrowserToolset::with_pool(pool));
+
+let agent = LlmAgentBuilder::new("web_agent")
+    .model(model)
+    .instruction("You are a web automation assistant.")
+    .toolset(toolset)  // Resolved per-user at runtime
+    .build()?;
+```
+
+You can mix static `.tool()` and dynamic `.toolset()` on the same agent. Duplicate tool names across static tools and toolsets produce a deterministic error.
+
+`RealtimeAgentBuilder` also supports `.toolset()` with the same semantics, so realtime voice agents get dynamic tool resolution too.
+
+### Toolset Composition
+
+Use `FilteredToolset`, `MergedToolset`, and `PrefixedToolset` from `adk-tool` to compose complex toolset configurations:
+
+```rust
+use adk_tool::{BasicToolset, FilteredToolset, MergedToolset, PrefixedToolset, string_predicate};
+
+// Prefix weather tools to avoid name collisions
+let weather = Arc::new(PrefixedToolset::new(weather_toolset, "wx"));
+
+// Filter utility tools to only expose search and calculate
+let utils = Arc::new(FilteredToolset::new(
+    utility_toolset,
+    string_predicate(vec!["search".into(), "calculate".into()]),
+));
+
+// Merge into a single toolset
+let composed = MergedToolset::new("all", vec![weather, utils]);
+
+let agent = LlmAgentBuilder::new("agent")
+    .model(model)
+    .toolset(Arc::new(composed))
+    .build()?;
+```
+
+All composition utilities work with any `Toolset` implementation including `McpToolset` and `BrowserToolset`.
+
+## Tool Resilience
+
+Configure retry budgets and circuit breakers for production agents:
+
+```rust
+use adk_core::RetryBudget;
+use std::time::Duration;
+
+let agent = LlmAgentBuilder::new("resilient_agent")
+    .model(model)
+    .tool(Arc::new(my_tool))
+    // Retry all tools up to 2 times with 500ms delay
+    .default_retry_budget(RetryBudget::new(2, Duration::from_millis(500)))
+    // Override for a specific tool
+    .tool_retry_budget("flaky_api", RetryBudget::new(4, Duration::from_secs(1)))
+    // Disable a tool after 3 consecutive failures in one invocation
+    .circuit_breaker_threshold(3)
+    // Provide a fallback when a tool fails
+    .on_tool_error(Box::new(|_ctx, tool, _args, error| {
+        Box::pin(async move {
+            tracing::warn!(tool = tool.name(), %error, "tool failed");
+            Ok(None) // None = propagate error; Some(value) = use as fallback
+        })
+    }))
+    .build()?;
+```
+
+After-tool callbacks can inspect structured `ToolOutcome` metadata via `CallbackContext::tool_outcome()`:
+
+```rust
+.after_tool_callback(Box::new(|ctx| {
+    Box::pin(async move {
+        if let Some(outcome) = ctx.tool_outcome() {
+            println!(
+                "Tool '{}' {} in {:?} (attempt {})",
+                outcome.tool_name,
+                if outcome.success { "succeeded" } else { "failed" },
+                outcome.duration,
+                outcome.attempt,
+            );
+        }
+        Ok(None)
+    })
+}))
+```
 
 ---
 

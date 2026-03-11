@@ -57,6 +57,7 @@ impl State for MockState {
 struct MockContext {
     session: MockSession,
     user_content: Content,
+    run_config: RunConfig,
 }
 
 impl MockContext {
@@ -67,6 +68,7 @@ impl MockContext {
                 role: "user".to_string(),
                 parts: vec![Part::Text { text: text.to_string() }],
             },
+            run_config: RunConfig::default(),
         }
     }
 }
@@ -115,7 +117,7 @@ impl InvocationContext for MockContext {
         &self.session
     }
     fn run_config(&self) -> &RunConfig {
-        unimplemented!()
+        &self.run_config
     }
     fn end_invocation(&self) {}
     fn ended(&self) -> bool {

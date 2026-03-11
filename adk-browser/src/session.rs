@@ -1,6 +1,7 @@
 //! Browser session management wrapping thirtyfour WebDriver.
 
 use crate::config::{BrowserConfig, BrowserType};
+use crate::escape::escape_js_string;
 use adk_core::{AdkError, Result};
 use std::sync::Arc;
 use std::time::Duration;
@@ -97,9 +98,78 @@ impl BrowserSession {
         Ok(())
     }
 
-    /// Check if the session is active.
+    /// Check if the session is active by verifying the WebDriver connection is alive.
     pub async fn is_active(&self) -> bool {
-        self.driver.read().await.is_some()
+        let driver_guard = self.driver.read().await;
+        if let Some(ref driver) = *driver_guard {
+            // Actually ping the session to verify it's alive
+            driver.title().await.is_ok()
+        } else {
+            false
+        }
+    }
+
+    /// Ensure the browser session is started, reconnecting if the session died.
+    ///
+    /// Call this instead of checking `is_active()` manually. If the session
+    /// exists but is stale (WebDriver died), it will be recreated transparently.
+    pub async fn ensure_started(&self) -> Result<()> {
+        {
+            let driver_guard = self.driver.read().await;
+            if let Some(ref driver) = *driver_guard {
+                // Ping the session — if it responds, we're good
+                if driver.title().await.is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+        // Session is dead or missing — (re)create it
+        // First clear the stale driver if any
+        {
+            let mut driver_guard = self.driver.write().await;
+            *driver_guard = None;
+        }
+        self.start().await
+    }
+
+    /// Internal: get a live WebDriver handle, auto-starting if needed.
+    /// All public methods that access the WebDriver MUST go through this.
+    ///
+    /// Returns a cloned WebDriver handle (cheap — WebDriver is Arc-based internally).
+    /// The RwLock is NOT held across the caller's WebDriver operations.
+    async fn live_driver(&self) -> Result<WebDriver> {
+        self.ensure_started().await?;
+
+        let guard = self.driver.read().await;
+        guard.clone().ok_or_else(|| {
+            AdkError::Tool(
+                "Failed to start browser session: driver is None after ensure_started()".into(),
+            )
+        })
+    }
+
+    /// Get a snapshot of the current page context (url, title, truncated body text).
+    ///
+    /// Useful for returning page state after interaction tools.
+    pub async fn page_context(&self) -> Result<serde_json::Value> {
+        let url = self.current_url().await.unwrap_or_default();
+        let title = self.title().await.unwrap_or_default();
+
+        // Get truncated visible text (first 2000 chars of body)
+        let page_text = self
+            .execute_script(
+                "return (document.body && document.body.innerText || '').substring(0, 2000);",
+            )
+            .await
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_default();
+
+        Ok(serde_json::json!({
+            "url": url,
+            "title": title,
+            "page_text": page_text
+        }))
     }
 
     /// Get the configuration.
@@ -109,10 +179,7 @@ impl BrowserSession {
 
     /// Navigate to a URL.
     pub async fn navigate(&self, url: &str) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver.goto(url).await.map_err(|e| AdkError::Tool(format!("Navigation failed: {}", e)))?;
 
@@ -121,10 +188,7 @@ impl BrowserSession {
 
     /// Get the current URL.
     pub async fn current_url(&self) -> Result<String> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .current_url()
@@ -135,20 +199,14 @@ impl BrowserSession {
 
     /// Get the page title.
     pub async fn title(&self) -> Result<String> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver.title().await.map_err(|e| AdkError::Tool(format!("Failed to get title: {}", e)))
     }
 
     /// Find an element by CSS selector.
     pub async fn find_element(&self, selector: &str) -> Result<WebElement> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .find(By::Css(selector))
@@ -158,10 +216,7 @@ impl BrowserSession {
 
     /// Find multiple elements by CSS selector.
     pub async fn find_elements(&self, selector: &str) -> Result<Vec<WebElement>> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .find_all(By::Css(selector))
@@ -171,10 +226,7 @@ impl BrowserSession {
 
     /// Find element by XPath.
     pub async fn find_by_xpath(&self, xpath: &str) -> Result<WebElement> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .find(By::XPath(xpath))
@@ -229,10 +281,7 @@ impl BrowserSession {
 
     /// Take a screenshot (returns base64-encoded PNG).
     pub async fn screenshot(&self) -> Result<String> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         let screenshot = driver
             .screenshot_as_png_base64()
@@ -255,10 +304,7 @@ impl BrowserSession {
 
     /// Execute JavaScript and return result.
     pub async fn execute_script(&self, script: &str) -> Result<serde_json::Value> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         let result = driver
             .execute(script, vec![])
@@ -271,10 +317,7 @@ impl BrowserSession {
 
     /// Execute async JavaScript and return result.
     pub async fn execute_async_script(&self, script: &str) -> Result<serde_json::Value> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         let result = driver
             .execute_async(script, vec![])
@@ -286,10 +329,7 @@ impl BrowserSession {
 
     /// Wait for an element to be present.
     pub async fn wait_for_element(&self, selector: &str, timeout_secs: u64) -> Result<WebElement> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .query(By::Css(selector))
@@ -310,10 +350,7 @@ impl BrowserSession {
         selector: &str,
         timeout_secs: u64,
     ) -> Result<WebElement> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .query(By::Css(selector))
@@ -328,10 +365,7 @@ impl BrowserSession {
 
     /// Get page source HTML.
     pub async fn page_source(&self) -> Result<String> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .source()
@@ -341,20 +375,14 @@ impl BrowserSession {
 
     /// Go back in history.
     pub async fn back(&self) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver.back().await.map_err(|e| AdkError::Tool(format!("Back navigation failed: {}", e)))
     }
 
     /// Go forward in history.
     pub async fn forward(&self) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .forward()
@@ -364,10 +392,7 @@ impl BrowserSession {
 
     /// Refresh the current page.
     pub async fn refresh(&self) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver.refresh().await.map_err(|e| AdkError::Tool(format!("Refresh failed: {}", e)))
     }
@@ -378,10 +403,7 @@ impl BrowserSession {
 
     /// Get all cookies.
     pub async fn get_all_cookies(&self) -> Result<Vec<serde_json::Value>> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         let cookies = driver
             .get_all_cookies()
@@ -404,10 +426,7 @@ impl BrowserSession {
 
     /// Get a cookie by name.
     pub async fn get_cookie(&self, name: &str) -> Result<serde_json::Value> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         let cookie = driver
             .get_named_cookie(name)
@@ -432,12 +451,9 @@ impl BrowserSession {
         domain: Option<&str>,
         path: Option<&str>,
         secure: Option<bool>,
-        _expiry: Option<i64>,
+        expiry: Option<i64>,
     ) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         let mut cookie = thirtyfour::Cookie::new(name, value);
         if let Some(d) = domain {
@@ -449,19 +465,20 @@ impl BrowserSession {
         if let Some(s) = secure {
             cookie.set_secure(s);
         }
+        if let Some(exp) = expiry {
+            // thirtyfour Cookie expiry expects seconds since epoch
+            cookie.set_expiry(exp);
+        }
 
         driver
             .add_cookie(cookie)
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to add cookie: {}", e)))
+            .map_err(|e| AdkError::Tool(format!("Failed to add cookie: {e}")))
     }
 
     /// Delete a cookie.
     pub async fn delete_cookie(&self, name: &str) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .delete_cookie(name)
@@ -471,10 +488,7 @@ impl BrowserSession {
 
     /// Delete all cookies.
     pub async fn delete_all_cookies(&self) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .delete_all_cookies()
@@ -488,10 +502,7 @@ impl BrowserSession {
 
     /// List all windows/tabs.
     pub async fn list_windows(&self) -> Result<(Vec<String>, String)> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         let windows = driver
             .windows()
@@ -508,10 +519,7 @@ impl BrowserSession {
 
     /// Open a new tab.
     pub async fn new_tab(&self) -> Result<String> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         let handle = driver
             .new_tab()
@@ -523,10 +531,7 @@ impl BrowserSession {
 
     /// Open a new window.
     pub async fn new_window(&self) -> Result<String> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         let handle = driver
             .new_window()
@@ -538,10 +543,7 @@ impl BrowserSession {
 
     /// Switch to a window by handle.
     pub async fn switch_to_window(&self, handle: &str) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         let window_handle = thirtyfour::WindowHandle::from(handle.to_string());
         driver
@@ -552,10 +554,7 @@ impl BrowserSession {
 
     /// Close the current window.
     pub async fn close_window(&self) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .close_window()
@@ -565,10 +564,7 @@ impl BrowserSession {
 
     /// Maximize window.
     pub async fn maximize_window(&self) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .maximize_window()
@@ -578,10 +574,7 @@ impl BrowserSession {
 
     /// Minimize window.
     pub async fn minimize_window(&self) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .minimize_window()
@@ -591,10 +584,7 @@ impl BrowserSession {
 
     /// Set window size and position.
     pub async fn set_window_rect(&self, x: i32, y: i32, width: u32, height: u32) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .set_window_rect(x as i64, y as i64, width, height)
@@ -608,10 +598,7 @@ impl BrowserSession {
 
     /// Switch to frame by index.
     pub async fn switch_to_frame_by_index(&self, index: u16) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .enter_frame(index)
@@ -631,10 +618,7 @@ impl BrowserSession {
 
     /// Switch to parent frame.
     pub async fn switch_to_parent_frame(&self) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .enter_parent_frame()
@@ -644,10 +628,7 @@ impl BrowserSession {
 
     /// Switch to default content.
     pub async fn switch_to_default_content(&self) -> Result<()> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         driver
             .enter_default_frame()
@@ -673,9 +654,10 @@ impl BrowserSession {
 
     /// Right-click (context click).
     pub async fn right_click(&self, selector: &str) -> Result<()> {
+        let escaped = escape_js_string(selector);
         let script = format!(
             r#"
-            var element = document.querySelector('{}');
+            var element = document.querySelector('{escaped}');
             if (element) {{
                 var event = new MouseEvent('contextmenu', {{
                     'view': window,
@@ -687,7 +669,6 @@ impl BrowserSession {
             }}
             return false;
             "#,
-            selector.replace('\'', "\\'")
         );
 
         let result = self.execute_script(&script).await?;
@@ -715,13 +696,25 @@ impl BrowserSession {
         Ok(ElementState { is_displayed, is_enabled, is_selected, is_clickable })
     }
 
-    /// Press a key.
+    /// Press a key, optionally with modifier keys (Ctrl, Alt, Shift, Meta).
     pub async fn press_key(
         &self,
         key: &str,
         selector: Option<&str>,
-        _modifiers: &[&str],
+        modifiers: &[&str],
     ) -> Result<()> {
+        // Map modifier names to WebDriver key codes
+        let modifier_codes: Vec<&str> = modifiers
+            .iter()
+            .filter_map(|m| match m.to_lowercase().as_str() {
+                "ctrl" | "control" => Some("\u{E009}"),
+                "alt" => Some("\u{E00A}"),
+                "shift" => Some("\u{E008}"),
+                "meta" | "command" | "cmd" => Some("\u{E03D}"),
+                _ => None,
+            })
+            .collect();
+
         let key_str = match key.to_lowercase().as_str() {
             "enter" => "\u{E007}",
             "tab" => "\u{E004}",
@@ -740,19 +733,35 @@ impl BrowserSession {
             _ => key,
         };
 
+        // Build the full key sequence: modifiers down + key + modifiers up
+        let mut key_sequence = String::new();
+        for code in &modifier_codes {
+            key_sequence.push_str(code);
+        }
+        key_sequence.push_str(key_str);
+        // Release modifiers in reverse order
+        for code in modifier_codes.iter().rev() {
+            key_sequence.push_str(code);
+        }
+
         if let Some(sel) = selector {
             let element = self.find_element(sel).await?;
             element
-                .send_keys(key_str)
+                .send_keys(&key_sequence)
                 .await
-                .map_err(|e| AdkError::Tool(format!("Key press failed: {}", e)))?;
+                .map_err(|e| AdkError::Tool(format!("Key press failed: {e}")))?;
         } else {
-            // Send to active element via JavaScript
-            let script = format!(
-                "document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {{'key': '{}'}}));",
-                key
-            );
-            self.execute_script(&script).await?;
+            // Send to active element via WebDriver
+            let driver = self.live_driver().await?;
+
+            let active = driver
+                .active_element()
+                .await
+                .map_err(|e| AdkError::Tool(format!("No active element: {e}")))?;
+            active
+                .send_keys(&key_sequence)
+                .await
+                .map_err(|e| AdkError::Tool(format!("Key press failed: {e}")))?;
         }
 
         Ok(())
@@ -769,10 +778,7 @@ impl BrowserSession {
 
     /// Print page to PDF.
     pub async fn print_to_pdf(&self, landscape: bool, scale: f64) -> Result<String> {
-        let driver_guard = self.driver.read().await;
-        let driver = driver_guard
-            .as_ref()
-            .ok_or_else(|| AdkError::Tool("Browser session not started".to_string()))?;
+        let driver = self.live_driver().await?;
 
         let params = PrintParameters {
             orientation: if landscape {
@@ -865,10 +871,62 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_not_started() {
-        let session = BrowserSession::with_defaults();
+        // Use a bogus WebDriver URL so ensure_started's auto-start attempt fails
+        let config = BrowserConfig::new().webdriver_url("http://127.0.0.1:1");
+        let session = BrowserSession::new(config);
         assert!(!session.is_active().await);
 
+        // navigate() calls live_driver() → ensure_started() → start(),
+        // which fails because the WebDriver is unreachable.
         let result = session.navigate("https://example.com").await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_capabilities_chrome_headless() {
+        let config = BrowserConfig::new().headless(true);
+        let session = BrowserSession::new(config);
+        let caps = session.build_capabilities();
+        assert!(caps.is_ok());
+    }
+
+    #[test]
+    fn test_build_capabilities_firefox() {
+        let config = BrowserConfig::new().browser(BrowserType::Firefox);
+        let session = BrowserSession::new(config);
+        let caps = session.build_capabilities();
+        assert!(caps.is_ok());
+    }
+
+    #[test]
+    fn test_build_capabilities_safari() {
+        let config = BrowserConfig::new().browser(BrowserType::Safari);
+        let session = BrowserSession::new(config);
+        let caps = session.build_capabilities();
+        assert!(caps.is_ok());
+    }
+
+    #[test]
+    fn test_build_capabilities_edge() {
+        let config = BrowserConfig::new().browser(BrowserType::Edge);
+        let session = BrowserSession::new(config);
+        let caps = session.build_capabilities();
+        assert!(caps.is_ok());
+    }
+
+    #[test]
+    fn test_build_capabilities_with_user_agent() {
+        let config = BrowserConfig::new().user_agent("CustomAgent/1.0");
+        let session = BrowserSession::new(config);
+        let caps = session.build_capabilities();
+        assert!(caps.is_ok());
+    }
+
+    #[test]
+    fn test_build_capabilities_with_extra_args() {
+        let config = BrowserConfig::new().add_arg("--disable-gpu").add_arg("--window-size=800,600");
+        let session = BrowserSession::new(config);
+        let caps = session.build_capabilities();
+        assert!(caps.is_ok());
     }
 }

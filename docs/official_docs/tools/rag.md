@@ -111,6 +111,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The real power of RAG is when an agent uses it as a tool. `RagTool` wraps the pipeline as an `adk_core::Tool` — the agent calls `rag_search` whenever it needs information.
 
+When you use `RagTool` with Gemini-backed agents, ADK automatically normalizes the tool result into a Gemini-compatible function response. This matters because `rag_search` naturally returns a list of chunks, while Gemini expects `functionResponse.response` to be a JSON object on the wire.
+
 ```rust
 use std::sync::Arc;
 use adk_agent::LlmAgentBuilder;

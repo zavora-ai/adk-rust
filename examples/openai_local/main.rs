@@ -6,7 +6,7 @@
 //! Make sure Ollama is running with OpenAI compatibility:
 //! ```bash
 //! ollama serve
-//! ollama pull llama3.2
+//! ollama pull qwen3.5
 //! cargo run --example openai_local --features openai
 //! ```
 
@@ -38,7 +38,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Local server endpoint - Ollama exposes OpenAI-compatible API at /v1
     let base_url =
         std::env::var("LOCAL_API_URL").unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
-    let model_name = std::env::var("LOCAL_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
+    let model_name = std::env::var("LOCAL_MODEL").unwrap_or_else(|_| "qwen3.5".to_string());
+    let structured_output = std::env::var("LOCAL_STRUCTURED_OUTPUT")
+        .ok()
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
 
     // API key can be anything for local models (Ollama ignores it)
     let api_key = std::env::var("LOCAL_API_KEY").unwrap_or_else(|_| "not-needed".to_string());
@@ -54,16 +58,21 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         get_tokyo_weather,
     );
 
-    // Create an agent with the weather tool and structured JSON output
-    let agent = LlmAgentBuilder::new("weather_agent")
+    // Default to plain tool-augmented responses for maximum compatibility with
+    // local OpenAI-compatible servers. Strict JSON schema output can be enabled
+    // with LOCAL_STRUCTURED_OUTPUT=1 for servers/models that support it.
+    let mut agent = LlmAgentBuilder::new("weather_agent")
         .description("A weather assistant that can get Tokyo weather")
         .model(Arc::new(model))
         .instruction(
             "You are a weather assistant. When asked about weather in Tokyo, \
-             use the get_tokyo_weather tool to fetch the data. ",
+             use the get_tokyo_weather tool to fetch the data. \
+             If structured output is not enabled, respond clearly in plain text.",
         )
-        .tool(Arc::new(weather_tool))
-        .output_schema(json!({
+        .tool(Arc::new(weather_tool));
+
+    if structured_output {
+        agent = agent.output_schema(json!({
             "type": "object",
             "properties": {
                 "location": { "type": "string" },
@@ -75,13 +84,17 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     "items": { "type": "string" }
                 }
             },
-            "required": ["location", "temperature", "conditions"]
-        }))
-        .build()?;
+            "required": ["location", "temperature", "conditions", "humidity", "forecast"],
+            "additionalProperties": false
+        }));
+    }
+
+    let agent = agent.build()?;
 
     println!("OpenAI-Compatible Local Model Agent created: {}", agent.name());
     println!("Using model: {} at {}", model_name, base_url);
     println!("This agent has a tool to get Tokyo weather.");
+    println!("Structured output: {}", if structured_output { "enabled" } else { "disabled" });
     println!("Try asking: 'What is the weather in Tokyo?'\n");
 
     Launcher::new(Arc::new(agent)).run().await?;

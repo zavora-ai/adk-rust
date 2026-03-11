@@ -43,6 +43,7 @@ impl State for TestState {
 struct TestContext {
     session: TestSession,
     user_content: Content,
+    run_config: RunConfig,
 }
 
 impl TestContext {
@@ -53,6 +54,7 @@ impl TestContext {
                 role: "user".to_string(),
                 parts: vec![Part::Text { text: text.to_string() }],
             },
+            run_config: RunConfig::default(),
         }
     }
 }
@@ -104,7 +106,7 @@ impl InvocationContext for TestContext {
     }
 
     fn run_config(&self) -> &RunConfig {
-        unimplemented!()
+        &self.run_config
     }
 
     fn end_invocation(&self) {}

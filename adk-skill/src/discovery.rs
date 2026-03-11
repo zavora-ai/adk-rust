@@ -22,11 +22,23 @@ pub fn discover_skill_files(root: impl AsRef<Path>) -> SkillResult<Vec<PathBuf>>
         .filter_map(std::result::Result::ok)
         .filter(|entry| entry.file_type().is_file())
         .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "md"))
+        .filter(|entry| !is_skill_support_file(entry.path()))
         .map(|entry| entry.into_path())
         .collect::<Vec<_>>();
 
     files.sort();
     Ok(files)
+}
+
+/// Returns true for files inside known supporting subdirectories of a skill
+/// (e.g. `references/`, `agents/`, `scripts/`). These are resources referenced
+/// by a `SKILL.md`, not skill definitions themselves.
+fn is_skill_support_file(path: &Path) -> bool {
+    const SUPPORT_DIRS: &[&str] = &["references", "agents", "scripts"];
+    path.components().any(|c| {
+        let s = c.as_os_str().to_string_lossy();
+        SUPPORT_DIRS.iter().any(|d| s.eq_ignore_ascii_case(d))
+    })
 }
 
 pub fn discover_instruction_files(root: impl AsRef<Path>) -> SkillResult<Vec<PathBuf>> {

@@ -250,6 +250,8 @@ impl Guardrail for ProfanityFilter {
 
 Guardrails integrate with `LlmAgentBuilder`:
 
+Configured input guardrails run before model execution, and configured output guardrails run on generated responses before they are returned to the caller.
+
 ```rust
 use adk_agent::LlmAgentBuilder;
 use adk_guardrail::{GuardrailSet, ContentFilter, PiiRedactor};

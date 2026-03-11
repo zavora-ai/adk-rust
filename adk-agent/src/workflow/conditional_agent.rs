@@ -17,7 +17,7 @@
 //!
 //! ```rust,ignore
 //! // LLM decides which agent to route to
-//! let router = LlmConditionalAgent::new("router", model)
+//! let router = LlmConditionalAgent::builder("router", model)
 //!     .instruction("Classify as 'technical' or 'general'")
 //!     .route("technical", tech_agent)
 //!     .route("general", general_agent)
@@ -27,13 +27,16 @@
 //! See [`crate::workflow::LlmConditionalAgent`] for details.
 
 use adk_core::{
-    AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result,
+    AfterAgentCallback, Agent, BeforeAgentCallback, CallbackContext, Event, EventStream,
+    InvocationContext, Result,
 };
 use adk_skill::{SelectionPolicy, SkillIndex, load_skill_index};
+use async_stream::stream;
 use async_trait::async_trait;
+use futures::StreamExt;
 use std::sync::Arc;
 
-type ConditionFn = Box<dyn Fn(&dyn InvocationContext) -> bool + Send + Sync>;
+type ConditionFn = Arc<dyn Fn(&dyn InvocationContext) -> bool + Send + Sync>;
 
 /// Rule-based conditional routing agent.
 ///
@@ -61,8 +64,8 @@ pub struct ConditionalAgent {
     skills_index: Option<Arc<SkillIndex>>,
     skill_policy: SelectionPolicy,
     max_skill_chars: usize,
-    before_callbacks: Vec<BeforeAgentCallback>,
-    after_callbacks: Vec<AfterAgentCallback>,
+    before_callbacks: Arc<Vec<BeforeAgentCallback>>,
+    after_callbacks: Arc<Vec<AfterAgentCallback>>,
 }
 
 impl ConditionalAgent {
@@ -74,15 +77,15 @@ impl ConditionalAgent {
         Self {
             name: name.into(),
             description: String::new(),
-            condition: Box::new(condition),
+            condition: Arc::new(condition),
             if_agent,
             else_agent: None,
             all_agents,
             skills_index: None,
             skill_policy: SelectionPolicy::default(),
             max_skill_chars: 2000,
-            before_callbacks: Vec::new(),
-            after_callbacks: Vec::new(),
+            before_callbacks: Arc::new(Vec::new()),
+            after_callbacks: Arc::new(Vec::new()),
         }
     }
 
@@ -98,12 +101,16 @@ impl ConditionalAgent {
     }
 
     pub fn before_callback(mut self, callback: BeforeAgentCallback) -> Self {
-        self.before_callbacks.push(callback);
+        Arc::get_mut(&mut self.before_callbacks)
+            .expect("before_callbacks not yet shared")
+            .push(callback);
         self
     }
 
     pub fn after_callback(mut self, callback: AfterAgentCallback) -> Self {
-        self.after_callbacks.push(callback);
+        Arc::get_mut(&mut self.after_callbacks)
+            .expect("after_callbacks not yet shared")
+            .push(callback);
         self
     }
 
@@ -154,15 +161,93 @@ impl Agent for ConditionalAgent {
             &self.skill_policy,
             self.max_skill_chars,
         );
+        let before_callbacks = self.before_callbacks.clone();
+        let after_callbacks = self.after_callbacks.clone();
+        let if_agent = self.if_agent.clone();
+        let else_agent = self.else_agent.clone();
+        let agent_name = self.name.clone();
+        let invocation_id = run_ctx.invocation_id().to_string();
+        let condition = self.condition.clone();
 
-        let agent = if (self.condition)(run_ctx.as_ref()) {
-            self.if_agent.clone()
-        } else if let Some(else_agent) = &self.else_agent {
-            else_agent.clone()
-        } else {
-            return Ok(Box::pin(futures::stream::empty()));
+        let s = stream! {
+            for callback in before_callbacks.as_ref() {
+                match callback(run_ctx.clone() as Arc<dyn CallbackContext>).await {
+                    Ok(Some(content)) => {
+                        let mut early_event = Event::new(&invocation_id);
+                        early_event.author = agent_name.clone();
+                        early_event.llm_response.content = Some(content);
+                        yield Ok(early_event);
+
+                        for after_callback in after_callbacks.as_ref() {
+                            match after_callback(run_ctx.clone() as Arc<dyn CallbackContext>).await {
+                                Ok(Some(after_content)) => {
+                                    let mut after_event = Event::new(&invocation_id);
+                                    after_event.author = agent_name.clone();
+                                    after_event.llm_response.content = Some(after_content);
+                                    yield Ok(after_event);
+                                    return;
+                                }
+                                Ok(None) => continue,
+                                Err(e) => {
+                                    yield Err(e);
+                                    return;
+                                }
+                            }
+                        }
+                        return;
+                    }
+                    Ok(None) => continue,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                }
+            }
+
+            let target_agent = if condition(run_ctx.as_ref()) {
+                Some(if_agent)
+            } else {
+                else_agent
+            };
+
+            if let Some(agent) = target_agent {
+                let mut stream = match agent.run(run_ctx.clone()).await {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                };
+
+                while let Some(result) = stream.next().await {
+                    match result {
+                        Ok(event) => yield Ok(event),
+                        Err(e) => {
+                            yield Err(e);
+                            return;
+                        }
+                    }
+                }
+            }
+
+            for callback in after_callbacks.as_ref() {
+                match callback(run_ctx.clone() as Arc<dyn CallbackContext>).await {
+                    Ok(Some(content)) => {
+                        let mut after_event = Event::new(&invocation_id);
+                        after_event.author = agent_name.clone();
+                        after_event.llm_response.content = Some(content);
+                        yield Ok(after_event);
+                        break;
+                    }
+                    Ok(None) => continue,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                }
+            }
         };
 
-        agent.run(run_ctx).await
+        Ok(Box::pin(s))
     }
 }

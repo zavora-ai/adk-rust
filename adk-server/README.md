@@ -15,6 +15,9 @@ HTTP server and A2A protocol for Rust Agent Development Kit (ADK-Rust) agents.
 - **SSE Streaming** - Server-Sent Events for real-time responses
 - **Web UI** - Built-in chat interface for testing
 - **RemoteA2aAgent** - Connect to remote agents as sub-agents
+- **Auth Bridge** - Flow authenticated identity from HTTP headers into agent execution
+- **Artifacts** - Binary artifact storage and retrieval per session
+- **Debug/Tracing** - Trace inspection and graph visualization endpoints
 
 ## Installation
 
@@ -63,10 +66,38 @@ let config = ServerConfig::new(agent_loader, session_service)
 
 // Production mode (restricted CORS, sanitized errors)
 let config = ServerConfig::new(agent_loader, session_service)
+    .with_security(SecurityConfig::production(vec!["https://myapp.com".to_string()]));
+
+// Or configure individual settings
+let config = ServerConfig::new(agent_loader, session_service)
     .with_allowed_origins(vec!["https://myapp.com".to_string()])
     .with_request_timeout(Duration::from_secs(60))
-    .with_max_body_size(5 * 1024 * 1024);  // 5MB
+    .with_max_body_size(5 * 1024 * 1024)  // 5MB
+    .with_error_details(false);
 ```
+
+### Optional Services
+
+```rust
+let config = ServerConfig::new(agent_loader, session_service)
+    .with_artifact_service(Arc::new(artifact_service))
+    .with_memory_service(Arc::new(memory_service))
+    .with_span_exporter(Arc::new(span_exporter))
+    .with_request_context(Arc::new(my_auth_extractor));
+```
+
+### Runner Configuration Passthrough
+
+`ServerConfig` can now forward runner-level compaction and prompt-cache settings:
+
+```rust
+let config = ServerConfig::new(agent_loader, session_service)
+    .with_compaction(compaction_config)
+    .with_context_cache(context_cache_config, cache_capable_model);
+```
+
+This applies to both the standard SSE runtime endpoints and the A2A runtime
+controller.
 
 ### A2A Server
 
@@ -97,21 +128,88 @@ let coordinator = LlmAgentBuilder::new("coordinator")
     .build()?;
 ```
 
+### Auth Bridge
+
+Flow authenticated identity from HTTP requests into agent execution:
+
+```rust
+use adk_server::auth_bridge::{RequestContextExtractor, RequestContextError};
+use adk_core::RequestContext;
+use async_trait::async_trait;
+
+struct MyExtractor;
+
+#[async_trait]
+impl RequestContextExtractor for MyExtractor {
+    async fn extract(
+        &self,
+        parts: &axum::http::request::Parts,
+    ) -> Result<RequestContext, RequestContextError> {
+        let auth = parts.headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(RequestContextError::MissingAuth)?;
+        // validate token, build RequestContext ...
+        todo!()
+    }
+}
+
+let config = ServerConfig::new(agent_loader, session_service)
+    .with_request_context(Arc::new(MyExtractor));
+```
+
+When configured, the extracted `RequestContext` flows into `InvocationContext`, making scopes available to tools via `ToolContext::user_scopes()`. Session and artifact endpoints enforce user_id authorization against the authenticated identity.
+
 ## API Endpoints
 
-### Runtime and Sessions
+### Health
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/health` | GET | Health check |
+| `/api/health` | GET | Health check with component status |
+
+### Apps
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `/api/apps` | GET | List available agents |
 | `/api/list-apps` | GET | adk-go compatible app listing |
+
+### Sessions
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `/api/sessions` | POST | Create session |
 | `/api/sessions/{app_name}/{user_id}/{session_id}` | GET, DELETE | Get or delete session |
+| `/api/apps/{app_name}/users/{user_id}/sessions` | GET, POST | List or create sessions |
+| `/api/apps/{app_name}/users/{user_id}/sessions/{session_id}` | GET, POST, DELETE | Get, create, or delete session |
+
+### Runtime
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `/api/run/{app_name}/{user_id}/{session_id}` | POST | Run agent with SSE |
 | `/api/run_sse` | POST | adk-go compatible SSE runtime |
 
-### UI Protocol Contracts
+### Artifacts
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/sessions/{app_name}/{user_id}/{session_id}/artifacts` | GET | List artifacts for a session |
+| `/api/sessions/{app_name}/{user_id}/{session_id}/artifacts/{artifact_name}` | GET | Get a specific artifact |
+
+### Debug and Tracing
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/debug/trace/{event_id}` | GET | Get trace by event ID (admin only when auth configured) |
+| `/api/debug/trace/session/{session_id}` | GET | Get all spans for a session |
+| `/api/debug/graph/{app_name}/{user_id}/{session_id}/{event_id}` | GET | Get graph visualization |
+| `/api/apps/{app_name}/users/{user_id}/sessions/{session_id}/events/{event_id}` | GET | Get event data |
+| `/api/apps/{app_name}/users/{user_id}/sessions/{session_id}/events/{event_id}/graph` | GET | Get graph (path-style) |
+| `/api/apps/{app_name}/eval_sets` | GET | Get evaluation sets (stub) |
+
+### UI Protocol
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -124,60 +222,7 @@ Runtime endpoints support protocol negotiation via:
 - request body field `uiProtocol` / `ui_protocol`
 - header `x-adk-ui-protocol` (takes precedence)
 
-Supported runtime profile values:
-- `adk_ui` (default, legacy profile)
-- `a2ui`
-- `ag_ui`
-- `mcp_apps`
-
-Deprecation signaling:
-
-- `adk_ui` deprecation metadata is included in `/api/ui/capabilities`.
-- Runtime requests using `adk_ui` emit server warning logs to aid migration tracking.
-- Current timeline: announced `2026-02-07`, sunset target `2026-12-31`.
-
-Example runtime request:
-
-```bash
-curl -X POST "http://localhost:8080/api/run_sse" \
-  -H "content-type: application/json" \
-  -H "x-adk-ui-protocol: ag_ui" \
-  -d '{
-    "appName": "assistant",
-    "userId": "user1",
-    "sessionId": "session1",
-    "newMessage": {
-      "parts": [{ "text": "Render a dashboard." }],
-      "role": "user"
-    }
-  }'
-```
-
-Protocol response behavior:
-
-- `adk_ui` profile: legacy runtime event payload shape
-- non-default profiles (`a2ui`, `ag_ui`, `mcp_apps`): profile-wrapped SSE payloads with protocol metadata
-
-MCP UI resource registration request shape:
-
-```json
-{
-  "uri": "ui://demo/dashboard",
-  "mimeType": "text/html;profile=mcp-app",
-  "text": "<html>...</html>",
-  "meta": {
-    "ui": {
-      "domain": "https://example.com"
-    }
-  }
-}
-```
-
-Resource registration enforces:
-
-- `ui://` URI scheme
-- supported MIME type contracts
-- metadata domain/CSP validation
+Supported runtime profile values: `adk_ui` (default), `a2ui`, `ag_ui`, `mcp_apps`.
 
 ### A2A Endpoints
 
@@ -187,19 +232,49 @@ Resource registration enforces:
 | `/a2a` | POST | A2A JSON-RPC |
 | `/a2a/stream` | POST | A2A streaming |
 
+### Web UI
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Redirect to `/ui/` |
+| `/ui/` | GET | Built-in chat interface |
+| `/ui/assets/config/runtime-config.json` | GET | Runtime configuration |
+| `/ui/{*path}` | GET | Static UI assets |
+
+## Security
+
+The server applies the following security layers automatically:
+
+- CORS (configurable allowed origins)
+- Request body size limits (default 10MB)
+- Request timeouts (default 30s)
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `X-XSS-Protection: 1; mode=block`
+- Request ID tracking via `x-request-id` header
+- User ID authorization on session/artifact/debug endpoints when auth is configured
+
 ## Features
 
-- Axum-based async HTTP
-- CORS support
-- Embedded web assets
-- Multi-agent routing
-- Health checks
+- Axum-based async HTTP server
+- CORS support with configurable origins
+- Embedded web UI assets
+- Multi-agent routing via `AgentLoader`
+- Health checks with component status
+- OpenTelemetry trace integration
+- Auth middleware bridge for identity propagation
+- Artifact storage and retrieval
+- A2A protocol with JSON-RPC 2.0
 
 ## Related Crates
 
 - [adk-rust](https://crates.io/crates/adk-rust) - Meta-crate with all components
 - [adk-runner](https://crates.io/crates/adk-runner) - Execution runtime
 - [adk-cli](https://crates.io/crates/adk-cli) - CLI launcher
+- [adk-telemetry](https://crates.io/crates/adk-telemetry) - OpenTelemetry integration
+- [adk-artifact](https://crates.io/crates/adk-artifact) - Artifact storage
+- [adk-auth](https://crates.io/crates/adk-auth) - Authentication (JWT bridge)
+- [adk-ui](https://crates.io/crates/adk-ui) - UI protocol support
 
 ## License
 

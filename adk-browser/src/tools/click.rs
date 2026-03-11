@@ -81,9 +81,13 @@ impl Tool for ClickTool {
             format!("{}: {}", tag_name, text.chars().take(50).collect::<String>())
         };
 
+        // Include page context so the agent knows what happened after the click
+        let context = self.browser.page_context().await.unwrap_or_default();
+
         Ok(json!({
             "success": true,
-            "clicked_element": element_info
+            "clicked_element": element_info,
+            "page": context
         }))
     }
 }
@@ -128,17 +132,19 @@ impl Tool for DoubleClickTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| adk_core::AdkError::Tool("Missing 'selector' parameter".to_string()))?;
 
-        let element = self.browser.find_element(selector).await?;
+        let escaped = crate::escape::escape_js_string(selector);
 
-        // Execute double-click via JS
-        self.browser
+        // Execute double-click via JS and get tag name in one call
+        let result = self.browser
             .execute_script(&format!(
-                "document.querySelector('{}').dispatchEvent(new MouseEvent('dblclick', {{'view': window, 'bubbles': true, 'cancelable': true}}))",
-                selector.replace('\'', "\\'")
+                "var el = document.querySelector('{escaped}'); if (!el) return null; el.dispatchEvent(new MouseEvent('dblclick', {{'view': window, 'bubbles': true, 'cancelable': true}})); return el.tagName.toLowerCase();"
             ))
             .await?;
 
-        let tag_name = element.tag_name().await.unwrap_or_else(|_| "unknown".to_string());
+        let tag_name = result.as_str().unwrap_or("unknown");
+        if tag_name == "unknown" && result.is_null() {
+            return Err(adk_core::AdkError::Tool(format!("Element not found: {selector}")));
+        }
 
         Ok(json!({
             "success": true,

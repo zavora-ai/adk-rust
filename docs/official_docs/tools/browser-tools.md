@@ -101,6 +101,32 @@ let toolset = BrowserToolset::new(browser)
 let tools = toolset.all_tools();
 ```
 
+## Multi-Tenant Usage with Pool-Backed Toolsets
+
+For production multi-tenant deployments, use `BrowserToolset::with_pool()` together with `LlmAgentBuilder::toolset()`. Each user gets an isolated browser session resolved from the pool at runtime:
+
+```rust
+use adk_browser::{BrowserSessionPool, BrowserToolset, BrowserConfig, BrowserProfile};
+use adk_agent::LlmAgentBuilder;
+use std::sync::Arc;
+
+let pool = Arc::new(BrowserSessionPool::new(BrowserConfig::new(), 10));
+
+// Pool-backed toolset — sessions resolved per-user via ctx.user_id()
+let toolset = Arc::new(BrowserToolset::with_pool_and_profile(
+    pool,
+    BrowserProfile::Scraping,
+));
+
+let agent = LlmAgentBuilder::new("web_agent")
+    .model(model)
+    .instruction("You are a web research assistant.")
+    .toolset(toolset)
+    .build()?;
+```
+
+Browser sessions auto-start and auto-recover from stale WebDriver connections. You no longer need to call `browser.start()` before using tools — the session starts transparently on first use.
+
 ## Available Tools (46 Total)
 
 ### Navigation (4 tools)

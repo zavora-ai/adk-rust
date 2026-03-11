@@ -19,10 +19,17 @@ pub(crate) fn with_skill_injected_context(
     let mut content = ctx.user_content().clone();
     if apply_skill_injection(&mut content, index.as_ref(), skill_policy, max_skill_chars).is_some()
     {
-        Arc::new(UserContentOverrideContext::new(ctx, content))
+        with_user_content_override(ctx, content)
     } else {
         ctx
     }
+}
+
+pub(crate) fn with_user_content_override(
+    ctx: Arc<dyn InvocationContext>,
+    user_content: Content,
+) -> Arc<dyn InvocationContext> {
+    Arc::new(UserContentOverrideContext::new(ctx, user_content))
 }
 
 struct UserContentOverrideContext {

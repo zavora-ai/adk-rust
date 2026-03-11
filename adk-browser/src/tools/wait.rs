@@ -257,8 +257,8 @@ impl Tool for WaitForTextTool {
 
         let timeout = args.get("timeout").and_then(|v| v.as_u64()).unwrap_or(30);
 
-        let script =
-            format!("return document.body.innerText.includes('{}')", text.replace('\'', "\\'"));
+        let escaped = crate::escape::escape_js_string(text);
+        let script = format!("return document.body.innerText.includes('{escaped}')");
 
         let start = std::time::Instant::now();
 

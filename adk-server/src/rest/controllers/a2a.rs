@@ -93,9 +93,9 @@ fn build_runner_config(
         memory_service: controller.config.memory_service.clone(),
         plugin_manager: None,
         run_config: None,
-        compaction_config: None,
-        context_cache_config: None,
-        cache_capable: None,
+        compaction_config: controller.config.compaction_config.clone(),
+        context_cache_config: controller.config.context_cache_config.clone(),
+        cache_capable: controller.config.cache_capable.clone(),
         request_context: None,
         cancellation_token,
     })

@@ -74,14 +74,16 @@ pub mod types;
 pub use agent::{Agent, EventStream, ResolvedContext};
 pub use agent_loader::{AgentLoader, MultiAgentLoader, SingleAgentLoader};
 pub use callbacks::{
-    AfterAgentCallback, AfterModelCallback, AfterToolCallback, BaseEventsSummarizer,
-    BeforeAgentCallback, BeforeModelCallback, BeforeModelResult, BeforeToolCallback,
-    EventsCompactionConfig, GlobalInstructionProvider, InstructionProvider,
+    AfterAgentCallback, AfterModelCallback, AfterToolCallback, AfterToolCallbackFull,
+    BaseEventsSummarizer, BeforeAgentCallback, BeforeModelCallback, BeforeModelResult,
+    BeforeToolCallback, EventsCompactionConfig, GlobalInstructionProvider, InstructionProvider,
+    OnToolErrorCallback,
 };
 pub use context::{
     Artifacts, CallbackContext, IncludeContents, InvocationContext, MAX_STATE_KEY_LEN, Memory,
     MemoryEntry, ReadonlyContext, ReadonlyState, RunConfig, Session, State, StreamingMode,
-    ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest, validate_state_key,
+    ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest, ToolOutcome,
+    validate_state_key,
 };
 pub use error::{AdkError, Result};
 pub use event::{
@@ -93,5 +95,7 @@ pub use model::{
     GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream, UsageMetadata,
 };
 pub use request_context::RequestContext;
-pub use tool::{Tool, ToolContext, ToolPredicate, ToolRegistry, Toolset, ValidationMode};
+pub use tool::{
+    RetryBudget, Tool, ToolContext, ToolPredicate, ToolRegistry, Toolset, ValidationMode,
+};
 pub use types::{Content, FunctionResponseData, MAX_INLINE_DATA_SIZE, Part};

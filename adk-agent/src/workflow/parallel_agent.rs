@@ -1,5 +1,6 @@
 use adk_core::{
-    AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result,
+    AfterAgentCallback, Agent, BeforeAgentCallback, CallbackContext, Event, EventStream,
+    InvocationContext, Result,
 };
 use adk_skill::{SelectionPolicy, SkillIndex, load_skill_index};
 use async_stream::stream;
@@ -14,8 +15,8 @@ pub struct ParallelAgent {
     skills_index: Option<Arc<SkillIndex>>,
     skill_policy: SelectionPolicy,
     max_skill_chars: usize,
-    before_callbacks: Vec<BeforeAgentCallback>,
-    after_callbacks: Vec<AfterAgentCallback>,
+    before_callbacks: Arc<Vec<BeforeAgentCallback>>,
+    after_callbacks: Arc<Vec<AfterAgentCallback>>,
 }
 
 impl ParallelAgent {
@@ -27,8 +28,8 @@ impl ParallelAgent {
             skills_index: None,
             skill_policy: SelectionPolicy::default(),
             max_skill_chars: 2000,
-            before_callbacks: Vec::new(),
-            after_callbacks: Vec::new(),
+            before_callbacks: Arc::new(Vec::new()),
+            after_callbacks: Arc::new(Vec::new()),
         }
     }
 
@@ -38,12 +39,16 @@ impl ParallelAgent {
     }
 
     pub fn before_callback(mut self, callback: BeforeAgentCallback) -> Self {
-        self.before_callbacks.push(callback);
+        Arc::get_mut(&mut self.before_callbacks)
+            .expect("before_callbacks not yet shared")
+            .push(callback);
         self
     }
 
     pub fn after_callback(mut self, callback: AfterAgentCallback) -> Self {
-        self.after_callbacks.push(callback);
+        Arc::get_mut(&mut self.after_callbacks)
+            .expect("after_callbacks not yet shared")
+            .push(callback);
         self
     }
 
@@ -95,9 +100,47 @@ impl Agent for ParallelAgent {
             &self.skill_policy,
             self.max_skill_chars,
         );
+        let before_callbacks = self.before_callbacks.clone();
+        let after_callbacks = self.after_callbacks.clone();
+        let agent_name = self.name.clone();
+        let invocation_id = run_ctx.invocation_id().to_string();
 
         let s = stream! {
             use futures::stream::{FuturesUnordered, StreamExt};
+
+            for callback in before_callbacks.as_ref() {
+                match callback(run_ctx.clone() as Arc<dyn CallbackContext>).await {
+                    Ok(Some(content)) => {
+                        let mut early_event = Event::new(&invocation_id);
+                        early_event.author = agent_name.clone();
+                        early_event.llm_response.content = Some(content);
+                        yield Ok(early_event);
+
+                        for after_callback in after_callbacks.as_ref() {
+                            match after_callback(run_ctx.clone() as Arc<dyn CallbackContext>).await {
+                                Ok(Some(after_content)) => {
+                                    let mut after_event = Event::new(&invocation_id);
+                                    after_event.author = agent_name.clone();
+                                    after_event.llm_response.content = Some(after_content);
+                                    yield Ok(after_event);
+                                    return;
+                                }
+                                Ok(None) => continue,
+                                Err(e) => {
+                                    yield Err(e);
+                                    return;
+                                }
+                            }
+                        }
+                        return;
+                    }
+                    Ok(None) => continue,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                }
+            }
 
             let mut futures = FuturesUnordered::new();
 
@@ -138,6 +181,24 @@ impl Agent for ParallelAgent {
             // After all agents complete, propagate the first error if any
             if let Some(e) = first_error {
                 yield Err(e);
+                return;
+            }
+
+            for callback in after_callbacks.as_ref() {
+                match callback(run_ctx.clone() as Arc<dyn CallbackContext>).await {
+                    Ok(Some(content)) => {
+                        let mut after_event = Event::new(&invocation_id);
+                        after_event.author = agent_name.clone();
+                        after_event.llm_response.content = Some(content);
+                        yield Ok(after_event);
+                        break;
+                    }
+                    Ok(None) => continue,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                }
             }
         };
 

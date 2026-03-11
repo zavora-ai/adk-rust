@@ -83,9 +83,49 @@ pub trait Session: Send + Sync {
     }
 }
 
+/// Structured metadata about a completed tool execution.
+///
+/// Available via [`CallbackContext::tool_outcome()`] in after-tool callbacks,
+/// plugins, and telemetry hooks. Provides structured access to execution
+/// results without requiring JSON error parsing.
+///
+/// # Fields
+///
+/// - `tool_name` — Name of the tool that was executed.
+/// - `tool_args` — Arguments passed to the tool as a JSON value.
+/// - `success` — Whether the tool execution succeeded. Derived from the
+///   Rust `Result` / timeout path, never from JSON content inspection.
+/// - `duration` — Wall-clock duration of the tool execution.
+/// - `error_message` — Error message if the tool failed; `None` on success.
+/// - `attempt` — Retry attempt number (0 = first attempt, 1 = first retry, etc.).
+///   Always 0 when retries are not configured.
+#[derive(Debug, Clone)]
+pub struct ToolOutcome {
+    /// Name of the tool that was executed.
+    pub tool_name: String,
+    /// Arguments passed to the tool (JSON value).
+    pub tool_args: serde_json::Value,
+    /// Whether the tool execution succeeded.
+    pub success: bool,
+    /// Wall-clock duration of the tool execution.
+    pub duration: std::time::Duration,
+    /// Error message if the tool failed. `None` on success.
+    pub error_message: Option<String>,
+    /// Retry attempt number (0 = first attempt, 1 = first retry, etc.).
+    /// Always 0 when retries are not configured.
+    pub attempt: u32,
+}
+
 #[async_trait]
 pub trait CallbackContext: ReadonlyContext {
     fn artifacts(&self) -> Option<Arc<dyn Artifacts>>;
+
+    /// Returns structured metadata about the most recent tool execution.
+    /// Available in after-tool callbacks and plugin hooks.
+    /// Returns `None` when not in a tool execution context.
+    fn tool_outcome(&self) -> Option<ToolOutcome> {
+        None // default for backward compatibility
+    }
 }
 
 #[async_trait]

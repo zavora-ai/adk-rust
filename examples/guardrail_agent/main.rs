@@ -51,9 +51,7 @@ async fn main() -> anyhow::Result<()> {
     println!("  Input: harmful_content filter, PII redactor");
     println!("  Output: max_length(2000)");
 
-    // Note: To actually run the agent with guardrails enforced,
-    // the guardrail execution needs to be integrated into the
-    // agent's run() method. This example shows the builder API.
+    println!("Guardrails are enforced during agent execution.");
 
     println!("\n=== Complete ===");
     Ok(())

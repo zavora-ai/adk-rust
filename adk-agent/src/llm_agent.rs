@@ -1,9 +1,11 @@
 use adk_core::{
-    AfterAgentCallback, AfterModelCallback, AfterToolCallback, Agent, BeforeAgentCallback,
-    BeforeModelCallback, BeforeModelResult, BeforeToolCallback, CallbackContext, Content, Event,
-    EventActions, FunctionResponseData, GlobalInstructionProvider, InstructionProvider,
-    InvocationContext, Llm, LlmRequest, LlmResponse, MemoryEntry, Part, ReadonlyContext, Result,
-    Tool, ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest, ToolContext,
+    AfterAgentCallback, AfterModelCallback, AfterToolCallback, AfterToolCallbackFull, Agent,
+    BeforeAgentCallback, BeforeModelCallback, BeforeModelResult, BeforeToolCallback,
+    CallbackContext, Content, Event, EventActions, FunctionResponseData, GlobalInstructionProvider,
+    InstructionProvider, InvocationContext, Llm, LlmRequest, LlmResponse, MemoryEntry,
+    OnToolErrorCallback, Part, ReadonlyContext, Result, RetryBudget, Tool,
+    ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest, ToolContext,
+    ToolOutcome, Toolset,
 };
 use adk_skill::{SelectionPolicy, SkillIndex, load_skill_index, select_skill_prompt_block};
 use async_stream::stream;
@@ -11,7 +13,11 @@ use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 use tracing::Instrument;
 
-use crate::guardrails::GuardrailSet;
+use crate::{
+    guardrails::{GuardrailSet, enforce_guardrails},
+    tool_call_markup::normalize_option_content,
+    workflow::with_user_content_override,
+};
 
 /// Default maximum number of LLM round-trips (iterations) before the agent stops.
 pub const DEFAULT_MAX_ITERATIONS: u32 = 100;
@@ -37,6 +43,8 @@ pub struct LlmAgent {
     disallow_transfer_to_peers: bool,
     include_contents: adk_core::IncludeContents,
     tools: Vec<Arc<dyn Tool>>,
+    #[allow(dead_code)] // Used in runtime toolset resolution (task 2.2)
+    toolsets: Vec<Arc<dyn Toolset>>,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
     /// Default generation config (temperature, top_p, etc.) applied to every LLM request.
@@ -51,11 +59,19 @@ pub struct LlmAgent {
     after_model_callbacks: Arc<Vec<AfterModelCallback>>,
     before_tool_callbacks: Arc<Vec<BeforeToolCallback>>,
     after_tool_callbacks: Arc<Vec<AfterToolCallback>>,
+    on_tool_error_callbacks: Arc<Vec<OnToolErrorCallback>>,
+    /// Rich after-tool callbacks that receive tool, args, and response.
+    after_tool_callbacks_full: Arc<Vec<AfterToolCallbackFull>>,
+    /// Default retry budget applied to all tools without a per-tool override.
+    default_retry_budget: Option<RetryBudget>,
+    /// Per-tool retry budget overrides, keyed by tool name.
+    tool_retry_budgets: std::collections::HashMap<String, RetryBudget>,
+    /// Circuit breaker failure threshold. When set, tools are temporarily disabled
+    /// after this many consecutive failures within a single invocation.
+    circuit_breaker_threshold: Option<u32>,
     tool_confirmation_policy: ToolConfirmationPolicy,
-    #[allow(dead_code)] // Used when guardrails feature is enabled
-    input_guardrails: GuardrailSet,
-    #[allow(dead_code)] // Used when guardrails feature is enabled
-    output_guardrails: GuardrailSet,
+    input_guardrails: Arc<GuardrailSet>,
+    output_guardrails: Arc<GuardrailSet>,
 }
 
 impl std::fmt::Debug for LlmAgent {
@@ -68,6 +84,28 @@ impl std::fmt::Debug for LlmAgent {
             .field("tools_count", &self.tools.len())
             .field("sub_agents_count", &self.sub_agents.len())
             .finish()
+    }
+}
+
+impl LlmAgent {
+    async fn apply_input_guardrails(
+        ctx: Arc<dyn InvocationContext>,
+        input_guardrails: Arc<GuardrailSet>,
+    ) -> Result<Arc<dyn InvocationContext>> {
+        let content =
+            enforce_guardrails(input_guardrails.as_ref(), ctx.user_content(), "input").await?;
+        if content.role != ctx.user_content().role || content.parts != ctx.user_content().parts {
+            Ok(with_user_content_override(ctx, content))
+        } else {
+            Ok(ctx)
+        }
+    }
+
+    async fn apply_output_guardrails(
+        output_guardrails: &GuardrailSet,
+        content: Content,
+    ) -> Result<Content> {
+        enforce_guardrails(output_guardrails, &content, "output").await
     }
 }
 
@@ -88,6 +126,7 @@ pub struct LlmAgentBuilder {
     disallow_transfer_to_peers: bool,
     include_contents: adk_core::IncludeContents,
     tools: Vec<Arc<dyn Tool>>,
+    toolsets: Vec<Arc<dyn Toolset>>,
     sub_agents: Vec<Arc<dyn Agent>>,
     output_key: Option<String>,
     generate_content_config: Option<adk_core::GenerateContentConfig>,
@@ -99,6 +138,11 @@ pub struct LlmAgentBuilder {
     after_model_callbacks: Vec<AfterModelCallback>,
     before_tool_callbacks: Vec<BeforeToolCallback>,
     after_tool_callbacks: Vec<AfterToolCallback>,
+    on_tool_error_callbacks: Vec<OnToolErrorCallback>,
+    after_tool_callbacks_full: Vec<AfterToolCallbackFull>,
+    default_retry_budget: Option<RetryBudget>,
+    tool_retry_budgets: std::collections::HashMap<String, RetryBudget>,
+    circuit_breaker_threshold: Option<u32>,
     tool_confirmation_policy: ToolConfirmationPolicy,
     input_guardrails: GuardrailSet,
     output_guardrails: GuardrailSet,
@@ -123,6 +167,7 @@ impl LlmAgentBuilder {
             disallow_transfer_to_peers: false,
             include_contents: adk_core::IncludeContents::Default,
             tools: Vec::new(),
+            toolsets: Vec::new(),
             sub_agents: Vec::new(),
             output_key: None,
             generate_content_config: None,
@@ -134,6 +179,11 @@ impl LlmAgentBuilder {
             after_model_callbacks: Vec::new(),
             before_tool_callbacks: Vec::new(),
             after_tool_callbacks: Vec::new(),
+            on_tool_error_callbacks: Vec::new(),
+            after_tool_callbacks_full: Vec::new(),
+            default_retry_budget: None,
+            tool_retry_budgets: std::collections::HashMap::new(),
+            circuit_breaker_threshold: None,
             tool_confirmation_policy: ToolConfirmationPolicy::Never,
             input_guardrails: GuardrailSet::new(),
             output_guardrails: GuardrailSet::new(),
@@ -307,6 +357,16 @@ impl LlmAgentBuilder {
         self
     }
 
+    /// Register a dynamic toolset for per-invocation tool resolution.
+    ///
+    /// Toolsets are resolved at the start of each `run()` call using the
+    /// invocation's `ReadonlyContext`. This enables context-dependent tools
+    /// like per-user browser sessions from a pool.
+    pub fn toolset(mut self, toolset: Arc<dyn Toolset>) -> Self {
+        self.toolsets.push(toolset);
+        self
+    }
+
     pub fn sub_agent(mut self, agent: Arc<dyn Agent>) -> Self {
         self.sub_agents.push(agent);
         self
@@ -339,6 +399,68 @@ impl LlmAgentBuilder {
 
     pub fn after_tool_callback(mut self, callback: AfterToolCallback) -> Self {
         self.after_tool_callbacks.push(callback);
+        self
+    }
+
+    /// Register a rich after-tool callback that receives the tool, arguments,
+    /// and response value.
+    ///
+    /// This is the V2 callback surface aligned with the Python/Go ADK model
+    /// where `after_tool_callback` receives the full tool execution context.
+    /// Unlike [`after_tool_callback`](Self::after_tool_callback) (which only
+    /// receives `CallbackContext`), this callback can inspect and modify tool
+    /// results directly.
+    ///
+    /// Return `Ok(None)` to keep the original response, or `Ok(Some(value))`
+    /// to replace the function response sent to the LLM.
+    ///
+    /// These callbacks run after the legacy `after_tool_callback` chain.
+    /// `ToolOutcome` is available via `ctx.tool_outcome()`.
+    pub fn after_tool_callback_full(mut self, callback: AfterToolCallbackFull) -> Self {
+        self.after_tool_callbacks_full.push(callback);
+        self
+    }
+
+    /// Register a callback invoked when a tool execution fails
+    /// (after retries are exhausted).
+    ///
+    /// If the callback returns `Ok(Some(value))`, the value is used as a
+    /// fallback function response to the LLM. If it returns `Ok(None)`,
+    /// the next callback in the chain is tried. If no callback provides a
+    /// fallback, the original error is reported to the LLM.
+    pub fn on_tool_error(mut self, callback: OnToolErrorCallback) -> Self {
+        self.on_tool_error_callbacks.push(callback);
+        self
+    }
+
+    /// Set a default retry budget applied to all tools that do not have
+    /// a per-tool override.
+    ///
+    /// When a tool execution fails and a retry budget applies, the agent
+    /// retries up to `budget.max_retries` times with the configured delay
+    /// between attempts.
+    pub fn default_retry_budget(mut self, budget: RetryBudget) -> Self {
+        self.default_retry_budget = Some(budget);
+        self
+    }
+
+    /// Set a per-tool retry budget that overrides the default for the
+    /// named tool.
+    ///
+    /// Per-tool budgets take precedence over the default retry budget.
+    pub fn tool_retry_budget(mut self, tool_name: impl Into<String>, budget: RetryBudget) -> Self {
+        self.tool_retry_budgets.insert(tool_name.into(), budget);
+        self
+    }
+
+    /// Configure a circuit breaker that temporarily disables tools after
+    /// `threshold` consecutive failures within a single invocation.
+    ///
+    /// When a tool's consecutive failure count reaches the threshold, subsequent
+    /// calls to that tool are short-circuited with an immediate error response
+    /// until the next invocation (which resets the state).
+    pub fn circuit_breaker_threshold(mut self, threshold: u32) -> Self {
+        self.circuit_breaker_threshold = Some(threshold);
         self
     }
 
@@ -390,6 +512,16 @@ impl LlmAgentBuilder {
         let model =
             self.model.ok_or_else(|| adk_core::AdkError::Agent("Model is required".to_string()))?;
 
+        let mut seen_names = std::collections::HashSet::new();
+        for agent in &self.sub_agents {
+            if !seen_names.insert(agent.name()) {
+                return Err(adk_core::AdkError::Agent(format!(
+                    "Duplicate sub-agent name: {}",
+                    agent.name()
+                )));
+            }
+        }
+
         Ok(LlmAgent {
             name: self.name,
             description: self.description.unwrap_or_default(),
@@ -407,6 +539,7 @@ impl LlmAgentBuilder {
             disallow_transfer_to_peers: self.disallow_transfer_to_peers,
             include_contents: self.include_contents,
             tools: self.tools,
+            toolsets: self.toolsets,
             sub_agents: self.sub_agents,
             output_key: self.output_key,
             generate_content_config: self.generate_content_config,
@@ -418,9 +551,14 @@ impl LlmAgentBuilder {
             after_model_callbacks: Arc::new(self.after_model_callbacks),
             before_tool_callbacks: Arc::new(self.before_tool_callbacks),
             after_tool_callbacks: Arc::new(self.after_tool_callbacks),
+            on_tool_error_callbacks: Arc::new(self.on_tool_error_callbacks),
+            after_tool_callbacks_full: Arc::new(self.after_tool_callbacks_full),
+            default_retry_budget: self.default_retry_budget,
+            tool_retry_budgets: self.tool_retry_budgets,
+            circuit_breaker_threshold: self.circuit_breaker_threshold,
             tool_confirmation_policy: self.tool_confirmation_policy,
-            input_guardrails: self.input_guardrails,
-            output_guardrails: self.output_guardrails,
+            input_guardrails: Arc::new(self.input_guardrails),
+            output_guardrails: Arc::new(self.output_guardrails),
         })
     }
 }
@@ -436,6 +574,10 @@ struct AgentToolContext {
 impl AgentToolContext {
     fn new(parent_ctx: Arc<dyn InvocationContext>, function_call_id: String) -> Self {
         Self { parent_ctx, function_call_id, actions: Mutex::new(EventActions::default()) }
+    }
+
+    fn actions_guard(&self) -> std::sync::MutexGuard<'_, EventActions> {
+        self.actions.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -488,11 +630,11 @@ impl ToolContext for AgentToolContext {
     }
 
     fn actions(&self) -> EventActions {
-        self.actions.lock().unwrap().clone()
+        self.actions_guard().clone()
     }
 
     fn set_actions(&self, actions: EventActions) {
-        *self.actions.lock().unwrap() = actions;
+        *self.actions_guard() = actions;
     }
 
     async fn search_memory(&self, query: &str) -> Result<Vec<MemoryEntry>> {
@@ -506,6 +648,92 @@ impl ToolContext for AgentToolContext {
 
     fn user_scopes(&self) -> Vec<String> {
         self.parent_ctx.user_scopes()
+    }
+}
+
+/// Wrapper that adds ToolOutcome to an existing CallbackContext.
+/// Used only during after-tool callback invocation so callbacks
+/// can inspect structured metadata about the completed tool execution.
+struct ToolCallbackContext {
+    inner: Arc<dyn CallbackContext>,
+    outcome: ToolOutcome,
+}
+
+#[async_trait]
+impl ReadonlyContext for ToolCallbackContext {
+    fn invocation_id(&self) -> &str {
+        self.inner.invocation_id()
+    }
+
+    fn agent_name(&self) -> &str {
+        self.inner.agent_name()
+    }
+
+    fn user_id(&self) -> &str {
+        self.inner.user_id()
+    }
+
+    fn app_name(&self) -> &str {
+        self.inner.app_name()
+    }
+
+    fn session_id(&self) -> &str {
+        self.inner.session_id()
+    }
+
+    fn branch(&self) -> &str {
+        self.inner.branch()
+    }
+
+    fn user_content(&self) -> &Content {
+        self.inner.user_content()
+    }
+}
+
+#[async_trait]
+impl CallbackContext for ToolCallbackContext {
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        self.inner.artifacts()
+    }
+
+    fn tool_outcome(&self) -> Option<ToolOutcome> {
+        Some(self.outcome.clone())
+    }
+}
+
+/// Per-invocation circuit breaker state.
+///
+/// Tracks consecutive failures per tool name within a single agent
+/// invocation. When a tool's consecutive failure count reaches the
+/// configured threshold the breaker "opens" and subsequent calls to
+/// that tool are short-circuited with an immediate error response.
+///
+/// The state is created fresh at the start of each `run()` call so
+/// it automatically resets between invocations.
+struct CircuitBreakerState {
+    threshold: u32,
+    /// tool_name → consecutive failure count
+    failures: std::collections::HashMap<String, u32>,
+}
+
+impl CircuitBreakerState {
+    fn new(threshold: u32) -> Self {
+        Self { threshold, failures: std::collections::HashMap::new() }
+    }
+
+    /// Returns `true` if the tool is currently tripped (open state).
+    fn is_open(&self, tool_name: &str) -> bool {
+        self.failures.get(tool_name).copied().unwrap_or(0) >= self.threshold
+    }
+
+    /// Record a tool outcome. Resets count on success, increments on failure.
+    fn record(&mut self, outcome: &ToolOutcome) {
+        if outcome.success {
+            self.failures.remove(&outcome.tool_name);
+        } else {
+            let count = self.failures.entry(outcome.tool_name.clone()).or_insert(0);
+            *count += 1;
+        }
     }
 }
 
@@ -535,11 +763,13 @@ impl Agent for LlmAgent {
     )]
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<adk_core::EventStream> {
         adk_telemetry::info!("Starting agent execution");
+        let ctx = Self::apply_input_guardrails(ctx, self.input_guardrails.clone()).await?;
 
         let agent_name = self.name.clone();
         let invocation_id = ctx.invocation_id().to_string();
         let model = self.model.clone();
         let tools = self.tools.clone();
+        let toolsets = self.toolsets.clone();
         let sub_agents = self.sub_agents.clone();
 
         let instruction = self.instruction.clone();
@@ -562,9 +792,15 @@ impl Agent for LlmAgent {
         let after_model_callbacks = self.after_model_callbacks.clone();
         let before_tool_callbacks = self.before_tool_callbacks.clone();
         let after_tool_callbacks = self.after_tool_callbacks.clone();
+        let on_tool_error_callbacks = self.on_tool_error_callbacks.clone();
+        let after_tool_callbacks_full = self.after_tool_callbacks_full.clone();
+        let default_retry_budget = self.default_retry_budget.clone();
+        let tool_retry_budgets = self.tool_retry_budgets.clone();
+        let circuit_breaker_threshold = self.circuit_breaker_threshold;
         let tool_confirmation_policy = self.tool_confirmation_policy.clone();
         let disallow_transfer_to_parent = self.disallow_transfer_to_parent;
         let disallow_transfer_to_peers = self.disallow_transfer_to_peers;
+        let output_guardrails = self.output_guardrails.clone();
 
         let s = stream! {
             // ===== BEFORE AGENT CALLBACKS =====
@@ -611,7 +847,7 @@ impl Agent for LlmAgent {
             }
 
             // ===== MAIN AGENT EXECUTION =====
-            let mut conversation_history = Vec::new();
+            let mut prompt_preamble = Vec::new();
 
             // ===== PROCESS SKILL CONTEXT =====
             // If skills are configured, select the most relevant skill from user input
@@ -634,7 +870,7 @@ impl Agent for LlmAgent {
                     &skill_policy,
                     max_skill_chars,
                 ) {
-                    conversation_history.push(Content {
+                    prompt_preamble.push(Content {
                         role: "user".to_string(),
                         parts: vec![Part::Text { text: skill_block }],
                     });
@@ -647,7 +883,7 @@ impl Agent for LlmAgent {
                 // Dynamic global instruction via provider
                 let global_inst = provider(ctx.clone() as Arc<dyn ReadonlyContext>).await?;
                 if !global_inst.is_empty() {
-                    conversation_history.push(Content {
+                    prompt_preamble.push(Content {
                         role: "user".to_string(),
                         parts: vec![Part::Text { text: global_inst }],
                     });
@@ -656,7 +892,7 @@ impl Agent for LlmAgent {
                 // Static global instruction with template injection
                 let processed = adk_core::inject_session_state(ctx.as_ref(), template).await?;
                 if !processed.is_empty() {
-                    conversation_history.push(Content {
+                    prompt_preamble.push(Content {
                         role: "user".to_string(),
                         parts: vec![Part::Text { text: processed }],
                     });
@@ -669,7 +905,7 @@ impl Agent for LlmAgent {
                 // Dynamic instruction via provider
                 let inst = provider(ctx.clone() as Arc<dyn ReadonlyContext>).await?;
                 if !inst.is_empty() {
-                    conversation_history.push(Content {
+                    prompt_preamble.push(Content {
                         role: "user".to_string(),
                         parts: vec![Part::Text { text: inst }],
                     });
@@ -678,7 +914,7 @@ impl Agent for LlmAgent {
                 // Static instruction with template injection
                 let processed = adk_core::inject_session_state(ctx.as_ref(), template).await?;
                 if !processed.is_empty() {
-                    conversation_history.push(Content {
+                    prompt_preamble.push(Content {
                         role: "user".to_string(),
                         parts: vec![Part::Text { text: processed }],
                     });
@@ -695,48 +931,78 @@ impl Agent for LlmAgent {
             } else {
                 ctx.session().conversation_history()
             };
-            conversation_history.extend(session_history);
+            let mut session_history = session_history;
+            let current_user_content = ctx.user_content().clone();
+            if let Some(index) = session_history.iter().rposition(|content| content.role == "user") {
+                session_history[index] = current_user_content.clone();
+            } else {
+                session_history.push(current_user_content.clone());
+            }
 
             // ===== APPLY INCLUDE_CONTENTS FILTERING =====
             // Control what conversation history the agent sees
             let mut conversation_history = match include_contents {
                 adk_core::IncludeContents::None => {
-                    // Agent operates solely on current turn - only keep the latest user input
-                    // Remove all previous history except instructions and current user message
-                    let mut filtered = Vec::new();
-
-                    // Keep global and agent instructions (already added above)
-                    let instruction_count = conversation_history.iter()
-                        .take_while(|c| c.role == "user" && c.parts.iter().any(|p| {
-                            if let Part::Text { text } = p {
-                                // These are likely instructions, not user queries
-                                !text.is_empty()
-                            } else {
-                                false
-                            }
-                        }))
-                        .count();
-
-                    // Take instructions
-                    filtered.extend(conversation_history.iter().take(instruction_count).cloned());
-
-                    // Take only the last user message (current turn)
-                    if let Some(last) = conversation_history.last() {
-                        if last.role == "user" {
-                            filtered.push(last.clone());
-                        }
-                    }
-
+                    let mut filtered = prompt_preamble.clone();
+                    filtered.push(current_user_content);
                     filtered
                 }
                 adk_core::IncludeContents::Default => {
-                    // Default behavior - keep full conversation history
-                    conversation_history
+                    let mut full_history = prompt_preamble;
+                    full_history.extend(session_history);
+                    full_history
                 }
             };
 
-            // Build tool lookup map for O(1) access (instead of linear scan)
-            let tool_map: std::collections::HashMap<String, Arc<dyn Tool>> = tools
+            // ===== RESOLVE TOOLSETS =====
+            // Start with static tools, then merge in toolset-provided tools
+            let mut resolved_tools: Vec<Arc<dyn Tool>> = tools.clone();
+            let static_tool_names: std::collections::HashSet<String> =
+                tools.iter().map(|t| t.name().to_string()).collect();
+
+            // Track which toolset provided each tool for deterministic error messages
+            let mut toolset_source: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+
+            for toolset in &toolsets {
+                let toolset_tools = match toolset
+                    .tools(ctx.clone() as Arc<dyn ReadonlyContext>)
+                    .await
+                {
+                    Ok(t) => t,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                };
+                for tool in &toolset_tools {
+                    let name = tool.name().to_string();
+                    // Check static-vs-toolset conflict
+                    if static_tool_names.contains(&name) {
+                        yield Err(adk_core::AdkError::Agent(format!(
+                            "Duplicate tool name '{}': conflict between static tool and toolset '{}'",
+                            name,
+                            toolset.name()
+                        )));
+                        return;
+                    }
+                    // Check toolset-vs-toolset conflict
+                    if let Some(other_toolset_name) = toolset_source.get(&name) {
+                        yield Err(adk_core::AdkError::Agent(format!(
+                            "Duplicate tool name '{}': conflict between toolset '{}' and toolset '{}'",
+                            name,
+                            other_toolset_name,
+                            toolset.name()
+                        )));
+                        return;
+                    }
+                    toolset_source.insert(name, toolset.name().to_string());
+                    resolved_tools.push(tool.clone());
+                }
+            }
+
+            // Build tool lookup map for O(1) access from merged resolved_tools
+            let tool_map: std::collections::HashMap<String, Arc<dyn Tool>> = resolved_tools
                 .iter()
                 .map(|t| (t.name().to_string(), t.clone()))
                 .collect();
@@ -760,7 +1026,7 @@ impl Agent for LlmAgent {
             // Build tool declarations for Gemini
             // Uses enhanced_description() which includes NOTE for long-running tools
             let mut tool_declarations = std::collections::HashMap::new();
-            for tool in &tools {
+            for tool in &resolved_tools {
                 // Build FunctionDeclaration JSON with enhanced description
                 // For long-running tools, this includes a warning not to call again if pending
                 let mut decl = serde_json::json!({
@@ -838,6 +1104,10 @@ impl Agent for LlmAgent {
                 tool_declarations.insert(transfer_tool_name.to_string(), transfer_tool_decl);
             }
 
+
+            // ===== CIRCUIT BREAKER STATE =====
+            // Created fresh per invocation so it resets between runs.
+            let mut circuit_breaker_state = circuit_breaker_threshold.map(CircuitBreakerState::new);
 
             // Multi-turn loop with max iterations
             let mut iteration = 0;
@@ -920,21 +1190,34 @@ impl Agent for LlmAgent {
                 if let Some(cached_response) = model_response_override {
                     // Use callback-provided response (e.g., from cache)
                     // Yield it as an event
+                    accumulated_content = cached_response.content.clone();
+                    normalize_option_content(&mut accumulated_content);
+                    if let Some(content) = accumulated_content.take() {
+                        let has_function_calls = content
+                            .parts
+                            .iter()
+                            .any(|part| matches!(part, Part::FunctionCall { .. }));
+                        let content = if has_function_calls {
+                            content
+                        } else {
+                            Self::apply_output_guardrails(output_guardrails.as_ref(), content).await?
+                        };
+                        accumulated_content = Some(content);
+                    }
+
                     let mut cached_event = Event::new(&invocation_id);
                     cached_event.author = agent_name.clone();
-                    cached_event.llm_response.content = cached_response.content.clone();
+                    cached_event.llm_response.content = accumulated_content.clone();
                     cached_event.llm_request = Some(serde_json::to_string(&request).unwrap_or_default());
                     cached_event.provider_metadata.insert("gcp.vertex.agent.llm_request".to_string(), serde_json::to_string(&request).unwrap_or_default());
                     cached_event.provider_metadata.insert("gcp.vertex.agent.llm_response".to_string(), serde_json::to_string(&cached_response).unwrap_or_default());
 
                     // Populate long_running_tool_ids for function calls from long-running tools
-                    if let Some(ref content) = cached_response.content {
+                    if let Some(ref content) = accumulated_content {
                         cached_event.long_running_tool_ids = collect_long_running_ids(content);
                     }
 
                     yield Ok(cached_event);
-
-                    accumulated_content = cached_response.content;
                 } else {
                     // Record LLM request for tracing
                     let request_json = serde_json::to_string(&request).unwrap_or_default();
@@ -959,7 +1242,8 @@ impl Agent for LlmAgent {
                     // Check streaming mode from run config
                     use adk_core::StreamingMode;
                     let streaming_mode = ctx.run_config().streaming_mode;
-                    let should_stream_to_client = matches!(streaming_mode, StreamingMode::SSE | StreamingMode::Bidi);
+                    let should_stream_to_client = matches!(streaming_mode, StreamingMode::SSE | StreamingMode::Bidi)
+                        && output_guardrails.is_empty();
 
                     // Always use streaming internally for LLM calls
                     let mut response_stream = model.generate_content(request, true).await?;
@@ -999,6 +1283,8 @@ impl Agent for LlmAgent {
                                 }
                             }
                         }
+
+                        normalize_option_content(&mut chunk.content);
 
                         // Accumulate content for conversation history (always needed)
                         if let Some(chunk_content) = chunk.content.clone() {
@@ -1041,6 +1327,19 @@ impl Agent for LlmAgent {
 
                     // For None mode: yield single final event with accumulated content
                     if !should_stream_to_client {
+                        if let Some(content) = accumulated_content.take() {
+                            let has_function_calls = content
+                                .parts
+                                .iter()
+                                .any(|part| matches!(part, Part::FunctionCall { .. }));
+                            let content = if has_function_calls {
+                                content
+                            } else {
+                                Self::apply_output_guardrails(output_guardrails.as_ref(), content).await?
+                            };
+                            accumulated_content = Some(content);
+                        }
+
                         let mut final_event = Event::with_id(&llm_event_id, &invocation_id);
                         final_event.author = agent_name.clone();
                         final_event.llm_request = Some(request_json.clone());
@@ -1194,6 +1493,10 @@ impl Agent for LlmAgent {
                             let mut tool_actions = EventActions::default();
                             let mut response_content: Option<Content> = None;
                             let mut run_after_tool_callbacks = true;
+                            let mut tool_outcome_for_callback: Option<ToolOutcome> = None;
+                            // Track tool ref, args, and response for AfterToolCallbackFull
+                            let mut executed_tool: Option<Arc<dyn Tool>> = None;
+                            let mut executed_tool_response: Option<serde_json::Value> = None;
 
                             // ===== TOOL CONFIRMATION POLICY =====
                             // If configured and no decision is provided, emit an interrupt event
@@ -1270,11 +1573,37 @@ impl Agent for LlmAgent {
 
                             // Find and execute tool unless callbacks already short-circuited.
                             if response_content.is_none() {
+                                // ===== CIRCUIT BREAKER CHECK =====
+                                // If the circuit breaker is open for this tool, skip execution
+                                // and return an immediate error response to the LLM.
+                                if let Some(ref cb_state) = circuit_breaker_state {
+                                    if cb_state.is_open(name) {
+                                        let error_msg = format!(
+                                            "Tool '{}' is temporarily disabled after {} consecutive failures",
+                                            name, cb_state.threshold
+                                        );
+                                        tracing::warn!(tool.name = %name, "circuit breaker open, skipping tool execution");
+                                        response_content = Some(Content {
+                                            role: "function".to_string(),
+                                            parts: vec![Part::FunctionResponse {
+                                                function_response: FunctionResponseData {
+                                                    name: name.clone(),
+                                                    response: serde_json::json!({ "error": error_msg }),
+                                                },
+                                                id: id.clone(),
+                                            }],
+                                        });
+                                        run_after_tool_callbacks = false;
+                                    }
+                                }
+                            }
+
+                            if response_content.is_none() {
                                 if let Some(tool) = tool_map.get(name) {
                                     // ✅ Use AgentToolContext that preserves parent context
                                     let tool_ctx: Arc<dyn ToolContext> = Arc::new(AgentToolContext::new(
                                         ctx.clone(),
-                                        format!("{}_{}", invocation_id, name),
+                                        function_call_id.clone(),
                                     ));
 
                                     // Create span name following adk-go pattern: "execute_tool {name}"
@@ -1289,31 +1618,120 @@ impl Agent for LlmAgent {
                                         "gen_ai.conversation.id" = %ctx.session_id()
                                     );
 
-                                    // Use instrument() for proper async span handling, with timeout
+                                    // ===== RETRY BUDGET RESOLUTION =====
+                                    // Look up per-tool budget first, fall back to default budget.
+                                    // When no budget is configured, max_attempts is 1 (single attempt, no retry).
+                                    let budget = tool_retry_budgets.get(name)
+                                        .or(default_retry_budget.as_ref());
+                                    let max_attempts = budget.map(|b| b.max_retries + 1).unwrap_or(1);
+                                    let retry_delay = budget.map(|b| b.delay).unwrap_or_default();
+
+                                    // Time tool execution with retry loop.
+                                    // Derive success from Ok/Err/timeout path — never from JSON inspection.
                                     let tool_clone = tool.clone();
-                                    let result = async {
-                                        tracing::info!(tool.name = %name, tool.args = %args, "tool_call");
-                                        let exec_future = tool_clone.execute(tool_ctx.clone(), args.clone());
-                                        match tokio::time::timeout(tool_timeout, exec_future).await {
-                                            Ok(Ok(result)) => {
-                                                tracing::info!(tool.name = %name, tool.result = %result, "tool_result");
-                                                result
+                                    let tool_start = std::time::Instant::now();
+
+                                    let mut last_error = String::new();
+                                    let mut final_attempt: u32 = 0;
+                                    let mut retry_result: Option<serde_json::Value> = None;
+
+                                    for attempt in 0..max_attempts {
+                                        final_attempt = attempt;
+
+                                        if attempt > 0 {
+                                            tokio::time::sleep(retry_delay).await;
+                                        }
+
+                                        match async {
+                                            tracing::info!(tool.name = %name, tool.args = %args, attempt = attempt, "tool_call");
+                                            let exec_future = tool_clone.execute(tool_ctx.clone(), args.clone());
+                                            tokio::time::timeout(tool_timeout, exec_future).await
+                                        }.instrument(tool_span.clone()).await {
+                                            Ok(Ok(value)) => {
+                                                tracing::info!(tool.name = %name, tool.result = %value, "tool_result");
+                                                retry_result = Some(value);
+                                                break;
                                             }
                                             Ok(Err(e)) => {
-                                                tracing::warn!(tool.name = %name, error = %e, "tool_error");
-                                                serde_json::json!({ "error": e.to_string() })
+                                                last_error = e.to_string();
+                                                if attempt + 1 < max_attempts {
+                                                    tracing::warn!(tool.name = %name, attempt = attempt, error = %last_error, "tool execution failed, retrying");
+                                                } else {
+                                                    tracing::warn!(tool.name = %name, error = %last_error, "tool_error");
+                                                }
                                             }
                                             Err(_) => {
-                                                tracing::warn!(tool.name = %name, timeout_secs = tool_timeout.as_secs(), "tool_timeout");
-                                                serde_json::json!({
-                                                    "error": format!(
-                                                        "Tool '{}' timed out after {} seconds",
-                                                        name, tool_timeout.as_secs()
-                                                    )
-                                                })
+                                                last_error = format!(
+                                                    "Tool '{}' timed out after {} seconds",
+                                                    name, tool_timeout.as_secs()
+                                                );
+                                                if attempt + 1 < max_attempts {
+                                                    tracing::warn!(tool.name = %name, attempt = attempt, timeout_secs = tool_timeout.as_secs(), "tool timed out, retrying");
+                                                } else {
+                                                    tracing::warn!(tool.name = %name, timeout_secs = tool_timeout.as_secs(), "tool_timeout");
+                                                }
                                             }
                                         }
-                                    }.instrument(tool_span).await;
+                                    }
+
+                                    let tool_duration = tool_start.elapsed();
+
+                                    // Derive final success/error/response from retry loop outcome
+                                    let (tool_success, tool_error_message, function_response) = match retry_result {
+                                        Some(value) => (true, None, value),
+                                        None => (false, Some(last_error.clone()), serde_json::json!({ "error": last_error })),
+                                    };
+
+                                    // Build ToolOutcome from execution state — never from JSON inspection.
+                                    // Emitted for the final attempt only, with correct attempt number (0-based).
+                                    let outcome = ToolOutcome {
+                                        tool_name: name.clone(),
+                                        tool_args: args.clone(),
+                                        success: tool_success,
+                                        duration: tool_duration,
+                                        error_message: tool_error_message.clone(),
+                                        attempt: final_attempt,
+                                    };
+                                    tool_outcome_for_callback = Some(outcome);
+
+                                    // ===== CIRCUIT BREAKER RECORDING =====
+                                    if let Some(ref mut cb_state) = circuit_breaker_state {
+                                        cb_state.record(tool_outcome_for_callback.as_ref().unwrap());
+                                    }
+
+                                    // ===== ON TOOL ERROR CALLBACKS =====
+                                    // When tool failed (after all retries exhausted), try on_tool_error
+                                    // callbacks for a fallback result. Only invoked after ALL retries
+                                    // are exhausted, not on each individual retry attempt.
+                                    let final_function_response = if !tool_success {
+                                        let mut fallback_result = None;
+                                        let error_msg = tool_error_message.clone().unwrap_or_default();
+                                        for callback in on_tool_error_callbacks.as_ref() {
+                                            match callback(
+                                                ctx.clone() as Arc<dyn CallbackContext>,
+                                                tool.clone(),
+                                                args.clone(),
+                                                error_msg.clone(),
+                                            ).await {
+                                                Ok(Some(result)) => {
+                                                    fallback_result = Some(result);
+                                                    break;
+                                                }
+                                                Ok(None) => continue,
+                                                Err(e) => {
+                                                    tracing::warn!(error = %e, "on_tool_error callback failed");
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if let Some(fallback) = fallback_result {
+                                            fallback
+                                        } else {
+                                            function_response
+                                        }
+                                    } else {
+                                        function_response
+                                    };
 
                                     let confirmation_decision =
                                         tool_actions.tool_confirmation_decision;
@@ -1322,12 +1740,15 @@ impl Agent for LlmAgent {
                                         tool_actions.tool_confirmation_decision =
                                             confirmation_decision;
                                     }
+                                    // Capture tool and response for AfterToolCallbackFull
+                                    executed_tool = Some(tool.clone());
+                                    executed_tool_response = Some(final_function_response.clone());
                                     response_content = Some(Content {
                                         role: "function".to_string(),
                                         parts: vec![Part::FunctionResponse {
                                             function_response: FunctionResponseData {
                                                 name: name.clone(),
-                                                response: result,
+                                                response: final_function_response,
                                             },
                                             id: id.clone(),
                                         }],
@@ -1352,8 +1773,16 @@ impl Agent for LlmAgent {
                             // Allows post-processing of tool outputs or audit side effects.
                             let mut response_content = response_content.expect("tool response content is set");
                             if run_after_tool_callbacks {
+                                // Build callback context with ToolOutcome if available
+                                let cb_ctx: Arc<dyn CallbackContext> = match tool_outcome_for_callback {
+                                    Some(outcome) => Arc::new(ToolCallbackContext {
+                                        inner: ctx.clone() as Arc<dyn CallbackContext>,
+                                        outcome,
+                                    }),
+                                    None => ctx.clone() as Arc<dyn CallbackContext>,
+                                };
                                 for callback in after_tool_callbacks.as_ref() {
-                                    match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                                    match callback(cb_ctx.clone()).await {
                                         Ok(Some(modified_content)) => {
                                             response_content = modified_content;
                                             break;
@@ -1362,6 +1791,41 @@ impl Agent for LlmAgent {
                                         Err(e) => {
                                             yield Err(e);
                                             return;
+                                        }
+                                    }
+                                }
+
+                                // ===== AFTER TOOL CALLBACKS (FULL / V2) =====
+                                // Rich callbacks that receive tool, args, and response value.
+                                // Aligned with Python/Go ADK after_tool_callback signature.
+                                // Run after legacy AfterToolCallback chain.
+                                if let (Some(tool_ref), Some(tool_resp)) = (&executed_tool, executed_tool_response) {
+                                    for callback in after_tool_callbacks_full.as_ref() {
+                                        match callback(
+                                            cb_ctx.clone(),
+                                            tool_ref.clone(),
+                                            args.clone(),
+                                            tool_resp.clone(),
+                                        ).await {
+                                            Ok(Some(modified_value)) => {
+                                                // Replace the function response in the content
+                                                response_content = Content {
+                                                    role: "function".to_string(),
+                                                    parts: vec![Part::FunctionResponse {
+                                                        function_response: FunctionResponseData {
+                                                            name: name.clone(),
+                                                            response: modified_value,
+                                                        },
+                                                        id: id.clone(),
+                                                    }],
+                                                };
+                                                break;
+                                            }
+                                            Ok(None) => continue,
+                                            Err(e) => {
+                                                yield Err(e);
+                                                return;
+                                            }
                                         }
                                     }
                                 }

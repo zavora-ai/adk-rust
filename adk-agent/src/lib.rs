@@ -38,7 +38,7 @@
 //! let par = ParallelAgent::new("team", vec![a, b, c]);
 //!
 //! // Loop: repeat until exit
-//! let loop_agent = LoopAgent::new("iterator", worker, 10);
+//! let loop_agent = LoopAgent::new("iterator", vec![worker]).with_max_iterations(10);
 //! ```
 //!
 //! ## Guardrails (optional)
@@ -64,7 +64,9 @@ mod llm_agent;
 pub mod tool_call_markup;
 mod workflow;
 
+pub use adk_core::AfterToolCallbackFull;
 pub use adk_core::Agent;
+pub use adk_core::OnToolErrorCallback;
 pub use compaction::LlmEventSummarizer;
 pub use custom_agent::{CustomAgent, CustomAgentBuilder};
 pub use guardrails::GuardrailSet;

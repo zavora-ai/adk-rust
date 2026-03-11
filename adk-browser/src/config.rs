@@ -111,6 +111,14 @@ impl BrowserConfig {
         self.browser_args.push(arg.into());
         self
     }
+
+    /// Configure for observable mode (noVNC-compatible).
+    ///
+    /// Sets `headless: false` and viewport to 1280x720 for noVNC viewing.
+    /// Use this when running with Selenium's noVNC viewer (port 7900).
+    pub fn observable(self) -> Self {
+        self.headless(false).viewport(1280, 720)
+    }
 }
 
 #[cfg(test)]
@@ -133,5 +141,13 @@ mod tests {
         assert_eq!(config.browser, BrowserType::Firefox);
         assert!(!config.headless);
         assert_eq!(config.viewport_width, 1280);
+    }
+
+    #[test]
+    fn test_observable() {
+        let config = BrowserConfig::new().observable();
+        assert!(!config.headless);
+        assert_eq!(config.viewport_width, 1280);
+        assert_eq!(config.viewport_height, 720);
     }
 }

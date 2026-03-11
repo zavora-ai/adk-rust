@@ -300,7 +300,8 @@ impl Tool for PageSourceTool {
         let max_length = args.get("max_length").and_then(|v| v.as_u64()).unwrap_or(50000) as usize;
 
         let source = self.browser.page_source().await?;
-        let truncated = source.len() > max_length;
+        let total_length = source.len();
+        let truncated = total_length > max_length;
         let html =
             if truncated { source.chars().take(max_length).collect::<String>() } else { source };
 
@@ -308,7 +309,8 @@ impl Tool for PageSourceTool {
             "success": true,
             "html": html,
             "truncated": truncated,
-            "total_length": html.len()
+            "total_length": total_length,
+            "returned_length": html.len()
         }))
     }
 }

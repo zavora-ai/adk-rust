@@ -191,6 +191,7 @@ pub fn content_to_message(content: &Content) -> Message {
     };
 
     let mut text_parts = Vec::new();
+    let mut reasoning_parts = Vec::new();
     let mut tool_calls = Vec::new();
     let mut tool_call_id = None;
 
@@ -220,12 +221,14 @@ pub fn content_to_message(content: &Content) -> Message {
                 text_parts.push(attachment::file_attachment_to_text(mime_type, file_uri));
             }
             Part::Thinking { thinking, .. } => {
-                text_parts.push(thinking.clone());
+                reasoning_parts.push(thinking.clone());
             }
         }
     }
 
     let content_str = if text_parts.is_empty() { None } else { Some(text_parts.join("\n")) };
+    let reasoning_content =
+        if reasoning_parts.is_empty() { None } else { Some(reasoning_parts.join("\n")) };
 
     Message {
         role: role.to_string(),
@@ -233,7 +236,7 @@ pub fn content_to_message(content: &Content) -> Message {
         name: None,
         tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
         tool_call_id,
-        reasoning_content: None,
+        reasoning_content,
     }
 }
 
@@ -402,5 +405,25 @@ mod tests {
         let payload = message.content.unwrap_or_default();
         assert!(payload.contains("text/csv"));
         assert!(payload.contains("https://example.com/data.csv"));
+    }
+
+    #[test]
+    fn content_to_message_maps_thinking_to_reasoning_content() {
+        let content = Content {
+            role: "model".to_string(),
+            parts: vec![
+                Part::Thinking {
+                    thinking: "reason through the tool plan".to_string(),
+                    signature: None,
+                },
+                Part::Text { text: "let me check the prices".to_string() },
+            ],
+        };
+
+        let message = content_to_message(&content);
+
+        assert_eq!(message.role, "assistant");
+        assert_eq!(message.reasoning_content.as_deref(), Some("reason through the tool plan"));
+        assert_eq!(message.content.as_deref(), Some("let me check the prices"));
     }
 }

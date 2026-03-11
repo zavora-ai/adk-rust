@@ -6,7 +6,7 @@
 //!   cd doc-test/deployment/a2a_test
 //!   GOOGLE_API_KEY=your_key cargo run --bin server
 
-use adk_cli::launcher::SingleAgentLoader;
+use adk_core::SingleAgentLoader;
 use adk_rust::prelude::*;
 use adk_server::{ServerConfig, create_app_with_a2a};
 use adk_session::InMemorySessionService;

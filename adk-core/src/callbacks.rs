@@ -1,4 +1,4 @@
-use crate::{CallbackContext, Content, LlmRequest, LlmResponse, ReadonlyContext, Result};
+use crate::{CallbackContext, Content, LlmRequest, LlmResponse, ReadonlyContext, Result, Tool};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -63,6 +63,30 @@ pub type AfterToolCallback = Box<
         + Sync,
 >;
 
+/// Rich after-tool callback that receives the tool, arguments, and response.
+///
+/// Aligned with the Python/Go ADK model where `after_tool_callback` receives
+/// the full tool execution context: the tool itself, the arguments it was
+/// called with, and the response it produced (or error JSON).
+///
+/// This is the V2 callback surface for first-class tool result handling.
+/// Unlike [`AfterToolCallback`] (which only receives `CallbackContext`),
+/// this callback can inspect and modify tool results without relying on
+/// `ToolOutcome` inspection.
+///
+/// Return `Ok(None)` to keep the original response, or `Ok(Some(value))`
+/// to replace the function response sent to the LLM.
+pub type AfterToolCallbackFull = Box<
+    dyn Fn(
+            Arc<dyn CallbackContext>,
+            Arc<dyn Tool>,
+            serde_json::Value, // args
+            serde_json::Value, // tool response (success result or error JSON)
+        ) -> Pin<Box<dyn Future<Output = Result<Option<serde_json::Value>>> + Send>>
+        + Send
+        + Sync,
+>;
+
 // Instruction providers - dynamic instruction generation
 pub type InstructionProvider = Box<
     dyn Fn(Arc<dyn ReadonlyContext>) -> Pin<Box<dyn Future<Output = Result<String>> + Send>>
@@ -70,6 +94,27 @@ pub type InstructionProvider = Box<
         + Sync,
 >;
 pub type GlobalInstructionProvider = InstructionProvider;
+
+// ===== Error Callbacks =====
+
+/// Callback invoked when a tool execution fails (after retries are exhausted).
+///
+/// This is the canonical, framework-level tool-error callback type shared by
+/// `adk-agent` (builder registration) and `adk-plugin` (plugin hooks).
+///
+/// Returns `Ok(Some(value))` to substitute a fallback result as the function
+/// response to the LLM, or `Ok(None)` to let the next callback (or the
+/// original error) propagate.
+pub type OnToolErrorCallback = Box<
+    dyn Fn(
+            Arc<dyn CallbackContext>,
+            Arc<dyn Tool>,
+            serde_json::Value, // args
+            String,            // error message
+        ) -> Pin<Box<dyn Future<Output = Result<Option<serde_json::Value>>> + Send>>
+        + Send
+        + Sync,
+>;
 
 // ===== Context Compaction =====
 

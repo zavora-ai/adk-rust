@@ -15,6 +15,9 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 - **GoogleSearchTool** - Web search via Gemini's grounding
 - **McpToolset** - Model Context Protocol integration (local & remote servers)
 - **BasicToolset** - Group multiple tools together
+- **FilteredToolset** - Filter tools from any toolset by predicate
+- **MergedToolset** - Combine multiple toolsets into one
+- **PrefixedToolset** - Namespace tool names with a prefix
 - **ExitLoopTool** - Control flow for loop agents
 - **LoadArtifactsTool** - Inject binary artifacts into context
 
@@ -279,6 +282,49 @@ let toolset = McpHttpClientBuilder::new("https://api.githubcopilot.com/mcp/")
 // - issue_read, issue_write, add_issue_comment
 // - and 30+ more GitHub operations
 ```
+
+## Toolset Composition
+
+Compose, filter, and namespace toolsets for complex agent configurations:
+
+```rust
+use adk_tool::{BasicToolset, FilteredToolset, MergedToolset, PrefixedToolset, string_predicate};
+use std::sync::Arc;
+
+// Group tools into named toolsets
+let weather = Arc::new(BasicToolset::new("weather", vec![get_weather, get_forecast]));
+let utils = Arc::new(BasicToolset::new("utils", vec![search, calculate]));
+
+// Filter: expose only specific tools from a toolset
+let filtered = FilteredToolset::new(weather.clone(), string_predicate(vec!["get_weather".into()]));
+
+// Or use a custom predicate
+let custom = FilteredToolset::with_name(
+    weather.clone(),
+    Box::new(|tool| tool.name().starts_with("get_")),
+    "get_only",
+);
+
+// Merge: combine multiple toolsets (first-wins deduplication)
+let merged = MergedToolset::new("all_tools", vec![weather.clone(), utils.clone()]);
+
+// Prefix: namespace tool names to avoid collisions
+let prefixed = PrefixedToolset::new(weather.clone(), "wx"); // wx_get_weather, wx_get_forecast
+
+// Chain them: prefix → filter → merge
+let composed = MergedToolset::new("composed", vec![
+    Arc::new(PrefixedToolset::new(weather, "wx")) as Arc<dyn Toolset>,
+    Arc::new(FilteredToolset::new(utils, string_predicate(vec!["search".into()]))),
+]);
+
+// Register with an agent
+let agent = LlmAgentBuilder::new("agent")
+    .model(model)
+    .toolset(Arc::new(composed))
+    .build()?;
+```
+
+All composition utilities implement `Toolset` and work with any `Toolset` implementation including `McpToolset` and `BrowserToolset`.
 
 ## Migration from rmcp 0.9
 

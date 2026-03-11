@@ -108,10 +108,14 @@ impl Tool for TypeTool {
         let field_value =
             element.attr("value").await.ok().flatten().unwrap_or_else(|| text.to_string());
 
+        // Include page context so the agent knows the current state
+        let context = self.browser.page_context().await.unwrap_or_default();
+
         Ok(json!({
             "success": true,
             "typed_text": text,
-            "field_value": field_value
+            "field_value": field_value,
+            "page": context
         }))
     }
 }
@@ -158,9 +162,12 @@ impl Tool for ClearTool {
 
         self.browser.clear(selector).await?;
 
+        let context = self.browser.page_context().await.unwrap_or_default();
+
         Ok(json!({
             "success": true,
-            "cleared": selector
+            "cleared": selector,
+            "page": context
         }))
     }
 }
@@ -221,16 +228,20 @@ impl Tool for SelectTool {
         let text = args.get("text").and_then(|v| v.as_str());
         let index = args.get("index").and_then(|v| v.as_u64());
 
+        let escaped_selector = crate::escape::escape_js_string(selector);
+
         // Build the appropriate selector for the option
         let option_selector = if let Some(val) = value {
-            format!("{} option[value='{}']", selector, val)
+            let escaped_val = crate::escape::escape_js_string(val);
+            format!("{selector} option[value='{escaped_val}']")
         } else if let Some(txt) = text {
+            let escaped_txt = crate::escape::escape_js_string(txt);
             // Use XPath for text matching isn't available, use JS instead
             let script = format!(
                 r#"
-                var select = document.querySelector('{}');
+                var select = document.querySelector('{escaped_selector}');
                 for (var i = 0; i < select.options.length; i++) {{
-                    if (select.options[i].text === '{}') {{
+                    if (select.options[i].text === '{escaped_txt}') {{
                         select.selectedIndex = i;
                         select.dispatchEvent(new Event('change', {{ bubbles: true }}));
                         return true;
@@ -238,15 +249,15 @@ impl Tool for SelectTool {
                 }}
                 return false;
                 "#,
-                selector.replace('\'', "\\'"),
-                txt.replace('\'', "\\'")
             );
 
             let result = self.browser.execute_script(&script).await?;
             if result.as_bool() == Some(true) {
+                let context = self.browser.page_context().await.unwrap_or_default();
                 return Ok(json!({
                     "success": true,
-                    "selected_text": txt
+                    "selected_text": txt,
+                    "page": context
                 }));
             } else {
                 return Err(adk_core::AdkError::Tool(format!(
@@ -257,26 +268,24 @@ impl Tool for SelectTool {
         } else if let Some(idx) = index {
             let script = format!(
                 r#"
-                var select = document.querySelector('{}');
-                if (select && select.options.length > {}) {{
-                    select.selectedIndex = {};
+                var select = document.querySelector('{escaped_selector}');
+                if (select && select.options.length > {idx}) {{
+                    select.selectedIndex = {idx};
                     select.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    return select.options[{}].text;
+                    return select.options[{idx}].text;
                 }}
                 return null;
                 "#,
-                selector.replace('\'', "\\'"),
-                idx,
-                idx,
-                idx
             );
 
             let result = self.browser.execute_script(&script).await?;
             if let Some(selected_text) = result.as_str() {
+                let context = self.browser.page_context().await.unwrap_or_default();
                 return Ok(json!({
                     "success": true,
                     "selected_text": selected_text,
-                    "selected_index": idx
+                    "selected_index": idx,
+                    "page": context
                 }));
             } else {
                 return Err(adk_core::AdkError::Tool(format!("Option at index {} not found", idx)));
@@ -290,9 +299,12 @@ impl Tool for SelectTool {
         // Click the option
         self.browser.click(&option_selector).await?;
 
+        let context = self.browser.page_context().await.unwrap_or_default();
+
         Ok(json!({
             "success": true,
-            "selected_value": value
+            "selected_value": value,
+            "page": context
         }))
     }
 }

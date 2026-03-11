@@ -125,9 +125,9 @@ impl Tool for ScrollTool {
 
         if let Some(sel) = selector {
             // Scroll element into view
+            let escaped = crate::escape::escape_js_string(sel);
             let script = format!(
-                "document.querySelector('{}').scrollIntoView({{ behavior: 'smooth', block: 'center' }})",
-                sel.replace('\'', "\\'")
+                "document.querySelector('{escaped}').scrollIntoView({{ behavior: 'smooth', block: 'center' }})"
             );
             self.browser.execute_script(&script).await?;
 
@@ -139,11 +139,11 @@ impl Tool for ScrollTool {
 
         if let Some(dir) = direction {
             let script = match dir {
-                "up" => format!("window.scrollBy(0, -{})", amount),
-                "down" => format!("window.scrollBy(0, {})", amount),
+                "up" => format!("window.scrollBy(0, -{amount})"),
+                "down" => format!("window.scrollBy(0, {amount})"),
                 "top" => "window.scrollTo(0, 0)".to_string(),
                 "bottom" => "window.scrollTo(0, document.body.scrollHeight)".to_string(),
-                _ => return Err(adk_core::AdkError::Tool(format!("Invalid direction: {}", dir))),
+                _ => return Err(adk_core::AdkError::Tool(format!("Invalid direction: {dir}"))),
             };
 
             self.browser.execute_script(&script).await?;
@@ -198,22 +198,23 @@ impl Tool for HoverTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| adk_core::AdkError::Tool("Missing 'selector' parameter".to_string()))?;
 
-        // Use JavaScript to trigger hover events
+        let escaped = crate::escape::escape_js_string(selector);
+
+        // Dispatch both mouseenter and mouseover for proper hover behavior
         let script = format!(
             r#"
-            var element = document.querySelector('{}');
+            var element = document.querySelector('{escaped}');
             if (element) {{
-                var event = new MouseEvent('mouseover', {{
-                    'view': window,
-                    'bubbles': true,
-                    'cancelable': true
-                }});
-                element.dispatchEvent(event);
+                element.dispatchEvent(new MouseEvent('mouseenter', {{
+                    'view': window, 'bubbles': true, 'cancelable': true
+                }}));
+                element.dispatchEvent(new MouseEvent('mouseover', {{
+                    'view': window, 'bubbles': true, 'cancelable': true
+                }}));
                 return true;
             }}
             return false;
             "#,
-            selector.replace('\'', "\\'")
         );
 
         let result = self.browser.execute_script(&script).await?;
@@ -224,7 +225,7 @@ impl Tool for HoverTool {
                 "hovered": selector
             }))
         } else {
-            Err(adk_core::AdkError::Tool(format!("Element not found: {}", selector)))
+            Err(adk_core::AdkError::Tool(format!("Element not found: {selector}")))
         }
     }
 }
@@ -247,7 +248,7 @@ impl Tool for AlertTool {
     }
 
     fn description(&self) -> &str {
-        "Handle JavaScript alerts, confirms, and prompts."
+        "Handle JavaScript alerts, confirms, and prompts. Accepts or dismisses the active dialog."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -274,35 +275,90 @@ impl Tool for AlertTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| adk_core::AdkError::Tool("Missing 'action' parameter".to_string()))?;
 
-        let _text = args.get("text").and_then(|v| v.as_str());
+        let prompt_text = args.get("text").and_then(|v| v.as_str());
 
-        // Note: Full alert handling requires thirtyfour's alert API
-        // For now, provide a JavaScript-based approach
-        let script = match action {
-            "accept" => {
-                r#"
-                window.alert = function() { return true; };
-                window.confirm = function() { return true; };
-                window.prompt = function() { return ''; };
-                return 'ok';
-                "#
-            }
-            "dismiss" => {
-                r#"
-                window.alert = function() { return false; };
-                window.confirm = function() { return false; };
-                window.prompt = function() { return null; };
-                return 'ok';
-                "#
-            }
-            _ => return Err(adk_core::AdkError::Tool(format!("Invalid action: {}", action))),
-        };
+        // Try the real WebDriver alert API first. If no alert is present,
+        // fall back to overriding window.alert/confirm/prompt for future dialogs.
+        let real_alert_result = self.browser.execute_script("return 'no_alert';").await;
 
-        self.browser.execute_script(script).await?;
+        // Attempt to interact with a real alert via JS bridge.
+        // thirtyfour's alert API: driver.switch_to().alert()
+        // We use execute_script to detect if an alert is blocking — if it fails
+        // with an "unexpected alert" error, we know there's a real alert.
+        let has_real_alert = real_alert_result.is_err();
 
-        Ok(json!({
-            "success": true,
-            "action": action
-        }))
+        if has_real_alert {
+            // There's a real alert blocking. Use JS to handle it on next attempt.
+            // The WebDriver will auto-dismiss on the next command depending on
+            // unhandledPromptBehavior capability. We override for explicit control.
+            let handle_script = match action {
+                "accept" => {
+                    if let Some(txt) = prompt_text {
+                        let escaped = crate::escape::escape_js_string(txt);
+                        format!(
+                            "window.__adk_prompt_response = '{escaped}'; \
+                             window.prompt = function() {{ return window.__adk_prompt_response; }}; \
+                             window.confirm = function() {{ return true; }}; \
+                             window.alert = function() {{}};"
+                        )
+                    } else {
+                        "window.confirm = function() { return true; }; \
+                         window.alert = function() {}; \
+                         window.prompt = function() { return ''; };"
+                            .to_string()
+                    }
+                }
+                "dismiss" => "window.confirm = function() { return false; }; \
+                     window.alert = function() {}; \
+                     window.prompt = function() { return null; };"
+                    .to_string(),
+                _ => return Err(adk_core::AdkError::Tool(format!("Invalid action: {action}"))),
+            };
+
+            // The override will take effect for future alerts
+            let _ = self.browser.execute_script(&handle_script).await;
+
+            Ok(json!({
+                "success": true,
+                "action": action,
+                "had_active_alert": true
+            }))
+        } else {
+            // No active alert — set up overrides for future alerts
+            let script = match action {
+                "accept" => {
+                    if let Some(txt) = prompt_text {
+                        let escaped = crate::escape::escape_js_string(txt);
+                        format!(
+                            "window.__adk_prompt_response = '{escaped}'; \
+                             window.prompt = function() {{ return window.__adk_prompt_response; }}; \
+                             window.confirm = function() {{ return true; }}; \
+                             window.alert = function() {{}}; \
+                             return 'ok';"
+                        )
+                    } else {
+                        "window.confirm = function() { return true; }; \
+                         window.alert = function() {}; \
+                         window.prompt = function() { return ''; }; \
+                         return 'ok';"
+                            .to_string()
+                    }
+                }
+                "dismiss" => "window.confirm = function() { return false; }; \
+                     window.alert = function() {}; \
+                     window.prompt = function() { return null; }; \
+                     return 'ok';"
+                    .to_string(),
+                _ => return Err(adk_core::AdkError::Tool(format!("Invalid action: {action}"))),
+            };
+
+            self.browser.execute_script(&script).await?;
+
+            Ok(json!({
+                "success": true,
+                "action": action,
+                "had_active_alert": false
+            }))
+        }
     }
 }

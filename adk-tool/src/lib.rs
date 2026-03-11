@@ -67,4 +67,6 @@ pub use agent_tool::{AgentTool, AgentToolConfig};
 pub use builtin::{ExitLoopTool, GoogleSearchTool, LoadArtifactsTool};
 pub use function_tool::FunctionTool;
 pub use mcp::{McpAuth, McpHttpClientBuilder, McpTaskConfig, McpToolset, OAuth2Config};
-pub use toolset::{BasicToolset, string_predicate};
+pub use toolset::{
+    BasicToolset, FilteredToolset, MergedToolset, PrefixedToolset, string_predicate,
+};
