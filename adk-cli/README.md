@@ -8,122 +8,202 @@ Command-line launcher for Rust Agent Development Kit (ADK-Rust) agents.
 
 ## Overview
 
-`adk-cli` provides command-line tools for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)):
+`adk-cli` provides two things:
 
-- **Launcher** - Interactive REPL for agent conversations
-- **Server Mode** - HTTP server with web UI
-- **Session Management** - Automatic session handling
-- **Telemetry** - Integrated logging and tracing
-
-## Installation
-
-```toml
-[dependencies]
-adk-cli = "0.3.2"
-```
-
-Or use the meta-crate:
-
-```toml
-[dependencies]
-adk-rust = { version = "0.3.2", features = ["cli"] }
-```
+- **`adk-rust` binary** — chat with an AI agent (6 providers), serve a web UI, or manage skills
+- **`Launcher` library** — embed a REPL and web server into any custom agent binary
 
 ## Quick Start
 
-### Interactive Mode
+```bash
+cargo install adk-cli
+
+# Just run it — interactive setup picks your provider on first run
+adk-rust
+
+# Or pre-configure a provider
+adk-rust --provider openai --api-key sk-...
+
+# Equivalent to:
+adk-rust chat
+
+# Web server
+adk-rust serve --port 3000
+```
+
+## Supported Providers
+
+| Provider | Flag | Default Model | Env Var |
+|----------|------|---------------|---------|
+| Gemini | `--provider gemini` | `gemini-2.5-flash` | `GOOGLE_API_KEY` / `GEMINI_API_KEY` |
+| OpenAI | `--provider openai` | `gpt-4.1` | `OPENAI_API_KEY` |
+| Anthropic | `--provider anthropic` | `claude-sonnet-4-5-20250929` | `ANTHROPIC_API_KEY` |
+| DeepSeek | `--provider deepseek` | `deepseek-chat` | `DEEPSEEK_API_KEY` |
+| Groq | `--provider groq` | `llama-3.3-70b-versatile` | `GROQ_API_KEY` |
+| Ollama | `--provider ollama` | `llama3.2` | _(none, local)_ |
+
+## First-Run Setup
+
+If no provider is configured, `adk-rust` launches an interactive setup:
+
+1. Choose a provider from the menu
+2. Enter your API key (skipped for Ollama)
+3. Provider and model are saved to `~/.config/adk-rust/config.json`
+4. API keys are stored in your OS credential store (Keychain, Credential Manager, Secret Service)
+
+On subsequent runs, the saved config is used automatically. CLI flags always
+take priority over environment variables, secure credential storage, and saved config.
+
+## Binary Commands
+
+```
+adk-rust              Interactive REPL (default, same as `chat`)
+adk-rust chat         Interactive REPL with an AI agent
+adk-rust serve        Start web server with an AI agent
+adk-rust skills       Skill tooling (list/validate/match)
+```
+
+### Global options (apply to `chat` and `serve`)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--provider` | saved config or interactive | LLM provider |
+| `--model` | provider default | Model name (provider-specific) |
+| `--api-key` | secure store / env var | API key (overrides all other sources) |
+| `--instruction` | built-in default | Agent system prompt |
+| `--thinking-budget` | none | Enable provider-side thinking when supported |
+| `--thinking-mode` | `auto` | Render emitted thinking: `auto`, `show`, `hide` |
+
+### `adk-rust serve` options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port` | `8080` | Server port |
+
+### `adk-rust skills` subcommands
+
+```bash
+adk-rust skills list                          # list indexed skills
+adk-rust skills validate                      # validate .skills/ directory
+adk-rust skills match --query "web scraping"  # rank skills by relevance
+```
+
+All skills commands accept `--json` for machine-readable output and `--path`
+to specify the project root (defaults to `.`).
+
+### REPL Commands
+
+| Input | Action |
+|-------|--------|
+| Any text | Send to agent |
+| `/help` | Show commands |
+| `quit`, `exit`, `/quit`, or `/exit` | Exit |
+| `/clear` | Clear display |
+| Ctrl+C | Interrupt |
+| Up/Down arrows | History |
+
+## Library: Launcher
+
+For custom agents, `Launcher` gives any `Arc<dyn Agent>` a CLI with two modes:
 
 ```rust
 use adk_cli::Launcher;
 use std::sync::Arc;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> adk_core::Result<()> {
     let agent = create_your_agent()?;
 
-    // Start interactive REPL
+    // Parses CLI args: default is chat, `serve --port N` for web
     Launcher::new(Arc::new(agent))
+        .app_name("my_app")
+        .with_memory_service(my_memory)
+        .with_session_service(my_sessions)
         .run()
-        .await?;
-
-    Ok(())
+        .await
 }
 ```
 
-### Server Mode
-
-```bash
-# Run with serve subcommand
-cargo run -- serve --port 8080
-
-# Open http://localhost:8080 for web UI
-```
-
-### Custom Configuration
+Or call modes directly without CLI parsing:
 
 ```rust
-use adk_cli::Launcher;
-use adk_artifact::InMemoryArtifactService;
-use adk_core::StreamingMode;
-use std::sync::Arc;
-
+// Console directly
 Launcher::new(Arc::new(agent))
-    .app_name("my_app")
-    .with_artifact_service(Arc::new(InMemoryArtifactService::new()))
-    .with_streaming_mode(StreamingMode::SSE)
-    .run()
+    .run_console_directly()
+    .await?;
+
+// Server directly
+Launcher::new(Arc::new(agent))
+    .run_serve_directly(8080)
     .await?;
 ```
 
-## CLI Commands
+### Production server composition
 
-When running in interactive mode:
+For production apps that need custom routes, middleware, or ownership of the
+serve loop, use `build_app()` instead of `run_serve_directly()`:
 
-| Command | Description |
-|---------|-------------|
-| Type message | Send to agent |
-| `/quit` or `/exit` | Exit REPL |
-| `/clear` | Clear conversation |
-| Ctrl+C | Interrupt |
+```rust
+use adk_cli::{Launcher, TelemetryConfig};
+use std::sync::Arc;
 
-## Environment Variables
+let app = Launcher::new(Arc::new(agent))
+    .with_a2a_base_url("https://agent.example.com")
+    .with_telemetry(TelemetryConfig::None)
+    .build_app()?;
 
-```bash
-# Logging level
-RUST_LOG=info
-
-# API key (for Gemini)
-GOOGLE_API_KEY=your-key
+let app = app.merge(my_admin_routes());
+let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+axum::serve(listener, app).await?;
 ```
 
-## Features
+You can also enable A2A explicitly with `build_app_with_a2a(...)`.
 
-- Colored output with streaming
-- History support (arrow keys)
-- Graceful shutdown
-- Error recovery
+### Serve-mode configuration
 
-## Binary Installation
+`Launcher` now forwards several server/runtime settings that previously required
+manual `ServerConfig` wiring:
 
-The `adk` binary is also available:
-
-```bash
-cargo install adk-cli
-
-# Run your agent
-adk --help
+```rust
+Launcher::new(Arc::new(agent))
+    .with_compaction(compaction_config)
+    .with_context_cache(context_cache_config, cache_capable_model)
+    .with_a2a_base_url("https://agent.example.com")
+    .with_telemetry(TelemetryConfig::AdkExporter {
+        service_name: "my-agent".to_string(),
+    });
 ```
+
+Available telemetry modes:
+
+- `TelemetryConfig::AdkExporter` — default in-memory ADK exporter
+- `TelemetryConfig::Otlp` — initialize OTLP export
+- `TelemetryConfig::None` — skip launcher-managed telemetry initialization
+
+## Configuration Priority
+
+Resolution order (highest wins):
+
+1. CLI flags (`--provider`, `--api-key`, etc.)
+2. Environment variables (`GOOGLE_API_KEY`, `OPENAI_API_KEY`, etc.)
+3. OS credential store (saved during first-run setup)
+4. Saved config (`~/.config/adk-rust/config.json`) for provider/model only
+5. Interactive setup (first run only)
+
+## Provider-Specific Notes
+
+- **Gemini**: Google Search grounding tool is automatically added
+- **Anthropic**: `--thinking-budget` enables extended thinking with the given token budget
+- **Ollama**: No API key needed; make sure `ollama serve` is running locally
+- **Groq**: Free tier available at [console.groq.com](https://console.groq.com)
 
 ## Related Crates
 
-- [adk-rust](https://crates.io/crates/adk-rust) - Meta-crate with all components
-- [adk-server](https://crates.io/crates/adk-server) - HTTP server
-- [adk-runner](https://crates.io/crates/adk-runner) - Execution runtime
+- [adk-rust](https://crates.io/crates/adk-rust) — umbrella crate
+- [adk-server](https://crates.io/crates/adk-server) — HTTP server
+- [adk-runner](https://crates.io/crates/adk-runner) — execution runtime
+- [adk-skill](https://crates.io/crates/adk-skill) — skill discovery
 
 ## License
 
 Apache-2.0
-
-## Part of ADK-Rust
-
-This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.

@@ -17,17 +17,18 @@ name = "adk_cli"
 path = "src/lib.rs"
 
 [[bin]]
-name = "adk"
+name = "adk-rust"
 path = "src/main.rs"
 
 [dependencies]
 adk-core.workspace = true
 adk-agent.workspace = true
-adk-model.workspace = true
+adk-model = { workspace = true, features = ["all-providers"] }
 adk-runner.workspace = true
 adk-server.workspace = true
 adk-session.workspace = true
 adk-artifact.workspace = true
+adk-tool.workspace = true
 adk-telemetry.workspace = true
 adk-skill.workspace = true
 clap = { version = "4.5", features = ["derive"] }
@@ -36,5 +37,21 @@ tokio.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 axum = "0.8"
-async-trait.workspace = true
+tracing.workspace = true
 serde_json.workspace = true
+serde.workspace = true
+tokio-util = { version = "0.7", features = ["rt"] }
+dirs = "6"
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
+
+[dev-dependencies]
+async-trait.workspace = true
+tower = { version = "0.5", features = ["util"] }

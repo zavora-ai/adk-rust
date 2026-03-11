@@ -29,6 +29,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking**: Removed crate-level `pub use ::livekit` and `pub use ::livekit_api` re-exports that collided with the `livekit` module namespace — use `adk_realtime::livekit::{AccessToken, VideoGrants}` instead of `adk_realtime::livekit_api::access_token::{AccessToken, VideoGrants}`
 - Added `AudioFrame` re-export to `adk_realtime::livekit` for downstream audio processing
 
+#### adk-core
+- **`ToolOutcome` struct**: Structured metadata for tool execution results — carries tool name, arguments, success/failure, execution duration, optional error message, and retry attempt number. Available via `CallbackContext::tool_outcome()` in after-tool callbacks.
+- **`tool_outcome()` default method on `CallbackContext`**: Returns `Option<ToolOutcome>`, defaulting to `None` for full backward compatibility with existing implementors.
+- **`RetryBudget` struct**: Configurable retry policy with `max_retries` and `delay` for automatic tool retry on transient failures.
+- **`OnToolErrorCallback` type**: Promoted to `adk-core` as the canonical, framework-level tool-error callback type shared by `adk-agent` and `adk-plugin`.
+- **`AfterToolCallbackFull` type**: V2 rich after-tool callback aligned with Python/Go ADK model. Receives `(CallbackContext, Tool, args, response)` and can inspect or replace the tool response sent to the LLM.
+
+#### adk-agent
+- **`.toolset()` builder method**: `LlmAgentBuilder` now accepts `Arc<dyn Toolset>` for dynamic per-invocation tool resolution. Toolsets are resolved at the start of each `run()` call using the current `ReadonlyContext`, enabling context-dependent tools (e.g., per-user browser sessions). Static `.tool()` and dynamic `.toolset()` can be mixed freely.
+- **`.default_retry_budget()` and `.tool_retry_budget()`**: Configure automatic retry for transient tool failures. Per-tool budgets override the default. When retries are exhausted, the final failure is reported to the LLM.
+- **`.circuit_breaker_threshold()`**: Tracks consecutive tool failures per tool name within an invocation. After the configured threshold, the tool is temporarily disabled with an immediate error response to the LLM. Resets at the start of each new invocation.
+- **`.on_tool_error()` callback**: Register fallback handlers invoked when a tool fails (after retries are exhausted). Callbacks can return a substitute `Value` used as the function response, or `None` to pass through to the next handler.
+- **`.after_tool_callback_full()` builder method**: V2 rich after-tool callback that receives the tool, arguments, and response. Aligned with Python/Go ADK model for first-class tool result handling.
+
+#### adk-browser
+- **`BrowserSessionPool`**: Multi-tenant session pool for managing browser sessions across concurrent agent invocations. Supports configurable pool size and session lifecycle management.
+- **`BrowserProfile` enum**: Pool-aware toolset creation with `Shared` (pooled) and `Dedicated` (single-session) profiles.
+- **JS string escaping**: `escape_js_string()` utility for safe JavaScript injection in evaluate tool.
+
+#### adk-tool
+- **Toolset composition**: `adk-tool/src/toolset/` module with composable toolset support for combining multiple tool sources.
+
+#### adk-cli
+- **Global provider flags**: `--provider`, `--model`, `--api-key` flags available on all subcommands.
+- **First-run setup wizard**: Interactive provider selection and API key configuration on first launch.
+- **Default to REPL**: Running `adk-rust` with no subcommand starts an interactive session.
+
 ### Fixed
 
 #### adk-auth
@@ -54,6 +81,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Agent runtime hardening**: `LlmAgent` now enforces configured input/output guardrails at runtime, normalizes XML tool-call markup before tool dispatch, preserves unique `function_call_id` values per tool invocation, and rejects duplicate sub-agent names during builder validation.
 - **Workflow agent contract fixes**: `ParallelAgent` and `ConditionalAgent` now execute their registered before/after callbacks, `IncludeContents::None` now keeps only the current user turn plus injected instructions, and `LoopAgent` maintains local conversation history for direct workflow use outside `adk-runner`.
 - **Deterministic LLM routing**: `LlmConditionalAgent` now resolves overlapping route labels deterministically, preferring exact matches and then the longest matching label.
+
+#### adk-browser
+- **Centralized `ensure_started()`**: All WebDriver-accessing methods now go through a single session initialization path, eliminating race conditions on first use.
+- **Navigation tool response alignment**: `navigate` tool returns consistent structured responses across success and error paths.
+- **Tool hardening**: `click`, `evaluate`, `extract`, `type_text`, and `wait` tools handle edge cases (stale elements, timeouts, JS errors) with actionable error messages.
+
+#### adk-model
+- **DeepSeek reasoning content**: `Part::Thinking` content is now correctly placed in `reasoning_content` field instead of being mixed into the main `content` field.
+
+#### adk-server
+- **Compaction config wiring**: `compaction_config` from server config is now passed through to `RunnerConfig` in both runtime and A2A controllers.
 
 #### adk-agent (Added)
 - **Regression test suite**: New `review_regression_tests.rs` with 10 targeted tests covering guardrail runtime enforcement, parallel/conditional agent callbacks, function_call_id uniqueness, `IncludeContents::None` filtering, deterministic LLM routing, sub-agent name uniqueness validation, and tool_call_markup normalization.

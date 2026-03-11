@@ -4,10 +4,11 @@
 //!
 //! ## Overview
 //!
-//! This crate provides command-line tools:
+//! This crate provides:
 //!
-//! - [`Launcher`] - Interactive REPL and server modes
-//! - [`SingleAgentLoader`] - Simple agent loader
+//! - [`Launcher`] — embeddable CLI that gives any agent a REPL and a web server
+//! - [`console::run_console`] — quick one-call REPL for examples
+//! - [`serve::run_serve`] — quick one-call HTTP server for examples
 //!
 //! ## Quick Start
 //!
@@ -16,7 +17,7 @@
 //! use std::sync::Arc;
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! async fn main() -> adk_core::Result<()> {
 //!     // let agent = create_your_agent()?;
 //!     // Launcher::new(Arc::new(agent)).run().await?;
 //!     Ok(())
@@ -25,12 +26,11 @@
 //!
 //! ## Modes
 //!
-//! - **Interactive**: REPL with history and colored output
-//! - **Server**: HTTP server with web UI
+//! - **Interactive**: rustyline REPL with history, streaming output, and think-block rendering
+//! - **Server**: HTTP server with web UI (`serve --port 8080`)
 
-pub mod config;
 pub mod console;
 pub mod launcher;
 pub mod serve;
 
-pub use launcher::{Launcher, SingleAgentLoader};
+pub use launcher::Launcher;

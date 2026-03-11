@@ -1,32 +1,67 @@
-use clap::{Parser, Subcommand};
+use adk_model::ModelProvider;
+use clap::{Parser, Subcommand, ValueEnum};
 
+/// ADK-Rust CLI — chat with an AI agent, serve a web UI, or manage skills.
+///
+/// Running `adk-rust` with no subcommand starts an interactive REPL.
+/// On first run, if no API key is configured, you'll be prompted to
+/// select a provider and enter your key.
+///
+/// For custom agents, use [`adk_cli::Launcher`] in your own binary.
 #[derive(Parser)]
-#[command(name = "adk")]
-#[command(about = "Agent Development Kit CLI", long_about = None)]
+#[command(name = "adk-rust")]
+#[command(about = "ADK-Rust CLI — interactive agent, web server, and skill tooling")]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
+
+    /// LLM provider
+    #[arg(long, global = true)]
+    pub provider: Option<ModelProvider>,
+
+    /// Model name (provider-specific, uses sensible default if omitted)
+    #[arg(long, global = true)]
+    pub model: Option<String>,
+
+    /// API key — overrides saved config and env vars
+    #[arg(long, global = true)]
+    pub api_key: Option<String>,
+
+    /// Agent instruction / system prompt
+    #[arg(long, global = true)]
+    pub instruction: Option<String>,
+
+    /// Request provider-side thinking mode with the given token budget when supported.
+    #[arg(long, global = true)]
+    pub thinking_budget: Option<u32>,
+
+    /// How the CLI should render emitted thinking/reasoning content.
+    #[arg(long, global = true, value_enum, default_value_t = ThinkingMode::Auto)]
+    pub thinking_mode: ThinkingMode,
+}
+
+/// All providers in menu order.
+pub const ALL_PROVIDERS: &[ModelProvider] = ModelProvider::all();
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ThinkingMode {
+    Auto,
+    Show,
+    Hide,
 }
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Run agent in interactive console mode
-    Console {
-        /// Agent application name
-        #[arg(short, long, default_value = "console_app")]
-        app_name: String,
+    /// Interactive REPL with an AI agent (this is the default)
+    Chat,
 
-        /// User ID for session
-        #[arg(short, long, default_value = "console_user")]
-        user_id: String,
-    },
-
-    /// Start web server
+    /// Start web server with an AI agent
     Serve {
         /// Server port
-        #[arg(short, long, default_value = "8080")]
+        #[arg(long, default_value_t = 8080)]
         port: u16,
     },
+
     /// Skills tooling (list/validate/match)
     Skills {
         #[command(subcommand)]
