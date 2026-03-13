@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ADK Deployment Console</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="backdrop"></div>
+    <div id="login-screen" class="login-shell">
+      <div class="login-panel">
+        <p class="eyebrow">ADK Deployment Platform</p>
+        <h1>Control plane for shipped agents</h1>
+        <p class="lede">
+          Paste an operator bearer token to inspect environments, review rollouts, and operate
+          live deployments.
+        </p>
+        <form id="login-form" class="login-form">
+          <label>
+            <span>Access Token</span>
+            <input
+              id="token-input"
+              type="password"
+              autocomplete="off"
+              required
+            />
+          </label>
+          <button type="submit">Connect</button>
+        </form>
+        <p id="login-error" class="error-text hidden"></p>
+      </div>
+    </div>
+
+    <div id="app-shell" class="app-shell hidden">
+      <aside class="sidebar">
+        <div>
+          <p class="eyebrow">ADK Deploy</p>
+          <h2 class="sidebar-title">Operate agents with one surface</h2>
+          <p class="sidebar-copy">
+            Dashboard, deployments, environments, audit, and billing in a single console.
+          </p>
+        </div>
+        <nav id="nav" class="nav-list">
+          <button data-view="dashboard" class="nav-item active">Dashboard</button>
+          <button data-view="agents" class="nav-item">Agents</button>
+          <button data-view="traces" class="nav-item">Traces</button>
+          <button data-view="logs" class="nav-item">Logs</button>
+          <button data-view="evaluations" class="nav-item">Evaluations</button>
+          <button data-view="catalog" class="nav-item">Catalog</button>
+          <button data-view="environments" class="nav-item">Environments</button>
+          <button data-view="alerts" class="nav-item">Alerts</button>
+          <button data-view="hitl" class="nav-item">HITL</button>
+          <button data-view="team" class="nav-item">Team</button>
+          <button data-view="billing" class="nav-item">Billing</button>
+          <button data-view="api" class="nav-item">API</button>
+          <button data-view="audit" class="nav-item">Audit</button>
+          <button data-view="settings" class="nav-item">Settings</button>
+        </nav>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p id="workspace-label" class="workspace-label">Workspace</p>
+            <h1 id="view-title">Dashboard</h1>
+          </div>
+          <div class="topbar-actions">
+            <label class="select-shell">
+              <span>Environment</span>
+              <select id="environment-select"></select>
+            </label>
+            <button id="refresh-button" class="ghost-button">Refresh</button>
+            <button id="logout-button" class="ghost-button">Logout</button>
+          </div>
+        </header>
+
+        <section id="notice" class="notice hidden"></section>
+        <section id="content" class="content-grid"></section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

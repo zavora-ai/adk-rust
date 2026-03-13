@@ -67,6 +67,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: SkillsCommands,
     },
+
+    /// Deployment platform commands
+    Deploy {
+        #[command(subcommand)]
+        command: DeployCommands,
+    },
 }
 
 #[derive(Subcommand, Clone)]
@@ -112,5 +118,104 @@ pub enum SkillsCommands {
         /// Output as JSON
         #[arg(long, default_value_t = false)]
         json: bool,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+pub enum DeployCommands {
+    /// Authenticate against the deployment control plane
+    Login {
+        #[arg(long, default_value = "http://127.0.0.1:8090")]
+        endpoint: String,
+        #[arg(long)]
+        token: String,
+    },
+    /// Remove locally stored deployment credentials
+    Logout,
+    /// Create a starter deployment manifest in the current project
+    Init {
+        #[arg(long, default_value = "adk-deploy.toml")]
+        path: String,
+        #[arg(long)]
+        agent_name: Option<String>,
+        #[arg(long)]
+        binary: Option<String>,
+    },
+    /// Validate a deployment manifest without contacting the control plane
+    Validate {
+        #[arg(long, default_value = "adk-deploy.toml")]
+        path: String,
+    },
+    /// Build a deployment bundle
+    Build {
+        #[arg(long, default_value = "adk-deploy.toml")]
+        path: String,
+    },
+    /// Push a deployment bundle to an environment
+    Push {
+        #[arg(long, default_value = "adk-deploy.toml")]
+        path: String,
+        #[arg(long, default_value = "staging")]
+        env: String,
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// Show the latest deployment status
+    Status {
+        #[arg(long, default_value = "production")]
+        env: String,
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    /// Show deployment history
+    History {
+        #[arg(long, default_value = "production")]
+        env: String,
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    /// Show the latest metrics summary
+    Metrics {
+        #[arg(long, default_value = "production")]
+        env: String,
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    /// Roll back from a deployment id
+    Rollback {
+        #[arg(long)]
+        deployment_id: String,
+    },
+    /// Promote a canary deployment
+    Promote {
+        #[arg(long)]
+        deployment_id: String,
+    },
+    /// Manage environment secrets
+    Secret {
+        #[command(subcommand)]
+        command: DeploySecretCommands,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+pub enum DeploySecretCommands {
+    /// Set or overwrite a secret
+    Set {
+        #[arg(long)]
+        env: String,
+        key: String,
+        value: String,
+    },
+    /// List secret keys for an environment
+    List {
+        #[arg(long)]
+        env: String,
+    },
+    /// Delete a secret key
+    Delete {
+        #[arg(long)]
+        env: String,
+        key: String,
     },
 }

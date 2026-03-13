@@ -1,0 +1,33 @@
+[package]
+name = "adk-deploy-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Control-plane server for the ADK Deployment Platform"
+
+[dependencies]
+adk-deploy.workspace = true
+adk-auth = { workspace = true, features = ["sso"] }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+axum = { version = "0.8", features = ["macros", "multipart"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+dirs = "6"
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.22"
+sha2.workspace = true
+
+[dev-dependencies]
+tower = "0.5"
+tempfile = "3"

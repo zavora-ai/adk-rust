@@ -1,4 +1,5 @@
 mod cli;
+mod deploy;
 mod setup;
 mod skills;
 
@@ -47,6 +48,7 @@ async fn main() -> Result<()> {
                 .map_err(Into::into)
         }
         Some(Commands::Skills { command }) => skills::run(command),
+        Some(Commands::Deploy { command }) => deploy::run(command).await,
     }
 }
 

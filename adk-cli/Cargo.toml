@@ -31,6 +31,7 @@ adk-artifact.workspace = true
 adk-tool.workspace = true
 adk-telemetry.workspace = true
 adk-skill.workspace = true
+adk-deploy.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 rustyline = "15.0"
 tokio.workspace = true
@@ -42,6 +43,7 @@ serde_json.workspace = true
 serde.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
 dirs = "6"
+toml.workspace = true
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["apple-native"] }

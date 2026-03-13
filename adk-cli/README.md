@@ -61,6 +61,7 @@ adk-rust              Interactive REPL (default, same as `chat`)
 adk-rust chat         Interactive REPL with an AI agent
 adk-rust serve        Start web server with an AI agent
 adk-rust skills       Skill tooling (list/validate/match)
+adk-rust deploy       Deployment platform commands
 ```
 
 ### Global options (apply to `chat` and `serve`)
@@ -90,6 +91,26 @@ adk-rust skills match --query "web scraping"  # rank skills by relevance
 
 All skills commands accept `--json` for machine-readable output and `--path`
 to specify the project root (defaults to `.`).
+
+### `adk-rust deploy` subcommands
+
+```bash
+adk-rust deploy login --endpoint http://127.0.0.1:8090 --token <bearer-token>
+adk-rust deploy logout
+adk-rust deploy validate --path adk-deploy.toml
+adk-rust deploy build --path adk-deploy.toml
+adk-rust deploy push --path adk-deploy.toml --env staging
+adk-rust deploy status --env production
+adk-rust deploy history --env production
+adk-rust deploy metrics --env production
+adk-rust deploy promote --deployment-id <id>
+adk-rust deploy rollback --deployment-id <id>
+adk-rust deploy secret set --env production OPENAI_API_KEY sk-...
+```
+
+Deploy credentials are stored in the OS credential store keyed by control-plane
+endpoint. The saved CLI config keeps the endpoint and workspace metadata, but
+not the bearer token itself.
 
 ### REPL Commands
 
