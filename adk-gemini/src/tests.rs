@@ -111,12 +111,25 @@ fn test_function_call_with_thought_signature() {
     assert_eq!(function_call.args["param"], "value");
     assert_eq!(function_call.thought_signature, Some("test_thought_signature".to_string()));
 
-    // Test serialization
-    let serialized = serde_json::to_string(&function_call).unwrap();
+    // The Gemini wire format carries thoughtSignature on the enclosing Part, not inside
+    // functionCall. Standalone FunctionCall serialization must omit it.
+    let serialized = serde_json::to_value(&function_call).unwrap();
     println!("Serialized FunctionCall: {}", serialized);
+    assert_eq!(
+        serialized,
+        json!({
+            "name": "test_function",
+            "args": {"param": "value"}
+        })
+    );
 
-    // Test deserialization
-    let deserialized: FunctionCall = serde_json::from_str(&serialized).unwrap();
+    // Accept both camelCase and legacy snake_case on input.
+    let deserialized: FunctionCall = serde_json::from_value(json!({
+        "name": "test_function",
+        "args": {"param": "value"},
+        "thoughtSignature": "test_thought_signature"
+    }))
+    .unwrap();
     assert_eq!(deserialized, function_call);
 }
 
@@ -133,6 +146,7 @@ fn test_function_call_without_thought_signature() {
     let serialized = serde_json::to_string(&function_call).unwrap();
     println!("Serialized FunctionCall without thought: {}", serialized);
     assert!(!serialized.contains("thought_signature"));
+    assert!(!serialized.contains("thoughtSignature"));
 }
 
 #[test]
@@ -161,12 +175,23 @@ fn test_multi_turn_content_structure() {
     assert_eq!(model_content.role, Some(Role::Model));
 
     // Test serialization of the complete structure first
-    let serialized = serde_json::to_string(&model_content).unwrap();
+    let serialized = serde_json::to_value(&model_content).unwrap();
     println!("Serialized multi-turn content: {}", serialized);
-
-    // Verify it contains the thought signature
-    assert!(serialized.contains("thoughtSignature"));
-    assert!(serialized.contains("sample_thought_signature"));
+    assert_eq!(
+        serialized,
+        json!({
+            "parts": [
+                {
+                    "functionCall": {
+                        "name": "get_weather",
+                        "args": {"location": "Tokyo"}
+                    },
+                    "thoughtSignature": "sample_thought_signature"
+                }
+            ],
+            "role": "model"
+        })
+    );
 
     let parts = model_content.parts.unwrap();
     assert_eq!(parts.len(), 1);
@@ -178,6 +203,32 @@ fn test_multi_turn_content_structure() {
         }
         _ => panic!("Expected FunctionCall part"),
     }
+}
+
+#[test]
+fn test_function_response_wraps_array_payloads() {
+    use crate::Content;
+
+    let content = Content::function_response_json("rag_search", json!([{ "id": "pricing" }]));
+    let serialized = serde_json::to_value(&content).unwrap();
+
+    assert_eq!(
+        serialized,
+        json!({
+            "parts": [
+                {
+                    "functionResponse": {
+                        "name": "rag_search",
+                        "response": {
+                            "result": [
+                                { "id": "pricing" }
+                            ]
+                        }
+                    }
+                }
+            ]
+        })
+    );
 }
 
 #[test]
@@ -335,11 +386,11 @@ fn test_thinking_level_serialization() {
 
     // ThinkingLevel serializes as lowercase
     let level = ThinkingLevel::Low;
-    let json = serde_json::to_value(&level).unwrap();
+    let json = serde_json::to_value(level).unwrap();
     assert_eq!(json, json!("low"));
 
     let level = ThinkingLevel::High;
-    let json = serde_json::to_value(&level).unwrap();
+    let json = serde_json::to_value(level).unwrap();
     assert_eq!(json, json!("high"));
 
     // Round-trip all variants

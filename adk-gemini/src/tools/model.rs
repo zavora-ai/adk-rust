@@ -140,8 +140,12 @@ pub struct FunctionCall {
     pub name: String,
     /// The arguments for the function
     pub args: serde_json::Value,
-    /// The thought signature for the function call (Gemini 2.5 series only)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The thought signature for the function call (Gemini 2.5 series only).
+    ///
+    /// Gemini expects this at the enclosing `Part::FunctionCall` level, not inside the
+    /// `functionCall` object. Preserve it in-memory for callers, but never emit it from the
+    /// inner wire type.
+    #[serde(skip_serializing, default, rename = "thoughtSignature", alias = "thought_signature")]
     pub thought_signature: Option<String>,
 }
 
@@ -203,6 +207,10 @@ pub struct FunctionResponse {
 impl FunctionResponse {
     /// Create a new function response with a JSON value
     pub fn new(name: impl Into<String>, response: serde_json::Value) -> Self {
+        let response = match response {
+            serde_json::Value::Object(_) => response,
+            other => serde_json::json!({ "result": other }),
+        };
         Self { name: name.into(), response: Some(response) }
     }
 
@@ -215,7 +223,7 @@ impl FunctionResponse {
         Response: JsonSchema + Serialize,
     {
         let json = serde_json::to_value(&response)?;
-        Ok(Self { name: name.into(), response: Some(json) })
+        Ok(Self::new(name, json))
     }
 
     /// Create a new function response with a string that will be parsed as JSON
@@ -224,7 +232,7 @@ impl FunctionResponse {
         response: impl Into<String>,
     ) -> Result<Self, serde_json::Error> {
         let json = serde_json::from_str(&response.into())?;
-        Ok(Self { name: name.into(), response: Some(json) })
+        Ok(Self::new(name, json))
     }
 }
 
