@@ -1,78 +1,69 @@
 # Quickstart
 
-This guide shows you how to get up and running with ADK-Rust. You'll create your first AI agent in under 10 minutes.
+Create your first AI agent in under 5 minutes.
 
 ## Prerequisites
 
-Before you start, make sure you have:
-
 - Rust 1.85.0 or later (`rustup update stable`)
-- A Google API key for Gemini
+- A Google API key ([get one here](https://aistudio.google.com/app/apikey))
 
-## Step 1: Create a New Project
-
-Create a new Rust project:
+## Step 1: Scaffold Your Project
 
 ```bash
-cargo new my_agent
+cargo install cargo-adk
+cargo adk new my_agent
 cd my_agent
 ```
 
-Your project structure will look like this:
+This generates a working project with the right dependencies and boilerplate.
 
-```
-my_agent/
-├── Cargo.toml
-├── src/
-│   └── main.rs
-└── .env          # You'll create this for your API key
-```
-
-## Step 2: Add Dependencies
-
-Update your `Cargo.toml` with the required dependencies:
-
-```toml
-[package]
-name = "my_agent"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-adk-rust = "0.4"
-tokio = { version = "1.40", features = ["full"] }
-dotenvy = "0.15"
-```
-
-Install the dependencies:
+### Other Templates
 
 ```bash
-cargo build
+# Agent with custom tools using #[tool] macro
+cargo adk new my_agent --template tools
+
+# RAG agent with Gemini embeddings and in-memory vector search
+cargo adk new my_agent --template rag
+
+# REST API server ready for deployment
+cargo adk new my_agent --template api
+
+# OpenAI GPT-4o-mini agent
+cargo adk new my_agent --template openai
+
+# Use any provider with any template
+cargo adk new my_agent --template tools --provider anthropic
 ```
 
-## Step 3: Set Up Your API Key
+| Template | What you get |
+|----------|-------------|
+| `basic` | Gemini agent with interactive console (default) |
+| `tools` | Agent with `#[tool]` macro custom tools + schemars schema generation |
+| `rag` | RAG pipeline — Gemini embeddings, in-memory vector store, document ingestion |
+| `api` | Axum REST server with health check, ready for `docker build` |
+| `openai` | OpenAI GPT-4o-mini agent with console |
 
-This project uses the Gemini API, which requires an API key. If you don't have one, create a key in [Google AI Studio](https://aistudio.google.com/app/apikey).
-
-Create a `.env` file in your project root:
-
-**Linux / macOS:**
+## Step 2: Add Your API Key
 
 ```bash
-echo 'GOOGLE_API_KEY=your-api-key-here' > .env
+cp .env.example .env
+# Edit .env and add your GOOGLE_API_KEY
 ```
 
-**Windows (PowerShell):**
+## Step 3: Run
 
-```powershell
-echo GOOGLE_API_KEY=your-api-key-here > .env
+```bash
+cargo run
 ```
 
-> **Security Tip:** Add `.env` to your `.gitignore` to avoid committing your API key.
+That's it — you have a working agent. Chat with it in your terminal.
 
-## Step 4: Write Your Agent
+---
 
-Replace the contents of `src/main.rs` with:
+## Understanding the Generated Code
+
+The scaffolded `src/main.rs` looks like this:
 
 ```rust
 use adk_rust::prelude::*;
@@ -131,51 +122,62 @@ You: exit
 👋 Goodbye!
 ```
 
-## Step 6: Add a Tool
+## Adding Custom Tools
 
-Let's enhance your agent with the Google Search tool to give it access to real-time information:
+The fastest way to add tools is the `#[tool]` macro. Add `adk-tool` to your dependencies:
+
+```toml
+[dependencies]
+adk-tool = "0.4"
+schemars = "0.8"
+serde = { version = "1", features = ["derive"] }
+```
+
+Then define a tool with a doc comment and a typed args struct:
 
 ```rust
-use adk_rust::prelude::*;
-use adk_rust::Launcher;
-use std::sync::Arc;
+use adk_tool::tool;
+use adk_core::AdkError;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::{json, Value};
 
-#[tokio::main]
-async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    dotenvy::dotenv().ok();
-    
-    let api_key = std::env::var("GOOGLE_API_KEY")
-        .expect("GOOGLE_API_KEY environment variable not set");
+#[derive(Deserialize, JsonSchema)]
+struct WeatherArgs {
+    /// The city to look up
+    city: String,
+}
 
-    let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
-
-    // Build agent with Google Search tool
-    let agent = LlmAgentBuilder::new("search_assistant")
-        .description("An assistant that can search the web")
-        .instruction("You are a helpful assistant. Use the search tool to find current information when needed.")
-        .model(Arc::new(model))
-        .tool(Arc::new(GoogleSearchTool::new()))  // Add search capability
-        .build()?;
-
-    Launcher::new(Arc::new(agent)).run().await?;
-
-    Ok(())
+/// Get the current weather for a city.
+#[tool]
+async fn get_weather(args: WeatherArgs) -> Result<Value, AdkError> {
+    // Your API call here
+    Ok(json!({ "temp": 22, "city": args.city, "condition": "sunny" }))
 }
 ```
 
-Start your agent again in interactive console mode:
+The macro generates a `GetWeather` struct implementing `Tool`. Add it to your agent:
 
-```bash
-cargo run
+```rust
+let agent = LlmAgentBuilder::new("weather_agent")
+    .instruction("Use the get_weather tool for weather questions.")
+    .model(Arc::new(model))
+    .tool(Arc::new(GetWeather))  // Generated by #[tool]
+    .build()?;
 ```
 
-Now you can prompt your agent to search the web:
+> **Tip:** Or scaffold a project with tools already set up: `cargo adk new my-agent --template tools`
 
-```
-You: What's the weather like in Tokyo today?
-Assistant: Let me search for that information...
-[Using GoogleSearchTool]
-Based on current information, Tokyo is experiencing...
+### Built-in Tools
+
+ADK also includes ready-to-use tools:
+
+```rust
+// Google Search (handled server-side by Gemini)
+.tool(Arc::new(GoogleSearchTool::new()))
+
+// Exit a LoopAgent
+.tool(Arc::new(ExitLoopTool::new()))
 ```
 
 ## Running as a Web Server
