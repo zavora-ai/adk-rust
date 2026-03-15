@@ -1,0 +1,28 @@
+[package]
+name = "adk-macros"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Proc macros for ADK-Rust — #[tool] attribute for zero-boilerplate tool registration"
+repository = "https://github.com/zavora-ai/adk-rust"
+documentation = "https://docs.rs/adk-macros"
+keywords = ["adk", "agent", "macro", "tool", "ai"]
+categories = ["development-tools::procedural-macro-helpers"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+
+[dev-dependencies]
+adk-core.workspace = true
+async-trait.workspace = true
+schemars = "0.8"
+serde = { workspace = true }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }

@@ -25,6 +25,7 @@ code-docker = ["code", "adk-code/docker"]
 
 [dependencies]
 adk-core.workspace = true
+adk-macros.workspace = true
 adk-telemetry.workspace = true
 async-trait.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
