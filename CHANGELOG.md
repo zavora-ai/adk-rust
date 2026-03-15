@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tiered feature presets**: Default changed from `full` to `standard`. Three presets: `minimal` (agents + Gemini + runner, ~30s build), `standard` (+ tools, sessions, memory, telemetry, guardrail, auth, plugin, ~51s build), `full` (+ server, CLI, graph, browser, eval, realtime, RAG, audio, ~2min build). Users who need server/CLI/specialist crates add `features = ["full"]`.
 - **Minimal tokio features**: `adk-rust` umbrella crate now declares explicit tokio features (`rt`, `rt-multi-thread`, `sync`, `time`, `macros`, `net`, `signal`, `fs`, `process`, `io-util`) instead of `"full"`. Binary crates (`adk-cli`, examples) retain `"full"`. This follows the Rust convention that library crates should never use `tokio = { features = ["full"] }`.
 
+#### adk-core
+- **AdkError documentation**: All 9 error variants now have doc comments describing their use (Agent, Model, Tool, Session, Artifact, Memory, Config, Io, Serde).
+
+#### Examples
+- **openai_basic**: Default model changed from `gpt-5-mini` to `gpt-4o-mini`, `max_output_tokens` increased from 64 to 256 (reasoning models need headroom). Supports `OPENAI_MODEL` env var override.
+- **vision_test**: OpenAI model changed from `gpt-5-mini` to `gpt-4o-mini`.
+- **Cleanup**: Removed 20 non-essential `openai_*` example directories (full collection in adk-playground repo).
+
 ### Removed
 - **adk-doc-audit**: Removed from workspace (docs.rs provides this functionality). Backed up to standalone directory.
 
