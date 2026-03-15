@@ -13,6 +13,7 @@ categories = ["api-bindings", "development-tools::debugging"]
 readme = "README.md"
 
 [dependencies]
+thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 opentelemetry = "0.21"

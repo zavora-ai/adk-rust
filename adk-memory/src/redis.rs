@@ -100,24 +100,6 @@ impl RedisMemoryService {
             .map_err(|e| adk_core::AdkError::Memory(format!("redis connection failed: {e}")))?;
         Ok(Self { client, ttl: config.ttl })
     }
-
-    /// Extract plain text from content parts.
-    fn extract_text(content: &adk_core::Content) -> String {
-        content
-            .parts
-            .iter()
-            .filter_map(|part| match part {
-                Part::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-
-    /// Extract lowercase words from text.
-    fn extract_words(text: &str) -> HashSet<String> {
-        text.split_whitespace().filter(|s| !s.is_empty()).map(|s| s.to_lowercase()).collect()
-    }
 }
 
 #[async_trait]
@@ -177,7 +159,7 @@ impl MemoryService for RedisMemoryService {
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {
         let limit = req.limit.unwrap_or(10);
-        let query_words = Self::extract_words(&req.query);
+        let query_words = crate::text::extract_words(&req.query);
         if query_words.is_empty() {
             return Ok(SearchResponse { memories: Vec::new() });
         }
@@ -204,8 +186,8 @@ impl MemoryService for RedisMemoryService {
                     Ok(s) => s,
                     Err(_) => continue,
                 };
-                let text = Self::extract_text(&stored.content);
-                let entry_words = Self::extract_words(&text);
+                let text = crate::text::extract_text(&stored.content);
+                let entry_words = crate::text::extract_words(&text);
                 if entry_words.is_empty() {
                     continue;
                 }

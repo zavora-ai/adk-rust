@@ -1,5 +1,5 @@
 use crate::service::*;
-use adk_core::{Part, Result};
+use adk_core::Result;
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -25,20 +25,6 @@ pub struct InMemoryMemoryService {
 impl InMemoryMemoryService {
     pub fn new() -> Self {
         Self { store: Arc::new(RwLock::new(HashMap::new())) }
-    }
-
-    fn extract_words(text: &str) -> HashSet<String> {
-        text.split_whitespace().filter(|s| !s.is_empty()).map(|s| s.to_lowercase()).collect()
-    }
-
-    fn extract_words_from_content(content: &adk_core::Content) -> HashSet<String> {
-        let mut words = HashSet::new();
-        for part in &content.parts {
-            if let Part::Text { text } = part {
-                words.extend(Self::extract_words(text));
-            }
-        }
-        words
     }
 
     fn has_intersection(set1: &HashSet<String>, set2: &HashSet<String>) -> bool {
@@ -69,7 +55,7 @@ impl MemoryService for InMemoryMemoryService {
         let stored_entries: Vec<StoredEntry> = entries
             .into_iter()
             .map(|entry| {
-                let words = Self::extract_words_from_content(&entry.content);
+                let words = crate::text::extract_words_from_content(&entry.content);
                 StoredEntry { entry, words }
             })
             .filter(|e| !e.words.is_empty())
@@ -87,7 +73,7 @@ impl MemoryService for InMemoryMemoryService {
     }
 
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {
-        let query_words = Self::extract_words(&req.query);
+        let query_words = crate::text::extract_words(&req.query);
         let limit = req.limit.unwrap_or(10);
 
         let key = MemoryKey { app_name: req.app_name, user_id: req.user_id };

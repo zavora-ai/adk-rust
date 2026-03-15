@@ -220,19 +220,6 @@ impl MongoMemoryService {
             })?;
         Ok(())
     }
-
-    /// Extract plain text from a `Content` value for text search indexing.
-    fn extract_text(content: &adk_core::Content) -> String {
-        content
-            .parts
-            .iter()
-            .filter_map(|part| match part {
-                Part::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
 }
 
 /// Execute a single MongoDB memory migration step by version number.
@@ -301,7 +288,8 @@ impl MemoryService for MongoMemoryService {
         let collection = self.db.collection::<Document>("memory_entries");
 
         // Collect texts for batch embedding
-        let texts: Vec<String> = entries.iter().map(|e| Self::extract_text(&e.content)).collect();
+        let texts: Vec<String> =
+            entries.iter().map(|e| crate::text::extract_text(&e.content)).collect();
 
         let embeddings = if let Some(provider) = &self.embedding_provider {
             let non_empty_texts: Vec<String> = texts

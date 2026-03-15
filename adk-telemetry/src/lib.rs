@@ -13,7 +13,7 @@
 //! ```rust
 //! use adk_telemetry::{init_telemetry, info, instrument};
 //!
-//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! fn main() -> Result<(), adk_telemetry::TelemetryError> {
 //!     // Initialize telemetry in your main
 //!     init_telemetry("my-service")?;
 //!
@@ -39,8 +39,10 @@ pub use spans::*;
 // Re-export span exporter (ADK-Go style)
 pub use span_exporter::*;
 
-// Re-export init functions
-pub use init::{init_telemetry, init_with_adk_exporter, init_with_otlp, shutdown_telemetry};
+// Re-export init functions and error type
+pub use init::{
+    TelemetryError, init_telemetry, init_with_adk_exporter, init_with_otlp, shutdown_telemetry,
+};
 
 // Re-export metrics
 pub use opentelemetry::global;

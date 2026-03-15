@@ -7,7 +7,15 @@ use crate::span_exporter::{AdkSpanExporter, AdkSpanLayer};
 
 static INIT: Once = Once::new();
 
-/// Initialize basic telemetry with console logging
+/// Error returned by telemetry initialization functions.
+#[derive(Debug, thiserror::Error)]
+pub enum TelemetryError {
+    /// Failed to build the tracing/OTLP pipeline.
+    #[error("telemetry init failed: {0}")]
+    Init(String),
+}
+
+/// Initialize basic telemetry with console logging.
 ///
 /// # Arguments
 /// * `service_name` - Name of the service for trace identification
@@ -17,7 +25,7 @@ static INIT: Once = Once::new();
 /// use adk_telemetry::init_telemetry;
 /// init_telemetry("my-agent-service").expect("Failed to initialize telemetry");
 /// ```
-pub fn init_telemetry(service_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn init_telemetry(service_name: &str) -> Result<(), TelemetryError> {
     INIT.call_once(|| {
         let filter = EnvFilter::try_from_default_env()
             .or_else(|_| EnvFilter::try_new("info"))
@@ -33,13 +41,13 @@ pub fn init_telemetry(service_name: &str) -> Result<(), Box<dyn std::error::Erro
             )
             .init();
 
-        tracing::info!(service.name = service_name, "Telemetry initialized");
+        tracing::info!(service.name = service_name, "telemetry initialized");
     });
 
     Ok(())
 }
 
-/// Initialize telemetry with OpenTelemetry OTLP export
+/// Initialize telemetry with OpenTelemetry OTLP export.
 ///
 /// Enables distributed tracing by exporting spans to an OTLP collector.
 ///
@@ -53,10 +61,7 @@ pub fn init_telemetry(service_name: &str) -> Result<(), Box<dyn std::error::Erro
 /// init_with_otlp("my-agent", "http://localhost:4317")
 ///     .expect("Failed to initialize telemetry");
 /// ```
-pub fn init_with_otlp(
-    service_name: &str,
-    endpoint: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn init_with_otlp(service_name: &str, endpoint: &str) -> Result<(), TelemetryError> {
     use opentelemetry_otlp::WithExportConfig;
     use tracing_opentelemetry::OpenTelemetryLayer;
 
@@ -107,26 +112,25 @@ pub fn init_with_otlp(
         tracing::info!(
             service.name = service_name,
             otlp.endpoint = endpoint,
-            "Telemetry initialized with OpenTelemetry"
+            "telemetry initialized with OpenTelemetry"
         );
     });
 
     Ok(())
 }
 
-/// Shutdown telemetry and flush any pending spans
+/// Shutdown telemetry and flush any pending spans.
 ///
 /// Should be called before application exit to ensure all telemetry data is sent.
 pub fn shutdown_telemetry() {
     opentelemetry::global::shutdown_tracer_provider();
 }
 
-/// Initialize telemetry with ADK-Go style span exporter
-/// This creates a shared span exporter that can be used by both telemetry and debug API
-/// Returns the exporter so it can be passed to the debug controller
-pub fn init_with_adk_exporter(
-    service_name: &str,
-) -> Result<Arc<AdkSpanExporter>, Box<dyn std::error::Error>> {
+/// Initialize telemetry with ADK span exporter.
+///
+/// Creates a shared span exporter that can be used by both telemetry and the debug API.
+/// Returns the exporter so it can be passed to the debug controller.
+pub fn init_with_adk_exporter(service_name: &str) -> Result<Arc<AdkSpanExporter>, TelemetryError> {
     let exporter = Arc::new(AdkSpanExporter::new());
     let exporter_clone = exporter.clone();
 
@@ -148,7 +152,7 @@ pub fn init_with_adk_exporter(
             .with(adk_layer)
             .init();
 
-        tracing::info!(service.name = service_name, "Telemetry initialized with ADK span exporter");
+        tracing::info!(service.name = service_name, "telemetry initialized with ADK span exporter");
     });
 
     Ok(exporter)

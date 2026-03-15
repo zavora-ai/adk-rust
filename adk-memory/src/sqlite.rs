@@ -128,19 +128,6 @@ END;",
     pub async fn schema_version(&self) -> Result<i64> {
         crate::migration::sqlite_runner::sql_schema_version(&self.pool, Self::REGISTRY_TABLE).await
     }
-
-    /// Extract plain text from content parts.
-    fn extract_text(content: &adk_core::Content) -> String {
-        content
-            .parts
-            .iter()
-            .filter_map(|part| match part {
-                Part::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
 }
 
 #[async_trait]
@@ -160,7 +147,7 @@ impl MemoryService for SqliteMemoryService {
         for entry in &entries {
             let content_json = serde_json::to_string(&entry.content)
                 .map_err(|e| adk_core::AdkError::Memory(format!("serialization failed: {e}")))?;
-            let content_text = Self::extract_text(&entry.content);
+            let content_text = crate::text::extract_text(&entry.content);
             let timestamp_str = entry.timestamp.to_rfc3339();
 
             sqlx::query(
