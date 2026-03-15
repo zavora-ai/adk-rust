@@ -1,0 +1,207 @@
+{
+  "id": "tpl-bug-triage",
+  "version": "1.0.0",
+  "name": "Bug Triage Bot",
+  "description": "Automatically classify incoming bug reports by severity and component, assign to the right team, create a Jira ticket, and notify the team lead",
+  "settings": {
+    "default_model": "gemini-2.0-flash",
+    "env_vars": {},
+    "layoutDirection": "LR",
+    "layoutMode": "free",
+    "debugMode": false
+  },
+  "agents": {
+    "bug_classifier": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a senior QA engineer who triages bug reports. Given a bug report, classify it.\n\nDetermine:\n- severity: critical (data loss, security, full outage), high (major feature broken, no workaround), medium (feature broken, workaround exists), low (cosmetic, minor UX)\n- component: one of [frontend, backend, api, database, auth, payments, infrastructure, mobile]\n- reproducibility: always, sometimes, rare, unknown\n- estimated_effort: hours (1-4h), days (1-3d), week (3-5d), major (5d+)\n\nOutput JSON only:\n{\"severity\": \"high\", \"component\": \"backend\", \"reproducibility\": \"always\", \"estimated_effort\": \"days\", \"summary\": \"One-line summary\", \"root_cause_hint\": \"Likely cause based on symptoms\", \"suggested_assignee_team\": \"backend-platform\"}",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    }
+  },
+  "tools": {},
+  "tool_configs": {},
+  "actionNodes": {
+    "manual_trigger": {
+      "type": "trigger",
+      "id": "manual_trigger",
+      "name": "Bug Reported",
+      "description": "New bug report submitted via form, email, or Slack",
+      "triggerType": "manual",
+      "manual": {
+        "buttonLabel": "Submit Bug",
+        "defaultPrompt": "Bug Report:\nTitle: Checkout fails silently on Safari\nReporter: customer-success@company.com\nEnvironment: Production, Safari 18.2 on macOS\nSteps: 1) Add items to cart 2) Click checkout 3) Enter payment details 4) Click 'Pay Now'\nExpected: Order confirmation page\nActual: Page refreshes, cart is empty, no order created, payment NOT charged\nFrequency: Every time on Safari, works fine on Chrome/Firefox\nImpact: ~15% of our users are on Safari, multiple customer complaints today",
+        "showPromptInput": true
+      },
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 30000 },
+      "mapping": { "outputKey": "trigger_input" }
+    },
+    "check_duplicates": {
+      "type": "http",
+      "id": "check_duplicates",
+      "name": "Check Duplicates",
+      "description": "Search Jira for similar open bugs to avoid duplicates",
+      "method": "GET",
+      "url": "https://{{JIRA_DOMAIN}}.atlassian.net/rest/api/3/search?jql=project=BUG AND status!=Done AND text~\"{{search_terms}}\"&maxResults=5",
+      "auth": { "type": "basic", "basic": { "username": "{{JIRA_EMAIL}}", "password": "{{JIRA_API_TOKEN}}" } },
+      "headers": { "Accept": "application/json" },
+      "body": { "type": "none" },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "duplicate_check" }
+    },
+    "route_severity": {
+      "type": "switch",
+      "id": "route_severity",
+      "name": "Route by Severity",
+      "description": "Critical bugs get fast-tracked, others go through normal flow",
+      "evaluationMode": "first_match",
+      "conditions": [
+        { "id": "critical", "name": "Critical", "field": "classification.severity", "operator": "eq", "value": "critical", "outputPort": "critical" },
+        { "id": "high", "name": "High", "field": "classification.severity", "operator": "eq", "value": "high", "outputPort": "high" }
+      ],
+      "defaultBranch": "normal",
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "severity_route" }
+    },
+    "set_critical": {
+      "type": "set",
+      "id": "set_critical",
+      "name": "Critical Priority",
+      "description": "Set critical bug parameters — immediate attention, page on-call",
+      "mode": "set",
+      "variables": [
+        { "key": "jira_priority", "value": "Highest", "valueType": "string", "isSecret": false },
+        { "key": "sla_hours", "value": "4", "valueType": "number", "isSecret": false },
+        { "key": "notify_channel", "value": "#critical-bugs", "valueType": "string", "isSecret": false },
+        { "key": "page_oncall", "value": "true", "valueType": "boolean", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "priority_config" }
+    },
+    "set_high": {
+      "type": "set",
+      "id": "set_high",
+      "name": "High Priority",
+      "description": "Set high priority bug parameters",
+      "mode": "set",
+      "variables": [
+        { "key": "jira_priority", "value": "High", "valueType": "string", "isSecret": false },
+        { "key": "sla_hours", "value": "24", "valueType": "number", "isSecret": false },
+        { "key": "notify_channel", "value": "#engineering-bugs", "valueType": "string", "isSecret": false },
+        { "key": "page_oncall", "value": "false", "valueType": "boolean", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "priority_config" }
+    },
+    "set_normal": {
+      "type": "set",
+      "id": "set_normal",
+      "name": "Normal Priority",
+      "description": "Set normal priority bug parameters",
+      "mode": "set",
+      "variables": [
+        { "key": "jira_priority", "value": "Medium", "valueType": "string", "isSecret": false },
+        { "key": "sla_hours", "value": "72", "valueType": "number", "isSecret": false },
+        { "key": "notify_channel", "value": "#engineering-bugs", "valueType": "string", "isSecret": false },
+        { "key": "page_oncall", "value": "false", "valueType": "boolean", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "priority_config" }
+    },
+    "merge_priorities": {
+      "type": "merge",
+      "id": "merge_priorities",
+      "name": "Merge",
+      "description": "Rejoin severity branches",
+      "mode": "wait_all",
+      "combineStrategy": "object",
+      "timeout": { "enabled": true, "ms": 10000, "behavior": "continue" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "merged_priority" }
+    },
+    "create_ticket": {
+      "type": "http",
+      "id": "create_ticket",
+      "name": "Create Jira Bug",
+      "description": "Create the bug ticket in Jira with all classification data",
+      "method": "POST",
+      "url": "https://{{JIRA_DOMAIN}}.atlassian.net/rest/api/3/issue",
+      "auth": { "type": "basic", "basic": { "username": "{{JIRA_EMAIL}}", "password": "{{JIRA_API_TOKEN}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"fields\": {\"project\": {\"key\": \"BUG\"}, \"summary\": \"{{classification.summary}}\", \"issuetype\": {\"name\": \"Bug\"}, \"priority\": {\"name\": \"{{priority_config.jira_priority}}\"}, \"components\": [{\"name\": \"{{classification.component}}\"}], \"labels\": [\"auto-triaged\", \"{{classification.severity}}\"]}}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 1000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "ticket" }
+    },
+    "notify_team": {
+      "type": "http",
+      "id": "notify_team",
+      "name": "Notify Team",
+      "description": "Post bug notification to the appropriate Slack channel",
+      "method": "POST",
+      "url": "https://slack.com/api/chat.postMessage",
+      "auth": { "type": "bearer", "bearer": { "token": "{{SLACK_BOT_TOKEN}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"channel\": \"{{priority_config.notify_channel}}\", \"text\": \"🐛 *New Bug [{{classification.severity}}]*: {{classification.summary}}\\nComponent: {{classification.component}} | Effort: {{classification.estimated_effort}}\\nTicket: {{ticket.key}} | SLA: {{priority_config.sla_hours}}h\"}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "slack_result" }
+    }
+  },
+  "workflow": {
+    "type": "graph",
+    "edges": [
+      { "from": "manual_trigger", "to": "START" },
+      { "from": "START", "to": "bug_classifier" },
+      { "from": "bug_classifier", "to": "check_duplicates" },
+      { "from": "check_duplicates", "to": "route_severity" },
+      { "from": "route_severity", "to": "set_critical", "fromPort": "critical" },
+      { "from": "route_severity", "to": "set_high", "fromPort": "high" },
+      { "from": "route_severity", "to": "set_normal", "fromPort": "normal" },
+      { "from": "set_critical", "to": "merge_priorities" },
+      { "from": "set_high", "to": "merge_priorities" },
+      { "from": "set_normal", "to": "merge_priorities" },
+      { "from": "merge_priorities", "to": "create_ticket" },
+      { "from": "create_ticket", "to": "notify_team" },
+      { "from": "notify_team", "to": "END" }
+    ],
+    "conditions": []
+  },
+  "created_at": "2026-02-08T00:00:00Z",
+  "updated_at": "2026-02-08T00:00:00Z"
+}

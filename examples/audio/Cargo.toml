@@ -1,0 +1,149 @@
+[package]
+name = "audio-examples"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Audio examples for ADK-Rust: TTS, STT, pipelines, and agent-powered demos"
+
+# --- TTS examples ---
+[[example]]
+name = "audio_openai_tts"
+path = "tts/openai_tts.rs"
+required-features = ["audio"]
+
+[[example]]
+name = "audio_gemini_tts"
+path = "tts/gemini_tts.rs"
+required-features = ["audio"]
+
+[[example]]
+name = "audio_elevenlabs_tts"
+path = "tts/elevenlabs_tts.rs"
+required-features = ["audio"]
+
+[[example]]
+name = "audio_local_kokoro"
+path = "tts/local_kokoro.rs"
+required-features = ["kokoro"]
+
+[[example]]
+name = "audio_chatterbox_tts"
+path = "tts/chatterbox_tts.rs"
+required-features = ["chatterbox"]
+
+[[example]]
+name = "audio_chatterbox_advanced"
+path = "tts/chatterbox_advanced.rs"
+required-features = ["chatterbox"]
+
+[[example]]
+name = "audio_qwen3_tts"
+path = "tts/qwen3_tts.rs"
+required-features = ["qwen3-tts"]
+
+[[example]]
+name = "audio_tts_basic"
+path = "tts/tts_basic.rs"
+required-features = ["audio"]
+
+[[example]]
+name = "audio_tts_comparison"
+path = "tts/tts_comparison.rs"
+required-features = ["audio"]
+
+# --- STT examples ---
+[[example]]
+name = "audio_openai_stt"
+path = "stt/openai_stt.rs"
+required-features = ["audio"]
+
+[[example]]
+name = "audio_gemini_stt"
+path = "stt/gemini_stt.rs"
+required-features = ["audio"]
+
+[[example]]
+name = "audio_whisper_local"
+path = "stt/whisper_local.rs"
+required-features = ["whisper-onnx"]
+
+[[example]]
+name = "audio_distil_whisper"
+path = "stt/distil_whisper.rs"
+required-features = ["distil-whisper"]
+
+[[example]]
+name = "audio_moonshine_local"
+path = "stt/moonshine_local.rs"
+required-features = ["moonshine"]
+
+[[example]]
+name = "audio_stt_comparison"
+path = "stt/stt_comparison.rs"
+required-features = ["audio"]
+
+# --- Pipeline examples ---
+[[example]]
+name = "audio_pipeline"
+path = "pipeline/audio_pipeline.rs"
+required-features = ["audio"]
+
+[[example]]
+name = "audio_mixer"
+path = "pipeline/audio_mixer.rs"
+required-features = ["audio"]
+
+# --- Agent examples ---
+[[example]]
+name = "voice_assistant"
+path = "agents/voice_assistant.rs"
+required-features = ["agents", "openai"]
+
+[[example]]
+name = "podcast_producer"
+path = "agents/podcast_producer.rs"
+required-features = ["agents", "openai"]
+
+[[example]]
+name = "transcription_agent"
+path = "agents/transcription_agent.rs"
+required-features = ["agents", "openai"]
+
+[[example]]
+name = "pipeline_agent"
+path = "agents/pipeline_agent.rs"
+required-features = ["agents", "openai"]
+
+[features]
+default = []
+audio = ["dep:adk-audio"]
+kokoro = ["audio", "adk-audio/kokoro", "dep:reqwest"]
+chatterbox = ["audio", "adk-audio/chatterbox"]
+whisper-onnx = ["audio", "adk-audio/whisper-onnx"]
+distil-whisper = ["audio", "adk-audio/distil-whisper"]
+moonshine = ["audio", "adk-audio/moonshine"]
+qwen3-tts = ["audio", "adk-audio/qwen3-tts"]
+all-local = ["kokoro", "chatterbox", "whisper-onnx", "distil-whisper", "moonshine", "qwen3-tts"]
+agents = ["audio", "adk-audio/fx", "dep:adk-agent", "dep:adk-model", "dep:adk-runner", "dep:adk-session", "dep:adk-tool", "dep:adk-cli"]
+openai = ["adk-model/openai"]
+
+[dependencies]
+adk-core.workspace = true
+adk-audio = { workspace = true, optional = true }
+adk-agent = { workspace = true, optional = true }
+adk-model = { workspace = true, features = ["gemini"], optional = true }
+adk-runner = { workspace = true, optional = true }
+adk-session = { workspace = true, optional = true }
+adk-tool = { workspace = true, optional = true }
+adk-cli = { workspace = true, optional = true }
+tokio.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+async-trait.workspace = true
+dotenvy = "0.15"
+hound = "3.5"
+futures.workspace = true
+reqwest = { workspace = true, optional = true }

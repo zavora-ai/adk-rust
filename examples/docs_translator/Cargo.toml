@@ -1,0 +1,16 @@
+[package]
+name = "docs_translator"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[[bin]]
+name = "docs_translator"
+path = "main.rs"
+
+[dependencies]
+adk-rust = { path = "../../adk-rust" }
+tokio = { version = "1", features = ["full"] }
+dotenvy = "0.15"
+anyhow = "1"

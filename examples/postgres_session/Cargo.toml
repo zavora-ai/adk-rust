@@ -1,0 +1,39 @@
+[package]
+name = "postgres-session-example"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "PostgreSQL session and memory service examples with Docker-managed database"
+
+[[bin]]
+name = "postgres-session-example"
+path = "src/main.rs"
+
+[[bin]]
+name = "postgres-memory-example"
+path = "src/memory.rs"
+
+[[bin]]
+name = "postgres-multi-session-example"
+path = "src/multi_session.rs"
+
+[[bin]]
+name = "postgres-llm-chat"
+path = "src/llm_chat.rs"
+
+[dependencies]
+adk-core.workspace = true
+adk-agent.workspace = true
+adk-model = { workspace = true, features = ["gemini"] }
+adk-runner.workspace = true
+adk-tool.workspace = true
+adk-session = { workspace = true, features = ["postgres"] }
+adk-memory = { workspace = true, features = ["database-memory"] }
+tokio.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+dotenvy = "0.15"

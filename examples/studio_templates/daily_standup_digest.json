@@ -1,0 +1,133 @@
+{
+  "id": "tpl-daily-standup-digest",
+  "version": "1.0.0",
+  "name": "Daily Standup Digest",
+  "description": "Pull Jira tickets and Slack activity, generate an AI-powered standup summary, and post it to your team channel",
+  "settings": {
+    "default_model": "gemini-2.0-flash",
+    "env_vars": {},
+    "layoutDirection": "LR",
+    "layoutMode": "free",
+    "debugMode": false
+  },
+  "agents": {
+    "standup_summarizer": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a standup meeting facilitator. Given Jira ticket data and Slack messages from the last 24 hours, produce a concise daily standup digest with these sections:\n\n## 🟢 Completed Yesterday\nList tickets moved to Done with assignee names.\n\n## 🔵 In Progress Today\nList active tickets with assignees and any blockers mentioned in Slack.\n\n## 🔴 Blockers & Risks\nHighlight any blockers, overdue tickets, or concerns raised in Slack.\n\n## 📊 Sprint Health\nOne sentence on overall sprint progress (e.g., '12 of 20 story points completed, on track').\n\nKeep it scannable. Use bullet points. Tag people with @name format.",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    }
+  },
+  "tools": {},
+  "tool_configs": {},
+  "actionNodes": {
+    "manual_trigger": {
+      "type": "trigger",
+      "id": "manual_trigger",
+      "name": "Morning Trigger",
+      "description": "Run daily at 9 AM or trigger manually",
+      "triggerType": "manual",
+      "manual": {
+        "buttonLabel": "Generate Standup",
+        "defaultPrompt": "Generate the daily standup digest for today",
+        "showPromptInput": true
+      },
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 30000 },
+      "mapping": { "outputKey": "trigger_input" }
+    },
+    "fetch_jira": {
+      "type": "http",
+      "id": "fetch_jira",
+      "name": "Fetch Jira Tickets",
+      "description": "Get active sprint tickets updated in the last 24h",
+      "method": "GET",
+      "url": "https://{{JIRA_DOMAIN}}.atlassian.net/rest/api/3/search?jql=sprint%20in%20openSprints()%20AND%20updated%20%3E%3D%20-1d&fields=summary,status,assignee,priority",
+      "auth": {
+        "type": "basic",
+        "basic": { "username": "{{JIRA_EMAIL}}", "password": "{{JIRA_API_TOKEN}}" }
+      },
+      "headers": { "Accept": "application/json" },
+      "body": { "type": "none" },
+      "response": { "type": "json", "jsonPath": "$.issues" },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 2000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 20000 },
+      "mapping": { "outputKey": "jira_tickets" }
+    },
+    "fetch_slack": {
+      "type": "http",
+      "id": "fetch_slack",
+      "name": "Fetch Slack Messages",
+      "description": "Get messages from the team channel in the last 24h",
+      "method": "GET",
+      "url": "https://slack.com/api/conversations.history?channel={{SLACK_CHANNEL_ID}}&oldest={{yesterday_ts}}",
+      "auth": { "type": "bearer", "bearer": { "token": "{{SLACK_BOT_TOKEN}}" } },
+      "headers": {},
+      "body": { "type": "none" },
+      "response": { "type": "json", "jsonPath": "$.messages" },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 2000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 20000 },
+      "mapping": { "outputKey": "slack_messages" }
+    },
+    "combine_data": {
+      "type": "transform",
+      "id": "combine_data",
+      "name": "Combine Sources",
+      "description": "Merge Jira and Slack data into a single context for the LLM",
+      "transformType": "javascript",
+      "expression": "const tickets = (input.jira_tickets || []).map(t => `[${t.fields.status.name}] ${t.fields.summary} — ${t.fields.assignee?.displayName || 'Unassigned'}`).join('\\n');\nconst messages = (input.slack_messages || []).slice(0, 30).map(m => m.text).join('\\n');\nreturn `JIRA TICKETS:\\n${tickets}\\n\\nSLACK ACTIVITY:\\n${messages}`;",
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "debug" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": {
+        "inputMapping": { "jira_tickets": "jira_tickets", "slack_messages": "slack_messages" },
+        "outputKey": "combined_context"
+      }
+    },
+    "post_digest": {
+      "type": "http",
+      "id": "post_digest",
+      "name": "Post to Slack",
+      "description": "Post the generated standup digest to the team channel",
+      "method": "POST",
+      "url": "https://slack.com/api/chat.postMessage",
+      "auth": { "type": "bearer", "bearer": { "token": "{{SLACK_BOT_TOKEN}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"channel\":\"{{SLACK_CHANNEL_ID}}\",\"text\":\"📋 *Daily Standup Digest*\\n\\n{{standup_summary}}\"}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 3000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "post_result" }
+    }
+  },
+  "workflow": {
+    "type": "graph",
+    "edges": [
+      { "from": "manual_trigger", "to": "START" },
+      { "from": "START", "to": "fetch_jira" },
+      { "from": "START", "to": "fetch_slack" },
+      { "from": "fetch_jira", "to": "combine_data" },
+      { "from": "fetch_slack", "to": "combine_data" },
+      { "from": "combine_data", "to": "standup_summarizer" },
+      { "from": "standup_summarizer", "to": "post_digest" },
+      { "from": "post_digest", "to": "END" }
+    ],
+    "conditions": []
+  },
+  "created_at": "2026-02-08T00:00:00Z",
+  "updated_at": "2026-02-08T00:00:00Z"
+}

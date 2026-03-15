@@ -1,0 +1,43 @@
+{
+  "id": "customer-comms",
+  "name": "Customer Comms",
+  "version": "0.1.0",
+  "description": "Write incident updates, customer notices, and post-incident summaries.",
+  "capabilities": [
+    "communications",
+    "status-updates",
+    "summarization",
+    "workflow:single"
+  ],
+  "permissions": [
+    "read.incident",
+    "send.mail",
+    "write.status-page"
+  ],
+  "handoff_allowlist": [
+    "sre-war-room",
+    "exec-briefing"
+  ],
+  "default_risk": "controlled",
+  "starter_prompts": [
+    "Draft a customer-safe incident update with known impact, mitigation, and ETA.",
+    "Create three message variants: internal, customer, and executive.",
+    "Summarize the latest incident activity into a clear external status page update."
+  ],
+  "runtime": {
+    "mode": "adk_runner",
+    "workflow_type": "single",
+    "root_agent_id": "comms-agent",
+    "default_model": "gemini-2.5-flash",
+    "provider": "auto",
+    "instruction": "You are the Customer Comms agent. Communicate facts, avoid speculation, and keep messages concise and empathetic.",
+    "supports_sub_agents": false,
+    "supports_a2a": false,
+    "callback_mode": "observe",
+    "tool_confirmation_policy": "never",
+    "guardrails": {
+      "input_profiles": [],
+      "output_profiles": []
+    }
+  }
+}

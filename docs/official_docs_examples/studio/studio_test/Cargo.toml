@@ -1,0 +1,13 @@
+[package]
+name = "studio_test"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "studio_test_basic"
+path = "src/basic.rs"
+
+[dependencies]
+adk-studio = { path = "../../../../adk-studio" }
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

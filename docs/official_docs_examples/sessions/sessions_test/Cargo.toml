@@ -23,7 +23,3 @@ path = "src/state_scopes.rs"
 [[bin]]
 name = "state_example"
 path = "src/state_example.rs"
-
-[[bin]]
-name = "typed_identity_append"
-path = "src/typed_identity_append.rs"

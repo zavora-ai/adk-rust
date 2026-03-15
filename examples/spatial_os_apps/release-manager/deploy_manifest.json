@@ -1,0 +1,61 @@
+{
+  "schema_version": "adk-spatial-os-deploy/v1",
+  "generated_at": "2026-02-08T00:00:00Z",
+  "source": {
+    "kind": "sample_pack",
+    "project_id": "release-manager-sample",
+    "project_name": "Release Manager"
+  },
+  "app": {
+    "id": "release-manager",
+    "name": "Release Manager",
+    "version": "0.1.0",
+    "description": "Coordinate release windows, rollout checks, rollback plans, and approvals.",
+    "capabilities": [
+      "release",
+      "deploy",
+      "rollback",
+      "workflow:parallel"
+    ],
+    "permissions": [
+      "read.release",
+      "write.release",
+      "write.rollback"
+    ],
+    "handoff_allowlist": [
+      "sre-war-room",
+      "exec-briefing",
+      "customer-comms"
+    ],
+    "default_risk": "dangerous",
+    "starter_prompts": [
+      "Generate a release readiness checklist and call out blockers by risk tier.",
+      "Draft a canary rollout plan with explicit rollback triggers.",
+      "Prepare a rollback command sequence and communication plan for a failed deployment."
+    ],
+    "runtime": {
+      "mode": "adk_runner",
+      "workflow_type": "parallel",
+      "root_agent_id": "release-orchestrator",
+      "default_model": "gemini-2.5-flash",
+      "provider": "auto",
+      "instruction": "You are the Release Manager. Enforce safe rollout sequencing, preflight checks, and rollback readiness.",
+      "supports_sub_agents": true,
+      "supports_a2a": false,
+      "callback_mode": "observe",
+      "tool_confirmation_policy": "always",
+      "guardrails": {
+        "input_profiles": [],
+        "output_profiles": []
+      }
+    }
+  },
+  "runtime": {
+    "mode": "adk_runner",
+    "workflow_type": "parallel",
+    "root_agent_id": "release-orchestrator",
+    "default_model": "gemini-2.5-flash",
+    "supports_sub_agents": true,
+    "supports_a2a": false
+  }
+}

@@ -1,0 +1,38 @@
+[package]
+name = "redis-session-example"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Redis session service example with Docker-managed Redis"
+
+[[bin]]
+name = "redis-session-example"
+path = "src/main.rs"
+
+[[bin]]
+name = "redis-llm-chat"
+path = "src/llm_chat.rs"
+
+[[bin]]
+name = "redis-memory-example"
+path = "src/memory.rs"
+
+[[bin]]
+name = "redis-memory-llm-chat"
+path = "src/memory_llm_chat.rs"
+
+[dependencies]
+adk-core.workspace = true
+adk-agent.workspace = true
+adk-model = { workspace = true, features = ["gemini"] }
+adk-runner.workspace = true
+adk-tool.workspace = true
+adk-session = { workspace = true, features = ["redis"] }
+adk-memory = { workspace = true, features = ["redis-memory"] }
+tokio.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+futures.workspace = true
+dotenvy = "0.15"

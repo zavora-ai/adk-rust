@@ -1,0 +1,183 @@
+{
+  "id": "tpl-lead-scoring",
+  "version": "1.0.0",
+  "name": "Lead Scoring & Routing",
+  "description": "Score inbound leads with AI, route hot leads to sales and warm leads to nurture sequences, log everything to the database",
+  "settings": {
+    "default_model": "gemini-2.0-flash",
+    "env_vars": {},
+    "layoutDirection": "LR",
+    "layoutMode": "free",
+    "debugMode": false
+  },
+  "agents": {
+    "lead_scorer": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a B2B lead scoring expert. Given a lead's information (company, role, industry, company size, engagement signals), assign a lead score from 0-100 and a tier.\n\nScoring criteria:\n- Company size >500 employees: +20\n- C-level or VP title: +25\n- Target industry (SaaS, fintech, healthcare): +15\n- Visited pricing page: +20\n- Downloaded whitepaper: +10\n- Requested demo: +30\n- Email domain is corporate (not gmail/yahoo): +10\n\nTiers:\n- Hot (score >= 70): Ready for sales outreach\n- Warm (score 40-69): Needs nurturing\n- Cold (score < 40): Add to general marketing\n\nOutput JSON only:\n{\"score\": 85, \"tier\": \"hot\", \"reasoning\": \"VP at 800-person SaaS company, requested demo\", \"recommended_action\": \"Assign to enterprise AE within 1 hour\"}",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    }
+  },
+  "tools": {},
+  "tool_configs": {},
+  "actionNodes": {
+    "manual_trigger": {
+      "type": "trigger",
+      "id": "manual_trigger",
+      "name": "New Lead",
+      "description": "Triggered when a new lead comes in via form submission or API",
+      "triggerType": "manual",
+      "manual": {
+        "buttonLabel": "Submit Lead",
+        "defaultPrompt": "New lead: Sarah Chen, VP of Product at DataFlow Inc (SaaS, 650 employees). Visited pricing page 3 times, downloaded the 'Enterprise Security' whitepaper, and just requested a demo.",
+        "showPromptInput": true
+      },
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 30000 },
+      "mapping": { "outputKey": "trigger_input" }
+    },
+    "enrich_lead": {
+      "type": "http",
+      "id": "enrich_lead",
+      "name": "Enrich Lead Data",
+      "description": "Pull additional company data from enrichment API",
+      "method": "GET",
+      "url": "https://api.clearbit.com/v2/companies/find?domain={{lead_domain}}",
+      "auth": { "type": "bearer", "bearer": { "token": "{{CLEARBIT_API_KEY}}" } },
+      "headers": {},
+      "body": { "type": "none" },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "enrichment" }
+    },
+    "route_by_tier": {
+      "type": "switch",
+      "id": "route_by_tier",
+      "name": "Route by Tier",
+      "description": "Send hot leads to sales, warm to nurture, cold to marketing",
+      "evaluationMode": "first_match",
+      "conditions": [
+        { "id": "hot", "name": "Hot Lead", "field": "lead_score.tier", "operator": "eq", "value": "hot", "outputPort": "hot" },
+        { "id": "warm", "name": "Warm Lead", "field": "lead_score.tier", "operator": "eq", "value": "warm", "outputPort": "warm" }
+      ],
+      "defaultBranch": "cold",
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "route_result" }
+    },
+    "set_hot": {
+      "type": "set",
+      "id": "set_hot",
+      "name": "Hot → Sales",
+      "description": "Assign to sales team, set SLA to 1 hour",
+      "mode": "set",
+      "variables": [
+        { "key": "pipeline", "value": "sales_qualified", "valueType": "string", "isSecret": false },
+        { "key": "owner", "value": "enterprise_ae_team", "valueType": "string", "isSecret": false },
+        { "key": "sla_hours", "value": "1", "valueType": "number", "isSecret": false },
+        { "key": "next_action", "value": "schedule_demo", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "assignment" }
+    },
+    "set_warm": {
+      "type": "set",
+      "id": "set_warm",
+      "name": "Warm → Nurture",
+      "description": "Add to email nurture sequence",
+      "mode": "set",
+      "variables": [
+        { "key": "pipeline", "value": "marketing_qualified", "valueType": "string", "isSecret": false },
+        { "key": "owner", "value": "marketing_ops", "valueType": "string", "isSecret": false },
+        { "key": "nurture_sequence", "value": "product_education_7day", "valueType": "string", "isSecret": false },
+        { "key": "next_action", "value": "enroll_nurture", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "assignment" }
+    },
+    "set_cold": {
+      "type": "set",
+      "id": "set_cold",
+      "name": "Cold → Marketing",
+      "description": "Add to general marketing list",
+      "mode": "set",
+      "variables": [
+        { "key": "pipeline", "value": "general_marketing", "valueType": "string", "isSecret": false },
+        { "key": "owner", "value": "marketing_team", "valueType": "string", "isSecret": false },
+        { "key": "next_action", "value": "add_to_newsletter", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "assignment" }
+    },
+    "merge_routes": {
+      "type": "merge",
+      "id": "merge_routes",
+      "name": "Merge Routes",
+      "description": "Rejoin all routing branches",
+      "mode": "wait_all",
+      "combineStrategy": "object",
+      "timeout": { "enabled": true, "ms": 15000, "behavior": "continue" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 20000 },
+      "mapping": { "outputKey": "merged_assignment" }
+    },
+    "save_to_db": {
+      "type": "database",
+      "id": "save_to_db",
+      "name": "Log to Database",
+      "description": "Save lead score and routing decision to PostgreSQL",
+      "dbType": "postgresql",
+      "connection": { "connectionString": "{{DATABASE_URL}}", "poolSize": 5 },
+      "sql": {
+        "operation": "insert",
+        "query": "INSERT INTO leads (email, company, score, tier, pipeline, owner, scored_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())",
+        "parameters": ["{{lead_email}}", "{{lead_company}}", "{{lead_score.score}}", "{{lead_score.tier}}", "{{assignment.pipeline}}", "{{assignment.owner}}"]
+      },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 1000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "db_result" }
+    }
+  },
+  "workflow": {
+    "type": "graph",
+    "edges": [
+      { "from": "manual_trigger", "to": "START" },
+      { "from": "START", "to": "enrich_lead" },
+      { "from": "enrich_lead", "to": "lead_scorer" },
+      { "from": "lead_scorer", "to": "route_by_tier" },
+      { "from": "route_by_tier", "to": "set_hot", "fromPort": "hot" },
+      { "from": "route_by_tier", "to": "set_warm", "fromPort": "warm" },
+      { "from": "route_by_tier", "to": "set_cold", "fromPort": "cold" },
+      { "from": "set_hot", "to": "merge_routes" },
+      { "from": "set_warm", "to": "merge_routes" },
+      { "from": "set_cold", "to": "merge_routes" },
+      { "from": "merge_routes", "to": "save_to_db" },
+      { "from": "save_to_db", "to": "END" }
+    ],
+    "conditions": []
+  },
+  "created_at": "2026-02-08T00:00:00Z",
+  "updated_at": "2026-02-08T00:00:00Z"
+}

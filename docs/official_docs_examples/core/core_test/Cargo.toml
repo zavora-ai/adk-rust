@@ -10,7 +10,3 @@ path = "src/basic.rs"
 [dependencies]
 adk-core = { path = "../../../../adk-core" }
 serde_json = "1.0"
-
-[[bin]]
-name = "core_test_typed_identity"
-path = "src/typed_identity.rs"

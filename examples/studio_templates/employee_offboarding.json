@@ -1,0 +1,160 @@
+{
+  "id": "tpl-employee-offboarding",
+  "version": "1.0.0",
+  "name": "Employee Offboarding",
+  "description": "Automated offboarding workflow: revoke access across systems, notify relevant teams, generate exit checklist, and schedule asset collection",
+  "settings": {
+    "default_model": "gemini-2.0-flash",
+    "env_vars": {},
+    "layoutDirection": "LR",
+    "layoutMode": "free",
+    "debugMode": false
+  },
+  "agents": {
+    "checklist_generator": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are an HR operations specialist. Given employee details and department, generate a comprehensive offboarding checklist.\n\nInclude:\n- IT access revocation items (email, VPN, SSO apps, code repos)\n- Physical asset return (laptop, badge, keys, parking pass)\n- Knowledge transfer tasks\n- Final payroll and benefits items\n- Department-specific items based on role\n\nOutput JSON:\n{\"checklist\": [{\"category\": \"IT\", \"item\": \"Revoke GitHub access\", \"owner\": \"IT Ops\", \"deadline_days\": 0}], \"knowledge_transfer_plan\": \"...\", \"estimated_completion_days\": 5}",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    },
+    "farewell_drafter": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a professional communications writer. Draft a tasteful internal announcement about the employee's departure. Keep it positive, thank them for contributions, and mention transition plans. Do not include reasons for departure. Keep it to 3-4 sentences.",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    }
+  },
+  "tools": {},
+  "tool_configs": {},
+  "actionNodes": {
+    "manual_trigger": {
+      "type": "trigger",
+      "id": "manual_trigger",
+      "name": "Offboarding Initiated",
+      "description": "HR initiates offboarding for a departing employee",
+      "triggerType": "manual",
+      "manual": {
+        "buttonLabel": "Start Offboarding",
+        "defaultPrompt": "Employee: Alex Rivera\nID: EMP-4821\nDepartment: Engineering\nRole: Senior Backend Engineer\nManager: Jordan Lee\nLast Day: 2026-02-28\nReason: Voluntary resignation\nAssets: MacBook Pro M3, 2x monitors, YubiKey, parking badge\nAccess: GitHub, AWS Console, Datadog, Slack, Jira, Confluence, VPN",
+        "showPromptInput": true
+      },
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 30000 },
+      "mapping": { "outputKey": "trigger_input" }
+    },
+    "revoke_sso": {
+      "type": "http",
+      "id": "revoke_sso",
+      "name": "Revoke SSO Access",
+      "description": "Disable user in Okta SSO — immediately revokes all connected app access",
+      "method": "POST",
+      "url": "https://{{OKTA_DOMAIN}}.okta.com/api/v1/users/{{employee_id}}/lifecycle/deactivate",
+      "auth": { "type": "bearer", "bearer": { "token": "{{OKTA_API_TOKEN}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": { "type": "none" },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 2000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "sso_result" }
+    },
+    "revoke_github": {
+      "type": "http",
+      "id": "revoke_github",
+      "name": "Remove from GitHub Org",
+      "description": "Remove user from GitHub organization",
+      "method": "DELETE",
+      "url": "https://api.github.com/orgs/{{GITHUB_ORG}}/members/{{github_username}}",
+      "auth": { "type": "bearer", "bearer": { "token": "{{GITHUB_ADMIN_TOKEN}}" } },
+      "headers": { "Accept": "application/vnd.github+json" },
+      "body": { "type": "none" },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "github_result" }
+    },
+    "set_offboard_context": {
+      "type": "set",
+      "id": "set_offboard_context",
+      "name": "Set Context",
+      "description": "Consolidate access revocation results and set context for checklist generation",
+      "mode": "set",
+      "variables": [
+        { "key": "access_revoked", "value": "true", "valueType": "boolean", "isSecret": false },
+        { "key": "revocation_timestamp", "value": "{{NOW}}", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "offboard_context" }
+    },
+    "create_jira_ticket": {
+      "type": "http",
+      "id": "create_jira_ticket",
+      "name": "Create Offboarding Ticket",
+      "description": "Create a Jira ticket to track the offboarding process",
+      "method": "POST",
+      "url": "https://{{JIRA_DOMAIN}}.atlassian.net/rest/api/3/issue",
+      "auth": { "type": "basic", "basic": { "username": "{{JIRA_EMAIL}}", "password": "{{JIRA_API_TOKEN}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"fields\": {\"project\": {\"key\": \"HR\"}, \"summary\": \"Offboarding: {{employee_name}} - {{employee_id}}\", \"issuetype\": {\"name\": \"Task\"}, \"description\": {\"type\": \"doc\", \"version\": 1, \"content\": [{\"type\": \"paragraph\", \"content\": [{\"type\": \"text\", \"text\": \"Offboarding checklist and tracking for {{employee_name}}\"}]}]}}}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 1000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 15000 },
+      "mapping": { "outputKey": "ticket" }
+    },
+    "notify_slack": {
+      "type": "http",
+      "id": "notify_slack",
+      "name": "Notify Teams",
+      "description": "Post farewell announcement and offboarding status to Slack",
+      "method": "POST",
+      "url": "https://slack.com/api/chat.postMessage",
+      "auth": { "type": "bearer", "bearer": { "token": "{{SLACK_BOT_TOKEN}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"channel\": \"#hr-notifications\", \"text\": \"{{farewell_message}}\\n\\n📋 Offboarding ticket: {{ticket.key}}\"}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "slack_result" }
+    }
+  },
+  "workflow": {
+    "type": "graph",
+    "edges": [
+      { "from": "manual_trigger", "to": "START" },
+      { "from": "START", "to": "revoke_sso" },
+      { "from": "START", "to": "revoke_github" },
+      { "from": "revoke_sso", "to": "set_offboard_context" },
+      { "from": "revoke_github", "to": "set_offboard_context" },
+      { "from": "set_offboard_context", "to": "checklist_generator" },
+      { "from": "checklist_generator", "to": "create_jira_ticket" },
+      { "from": "create_jira_ticket", "to": "farewell_drafter" },
+      { "from": "farewell_drafter", "to": "notify_slack" },
+      { "from": "notify_slack", "to": "END" }
+    ],
+    "conditions": []
+  },
+  "created_at": "2026-02-08T00:00:00Z",
+  "updated_at": "2026-02-08T00:00:00Z"
+}

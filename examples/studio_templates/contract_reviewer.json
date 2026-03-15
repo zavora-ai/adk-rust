@@ -1,0 +1,195 @@
+{
+  "id": "tpl-contract-reviewer",
+  "version": "1.0.0",
+  "name": "Contract Reviewer",
+  "description": "AI-powered contract analysis: extract key clauses, flag risky terms, score overall risk, and route high-risk contracts to legal for manual review",
+  "settings": {
+    "default_model": "gemini-2.0-flash",
+    "env_vars": {},
+    "layoutDirection": "LR",
+    "layoutMode": "free",
+    "debugMode": false
+  },
+  "agents": {
+    "clause_extractor": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a contract analysis specialist. Given contract text, extract all key clauses and terms.\n\nExtract:\n- parties: Names of all parties involved\n- effective_date: When the contract starts\n- termination_date: When it expires\n- auto_renewal: Whether it auto-renews and terms\n- payment_terms: Payment amounts, schedule, currency\n- liability_cap: Maximum liability amount\n- indemnification: Who indemnifies whom and scope\n- ip_ownership: Who owns intellectual property\n- non_compete: Any non-compete clauses and duration\n- data_handling: Data privacy and security obligations\n- termination_clauses: How either party can terminate\n- governing_law: Jurisdiction and governing law\n\nOutput JSON only:\n{\"parties\": [...], \"clauses\": [{\"type\": \"payment_terms\", \"text\": \"exact quote\", \"summary\": \"plain English\"}], \"missing_clauses\": [\"clauses that should be present but aren't\"]}",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    },
+    "risk_assessor": {
+      "type": "llm",
+      "model": "gemini-2.0-flash",
+      "instruction": "You are a legal risk analyst. Given extracted contract clauses, assess the risk level of each clause and the overall contract.\n\nRisk factors:\n- Unlimited liability: HIGH risk\n- No termination for convenience: MEDIUM risk\n- Auto-renewal without notice period: MEDIUM risk\n- Broad indemnification: HIGH risk\n- Unfavorable IP assignment: HIGH risk\n- Missing data protection clauses: HIGH risk\n- Non-compete > 2 years: MEDIUM risk\n- Governing law in unfavorable jurisdiction: LOW risk\n\nOutput JSON:\n{\"overall_risk\": \"high|medium|low\", \"risk_score\": 78, \"flags\": [{\"clause_type\": \"liability\", \"risk\": \"high\", \"issue\": \"Unlimited liability exposure\", \"recommendation\": \"Negotiate a cap at 2x annual contract value\"}], \"approval_recommendation\": \"reject|review|approve\", \"executive_summary\": \"2-3 sentence summary for decision makers\"}",
+      "tools": [],
+      "sub_agents": [],
+      "position": { "x": 0, "y": 0 }
+    }
+  },
+  "tools": {},
+  "tool_configs": {},
+  "actionNodes": {
+    "manual_trigger": {
+      "type": "trigger",
+      "id": "manual_trigger",
+      "name": "Contract Submitted",
+      "description": "New contract submitted for review",
+      "triggerType": "manual",
+      "manual": {
+        "buttonLabel": "Review Contract",
+        "defaultPrompt": "SOFTWARE LICENSE AGREEMENT\n\nThis Agreement is entered into as of February 1, 2026 between Acme Corp (\"Vendor\") and Our Company Inc (\"Client\").\n\n1. LICENSE: Vendor grants Client a non-exclusive license to use the Software.\n2. TERM: 3 years, auto-renews for successive 1-year periods unless terminated with 90 days notice.\n3. FEES: $150,000/year, payable quarterly. Late payments accrue 1.5% monthly interest.\n4. LIABILITY: Vendor's total liability shall not exceed fees paid in the prior 12 months. Client provides unlimited indemnification for all third-party claims.\n5. IP: All customizations and integrations built by Client become Vendor's intellectual property.\n6. TERMINATION: Only Vendor may terminate for convenience with 30 days notice. Client may only terminate for material breach.\n7. DATA: Vendor may use Client's data for product improvement and benchmarking.\n8. GOVERNING LAW: State of Delaware.",
+        "showPromptInput": true
+      },
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 30000 },
+      "mapping": { "outputKey": "trigger_input" }
+    },
+    "route_risk": {
+      "type": "switch",
+      "id": "route_risk",
+      "name": "Route by Risk",
+      "description": "High-risk contracts go to legal, medium to manager, low auto-approved",
+      "evaluationMode": "first_match",
+      "conditions": [
+        { "id": "high", "name": "High Risk → Legal", "field": "risk_assessment.overall_risk", "operator": "eq", "value": "high", "outputPort": "legal" },
+        { "id": "medium", "name": "Medium Risk → Manager", "field": "risk_assessment.overall_risk", "operator": "eq", "value": "medium", "outputPort": "manager" }
+      ],
+      "defaultBranch": "auto_approve",
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "risk_route" }
+    },
+    "set_legal": {
+      "type": "set",
+      "id": "set_legal",
+      "name": "Legal Review",
+      "description": "Route to legal team for detailed review",
+      "mode": "set",
+      "variables": [
+        { "key": "reviewer", "value": "legal-team@company.com", "valueType": "string", "isSecret": false },
+        { "key": "review_type", "value": "full_legal_review", "valueType": "string", "isSecret": false },
+        { "key": "sla_days", "value": "5", "valueType": "number", "isSecret": false },
+        { "key": "status", "value": "pending_legal_review", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "review_assignment" }
+    },
+    "set_manager": {
+      "type": "set",
+      "id": "set_manager",
+      "name": "Manager Review",
+      "description": "Route to department manager for approval",
+      "mode": "set",
+      "variables": [
+        { "key": "reviewer", "value": "dept-manager@company.com", "valueType": "string", "isSecret": false },
+        { "key": "review_type", "value": "manager_approval", "valueType": "string", "isSecret": false },
+        { "key": "sla_days", "value": "3", "valueType": "number", "isSecret": false },
+        { "key": "status", "value": "pending_manager_approval", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "review_assignment" }
+    },
+    "set_approved": {
+      "type": "set",
+      "id": "set_approved",
+      "name": "Auto-Approved",
+      "description": "Low-risk contracts are auto-approved",
+      "mode": "set",
+      "variables": [
+        { "key": "reviewer", "value": "system", "valueType": "string", "isSecret": false },
+        { "key": "review_type", "value": "auto_approved", "valueType": "string", "isSecret": false },
+        { "key": "status", "value": "approved", "valueType": "string", "isSecret": false }
+      ],
+      "errorHandling": { "mode": "stop" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 5000 },
+      "mapping": { "outputKey": "review_assignment" }
+    },
+    "merge_reviews": {
+      "type": "merge",
+      "id": "merge_reviews",
+      "name": "Merge Reviews",
+      "description": "Rejoin all review branches",
+      "mode": "wait_all",
+      "combineStrategy": "object",
+      "timeout": { "enabled": true, "ms": 15000, "behavior": "continue" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 20000 },
+      "mapping": { "outputKey": "merged_review" }
+    },
+    "save_to_db": {
+      "type": "database",
+      "id": "save_to_db",
+      "name": "Save Review",
+      "description": "Store contract review results in the database",
+      "dbType": "postgresql",
+      "connection": { "connectionString": "{{DATABASE_URL}}", "poolSize": 3 },
+      "sql": {
+        "operation": "insert",
+        "query": "INSERT INTO contract_reviews (contract_id, risk_score, overall_risk, status, reviewer, flags_count, reviewed_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())",
+        "parameters": ["{{contract_id}}", "{{risk_assessment.risk_score}}", "{{risk_assessment.overall_risk}}", "{{review_assignment.status}}", "{{review_assignment.reviewer}}", "{{risk_assessment.flags_count}}"]
+      },
+      "errorHandling": { "mode": "retry", "retryCount": 2, "retryDelay": 1000 },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "db_result" }
+    },
+    "notify_slack": {
+      "type": "http",
+      "id": "notify_slack",
+      "name": "Notify Stakeholders",
+      "description": "Post contract review summary to Slack",
+      "method": "POST",
+      "url": "https://slack.com/api/chat.postMessage",
+      "auth": { "type": "bearer", "bearer": { "token": "{{SLACK_BOT_TOKEN}}" } },
+      "headers": { "Content-Type": "application/json" },
+      "body": {
+        "type": "json",
+        "content": "{\"channel\": \"#contract-reviews\", \"text\": \"📄 *Contract Review Complete*\\nRisk: {{risk_assessment.overall_risk}} (score: {{risk_assessment.risk_score}}/100)\\nStatus: {{review_assignment.status}}\\nAssigned to: {{review_assignment.reviewer}}\\n\\n{{risk_assessment.executive_summary}}\"}"
+      },
+      "response": { "type": "json" },
+      "errorHandling": { "mode": "continue" },
+      "tracing": { "enabled": true, "logLevel": "info" },
+      "callbacks": {},
+      "execution": { "timeout": 10000 },
+      "mapping": { "outputKey": "slack_result" }
+    }
+  },
+  "workflow": {
+    "type": "graph",
+    "edges": [
+      { "from": "manual_trigger", "to": "START" },
+      { "from": "START", "to": "clause_extractor" },
+      { "from": "clause_extractor", "to": "risk_assessor" },
+      { "from": "risk_assessor", "to": "route_risk" },
+      { "from": "route_risk", "to": "set_legal", "fromPort": "legal" },
+      { "from": "route_risk", "to": "set_manager", "fromPort": "manager" },
+      { "from": "route_risk", "to": "set_approved", "fromPort": "auto_approve" },
+      { "from": "set_legal", "to": "merge_reviews" },
+      { "from": "set_manager", "to": "merge_reviews" },
+      { "from": "set_approved", "to": "merge_reviews" },
+      { "from": "merge_reviews", "to": "save_to_db" },
+      { "from": "save_to_db", "to": "notify_slack" },
+      { "from": "notify_slack", "to": "END" }
+    ],
+    "conditions": []
+  },
+  "created_at": "2026-02-08T00:00:00Z",
+  "updated_at": "2026-02-08T00:00:00Z"
+}
