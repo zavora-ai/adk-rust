@@ -2,15 +2,16 @@
 
 use crate::attachment;
 use adk_core::{Content, FinishReason, LlmResponse, Part, UsageMetadata};
-use async_openai::types::{
-    ChatCompletionMessageToolCall, ChatCompletionRequestAssistantMessageArgs,
-    ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartAudio,
-    ChatCompletionRequestMessageContentPartImage, ChatCompletionRequestMessageContentPartText,
-    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs,
-    ChatCompletionRequestUserMessageArgs, ChatCompletionRequestUserMessageContent,
-    ChatCompletionRequestUserMessageContentPart, ChatCompletionTool, ChatCompletionToolType,
-    CreateChatCompletionResponse, CreateChatCompletionStreamResponse, FunctionCall, FunctionObject,
-    ImageUrl, InputAudio, InputAudioFormat,
+use async_openai::types::chat::{
+    ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
+    ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
+    ChatCompletionRequestMessageContentPartAudio, ChatCompletionRequestMessageContentPartImage,
+    ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessageArgs,
+    ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
+    ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
+    ChatCompletionTool, ChatCompletionTools, CreateChatCompletionResponse,
+    CreateChatCompletionStreamResponse, FinishReason as OaiFinishReason, FunctionCall,
+    FunctionObject, ImageUrl, InputAudio, InputAudioFormat,
 };
 use std::collections::HashMap;
 
@@ -43,11 +44,21 @@ pub fn content_to_message(content: &Content) -> ChatCompletionRequestMessage {
                             Some(inline_data_part_to_openai(mime_type, data))
                         }
                         Part::FileData { mime_type, file_uri } => {
-                            Some(ChatCompletionRequestUserMessageContentPart::Text(
-                                ChatCompletionRequestMessageContentPartText {
-                                    text: attachment::file_attachment_to_text(mime_type, file_uri),
-                                },
-                            ))
+                            if mime_type.starts_with("image/") {
+                                Some(ChatCompletionRequestUserMessageContentPart::ImageUrl(
+                                    ChatCompletionRequestMessageContentPartImage {
+                                        image_url: ImageUrl { url: file_uri.clone(), detail: None },
+                                    },
+                                ))
+                            } else {
+                                Some(ChatCompletionRequestUserMessageContentPart::Text(
+                                    ChatCompletionRequestMessageContentPartText {
+                                        text: attachment::file_attachment_to_text(
+                                            mime_type, file_uri,
+                                        ),
+                                    },
+                                ))
+                            }
                         }
                         _ => None,
                     })
@@ -190,19 +201,18 @@ fn get_text_content(parts: &[Part]) -> Option<String> {
 }
 
 /// Extract tool calls from parts.
-fn extract_tool_calls(parts: &[Part]) -> Vec<ChatCompletionMessageToolCall> {
+fn extract_tool_calls(parts: &[Part]) -> Vec<ChatCompletionMessageToolCalls> {
     parts
         .iter()
         .filter_map(|part| {
             if let Part::FunctionCall { name, args, id, .. } = part {
-                Some(ChatCompletionMessageToolCall {
+                Some(ChatCompletionMessageToolCalls::Function(ChatCompletionMessageToolCall {
                     id: id.clone().unwrap_or_else(|| format!("call_{}", name)),
-                    r#type: ChatCompletionToolType::Function,
                     function: FunctionCall {
                         name: name.clone(),
                         arguments: serde_json::to_string(args).unwrap_or_default(),
                     },
-                })
+                }))
             } else {
                 None
             }
@@ -210,8 +220,8 @@ fn extract_tool_calls(parts: &[Part]) -> Vec<ChatCompletionMessageToolCall> {
         .collect()
 }
 
-/// Convert ADK tools to OpenAI ChatCompletionTool.
-pub fn convert_tools(tools: &HashMap<String, serde_json::Value>) -> Vec<ChatCompletionTool> {
+/// Convert ADK tools to OpenAI ChatCompletionTools.
+pub fn convert_tools(tools: &HashMap<String, serde_json::Value>) -> Vec<ChatCompletionTools> {
     tools
         .iter()
         .map(|(name, decl)| {
@@ -219,15 +229,14 @@ pub fn convert_tools(tools: &HashMap<String, serde_json::Value>) -> Vec<ChatComp
 
             let parameters = decl.get("parameters").cloned();
 
-            ChatCompletionTool {
-                r#type: ChatCompletionToolType::Function,
+            ChatCompletionTools::Function(ChatCompletionTool {
                 function: FunctionObject {
                     name: name.clone(),
                     description,
                     parameters,
                     strict: None,
                 },
-            }
+            })
         })
         .collect()
 }
@@ -238,22 +247,27 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
     let content = resp.choices.first().map(|choice| {
         let mut parts = Vec::new();
 
-        // Add text content
+        // Add text content (skip empty strings from reasoning models)
         if let Some(text) = &choice.message.content {
-            parts.push(Part::Text { text: text.clone() });
+            if !text.is_empty() {
+                parts.push(Part::Text { text: text.clone() });
+            }
         }
 
         // Add tool calls with IDs
         if let Some(tool_calls) = &choice.message.tool_calls {
             for tc in tool_calls {
-                let args: serde_json::Value =
-                    serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::json!({}));
-                parts.push(Part::FunctionCall {
-                    name: tc.function.name.clone(),
-                    args,
-                    id: Some(tc.id.clone()),
-                    thought_signature: None,
-                });
+                if let ChatCompletionMessageToolCalls::Function(func_call) = tc {
+                    let args: serde_json::Value =
+                        serde_json::from_str(&func_call.function.arguments)
+                            .unwrap_or(serde_json::json!({}));
+                    parts.push(Part::FunctionCall {
+                        name: func_call.function.name.clone(),
+                        args,
+                        id: Some(func_call.id.clone()),
+                        thought_signature: None,
+                    });
+                }
             }
         }
 
@@ -279,11 +293,11 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
     });
 
     let finish_reason = resp.choices.first().and_then(|c| c.finish_reason).map(|fr| match fr {
-        async_openai::types::FinishReason::Stop => FinishReason::Stop,
-        async_openai::types::FinishReason::Length => FinishReason::MaxTokens,
-        async_openai::types::FinishReason::ToolCalls => FinishReason::Stop,
-        async_openai::types::FinishReason::ContentFilter => FinishReason::Safety,
-        async_openai::types::FinishReason::FunctionCall => FinishReason::Stop,
+        OaiFinishReason::Stop => FinishReason::Stop,
+        OaiFinishReason::Length => FinishReason::MaxTokens,
+        OaiFinishReason::ToolCalls => FinishReason::Stop,
+        OaiFinishReason::ContentFilter => FinishReason::Safety,
+        OaiFinishReason::FunctionCall => FinishReason::Stop,
     });
 
     LlmResponse {
@@ -299,7 +313,116 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
     }
 }
 
+/// Convert a raw OpenAI JSON response to ADK LlmResponse.
+///
+/// Unlike [`from_openai_response`], this parses the raw JSON directly so it can
+/// extract fields that `async-openai` 0.33 does not model, such as
+/// `reasoning_content` returned by reasoning models (o3, gpt-5-mini, etc.).
+pub fn from_raw_openai_response(json: &serde_json::Value) -> LlmResponse {
+    let choice = json.get("choices").and_then(|c| c.get(0));
+
+    let content = choice.map(|choice| {
+        let message = &choice["message"];
+        let mut parts = Vec::new();
+
+        // Extract reasoning_content (returned by reasoning models like o3, gpt-5-mini)
+        if let Some(reasoning) = message.get("reasoning_content").and_then(|v| v.as_str()) {
+            if !reasoning.is_empty() {
+                parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
+            }
+        }
+
+        // Extract visible text content (skip empty strings)
+        if let Some(text) = message.get("content").and_then(|v| v.as_str()) {
+            if !text.is_empty() {
+                parts.push(Part::Text { text: text.to_string() });
+            }
+        }
+
+        // Extract tool calls
+        if let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
+            for tc in tool_calls {
+                let func = &tc["function"];
+                if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
+                    let args: serde_json::Value = func
+                        .get("arguments")
+                        .and_then(|a| a.as_str())
+                        .and_then(|a| serde_json::from_str(a).ok())
+                        .unwrap_or(serde_json::json!({}));
+                    let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
+                    parts.push(Part::FunctionCall {
+                        name: name.to_string(),
+                        args,
+                        id,
+                        thought_signature: None,
+                    });
+                }
+            }
+        }
+
+        Content { role: "model".to_string(), parts }
+    });
+
+    // Parse usage metadata
+    let usage_metadata = json.get("usage").map(|u| {
+        let prompt_tokens = u.get("prompt_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let completion_tokens =
+            u.get("completion_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let total_tokens = u.get("total_tokens").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+
+        let prompt_details = u.get("prompt_tokens_details");
+        let completion_details = u.get("completion_tokens_details");
+
+        UsageMetadata {
+            prompt_token_count: prompt_tokens,
+            candidates_token_count: completion_tokens,
+            total_token_count: total_tokens,
+            cache_read_input_token_count: prompt_details
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32),
+            thinking_token_count: completion_details
+                .and_then(|d| d.get("reasoning_tokens"))
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32),
+            audio_input_token_count: prompt_details
+                .and_then(|d| d.get("audio_tokens"))
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32),
+            audio_output_token_count: completion_details
+                .and_then(|d| d.get("audio_tokens"))
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32),
+            ..Default::default()
+        }
+    });
+
+    // Parse finish reason
+    let finish_reason =
+        choice.and_then(|c| c.get("finish_reason")).and_then(|v| v.as_str()).map(|fr| match fr {
+            "stop" => FinishReason::Stop,
+            "length" => FinishReason::MaxTokens,
+            "tool_calls" => FinishReason::Stop,
+            "content_filter" => FinishReason::Safety,
+            "function_call" => FinishReason::Stop,
+            _ => FinishReason::Stop,
+        });
+
+    LlmResponse {
+        content,
+        usage_metadata,
+        finish_reason,
+        citation_metadata: None,
+        partial: false,
+        turn_complete: true,
+        interrupted: false,
+        error_code: None,
+        error_message: None,
+    }
+}
+
 /// Convert OpenAI stream chunk to ADK LlmResponse.
+#[allow(dead_code)]
 pub fn from_openai_chunk(chunk: &CreateChatCompletionStreamResponse) -> LlmResponse {
     let content = chunk.choices.first().and_then(|choice| {
         let mut parts = Vec::new();
@@ -340,11 +463,11 @@ pub fn from_openai_chunk(chunk: &CreateChatCompletionStreamResponse) -> LlmRespo
     });
 
     let finish_reason = chunk.choices.first().and_then(|c| c.finish_reason).map(|fr| match fr {
-        async_openai::types::FinishReason::Stop => FinishReason::Stop,
-        async_openai::types::FinishReason::Length => FinishReason::MaxTokens,
-        async_openai::types::FinishReason::ToolCalls => FinishReason::Stop,
-        async_openai::types::FinishReason::ContentFilter => FinishReason::Safety,
-        async_openai::types::FinishReason::FunctionCall => FinishReason::Stop,
+        OaiFinishReason::Stop => FinishReason::Stop,
+        OaiFinishReason::Length => FinishReason::MaxTokens,
+        OaiFinishReason::ToolCalls => FinishReason::Stop,
+        OaiFinishReason::ContentFilter => FinishReason::Safety,
+        OaiFinishReason::FunctionCall => FinishReason::Stop,
     });
 
     let is_final = chunk.choices.first().map(|c| c.finish_reason.is_some()).unwrap_or(false);
@@ -522,6 +645,36 @@ mod tests {
     }
 
     #[test]
+    fn test_user_message_with_image_file_data_maps_to_image_url() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![
+                Part::Text { text: "Describe this".to_string() },
+                Part::FileData {
+                    mime_type: "image/jpeg".to_string(),
+                    file_uri: "https://example.com/photo.jpg".to_string(),
+                },
+            ],
+        };
+        let msg = content_to_message(&content);
+
+        if let ChatCompletionRequestMessage::User(user_msg) = &msg {
+            if let ChatCompletionRequestUserMessageContent::Array(parts) = &user_msg.content {
+                assert_eq!(parts.len(), 2);
+                if let ChatCompletionRequestUserMessageContentPart::ImageUrl(img) = &parts[1] {
+                    assert_eq!(img.image_url.url, "https://example.com/photo.jpg");
+                } else {
+                    panic!("Expected ImageUrl part for image FileData");
+                }
+            } else {
+                panic!("Expected Array content");
+            }
+        } else {
+            panic!("Expected User message");
+        }
+    }
+
+    #[test]
     fn test_user_message_text_only_stays_text_content() {
         let content = Content {
             role: "user".to_string(),
@@ -537,6 +690,112 @@ mod tests {
         } else {
             panic!("Expected User message");
         }
+    }
+
+    #[test]
+    fn test_raw_response_extracts_reasoning_content() {
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": "Let me think about this...",
+                    "content": "Hello!"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 50,
+                "total_tokens": 60,
+                "completion_tokens_details": { "reasoning_tokens": 40 }
+            }
+        });
+
+        let resp = from_raw_openai_response(&json);
+        let content = resp.content.unwrap();
+        assert_eq!(content.parts.len(), 2);
+        assert!(
+            matches!(&content.parts[0], Part::Thinking { thinking, .. } if thinking == "Let me think about this...")
+        );
+        assert!(matches!(&content.parts[1], Part::Text { text } if text == "Hello!"));
+        assert_eq!(resp.usage_metadata.unwrap().thinking_token_count, Some(40));
+    }
+
+    #[test]
+    fn test_raw_response_skips_empty_content() {
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": ""
+                },
+                "finish_reason": "length"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 64,
+                "total_tokens": 74,
+                "completion_tokens_details": { "reasoning_tokens": 64 }
+            }
+        });
+
+        let resp = from_raw_openai_response(&json);
+        let content = resp.content.unwrap();
+        assert!(content.parts.is_empty(), "empty text should be filtered out");
+        assert_eq!(resp.finish_reason, Some(FinishReason::MaxTokens));
+    }
+
+    #[test]
+    fn test_raw_response_extracts_tool_calls() {
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": "{\"city\":\"Paris\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 }
+        });
+
+        let resp = from_raw_openai_response(&json);
+        let content = resp.content.unwrap();
+        assert_eq!(content.parts.len(), 1);
+        if let Part::FunctionCall { name, args, id, .. } = &content.parts[0] {
+            assert_eq!(name, "get_weather");
+            assert_eq!(args["city"], "Paris");
+            assert_eq!(id.as_deref(), Some("call_abc123"));
+        } else {
+            panic!("Expected FunctionCall part");
+        }
+    }
+
+    #[test]
+    fn test_raw_response_standard_text() {
+        let json = serde_json::json!({
+            "choices": [{
+                "message": { "role": "assistant", "content": "Hello there!" },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8 }
+        });
+
+        let resp = from_raw_openai_response(&json);
+        let content = resp.content.unwrap();
+        assert_eq!(content.parts.len(), 1);
+        assert!(matches!(&content.parts[0], Part::Text { text } if text == "Hello there!"));
+        assert_eq!(resp.finish_reason, Some(FinishReason::Stop));
+        let usage = resp.usage_metadata.unwrap();
+        assert_eq!(usage.prompt_token_count, 5);
+        assert_eq!(usage.candidates_token_count, 3);
     }
 
     #[test]
@@ -557,6 +816,10 @@ mod tests {
 
         let openai_tools = convert_tools(&tools);
         assert_eq!(openai_tools.len(), 1);
-        assert_eq!(openai_tools[0].function.name, "get_weather");
+        if let ChatCompletionTools::Function(tool) = &openai_tools[0] {
+            assert_eq!(tool.function.name, "get_weather");
+        } else {
+            panic!("Expected Function variant");
+        }
     }
 }

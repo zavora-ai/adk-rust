@@ -656,22 +656,6 @@ pub mod sandbox {
     pub use adk_sandbox::*;
 }
 
-/// Documentation audit system.
-///
-/// Validates ADK-Rust documentation against actual crate implementations:
-/// - [`AuditOrchestrator`](doc_audit::AuditOrchestrator) - Main audit coordinator
-/// - [`DocumentationParser`](doc_audit::DocumentationParser) - Parse markdown files
-/// - [`CodeAnalyzer`](doc_audit::CodeAnalyzer) - Analyze Rust source code
-/// - [`ExampleValidator`](doc_audit::ExampleValidator) - Validate code examples
-/// - [`ReportGenerator`](doc_audit::ReportGenerator) - Generate audit reports
-///
-/// Available with feature: `doc-audit`
-#[cfg(feature = "doc-audit")]
-#[cfg_attr(docsrs, doc(cfg(feature = "doc-audit")))]
-pub mod doc_audit {
-    pub use adk_doc_audit::*;
-}
-
 /// CLI launcher for running agents.
 ///
 /// Quick way to run agents in console or server mode:

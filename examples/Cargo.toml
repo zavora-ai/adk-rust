@@ -34,6 +34,14 @@ path = "eval_basic/main.rs"
 name = "template"
 path = "template/main.rs"
 
+[[example]]
+name = "openai_basic"
+path = "openai_basic/main.rs"
+
+[[example]]
+name = "vision_test"
+path = "vision_test/main.rs"
+
 # Note: ralph is a standalone crate at examples/ralph/
 # Run with: cargo run -p ralph
 # Test with: cargo test -p ralph
@@ -43,6 +51,11 @@ path = "template/main.rs"
 
 [features]
 default = []
+# Enable all vision-capable providers for the vision_test example
+vision-test = ["openai", "anthropic", "bedrock"]
+openai = ["adk-model/openai"]
+anthropic = ["adk-model/anthropic"]
+bedrock = ["adk-model/bedrock"]
 
 [dependencies]
 adk-core.workspace = true
@@ -55,7 +68,8 @@ adk-session.workspace = true
 adk-memory.workspace = true
 adk-graph.workspace = true
 adk-eval.workspace = true
-tokio.workspace = true
+adk-cli.workspace = true
+tokio = { workspace = true, features = ["full"] }
 anyhow.workspace = true
 futures.workspace = true
 serde.workspace = true
@@ -65,6 +79,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 async-trait.workspace = true
 dotenvy = "0.15"
+miniz_oxide = "0.8"
 rmcp = { version = "0.15", features = ["client", "transport-child-process"] }
 
 [dev-dependencies]

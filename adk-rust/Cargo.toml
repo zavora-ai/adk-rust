@@ -33,7 +33,6 @@ full = [
     "graph",
     "code",
     "sandbox",
-    "doc-audit",
     "realtime",
     "browser",
     "eval",
@@ -61,7 +60,6 @@ telemetry = ["dep:adk-telemetry"]
 graph = ["dep:adk-graph"]
 code = ["dep:adk-code"]
 sandbox = ["dep:adk-sandbox"]
-doc-audit = ["dep:adk-doc-audit"]
 realtime = ["dep:adk-realtime"]
 browser = ["dep:adk-browser"]
 eval = ["dep:adk-eval"]
@@ -145,7 +143,6 @@ adk-cli = { workspace = true, optional = true }
 adk-graph = { workspace = true, optional = true }
 adk-code = { workspace = true, optional = true }
 adk-sandbox = { workspace = true, optional = true }
-adk-doc-audit = { workspace = true, optional = true }
 adk-realtime = { workspace = true, optional = true }
 adk-browser = { workspace = true, optional = true }
 adk-eval = { workspace = true, optional = true }
@@ -156,7 +153,7 @@ adk-rag = { workspace = true, optional = true }
 adk-audio = { workspace = true, optional = true }
 
 # Re-export common dependencies
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "signal", "fs", "process", "io-util"] }
 async-trait = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
@@ -164,7 +161,7 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "signal", "fs", "process", "io-util", "test-util"] }
 
 [package.metadata.docs.rs]
 all-features = true

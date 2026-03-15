@@ -17,12 +17,12 @@ adk-core.workspace = true
 adk-telemetry.workspace = true
 adk-gemini = { workspace = true, optional = true }
 async-trait.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
 futures.workspace = true
 async-stream.workspace = true
 serde_json.workspace = true
 serde = { workspace = true }
-async-openai = { version = "0.27", optional = true }
+async-openai = { version = "0.33", optional = true, features = ["full"] }
 claudius = { version = "0.16", optional = true, default-features = false }
 reqwest = { workspace = true, optional = true }
 anyhow.workspace = true
@@ -37,7 +37,7 @@ aws-smithy-types = { version = "1", optional = true }
 [features]
 default = ["gemini"]
 gemini = ["dep:adk-gemini"]
-openai = ["dep:async-openai"]
+openai = ["dep:async-openai", "dep:reqwest"]
 xai = ["openai"]
 anthropic = ["dep:claudius"]
 deepseek = ["dep:reqwest"]
@@ -55,3 +55,4 @@ all-providers = ["gemini", "openai", "xai", "anthropic", "deepseek", "ollama", "
 
 [dev-dependencies]
 proptest = "1.5"
+tokio = { workspace = true, features = ["rt", "macros"] }
