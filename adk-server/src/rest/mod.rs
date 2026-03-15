@@ -244,13 +244,13 @@ pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> 
         Router::new().route("/health", get(health_check)).with_state(health_controller);
 
     let ui_api_router = Router::new()
+        .route("/apps", get(controllers::apps::list_apps))
+        .route("/list-apps", get(controllers::apps::list_apps_compat))
+        .with_state(apps_controller)
         .route("/ui/capabilities", get(controllers::ui::ui_capabilities))
         .route("/ui/resources", get(controllers::ui::list_ui_resources))
         .route("/ui/resources/read", get(controllers::ui::read_ui_resource))
-        .route("/ui/resources/register", post(controllers::ui::register_ui_resource))
-        .route("/apps", get(controllers::apps::list_apps))
-        .route("/list-apps", get(controllers::apps::list_apps_compat))
-        .with_state(apps_controller);
+        .route("/ui/resources/register", post(controllers::ui::register_ui_resource));
 
     let session_router = Router::new()
         .route("/sessions", post(controllers::session::create_session))

@@ -1,7 +1,9 @@
 use crate::ServerConfig;
 use crate::auth_bridge::{RequestContextError, RequestContextExtractor};
+use crate::ui_protocol::{
+    SUPPORTED_UI_PROTOCOLS, UI_PROTOCOL_CAPABILITIES, normalize_runtime_ui_protocol,
+};
 use adk_core::RequestContext;
-use adk_ui::{SUPPORTED_UI_PROTOCOLS, UI_PROTOCOL_CAPABILITIES, normalize_runtime_ui_protocol};
 use axum::{
     Json,
     extract::{Path, State},
@@ -134,19 +136,15 @@ fn resolve_ui_profile(
     };
 
     parse_ui_profile(raw).ok_or_else(|| {
+        let supported = SUPPORTED_UI_PROTOCOLS.join(", ");
         warn!(
             requested = %raw,
             header = %UI_PROTOCOL_HEADER,
-            supported = ?SUPPORTED_UI_PROTOCOLS,
             "unsupported ui protocol requested"
         );
         (
             StatusCode::BAD_REQUEST,
-            format!(
-                "Unsupported ui protocol '{}'. Supported profiles: {}",
-                raw,
-                SUPPORTED_UI_PROTOCOLS.join(", ")
-            ),
+            format!("Unsupported ui protocol '{}'. Supported profiles: {}", raw, supported),
         )
     })
 }

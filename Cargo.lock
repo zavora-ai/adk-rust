@@ -533,7 +533,6 @@ dependencies = [
  "adk-skill",
  "adk-telemetry",
  "adk-tool",
- "adk-ui",
  "anyhow",
  "async-trait",
  "futures",
@@ -569,7 +568,6 @@ dependencies = [
  "adk-runner",
  "adk-session",
  "adk-telemetry",
- "adk-ui",
  "anyhow",
  "async-stream",
  "async-trait",
@@ -672,22 +670,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "adk-ui"
-version = "0.4.0"
-dependencies = [
- "adk-core",
- "async-trait",
- "chrono",
- "jsonschema",
- "reqwest 0.12.28",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
 ]
 
 [[package]]

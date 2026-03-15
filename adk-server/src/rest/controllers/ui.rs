@@ -1,7 +1,8 @@
-use adk_ui::interop::mcp_apps::{McpUiPermissions, McpUiResourceCsp};
-use adk_ui::{
-    McpAppsRenderOptions, TOOL_ENVELOPE_VERSION, UI_DEFAULT_PROTOCOL, UI_PROTOCOL_CAPABILITIES,
-    UiProtocolDeprecationSpec, validate_mcp_apps_render_options,
+use crate::ui_protocol::{
+    TOOL_ENVELOPE_VERSION, UI_DEFAULT_PROTOCOL, UI_PROTOCOL_CAPABILITIES, UiProtocolDeprecationSpec,
+};
+use crate::ui_types::{
+    McpAppsRenderOptions, McpUiPermissions, McpUiResourceCsp, validate_mcp_apps_render_options,
 };
 use axum::{Json, extract::Query, http::StatusCode};
 use serde::{Deserialize, Serialize};
@@ -195,7 +196,7 @@ fn parse_ui_meta_options(
         })
         .transpose()?;
 
-    Ok(McpAppsRenderOptions { domain, prefers_border, csp, permissions, ..Default::default() })
+    Ok(McpAppsRenderOptions { domain, prefers_border, csp, permissions })
 }
 
 fn validate_ui_meta(meta: &Option<Value>) -> Result<McpAppsRenderOptions, (StatusCode, String)> {

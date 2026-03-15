@@ -20,7 +20,6 @@ adk-runner.workspace = true
 adk-session.workspace = true
 adk-artifact.workspace = true
 adk-telemetry.workspace = true
-adk-ui.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 async-trait.workspace = true
@@ -41,6 +40,9 @@ rust-embed = "8.9.0"
 mime_guess = "2.0.5"
 reqwest.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
+
+[features]
+default = []
 
 [dev-dependencies]
 async-stream.workspace = true

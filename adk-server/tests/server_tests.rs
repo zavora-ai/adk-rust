@@ -1,9 +1,11 @@
 use adk_artifact::InMemoryArtifactService;
+use adk_server::ui_protocol::{
+    TOOL_ENVELOPE_VERSION, UI_DEFAULT_PROTOCOL, UI_PROTOCOL_CAPABILITIES,
+};
 use adk_server::{RequestContextError, RequestContextExtractor, create_app};
 use adk_session::{
     CreateRequest, DeleteRequest, Event, GetRequest, ListRequest, Session, SessionService,
 };
-use adk_ui::{TOOL_ENVELOPE_VERSION, UI_DEFAULT_PROTOCOL, UI_PROTOCOL_CAPABILITIES};
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, request::Parts};

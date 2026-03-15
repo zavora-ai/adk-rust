@@ -626,21 +626,6 @@ pub mod graph {
     pub use adk_graph::*;
 }
 
-/// Dynamic UI generation for agents.
-///
-/// Enables agents to render rich user interfaces via tool calls:
-/// - [`UiToolset`](ui::UiToolset) - All UI rendering tools
-/// - [`UiResponse`](ui::UiResponse) - UI component tree
-/// - [`UiEvent`](ui::UiEvent) - User interaction events
-/// - [`UiUpdate`](ui::UiUpdate) - Streaming UI updates
-///
-/// Available with feature: `ui`
-#[cfg(feature = "ui")]
-#[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
-pub mod ui {
-    pub use adk_ui::*;
-}
-
 /// Code execution substrate.
 ///
 /// First-class code execution for agents, Studio, and generated projects:
@@ -918,10 +903,6 @@ pub mod prelude {
     // Graph workflows
     #[cfg(feature = "graph")]
     pub use crate::graph::{END, GraphAgent, NodeOutput, Router, START, StateGraph};
-
-    // UI
-    #[cfg(feature = "ui")]
-    pub use crate::ui::UiToolset;
 
     // Realtime
     #[cfg(feature = "realtime")]

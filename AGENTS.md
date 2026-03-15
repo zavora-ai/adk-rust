@@ -62,7 +62,6 @@ adk-realtime/    Real-time bidirectional audio/video streaming (OpenAI, Gemini L
                  LiveKit, WebRTC)
 adk-browser/     Browser automation tools via WebDriver
 adk-eval/        Evaluation framework: trajectory, semantic, rubric, LLM-judge
-adk-ui/          Dynamic UI generation: forms, cards, tables, charts, modals
 adk-telemetry/   OpenTelemetry integration for agent observability
 adk-guardrail/   Input/output guardrails: validation, content filtering, PII redaction
 adk-auth/        Authentication: API keys, JWT, OAuth2, OIDC, SSO
@@ -84,15 +83,19 @@ adk-studio/      Visual agent builder — extracted to standalone repo.
                  Repo: https://github.com/zavora-ai/adk-studio
                  Local dev: ../adk-studio/ with path deps back to this workspace.
                  Build: cargo check --manifest-path ../adk-studio/Cargo.toml
+
+adk-ui/          Dynamic UI generation (forms, cards, tables, charts) — extracted to standalone repo.
+                 Repo: https://github.com/zavora-ai/adk-ui
+                 Local dev: ../adk-ui/ with git dep on adk-core.
+                 UI protocol constants are inlined in adk-server/src/ui_protocol.rs.
 ```
 
 ### Examples and docs
 
 ```
-examples/              120+ working examples organized by provider/feature
+examples/              7 essential examples (full collection in adk-playground repo)
 examples/ralph/        Standalone autonomous agent crate (own Cargo.toml + tests/)
 docs/official_docs/    Comprehensive documentation site content
-docs/official_docs_examples/  Compilable code snippets validating every doc page
 ```
 
 ## Feature flags

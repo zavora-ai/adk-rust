@@ -35,6 +35,8 @@ pub mod a2a;
 pub mod auth_bridge;
 pub mod config;
 pub mod rest;
+pub mod ui_protocol;
+pub mod ui_types;
 pub mod web_ui;
 
 pub use a2a::{

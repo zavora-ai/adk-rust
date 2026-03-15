@@ -1,3 +1,8 @@
+//! UI protocol constants, capability specs, and normalization.
+//!
+//! These were originally in `adk-ui` but are inlined here so `adk-server`
+//! can be published independently without a UI-toolkit dependency.
+
 use serde::Serialize;
 
 /// Default runtime protocol profile for server integrations.
