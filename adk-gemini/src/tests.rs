@@ -172,7 +172,8 @@ fn test_multi_turn_content_structure() {
     assert!(model_content.parts.is_some());
     assert_eq!(model_content.role, Some(Role::Model));
 
-    // Test serialization of the complete structure first
+    // thoughtSignature is skip_serializing — must NOT appear in serialized output
+    // (Gemini API rejects it in request payloads)
     let serialized = serde_json::to_value(&model_content).unwrap();
     assert_eq!(
         serialized,
@@ -182,8 +183,7 @@ fn test_multi_turn_content_structure() {
                     "functionCall": {
                         "name": "get_weather",
                         "args": {"location": "Tokyo"}
-                    },
-                    "thoughtSignature": "sample_thought_signature"
+                    }
                 }
             ],
             "role": "model"
@@ -345,15 +345,13 @@ fn test_content_creation_with_thought_signature() {
         _ => panic!("Expected Text part"),
     }
 
-    // Test serialization
+    // thoughtSignature is skip_serializing — must NOT appear in serialized output
     let serialized = serde_json::to_string(&content).unwrap();
-    assert!(serialized.contains("thoughtSignature"));
-    assert!(serialized.contains("test_signature_123"));
+    assert!(!serialized.contains("thoughtSignature"));
 
-    // Test serialization of thought content
+    // thought field IS serialized (it's not skip_serializing)
     let serialized_thought = serde_json::to_string(&thought_content).unwrap();
-    assert!(serialized_thought.contains("thoughtSignature"));
-    assert!(serialized_thought.contains("thought_signature_456"));
+    assert!(!serialized_thought.contains("thoughtSignature"));
     assert!(serialized_thought.contains("\"thought\":true"));
 }
 
