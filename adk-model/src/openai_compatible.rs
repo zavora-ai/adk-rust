@@ -76,6 +76,69 @@ impl OpenAICompatibleConfig {
         self.reasoning_effort = Some(effort);
         self
     }
+
+    // ── Provider presets ─────────────────────────────────────────
+
+    /// Fireworks AI preset.
+    ///
+    /// Default model: `accounts/fireworks/models/llama-v3p1-8b-instruct`
+    pub fn fireworks(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::new(api_key, model)
+            .with_provider_name("fireworks")
+            .with_base_url("https://api.fireworks.ai/inference/v1")
+    }
+
+    /// Together AI preset.
+    ///
+    /// Default model: `meta-llama/Llama-3.3-70B-Instruct-Turbo`
+    pub fn together(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::new(api_key, model)
+            .with_provider_name("together")
+            .with_base_url("https://api.together.xyz/v1")
+    }
+
+    /// Mistral AI preset.
+    ///
+    /// Default model: `mistral-small-latest`
+    pub fn mistral(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::new(api_key, model)
+            .with_provider_name("mistral")
+            .with_base_url("https://api.mistral.ai/v1")
+    }
+
+    /// Perplexity preset.
+    ///
+    /// Default model: `sonar`
+    pub fn perplexity(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::new(api_key, model)
+            .with_provider_name("perplexity")
+            .with_base_url("https://api.perplexity.ai")
+    }
+
+    /// Cerebras preset.
+    ///
+    /// Default model: `llama-3.3-70b`
+    pub fn cerebras(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::new(api_key, model)
+            .with_provider_name("cerebras")
+            .with_base_url("https://api.cerebras.ai/v1")
+    }
+
+    /// SambaNova preset.
+    ///
+    /// Default model: `Meta-Llama-3.3-70B-Instruct`
+    pub fn sambanova(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::new(api_key, model)
+            .with_provider_name("sambanova")
+            .with_base_url("https://api.sambanova.ai/v1")
+    }
+
+    /// xAI (Grok) preset.
+    ///
+    /// Default model: `grok-3-mini`
+    pub fn xai(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::new(api_key, model).with_provider_name("xai").with_base_url("https://api.x.ai/v1")
+    }
 }
 
 /// Shared OpenAI-compatible client implementation.

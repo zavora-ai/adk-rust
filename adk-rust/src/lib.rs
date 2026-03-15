@@ -848,23 +848,10 @@ pub mod prelude {
     #[cfg(feature = "ollama")]
     pub use crate::model::ollama::{OllamaConfig, OllamaModel};
 
-    #[cfg(feature = "fireworks")]
-    pub use crate::model::fireworks::{FireworksClient, FireworksConfig};
-
-    #[cfg(feature = "together")]
-    pub use crate::model::together::{TogetherClient, TogetherConfig};
-
-    #[cfg(feature = "mistral")]
-    pub use crate::model::mistral::{MistralClient, MistralConfig};
-
-    #[cfg(feature = "perplexity")]
-    pub use crate::model::perplexity::{PerplexityClient, PerplexityConfig};
-
-    #[cfg(feature = "cerebras")]
-    pub use crate::model::cerebras::{CerebrasClient, CerebrasConfig};
-
-    #[cfg(feature = "sambanova")]
-    pub use crate::model::sambanova::{SambaNovaClient, SambaNovaConfig};
+    // OpenAI-compatible providers: use OpenAICompatible with provider presets
+    // e.g. OpenAICompatibleConfig::fireworks(api_key, model)
+    #[cfg(feature = "openai")]
+    pub use crate::model::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig};
 
     #[cfg(feature = "bedrock")]
     pub use crate::model::bedrock::{BedrockClient, BedrockConfig};

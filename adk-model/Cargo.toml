@@ -51,7 +51,7 @@ cerebras = ["openai"]
 sambanova = ["openai"]
 bedrock = ["dep:aws-sdk-bedrockruntime", "dep:aws-config", "dep:aws-smithy-types"]
 azure-ai = ["dep:reqwest"]
-all-providers = ["gemini", "openai", "xai", "anthropic", "deepseek", "ollama", "groq", "fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova", "bedrock", "azure-ai"]
+all-providers = ["gemini", "openai", "anthropic", "deepseek", "ollama", "groq", "bedrock", "azure-ai"]
 
 [dev-dependencies]
 proptest = "1.5"
