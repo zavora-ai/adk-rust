@@ -198,7 +198,7 @@ async fn main() -> anyhow::Result<()> {
 
 > **Note**: The `SqliteSessionService` requires the `sqlite` feature flag:
 > ```toml
-> adk-session = { version = "0.3", features = ["sqlite"] }
+> adk-session = { version = "0.4", features = ["sqlite"] }
 > ```
 
 ### PostgresSessionService
@@ -231,7 +231,7 @@ async fn main() -> anyhow::Result<()> {
 
 > **Note**: Requires the `postgres` feature flag:
 > ```toml
-> adk-session = { version = "0.3", features = ["postgres"] }
+> adk-session = { version = "0.4", features = ["postgres"] }
 > ```
 
 ### RedisSessionService
@@ -247,7 +247,7 @@ let session_service = RedisSessionService::new(config).await?;
 
 > **Note**: Requires the `redis` feature flag:
 > ```toml
-> adk-session = { version = "0.3", features = ["redis"] }
+> adk-session = { version = "0.4", features = ["redis"] }
 > ```
 
 ## Schema Migrations

@@ -1190,8 +1190,8 @@ edition = "2021"
 [dependencies]
 adk-core = { version = "0.1", path = "../adk-core" }
 async-trait = "0.1"
-async-stream = "0.3"
-futures = "0.3"
+async-stream = "0.4"
+futures = "0.4"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

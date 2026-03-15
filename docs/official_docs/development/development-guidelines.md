@@ -39,8 +39,11 @@ devenv shell
 # Option C: Manual
 cargo build
 
+# Install cargo-nextest (parallel test runner, ~10x faster)
+curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C ${CARGO_HOME:-~/.cargo}/bin
+
 # Run all tests
-cargo test --all
+cargo nextest run --workspace
 
 # Check for lints
 cargo clippy --all-targets --all-features
@@ -243,6 +246,20 @@ let state: Arc<RwLock<State>> = Arc::new(RwLock::new(State::default()));
 let counter: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
 ```
 
+### Tokio Feature Convention
+
+Library crates (`adk-*`) must declare only the minimal tokio features they actually use:
+
+```toml
+# Library crates — minimal features
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+
+# Binary crates only (adk-cli, examples) — full is acceptable
+tokio = { workspace = true, features = ["full"] }
+```
+
+Never use `features = ["full"]` in a library crate. This forces all downstream consumers to compile every tokio subsystem whether they need it or not.
+
 ### Async Traits
 
 Use `async_trait` for async trait methods:
@@ -293,6 +310,22 @@ fn _check() {
 ```
 
 ## Testing
+
+### Test Runner
+
+ADK-Rust uses [cargo-nextest](https://nexte.st/) for test execution. Nextest runs each test binary in a separate process with parallel scheduling, giving ~10x speedup over `cargo test` on this workspace.
+
+```bash
+# Install (one-time)
+curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C ${CARGO_HOME:-~/.cargo}/bin
+
+# Or via devenv (included automatically)
+devenv shell
+```
+
+Configuration lives in `.config/nextest.toml` with two profiles:
+- `default` — local development (fail-fast, no retries)
+- `ci` — CI runs (retries for flaky tests, slow-test warnings)
 
 ### Test Organization
 
@@ -378,17 +411,28 @@ async fn test_agent_with_mock() {
 ### Test Commands
 
 ```bash
-# Run all tests
-cargo test --all
+# Run all tests (nextest — parallel, fast)
+cargo nextest run --workspace
 
 # Run specific crate tests
-cargo test --package adk-core
+cargo nextest run -p adk-core
 
-# Run with output
-cargo test --all -- --nocapture
+# Run with CI profile (retries flaky tests)
+cargo nextest run --workspace --profile ci
+
+# Run doctests (nextest doesn't run these — use cargo test)
+cargo test --workspace --doc
 
 # Run ignored tests (require API keys)
-cargo test --all -- --ignored
+cargo nextest run --workspace -- --run-ignored
+
+# Run with output (nextest shows output for failing tests by default)
+cargo nextest run --workspace --no-capture
+
+# Devenv shortcuts
+devenv shell ws-test          # nextest, default profile
+devenv shell ws-test-ci       # nextest, CI profile
+devenv shell ws-test-slow     # cargo test fallback (includes doctests)
 ```
 
 ## Documentation
@@ -460,7 +504,7 @@ cargo test --doc --all
 
 1. **Run the full test suite**:
    ```bash
-   cargo test --all
+   cargo nextest run --workspace
    ```
 
 2. **Run clippy**:

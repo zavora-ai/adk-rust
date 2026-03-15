@@ -114,11 +114,11 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.3.0", features = ["ui"] }
+adk-rust = { version = "0.4", features = ["ui"] }
 # Or use individual crates:
-adk-ui = "0.3.0"
-adk-agent = "0.3.0"
-adk-model = "0.3.0"
+adk-ui = "0.4"
+adk-agent = "0.4"
+adk-model = "0.4"
 ```
 
 ### Basic Usage

@@ -16,7 +16,7 @@ Or add it to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.3.2"
+adk-rust = "0.4"
 tokio = { version = "1.40", features = ["full"] }
 ```
 
@@ -161,13 +161,13 @@ ADK-Rust uses Cargo features for modularity:
 
 ```toml
 # Full installation (default)
-adk-rust = "0.3.2"
+adk-rust = "0.4"
 
 # Minimal: Only agents + Gemini
-adk-rust = { version = "0.3.2", default-features = false, features = ["minimal"] }
+adk-rust = { version = "0.4", default-features = false, features = ["minimal"] }
 
 # Custom: Pick what you need
-adk-rust = { version = "0.3.2", default-features = false, features = ["agents", "gemini", "tools"] }
+adk-rust = { version = "0.4", default-features = false, features = ["agents", "gemini", "tools"] }
 ```
 
 Available features:
