@@ -210,7 +210,7 @@ schemars = "0.8"
     let main = format!(
         r#"use adk_rust::prelude::*;
 use adk_rust::Launcher;
-use adk_tool::tool;
+use adk_tool::{{tool, AdkError}};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{{json, Value}};
@@ -226,7 +226,7 @@ struct GreetArgs {{
 
 /// Greet a person by name.
 #[tool]
-async fn greet(args: GreetArgs) -> Result<Value, AdkError> {{
+async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {{
     let greeting = match args.style.as_deref() {{
         Some("formal") => format!("Good day, {{}}. How may I assist you?", args.name),
         _ => format!("Hey {{}}! What's up?", args.name),
@@ -342,9 +342,9 @@ async fn main() -> anyhow::Result<()> {{
 fn generate_api(name: &str, provider: &str) -> (String, String, String) {
     let (_, model_code, env_var) = provider_dep(provider);
     let dep = if provider == "gemini" {
-        r#"adk-rust = { version = "0.4", features = ["full"] }"#
+        r#"adk-rust = { version = "0.4", features = ["server"] }"#
     } else {
-        &format!(r#"adk-rust = {{ version = "0.4", features = ["full", "{provider}"] }}"#)
+        &format!(r#"adk-rust = {{ version = "0.4", features = ["server", "{provider}"] }}"#)
     };
 
     let cargo = format!(
@@ -355,6 +355,7 @@ edition = "2024"
 
 [dependencies]
 {dep}
+axum = "0.8"
 tokio = {{ version = "1", features = ["full"] }}
 dotenvy = "0.15"
 anyhow = "1"

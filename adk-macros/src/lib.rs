@@ -4,7 +4,7 @@
 //!
 //! ## `#[tool]`
 //!
-//! Turns an async function into a fully-wired [`adk_core::Tool`] implementation:
+//! Turns an async function into a fully-wired [`adk_tool::Tool`] implementation:
 //!
 //! ```rust,ignore
 //! use adk_macros::tool;
@@ -19,11 +19,11 @@
 //!
 //! /// Get the current weather for a city.
 //! #[tool]
-//! async fn get_weather(args: WeatherArgs) -> Result<serde_json::Value, adk_core::AdkError> {
+//! async fn get_weather(args: WeatherArgs) -> Result<serde_json::Value, adk_tool::AdkError> {
 //!     Ok(serde_json::json!({ "temp": 72, "city": args.city }))
 //! }
 //!
-//! // This generates a struct `GetWeather` that implements `adk_core::Tool`.
+//! // This generates a struct `GetWeather` that implements `adk_tool::Tool`.
 //! // Use it like: Arc::new(GetWeather)
 //! ```
 //!
@@ -44,7 +44,7 @@ use syn::{FnArg, ItemFn, Type, parse_macro_input};
 /// - The function must be `async`
 /// - It must take exactly one argument (the args struct) that implements
 ///   `serde::de::DeserializeOwned` and `schemars::JsonSchema`
-/// - It must return `Result<serde_json::Value, adk_core::AdkError>`
+/// - It must return `Result<serde_json::Value, adk_tool::AdkError>`
 /// - Doc comments become the tool description
 ///
 /// # Example
@@ -52,7 +52,7 @@ use syn::{FnArg, ItemFn, Type, parse_macro_input};
 /// ```rust,ignore
 /// /// Search the knowledge base for documents matching a query.
 /// #[tool]
-/// async fn search_docs(args: SearchArgs) -> Result<serde_json::Value, adk_core::AdkError> {
+/// async fn search_docs(args: SearchArgs) -> Result<serde_json::Value, adk_tool::AdkError> {
 ///     // ...
 /// }
 ///
@@ -166,7 +166,7 @@ pub fn tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
             },
             quote! {
                 let typed_args: #args_ty = serde_json::from_value(args)
-                    .map_err(|e| adk_core::AdkError::Tool(
+                    .map_err(|e| adk_tool::AdkError::Tool(
                         format!("invalid arguments for '{}': {e}", #tool_name_str)
                     ))?;
                 #fn_name(typed_args).await
@@ -188,7 +188,7 @@ pub fn tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
         if let Some(args_ty) = &args_type {
             quote! {
                 let typed_args: #args_ty = serde_json::from_value(args)
-                    .map_err(|e| adk_core::AdkError::Tool(
+                    .map_err(|e| adk_tool::AdkError::Tool(
                         format!("invalid arguments for '{}': {e}", #tool_name_str)
                     ))?;
                 #fn_name(ctx, typed_args).await
@@ -210,8 +210,8 @@ pub fn tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
         /// Auto-generated tool struct for [`#fn_name`].
         #fn_vis struct #struct_name;
 
-        #[async_trait::async_trait]
-        impl adk_core::Tool for #struct_name {
+        #[adk_tool::async_trait]
+        impl adk_tool::Tool for #struct_name {
             fn name(&self) -> &str {
                 #tool_name_str
             }
@@ -226,9 +226,9 @@ pub fn tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
             async fn execute(
                 &self,
-                ctx: std::sync::Arc<dyn adk_core::ToolContext>,
+                ctx: std::sync::Arc<dyn adk_tool::ToolContext>,
                 args: serde_json::Value,
-            ) -> adk_core::Result<serde_json::Value> {
+            ) -> adk_tool::Result<serde_json::Value> {
                 #execute_body
             }
         }

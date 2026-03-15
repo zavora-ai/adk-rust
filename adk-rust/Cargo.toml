@@ -27,6 +27,8 @@ standard = [
     "artifacts",
     "memory",
     "runner",
+    "server",
+    "cli",
     "telemetry",
     "plugin",
     "guardrail",

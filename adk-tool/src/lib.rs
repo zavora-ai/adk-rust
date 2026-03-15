@@ -65,7 +65,9 @@ pub mod toolset;
 #[cfg(feature = "code")]
 pub mod code_execution;
 
-pub use adk_core::{Tool, ToolContext, Toolset};
+pub use adk_core::{AdkError, Result, Tool, ToolContext, Toolset};
+/// Re-exported for use by the `#[tool]` macro.
+pub use async_trait::async_trait;
 pub use adk_macros::tool;
 pub use agent_tool::{AgentTool, AgentToolConfig};
 pub use builtin::{ExitLoopTool, GoogleSearchTool, LoadArtifactsTool};
