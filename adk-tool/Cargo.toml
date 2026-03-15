@@ -40,7 +40,7 @@ futures.workspace = true
 adk-code = { workspace = true, optional = true }
 adk-sandbox = { workspace = true, optional = true }
 # Optional: HTTP client for remote MCP servers
-reqwest = { version = "0.12", features = ["json"], optional = true }
+reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
 async-stream.workspace = true

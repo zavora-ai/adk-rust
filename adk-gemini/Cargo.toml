@@ -244,17 +244,13 @@ version = "0.3"
 version = "2.0"
 
 [dependencies.reqwest]
-version = "^0.12.15"
+workspace = true
 features = [
     "charset",
     "h2",
     "http2",
-    "json",
-    "stream",
     "macos-system-configuration",
-    "rustls-tls",
 ]
-default-features = false
 
 [dependencies.schemars]
 version = "1.0"
