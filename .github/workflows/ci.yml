@@ -12,12 +12,33 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  # cmake 4.x compat for audiopus
   CMAKE_POLICY_VERSION_MINIMUM: "3.5"
   PROTOC: protoc
 
+# Cancel in-progress runs for the same branch/PR
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check:
+  # ── Fast gate: formatting (< 30s) ──────────────────────────────
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: cachix/install-nix-action@v30
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+    - uses: cachix/cachix-action@v15
+      with:
+        name: devenv
+    - run: nix profile install nixpkgs#devenv
+    - name: Check formatting
+      run: devenv shell ws-fmt -- --check
+
+  # ── Lint: clippy (parallel with test) ──────────────────────────
+  clippy:
+    needs: fmt
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -26,23 +47,16 @@ jobs:
       run: |
         sudo rm -rf /usr/local/lib/android
         sudo rm -rf /usr/share/dotnet
-        df -h
 
-    # 1. Install Nix
     - uses: cachix/install-nix-action@v30
       with:
         nix_path: nixpkgs=channel:nixos-unstable
-
-    # 2. Use the 'devenv' cache (Crucial for devenv-nixpkgs)
     - uses: cachix/cachix-action@v15
       with:
         name: devenv
+    - run: nix profile install nixpkgs#devenv
 
-    # 3. Install devenv CLI
-    - name: Install devenv.sh
-      run: nix profile install nixpkgs#devenv
-
-    - name: Cache Devenv/Cargo artifacts
+    - name: Cache cargo artifacts
       uses: actions/cache@v4
       with:
         path: |
@@ -50,27 +64,59 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-        key: devenv-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          devenv-${{ runner.os }}-cargo-
-
-    - name: Check formatting
-      run: |
-        echo "🎨 Starting formatting check..."
-        devenv shell ws-fmt
+        key: clippy-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: clippy-${{ runner.os }}-
 
     - name: Run clippy
-      run: |
-        echo "🔍 Starting clippy lints..."
-        devenv shell ws-clippy --message-format=json | tee clippy.json
+      run: devenv shell ws-clippy --message-format=json | tee clippy.json
 
-    - name: Run tests
-      run: |
-        echo "🧪 Starting workspace tests..."
-        devenv shell ws-test | tee test.log
-
-    - name: Generate Summary
+    - name: Annotate clippy warnings
       if: always()
       run: |
-        echo "📊 Generating CI summary..."
-        devenv shell ws-summary
+        if [ -f clippy.json ]; then
+          ERRORS=$(grep -c '"level":"error"' clippy.json || echo 0)
+          WARNINGS=$(grep -c '"level":"warning"' clippy.json || echo 0)
+          echo "### 🔍 Clippy: ${ERRORS} errors, ${WARNINGS} warnings" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+  # ── Test: nextest (parallel with clippy) ───────────────────────
+  test:
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Free disk space
+      run: |
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /usr/share/dotnet
+
+    - uses: cachix/install-nix-action@v30
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+    - uses: cachix/cachix-action@v15
+      with:
+        name: devenv
+    - run: nix profile install nixpkgs#devenv
+
+    - name: Cache cargo artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/sccache
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: test-${{ runner.os }}-
+
+    - name: Run tests
+      run: devenv shell ws-test-ci | tee test.log
+
+    - name: Test summary
+      if: always()
+      run: |
+        if [ -f test.log ] && grep -q "tests run:" test.log; then
+          SUMMARY=$(grep "tests run:" test.log | tail -1)
+          echo "### 🧪 $SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+        fi
