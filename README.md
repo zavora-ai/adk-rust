@@ -177,9 +177,9 @@ Requires Rust 1.85 or later (Rust 2024 edition). Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.4"  # Standard preset: agents, models, tools, sessions, runner
+adk-rust = "0.4"  # Standard: agents, models, tools, sessions, runner, server, CLI
 
-# Need server, CLI, graph, browser, eval, realtime, audio, RAG?
+# Need graph, browser, eval, realtime, audio, RAG?
 # adk-rust = { version = "0.4", features = ["full"] }
 ```
 
@@ -745,10 +745,10 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-# Standard (default) — agents, models, tools, sessions, runner, guardrails, auth
+# Standard (default) — agents, models, tools, sessions, runner, server, CLI, guardrails, auth
 adk-rust = "0.4"
 
-# Full — adds server, CLI, graph, browser, eval, realtime, audio, RAG
+# Full — adds graph, browser, eval, realtime, audio, RAG, code, sandbox
 adk-rust = { version = "0.4", features = ["full"] }
 
 # Minimal — just agents + Gemini + runner (fastest build)

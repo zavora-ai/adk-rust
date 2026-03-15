@@ -35,11 +35,9 @@ standard = [
     "auth",
 ]
 
-# Full — standard + server, CLI, and all specialist crates (~2min clean build)
+# Full — standard + all specialist crates (~2min clean build)
 full = [
     "standard",
-    "server",
-    "cli",
     "graph",
     "code",
     "sandbox",

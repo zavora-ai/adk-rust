@@ -51,7 +51,7 @@
 //! # Standard (default) — agents, models, tools, sessions, runner, guardrails, auth
 //! adk-rust = "0.4"
 //!
-//! # Full — standard + server, CLI, graph, browser, eval, realtime, audio, RAG
+//! # Full — standard + graph, browser, eval, realtime, audio, RAG, code, sandbox
 //! adk-rust = { version = "0.4", features = ["full"] }
 //!
 //! # Minimal — just agents + Gemini + runner (fastest build)
@@ -414,8 +414,8 @@
 //! | `guardrail` | Input/output validation | standard |
 //! | `auth` | Access control | standard |
 //! | `plugin` | Plugin system | standard |
-//! | `server` | HTTP server + A2A | full |
-//! | `cli` | CLI launcher | full |
+//! | `server` | HTTP server + A2A | standard |
+//! | `cli` | CLI launcher | standard |
 //! | `graph` | Graph workflows | full |
 //! | `browser` | Browser automation | full |
 //! | `eval` | Agent evaluation | full |
