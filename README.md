@@ -147,7 +147,23 @@ Built-in tools:
 
 ## Quick Start
 
-### Installation
+### Scaffold a project (recommended)
+
+```bash
+cargo install cargo-adk
+
+cargo adk new my-agent                    # basic Gemini agent
+cargo adk new my-agent --template tools   # agent with #[tool] custom tools
+cargo adk new my-agent --template rag     # RAG with vector search
+cargo adk new my-agent --template api     # REST server
+cargo adk new my-agent --template openai  # OpenAI-powered agent
+
+cd my-agent
+cp .env.example .env    # add your API key
+cargo run
+```
+
+### Manual installation
 
 Requires Rust 1.85 or later (Rust 2024 edition). Add to your `Cargo.toml`:
 
@@ -157,11 +173,6 @@ adk-rust = "0.4"  # Standard preset: agents, models, tools, sessions, runner
 
 # Need server, CLI, graph, browser, eval, realtime, audio, RAG?
 # adk-rust = { version = "0.4", features = ["full"] }
-```
-
-**Nightly (latest features):**
-```toml
-adk-rust = { git = "https://github.com/zavora-ai/adk-rust", branch = "develop" }
 ```
 
 Set your API key:

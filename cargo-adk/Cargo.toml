@@ -1,0 +1,20 @@
+[package]
+name = "cargo-adk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "CLI scaffolding tool for ADK-Rust — generate agent projects from templates"
+repository = "https://github.com/zavora-ai/adk-rust"
+documentation = "https://docs.rs/cargo-adk"
+keywords = ["adk", "agent", "scaffold", "cli", "ai"]
+categories = ["development-tools", "command-line-utilities"]
+readme = "README.md"
+
+[[bin]]
+name = "cargo-adk"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }

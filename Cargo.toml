@@ -30,6 +30,9 @@ members = [
     "adk-audio",
     "adk-deploy",
 
+    # CLI tools
+    "cargo-adk",
+
     # Examples (essential only — full collection in adk-playground repo)
     "examples",
     "examples/ralph",

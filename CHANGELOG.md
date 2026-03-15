@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### `cargo-adk` Scaffolding CLI
+- **Project scaffolding**: New `cargo-adk` binary for generating agent projects from templates. `cargo adk new my-agent` scaffolds a working project with the right dependencies, feature flags, and boilerplate. Templates: `basic`, `tools` (#[tool] macro), `rag` (vector search), `api` (REST server), `openai`. Supports `--provider` flag for OpenAI/Anthropic/Gemini.
+
 #### `#[tool]` Proc Macro (adk-macros)
 - **Zero-boilerplate tool registration**: New `#[tool]` attribute macro turns an async function into a full `Tool` implementation. Doc comments become the description, argument types derive JSON schemas via schemars, and a PascalCase struct is generated implementing `adk_core::Tool`. Supports both standalone functions and functions with `Arc<dyn ToolContext>` parameter. Schema output is automatically cleaned for LLM API compatibility (strips `$schema`, simplifies nullable types).
 
