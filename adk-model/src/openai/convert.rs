@@ -10,8 +10,8 @@ use async_openai::types::chat::{
     ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
     ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
     ChatCompletionTool, ChatCompletionTools, CreateChatCompletionResponse,
-    CreateChatCompletionStreamResponse, FinishReason as OaiFinishReason, FunctionCall,
-    FunctionObject, ImageUrl, InputAudio, InputAudioFormat,
+    FinishReason as OaiFinishReason, FunctionCall, FunctionObject, ImageUrl, InputAudio,
+    InputAudioFormat,
 };
 use std::collections::HashMap;
 
@@ -242,7 +242,9 @@ pub fn convert_tools(tools: &HashMap<String, serde_json::Value>) -> Vec<ChatComp
 }
 
 /// Convert OpenAI response to ADK LlmResponse (for non-streaming use).
-#[allow(dead_code)]
+///
+/// Used by [`AzureOpenAIClient`](super::client::AzureOpenAIClient) which still
+/// goes through `async-openai`'s typed client.
 pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse {
     let content = resp.choices.first().map(|choice| {
         let mut parts = Vec::new();
@@ -415,70 +417,6 @@ pub fn from_raw_openai_response(json: &serde_json::Value) -> LlmResponse {
         citation_metadata: None,
         partial: false,
         turn_complete: true,
-        interrupted: false,
-        error_code: None,
-        error_message: None,
-    }
-}
-
-/// Convert OpenAI stream chunk to ADK LlmResponse.
-#[allow(dead_code)]
-pub fn from_openai_chunk(chunk: &CreateChatCompletionStreamResponse) -> LlmResponse {
-    let content = chunk.choices.first().and_then(|choice| {
-        let mut parts = Vec::new();
-
-        // Add text content from delta
-        if let Some(text) = &choice.delta.content {
-            if !text.is_empty() {
-                parts.push(Part::Text { text: text.clone() });
-            }
-        }
-
-        // Add tool calls from delta
-        if let Some(tool_calls) = &choice.delta.tool_calls {
-            for tc in tool_calls {
-                if let Some(func) = &tc.function {
-                    if let Some(name) = &func.name {
-                        if !name.is_empty() {
-                            let args: serde_json::Value = func
-                                .arguments
-                                .as_ref()
-                                .and_then(|a| serde_json::from_str(a).ok())
-                                .unwrap_or(serde_json::json!({}));
-                            parts.push(Part::FunctionCall {
-                                name: name.clone(),
-                                args,
-                                id: tc.id.clone(),
-                                thought_signature: None,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        // Only return content if there are actual parts
-        // This prevents empty Content from being accumulated in conversation history
-        if parts.is_empty() { None } else { Some(Content { role: "model".to_string(), parts }) }
-    });
-
-    let finish_reason = chunk.choices.first().and_then(|c| c.finish_reason).map(|fr| match fr {
-        OaiFinishReason::Stop => FinishReason::Stop,
-        OaiFinishReason::Length => FinishReason::MaxTokens,
-        OaiFinishReason::ToolCalls => FinishReason::Stop,
-        OaiFinishReason::ContentFilter => FinishReason::Safety,
-        OaiFinishReason::FunctionCall => FinishReason::Stop,
-    });
-
-    let is_final = chunk.choices.first().map(|c| c.finish_reason.is_some()).unwrap_or(false);
-
-    LlmResponse {
-        content,
-        usage_metadata: None, // Streaming chunks don't have usage info
-        finish_reason,
-        citation_metadata: None,
-        partial: !is_final,
-        turn_complete: is_final,
         interrupted: false,
         error_code: None,
         error_message: None,

@@ -24,7 +24,7 @@ The fastest way to get a working RAG pipeline. Uses Gemini for embeddings (free 
 
 ```toml
 [dependencies]
-adk-rag = { version = "0.3", features = ["gemini"] }
+adk-rag = { version = "0.4", features = ["gemini"] }
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -70,10 +70,10 @@ The practical use case — an agent that searches your knowledge base to answer 
 
 ```toml
 [dependencies]
-adk-rag = { version = "0.3", features = ["gemini"] }
-adk-agent = "0.3"
-adk-model = "0.3"
-adk-cli = "0.3"
+adk-rag = { version = "0.4", features = ["gemini"] }
+adk-agent = "0.4"
+adk-model = "0.4"
+adk-cli = "0.4"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -149,7 +149,7 @@ The `RagPipeline` wires these together. The `RagTool` wraps the pipeline as an `
 Uses Google's `gemini-embedding-001` model (3072 dimensions). Free tier available.
 
 ```toml
-adk-rag = { version = "0.3", features = ["gemini"] }
+adk-rag = { version = "0.4", features = ["gemini"] }
 ```
 
 ```rust
@@ -161,7 +161,7 @@ let provider = GeminiEmbeddingProvider::new(&api_key)?;
 Uses `text-embedding-3-small` (1536 dimensions) by default. Supports dimension truncation via Matryoshka.
 
 ```toml
-adk-rag = { version = "0.3", features = ["openai"] }
+adk-rag = { version = "0.4", features = ["openai"] }
 ```
 
 ```rust
@@ -217,7 +217,7 @@ let store = InMemoryVectorStore::new();
 Production-ready vector database with filtering, snapshots, and clustering.
 
 ```toml
-adk-rag = { version = "0.3", features = ["qdrant"] }
+adk-rag = { version = "0.4", features = ["qdrant"] }
 ```
 
 ```rust
@@ -229,7 +229,7 @@ let store = QdrantVectorStore::new("http://localhost:6334").await?;
 Embedded vector database with no server required. Data persists to disk.
 
 ```toml
-adk-rag = { version = "0.3", features = ["lancedb"] }
+adk-rag = { version = "0.4", features = ["lancedb"] }
 ```
 
 > Requires `protoc` installed: `brew install protobuf` (macOS), `apt install protobuf-compiler` (Ubuntu).
@@ -243,7 +243,7 @@ let store = LanceDBVectorStore::new("/tmp/my-vectors").await?;
 Use your existing PostgreSQL database for vector search.
 
 ```toml
-adk-rag = { version = "0.3", features = ["pgvector"] }
+adk-rag = { version = "0.4", features = ["pgvector"] }
 ```
 
 ```rust
@@ -255,7 +255,7 @@ let store = PgVectorStore::new("postgres://user:pass@localhost/mydb").await?;
 Embedded or remote multi-model database with built-in vector search.
 
 ```toml
-adk-rag = { version = "0.3", features = ["surrealdb"] }
+adk-rag = { version = "0.4", features = ["surrealdb"] }
 ```
 
 ```rust
@@ -305,7 +305,7 @@ The default `NoOpReranker` passes results through unchanged. Write your own to i
 
 ```toml
 [dependencies]
-adk-rag = { version = "0.3", features = ["gemini"] }
+adk-rag = { version = "0.4", features = ["gemini"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["full"] }
 ```
@@ -358,19 +358,19 @@ let pipeline = RagPipeline::builder()
 
 ```toml
 # Core only (in-memory store, all chunkers, no external deps)
-adk-rag = "0.3"
+adk-rag = "0.4"
 
 # With Gemini embeddings (recommended)
-adk-rag = { version = "0.3", features = ["gemini"] }
+adk-rag = { version = "0.4", features = ["gemini"] }
 
 # With OpenAI embeddings
-adk-rag = { version = "0.3", features = ["openai"] }
+adk-rag = { version = "0.4", features = ["openai"] }
 
 # With a persistent vector store
-adk-rag = { version = "0.3", features = ["gemini", "qdrant"] }
+adk-rag = { version = "0.4", features = ["gemini", "qdrant"] }
 
 # Everything
-adk-rag = { version = "0.3", features = ["full"] }
+adk-rag = { version = "0.4", features = ["full"] }
 ```
 
 | Feature | Enables | Extra dependency |

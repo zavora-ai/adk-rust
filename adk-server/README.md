@@ -23,14 +23,14 @@ HTTP server and A2A protocol for Rust Agent Development Kit (ADK-Rust) agents.
 
 ```toml
 [dependencies]
-adk-server = "0.3.2"
+adk-server = "0.4"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.3.2", features = ["server"] }
+adk-rust = { version = "0.4", features = ["server"] }
 ```
 
 ## Quick Start
