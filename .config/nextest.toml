@@ -1,0 +1,28 @@
+# =============================================================================
+# cargo-nextest configuration
+# =============================================================================
+# Docs: https://nexte.st/docs/configuration/
+#
+# Install: curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C ~/.cargo/bin
+# Run:     cargo nextest run --workspace
+
+[profile.default]
+# Run test binaries with moderate parallelism
+test-threads = "num-cpus"
+# Fail-fast: stop on first failure in CI-like runs
+fail-fast = true
+# Retry flaky tests once before reporting failure
+retries = 0
+# Status level controls what gets printed
+status-level = "pass"
+final-status-level = "flaky"
+# Slow test warning threshold
+slow-timeout = { period = "30s", terminate-after = 3 }
+
+[profile.ci]
+# CI profile: stricter, with retries for flaky network tests
+retries = 2
+fail-fast = true
+status-level = "retry"
+final-status-level = "slow"
+slow-timeout = { period = "60s", terminate-after = 2 }

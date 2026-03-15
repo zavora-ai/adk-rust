@@ -8,7 +8,7 @@ use claudius::{
     Base64ImageSource, Base64PdfSource, CacheControlEphemeral, ContentBlock, DocumentBlock,
     ImageBlock, Message, MessageCreateParams, MessageParam, MessageRole, Model, PlainTextSource,
     StopReason, SystemPrompt, TextBlock, ToolParam, ToolResultBlock, ToolResultBlockContent,
-    ToolUnionParam, ToolUseBlock, UrlPdfSource,
+    ToolUnionParam, ToolUseBlock, UrlImageSource, UrlPdfSource,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -107,6 +107,13 @@ pub fn content_to_message(
                     Some(ContentBlock::Document(DocumentBlock::new_with_url_pdf(
                         UrlPdfSource::new(file_uri.clone()),
                     )))
+                } else if matches!(
+                    mime_type.as_str(),
+                    "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+                ) {
+                    Some(ContentBlock::Image(ImageBlock::new_with_url(UrlImageSource::new(
+                        file_uri.clone(),
+                    ))))
                 } else {
                     Some(ContentBlock::Text(TextBlock::new(attachment::file_attachment_to_text(
                         mime_type, file_uri,
@@ -495,6 +502,65 @@ mod tests {
         assert_eq!(content_blocks[0]["type"], "document");
         assert_eq!(content_blocks[0]["source"]["type"], "url");
         assert_eq!(content_blocks[0]["source"]["url"], "https://example.com/test.pdf");
+    }
+
+    #[test]
+    fn test_content_to_message_image_file_data_maps_to_url_image() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![
+                Part::Text { text: "Describe this".to_string() },
+                Part::FileData {
+                    mime_type: "image/jpeg".to_string(),
+                    file_uri: "https://example.com/photo.jpg".to_string(),
+                },
+            ],
+        };
+        let msg = content_to_message(&content, false).unwrap();
+
+        let json = serde_json::to_value(&msg).unwrap();
+        let content_blocks = json["content"].as_array().unwrap();
+        assert_eq!(content_blocks.len(), 2);
+        assert_eq!(content_blocks[0]["type"], "text");
+        assert_eq!(content_blocks[1]["type"], "image");
+        assert_eq!(content_blocks[1]["source"]["type"], "url");
+        assert_eq!(content_blocks[1]["source"]["url"], "https://example.com/photo.jpg");
+    }
+
+    #[test]
+    fn test_content_to_message_webp_file_data_maps_to_url_image() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::FileData {
+                mime_type: "image/webp".to_string(),
+                file_uri: "https://example.com/image.webp".to_string(),
+            }],
+        };
+        let msg = content_to_message(&content, false).unwrap();
+
+        let json = serde_json::to_value(&msg).unwrap();
+        let content_blocks = json["content"].as_array().unwrap();
+        assert_eq!(content_blocks.len(), 1);
+        assert_eq!(content_blocks[0]["type"], "image");
+        assert_eq!(content_blocks[0]["source"]["url"], "https://example.com/image.webp");
+    }
+
+    #[test]
+    fn test_content_to_message_unsupported_file_data_falls_back_to_text() {
+        let content = Content {
+            role: "user".to_string(),
+            parts: vec![Part::FileData {
+                mime_type: "audio/wav".to_string(),
+                file_uri: "https://example.com/audio.wav".to_string(),
+            }],
+        };
+        let msg = content_to_message(&content, false).unwrap();
+
+        let json = serde_json::to_value(&msg).unwrap();
+        let content_blocks = json["content"].as_array().unwrap();
+        assert_eq!(content_blocks.len(), 1);
+        assert_eq!(content_blocks[0]["type"], "text");
+        assert!(content_blocks[0]["text"].as_str().unwrap().contains("audio/wav"));
     }
 
     #[test]

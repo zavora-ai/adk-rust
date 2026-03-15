@@ -50,7 +50,7 @@ Run these before every commit. CI enforces them — save yourself the round-trip
 ```bash
 cargo fmt --all                                          # Format
 cargo clippy --workspace --all-targets -- -D warnings    # Lint (zero warnings)
-cargo test --workspace                                   # Test
+cargo nextest run --workspace                            # Test (parallel, ~10x faster)
 ```
 
 ### 4. Submit a PR
@@ -85,7 +85,7 @@ make check-env
 cargo build --workspace
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo nextest run --workspace
 ```
 
 ### Prerequisites
@@ -217,7 +217,7 @@ Every PR must pass these checks. CI enforces them automatically.
 |------|---------|-----------------|
 | Format | `cargo fmt --all -- --check` | Inconsistent formatting |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | Warnings, dead code, anti-patterns |
-| Test | `cargo test --workspace` | Regressions, broken logic |
+| Test | `cargo nextest run --workspace` | Regressions, broken logic |
 
 ### Quick Validation
 
@@ -226,7 +226,7 @@ Run all three in sequence:
 ```bash
 cargo fmt --all && \
 cargo clippy --workspace --all-targets -- -D warnings && \
-cargo test --workspace
+cargo nextest run --workspace
 ```
 
 If all three pass, your PR will pass CI.
@@ -287,19 +287,27 @@ Key feature flags on `adk-model` and `examples`:
 
 ## Testing
 
+ADK-Rust uses [cargo-nextest](https://nexte.st/) for parallel test execution (~10x faster than `cargo test`).
+
 ```bash
+# Install (one-time, or use devenv which includes it)
+curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C ${CARGO_HOME:-~/.cargo}/bin
+
 # Full workspace
-cargo test --workspace
+cargo nextest run --workspace
 
 # Single crate
-cargo test -p adk-core
-cargo test -p adk-gemini
+cargo nextest run -p adk-core
+cargo nextest run -p adk-gemini
 
 # With features
-cargo test -p adk-realtime --features full
+cargo nextest run -p adk-realtime --features full
 
 # Standalone crate (Ralph)
-cargo test -p ralph
+cargo nextest run -p ralph
+
+# Doctests (nextest doesn't run these)
+cargo test --workspace --doc
 ```
 
 ### Test Organization
@@ -387,7 +395,7 @@ Every PR has a template with this checklist. Fill it out when you open your PR.
 
 - [ ] `cargo fmt --all` — code is formatted
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` — zero warnings
-- [ ] `cargo test --workspace` — all tests pass
+- [ ] `cargo nextest run --workspace` — all tests pass
 - [ ] Builds clean: `cargo build --workspace`
 
 ### Code Quality

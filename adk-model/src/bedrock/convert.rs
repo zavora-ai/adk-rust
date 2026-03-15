@@ -7,13 +7,16 @@ use super::config::{BedrockCacheConfig, BedrockCacheTtl};
 use adk_core::{Content, FinishReason, GenerateContentConfig, LlmResponse, Part, UsageMetadata};
 use aws_sdk_bedrockruntime::types::{
     self as bedrock, CachePointBlock, CachePointType, CacheTtl, ContentBlock, ContentBlockDelta,
-    ContentBlockStart, ConversationRole, ConverseOutput, InferenceConfiguration, Message,
-    StopReason, SystemContentBlock, Tool, ToolConfiguration, ToolInputSchema, ToolResultBlock,
-    ToolResultContentBlock, ToolSpecification, ToolUseBlock,
+    ContentBlockStart, ConversationRole, ConverseOutput, DocumentBlock, DocumentFormat,
+    DocumentSource, ImageBlock, ImageFormat as BedrockImageFormat, ImageSource,
+    InferenceConfiguration, Message, StopReason, SystemContentBlock, Tool, ToolConfiguration,
+    ToolInputSchema, ToolResultBlock, ToolResultContentBlock, ToolSpecification, ToolUseBlock,
 };
 use aws_smithy_types::Document;
 use serde_json::Value;
 use std::collections::HashMap;
+
+use super::super::attachment;
 
 /// Result of converting an `LlmRequest` into Bedrock Converse API inputs.
 ///
@@ -147,11 +150,74 @@ fn adk_parts_to_bedrock(parts: &[Part]) -> Vec<ContentBlock> {
                     Some(ContentBlock::Text(thinking.clone()))
                 }
             }
-            // InlineData and FileData are not directly supported by Bedrock Converse text API;
-            // skip them for now (image/document support can be added later).
-            Part::InlineData { .. } | Part::FileData { .. } => None,
+            Part::InlineData { mime_type, data } => {
+                if let Some(fmt) = mime_to_bedrock_image_format(mime_type) {
+                    let source = ImageSource::Bytes(aws_smithy_types::Blob::new(data.as_slice()));
+                    ImageBlock::builder()
+                        .format(fmt)
+                        .source(source)
+                        .build()
+                        .ok()
+                        .map(ContentBlock::Image)
+                } else if let Some(fmt) = mime_to_bedrock_document_format(mime_type) {
+                    let source =
+                        DocumentSource::Bytes(aws_smithy_types::Blob::new(data.as_slice()));
+                    DocumentBlock::builder()
+                        .format(fmt)
+                        .name("document")
+                        .source(source)
+                        .build()
+                        .ok()
+                        .map(ContentBlock::Document)
+                } else {
+                    // Unsupported MIME type — skip silently
+                    None
+                }
+            }
+            Part::FileData { mime_type, .. } => {
+                // Bedrock Converse API supports S3 URIs for images/documents, but not
+                // arbitrary HTTP URLs. For now, represent as text so the model sees the
+                // reference rather than silently dropping it.
+                if mime_type.starts_with("image/")
+                    || mime_to_bedrock_document_format(mime_type).is_some()
+                {
+                    Some(ContentBlock::Text(attachment::file_attachment_to_text(
+                        mime_type,
+                        part.file_uri().unwrap_or(""),
+                    )))
+                } else {
+                    None
+                }
+            }
         })
         .collect()
+}
+
+/// Map a MIME type to a Bedrock `ImageFormat`, if supported.
+fn mime_to_bedrock_image_format(mime_type: &str) -> Option<BedrockImageFormat> {
+    match mime_type {
+        "image/jpeg" | "image/jpg" => Some(BedrockImageFormat::Jpeg),
+        "image/png" => Some(BedrockImageFormat::Png),
+        "image/gif" => Some(BedrockImageFormat::Gif),
+        "image/webp" => Some(BedrockImageFormat::Webp),
+        _ => None,
+    }
+}
+
+/// Map a MIME type to a Bedrock `DocumentFormat`, if supported.
+fn mime_to_bedrock_document_format(mime_type: &str) -> Option<DocumentFormat> {
+    match mime_type {
+        "application/pdf" => Some(DocumentFormat::Pdf),
+        "text/csv" => Some(DocumentFormat::Csv),
+        "text/html" => Some(DocumentFormat::Html),
+        "text/markdown" => Some(DocumentFormat::Md),
+        "text/plain" => Some(DocumentFormat::Txt),
+        "application/msword" => Some(DocumentFormat::Doc),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => {
+            Some(DocumentFormat::Docx)
+        }
+        _ => None,
+    }
 }
 
 /// Convert ADK tool declarations to Bedrock `ToolConfiguration`.
@@ -292,9 +358,33 @@ fn bedrock_content_blocks_to_parts(blocks: &[ContentBlock]) -> Vec<Part> {
                     None
                 }
             }
+            ContentBlock::Image(image_block) => {
+                let mime_type = bedrock_image_format_to_mime(image_block.format());
+                image_block.source().and_then(|source| {
+                    if let Ok(blob) = source.as_bytes() {
+                        Some(Part::InlineData {
+                            mime_type: mime_type.to_string(),
+                            data: blob.as_ref().to_vec(),
+                        })
+                    } else {
+                        None
+                    }
+                })
+            }
             _ => None,
         })
         .collect()
+}
+
+/// Map a Bedrock `ImageFormat` back to a MIME type string.
+fn bedrock_image_format_to_mime(format: &BedrockImageFormat) -> &'static str {
+    match format {
+        BedrockImageFormat::Jpeg => "image/jpeg",
+        BedrockImageFormat::Png => "image/png",
+        BedrockImageFormat::Gif => "image/gif",
+        BedrockImageFormat::Webp => "image/webp",
+        _ => "image/png",
+    }
 }
 
 /// Map Bedrock `StopReason` to ADK `FinishReason`.
@@ -937,5 +1027,113 @@ mod tests {
         assert_eq!(*cache_point.r#type(), CachePointType::Default);
         // FiveMinutes is the default — no explicit TTL set
         assert!(cache_point.ttl().is_none());
+    }
+
+    #[test]
+    fn test_inline_image_converts_to_image_block() {
+        let contents = vec![Content {
+            role: "user".to_string(),
+            parts: vec![
+                Part::Text { text: "What is in this image?".to_string() },
+                Part::InlineData {
+                    mime_type: "image/png".to_string(),
+                    data: vec![0x89, 0x50, 0x4E, 0x47],
+                },
+            ],
+        }];
+
+        let result = adk_request_to_bedrock(&contents, &HashMap::new(), None, None).unwrap();
+        assert_eq!(result.messages.len(), 1);
+        let blocks = &result.messages[0].content;
+        assert_eq!(blocks.len(), 2);
+        assert!(blocks[0].is_text());
+        assert!(blocks[1].is_image());
+    }
+
+    #[test]
+    fn test_inline_jpeg_converts_to_image_block() {
+        let parts = vec![Part::InlineData {
+            mime_type: "image/jpeg".to_string(),
+            data: vec![0xFF, 0xD8, 0xFF],
+        }];
+        let blocks = adk_parts_to_bedrock(&parts);
+        assert_eq!(blocks.len(), 1);
+        let img = blocks[0].as_image().unwrap();
+        assert_eq!(*img.format(), BedrockImageFormat::Jpeg);
+    }
+
+    #[test]
+    fn test_inline_pdf_converts_to_document_block() {
+        let parts = vec![Part::InlineData {
+            mime_type: "application/pdf".to_string(),
+            data: b"%PDF-1.4".to_vec(),
+        }];
+        let blocks = adk_parts_to_bedrock(&parts);
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].is_document());
+    }
+
+    #[test]
+    fn test_inline_csv_converts_to_document_block() {
+        let parts = vec![Part::InlineData {
+            mime_type: "text/csv".to_string(),
+            data: b"a,b,c\n1,2,3".to_vec(),
+        }];
+        let blocks = adk_parts_to_bedrock(&parts);
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].is_document());
+    }
+
+    #[test]
+    fn test_unsupported_mime_type_skipped() {
+        let parts = vec![Part::InlineData {
+            mime_type: "application/octet-stream".to_string(),
+            data: vec![0xCA, 0xFE],
+        }];
+        let blocks = adk_parts_to_bedrock(&parts);
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn test_file_data_image_url_becomes_text_reference() {
+        let parts = vec![Part::FileData {
+            mime_type: "image/jpeg".to_string(),
+            file_uri: "https://example.com/photo.jpg".to_string(),
+        }];
+        let blocks = adk_parts_to_bedrock(&parts);
+        assert_eq!(blocks.len(), 1);
+        let text = blocks[0].as_text().unwrap();
+        assert!(text.contains("image/jpeg"));
+        assert!(text.contains("https://example.com/photo.jpg"));
+    }
+
+    #[test]
+    fn test_file_data_unsupported_mime_skipped() {
+        let parts = vec![Part::FileData {
+            mime_type: "application/octet-stream".to_string(),
+            file_uri: "https://example.com/data.bin".to_string(),
+        }];
+        let blocks = adk_parts_to_bedrock(&parts);
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn test_bedrock_image_response_converts_to_inline_data() {
+        let image_bytes = vec![0x89, 0x50, 0x4E, 0x47];
+        let image_block = ImageBlock::builder()
+            .format(BedrockImageFormat::Png)
+            .source(ImageSource::Bytes(aws_smithy_types::Blob::new(image_bytes.as_slice())))
+            .build()
+            .unwrap();
+
+        let parts = bedrock_content_blocks_to_parts(&[ContentBlock::Image(image_block)]);
+        assert_eq!(parts.len(), 1);
+        match &parts[0] {
+            Part::InlineData { mime_type, data } => {
+                assert_eq!(mime_type, "image/png");
+                assert_eq!(data, &image_bytes);
+            }
+            _ => panic!("expected Part::InlineData"),
+        }
     }
 }

@@ -22,10 +22,7 @@ async fn main() -> anyhow::Result<()> {
             role: "user".to_string(),
             parts: vec![Part::Text { text: "Say hello in one sentence.".to_string() }],
         }],
-        config: Some(GenerateContentConfig {
-            max_output_tokens: Some(256),
-            ..Default::default()
-        }),
+        config: Some(GenerateContentConfig { max_output_tokens: Some(256), ..Default::default() }),
         tools: HashMap::new(),
     };
 

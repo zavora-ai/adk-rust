@@ -70,6 +70,9 @@
     # Frontend tooling (ADK Studio UI)
     nodePackages.pnpm
 
+    # Test runner
+    cargo-nextest      # Parallel test runner (~10x faster than cargo test)
+
     # Utilities
     just               # Modern make alternative (optional)
     git
@@ -109,15 +112,17 @@
   # --------------------------------------------------------------------------
   tasks = {
     "ci:test" = {
-      description = "Run full workspace checks.";
-      exec = "cargo check && cargo test";
+      description = "Run full workspace quality gates.";
+      exec = "cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings && cargo nextest run --workspace";
     };
   };
 
   scripts = {
     ws-fmt.exec = "cargo fmt --all $@";
     ws-check.exec = "RUSTC_WRAPPER=sccache cargo check --workspace $@";
-    ws-test.exec = "RUSTC_WRAPPER=sccache cargo test --workspace $@";
+    ws-test.exec = "RUSTC_WRAPPER=sccache cargo nextest run --workspace $@";
+    ws-test-ci.exec = "RUSTC_WRAPPER=sccache cargo nextest run --workspace --profile ci $@";
+    ws-test-slow.exec = "RUSTC_WRAPPER=sccache cargo test --workspace $@";
     ws-clippy.exec = "RUSTC_WRAPPER=sccache cargo clippy --workspace $@ -- -D warnings";
     ws-summary.exec = ''
       if [ -n "$GITHUB_STEP_SUMMARY" ]; then
@@ -154,12 +159,25 @@
         # 3. Test Results
         if [ -f "test.log" ]; then
           echo "### 🧪 Test Results" >> "$GITHUB_STEP_SUMMARY"
-          PASSED=$(grep -oP "\d+(?= passed)" test.log | awk '{sum += $1} END {print sum}')
-          FAILED=$(grep -oP "\d+(?= failed)" test.log | awk '{sum += $1} END {print sum}')
-          echo "- **Passed:** ''${PASSED:-0}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Failed:** ''${FAILED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          # nextest summary line: "N tests run: N passed, N skipped"
+          if grep -q "tests run:" test.log; then
+            RUN=$(grep "tests run:" test.log | grep -oP "\d+(?= tests run)" || echo 0)
+            PASSED=$(grep "tests run:" test.log | grep -oP "\d+(?= passed)" || echo 0)
+            SKIPPED=$(grep "tests run:" test.log | grep -oP "\d+(?= skipped)" || echo 0)
+            FAILED=$(grep "tests run:" test.log | grep -oP "\d+(?= failed)" || echo 0)
+            echo "- **Run:** ''${RUN:-0}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Passed:** ''${PASSED:-0}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failed:** ''${FAILED:-0}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Skipped:** ''${SKIPPED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            # Fallback: cargo test output
+            PASSED=$(grep -oP "\d+(?= passed)" test.log | awk '{sum += $1} END {print sum}')
+            FAILED=$(grep -oP "\d+(?= failed)" test.log | awk '{sum += $1} END {print sum}')
+            echo "- **Passed:** ''${PASSED:-0}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failed:** ''${FAILED:-0}" >> "$GITHUB_STEP_SUMMARY"
+          fi
         else
-          echo "💡 To include test stats, run: devenv shell ws-test | tee test.log"
+          echo "💡 To include test stats, run: devenv shell ws-test-ci | tee test.log"
         fi
       else
         echo "GITHUB_STEP_SUMMARY not set, skipping summary generation."
@@ -170,7 +188,7 @@
   # --------------------------------------------------------------------------
   # Test & Shell Hooks
   # --------------------------------------------------------------------------
-  enterTest = "ws-test"; # Runs the 'ws-test' script above
+  enterTest = "ws-test-ci"; # Runs nextest with CI profile
 
   # --------------------------------------------------------------------------
   # Quality Gates (Git-Hooks)
@@ -191,6 +209,6 @@
     echo "   sccache: $(sccache --version 2>/dev/null || echo 'not found')"
     echo "   Node:    $(node --version)"
     echo ""
-    echo "💡 Run 'devenv tasks list' or use the scripts: fmt, check, test, clippy."
+    echo "💡 Run 'devenv tasks list' or use the scripts: ws-fmt, ws-check, ws-test, ws-clippy."
   '';
 }
