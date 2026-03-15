@@ -86,7 +86,7 @@ tracing-subscriber.workspace = true
 async-trait.workspace = true
 dotenvy = "0.15"
 miniz_oxide = "0.8"
-rmcp = { version = "0.15", features = ["client", "transport-child-process"] }
+rmcp = { version = "0.17", features = ["client", "transport-child-process"] }
 
 [dev-dependencies]
 proptest = "1.0"

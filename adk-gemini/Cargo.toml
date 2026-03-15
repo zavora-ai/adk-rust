@@ -269,11 +269,11 @@ version = "0.8"
 features = ["backtrace"]
 
 [dependencies.strum]
-version = "0.27"
+version = "0.28"
 features = ["derive"]
 
 [dependencies.strum_macros]
-version = "0.27"
+version = "0.28"
 
 [dependencies.time]
 version = "0.3"
