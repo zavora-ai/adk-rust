@@ -35,6 +35,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **vision_test**: OpenAI model changed from `gpt-5-mini` to `gpt-4o-mini`.
 - **Cleanup**: Removed 20 non-essential `openai_*` example directories (full collection in adk-playground repo).
 
+#### adk-telemetry
+- **Proper error type**: Replaced `Box<dyn std::error::Error>` with `TelemetryError` (thiserror) in all init functions. Convention-compliant typed errors.
+
+#### adk-plugin
+- **Removed unused dependencies**: `async-trait` and `serde` removed from Cargo.toml (never imported).
+
+#### adk-memory
+- **Shared text utilities**: Extracted `extract_text()`, `extract_words()`, and `extract_words_from_content()` into `adk_memory::text` module. Removed duplicate implementations from 5 backends (postgres, sqlite, mongodb, neo4j, redis) and inmemory.
+
+#### Documentation (Tier 2 crates)
+- **adk-artifact**: Documented all request/response structs, `ArtifactService` trait methods, `InMemoryArtifactService`.
+- **adk-guardrail**: Documented `GuardrailError` variants, `GuardrailSet` methods, `ExecutionResult` fields.
+- **adk-skill**: Documented 8 public functions (`select_skills`, `apply_skill_injection`, `discover_skill_files`, `parse_skill_markdown`, `load_skill_index`, etc.).
+- **adk-gemini**: Removed `println!` debug statements from tests.
+- **README versions**: Bumped 0.3→0.4 in adk-telemetry, adk-memory, adk-artifact, adk-plugin, adk-guardrail, adk-gemini.
+
 ### Removed
 - **adk-doc-audit**: Removed from workspace (docs.rs provides this functionality). Backed up to standalone directory.
 
