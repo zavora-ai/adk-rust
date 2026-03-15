@@ -11,7 +11,15 @@
 >
 > **Contributors:** Many thanks to[@mikefaille](https://github.com/mikefaille) — AdkIdentity design, realtime audio, LiveKit bridge, skill system. [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI-compatible providers, xAI, multimodal content. [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [@danielsan](https://github.com/danielsan) — Google deps issue & PR (#181, #203), RAG crash report (#205). [@CodingFlow](https://github.com/CodingFlow) — Gemini 3 thinking level, global endpoint, citationSources (#177, #178, #179). [@ctylx](https://github.com/ctylx) — skill discovery fix (#204). [@poborin](https://github.com/poborin) — project config proposal (#176). [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 
-A comprehensive and production-ready Rust framework for building AI agents. Create powerful and high-performance AI agent systems with a flexible, modular architecture. Model-agnostic. Type-safe. Blazingly fast.
+A comprehensive and production-ready Rust framework for building AI agents. Create powerful and high-performance AI agent systems with a flexible, modular architecture. Model-agnostic. Type-safe. Blazingly fast. 
+
+```bash
+cargo install cargo-adk
+cargo adk new my-agent
+cd my-agent && cargo run
+```
+
+Or pick a template: `--template tools` | `rag` | `api` | `openai`. See [Quick Start](#quick-start) for details.
 
 ## Overview
 
