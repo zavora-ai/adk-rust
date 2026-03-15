@@ -8,6 +8,11 @@ const CONVENTION_FILES: &[&str] =
 const IGNORED_DIRS: &[&str] =
     &[".git", ".hg", ".svn", "target", "node_modules", ".next", "dist", "build", "coverage"];
 
+/// Discovers all Markdown skill files under the `.skills` directory at `root`.
+///
+/// Recursively walks `.skills/`, collecting `.md` files and excluding known
+/// support subdirectories (e.g. `references/`, `agents/`, `scripts/`). Returns
+/// an empty list if the `.skills` directory does not exist.
 pub fn discover_skill_files(root: impl AsRef<Path>) -> SkillResult<Vec<PathBuf>> {
     let skill_root = root.as_ref().join(".skills");
     if !skill_root.exists() {
@@ -41,6 +46,10 @@ fn is_skill_support_file(path: &Path) -> bool {
     })
 }
 
+/// Discovers all instruction files: both `.skills/` Markdown files and
+/// convention files (e.g. `AGENTS.md`, `CLAUDE.md`, `SOUL.md`) found anywhere
+/// in the project tree, excluding common build and dependency directories.
+/// Results are sorted and deduplicated.
 pub fn discover_instruction_files(root: impl AsRef<Path>) -> SkillResult<Vec<PathBuf>> {
     let root = root.as_ref();
     let mut files = discover_skill_files(root)?;

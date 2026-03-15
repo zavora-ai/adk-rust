@@ -77,6 +77,11 @@ impl SkillInjector {
     }
 }
 
+/// Selects the top-scoring skill for a query and returns its formatted prompt block.
+///
+/// Returns `None` if no skill meets the selection criteria. The prompt block is
+/// truncated to `max_injected_chars` and wrapped in a `[skill:<name>]` section
+/// suitable for prepending to a user message.
 pub fn select_skill_prompt_block(
     index: &SkillIndex,
     query: &str,
@@ -89,6 +94,12 @@ pub fn select_skill_prompt_block(
     Some((top, prompt_block))
 }
 
+/// Injects the best-matching skill prompt into a user [`Content`] message.
+///
+/// Extracts the text from `content`, selects the top skill from `index`, and
+/// prepends its prompt block to the first text part. Returns the matched skill
+/// on success, or `None` if the content is not a user message, the index is
+/// empty, or no skill meets the selection threshold.
 pub fn apply_skill_injection(
     content: &mut Content,
     index: &SkillIndex,

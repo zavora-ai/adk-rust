@@ -3,30 +3,37 @@ use adk_core::Content;
 use futures::future::join_all;
 use std::sync::Arc;
 
-/// A set of guardrails to run together
+/// A collection of guardrails to execute together.
+///
+/// Use the builder-style [`with`](Self::with) method to add guardrails.
 pub struct GuardrailSet {
     guardrails: Vec<Arc<dyn Guardrail>>,
 }
 
 impl GuardrailSet {
+    /// Create an empty guardrail set.
     pub fn new() -> Self {
         Self { guardrails: Vec::new() }
     }
 
+    /// Add a guardrail (by value, automatically wrapped in `Arc`).
     pub fn with(mut self, guardrail: impl Guardrail + 'static) -> Self {
         self.guardrails.push(Arc::new(guardrail));
         self
     }
 
+    /// Add a pre-wrapped guardrail.
     pub fn with_arc(mut self, guardrail: Arc<dyn Guardrail>) -> Self {
         self.guardrails.push(guardrail);
         self
     }
 
+    /// Get a reference to the registered guardrails.
     pub fn guardrails(&self) -> &[Arc<dyn Guardrail>] {
         &self.guardrails
     }
 
+    /// Returns `true` if no guardrails have been added.
     pub fn is_empty(&self) -> bool {
         self.guardrails.is_empty()
     }
@@ -38,12 +45,15 @@ impl Default for GuardrailSet {
     }
 }
 
-/// Result of running a guardrail set
+/// Result of running a [`GuardrailSet`].
 #[derive(Debug)]
 pub struct ExecutionResult {
+    /// `true` if all guardrails passed (no critical failures).
     pub passed: bool,
+    /// Content after guardrail transformations, or `None` if unchanged.
     pub transformed_content: Option<Content>,
-    pub failures: Vec<(String, String, Severity)>, // (name, reason, severity)
+    /// List of failures as `(guardrail_name, reason, severity)`.
+    pub failures: Vec<(String, String, Severity)>,
 }
 
 /// Executor for running guardrails in parallel

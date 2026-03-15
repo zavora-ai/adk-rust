@@ -15,11 +15,16 @@ struct ArtifactKey {
     version: i64,
 }
 
+/// In-memory artifact storage for development and testing.
+///
+/// Artifacts are stored in a `HashMap` behind an `RwLock`. Data is lost
+/// when the process exits. For persistent storage, use [`FileArtifactService`](crate::FileArtifactService).
 pub struct InMemoryArtifactService {
     artifacts: Arc<RwLock<HashMap<ArtifactKey, Part>>>,
 }
 
 impl InMemoryArtifactService {
+    /// Create a new empty in-memory artifact store.
     pub fn new() -> Self {
         Self { artifacts: Arc::new(RwLock::new(HashMap::new())) }
     }

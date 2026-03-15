@@ -5,6 +5,11 @@ use std::path::Path;
 const CONVENTION_FILES: &[&str] =
     &["AGENTS.md", "AGENT.md", "CLAUDE.md", "GEMINI.md", "COPILOT.md", "SKILLS.md", "SOUL.md"];
 
+/// Parses a skill Markdown file that uses YAML frontmatter.
+///
+/// The file must begin with a `---` delimited frontmatter block containing at
+/// least `name` and `description` fields. Everything after the closing `---`
+/// delimiter is captured as the skill body.
 pub fn parse_skill_markdown(path: &Path, content: &str) -> SkillResult<ParsedSkill> {
     let normalized = content.replace("\r\n", "\n");
     let mut lines = normalized.lines();
@@ -86,6 +91,12 @@ pub fn parse_skill_markdown(path: &Path, content: &str) -> SkillResult<ParsedSki
     })
 }
 
+/// Parses an instruction Markdown file, choosing the strategy based on its path.
+///
+/// Files inside `.skills/` are parsed strictly with required YAML frontmatter.
+/// Known convention files (e.g. `AGENTS.md`, `CLAUDE.md`) are parsed leniently,
+/// deriving name, description, and tags from the filename and content when
+/// frontmatter is absent.
 pub fn parse_instruction_markdown(path: &Path, content: &str) -> SkillResult<ParsedSkill> {
     if is_skill_file_path(path) {
         return parse_skill_markdown(path, content);

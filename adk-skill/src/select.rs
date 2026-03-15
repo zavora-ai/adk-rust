@@ -1,6 +1,12 @@
 use crate::model::{SelectionPolicy, SkillIndex, SkillMatch, SkillSummary};
 use std::collections::HashSet;
 
+/// Selects the most relevant skills from the index for a given query string.
+///
+/// Skills are scored by token overlap across name, description, tags, and body,
+/// filtered by the include/exclude tag lists in `policy`, and returned in
+/// descending score order up to `policy.top_k` results. Only matches that meet
+/// `policy.min_score` are included.
 pub fn select_skills(index: &SkillIndex, query: &str, policy: &SelectionPolicy) -> Vec<SkillMatch> {
     if policy.top_k == 0 {
         return Vec::new();

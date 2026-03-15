@@ -7,6 +7,10 @@ use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
+/// Loads a [`SkillIndex`] by discovering and parsing all instruction files under `root`.
+///
+/// Each file is read, parsed, and assigned a content-hash-based identifier.
+/// The resulting index is sorted by skill name and path.
 pub fn load_skill_index(root: impl AsRef<Path>) -> SkillResult<SkillIndex> {
     let mut skills = Vec::new();
     for path in discover_instruction_files(root)? {
