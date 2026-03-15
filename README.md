@@ -7,7 +7,9 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 
-> **🎉 v0.3.2 Released!** 9 new LLM providers (xAI,Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, Bedrock, Azure AI), RAG pipeline with 6 vector store backends, multimodal support across all providers, Models Discovery API, Gemini 3 model support, generation config on agents, and multi-turn tool fix. [@mikefaille](https://github.com/mikefaille) — realtime audio transport & LiveKit bridge, [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI compatible providers, xAI, attachment support & multi-provider content, [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
+> **🚀 v0.4.0 Released!** Focused, leaner framework. Extracted UI/Studio to standalone repos. Tiered feature presets (standard default builds in ~50s, not ~2min). Consolidated 7 OpenAI-compatible providers into presets (-1,000 lines). Vertex AI deps now opt-in. OpenAI reasoning model support (o3, gpt-5-mini). Gemini thinking model fix for multi-turn tool calling. All 25 crates audited, documented, and tested. See [CHANGELOG](CHANGELOG.md) for full details.
+>
+> **Contributors:** [@mikefaille](https://github.com/mikefaille) — AdkIdentity design, realtime audio, LiveKit bridge, skill system. [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI-compatible providers, xAI, multimodal content. [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [@danielsan](https://github.com/danielsan) — Google deps issue & PR (#181, #203), RAG crash report (#205). [@CodingFlow](https://github.com/CodingFlow) — Gemini 3 thinking level, global endpoint, citationSources (#177, #178, #179). [@ctylx](https://github.com/ctylx) — skill discovery fix (#204). [@poborin](https://github.com/poborin) — project config proposal (#176). [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 
 A comprehensive and production-ready Rust framework for building AI agents. Create powerful and high-performance AI agent systems with a flexible, modular architecture. Model-agnostic. Type-safe. Blazingly fast.
 
@@ -99,7 +101,7 @@ Built-in tools:
 | `adk-core` | Foundational traits and types | `Agent` trait, `Content`, `Part`, error types, streaming primitives |
 | `adk-agent` | Agent implementations | `LlmAgent`, `SequentialAgent`, `ParallelAgent`, `LoopAgent`, builder patterns |
 | `adk-skill` | AgentSkills parsing and selection | Skill markdown parser, `.skills` discovery/indexing, lexical matching, prompt injection helpers |
-| `adk-model` | LLM integrations | Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, Amazon Bedrock, Azure AI Inference clients, streaming, function calling |
+| `adk-model` | LLM integrations | Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama, Bedrock, Azure AI + OpenAI-compatible presets (Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI) |
 | `adk-gemini` | Gemini client | Google Gemini API client with streaming and multimodal support |
 | `adk-mistralrs` | Native local inference | mistral.rs integration, ISQ quantization, LoRA adapters (git-only) |
 | `adk-tool` | Tool system and extensibility | `FunctionTool`, Google Search, MCP protocol, schema validation |
@@ -117,8 +119,8 @@ Built-in tools:
 | `adk-guardrail` | Input/output validation | PII redaction, content filtering, JSON schema validation |
 | `adk-auth` | Access control | Role-based permissions, declarative scope-based security, SSO/OAuth, audit logging |
 | `adk-telemetry` | Observability | Structured logging, OpenTelemetry tracing, span helpers |
-| `adk-ui` | Dynamic UI generation | 28 components, 10 templates, React client, streaming updates |
-| `adk-studio` | Visual development | Drag-and-drop agent builder, code generation, live testing ([separate repo](https://github.com/zavora-ai/adk-studio)) |
+
+> **Extracted to standalone repos:** [adk-ui](https://github.com/zavora-ai/adk-ui) (dynamic UI generation), [adk-studio](https://github.com/zavora-ai/adk-studio) (visual agent builder), [adk-playground](https://github.com/zavora-ai/adk-playground) (120+ examples).
 
 ## Quick Start
 
@@ -357,32 +359,13 @@ cargo run --example parallel_agent
 ls examples/
 ```
 
-## ADK-Rust Studio
+## Companion Projects
 
-[![adk-studio](https://img.shields.io/crates/v/adk-studio.svg)](https://crates.io/crates/adk-studio)
-![New](https://img.shields.io/badge/new-v0.3.0-brightgreen)
-
-> **Note**: ADK Studio has been extracted to its own repository: [github.com/zavora-ai/adk-studio](https://github.com/zavora-ai/adk-studio)
-
-A visual development environment for building AI agents with drag-and-drop. Design complex multi-agent workflows, compile to production Rust code, and test live — all from your browser.
-
-![ADK Studio — Visual Agent Builder with Debug Mode](assets/studio-hero.png)
-
-```bash
-# Install and run
-cargo install adk-studio
-adk-studio
-```
-
-**Features**:
-- Drag-and-drop canvas with LLM agents, workflow agents, and 14 action nodes
-- Execution Timeline with step-by-step replay and State Inspector
-- Debug mode with live input/output state visualization per node
-- Real-time chat with SSE streaming and event trace
-- 14 action nodes: Trigger, HTTP, Set, Transform, Switch, Loop, Merge, Wait, Code, Database, Email, Notification, RSS, File
-- Triggers: Manual, Webhook (with auth), Cron Schedule, Event (with JSONPath filters)
-- Code generation: Compile visual designs to production ADK-Rust with auto-detected dependencies
-- Build, run, and deploy executables directly from Studio
+| Project | Description |
+|---------|-------------|
+| [adk-studio](https://github.com/zavora-ai/adk-studio) | Visual agent builder — drag-and-drop canvas, code generation, live testing |
+| [adk-ui](https://github.com/zavora-ai/adk-ui) | Dynamic UI generation — 28 components, React client, streaming updates |
+| [adk-playground](https://github.com/zavora-ai/adk-playground) | 120+ working examples for every feature and provider |
 
 ## Advanced Features
 
@@ -635,30 +618,6 @@ adk-mistralrs = { git = "https://github.com/zavora-ai/adk-rust" }
 ```
 
 **Features**: ISQ quantization, PagedAttention, multi-GPU splitting, LoRA/X-LoRA adapters, vision/speech/diffusion models, MCP integration.
-
-### Dynamic UI Generation
-
-The `adk-ui` crate enables agents to render rich user interfaces:
-
-```rust
-use adk_ui::{UiToolset, UI_AGENT_PROMPT};
-
-let tools = UiToolset::all_tools(); // 10 render tools
-
-let mut builder = LlmAgentBuilder::new("ui_assistant")
-    .instruction(UI_AGENT_PROMPT);  // Tested prompt for reliable UI generation
-
-for tool in tools {
-    builder = builder.tool(tool);
-}
-
-let agent = builder.build()?;
-```
-
-**React Client**: `npm install @zavora-ai/adk-ui-react`
-
-**Features**: 28 components, 10 templates, dark mode, streaming updates, server-side validation
-
 
 ## Building from Source
 
@@ -927,49 +886,27 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 
 ## Roadmap
 
-**Implemented** (v0.3.2):
-- **8 new LLM providers** — Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova (OpenAI-compatible), Amazon Bedrock (AWS SDK), Azure AI Inference (reqwest) — all feature-gated with contract tests
-- **adk-rag** — Full RAG pipeline with document chunking (fixed-size, recursive, markdown), embedding providers, vector search, reranking, and 6 vector store backends (in-memory, Qdrant, Milvus, Weaviate, Pinecone, SurrealDB)
-- **Declarative scope-based security** — Tools declare required scopes via `required_scopes()`, framework enforces automatically via `ScopeGuard` with pluggable resolvers and audit logging
-- **Models Discovery API** — `list_models()` and `get_model()` on `Gemini` client for runtime model enumeration
-- **Gemini model expansion** — 22+ model variants including Gemini 3 Pro/Flash, 2.5 Pro/Flash, embedding models, with proper `From<String>` matching
-- **Generation config on agents** — `temperature()`, `top_p()`, `top_k()`, `max_output_tokens()` convenience methods on `LlmAgentBuilder`
-- **Multi-turn tool fix** — Tool context role preservation in `adk-runner` (#139)
-- **Vertex AI Live streaming** — `adk-gemini` refactored with `GeminiBackend` trait, pluggable `StudioBackend` (REST) and `VertexBackend` (REST SSE + gRPC fallback)
-- **Realtime audio transports** — Vertex AI Live with ADC auth, LiveKit WebRTC bridge, OpenAI WebRTC with Opus codec
-- **Multi-provider Studio codegen** — Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama support in code generation
-- **2026 model names** — all docs, examples, and defaults updated (gemini-2.5-flash, gpt-5-mini, claude-sonnet-4-5-20250929)
-- **Response parsing hardening** — 25 tests covering Gemini edge cases (safety ratings, streaming, function calls, grounding)
+**v0.4.0** (current) — Framework focus & performance:
+- **Breaking: Extracted UI/Studio/Playground** — `adk-ui`, `adk-studio`, and 120+ examples moved to standalone repos. This repo is now pure Rust framework.
+- **Tiered feature presets** — Default changed from `full` to `standard` (~50s build). `minimal` (~30s), `standard` (default), `full` (~2min). Non-Gemini users no longer compile Google Cloud SDK.
+- **Consolidated 7 OpenAI-compatible providers** — Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI collapsed into `OpenAICompatibleConfig` presets (-1,000 lines). Feature flags preserved as backward-compatible aliases.
+- **Vertex AI deps opt-in** — `adk-gemini` default changed from `[studio, vertex]` to `[studio]`. Google Cloud deps only compile with `features = ["gemini-vertex"]`.
+- **OpenAI reasoning model support** — Direct reqwest calls replace async-openai HTTP client, extracting `reasoning_content` from o3/gpt-5-mini. Empty text filtering for thinking models.
+- **Gemini thinking model fix** — `thoughtSignature` no longer serialized in request payloads, fixing 400 errors in multi-turn tool calling with thinking models (#205).
+- **Full crate audit** — All 25 crates: doc comments on all public items, stale versions bumped, dead code removed, convention violations fixed, shared utilities extracted.
+- **CI overhaul** — Split into parallel fmt/clippy/test gates with nextest (~11x faster).
+- **Dep bumps** — chrono 0.4.44, surrealdb 3.0.1, jsonschema 0.43, strum 0.28, rmcp 0.17.
+- **Multimodal vision** — Anthropic `FileData` → `ImageBlock`, Bedrock `InlineData` → `ContentBlock::Image`.
 
-**Implemented** (v0.3.0):
-- **adk-gemini overhaul** — Vertex AI support (ADC, Service Accounts, WIF), v1 stable API, image generation, speech generation, thinking mode, content caching, batch processing, URL context
-- **Context compaction** — automatic conversation history summarization to stay within token limits
-- **Production hardening** — deterministic event ordering, bounded history, configurable limits across adk-core, adk-agent, adk-runner
-- **ADK Studio debug mode** — Execution Timeline with step-by-step replay, State Inspector with per-node input/output visualization
-- **Action nodes code generation** — HTTP (reqwest), Database (sqlx/mongodb/redis), Email (lettre/imap), Code (boa_engine JS sandbox) compile to production Rust
-- **14 action nodes** — Trigger, HTTP, Set, Transform, Switch, Loop, Merge, Wait, Code, Database, Email, Notification, RSS, File
-- **Triggers** — Manual, Webhook (with bearer/API key auth), Cron Schedule (with timezone), Event (with JSONPath filters)
-- **A2UI protocol support** — render_screen, render_page, render_kit tools with AG-UI and MCP Apps adapters
-- **SSO/OAuth integration** — Auth0, Okta, Azure AD, Google OIDC providers in adk-auth
-- **Plugin system** (adk-plugin) — dynamic agent/tool/model loading with hot-reload
+<details>
+<summary>v0.3.x and earlier</summary>
 
-**Implemented** (v0.2.0):
-- Core framework and agent types
-- Multi-provider LLM support (Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama)
-- Native local inference (adk-mistralrs) with ISQ quantization, LoRA adapters, vision/speech/diffusion
-- Tool system with MCP support
-- Agent Tool — use agents as callable tools
-- Session and artifact management
-- Memory system with vector embeddings
-- REST and A2A servers
-- CLI with interactive mode
-- Realtime voice agents (OpenAI Realtime API, Gemini Live API)
-- Graph-based workflows (LangGraph-style) with checkpointing and human-in-the-loop
-- Browser automation (46 WebDriver tools)
-- Agent evaluation framework with trajectory validation and LLM-judged scoring
-- Dynamic UI generation (adk-ui) with 28 components, 10 templates, React client
-- Guardrails (adk-guardrail) with PII redaction, content filtering, schema validation
-- ADK Studio — visual agent builder with drag-and-drop, code generation, live streaming
+**v0.3.2**: 8 new LLM providers, RAG pipeline, scope-based security, Models Discovery API, Gemini 3 support, generation config, Vertex AI Live, realtime audio transports, response parsing hardening.
+
+**v0.3.0**: adk-gemini Vertex AI overhaul, context compaction, production hardening, ADK Studio debug mode, action nodes code generation, SSO/OAuth, plugin system.
+
+**v0.2.0**: Core framework, multi-provider LLM, tool system with MCP, sessions, artifacts, memory, REST/A2A servers, CLI, realtime voice, graph workflows, browser automation, evaluation, guardrails.
+</details>
 
 **Planned** (see [docs/roadmap/](docs/roadmap/)):
 
