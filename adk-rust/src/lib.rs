@@ -48,15 +48,18 @@
 //! ### Feature Presets
 //!
 //! ```toml
-//! # Full (default) - Everything included
-//! adk-rust = "0.3"
+//! # Standard (default) — agents, models, tools, sessions, runner, guardrails, auth
+//! adk-rust = "0.4"
 //!
-//! # Minimal - Agents + Gemini + Runner only
-//! adk-rust = { version = "0.3", default-features = false, features = ["minimal"] }
+//! # Full — standard + server, CLI, graph, browser, eval, realtime, audio, RAG
+//! adk-rust = { version = "0.4", features = ["full"] }
 //!
-//! # Custom - Pick exactly what you need
-//! adk-rust = { version = "0.3", default-features = false, features = [
-//!     "agents", "gemini", "tools", "sessions"
+//! # Minimal — just agents + Gemini + runner (fastest build)
+//! adk-rust = { version = "0.4", default-features = false, features = ["minimal"] }
+//!
+//! # Custom — pick exactly what you need
+//! adk-rust = { version = "0.4", default-features = false, features = [
+//!     "agents", "gemini", "tools", "sessions", "openai"
 //! ] }
 //! ```
 //!
@@ -396,20 +399,31 @@
 //!
 //! ## Feature Flags
 //!
-//! | Feature | Description | Default |
-//! |---------|-------------|---------|
-//! | `agents` | Agent implementations | ✅ |
-//! | `models` | Model integrations | ✅ |
-//! | `gemini` | Gemini model support | ✅ |
-//! | `tools` | Tool system | ✅ |
-//! | `mcp` | MCP integration | ✅ |
-//! | `sessions` | Session management | ✅ |
-//! | `artifacts` | Artifact storage | ✅ |
-//! | `memory` | Semantic memory | ✅ |
-//! | `runner` | Execution runtime | ✅ |
-//! | `server` | HTTP server | ✅ |
-//! | `telemetry` | OpenTelemetry | ✅ |
-//! | `cli` | CLI launcher | ✅ |
+//! | Feature | Description | Preset |
+//! |---------|-------------|--------|
+//! | `agents` | Agent implementations | standard |
+//! | `models` | Model integrations | standard |
+//! | `gemini` | Gemini model support | standard |
+//! | `tools` | Tool system | standard |
+//! | `skills` | Skill discovery | standard |
+//! | `sessions` | Session management | standard |
+//! | `artifacts` | Artifact storage | standard |
+//! | `memory` | Semantic memory | standard |
+//! | `runner` | Execution runtime | standard |
+//! | `telemetry` | OpenTelemetry | standard |
+//! | `guardrail` | Input/output validation | standard |
+//! | `auth` | Access control | standard |
+//! | `plugin` | Plugin system | standard |
+//! | `server` | HTTP server + A2A | full |
+//! | `cli` | CLI launcher | full |
+//! | `graph` | Graph workflows | full |
+//! | `browser` | Browser automation | full |
+//! | `eval` | Agent evaluation | full |
+//! | `realtime` | Voice/audio streaming | full |
+//! | `rag` | RAG pipeline | full |
+//! | `audio` | Audio processing | full |
+//! | `code` | Code execution | full |
+//! | `sandbox` | Sandboxed execution | full |
 //!
 //! ## Examples
 //!

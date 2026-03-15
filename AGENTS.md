@@ -19,7 +19,7 @@ Run all three before every commit. CI enforces them — save yourself the round-
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo nextest run --workspace
 ```
 
 ### AI Agent Workflow (`devenv`)
@@ -29,7 +29,7 @@ Use these shorthand scripts instead of raw `cargo` to ensure `sccache` wrap and 
 | Action | Command | Description |
 | :--- | :--- | :--- |
 | **Check** | `devenv shell check` | Fast workspace compilation check. |
-| **Test** | `devenv shell test` | Run all non-ignored tests. |
+| **Test** | `devenv shell test` | Run all non-ignored tests (nextest). |
 | **Lint** | `devenv shell clippy` | Clippy with `-D warnings` (zero tolerance). |
 | **Format** | `devenv shell fmt` | Enforce Rust Edition 2024 style. |
 
@@ -124,7 +124,13 @@ All opt-in, no defaults:
 
 ### adk-rust (umbrella)
 
-`full` is the default, which enables all component features. Individual features like `agents`, `models`, `tools`, `sessions`, `runner`, `server`, `graph`, `realtime`, `eval`, `browser`, `auth`, `guardrail`, `plugin`, `telemetry`, `cli`, `ui`, `doc-audit`, `skills`, `artifacts`, `memory` can be selected individually.
+Three presets control which crates are compiled:
+
+- `standard` **(default)** — agents, models, gemini, tools, skills, sessions, artifacts, memory, runner, telemetry, guardrail, auth, plugin. Everything needed to build and run agents.
+- `full` — standard + server, cli, graph, code, sandbox, realtime, browser, eval, rag, audio. All specialist crates.
+- `minimal` — agents, gemini, runner. Fastest possible build.
+
+Individual features (`agents`, `models`, `tools`, `sessions`, `server`, `graph`, `realtime`, `eval`, `browser`, `auth`, `guardrail`, `plugin`, `telemetry`, `cli`, `skills`, `artifacts`, `memory`, etc.) can be selected independently.
 
 ## Rust conventions
 
@@ -208,11 +214,14 @@ See `adk-gemini/AGENTS.md` for the full tracing conventions. The key rules:
 ## Testing
 
 ```bash
-cargo test --workspace                                    # full workspace
-cargo test -p adk-core                                    # single crate
-cargo test -p adk-realtime --features full                # with features
-cargo test -p ralph                                       # standalone example crate
+cargo nextest run --workspace                                # full workspace (parallel)
+cargo nextest run -p adk-core                                # single crate
+cargo nextest run -p adk-realtime --features full            # with features
+cargo test -p ralph                                          # standalone example crate
 ```
+
+- Prefer `cargo nextest run` over `cargo test` for speed (~10x faster via parallel test binary execution).
+- Use `cargo test` only for doctests (nextest doesn't run them) or when you need `--doc` specifically.
 
 - Unit tests: `#[cfg(test)]` modules in source files.
 - Integration tests: `tests/*.rs` in each crate.
@@ -309,7 +318,7 @@ Tier 3: adk-session
 Tier 4: adk-tool, adk-model, adk-ui, adk-browser
 Tier 5: adk-agent, adk-graph
 Tier 6: adk-runner, adk-realtime, adk-eval
-Tier 7: adk-server, adk-cli, adk-doc-audit
+Tier 7: adk-server, adk-cli
 Tier 8: adk-rust (umbrella — always last)
 ```
 

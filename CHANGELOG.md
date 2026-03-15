@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Development Infrastructure
+- **cargo-nextest integration**: Switched from `cargo test` to `cargo nextest run` for workspace test execution. Parallel test binary execution reduces test wall-clock time from ~1m47s to ~9s (~11x speedup). Added `.config/nextest.toml` with default and CI profiles (CI profile includes retry-on-flaky and slow-test warnings). `devenv.nix` updated with `ws-test` (nextest), `ws-test-ci` (nextest CI profile), and `ws-test-slow` (fallback `cargo test` for doctests) scripts.
+
+#### Vision / Multimodal Support (adk-model)
+- **Bedrock**: `InlineData` with image MIME types (jpeg/png/gif/webp) now maps to `ContentBlock::Image`; document MIME types (pdf/csv/html/md/txt/doc/docx) map to `ContentBlock::Document`. Response-side `ContentBlock::Image` converts back to `Part::InlineData`. `FileData` with image/document URLs becomes a text reference (Bedrock only supports S3 URIs natively).
+- **OpenAI**: `FileData` with `image/*` MIME types now maps to `ImageUrl` content part instead of falling back to text, enabling direct image URL vision.
+- **Anthropic**: `FileData` with image MIME types (jpeg/png/gif/webp) now maps to `ImageBlock` with `UrlImageSource` instead of text fallback, enabling direct image URL vision.
+
+#### OpenAI Reasoning Model Support (adk-model)
+- **Reasoning content extraction**: OpenAI-compatible client now uses direct reqwest calls instead of async-openai's HTTP client, enabling extraction of `reasoning_content` from reasoning models (o3, o4-mini, gpt-5-mini) that async-openai 0.33 silently drops. Reasoning content maps to `Part::Thinking`.
+- **Empty text filtering**: `from_openai_response` and new `from_raw_openai_response` now filter empty text parts produced by reasoning models when all tokens go to internal chain-of-thought.
+
+### Changed
+
+#### adk-rust (umbrella crate)
+- **Tiered feature presets**: Default changed from `full` to `standard`. Three presets: `minimal` (agents + Gemini + runner, ~30s build), `standard` (+ tools, sessions, memory, telemetry, guardrail, auth, plugin, ~51s build), `full` (+ server, CLI, graph, browser, eval, realtime, RAG, audio, ~2min build). Users who need server/CLI/specialist crates add `features = ["full"]`.
+- **Minimal tokio features**: `adk-rust` umbrella crate now declares explicit tokio features (`rt`, `rt-multi-thread`, `sync`, `time`, `macros`, `net`, `signal`, `fs`, `process`, `io-util`) instead of `"full"`. Binary crates (`adk-cli`, examples) retain `"full"`. This follows the Rust convention that library crates should never use `tokio = { features = ["full"] }`.
+
+### Removed
+- **adk-doc-audit**: Removed from workspace (docs.rs provides this functionality). Backed up to standalone directory.
+
+#### adk-mistralrs
+- **Minimal tokio features**: Changed from `tokio = { features = ["full"] }` to `tokio = { features = ["rt", "sync", "macros"] }` — the minimal set actually used by the crate.
+
+#### CI
+- **nextest in CI**: GitHub Actions workflow now uses `ws-test-ci` (cargo-nextest with CI profile) instead of `cargo test --workspace`. Summary parser updated to handle nextest output format with fallback for `cargo test` format.
+
+#### adk-model (OpenAI / OpenAI-compatible providers)
+- **async-openai 0.33**: Upgraded from 0.27 to 0.33. Breaking API changes adapted: types moved to `types::chat::*`, `ChatCompletionToolType` removed, `FunctionObject.parameters` changed to `Option<serde_json::Value>`, `max_tokens` replaced with `max_completion_tokens`.
+- **Non-streaming workaround**: OpenAI and Azure OpenAI providers temporarily use non-streaming `create()` instead of `create_stream()` due to a `reqwest-eventsource` compatibility bug in async-openai 0.33 that causes "Invalid header value" errors on SSE connections. Responses arrive as a single chunk. Streaming will be restored when the upstream bug is fixed.
+- **reqwest default features restored**: Root workspace `reqwest` dependency no longer sets `default-features = false`, fixing transitive feature resolution issues.
+
+### Added
+
 #### adk-sandbox (NEW CRATE)
 - New `adk-sandbox` crate: isolated code execution runtime for ADK agents
 - `SandboxBackend` trait with `execute(ExecRequest) -> Result<ExecResult, SandboxError>` and `capabilities()` methods

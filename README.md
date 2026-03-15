@@ -127,14 +127,10 @@ Requires Rust 1.85 or later (Rust 2024 edition). Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.3.2"
+adk-rust = "0.4"  # Standard preset: agents, models, tools, sessions, runner
 
-# Or individual crates
-adk-core = "0.3.2"
-adk-agent = "0.3.2"
-adk-model = "0.3.2"  # Add features for providers: features = ["openai", "anthropic"]
-adk-tool = "0.3.2"
-adk-runner = "0.3.2"
+# Need server, CLI, graph, browser, eval, realtime, audio, RAG?
+# adk-rust = { version = "0.4", features = ["full"] }
 ```
 
 **Nightly (latest features):**
@@ -747,26 +743,21 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-# All-in-one crate
-adk-rust = "0.3.2"
+# Standard (default) — agents, models, tools, sessions, runner, guardrails, auth
+adk-rust = "0.4"
+
+# Full — adds server, CLI, graph, browser, eval, realtime, audio, RAG
+adk-rust = { version = "0.4", features = ["full"] }
+
+# Minimal — just agents + Gemini + runner (fastest build)
+adk-rust = { version = "0.4", default-features = false, features = ["minimal"] }
 
 # Or individual crates for finer control
-adk-core = "0.3.2"
-adk-agent = "0.3.2"
-adk-model = { version = "0.3.2", features = ["openai", "anthropic"] }  # Enable providers
-adk-tool = "0.3.2"
-adk-runner = "0.3.2"
-
-# Optional dependencies
-adk-session = { version = "0.3.2", optional = true }
-adk-artifact = { version = "0.3.2", optional = true }
-adk-memory = { version = "0.3.2", optional = true }
-adk-server = { version = "0.3.2", optional = true }
-adk-cli = { version = "0.3.2", optional = true }
-adk-realtime = { version = "0.3.2", features = ["openai"], optional = true }
-adk-graph = { version = "0.3.2", features = ["sqlite"], optional = true }
-adk-browser = { version = "0.3.2", optional = true }
-adk-eval = { version = "0.3.2", optional = true }
+adk-core = "0.4"
+adk-agent = "0.4"
+adk-model = { version = "0.4", features = ["openai", "anthropic"] }
+adk-tool = "0.4"
+adk-runner = "0.4"
 ```
 
 ## Examples

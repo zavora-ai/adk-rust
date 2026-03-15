@@ -14,10 +14,10 @@ categories = ["api-bindings", "asynchronous", "web-programming"]
 readme = "README.md"
 
 [features]
-default = ["full"]
+default = ["standard"]
 
-# Full installation (everything)
-full = [
+# Standard — everything needed to build, run, and test agents (~30s clean build)
+standard = [
     "agents",
     "models",
     "gemini",
@@ -27,8 +27,16 @@ full = [
     "artifacts",
     "memory",
     "runner",
-    "server",
     "telemetry",
+    "plugin",
+    "guardrail",
+    "auth",
+]
+
+# Full — standard + server, CLI, and all specialist crates (~2min clean build)
+full = [
+    "standard",
+    "server",
     "cli",
     "graph",
     "code",
@@ -36,12 +44,12 @@ full = [
     "realtime",
     "browser",
     "eval",
-    "guardrail",
-    "auth",
-    "plugin",
     "rag",
-    "audio"
+    "audio",
 ]
+
+# Minimal — just agents + Gemini + runner (fastest possible build)
+minimal = ["agents", "gemini", "runner"]
 
 # CLI launcher support
 cli = ["dep:adk-cli", "runner", "server", "sessions", "telemetry"]
@@ -67,9 +75,6 @@ guardrail = ["dep:adk-guardrail"]
 auth = ["dep:adk-auth"]
 plugin = ["dep:adk-plugin"]
 rag = ["dep:adk-rag"]
-
-# Minimal preset (just agents + models + runner)
-minimal = ["agents", "models", "runner"]
 
 # Model provider features (forwarded to adk-model)
 gemini = ["models", "adk-model/gemini"]
