@@ -18,7 +18,6 @@ adk-runner.workspace = true
 adk-session.workspace = true
 adk-model.workspace = true
 
-tokio.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -29,5 +28,6 @@ futures.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
 tokio-test = "0.4"
 tempfile = "3.0"

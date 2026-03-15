@@ -26,7 +26,7 @@ neo4rs = { version = "0.8", optional = true }
 fred = { version = "10", optional = true }
 
 [dev-dependencies]
-tokio.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
 proptest = "1.5"
 serde_json.workspace = true
 chrono.workspace = true

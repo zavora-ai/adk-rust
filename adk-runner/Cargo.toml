@@ -19,7 +19,7 @@ adk-session.workspace = true
 adk-plugin.workspace = true
 adk-skill.workspace = true
 async-trait.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 futures.workspace = true
 async-stream.workspace = true
 uuid.workspace = true
@@ -32,3 +32,4 @@ tokio-util = { version = "0.7", features = ["rt"] }
 chrono = "0.4"
 proptest = "1.5"
 tempfile = "3"
+tokio = { workspace = true, features = ["rt", "macros"] }

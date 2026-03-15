@@ -27,7 +27,7 @@ code-docker = ["code", "adk-code/docker"]
 adk-core.workspace = true
 adk-telemetry.workspace = true
 async-trait.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
 serde.workspace = true
 serde_json.workspace = true
 schemars = "0.8"

@@ -17,7 +17,7 @@ adk-tool.workspace = true
 adk-cli.workspace = true
 adk-runner.workspace = true
 adk-session.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["full"] }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

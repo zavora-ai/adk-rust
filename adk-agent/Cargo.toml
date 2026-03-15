@@ -20,7 +20,7 @@ adk-telemetry.workspace = true
 adk-skill.workspace = true
 adk-guardrail = { workspace = true, optional = true }
 async-trait = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 futures = { workspace = true }
 async-stream = { workspace = true }
 serde = { workspace = true }
@@ -35,3 +35,4 @@ guardrails = ["adk-guardrail"]
 [dev-dependencies]
 dotenvy = "0.15"
 tempfile = "3"
+tokio = { workspace = true, features = ["rt", "macros"] }

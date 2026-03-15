@@ -17,7 +17,7 @@ readme = "README.md"
 adk-core.workspace = true
 
 # Async runtime
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["sync", "net"] }
 async-trait.workspace = true
 futures.workspace = true
 async-stream.workspace = true
@@ -46,7 +46,7 @@ base64 = "0.22"
 uuid.workspace = true
 
 # OpenAI realtime types (optional)
-async-openai = { version = "0.27", optional = true, default-features = false, features = ["rustls"] }
+async-openai = { version = "0.33", optional = true, features = ["realtime"] }
 
 # Random bytes for WebSocket key generation (optional)
 getrandom = { version = "0.3", optional = true }
@@ -70,7 +70,7 @@ audiopus = { version = "0.3.0-rc.0", optional = true }
 reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
 dotenvy = "0.15"
 proptest = "1.5"
 url = "2.5"

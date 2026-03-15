@@ -15,7 +15,7 @@ categories = ["web-programming", "development-tools"]
 [dependencies]
 adk-core.workspace = true
 thirtyfour = "0.35"
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

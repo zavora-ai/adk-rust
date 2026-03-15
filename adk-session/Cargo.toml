@@ -29,7 +29,7 @@ firestore = { version = "0.44", optional = true }
 neo4rs = { version = "0.8", optional = true }
 
 [dev-dependencies]
-tokio.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
 axum = "0.8"
 proptest = "1.5"
 

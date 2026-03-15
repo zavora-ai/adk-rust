@@ -20,7 +20,7 @@ adk-runner.workspace = true
 adk-session.workspace = true
 adk-artifact.workspace = true
 adk-telemetry.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync", "signal", "macros", "rt", "time"] }
 tokio-stream.workspace = true
 async-trait.workspace = true
 async-stream.workspace = true

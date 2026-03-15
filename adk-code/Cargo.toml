@@ -24,7 +24,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3"
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["fs", "process", "time", "io-util"] }
 tracing = { workspace = true }
 
 [features]
@@ -34,4 +34,4 @@ docker = ["dep:bollard", "dep:rand", "dep:futures"]
 
 [dev-dependencies]
 proptest = "1.5"
-tokio = { workspace = true, features = ["test-util", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }

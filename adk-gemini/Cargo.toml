@@ -249,7 +249,9 @@ features = [
     "charset",
     "h2",
     "http2",
-    "macos-system-configuration",
+    "json",
+    "stream",
+    "rustls-tls"
 ]
 
 [dependencies.schemars]
