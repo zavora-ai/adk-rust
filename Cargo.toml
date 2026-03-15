@@ -66,6 +66,19 @@ strip = true
 opt-level = 3
 lto = true
 
+# Fast example builds: no debug info, max codegen parallelism
+# Usage: cargo build --examples --profile example-dev
+[profile.example-dev]
+inherits = "dev"
+opt-level = 0
+debug = 0
+codegen-units = 256
+incremental = true
+
+[profile.example-dev.package."*"]
+incremental = false
+opt-level = 1
+
 # CI profile: like release but faster to compile (no LTO)
 [profile.ci]
 inherits = "release"
