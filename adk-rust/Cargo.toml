@@ -78,6 +78,7 @@ rag = ["dep:adk-rag"]
 
 # Model provider features (forwarded to adk-model)
 gemini = ["models", "adk-model/gemini"]
+gemini-vertex = ["gemini", "adk-model/gemini-vertex"]
 openai = ["models", "adk-model/openai"]
 anthropic = ["models", "adk-model/anthropic"]
 deepseek = ["models", "adk-model/deepseek"]

@@ -37,6 +37,7 @@ aws-smithy-types = { version = "1", optional = true }
 [features]
 default = ["gemini"]
 gemini = ["dep:adk-gemini"]
+gemini-vertex = ["gemini", "adk-gemini/vertex"]
 openai = ["dep:async-openai", "dep:reqwest"]
 xai = ["openai"]
 anthropic = ["dep:claudius"]
