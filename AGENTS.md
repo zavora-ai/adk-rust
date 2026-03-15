@@ -105,10 +105,10 @@ docs/official_docs/    Comprehensive documentation site content
 `gemini` is the default. All others are opt-in:
 
 - `gemini` (default), `openai`, `anthropic`, `deepseek`, `ollama`, `groq`
-- `fireworks`, `together`, `mistral`, `perplexity`, `cerebras`, `sambanova` — OpenAI-compatible providers
 - `bedrock` — Amazon Bedrock via AWS SDK Converse API
 - `azure-ai` — Azure AI Inference endpoints
-- `all-providers` — enables all fourteen
+- `all-providers` — enables all eight real feature flags
+- `fireworks`, `together`, `mistral`, `perplexity`, `cerebras`, `sambanova`, `xai` — backward-compat aliases for `openai`. Use `OpenAICompatibleConfig` presets instead of separate client types.
 
 ### adk-realtime
 

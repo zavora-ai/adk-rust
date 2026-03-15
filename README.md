@@ -61,12 +61,13 @@ ADK supports multiple LLM providers with a unified API:
 | DeepSeek | `deepseek-chat`, `deepseek-reasoner` | `deepseek` |
 | Groq | `meta-llama/llama-4-scout-17b-16e-instruct`, `llama-3.3-70b-versatile` | `groq` |
 | Ollama | `llama3.2:3b`, `qwen2.5:7b`, `mistral:7b` | `ollama` |
-| Fireworks AI | `accounts/fireworks/models/llama-v3p1-8b-instruct` | `fireworks` |
-| Together AI | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | `together` |
-| Mistral AI | `mistral-small-latest` | `mistral` |
-| Perplexity | `sonar` | `perplexity` |
-| Cerebras | `llama-3.3-70b` | `cerebras` |
-| SambaNova | `Meta-Llama-3.3-70B-Instruct` | `sambanova` |
+| Fireworks AI | `accounts/fireworks/models/llama-v3p1-8b-instruct` | `openai` (preset) |
+| Together AI | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | `openai` (preset) |
+| Mistral AI | `mistral-small-latest` | `openai` (preset) |
+| Perplexity | `sonar` | `openai` (preset) |
+| Cerebras | `llama-3.3-70b` | `openai` (preset) |
+| SambaNova | `Meta-Llama-3.3-70B-Instruct` | `openai` (preset) |
+| xAI (Grok) | `grok-3-mini` | `openai` (preset) |
 | Amazon Bedrock | `anthropic.claude-sonnet-4-20250514-v1:0` | `bedrock` |
 | Azure AI Inference | (endpoint-specific) | `azure-ai` |
 | mistral.rs | Phi-3, Mistral, Llama, Gemma, LLaVa, FLUX | git dependency |
