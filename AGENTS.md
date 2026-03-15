@@ -301,7 +301,7 @@ test(eval): add trajectory property tests
 - If you change `Cargo.toml` or `Cargo.lock`, run `cargo check --workspace` to verify resolution.
 - Internal crate dependencies use workspace inheritance: `adk-core = { workspace = true }` in member crates.
 - The root `Cargo.toml` `[workspace.dependencies]` section pins all internal crate versions.
-- `adk-plugin` has a hardcoded `adk-core` dep (not workspace ref) — keep it in sync manually.
+- `adk-plugin` now uses workspace inheritance for `adk-core` (previously hardcoded).
 
 ## Publishing to crates.io
 
@@ -325,8 +325,7 @@ Tier 8: adk-rust (umbrella — always last)
 ### Publish workflow
 
 1. Ensure all quality gates pass and the version is bumped in `[workspace.package]` and all `[workspace.dependencies]` entries.
-2. Bump `adk-plugin/Cargo.toml` manually — it has a hardcoded `adk-core` dep.
-3. Tag the release: `git tag v<version> && git push origin v<version>`.
+2. Tag the release: `git tag v<version> && git push origin v<version>`.
 4. Publish one crate at a time with verification:
 
 ```bash
@@ -339,8 +338,7 @@ cargo publish -p <crate-name>
 ### Version checklist
 
 - [ ] `[workspace.package] version` in root `Cargo.toml`
-- [ ] All 23 `adk-*` entries in `[workspace.dependencies]`
-- [ ] `adk-plugin/Cargo.toml` hardcoded `adk-core` version
+- [ ] All `adk-*` entries in `[workspace.dependencies]`
 - [ ] `CHANGELOG.md` updated
 - [ ] Git tag created and pushed
 - [ ] GitHub release created with release notes

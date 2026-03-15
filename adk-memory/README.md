@@ -24,14 +24,14 @@ Semantic memory and search for Rust Agent Development Kit (ADK-Rust) agents.
 
 ```toml
 [dependencies]
-adk-memory = "0.3.2"
+adk-memory = "0.4"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.3.2", features = ["memory"] }
+adk-rust = { version = "0.4", features = ["memory"] }
 ```
 
 ## Quick Start
@@ -76,10 +76,10 @@ for memory in response.memories {
 
 ```toml
 # SQLite
-adk-memory = { version = "0.3.2", features = ["sqlite-memory"] }
+adk-memory = { version = "0.4", features = ["sqlite-memory"] }
 
 # PostgreSQL + pgvector
-adk-memory = { version = "0.3.2", features = ["database-memory"] }
+adk-memory = { version = "0.4", features = ["database-memory"] }
 ```
 
 ## Schema Migrations

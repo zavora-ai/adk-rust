@@ -114,7 +114,6 @@ fn test_function_call_with_thought_signature() {
     // The Gemini wire format carries thoughtSignature on the enclosing Part, not inside
     // functionCall. Standalone FunctionCall serialization must omit it.
     let serialized = serde_json::to_value(&function_call).unwrap();
-    println!("Serialized FunctionCall: {}", serialized);
     assert_eq!(
         serialized,
         json!({
@@ -144,7 +143,6 @@ fn test_function_call_without_thought_signature() {
 
     // Test serialization should not include thought_signature field when None
     let serialized = serde_json::to_string(&function_call).unwrap();
-    println!("Serialized FunctionCall without thought: {}", serialized);
     assert!(!serialized.contains("thought_signature"));
     assert!(!serialized.contains("thoughtSignature"));
 }
@@ -176,7 +174,6 @@ fn test_multi_turn_content_structure() {
 
     // Test serialization of the complete structure first
     let serialized = serde_json::to_value(&model_content).unwrap();
-    println!("Serialized multi-turn content: {}", serialized);
     assert_eq!(
         serialized,
         json!({
@@ -350,13 +347,11 @@ fn test_content_creation_with_thought_signature() {
 
     // Test serialization
     let serialized = serde_json::to_string(&content).unwrap();
-    println!("Serialized content with thought signature: {}", serialized);
     assert!(serialized.contains("thoughtSignature"));
     assert!(serialized.contains("test_signature_123"));
 
     // Test serialization of thought content
     let serialized_thought = serde_json::to_string(&thought_content).unwrap();
-    println!("Serialized thought content: {}", serialized_thought);
     assert!(serialized_thought.contains("thoughtSignature"));
     assert!(serialized_thought.contains("thought_signature_456"));
     assert!(serialized_thought.contains("\"thought\":true"));
