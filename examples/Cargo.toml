@@ -39,6 +39,10 @@ name = "openai_basic"
 path = "openai_basic/main.rs"
 
 [[example]]
+name = "rag_gemini"
+path = "rag_gemini/main.rs"
+
+[[example]]
 name = "vision_test"
 path = "vision_test/main.rs"
 
@@ -52,6 +56,7 @@ path = "vision_test/main.rs"
 [features]
 default = []
 # Enable all vision-capable providers for the vision_test example
+rag-gemini = ["adk-rag/gemini"]
 vision-test = ["openai", "anthropic", "bedrock"]
 openai = ["adk-model/openai"]
 anthropic = ["adk-model/anthropic"]
@@ -68,6 +73,7 @@ adk-session.workspace = true
 adk-memory.workspace = true
 adk-graph.workspace = true
 adk-eval.workspace = true
+adk-rag = { workspace = true, optional = true }
 adk-cli.workspace = true
 tokio = { workspace = true, features = ["full"] }
 anyhow.workspace = true
