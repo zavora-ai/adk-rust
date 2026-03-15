@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **vision_test**: OpenAI model changed from `gpt-5-mini` to `gpt-4o-mini`.
 - **Cleanup**: Removed 20 non-essential `openai_*` example directories (full collection in adk-playground repo).
 
+#### adk-model
+- **Consolidated OpenAI-compatible providers**: Replaced 7 near-identical provider modules (fireworks, together, mistral, perplexity, cerebras, sambanova, xai) with `OpenAICompatibleConfig` presets. Each was ~150 lines wrapping the same `OpenAICompatible` client — now 7 preset constructors totaling 63 lines. Usage: `OpenAICompatible::new(OpenAICompatibleConfig::fireworks(key, model))`. Feature flags preserved as backward-compatible aliases (`fireworks = ["openai"]`). `all-providers` simplified from 15 to 8 flags.
+
 #### adk-telemetry
 - **Proper error type**: Replaced `Box<dyn std::error::Error>` with `TelemetryError` (thiserror) in all init functions. Convention-compliant typed errors.
 
