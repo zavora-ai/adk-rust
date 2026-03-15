@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### `#[tool]` Proc Macro (adk-macros)
+- **Zero-boilerplate tool registration**: New `#[tool]` attribute macro turns an async function into a full `Tool` implementation. Doc comments become the description, argument types derive JSON schemas via schemars, and a PascalCase struct is generated implementing `adk_core::Tool`. Supports both standalone functions and functions with `Arc<dyn ToolContext>` parameter. Schema output is automatically cleaned for LLM API compatibility (strips `$schema`, simplifies nullable types).
+
 #### Development Infrastructure
 - **cargo-nextest integration**: Switched from `cargo test` to `cargo nextest run` for workspace test execution. Parallel test binary execution reduces test wall-clock time from ~1m47s to ~9s (~11x speedup). Added `.config/nextest.toml` with default and CI profiles (CI profile includes retry-on-flaky and slow-test warnings). `devenv.nix` updated with `ws-test` (nextest), `ws-test-ci` (nextest CI profile), and `ws-test-slow` (fallback `cargo test` for doctests) scripts.
 

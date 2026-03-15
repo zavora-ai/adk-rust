@@ -6,6 +6,8 @@ ADK-Rust provides several built-in tools that extend agent capabilities without 
 
 | Tool | Purpose | Use Case |
 |------|---------|----------|
+| `#[tool]` macro | Zero-boilerplate custom tools | Any custom function — [see Function Tools](function-tools.md) |
+| `FunctionTool` | Manual custom tool registration | Dynamic tools, closures |
 | `GoogleSearchTool` | Web search via Gemini | Real-time information retrieval |
 | `ExitLoopTool` | Loop termination | Controlling LoopAgent iterations |
 | `LoadArtifactsTool` | Artifact loading | Accessing stored binary data |

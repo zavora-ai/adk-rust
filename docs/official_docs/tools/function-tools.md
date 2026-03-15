@@ -9,14 +9,65 @@ Extend agent capabilities with custom Rust functions.
 Function tools let you give agents abilities beyond conversation - calling APIs, performing calculations, accessing databases, or any custom logic. The LLM decides when to use a tool based on the user's request.
 
 > **Key highlights**:
-> - 🔧 **Wrap any async function** as a callable tool
+> - 🚀 **`#[tool]` macro** - zero-boilerplate tool registration (recommended)
+> - 🔧 **`FunctionTool::new()`** - wrap any async function manually
 > - 📝 **JSON parameters** - flexible input/output
-> - 🎯 **Type-safe schemas** - optional JSON Schema validation
+> - 🎯 **Type-safe schemas** - automatic JSON Schema from types via schemars
 > - 🔗 **Context access** - session state, artifacts, memory
 
 ---
 
-## Step 1: Basic Tool
+## Recommended: `#[tool]` Macro
+
+The fastest way to create tools. The macro reads your doc comment as the description and derives the JSON schema from your args type:
+
+```rust
+use adk_tool::tool;
+use adk_core::AdkError;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+#[derive(Deserialize, JsonSchema)]
+struct WeatherArgs {
+    /// The city to look up
+    city: String,
+    /// Temperature unit (celsius or fahrenheit)
+    unit: Option<String>,
+}
+
+/// Get the current weather for a city.
+#[tool]
+async fn get_weather(args: WeatherArgs) -> Result<Value, AdkError> {
+    Ok(json!({ "temp": 22, "city": args.city }))
+}
+
+// Generated: pub struct GetWeather; — implements adk_core::Tool
+// Use it: agent_builder.tool(Arc::new(GetWeather))
+```
+
+If your tool needs session context, add `Arc<dyn ToolContext>` as the first parameter:
+
+```rust
+use adk_core::ToolContext;
+use std::sync::Arc;
+
+/// Search the user's saved documents.
+#[tool]
+async fn search_docs(
+    ctx: Arc<dyn ToolContext>,
+    args: SearchArgs,
+) -> Result<Value, AdkError> {
+    let user_id = ctx.user_id();
+    // ... use context for scoped access
+}
+```
+
+---
+
+## Alternative: `FunctionTool::new()`
+
+For dynamic tools or when you prefer explicit registration:
 
 Create a tool with `FunctionTool::new()` and **always add a schema** so the LLM knows what parameters to pass:
 

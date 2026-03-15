@@ -113,9 +113,56 @@ pub fn tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let (schema_gen, deserialize_call) = if let Some(args_ty) = &args_type {
         (
             quote! {
-                Some(serde_json::to_value(
-                    schemars::schema_for!(#args_ty)
-                ).unwrap_or_default())
+                {
+                    let mut schema = serde_json::to_value(
+                        schemars::schema_for!(#args_ty)
+                    ).unwrap_or_default();
+                    // Strip fields that Gemini/LLM APIs don't accept
+                    if let Some(obj) = schema.as_object_mut() {
+                        obj.remove("$schema");
+                        obj.remove("title");
+                    }
+                    // Simplify nullable types: {"type": ["string", "null"]} → {"type": "string"}
+                    fn simplify_nullable(v: &mut serde_json::Value) {
+                        match v {
+                            serde_json::Value::Object(map) => {
+                                if let Some(serde_json::Value::Array(types)) = map.get("type") {
+                                    let non_null: Vec<_> = types.iter()
+                                        .filter(|t| t.as_str() != Some("null"))
+                                        .cloned()
+                                        .collect();
+                                    if non_null.len() == 1 {
+                                        map.insert("type".to_string(), non_null[0].clone());
+                                    }
+                                }
+                                // Remove anyOf wrappers for simple nullable types
+                                if let Some(serde_json::Value::Array(any_of)) = map.remove("anyOf") {
+                                    for variant in &any_of {
+                                        if let Some(obj) = variant.as_object() {
+                                            if obj.get("type").and_then(|t| t.as_str()) != Some("null") {
+                                                for (k, val) in obj {
+                                                    map.insert(k.clone(), val.clone());
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                for val in map.values_mut() {
+                                    simplify_nullable(val);
+                                }
+                            }
+                            serde_json::Value::Array(arr) => {
+                                for item in arr {
+                                    simplify_nullable(item);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    simplify_nullable(&mut schema);
+                    Some(schema)
+                }
             },
             quote! {
                 let typed_args: #args_ty = serde_json::from_value(args)

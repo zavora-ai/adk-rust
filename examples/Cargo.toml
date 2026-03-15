@@ -35,6 +35,10 @@ name = "template"
 path = "template/main.rs"
 
 [[example]]
+name = "tool_macro"
+path = "tool_macro/main.rs"
+
+[[example]]
 name = "openai_basic"
 path = "openai_basic/main.rs"
 
