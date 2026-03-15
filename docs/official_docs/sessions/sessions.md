@@ -426,6 +426,79 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+## Typed Session Identity
+
+Session operations use `AdkIdentity` — a typed composite of `AppName`, `UserId`, and `SessionId` — to address sessions unambiguously. This eliminates parameter ordering bugs and ensures multi-tenant isolation.
+
+### Typed Session Operations
+
+`SessionService` provides typed methods alongside the existing string-based API:
+
+```rust
+use adk_core::{AdkIdentity, AppName, SessionId, UserId};
+use adk_session::{AppendEventRequest, Event, SessionService};
+
+let identity = AdkIdentity::new(
+    AppName::try_from("my_app")?,
+    UserId::try_from("user_123")?,
+    SessionId::try_from("session_abc")?,
+);
+
+// Typed append — uses the full (app, user, session) triple
+let event = Event::new("inv_001");
+service.append_event_for_identity(AppendEventRequest {
+    identity: identity.clone(),
+    event,
+}).await?;
+
+// Typed get and delete
+let session = service.get_for_identity(&identity, None, None).await?;
+service.delete_for_identity(&identity).await?;
+```
+
+All session backends (in-memory, SQLite, PostgreSQL, Redis, MongoDB, Firestore, Neo4j, Vertex) support the typed identity path. The legacy `append_event(&str, ...)` method remains available for backward compatibility.
+
+For new code, prefer `append_event_for_identity()` and the other typed identity helpers. The legacy `append_event(&str, ...)` path is retained only for migration and is the first legacy identity API intended for future deprecation once internal callers have fully moved to `AdkIdentity`.
+
+### Multi-Tenant Safety
+
+With typed identity, two sessions that share the same raw `session_id` but differ in `app_name` or `user_id` are always addressed correctly:
+
+```rust
+let tenant_a = AdkIdentity::new(
+    AppName::try_from("app-a")?,
+    UserId::try_from("alice")?,
+    SessionId::try_from("shared-session-id")?,
+);
+
+let tenant_b = AdkIdentity::new(
+    AppName::try_from("app-b")?,
+    UserId::try_from("bob")?,
+    SessionId::try_from("shared-session-id")?,
+);
+
+// These address completely different sessions
+assert_ne!(tenant_a, tenant_b);
+```
+
+### Reading Identity from Sessions
+
+The `Session` trait provides typed helpers to extract identity from an existing session:
+
+```rust
+let session = service.get(get_request).await?;
+
+// Get the full session identity
+let identity = session.try_identity()?;
+
+// Or individual typed fields
+let app = session.try_app_name()?;
+let user = session.try_user_id()?;
+let sid = session.try_session_id()?;
+```
+
+For more on the three identity layers (auth, session, execution), see [Core Types — Identity](../core/core.md#identity).
+
 ## Events
 
 The `Events` trait provides access to conversation history:

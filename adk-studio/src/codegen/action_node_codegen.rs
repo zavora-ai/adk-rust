@@ -1481,71 +1481,105 @@ impl ActionNodeCodeGen for CodeNodeConfig {
         let mut code = String::new();
 
         code.push_str(&format!("// Code Node: {}\n", self.standard.name));
-        code.push_str(&format!(
-            "async fn {}_code(state: &mut State) -> Result<serde_json::Value, ActionError> {{\n",
-            node_id
-        ));
-
-        // Sandbox configuration
-        code.push_str("    // Sandbox configuration\n");
-        code.push_str(&format!(
-            "    let sandbox_config = SandboxConfig {{\n\
-                     network_access: {},\n\
-                     file_system_access: {},\n\
-                     memory_limit_mb: {},\n\
-                     time_limit_ms: {},\n\
-                 }};\n\n",
-            self.sandbox.network_access,
-            self.sandbox.file_system_access,
-            self.sandbox.memory_limit,
-            self.sandbox.time_limit
-        ));
-
-        // Prepare input
-        code.push_str("    // Prepare input for code execution\n");
-        code.push_str("    let input = serde_json::json!(state.clone());\n\n");
-
-        // Execute code in sandbox
-        code.push_str("    // Execute code in sandbox\n");
-        code.push_str(&format!(
-            "    let code = r#\"{}\"#;\n",
-            self.code.replace("\\", "\\\\").replace("#", "\\#")
-        ));
 
         match self.language {
-            CodeLanguage::Javascript => {
-                code.push_str(
-                    "    let result = execute_js_sandboxed(code, &input, &sandbox_config)?;\n",
-                );
+            CodeLanguage::Rust => {
+                // Rust-first: embed the authored Rust body directly as a native function.
+                // The user's code follows the contract: fn run(input: Value) -> Value
+                code.push_str(&format!(
+                    "/// Authored Rust body for code node `{}`\n",
+                    self.standard.name
+                ));
+                code.push_str(&format!(
+                    "fn {}_run(input: serde_json::Value) -> serde_json::Value {{\n",
+                    node_id
+                ));
+                code.push_str(&self.code);
+                code.push_str("\n}\n\n");
+
+                code.push_str(&format!(
+                    "async fn {}_code(state: &mut State) -> Result<serde_json::Value, ActionError> {{\n",
+                    node_id
+                ));
+                code.push_str("    let input = serde_json::json!(state.clone());\n");
+                code.push_str(&format!("    let result = {}_run(input);\n", node_id));
+                code.push_str(&format!(
+                    "    state.insert(\"{}\".to_string(), result.clone());\n",
+                    self.standard.mapping.output_key
+                ));
+                code.push_str("    Ok(result)\n");
+                code.push_str("}\n\n");
             }
-            CodeLanguage::Typescript => {
-                code.push_str("    // TypeScript is transpiled to JavaScript\n");
-                code.push_str("    let js_code = transpile_typescript(code)?;\n");
-                code.push_str(
-                    "    let result = execute_js_sandboxed(&js_code, &input, &sandbox_config)?;\n",
-                );
+            CodeLanguage::Javascript | CodeLanguage::Typescript => {
+                // Secondary scripting: JS/TS execution via sandbox helper
+                code.push_str(&format!(
+                    "async fn {}_code(state: &mut State) -> Result<serde_json::Value, ActionError> {{\n",
+                    node_id
+                ));
+
+                code.push_str("    // Sandbox configuration\n");
+                code.push_str(&format!(
+                    "    let sandbox_config = SandboxConfig {{\n\
+                             network_access: {},\n\
+                             file_system_access: {},\n\
+                             memory_limit_mb: {},\n\
+                             time_limit_ms: {},\n\
+                         }};\n\n",
+                    self.sandbox.network_access,
+                    self.sandbox.file_system_access,
+                    self.sandbox.memory_limit,
+                    self.sandbox.time_limit
+                ));
+
+                code.push_str("    let input = serde_json::json!(state.clone());\n\n");
+                code.push_str(&format!(
+                    "    let code = r#\"{}\"#;\n",
+                    self.code.replace('\\', "\\\\").replace('#', "\\#")
+                ));
+
+                if matches!(self.language, CodeLanguage::Typescript) {
+                    code.push_str("    // TypeScript is transpiled to JavaScript\n");
+                    code.push_str("    let js_code = transpile_typescript(code)?;\n");
+                    code.push_str(
+                        "    let result = execute_js_sandboxed(&js_code, &input, &sandbox_config)?;\n",
+                    );
+                } else {
+                    code.push_str(
+                        "    let result = execute_js_sandboxed(code, &input, &sandbox_config)?;\n",
+                    );
+                }
+
+                code.push_str(&format!(
+                    "\n    state.insert(\"{}\".to_string(), result.clone());\n",
+                    self.standard.mapping.output_key
+                ));
+                code.push_str("    Ok(result)\n");
+                code.push_str("}\n\n");
+
+                // Generate sandbox execution helper for JS/TS only
+                code.push_str(generate_sandbox_helper());
             }
         }
-
-        code.push_str(&format!(
-            "\n    state.insert(\"{}\".to_string(), result.clone());\n",
-            self.standard.mapping.output_key
-        ));
-        code.push_str("    Ok(result)\n");
-        code.push_str("}\n\n");
-
-        // Generate sandbox execution helper
-        code.push_str(generate_sandbox_helper());
 
         code
     }
 
     fn required_imports(&self) -> Vec<&'static str> {
-        vec!["serde_json", "quick_js"]
+        match self.language {
+            CodeLanguage::Rust => vec!["serde_json"],
+            CodeLanguage::Javascript | CodeLanguage::Typescript => {
+                vec!["serde_json", "quick_js"]
+            }
+        }
     }
 
     fn required_dependencies(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("serde_json", "1"), ("quick-js", "0.4")]
+        match self.language {
+            CodeLanguage::Rust => vec![("serde_json", "1")],
+            CodeLanguage::Javascript | CodeLanguage::Typescript => {
+                vec![("serde_json", "1"), ("quick-js", "0.4")]
+            }
+        }
     }
 }
 
@@ -3321,6 +3355,7 @@ mod tests {
                 ..Default::default()
             },
             trigger_type: TriggerType::Manual,
+            manual: Some(ManualTriggerConfig::default()),
             webhook: None,
             schedule: None,
             event: None,

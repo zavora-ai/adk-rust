@@ -561,9 +561,11 @@ export interface WaitNodeConfig extends StandardProperties {
 
 /**
  * Code language.
+ * Rust is the primary code authoring path. JavaScript and TypeScript
+ * are available as secondary scripting/transform support.
  * @see Requirement 10.1
  */
-export type CodeLanguage = 'javascript' | 'typescript';
+export type CodeLanguage = 'rust' | 'javascript' | 'typescript';
 
 /**
  * Sandbox security configuration.
@@ -582,7 +584,9 @@ export interface SandboxConfig {
 
 /**
  * Code node configuration.
- * Executes custom JavaScript/TypeScript code in sandbox.
+ * Executes custom code in sandbox. Rust is the primary authoring path
+ * executed via adk-code RustSandboxExecutor. JavaScript/TypeScript are
+ * secondary scripting support.
  * @see Requirement 10
  */
 export interface CodeNodeConfig extends StandardProperties {

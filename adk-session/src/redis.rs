@@ -16,8 +16,8 @@
 //! | `session_lookup:{session}` | String | Reverse lookup to `{app}:{user}` |
 
 use crate::{
-    CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP, ListRequest, Session,
-    SessionService, State, state_utils,
+    AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
+    ListRequest, Session, SessionService, State, state_utils,
 };
 use adk_core::Result;
 use async_trait::async_trait;
@@ -479,6 +479,103 @@ impl SessionService for RedisSessionService {
 
         // Add event to sorted set
         let events_k = events_key(app_name, user_id, session_id);
+        let _: () = trx
+            .zadd(&events_k, None, None, false, false, (score, event_json))
+            .await
+            .map_err(|e| adk_core::AdkError::Session(format!("redis zadd failed: {e}")))?;
+
+        let _: () = trx
+            .exec(true)
+            .await
+            .map_err(|e| adk_core::AdkError::Session(format!("redis transaction failed: {e}")))?;
+
+        // Refresh TTL
+        self.apply_ttl(&session_k, &events_k).await?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all, fields(
+        app_name = %req.identity.app_name,
+        user_id = %req.identity.user_id,
+        session_id = %req.identity.session_id,
+    ))]
+    async fn append_event_for_identity(&self, req: AppendEventRequest) -> Result<()> {
+        let mut event = req.event;
+        event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
+
+        let app_name = req.identity.app_name.as_ref();
+        let user_id = req.identity.user_id.as_ref();
+        let sid = req.identity.session_id.as_ref();
+
+        // Construct the key directly from the identity — no reverse lookup needed.
+        let session_k = session_key(app_name, user_id, sid);
+
+        // Verify session hash exists
+        let exists: bool = self
+            .client
+            .exists(&session_k)
+            .await
+            .map_err(|e| adk_core::AdkError::Session(format!("redis exists failed: {e}")))?;
+        if !exists {
+            return Err(adk_core::AdkError::Session("session not found".into()));
+        }
+
+        // Read existing session state
+        let raw: HashMap<String, String> = self
+            .client
+            .hgetall(&session_k)
+            .await
+            .map_err(|e| adk_core::AdkError::Session(format!("redis hgetall failed: {e}")))?;
+
+        let existing_state: HashMap<String, Value> =
+            raw.get("state").and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default();
+        let (_, _, mut session_state) = state_utils::extract_state_deltas(&existing_state);
+
+        // Load current app/user state
+        let app_state = self.read_state_hash(&app_state_key(app_name)).await?;
+        let user_state = self.read_state_hash(&user_state_key(app_name, user_id)).await?;
+
+        let (app_delta, user_delta, session_delta) =
+            state_utils::extract_state_deltas(&event.actions.state_delta);
+
+        let mut new_app_state = app_state;
+        new_app_state.extend(app_delta);
+
+        let mut new_user_state = user_state;
+        new_user_state.extend(user_delta);
+
+        session_state.extend(session_delta);
+        let merged_state =
+            state_utils::merge_states(&new_app_state, &new_user_state, &session_state);
+
+        // Serialize event for sorted set
+        let event_json = serde_json::to_string(&event)
+            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+        let score = event.timestamp.timestamp_millis() as f64;
+
+        // Atomic write
+        let trx = self.client.multi();
+
+        Self::write_state_hash(&trx, &app_state_key(app_name), &new_app_state).await?;
+        Self::write_state_hash(&trx, &user_state_key(app_name, user_id), &new_user_state).await?;
+
+        // Update session merged state and timestamp
+        let merged_state_json = serde_json::to_string(&merged_state)
+            .map_err(|e| adk_core::AdkError::Session(format!("serialize state failed: {e}")))?;
+        let _: () = trx
+            .hset(
+                &session_k,
+                vec![
+                    ("state".to_string(), merged_state_json),
+                    ("updated_at".to_string(), event.timestamp.to_rfc3339()),
+                ],
+            )
+            .await
+            .map_err(|e| adk_core::AdkError::Session(format!("redis hset failed: {e}")))?;
+
+        // Add event to sorted set
+        let events_k = events_key(app_name, user_id, sid);
         let _: () = trx
             .zadd(&events_k, None, None, false, false, (score, event_json))
             .await

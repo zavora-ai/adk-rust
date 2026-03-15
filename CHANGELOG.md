@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### adk-sandbox (NEW CRATE)
+- New `adk-sandbox` crate: isolated code execution runtime for ADK agents
+- `SandboxBackend` trait with `execute(ExecRequest) -> Result<ExecResult, SandboxError>` and `capabilities()` methods
+- `ProcessBackend`: subprocess execution via `tokio::process::Command` with timeout enforcement, environment isolation (`env_clear()`), output truncation (1 MB, UTF-8 safe), and `kill_on_drop(true)`. Supports Rust, Python, JavaScript, TypeScript, and shell commands
+- `WasmBackend`: in-process WASM execution via `wasmtime` with epoch-based timeout, memory limits via `StoreLimitsBuilder`, WASI stdin/stdout/stderr capture, and no filesystem or network access (behind `wasm` feature)
+- `SandboxTool`: `adk_core::Tool` implementation delegating to any `SandboxBackend`, with error-as-information pattern (errors returned as structured JSON, never `ToolError`)
+- `ExecRequest` and `ExecResult` types with explicit timeout (no `Default` impl), `Language` enum, and `SandboxError` enum
+- `BackendCapabilities` with honest `EnforcedLimits` reporting what each backend actually enforces
+- Feature flags: `process` (default), `wasm` (optional, requires `wasmtime`)
+
+### Changed
+
+#### Repository structure
+- `adk-deploy-server` and `adk-deploy-console` have been hard-migrated out of the `adk-rust` workspace into the sibling `adk-platform` repo, while `adk-deploy` remains in `adk-rust` as the shared deployment manifest and bundling utility crate
+
+#### adk-code
+- Redesigned with `RustExecutor`: check → build → execute pipeline delegating to `SandboxBackend` from `adk-sandbox`
+- New `CodeTool` implementing `adk_core::Tool` with structured diagnostic passthrough (compile errors as JSON, not `ToolError`)
+- New `CodeError` enum with `CompileError` (structured `Vec<RustDiagnostic>`), `DependencyNotFound`, `Sandbox`, `InvalidCode` variants
+- Extracted `harness.rs` (harness template, source validation) and `diagnostics.rs` (rustc JSON diagnostic parser) as shared modules
+- `EmbeddedJsExecutor` capabilities fixed: now honestly reports `true` for network/filesystem/environment enforcement (isolation by omission via `boa_engine`)
+- `DockerExecutor` Drop safety fixed: uses `Handle::try_current()` before spawning cleanup, logs warning when no runtime is available
+- Migration compatibility layer in `compat` module with deprecated type aliases for one release cycle
+
+### Deprecated
+
+#### adk-tool
+- `RustCodeTool` is deprecated in favor of `adk_code::CodeTool`
+
+#### adk-code
+- `CodeExecutor`, `ExecutionRequest`, `ExecutionResult`, `RustSandboxExecutor`, `RustSandboxConfig` type aliases deprecated (use `adk-sandbox` and new `adk-code` types instead). Will be removed in v0.6.0
+
+## [0.4.0] - 2026-03-12
+
+### Added
+
+#### adk-code (NEW CRATE)
+- New `adk-code` crate: first-class code execution substrate for ADK-Rust
+- Core types: `CodeExecutor` trait, `ExecutionRequest`, `ExecutionResult`, `ExecutionLanguage`, `SandboxPolicy`, `BackendCapabilities`, `ExecutionIsolation`
+- `CodeExecutor` lifecycle methods: `start()`, `stop()`, `restart()`, `is_running()` for persistent execution environments (default no-ops for simple backends)
+- `RustSandboxExecutor`: flagship Rust-authored code execution with host-local process isolation and strict defaults (30s timeout, 1MB output limits)
+- `EmbeddedJsExecutor`: secondary in-process JavaScript backend via `boa_engine` for lightweight transforms (behind `embedded-js` feature)
+- `DockerExecutor`: persistent Docker container executor using `bollard` SDK (behind `docker` feature) — matches AutoGen's `DockerCommandLineCodeExecutor` lifecycle model (start once, execute many, stop when done)
+- `DockerConfig` presets: `python()`, `node()`, `custom(image)` with builder methods `.pip_install()`, `.npm_install()`, `.with_network()`, `.env()`, `.bind_mount()`
+- `ContainerCommandExecutor`: CLI-based ephemeral container executor for Python, JavaScript, and command execution
+- `WasmGuestExecutor`: guest-module backend for precompiled `.wasm` modules with explicit boundary validation
+- `Workspace` and `CollaborationEvent`: shared project context for multi-agent code generation with typed collaboration events (NeedWork, WorkClaimed, WorkPublished, FeedbackRequested, FeedbackProvided, Blocked, Completed)
+- A2A-compatible collaboration event mapping for future remote specialist execution
+- `ExecutionMetadata` and `ArtifactRef` for telemetry correlation and artifact storage references
+- Fail-closed sandbox policy validation: backends reject unsupported controls before executing user code
+- 10 correctness properties validated by proptest (100+ iterations each)
+
+#### adk-tool
+- `RustCodeTool`: primary Rust-first code execution tool with `code:execute` and `code:execute:rust` scopes
+- `JavaScriptCodeTool`: secondary JavaScript execution tool — uses real `EmbeddedJsExecutor` when `code-embedded-js` feature is enabled, returns descriptive error otherwise
+- `PythonCodeTool`: container-backed Python execution tool, supports custom executors via `with_executor()` (e.g., `DockerExecutor` for persistent containers)
+- `FrontendCodeTool`: container-backed Node.js execution tool for React/frontend code, supports custom executors via `with_executor()`
+- New feature flags: `code-embedded-js` (enables boa_engine JS backend), `code-docker` (enables Docker SDK persistent containers)
+- Workspace-friendly presets: `RustCodeTool::backend()`, `FrontendCodeTool::react()` for collaborative project builds
+
+#### adk-studio
+- Rust-first code execution: Studio live runner executes authored Rust through `adk-code` `RustSandboxExecutor` instead of returning placeholder errors
+- Generated Studio projects reuse the same authored Rust body for code nodes
+- Rust is the primary code authoring mode; JavaScript/TypeScript available as secondary scripting
+- Sandbox settings map to backend-enforceable capabilities with incompatibility surfacing
+
+#### adk-deploy
+- `adk-deploy` manifest coverage now includes telemetry, auth, guardrails, realtime, A2A, graph/HITL, plugins, skills, and richer service binding validation for self-hosted deployment workflows
+- Bundle creation now rejects asset paths that escape the project root
+- `adk-cli` deploy login now validates operator-provided bearer tokens against the external platform API and stores them in the OS credential store instead of plaintext config
+- Deployment manifests can now publish operator interaction metadata for manual, webhook, schedule, and event triggers, and Studio carries trigger configuration into that manifest for external platform consumers
+
 ### Fixed
 
 #### adk-gemini
@@ -23,11 +97,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **OpenAI reasoning effort**: `ReasoningEffort` enum (`Low`, `Medium`, `High`) and `reasoning_effort` field on `OpenAIConfig` for OpenAI reasoning models (o1, o3, etc.). Builder method `with_reasoning_effort()` wires through to the `reasoning_effort` API field. Also available on `OpenAICompatibleConfig` for compatible providers. ([#177](https://github.com/zavora-ai/adk-rust/issues/177))
 
 #### adk-core
+- **Typed identity module**: New `adk_core::identity` module with `AppName`, `UserId`, `SessionId`, `InvocationId` newtypes, `AdkIdentity` (session-scoped triple), `ExecutionIdentity` (per-invocation capsule), and `IdentityError`. All leaf types implement `Clone`, `Debug`, `Eq`, `Hash`, `Ord`, `Display`, `AsRef<str>`, `Borrow<str>`, `FromStr`, `TryFrom<&str>`, `TryFrom<String>`, `Serialize`, `Deserialize` with `#[serde(transparent)]`. Validation rejects empty values, null bytes, and strings exceeding 512 bytes. `SessionId::generate()` and `InvocationId::generate()` produce UUID-based identifiers.
+- **Typed context helpers on `ReadonlyContext`**: Additive default methods `try_app_name()`, `try_user_id()`, `try_session_id()`, `try_invocation_id()`, `try_identity()`, and `try_execution_identity()` parse existing string fields into typed identifiers, returning `IdentityError` on invalid values instead of panicking.
+- **Typed session helpers on `Session`**: Additive default methods `try_app_name()`, `try_user_id()`, `try_session_id()`, and `try_identity()` on the `Session` trait.
 - **`ToolOutcome` struct**: Structured metadata for tool execution results — carries tool name, arguments, success/failure, execution duration, optional error message, and retry attempt number. Available via `CallbackContext::tool_outcome()` in after-tool callbacks.
 - **`tool_outcome()` default method on `CallbackContext`**: Returns `Option<ToolOutcome>`, defaulting to `None` for full backward compatibility with existing implementors.
 - **`RetryBudget` struct**: Configurable retry policy with `max_retries` and `delay` for automatic tool retry on transient failures.
 - **`OnToolErrorCallback` type**: Promoted to `adk-core` as the canonical, framework-level tool-error callback type. Previously defined locally in `adk-agent` and `adk-plugin`.
 - **`AfterToolCallbackFull` type**: V2 rich after-tool callback aligned with Python/Go ADK model. Receives `(CallbackContext, Tool, args, response)` and can inspect or replace the tool response sent to the LLM.
+
+#### adk-auth
+- **Typed auth-boundary user validation**: `JwtRequestContextExtractor` now validates the mapped auth user against `UserId` before returning `RequestContext`. Invalid mapped user IDs now fail with `RequestContextError::ExtractionFailed` instead of slipping deeper into the runtime. `ClaimsMapper` remains responsible only for claim selection.
 
 #### adk-agent
 - **`.toolset()` builder method**: `LlmAgentBuilder` now accepts `Arc<dyn Toolset>` for dynamic per-invocation tool resolution. Toolsets are resolved at the start of each `run()` call using the current `ReadonlyContext`, enabling context-dependent tools (e.g., per-user browser sessions). Static `.tool()` and dynamic `.toolset()` can be mixed freely.
@@ -60,6 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`server_compaction`**: `ServerConfig::with_compaction()`, `EventsCompactionConfig`, and custom `BaseEventsSummarizer`.
 
 #### adk-session
+- **Typed identity session APIs**: `AppendEventRequest` struct and `SessionService::append_event_for_identity()` default method accept `AdkIdentity` for unambiguous session-scoped event appending. Additive `get_for_identity()` and `delete_for_identity()` default methods for typed get/delete. All 8 backends (InMemory, SQLite, PostgreSQL, Redis, MongoDB, Firestore, Neo4j, Vertex) override `append_event_for_identity()`. `InMemorySessionService` uses `AdkIdentity` as its internal HashMap key instead of delimiter-concatenated strings. Typed request helpers on `GetRequest`, `DeleteRequest`, `ListRequest`, and `CreateRequest`.
+- **Legacy append guidance**: The typed `AdkIdentity` path is now the preferred session API for new code. The legacy `append_event(&str, ...)` method remains for migration only and is the first legacy identity API slated for deprecation after internal callers complete their move to typed identity.
 - **Schema migrations**: Versioned, forward-only migration system for all database backends (SQLite, PostgreSQL, MongoDB, Neo4j). Each backend tracks applied migrations in a `_schema_migrations` registry table with checksums and timestamps. Migrations are idempotent — calling `migrate()` on an already-current database is a no-op.
 - **Baseline detection**: `migrate()` detects pre-existing tables created before the migration system and registers them as already applied, avoiding destructive re-creation.
 - **`schema_version()` method**: All database backends expose `schema_version()` returning the current migration version (0 if no migrations applied).
@@ -73,6 +155,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Production app builder path**: `Launcher` now exposes `build_app()` and `build_app_with_a2a(...)`, making it possible to reuse ADK server wiring while still owning the Axum router, middleware stack, and serve loop in production applications.
 - **Launcher A2A and telemetry configuration**: `Launcher` now supports `with_a2a_base_url(...)` and `with_telemetry(...)`, so A2A routes and telemetry initialization are configurable instead of hardcoded in serve mode.
 - **Server runtime passthrough**: `ServerConfig` now exposes `with_compaction(...)` and `with_context_cache(...)`, and the SSE + A2A runtime controllers now forward those settings into `RunnerConfig`.
+
+#### adk-runner
+- **Typed execution identity**: `InvocationContext` stores `ExecutionIdentity` internally, providing validated typed identity throughout the agent execution lifecycle. Event creation and agent transfers use typed invocation identity after boundary parsing.
+
+#### adk-server / adk-studio
+- **Boundary identity parsing**: HTTP and Studio ingress handlers parse user-controlled `app_name`, `user_id`, and `session_id` values into typed identifiers at the boundary, returning `400 Bad Request` on invalid input instead of panicking downstream.
 
 ### Changed
 

@@ -1,0 +1,37 @@
+[package]
+name = "adk-code"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Code execution substrate for ADK-Rust — typed executor abstraction, sandbox policy model, and built-in execution backends"
+repository = "https://github.com/zavora-ai/adk-rust"
+documentation = "https://docs.rs/adk-code"
+keywords = ["ai", "agent", "adk", "code-execution", "sandbox"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
+
+[dependencies]
+adk-core = { workspace = true }
+adk-sandbox = { workspace = true }
+async-trait = { workspace = true }
+boa_engine = { version = "0.20", optional = true }
+bollard = { version = "0.18", optional = true }
+futures = { workspace = true, optional = true }
+rand = { version = "0.9", optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = "3"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = []
+embedded-js = ["dep:boa_engine"]
+docker = ["dep:bollard", "dep:rand", "dep:futures"]
+
+[dev-dependencies]
+proptest = "1.5"
+tokio = { workspace = true, features = ["test-util", "macros"] }

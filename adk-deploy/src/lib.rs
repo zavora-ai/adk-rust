@@ -24,14 +24,16 @@ pub use error::{DeployError, DeployResult};
 pub use manifest::{
     A2aConfig, AgentAuthConfig, AgentConfig, AuthModeSpec, BindingMode, BuildConfig,
     DeploymentManifest, DeploymentStrategyConfig, DeploymentStrategyKind, EnvVarSpec, GraphConfig,
-    GuardrailConfig, HealthCheckConfig, PluginRef, RealtimeConfig, SecretRef, ServiceBinding,
-    ServiceKind, SkillConfig, SourceInfo, TelemetryConfig,
+    GuardrailConfig, HealthCheckConfig, InteractionConfig, ManualInteractionConfig, PluginRef,
+    RealtimeConfig, SecretRef, ServiceBinding, ServiceKind, SkillConfig, SourceInfo,
+    TelemetryConfig, TriggerInteractionConfig, TriggerKind,
 };
 pub use models::{
     ActiveInstance, AgentDetail, AgentSummary, AlertSummary, AuditEvent, AuthSessionResponse,
-    BillingSummary, DashboardResponse, DeploymentHistoryResponse, DeploymentRecord,
-    DeploymentStatusResponse, DeploymentStatusValue, DeploymentSummary, EnvironmentSummary,
-    HitlCheckpoint, LogEntry, LoginRequest, LoginResponse, MetricPoint, MetricsSummary,
-    PushDeploymentRequest, PushDeploymentResponse, SecretListResponse, SecretSetRequest,
-    TraceSummary, WorkspaceSummary,
+    BillingSummary, DashboardResponse, DeploymentActionState, DeploymentActions,
+    DeploymentHistoryResponse, DeploymentRecord, DeploymentStatusResponse, DeploymentStatusValue,
+    DeploymentSummary, EnvironmentSummary, HitlCheckpoint, LogEntry, LoginRequest, LoginResponse,
+    MetricPoint, MetricsSummary, PushDeploymentRequest, PushDeploymentResponse, SecretListResponse,
+    SecretSetRequest, TraceAdkIdentity, TraceExecutionIdentity, TraceInvocation, TraceSession,
+    TraceSpan, TraceSummary, TraceTokenUsage, WorkspaceSummary,
 };

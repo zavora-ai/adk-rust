@@ -89,6 +89,8 @@ impl BundleBuilder {
         }
 
         tar.finish()?;
+        let encoder = tar.into_inner()?;
+        let _file = encoder.finish()?;
 
         let checksum_sha256 = checksum_file(&bundle_path)?;
         let sums_path =

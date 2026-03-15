@@ -2,6 +2,7 @@ use crate::keystore::{KNOWN_PROVIDER_KEYS, Keystore};
 use crate::server::events::{DebugEvent, TraceEventV2};
 use crate::server::graph_runner::{GraphInterruptHandler, INTERRUPTED_SESSIONS};
 use crate::server::state::AppState;
+use adk_core::SessionId;
 use axum::{
     extract::{Path, Query, State},
     response::sse::{Event, Sse},
@@ -621,10 +622,20 @@ pub async fn stream_handler(
     Path(_id): Path<String>,
     Query(query): Query<StreamQuery>,
     State(app_state): State<AppState>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (axum::http::StatusCode, String)> {
     let input = query.input.clone();
     let binary_path = query.binary_path;
-    let session_id = query.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    // Validate user-provided session_id at the boundary (Requirement 7.1, 7.2, 7.3)
+    let session_id = match query.session_id {
+        Some(ref sid) => {
+            let _valid = SessionId::try_from(sid.as_str()).map_err(|e| {
+                (axum::http::StatusCode::BAD_REQUEST, format!("invalid session_id: {e}"))
+            })?;
+            sid.clone()
+        }
+        None => uuid::Uuid::new_v4().to_string(),
+    };
 
     // Load the project's action node output key mappings so we can
     // reconstruct per-node output snapshots from the final state.
@@ -1214,7 +1225,7 @@ pub async fn stream_handler(
         }
     };
 
-    Sse::new(stream)
+    Ok(Sse::new(stream))
 }
 /// Capitalize the first character of a string.
 fn capitalize(s: &str) -> String {
@@ -1225,7 +1236,13 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-pub async fn kill_session(Path(session_id): Path<String>) -> &'static str {
+pub async fn kill_session(
+    Path(session_id): Path<String>,
+) -> Result<&'static str, (axum::http::StatusCode, String)> {
+    // Validate session_id at the boundary (Requirement 7.1, 7.2, 7.3)
+    let _valid_session_id = SessionId::try_from(session_id.as_str())
+        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, format!("invalid session_id: {e}")))?;
+
     let mut sessions = SESSIONS.lock().await;
     if let Some(mut session) = sessions.remove(&session_id) {
         // Kill the child process explicitly
@@ -1233,7 +1250,7 @@ pub async fn kill_session(Path(session_id): Path<String>) -> &'static str {
             tracing::warn!("Failed to kill session {}: {}", session_id, e);
         }
     }
-    "ok"
+    Ok("ok")
 }
 
 // ============================================

@@ -150,6 +150,24 @@ pub enum TriggerType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ManualTriggerConfig {
+    #[serde(default = "default_manual_input_label")]
+    pub input_label: String,
+    #[serde(default = "default_manual_default_prompt")]
+    pub default_prompt: String,
+}
+
+impl Default for ManualTriggerConfig {
+    fn default() -> Self {
+        Self {
+            input_label: default_manual_input_label(),
+            default_prompt: default_manual_default_prompt(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WebhookConfig {
     pub path: String,
     pub method: String,
@@ -194,11 +212,21 @@ pub struct TriggerNodeConfig {
     pub standard: StandardProperties,
     pub trigger_type: TriggerType,
     #[serde(default)]
+    pub manual: Option<ManualTriggerConfig>,
+    #[serde(default)]
     pub webhook: Option<WebhookConfig>,
     #[serde(default)]
     pub schedule: Option<ScheduleConfig>,
     #[serde(default)]
     pub event: Option<EventConfig>,
+}
+
+fn default_manual_input_label() -> String {
+    "Enter your message".to_string()
+}
+
+fn default_manual_default_prompt() -> String {
+    "What can you help me build with ADK-Rust today?".to_string()
 }
 
 // ============================================
@@ -610,6 +638,7 @@ pub struct WaitNodeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum CodeLanguage {
+    Rust,
     Javascript,
     Typescript,
 }

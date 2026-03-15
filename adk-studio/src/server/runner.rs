@@ -848,14 +848,97 @@ impl WorkflowExecutor {
         Ok(serde_json::json!({ "waited": true }))
     }
 
-    /// Execute Code node (placeholder - needs sandbox)
+    /// Execute Code node through `adk-code` Rust sandbox execution.
+    ///
+    /// Rust-authored code is the primary path and is executed via
+    /// [`adk_code::RustSandboxExecutor`]. Unsupported languages and
+    /// unsupported sandbox combinations are rejected with descriptive errors.
+    /// Compile diagnostics are surfaced distinctly from runtime failures.
     async fn execute_code(
         &self,
-        _config: &crate::codegen::action_nodes::CodeNodeConfig,
+        config: &crate::codegen::action_nodes::CodeNodeConfig,
     ) -> Result<Value, ActionError> {
-        // Code execution would need a JavaScript sandbox like quickjs
-        // For now, return a placeholder
-        Err(ActionError::Execution("Code node execution requires JavaScript sandbox".to_string()))
+        use crate::codegen::action_nodes::CodeLanguage;
+        use adk_code::{CodeError, RustExecutor, RustExecutorConfig};
+        use adk_sandbox::{ProcessBackend, SandboxBackend, SandboxError};
+
+        // Only Rust is supported through the adk-code sandbox backend.
+        // JavaScript and TypeScript are rejected with descriptive errors
+        // pointing users to the primary Rust-first path.
+        match config.language {
+            CodeLanguage::Rust => {}
+            CodeLanguage::Javascript => {
+                return Err(ActionError::CodeExecution(
+                    "JavaScript execution is not supported by the Rust sandbox backend. \
+                     Use the Rust language for code nodes, or use a Script/Transform \
+                     node for lightweight JavaScript transforms."
+                        .to_string(),
+                ));
+            }
+            CodeLanguage::Typescript => {
+                return Err(ActionError::CodeExecution(
+                    "TypeScript execution is not supported. No transpilation or \
+                     execution backend is available. Use the Rust language for \
+                     code nodes instead."
+                        .to_string(),
+                ));
+            }
+        }
+
+        if config.code.trim().is_empty() {
+            return Err(ActionError::CodeExecution(
+                "Code node has no source code to execute".to_string(),
+            ));
+        }
+
+        if config.sandbox.file_system_access {
+            return Err(ActionError::SandboxInit(
+                "Filesystem access is not supported by the Rust sandbox backend. \
+                 Disable filesystem access in the sandbox configuration."
+                    .to_string(),
+            ));
+        }
+
+        // Build the structured input from workflow state.
+        let state = self.get_state().await;
+        let input = if state.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_value(&state).unwrap_or_default())
+        };
+
+        let timeout = Duration::from_millis(config.sandbox.time_limit);
+        let backend: Arc<dyn SandboxBackend> = Arc::new(ProcessBackend::default());
+        let executor = RustExecutor::new(backend, RustExecutorConfig::default());
+
+        match executor.execute(&config.code, input.as_ref(), timeout).await {
+            Ok(result) => {
+                let mut response = serde_json::json!({
+                    "status": "success",
+                    "stdout": result.display_stdout,
+                    "stderr": result.exec_result.stderr,
+                    "durationMs": result.exec_result.duration.as_millis() as u64,
+                    "exitCode": result.exec_result.exit_code,
+                });
+                if let Some(output) = result.output {
+                    response["output"] = output;
+                }
+                Ok(response)
+            }
+            Err(CodeError::CompileError { stderr, .. }) => {
+                Err(ActionError::CodeExecution(format!("Rust compilation failed:\n{stderr}")))
+            }
+            Err(CodeError::Sandbox(SandboxError::Timeout { timeout })) => {
+                Err(ActionError::Timeout {
+                    node: config.standard.name.clone(),
+                    timeout_ms: timeout.as_millis() as u64,
+                })
+            }
+            Err(CodeError::DependencyNotFound { name, searched }) => Err(ActionError::SandboxInit(
+                format!("Dependency '{name}' not found (searched: {searched:?})"),
+            )),
+            Err(e) => Err(ActionError::CodeExecution(format!("{e}"))),
+        }
     }
 
     /// Execute Database node

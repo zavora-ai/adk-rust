@@ -17,6 +17,7 @@
 //! ```
 
 use crate::sso::{ClaimsMapper, TokenClaims, TokenValidator};
+use adk_core::UserId;
 use adk_server::auth_bridge::{RequestContext, RequestContextError, RequestContextExtractor};
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -49,7 +50,10 @@ impl JwtRequestContextExtractor {
         })
     }
 
-    fn request_context_from_claims(&self, claims: &TokenClaims) -> RequestContext {
+    fn request_context_from_claims(
+        &self,
+        claims: &TokenClaims,
+    ) -> Result<RequestContext, RequestContextError> {
         let mut metadata = HashMap::new();
         metadata.insert("issuer".to_string(), claims.iss.clone());
         metadata.insert("subject".to_string(), claims.sub.clone());
@@ -63,11 +67,16 @@ impl JwtRequestContextExtractor {
             metadata.insert("hosted_domain".to_string(), hosted_domain.clone());
         }
 
-        RequestContext {
-            user_id: self.mapper.get_user_id(claims),
+        let user_id = self.mapper.get_user_id(claims);
+        let validated_user_id = UserId::try_from(user_id.as_str()).map_err(|err| {
+            RequestContextError::ExtractionFailed(format!("invalid mapped user id: {err}"))
+        })?;
+
+        Ok(RequestContext {
+            user_id: validated_user_id.to_string(),
             scopes: claims.scopes(),
             metadata,
-        }
+        })
     }
 }
 
@@ -84,7 +93,7 @@ impl RequestContextExtractor for JwtRequestContextExtractor {
             .await
             .map_err(|err| RequestContextError::InvalidToken(err.to_string()))?;
 
-        Ok(self.request_context_from_claims(&claims))
+        self.request_context_from_claims(&claims)
     }
 }
 
@@ -189,6 +198,58 @@ mod tests {
         assert!(matches!(
             extractor.extract(&parts).await.unwrap_err(),
             RequestContextError::InvalidToken(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_extract_rejects_invalid_mapped_user_id() {
+        let claims = TokenClaims {
+            sub: String::new(),
+            iss: "https://issuer.example.com".into(),
+            ..Default::default()
+        };
+
+        let extractor = JwtRequestContextExtractor::builder()
+            .validator(StaticValidator { claims })
+            .mapper(ClaimsMapper::builder().user_id_from_sub().build())
+            .build()
+            .unwrap();
+
+        let request = axum::http::Request::builder()
+            .header("authorization", "Bearer valid-token")
+            .body(())
+            .unwrap();
+        let (parts, _) = request.into_parts();
+
+        assert!(matches!(
+            extractor.extract(&parts).await.unwrap_err(),
+            RequestContextError::ExtractionFailed(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_extract_rejects_null_byte_in_mapped_user_id() {
+        let claims = TokenClaims {
+            sub: "bad\0user".into(),
+            iss: "https://issuer.example.com".into(),
+            ..Default::default()
+        };
+
+        let extractor = JwtRequestContextExtractor::builder()
+            .validator(StaticValidator { claims })
+            .mapper(ClaimsMapper::builder().user_id_from_sub().build())
+            .build()
+            .unwrap();
+
+        let request = axum::http::Request::builder()
+            .header("authorization", "Bearer valid-token")
+            .body(())
+            .unwrap();
+        let (parts, _) = request.into_parts();
+
+        assert!(matches!(
+            extractor.extract(&parts).await.unwrap_err(),
+            RequestContextError::ExtractionFailed(_)
         ));
     }
 }

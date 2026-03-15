@@ -61,7 +61,7 @@ adk-rust              Interactive REPL (default, same as `chat`)
 adk-rust chat         Interactive REPL with an AI agent
 adk-rust serve        Start web server with an AI agent
 adk-rust skills       Skill tooling (list/validate/match)
-adk-rust deploy       Deployment platform commands
+adk-rust deploy       External platform integration commands
 ```
 
 ### Global options (apply to `chat` and `serve`)
@@ -93,6 +93,11 @@ All skills commands accept `--json` for machine-readable output and `--path`
 to specify the project root (defaults to `.`).
 
 ### `adk-rust deploy` subcommands
+
+These commands target the external `adk-platform` deployment product. In
+`adk-rust`, the deploy surface is kept as a client and manifest/bundling
+integration layer; the control plane and operator console live in the separate
+`adk-platform` repository.
 
 ```bash
 adk-rust deploy login --endpoint http://127.0.0.1:8090 --token <bearer-token>

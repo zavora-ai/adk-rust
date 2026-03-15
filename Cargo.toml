@@ -22,53 +22,28 @@ members = [
     "adk-auth",
     "adk-plugin",
     "adk-skill",
-    "adk-studio",
     "adk-rust",
     "adk-gemini",
+    "adk-code",
+    "adk-sandbox",
     "adk-doc-audit",
     "adk-rag",
     "adk-audio",
     "adk-deploy",
-    "adk-deploy-server",
-    "adk-deploy-console",
 
-    # Development packages (not published)
+    # Essential examples only (full collection at https://github.com/zavora-ai/adk-playground)
     "examples",
-    "examples/audio",
-    "examples/ralph",
-    "examples/postgres_session",
-    "examples/redis_session",
-    "examples/mongodb_session",
-    "examples/neo4j_session",
-    "examples/sqlite_memory",
-    "docs/official_docs_examples/quickstart_test", "docs/official_docs_examples/agents/llm_agent_test",
-    "docs/official_docs_examples/tools/mcp_test",
-    "docs/official_docs_examples/tools/rag_test",
-    "docs/official_docs_examples/sessions/sessions_test",
-    "docs/official_docs_examples/callbacks/callbacks_test",
-    "docs/official_docs_examples/artifacts/artifacts_test",
-    "docs/official_docs_examples/events/events_test",
-    "docs/official_docs_examples/observability/telemetry_test",
-    "docs/official_docs_examples/deployment/launcher_test",
-    "docs/official_docs_examples/deployment/a2a_test",
-    "docs/official_docs_examples/evaluation/eval_test",
-    "docs/official_docs_examples/security/auth_test",
-    "docs/official_docs_examples/security/guardrails_test",
-    "docs/official_docs_examples/security/memory_test",
-    "docs/official_docs_examples/studio/studio_test",
-    "docs/official_docs_examples/core/core_test",
-    "docs/official_docs_examples/core/runner_test",
-    "docs/official_docs_examples/cli/cli_test",
-    "docs/official_docs_examples/eval/eval_readme_test",
-    "docs/official_docs_examples/graph/graph_readme_test",
-    "docs/official_docs_examples/guardrail/guardrail_readme_test",
-    "docs/official_docs_examples/realtime/realtime_readme_test",
-    "docs/official_docs_examples/readme_validation",
 ]
 exclude = [
     # Git-only packages with GPU dependencies (build explicitly with: cargo build -p adk-mistralrs)
     # Excluded to prevent --all-features from failing without CUDA toolkit
     "adk-mistralrs",
+
+    # Extracted to standalone repo: https://github.com/zavora-ai/adk-studio
+    "adk-studio",
+
+    # Extracted to playground repo: https://github.com/zavora-ai/adk-playground
+    "docs/official_docs_examples",
 
     # Reference implementations (not part of workspace)
     "reference/adk-go",
@@ -101,7 +76,7 @@ strip = false
 opt-level = 2
 
 [workspace.package]
-version = "0.3.2"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.85.0"
 license = "Apache-2.0"
@@ -134,30 +109,30 @@ flate2 = "1.0"
 tar = "0.4"
 
 # ADK internal crates (use { workspace = true } in member crates)
-adk-core = { path = "adk-core", version = "0.3.2" }
-adk-agent = { path = "adk-agent", version = "0.3.2" }
-adk-model = { path = "adk-model", version = "0.3.2" }
-adk-tool = { path = "adk-tool", version = "0.3.2" }
-adk-runner = { path = "adk-runner", version = "0.3.2" }
-adk-server = { path = "adk-server", version = "0.3.2" }
-adk-session = { path = "adk-session", version = "0.3.2" }
-adk-artifact = { path = "adk-artifact", version = "0.3.2" }
-adk-memory = { path = "adk-memory", version = "0.3.2" }
-adk-cli = { path = "adk-cli", version = "0.3.2" }
-adk-realtime = { path = "adk-realtime", version = "0.3.2" }
-adk-graph = { path = "adk-graph", version = "0.3.2" }
-adk-browser = { path = "adk-browser", version = "0.3.2" }
-adk-eval = { path = "adk-eval", version = "0.3.2" }
-adk-ui = { path = "adk-ui", version = "0.3.2" }
-adk-telemetry = { path = "adk-telemetry", version = "0.3.2" }
-adk-guardrail = { path = "adk-guardrail", version = "0.3.2" }
-adk-auth = { path = "adk-auth", version = "0.3.2" }
-adk-plugin = { path = "adk-plugin", version = "0.3.2" }
-adk-skill = { path = "adk-skill", version = "0.3.2" }
-adk-studio = { path = "adk-studio", version = "0.3.2" }
-adk-gemini = { path = "adk-gemini", version = "0.3.2" }
-adk-doc-audit = { path = "adk-doc-audit", version = "0.3.2" }
-adk-rag = { path = "adk-rag", version = "0.3.2" }
-adk-audio = { path = "adk-audio", version = "0.3.2" }
-adk-deploy = { path = "adk-deploy", version = "0.3.2" }
-adk-deploy-server = { path = "adk-deploy-server", version = "0.3.2" }
+adk-core = { path = "adk-core", version = "0.4.0" }
+adk-agent = { path = "adk-agent", version = "0.4.0" }
+adk-model = { path = "adk-model", version = "0.4.0" }
+adk-tool = { path = "adk-tool", version = "0.4.0" }
+adk-runner = { path = "adk-runner", version = "0.4.0" }
+adk-server = { path = "adk-server", version = "0.4.0" }
+adk-session = { path = "adk-session", version = "0.4.0" }
+adk-artifact = { path = "adk-artifact", version = "0.4.0" }
+adk-memory = { path = "adk-memory", version = "0.4.0" }
+adk-cli = { path = "adk-cli", version = "0.4.0" }
+adk-realtime = { path = "adk-realtime", version = "0.4.0" }
+adk-graph = { path = "adk-graph", version = "0.4.0" }
+adk-browser = { path = "adk-browser", version = "0.4.0" }
+adk-eval = { path = "adk-eval", version = "0.4.0" }
+adk-ui = { path = "adk-ui", version = "0.4.0" }
+adk-telemetry = { path = "adk-telemetry", version = "0.4.0" }
+adk-guardrail = { path = "adk-guardrail", version = "0.4.0" }
+adk-auth = { path = "adk-auth", version = "0.4.0" }
+adk-plugin = { path = "adk-plugin", version = "0.4.0" }
+adk-skill = { path = "adk-skill", version = "0.4.0" }
+adk-gemini = { path = "adk-gemini", version = "0.4.0" }
+adk-code = { path = "adk-code", version = "0.4.0" }
+adk-sandbox = { path = "adk-sandbox", version = "0.4.0" }
+adk-doc-audit = { path = "adk-doc-audit", version = "0.4.0" }
+adk-rag = { path = "adk-rag", version = "0.4.0" }
+adk-audio = { path = "adk-audio", version = "0.4.0" }
+adk-deploy = { path = "adk-deploy", version = "0.4.0" }

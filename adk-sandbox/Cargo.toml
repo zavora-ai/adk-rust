@@ -1,0 +1,33 @@
+[package]
+name = "adk-sandbox"
+description = "Isolated code execution runtime for ADK agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+adk-core = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tempfile = "3.10"
+
+# Optional dependencies for wasm feature
+wasmtime = { version = "29", optional = true }
+wasmtime-wasi = { version = "29", optional = true }
+
+[features]
+default = ["process"]
+wasm = ["dep:wasmtime", "dep:wasmtime-wasi"]
+process = []  # no extra deps, uses tokio
+
+[dev-dependencies]
+proptest = "1.4"
+tokio = { workspace = true, features = ["test-util"] }

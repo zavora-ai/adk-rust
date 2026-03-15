@@ -322,14 +322,20 @@ pub async fn run_sse(
             "resolved ui protocol profile for runtime request"
         );
 
-        // Extract request context from auth middleware bridge if configured
+        // Extract request context from auth middleware bridge if configured.
+        // This returns Err (401/500) when the extractor is present but auth
+        // fails, ensuring authorization checks are never bypassed.
         let request_context = extract_request_context(
             controller.config.request_context_extractor.as_deref(),
             &headers,
         )
         .await?;
 
-        // Use authenticated user_id if present, otherwise fall back to path param
+        // Explicit authenticated user override: when an auth extractor is
+        // configured and succeeds, the authenticated user_id takes precedence
+        // over the path parameter. This prevents callers from impersonating
+        // other users via the URL while keeping the path param as a fallback
+        // for unauthenticated deployments (no extractor configured).
         let effective_user_id = request_context.as_ref().map_or(user_id, |rc| rc.user_id.clone());
 
         // Validate session exists
@@ -422,12 +428,18 @@ pub async fn run_sse_compat(
     );
     log_profile_deprecation(ui_profile);
 
-    // Extract request context from auth middleware bridge if configured
+    // Extract request context from auth middleware bridge if configured.
+    // This returns Err (401/500) when the extractor is present but auth
+    // fails, ensuring authorization checks are never bypassed.
     let request_context =
         extract_request_context(controller.config.request_context_extractor.as_deref(), &headers)
             .await?;
 
-    // Use authenticated user_id if present, otherwise fall back to request body
+    // Explicit authenticated user override: when an auth extractor is
+    // configured and succeeds, the authenticated user_id takes precedence
+    // over the request body value. This prevents callers from impersonating
+    // other users via the JSON payload while keeping the body param as a
+    // fallback for unauthenticated deployments (no extractor configured).
     let effective_user_id = request_context.as_ref().map_or(user_id, |rc| rc.user_id.clone());
 
     // Build content from message parts (includes both text and inline_data)

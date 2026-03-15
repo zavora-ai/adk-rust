@@ -526,6 +526,126 @@ async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>
 
 ---
 
+## Identity
+
+ADK-Rust uses typed identity primitives to prevent accidental ID mixing and make session addressing explicit. There are three distinct identity layers, each serving a different purpose.
+
+### Auth Identity (`RequestContext`)
+
+Auth identity represents who is authenticated and what they are allowed to do. It lives in `RequestContext` and is populated at HTTP or Studio ingress:
+
+- `user_id` — the authenticated user
+- `scopes` — authorization scopes (e.g. `["read", "write"]`)
+- `metadata` — additional request-level key-value pairs
+
+Auth identity does not include session or invocation information. It answers: "Who is making this request?"
+
+### Session Identity (`AdkIdentity`)
+
+Session identity is the stable address of a conversation session. It is a composite of three typed fields:
+
+```rust
+use adk_core::{AdkIdentity, AppName, SessionId, UserId};
+
+let identity = AdkIdentity::new(
+    AppName::try_from("weather-app")?,
+    UserId::try_from("tenant:alice@example.com")?,
+    SessionId::generate(),
+);
+
+// Each field is a typed wrapper — no accidental swaps
+assert_eq!(identity.app_name.as_ref(), "weather-app");
+```
+
+`AdkIdentity` replaces the pattern of passing `(app_name, user_id, session_id)` as three separate strings. It eliminates parameter ordering bugs and makes the addressing model explicit across all session backends.
+
+Session identity answers: "Which conversation session is being addressed?"
+
+### Execution Identity (`ExecutionIdentity`)
+
+Execution identity extends session identity with per-invocation runtime coordinates:
+
+```rust
+use adk_core::{ExecutionIdentity, InvocationId};
+
+let exec = ExecutionIdentity {
+    adk: identity.clone(),
+    invocation_id: InvocationId::generate(),
+    branch: String::new(),
+    agent_name: "planner".to_string(),
+};
+```
+
+The runtime stores `ExecutionIdentity` internally so that event creation, agent transfers, and telemetry correlation work with validated IDs — no re-parsing of raw strings after the initial boundary parse.
+
+Execution identity answers: "Which invocation of which session is currently running, and which agent is executing?"
+
+### Leaf Identifier Types
+
+The four leaf types — `AppName`, `UserId`, `SessionId`, `InvocationId` — all share the same validation rules:
+
+- Must not be empty
+- Must not contain null bytes
+- Must not exceed 512 bytes
+- Characters like `:`, `@`, `/` are allowed (validation is not coupled to backend key encoding)
+
+All four use `#[serde(transparent)]`, so existing JSON and SSE payloads continue to encode identifiers as plain strings.
+
+```rust
+use adk_core::{AppName, SessionId, InvocationId};
+
+// Parse at trust boundaries
+let app = AppName::try_from("my-app")?;
+
+// Generate internally
+let session = SessionId::generate();
+let invocation = InvocationId::generate();
+
+// Use as &str anywhere
+println!("app={}, session={}", app.as_ref(), session.as_ref());
+```
+
+### Reading Typed Identity from Context
+
+Both `ReadonlyContext` and `Session` provide typed helper methods that parse the underlying string values on demand:
+
+```rust
+// From a ReadonlyContext (agent or tool execution)
+let identity = ctx.try_identity()?;           // AdkIdentity
+let exec = ctx.try_execution_identity()?;     // ExecutionIdentity
+let app = ctx.try_app_name()?;               // AppName
+
+// From a Session
+let identity = session.try_identity()?;       // AdkIdentity
+let user = session.try_user_id()?;           // UserId
+```
+
+These methods return `Result<T>` — if the underlying string is invalid (e.g. empty), you get a descriptive error instead of a panic.
+
+### Use Cases
+
+| Use Case | Identity Layer | Why |
+|----------|---------------|-----|
+| Multi-tenant isolation | `AdkIdentity` | The `(app, user, session)` triple ensures sessions never cross tenant boundaries |
+| Audit correlation | `ExecutionIdentity` | Links every event to a specific invocation, agent, and session |
+| Replay and resume | `AdkIdentity` + `InvocationId` | Stable session address plus invocation ID enables deterministic replay |
+| Safer plugin/tool contracts | Typed leaf IDs | Plugins receive `AppName` and `UserId` instead of raw strings — no accidental swaps |
+| Boundary validation | `TryFrom<&str>` | Parse once at HTTP ingress, reject bad input early with a 400 error |
+
+### Identity Separation Summary
+
+```
+RequestContext          → Auth: who is authenticated, what scopes
+    ↓ (user binding)
+AdkIdentity             → Session: which app + user + session
+    ↓ (+ invocation)
+ExecutionIdentity       → Runtime: which invocation, branch, agent
+```
+
+These three layers are intentionally separate. `RequestContext` may share the same `UserId` type, but the structs are never merged. Auth concerns stay in auth, session addressing stays in session identity, and runtime coordinates stay in execution identity.
+
+---
+
 ## EventStream
 
 Agents return a stream of events rather than a single response:

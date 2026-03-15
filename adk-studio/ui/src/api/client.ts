@@ -34,6 +34,11 @@ export interface DeployRequest {
   spatialOsUrl?: string;
   register?: boolean;
   openSpatialOs?: boolean;
+  controlPlaneUrl?: string;
+  pushToDeploymentPlatform?: boolean;
+  deploymentEnvironment?: string;
+  openDeploymentConsole?: boolean;
+  workspaceId?: string;
 }
 
 export interface SpatialRegistrationResult {
@@ -46,8 +51,20 @@ export interface DeployResponse {
   success: boolean;
   manifest: unknown;
   manifestPath: string;
+  deploymentManifestPath: string | null;
   spatialOsUrl: string;
   registration: SpatialRegistrationResult;
+  deploymentPlatformUrl: string | null;
+  deploymentConsoleUrl: string | null;
+  deploymentEnvironment: string | null;
+  deployment:
+    | {
+        id: string;
+        environment: string;
+        agentName: string;
+        version: string;
+      }
+    | null;
   openUrl: string | null;
 }
 

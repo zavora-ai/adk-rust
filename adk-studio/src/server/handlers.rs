@@ -6,6 +6,14 @@ use crate::server::events::ResumeEvent;
 use crate::server::graph_runner::{INTERRUPTED_SESSIONS, deserialize_interrupt_response};
 use crate::server::sse::send_resume_response;
 use crate::server::state::AppState;
+use adk_core::SessionId;
+use adk_deploy::{
+    BundleBuilder, DeployClient, DeployClientConfig,
+    DeploymentManifest as PlatformDeploymentManifest, DeploymentRecord, EnvVarSpec,
+    InteractionConfig, LoginRequest as DeployLoginRequest, ManualInteractionConfig,
+    PushDeploymentRequest, SecretRef as DeploySecretRef, SecretSetRequest, SourceInfo,
+    TriggerInteractionConfig, TriggerKind,
+};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -13,6 +21,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::Path as StdPath;
 use uuid::Uuid;
 
 /// API error response
@@ -181,6 +190,16 @@ pub struct DeployRequest {
     pub register: Option<bool>,
     #[serde(default)]
     pub open_spatial_os: Option<bool>,
+    #[serde(default)]
+    pub control_plane_url: Option<String>,
+    #[serde(default)]
+    pub push_to_deployment_platform: Option<bool>,
+    #[serde(default)]
+    pub deployment_environment: Option<String>,
+    #[serde(default)]
+    pub open_deployment_console: Option<bool>,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -197,8 +216,18 @@ pub struct DeployResponse {
     pub success: bool,
     pub manifest: DeployManifest,
     pub manifest_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_manifest_path: Option<String>,
     pub spatial_os_url: String,
     pub registration: SpatialRegistrationResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_platform_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_console_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_environment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment: Option<DeploymentRecord>,
     pub open_url: Option<String>,
 }
 
@@ -218,6 +247,24 @@ fn normalize_spatial_os_url(candidate: Option<String>) -> String {
         .or_else(|| std::env::var("ADK_SPATIAL_OS_URL").ok())
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "http://127.0.0.1:8199".to_string())
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn normalize_control_plane_url(candidate: Option<String>) -> String {
+    candidate
+        .or_else(|| std::env::var("ADK_DEPLOY_SERVER_URL").ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:8090".to_string())
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn normalize_deployment_console_url(candidate: Option<String>) -> String {
+    candidate
+        .or_else(|| std::env::var("ADK_DEPLOY_CONSOLE_URL").ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:8091".to_string())
         .trim_end_matches('/')
         .to_string()
 }
@@ -265,7 +312,11 @@ pub async fn deploy_project(
 
     let manifest = DeployManifest::from_project(&project);
     let deploy_dir = base_dir.join("deploy").join(id.to_string());
+    let runtime_dir = deploy_dir.join("runtime");
     tokio::fs::create_dir_all(&deploy_dir)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    tokio::fs::create_dir_all(&runtime_dir)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -276,8 +327,30 @@ pub async fn deploy_project(
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    let generated = crate::codegen::generate_rust_project(&project)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    write_generated_project(&runtime_dir, &generated)
+        .map_err(|message| err(StatusCode::INTERNAL_SERVER_ERROR, message))?;
+
+    let project_keys = load_project_keys(&base_dir, id)
+        .await
+        .map_err(|message| err(StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    let deployment_manifest = deployment_manifest_from_project(&project, &project_keys);
+    let deployment_manifest_path = runtime_dir.join("adk-deploy.toml");
+    let deployment_manifest_payload = deployment_manifest
+        .to_toml_string()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    tokio::fs::write(&deployment_manifest_path, deployment_manifest_payload)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     let spatial_os_url = normalize_spatial_os_url(req.spatial_os_url);
+    let control_plane_url = normalize_control_plane_url(req.control_plane_url.clone());
+    let deployment_console_url = normalize_deployment_console_url(None);
     let should_register = req.register.unwrap_or(true);
+    let should_push = req.push_to_deployment_platform.unwrap_or(true);
+    let deployment_environment =
+        req.deployment_environment.clone().unwrap_or_else(|| "staging".to_string());
     let registration = if should_register {
         match register_with_spatial_os(&spatial_os_url, &manifest).await {
             Ok(result) => SpatialRegistrationResult {
@@ -295,17 +368,242 @@ pub async fn deploy_project(
         }
     };
 
-    let open_url =
-        if req.open_spatial_os.unwrap_or(true) { Some(spatial_os_url.clone()) } else { None };
+    let deployment = if should_push {
+        let artifact = BundleBuilder::new(&deployment_manifest_path, deployment_manifest.clone())
+            .build()
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let mut client = DeployClient::new(DeployClientConfig {
+            endpoint: control_plane_url.clone(),
+            token: None,
+            workspace_id: req.workspace_id.clone(),
+        });
+        let login = client
+            .login_ephemeral(&DeployLoginRequest {
+                email: "studio@adk.local".to_string(),
+                workspace_name: Some("Default Workspace".to_string()),
+            })
+            .await
+            .map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
+        for (key, value) in &project_keys {
+            client
+                .set_secret(&SecretSetRequest {
+                    environment: deployment_environment.clone(),
+                    key: key.clone(),
+                    value: value.clone(),
+                })
+                .await
+                .map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
+        }
+        let response = client
+            .push_deployment(&PushDeploymentRequest {
+                workspace_id: req.workspace_id.clone().or(Some(login.workspace_id)),
+                environment: deployment_environment.clone(),
+                manifest: deployment_manifest,
+                bundle_path: artifact.bundle_path.to_string_lossy().to_string(),
+                checksum_sha256: artifact.checksum_sha256,
+                binary_path: Some(artifact.binary_path.to_string_lossy().to_string()),
+            })
+            .await
+            .map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
+        Some(response.deployment)
+    } else {
+        None
+    };
+
+    let open_url = if req.open_deployment_console.unwrap_or(true) && deployment.is_some() {
+        Some(deployment_console_url.clone())
+    } else if req.open_spatial_os.unwrap_or(false) {
+        Some(spatial_os_url.clone())
+    } else {
+        None
+    };
 
     Ok(Json(DeployResponse {
         success: true,
         manifest,
         manifest_path: manifest_path.to_string_lossy().to_string(),
+        deployment_manifest_path: Some(deployment_manifest_path.to_string_lossy().to_string()),
         spatial_os_url,
         registration,
+        deployment_platform_url: Some(control_plane_url),
+        deployment_console_url: Some(deployment_console_url),
+        deployment_environment: deployment.as_ref().map(|item| item.environment.clone()),
+        deployment,
         open_url,
     }))
+}
+
+fn deployment_manifest_from_project(
+    project: &ProjectSchema,
+    project_keys: &HashMap<String, String>,
+) -> PlatformDeploymentManifest {
+    let binary_name = project_binary_name(project);
+    let mut manifest = PlatformDeploymentManifest::default();
+    manifest.agent.name = binary_name.clone();
+    manifest.agent.binary = binary_name;
+    manifest.agent.version = if project.version.trim().is_empty() {
+        "1.0.0".to_string()
+    } else {
+        project.version.clone()
+    };
+    manifest.agent.description = Some(if project.description.trim().is_empty() {
+        format!("Deployed from ADK Studio project {}", project.name)
+    } else {
+        project.description.clone()
+    });
+    manifest.scaling.max_instances = 3;
+    manifest.interaction = interaction_manifest_from_project(project);
+    manifest.source = Some(SourceInfo {
+        kind: "adk_studio".to_string(),
+        project_id: Some(project.id.to_string()),
+        project_name: Some(project.name.clone()),
+    });
+    for (key, value) in &project.settings.env_vars {
+        manifest.env.insert(key.clone(), EnvVarSpec::Plain(value.clone()));
+    }
+    for key in project_keys.keys() {
+        manifest.env.insert(key.clone(), EnvVarSpec::SecretRef { secret_ref: key.clone() });
+        manifest.secrets.push(DeploySecretRef { key: key.clone(), required: true });
+    }
+    manifest
+}
+
+fn interaction_manifest_from_project(project: &ProjectSchema) -> Option<InteractionConfig> {
+    use crate::codegen::action_nodes::{ActionNodeConfig, TriggerType};
+
+    let mut manual = None;
+    let mut triggers = Vec::new();
+
+    for node in project.action_nodes.values() {
+        let ActionNodeConfig::Trigger(trigger) = node else {
+            continue;
+        };
+
+        let description = trigger
+            .standard
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let name = if trigger.standard.name.trim().is_empty() {
+            trigger.standard.id.clone()
+        } else {
+            trigger.standard.name.clone()
+        };
+
+        match trigger.trigger_type {
+            TriggerType::Manual => {
+                if manual.is_none() {
+                    let config = trigger.manual.clone().unwrap_or_default();
+                    manual = Some(ManualInteractionConfig {
+                        input_label: config.input_label,
+                        default_prompt: config.default_prompt,
+                    });
+                }
+            }
+            TriggerType::Webhook => {
+                if let Some(config) = &trigger.webhook {
+                    triggers.push(TriggerInteractionConfig {
+                        id: trigger.standard.id.clone(),
+                        name,
+                        kind: TriggerKind::Webhook,
+                        description,
+                        path: Some(config.path.clone()),
+                        method: Some(config.method.clone()),
+                        auth: Some(config.auth.clone()),
+                        default_prompt: None,
+                        cron: None,
+                        timezone: None,
+                        event_source: None,
+                        event_type: None,
+                        filter: None,
+                    });
+                }
+            }
+            TriggerType::Schedule => {
+                if let Some(config) = &trigger.schedule {
+                    triggers.push(TriggerInteractionConfig {
+                        id: trigger.standard.id.clone(),
+                        name,
+                        kind: TriggerKind::Schedule,
+                        description,
+                        path: None,
+                        method: None,
+                        auth: None,
+                        default_prompt: config.default_prompt.clone(),
+                        cron: Some(config.cron.clone()),
+                        timezone: Some(config.timezone.clone()),
+                        event_source: None,
+                        event_type: None,
+                        filter: None,
+                    });
+                }
+            }
+            TriggerType::Event => {
+                if let Some(config) = &trigger.event {
+                    triggers.push(TriggerInteractionConfig {
+                        id: trigger.standard.id.clone(),
+                        name,
+                        kind: TriggerKind::Event,
+                        description,
+                        path: None,
+                        method: None,
+                        auth: None,
+                        default_prompt: None,
+                        cron: None,
+                        timezone: None,
+                        event_source: Some(config.source.clone()),
+                        event_type: Some(config.event_type.clone()),
+                        filter: config.filter.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    if manual.is_none() && triggers.is_empty() {
+        None
+    } else {
+        Some(InteractionConfig { manual, triggers })
+    }
+}
+
+async fn load_project_keys(
+    base_dir: &StdPath,
+    project_id: Uuid,
+) -> Result<HashMap<String, String>, String> {
+    let keystore = Keystore::new(base_dir, project_id).map_err(|e| e.to_string())?;
+    keystore.load().await.map_err(|e| e.to_string())
+}
+
+fn write_generated_project(
+    runtime_dir: &StdPath,
+    generated: &crate::codegen::GeneratedProject,
+) -> Result<(), String> {
+    std::fs::create_dir_all(runtime_dir).map_err(|e| e.to_string())?;
+    for file in &generated.files {
+        let path = runtime_dir.join(&file.path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(path, &file.content).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn project_binary_name(project: &ProjectSchema) -> String {
+    let mut project_name = project
+        .name
+        .to_lowercase()
+        .replace(' ', "_")
+        .replace(|c: char| !c.is_alphanumeric() && c != '_', "");
+    if project_name.is_empty()
+        || project_name.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+    {
+        project_name = format!("project_{project_name}");
+    }
+    project_name
 }
 
 /// Build response
@@ -562,6 +860,10 @@ pub async fn resume_session(
     Path(session_id): Path<String>,
     Json(req): Json<ResumeRequest>,
 ) -> ApiResult<ResumeResponse> {
+    // Validate session_id at the boundary (Requirement 7.1, 7.2, 7.3)
+    let _valid_session_id = SessionId::try_from(session_id.as_str())
+        .map_err(|e| err(StatusCode::BAD_REQUEST, format!("invalid session_id: {e}")))?;
+
     // Task 10.1: Get the interrupted session state
     let interrupted_state = INTERRUPTED_SESSIONS.get(&session_id).await.ok_or_else(|| {
         err(StatusCode::NOT_FOUND, format!("Session '{}' not found or not interrupted", session_id))
@@ -1886,4 +2188,69 @@ pub async fn delete_project_key(
         .collect();
 
     Ok(Json(ProjectKeysResponse { keys }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::deployment_manifest_from_project;
+    use crate::schema::ProjectSchema;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[test]
+    fn deployment_manifest_carries_studio_trigger_metadata() {
+        let mut project = ProjectSchema::new("Console Ready");
+        project.action_nodes.insert(
+            "manual_trigger".to_string(),
+            serde_json::from_value(json!({
+                "type": "trigger",
+                "id": "manual_trigger",
+                "name": "Manual start",
+                "triggerType": "manual",
+                "manual": {
+                    "inputLabel": "Ask the ops agent",
+                    "defaultPrompt": "Summarize the latest rollout."
+                },
+                "errorHandling": {"mode": "stop"},
+                "tracing": {"enabled": false, "logLevel": "error"},
+                "callbacks": {},
+                "execution": {"timeout": 30000},
+                "mapping": {"outputKey": "result"}
+            }))
+            .unwrap(),
+        );
+        project.action_nodes.insert(
+            "webhook_trigger".to_string(),
+            serde_json::from_value(json!({
+                "type": "trigger",
+                "id": "webhook_trigger",
+                "name": "Inbound webhook",
+                "description": "Receives external payloads.",
+                "triggerType": "webhook",
+                "webhook": {
+                    "path": "/api/webhook/ingest",
+                    "method": "POST",
+                    "auth": "bearer",
+                    "authConfig": {
+                        "tokenEnvVar": "WEBHOOK_TOKEN"
+                    }
+                },
+                "errorHandling": {"mode": "stop"},
+                "tracing": {"enabled": false, "logLevel": "error"},
+                "callbacks": {},
+                "execution": {"timeout": 30000},
+                "mapping": {"outputKey": "result"}
+            }))
+            .unwrap(),
+        );
+
+        let manifest = deployment_manifest_from_project(&project, &HashMap::new());
+        let interaction = manifest.interaction.expect("studio interaction metadata");
+        let manual = interaction.manual.expect("manual config");
+        assert_eq!(manual.input_label, "Ask the ops agent");
+        assert_eq!(manual.default_prompt, "Summarize the latest rollout.");
+        assert_eq!(interaction.triggers.len(), 1);
+        assert_eq!(interaction.triggers[0].path.as_deref(), Some("/api/webhook/ingest"));
+        assert_eq!(interaction.triggers[0].method.as_deref(), Some("POST"));
+    }
 }

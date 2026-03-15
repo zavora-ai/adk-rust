@@ -538,12 +538,17 @@ fn generate_main_rs(project: &ProjectSchema) -> String {
         }
     }
 
-    // Add js_value_to_json helper if any Code action nodes exist
+    // Add js_value_to_json helper if any JS/TS Code action nodes exist
     {
+        use crate::codegen::action_node_types::CodeLanguage;
         use crate::codegen::action_nodes::ActionNodeConfig;
-        let has_code_nodes =
-            project.action_nodes.values().any(|n| matches!(n, ActionNodeConfig::Code(_)));
-        if has_code_nodes {
+        let has_js_code_nodes = project.action_nodes.values().any(|n| {
+            matches!(
+                n,
+                ActionNodeConfig::Code(cfg) if matches!(cfg.language, CodeLanguage::Javascript | CodeLanguage::Typescript)
+            )
+        });
+        if has_js_code_nodes {
             code.push_str("/// Convert a boa_engine JsValue to serde_json::Value\n");
             code.push_str("fn js_value_to_json(val: &boa_engine::JsValue, ctx: &mut boa_engine::Context) -> serde_json::Value {\n");
             code.push_str(
@@ -4085,95 +4090,134 @@ fn generate_action_node_function(
                     output_key
                 ));
             } else {
-                // Inject state variables as input to the JS context
-                code.push_str("        // Collect state into a JSON object for the JS context\n");
-                code.push_str("        let mut input_obj = serde_json::Map::new();\n");
-                code.push_str("        for (k, v) in ctx.state.iter() {\n");
-                code.push_str("            input_obj.insert(k.clone(), v.clone());\n");
-                code.push_str("        }\n");
-                code.push_str("        let input_json = serde_json::Value::Object(input_obj);\n\n");
+                match config.language {
+                    crate::codegen::action_node_types::CodeLanguage::Rust => {
+                        // Rust-first: embed the authored Rust body directly.
+                        // The user's code is expected to follow the contract:
+                        //   fn run(input: serde_json::Value) -> serde_json::Value
+                        // We wrap it in a module-level function and call it inline.
+                        code.push_str(
+                            "        // Rust-first: execute authored Rust body directly\n",
+                        );
+                        code.push_str("        let mut input_obj = serde_json::Map::new();\n");
+                        code.push_str("        for (k, v) in ctx.state.iter() {\n");
+                        code.push_str("            input_obj.insert(k.clone(), v.clone());\n");
+                        code.push_str("        }\n");
+                        code.push_str(
+                            "        let input = serde_json::Value::Object(input_obj);\n\n",
+                        );
+                        code.push_str(&format!("        let result = {}_run(input);\n", node_id));
+                        code.push_str(&format!(
+                            "        Ok(NodeOutput::new().with_update(\"{}\", result))\n",
+                            output_key
+                        ));
+                    }
+                    _ => {
+                        // JS/TS: use boa_engine as secondary scripting support
+                        code.push_str(
+                            "        // Secondary scripting: execute JS/TS via boa_engine\n",
+                        );
+                        code.push_str("        let mut input_obj = serde_json::Map::new();\n");
+                        code.push_str("        for (k, v) in ctx.state.iter() {\n");
+                        code.push_str("            input_obj.insert(k.clone(), v.clone());\n");
+                        code.push_str("        }\n");
+                        code.push_str(
+                            "        let input_json = serde_json::Value::Object(input_obj);\n\n",
+                        );
 
-                // Escape the user's JS code for embedding in a Rust raw string
-                // Use a raw string with enough # delimiters to avoid conflicts
-                let escaped_code = config.code.replace('\\', "\\\\");
-                let escaped_code = escaped_code.replace('"', "\\\"");
-                let escaped_code = escaped_code.replace('\n', "\\n");
-                let escaped_code = escaped_code.replace('\r', "");
-                let escaped_code = escaped_code.replace('\t', "\\t");
+                        let escaped_code = config.code.replace('\\', "\\\\");
+                        let escaped_code = escaped_code.replace('"', "\\\"");
+                        let escaped_code = escaped_code.replace('\n', "\\n");
+                        let escaped_code = escaped_code.replace('\r', "");
+                        let escaped_code = escaped_code.replace('\t', "\\t");
 
-                // Create the JS execution using boa_engine
-                code.push_str("        // Execute JavaScript code using boa_engine\n");
-                code.push_str("        let js_result = std::thread::spawn(move || -> Result<serde_json::Value, String> {\n");
-                code.push_str("            use boa_engine::{Context, Source, JsValue, JsError};\n");
-                code.push_str("            use std::time::Instant;\n\n");
+                        code.push_str("        let js_result = std::thread::spawn(move || -> Result<serde_json::Value, String> {\n");
+                        code.push_str(
+                            "            use boa_engine::{Context, Source, JsValue, JsError};\n",
+                        );
+                        code.push_str("            use std::time::Instant;\n\n");
 
-                // Time limit
-                let time_limit = config.sandbox.time_limit;
-                code.push_str(&format!(
-                    "            let time_limit = std::time::Duration::from_millis({});\n",
-                    time_limit
-                ));
-                code.push_str("            let start = Instant::now();\n\n");
+                        let time_limit = config.sandbox.time_limit;
+                        code.push_str(&format!(
+                            "            let time_limit = std::time::Duration::from_millis({});\n",
+                            time_limit
+                        ));
+                        code.push_str("            let start = Instant::now();\n\n");
+                        code.push_str("            let mut context = Context::default();\n\n");
+                        code.push_str("            let input_str = serde_json::to_string(&input_json).unwrap_or_else(|_| \"{}\".to_string());\n");
+                        code.push_str(
+                            "            let setup_code = format!(\"var input = {};\", input_str);\n",
+                        );
+                        code.push_str(
+                            "            context.eval(Source::from_bytes(&setup_code))\n",
+                        );
+                        code.push_str("                .map_err(|e| format!(\"Failed to inject input: {:?}\", e))?;\n\n");
 
-                code.push_str("            let mut context = Context::default();\n\n");
+                        code.push_str(&format!(
+                            "            let user_code = \"{}\";\n",
+                            escaped_code
+                        ));
+                        code.push_str(
+                            "            let wrapped = format!(\"(function() {{ {} }})()\", user_code);\n",
+                        );
+                        code.push_str(
+                            "            let result = context.eval(Source::from_bytes(&wrapped));\n\n",
+                        );
 
-                // Inject input state as a global `input` variable
-                code.push_str("            // Inject state as global 'input' variable\n");
-                code.push_str("            let input_str = serde_json::to_string(&input_json).unwrap_or_else(|_| \"{}\".to_string());\n");
-                code.push_str(
-                    "            let setup_code = format!(\"var input = {};\", input_str);\n",
-                );
-                code.push_str("            context.eval(Source::from_bytes(&setup_code))\n");
-                code.push_str("                .map_err(|e| format!(\"Failed to inject input: {:?}\", e))?;\n\n");
+                        code.push_str("            if start.elapsed() > time_limit {\n");
+                        code.push_str("                return Err(format!(\"Code execution exceeded time limit of {}ms\", time_limit.as_millis()));\n");
+                        code.push_str("            }\n\n");
 
-                // Execute the user's code wrapped in a function that returns a value
-                code.push_str(&format!("            let user_code = \"{}\";\n", escaped_code));
-                // Wrap in an IIFE so the last expression is returned
-                code.push_str(
-                    "            let wrapped = format!(\"(function() {{ {} }})()\", user_code);\n",
-                );
-                code.push_str(
-                    "            let result = context.eval(Source::from_bytes(&wrapped));\n\n",
-                );
+                        code.push_str("            match result {\n");
+                        code.push_str("                Ok(val) => {\n");
+                        code.push_str(
+                            "                    let json_val = js_value_to_json(&val, &mut context);\n",
+                        );
+                        code.push_str("                    Ok(json_val)\n");
+                        code.push_str("                }\n");
+                        code.push_str("                Err(e) => {\n");
+                        code.push_str(
+                            "                    Err(format!(\"JavaScript error: {:?}\", e))\n",
+                        );
+                        code.push_str("                }\n");
+                        code.push_str("            }\n");
+                        code.push_str("        }).join().unwrap_or_else(|_| Err(\"Code execution panicked\".to_string()));\n\n");
 
-                // Check time limit
-                code.push_str("            if start.elapsed() > time_limit {\n");
-                code.push_str("                return Err(format!(\"Code execution exceeded time limit of {}ms\", time_limit.as_millis()));\n");
-                code.push_str("            }\n\n");
-
-                // Convert JsValue to serde_json::Value
-                code.push_str("            match result {\n");
-                code.push_str("                Ok(val) => {\n");
-                code.push_str("                    // Convert JsValue to JSON\n");
-                code.push_str(
-                    "                    let json_val = js_value_to_json(&val, &mut context);\n",
-                );
-                code.push_str("                    Ok(json_val)\n");
-                code.push_str("                }\n");
-                code.push_str("                Err(e) => {\n");
-                code.push_str("                    Err(format!(\"JavaScript error: {:?}\", e))\n");
-                code.push_str("                }\n");
-                code.push_str("            }\n");
-                code.push_str("        }).join().unwrap_or_else(|_| Err(\"Code execution panicked\".to_string()));\n\n");
-
-                // Handle result
-                code.push_str("        match js_result {\n");
-                code.push_str("            Ok(value) => {\n");
-                code.push_str(&format!(
-                    "                Ok(NodeOutput::new().with_update(\"{}\", value))\n",
-                    output_key
-                ));
-                code.push_str("            }\n");
-                code.push_str("            Err(err) => {\n");
-                code.push_str(&format!(
-                    "                Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"error\": true, \"message\": err }})))\n",
-                    output_key
-                ));
-                code.push_str("            }\n");
-                code.push_str("        }\n");
+                        code.push_str("        match js_result {\n");
+                        code.push_str("            Ok(value) => {\n");
+                        code.push_str(&format!(
+                            "                Ok(NodeOutput::new().with_update(\"{}\", value))\n",
+                            output_key
+                        ));
+                        code.push_str("            }\n");
+                        code.push_str("            Err(err) => {\n");
+                        code.push_str(&format!(
+                            "                Ok(NodeOutput::new().with_update(\"{}\", json!({{ \"error\": true, \"message\": err }})))\n",
+                            output_key
+                        ));
+                        code.push_str("            }\n");
+                        code.push_str("        }\n");
+                    }
+                }
             }
 
             code.push_str("    });\n\n");
+
+            // For Rust code nodes, emit the authored function at module level
+            if !config.code.is_empty()
+                && matches!(config.language, crate::codegen::action_node_types::CodeLanguage::Rust)
+            {
+                code.push_str(&format!(
+                    "// Authored Rust body for Code node \"{}\"\n",
+                    config.standard.name
+                ));
+                code.push_str(&format!(
+                    "fn {}_run(input: serde_json::Value) -> serde_json::Value {{\n",
+                    node_id
+                ));
+                code.push_str(&config.code);
+                code.push_str("\n}\n\n");
+            }
         }
         // Other action node types can be added here
         _ => {
@@ -4224,8 +4268,14 @@ fn generate_cargo_toml(project: &ProjectSchema) -> String {
     let needs_imap = code_uses("imap::");
     let needs_native_tls = code_uses("native_tls::");
     let needs_boa = {
+        use crate::codegen::action_node_types::CodeLanguage;
         use crate::codegen::action_nodes::ActionNodeConfig;
-        project.action_nodes.values().any(|n| matches!(n, ActionNodeConfig::Code(_)))
+        project.action_nodes.values().any(|n| {
+            matches!(
+                n,
+                ActionNodeConfig::Code(cfg) if matches!(cfg.language, CodeLanguage::Javascript | CodeLanguage::Typescript)
+            )
+        })
     };
 
     // Database dependencies based on action node db_type

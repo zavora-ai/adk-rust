@@ -39,6 +39,8 @@ pub struct DeploymentManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<SkillConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interaction: Option<InteractionConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceInfo>,
 }
 
@@ -178,6 +180,9 @@ impl DeploymentManifest {
                 message: "skills.directory must not be empty".to_string(),
             });
         }
+        if let Some(interaction) = &self.interaction {
+            interaction.validate()?;
+        }
         Ok(())
     }
 }
@@ -201,6 +206,7 @@ impl Default for DeploymentManifest {
             graph: None,
             plugins: Vec::new(),
             skills: None,
+            interaction: None,
             source: None,
         }
     }
@@ -396,6 +402,160 @@ pub struct SourceInfo {
     pub project_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_name: Option<String>,
+}
+
+/// Declares how operators can interact with a deployed agent in the control plane.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual: Option<ManualInteractionConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<TriggerInteractionConfig>,
+}
+
+impl InteractionConfig {
+    fn validate(&self) -> DeployResult<()> {
+        if let Some(manual) = &self.manual {
+            manual.validate()?;
+        }
+        for trigger in &self.triggers {
+            trigger.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// Defines the default operator input experience for chat or manual-run agents.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualInteractionConfig {
+    #[serde(default = "default_manual_input_label")]
+    pub input_label: String,
+    #[serde(default = "default_manual_prompt")]
+    pub default_prompt: String,
+}
+
+impl ManualInteractionConfig {
+    fn validate(&self) -> DeployResult<()> {
+        if self.input_label.trim().is_empty() {
+            return Err(DeployError::InvalidManifest {
+                message: "interaction.manual.input_label must not be empty".to_string(),
+            });
+        }
+        if self.default_prompt.trim().is_empty() {
+            return Err(DeployError::InvalidManifest {
+                message: "interaction.manual.default_prompt must not be empty".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl Default for ManualInteractionConfig {
+    fn default() -> Self {
+        Self { input_label: default_manual_input_label(), default_prompt: default_manual_prompt() }
+    }
+}
+
+/// Describes a non-chat trigger so the console can show how the deployed agent is activated.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TriggerInteractionConfig {
+    pub id: String,
+    pub name: String,
+    pub kind: TriggerKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cron: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+}
+
+impl TriggerInteractionConfig {
+    fn validate(&self) -> DeployResult<()> {
+        if self.id.trim().is_empty() {
+            return Err(DeployError::InvalidManifest {
+                message: "interaction.triggers[].id must not be empty".to_string(),
+            });
+        }
+        if self.name.trim().is_empty() {
+            return Err(DeployError::InvalidManifest {
+                message: "interaction.triggers[].name must not be empty".to_string(),
+            });
+        }
+        match self.kind {
+            TriggerKind::Webhook => {
+                if self.path.as_deref().map(str::trim).is_none_or(str::is_empty) {
+                    return Err(DeployError::InvalidManifest {
+                        message: "interaction.triggers[].path is required for webhook triggers"
+                            .to_string(),
+                    });
+                }
+                if self.method.as_deref().map(str::trim).is_none_or(str::is_empty) {
+                    return Err(DeployError::InvalidManifest {
+                        message: "interaction.triggers[].method is required for webhook triggers"
+                            .to_string(),
+                    });
+                }
+            }
+            TriggerKind::Schedule => {
+                if self.cron.as_deref().map(str::trim).is_none_or(str::is_empty) {
+                    return Err(DeployError::InvalidManifest {
+                        message: "interaction.triggers[].cron is required for schedule triggers"
+                            .to_string(),
+                    });
+                }
+                if self.timezone.as_deref().map(str::trim).is_none_or(str::is_empty) {
+                    return Err(DeployError::InvalidManifest {
+                        message:
+                            "interaction.triggers[].timezone is required for schedule triggers"
+                                .to_string(),
+                    });
+                }
+            }
+            TriggerKind::Event => {
+                if self.event_source.as_deref().map(str::trim).is_none_or(str::is_empty) {
+                    return Err(DeployError::InvalidManifest {
+                        message:
+                            "interaction.triggers[].event_source is required for event triggers"
+                                .to_string(),
+                    });
+                }
+                if self.event_type.as_deref().map(str::trim).is_none_or(str::is_empty) {
+                    return Err(DeployError::InvalidManifest {
+                        message: "interaction.triggers[].event_type is required for event triggers"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Identifies the operator-visible trigger type for a deployment.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TriggerKind {
+    Webhook,
+    Schedule,
+    Event,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -603,11 +763,20 @@ fn default_required() -> bool {
     true
 }
 
+fn default_manual_input_label() -> String {
+    "Enter your message".to_string()
+}
+
+fn default_manual_prompt() -> String {
+    "What can you help me build with ADK-Rust today?".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentAuthConfig, AuthModeSpec, DeploymentManifest, EnvVarSpec, GraphConfig, RealtimeConfig,
-        ServiceBinding, ServiceKind,
+        AgentAuthConfig, AuthModeSpec, DeploymentManifest, EnvVarSpec, GraphConfig,
+        InteractionConfig, ManualInteractionConfig, RealtimeConfig, ServiceBinding, ServiceKind,
+        TriggerInteractionConfig, TriggerKind,
     };
 
     #[test]
@@ -681,5 +850,33 @@ mod tests {
         });
 
         manifest.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_webhook_interaction_trigger() {
+        let manifest = DeploymentManifest {
+            interaction: Some(InteractionConfig {
+                manual: Some(ManualInteractionConfig::default()),
+                triggers: vec![TriggerInteractionConfig {
+                    id: "trigger_1".to_string(),
+                    name: "Incoming webhook".to_string(),
+                    kind: TriggerKind::Webhook,
+                    description: None,
+                    path: None,
+                    method: Some("POST".to_string()),
+                    auth: None,
+                    default_prompt: None,
+                    cron: None,
+                    timezone: None,
+                    event_source: None,
+                    event_type: None,
+                    filter: None,
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let error = manifest.validate().unwrap_err();
+        assert!(error.to_string().contains("path is required"));
     }
 }

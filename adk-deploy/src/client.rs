@@ -240,3 +240,24 @@ fn build_url_with_query(path: &str, query: &[(&str, &str)]) -> DeployResult<Stri
 fn encode_path_segment(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{build_url_with_query, encode_path_segment};
+
+    #[test]
+    fn build_url_with_query_encodes_reserved_characters() {
+        let path = build_url_with_query(
+            "/api/v1/deployments/status",
+            &[("environment", "prod blue"), ("agent", "agent/one")],
+        )
+        .unwrap();
+
+        assert_eq!(path, "/api/v1/deployments/status?environment=prod+blue&agent=agent%2Fone");
+    }
+
+    #[test]
+    fn encode_path_segment_escapes_slashes_and_spaces() {
+        assert_eq!(encode_path_segment("prod/agent name"), "prod%2Fagent+name");
+    }
+}

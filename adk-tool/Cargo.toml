@@ -16,6 +16,12 @@ readme = "README.md"
 default = []
 # Enable HTTP transport for remote MCP servers (streamable HTTP)
 http-transport = ["rmcp/transport-streamable-http-client-reqwest", "reqwest"]
+# Enable code execution tools (RustCodeTool, etc.)
+code = ["dep:adk-code", "dep:adk-sandbox"]
+# Enable embedded JavaScript execution (requires boa_engine)
+code-embedded-js = ["code", "adk-code/embedded-js"]
+# Enable Docker SDK-based persistent container execution
+code-docker = ["code", "adk-code/docker"]
 
 [dependencies]
 adk-core.workspace = true
@@ -30,8 +36,14 @@ tracing.workspace = true
 base64 = "0.21"
 uuid.workspace = true
 futures.workspace = true
+# Optional: code execution substrate
+adk-code = { workspace = true, optional = true }
+adk-sandbox = { workspace = true, optional = true }
 # Optional: HTTP client for remote MCP servers
 reqwest = { version = "0.12", features = ["json"], optional = true }
 
 [dev-dependencies]
 async-stream.workspace = true
+proptest = "1.5"
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+adk-code = { workspace = true }

@@ -23,6 +23,7 @@ adk-mistralrs/Cargo.lock
 .kiro/
 .claude/
 .vite/
+.playwright-cli/
 
 # Devenv / Direnv
 .devenv/

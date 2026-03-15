@@ -24,6 +24,9 @@ adk-tool.workspace = true
 adk-runner.workspace = true
 adk-session.workspace = true
 adk-graph.workspace = true
+adk-deploy.workspace = true
+adk-code.workspace = true
+adk-sandbox.workspace = true
 
 # Async
 tokio.workspace = true

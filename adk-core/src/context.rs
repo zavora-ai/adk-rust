@@ -1,3 +1,4 @@
+use crate::identity::{AdkIdentity, AppName, ExecutionIdentity, InvocationId, SessionId, UserId};
 use crate::{Agent, Result, types::Content};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,95 @@ pub trait ReadonlyContext: Send + Sync {
     fn session_id(&self) -> &str;
     fn branch(&self) -> &str;
     fn user_content(&self) -> &Content;
+
+    /// Returns the application name as a typed [`AppName`].
+    ///
+    /// Parses the value returned by [`app_name()`](Self::app_name). Returns an
+    /// error if the raw string fails validation (empty, null bytes, or exceeds
+    /// the maximum length).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdkError::Config`](crate::AdkError::Config) when the
+    /// underlying string is not a valid identifier.
+    fn try_app_name(&self) -> Result<AppName> {
+        Ok(AppName::try_from(self.app_name())?)
+    }
+
+    /// Returns the user identifier as a typed [`UserId`].
+    ///
+    /// Parses the value returned by [`user_id()`](Self::user_id). Returns an
+    /// error if the raw string fails validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdkError::Config`](crate::AdkError::Config) when the
+    /// underlying string is not a valid identifier.
+    fn try_user_id(&self) -> Result<UserId> {
+        Ok(UserId::try_from(self.user_id())?)
+    }
+
+    /// Returns the session identifier as a typed [`SessionId`].
+    ///
+    /// Parses the value returned by [`session_id()`](Self::session_id).
+    /// Returns an error if the raw string fails validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdkError::Config`](crate::AdkError::Config) when the
+    /// underlying string is not a valid identifier.
+    fn try_session_id(&self) -> Result<SessionId> {
+        Ok(SessionId::try_from(self.session_id())?)
+    }
+
+    /// Returns the invocation identifier as a typed [`InvocationId`].
+    ///
+    /// Parses the value returned by [`invocation_id()`](Self::invocation_id).
+    /// Returns an error if the raw string fails validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdkError::Config`](crate::AdkError::Config) when the
+    /// underlying string is not a valid identifier.
+    fn try_invocation_id(&self) -> Result<InvocationId> {
+        Ok(InvocationId::try_from(self.invocation_id())?)
+    }
+
+    /// Returns the stable session-scoped [`AdkIdentity`] triple.
+    ///
+    /// Combines [`try_app_name()`](Self::try_app_name),
+    /// [`try_user_id()`](Self::try_user_id), and
+    /// [`try_session_id()`](Self::try_session_id) into a single composite
+    /// identity value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of the three constituent identifiers fail
+    /// validation.
+    fn try_identity(&self) -> Result<AdkIdentity> {
+        Ok(AdkIdentity {
+            app_name: self.try_app_name()?,
+            user_id: self.try_user_id()?,
+            session_id: self.try_session_id()?,
+        })
+    }
+
+    /// Returns the full per-invocation [`ExecutionIdentity`].
+    ///
+    /// Combines [`try_identity()`](Self::try_identity) with the invocation,
+    /// branch, and agent name from this context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of the four typed identifiers fail validation.
+    fn try_execution_identity(&self) -> Result<ExecutionIdentity> {
+        Ok(ExecutionIdentity {
+            adk: self.try_identity()?,
+            invocation_id: self.try_invocation_id()?,
+            branch: self.branch().to_string(),
+            agent_name: self.agent_name().to_string(),
+        })
+    }
 }
 
 // State management traits
@@ -80,6 +170,65 @@ pub trait Session: Send + Sync {
     /// Append content to conversation history (for sequential agent support)
     fn append_to_history(&self, _content: Content) {
         // Default no-op - implementations can override to track history
+    }
+
+    /// Returns the application name as a typed [`AppName`].
+    ///
+    /// Parses the value returned by [`app_name()`](Self::app_name). Returns an
+    /// error if the raw string fails validation (empty, null bytes, or exceeds
+    /// the maximum length).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdkError::Config`](crate::AdkError::Config) when the
+    /// underlying string is not a valid identifier.
+    fn try_app_name(&self) -> Result<AppName> {
+        Ok(AppName::try_from(self.app_name())?)
+    }
+
+    /// Returns the user identifier as a typed [`UserId`].
+    ///
+    /// Parses the value returned by [`user_id()`](Self::user_id). Returns an
+    /// error if the raw string fails validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdkError::Config`](crate::AdkError::Config) when the
+    /// underlying string is not a valid identifier.
+    fn try_user_id(&self) -> Result<UserId> {
+        Ok(UserId::try_from(self.user_id())?)
+    }
+
+    /// Returns the session identifier as a typed [`SessionId`].
+    ///
+    /// Parses the value returned by [`id()`](Self::id). Returns an error if
+    /// the raw string fails validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdkError::Config`](crate::AdkError::Config) when the
+    /// underlying string is not a valid identifier.
+    fn try_session_id(&self) -> Result<SessionId> {
+        Ok(SessionId::try_from(self.id())?)
+    }
+
+    /// Returns the stable session-scoped [`AdkIdentity`] triple.
+    ///
+    /// Combines [`try_app_name()`](Self::try_app_name),
+    /// [`try_user_id()`](Self::try_user_id), and
+    /// [`try_session_id()`](Self::try_session_id) into a single composite
+    /// identity value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of the three constituent identifiers fail
+    /// validation.
+    fn try_identity(&self) -> Result<AdkIdentity> {
+        Ok(AdkIdentity {
+            app_name: self.try_app_name()?,
+            user_id: self.try_user_id()?,
+            session_id: self.try_session_id()?,
+        })
     }
 }
 

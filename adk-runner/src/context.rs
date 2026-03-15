@@ -1,6 +1,7 @@
 use adk_core::{
-    Agent, Artifacts, CallbackContext, Content, Event, InvocationContext as InvocationContextTrait,
-    Memory, ReadonlyContext, RequestContext, RunConfig,
+    AdkIdentity, Agent, AppName, Artifacts, CallbackContext, Content, Event, ExecutionIdentity,
+    InvocationContext as InvocationContextTrait, InvocationId, Memory, ReadonlyContext,
+    RequestContext, RunConfig, SessionId, UserId,
 };
 use adk_session::Session as AdkSession;
 use async_trait::async_trait;
@@ -183,12 +184,8 @@ impl adk_core::State for MutableSession {
 }
 
 pub struct InvocationContext {
-    invocation_id: String,
+    identity: ExecutionIdentity,
     agent: Arc<dyn Agent>,
-    user_id: String,
-    app_name: String,
-    session_id: String,
-    branch: String,
     user_content: Content,
     artifacts: Option<Arc<dyn Artifacts>>,
     memory: Option<Arc<dyn Memory>>,
@@ -214,13 +211,19 @@ impl InvocationContext {
         user_content: Content,
         session: Arc<dyn AdkSession>,
     ) -> Self {
-        Self {
-            invocation_id,
-            agent,
-            user_id,
-            app_name,
-            session_id,
+        let identity = ExecutionIdentity {
+            adk: AdkIdentity {
+                app_name: AppName::new_unchecked(app_name),
+                user_id: UserId::new_unchecked(user_id),
+                session_id: SessionId::new_unchecked(session_id),
+            },
+            invocation_id: InvocationId::new_unchecked(invocation_id),
             branch: String::new(),
+            agent_name: agent.name().to_string(),
+        };
+        Self {
+            identity,
+            agent,
             user_content,
             artifacts: None,
             memory: None,
@@ -243,13 +246,19 @@ impl InvocationContext {
         user_content: Content,
         session: Arc<MutableSession>,
     ) -> Self {
-        Self {
-            invocation_id,
-            agent,
-            user_id,
-            app_name,
-            session_id,
+        let identity = ExecutionIdentity {
+            adk: AdkIdentity {
+                app_name: AppName::new_unchecked(app_name),
+                user_id: UserId::new_unchecked(user_id),
+                session_id: SessionId::new_unchecked(session_id),
+            },
+            invocation_id: InvocationId::new_unchecked(invocation_id),
             branch: String::new(),
+            agent_name: agent.name().to_string(),
+        };
+        Self {
+            identity,
+            agent,
             user_content,
             artifacts: None,
             memory: None,
@@ -261,7 +270,7 @@ impl InvocationContext {
     }
 
     pub fn with_branch(mut self, branch: String) -> Self {
-        self.branch = branch;
+        self.identity.branch = branch;
         self
     }
 
@@ -283,7 +292,10 @@ impl InvocationContext {
     /// Set the request context from the server's auth middleware bridge.
     ///
     /// When set, `user_id()` returns `request_context.user_id` (overriding
-    /// the original), and `user_scopes()` returns `request_context.scopes`.
+    /// the session-scoped identity), and `user_scopes()` returns
+    /// `request_context.scopes`. This is the explicit authenticated user
+    /// override — `RequestContext` remains separate from `ExecutionIdentity`
+    /// and `AdkIdentity` (it does not carry session or invocation IDs).
     pub fn with_request_context(mut self, ctx: RequestContext) -> Self {
         self.request_context = Some(ctx);
         self
@@ -299,7 +311,7 @@ impl InvocationContext {
 #[async_trait]
 impl ReadonlyContext for InvocationContext {
     fn invocation_id(&self) -> &str {
-        &self.invocation_id
+        self.identity.invocation_id.as_ref()
     }
 
     fn agent_name(&self) -> &str {
@@ -307,19 +319,24 @@ impl ReadonlyContext for InvocationContext {
     }
 
     fn user_id(&self) -> &str {
-        self.request_context.as_ref().map_or(&self.user_id, |rc| &rc.user_id)
+        // Explicit authenticated user override: when a RequestContext is
+        // present (set via with_request_context from the auth middleware
+        // bridge), the authenticated user_id takes precedence over the
+        // session-scoped identity. This keeps auth binding explicit and
+        // ensures the runtime reflects the verified caller identity.
+        self.request_context.as_ref().map_or(self.identity.adk.user_id.as_ref(), |rc| &rc.user_id)
     }
 
     fn app_name(&self) -> &str {
-        &self.app_name
+        self.identity.adk.app_name.as_ref()
     }
 
     fn session_id(&self) -> &str {
-        &self.session_id
+        self.identity.adk.session_id.as_ref()
     }
 
     fn branch(&self) -> &str {
-        &self.branch
+        &self.identity.branch
     }
 
     fn user_content(&self) -> &Content {

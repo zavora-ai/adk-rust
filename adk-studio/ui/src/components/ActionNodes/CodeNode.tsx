@@ -23,11 +23,14 @@ interface Props {
 
 /**
  * Language display configuration.
+ * Rust is the primary code authoring mode. JavaScript and TypeScript
+ * are available as secondary scripting / transform support.
  * @see Requirement 10.1
  */
 const LANGUAGE_CONFIG: Record<CodeLanguage, { label: string; icon: string; color: string }> = {
-  javascript: { label: 'JS', icon: '📜', color: '#F7DF1E' },
-  typescript: { label: 'TS', icon: '📘', color: '#3178C6' },
+  rust: { label: 'Rust', icon: '🦀', color: '#DEA584' },
+  javascript: { label: 'JS (Script)', icon: '📜', color: '#F7DF1E' },
+  typescript: { label: 'TS (Script)', icon: '📘', color: '#3178C6' },
 };
 
 /**
@@ -83,7 +86,7 @@ function getSandboxIndicator(sandbox: SandboxConfig): { icon: string; label: str
 }
 
 /**
- * CodeNode displays custom JavaScript/TypeScript code execution.
+ * CodeNode displays Rust-first code execution with secondary JS/TS scripting.
  * 
  * Features:
  * - Language badge with icon (Requirement 10.1)
@@ -91,10 +94,13 @@ function getSandboxIndicator(sandbox: SandboxConfig): { icon: string; label: str
  * - Code preview with line count
  * - Memory/time limit indicators
  * 
+ * Rust is the primary code authoring mode. JavaScript and TypeScript
+ * are available as secondary scripting / transform support.
+ * 
  * @see Requirements 10.1, 10.2, 12.1, 12.3
  */
 export const CodeNode = memo(function CodeNode({ data, selected }: Props) {
-  const langConfig = LANGUAGE_CONFIG[data.language] || LANGUAGE_CONFIG.javascript;
+  const langConfig = LANGUAGE_CONFIG[data.language] || LANGUAGE_CONFIG.rust;
   const sandboxIndicator = getSandboxIndicator(data.sandbox);
   const lineCount = getLineCount(data.code);
   const codePreview = getCodePreview(data.code);

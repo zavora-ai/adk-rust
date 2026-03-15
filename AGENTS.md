@@ -1,6 +1,6 @@
 # ADK-Rust
 
-Rust Agent Development Kit — a modular workspace of 25 publishable crates for building AI agents with tool calling, multi-model support, real-time voice, graph workflows, and a visual studio.
+Rust Agent Development Kit — a modular workspace of publishable crates for building AI agents with tool calling, multi-model support, real-time voice, graph workflows, and more.
 
 ## Dev environment
 
@@ -69,7 +69,6 @@ adk-auth/        Authentication: API keys, JWT, OAuth2, OIDC, SSO
 adk-plugin/      Plugin system for agent lifecycle hooks
 adk-skill/       Skill discovery, parsing, and convention-based agent capabilities
 adk-cli/         Command-line launcher for agents
-adk-studio/      Visual agent builder: Axum backend (src/) + React/ReactFlow frontend (ui/)
 adk-doc-audit/   Documentation audit: rustdoc coverage, link checking, crate validation
 adk-rust/        Umbrella crate re-exporting all of the above
 ```
@@ -80,6 +79,11 @@ adk-rust/        Umbrella crate re-exporting all of the above
 adk-mistralrs/   Local LLM inference via mistral.rs (GPU deps — build explicitly)
                  Excluded so `--all-features` works without CUDA toolkit.
                  Has its own CI workflow (.github/workflows/mistralrs-tests.yml).
+
+adk-studio/      Visual agent builder — extracted to standalone repo.
+                 Repo: https://github.com/zavora-ai/adk-studio
+                 Local dev: ../adk-studio/ with path deps back to this workspace.
+                 Build: cargo check --manifest-path ../adk-studio/Cargo.toml
 ```
 
 ### Examples and docs
@@ -231,7 +235,7 @@ cargo test -p ralph                                       # standalone example c
 2. Add feature flag to `adk-model/Cargo.toml`
 3. Re-export from `adk-model/src/lib.rs` behind the feature
 4. Add example under `examples/<provider>_basic/`
-5. Update `adk-studio` codegen if the provider should be available in Studio
+5. Update `adk-studio` codegen if the provider should be available in Studio (separate repo: `../adk-studio/`)
 
 ### New tool
 
@@ -302,7 +306,7 @@ Tier 3: adk-session
 Tier 4: adk-tool, adk-model, adk-ui, adk-browser
 Tier 5: adk-agent, adk-graph
 Tier 6: adk-runner, adk-realtime, adk-eval
-Tier 7: adk-server, adk-cli, adk-studio, adk-doc-audit
+Tier 7: adk-server, adk-cli, adk-doc-audit
 Tier 8: adk-rust (umbrella — always last)
 ```
 
@@ -333,17 +337,19 @@ cargo publish -p <crate-name>
 
 - `adk-gemini/AGENTS.md` — Gemini client tracing conventions and instrumentation patterns
 
-## adk-studio (frontend)
+## adk-studio (separate repo)
 
-The `adk-studio/ui/` directory is a Vite + React + TypeScript app using ReactFlow. It has its own toolchain:
+`adk-studio` has been extracted to a standalone repository at `../adk-studio/` (or `https://github.com/zavora-ai/adk-studio`). It depends on ADK crates via local path references for development.
 
 ```bash
-cd adk-studio/ui
+# Build the studio
+cargo check --manifest-path ../adk-studio/Cargo.toml
+
+# Frontend (Vite + React + TypeScript + ReactFlow)
+cd ../adk-studio/ui
 pnpm install          # install deps
 pnpm run dev          # dev server
 pnpm run build        # production build (tsc + vite)
 pnpm run lint         # eslint
 pnpm run test         # vitest (single run)
 ```
-
-When making changes to the Studio frontend, run `pnpm run lint` and `pnpm run test` before committing. The Rust backend in `adk-studio/src/` follows the normal Cargo quality gates.

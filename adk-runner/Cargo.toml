@@ -30,4 +30,5 @@ tokio-util = { version = "0.7", features = ["rt"] }
 
 [dev-dependencies]
 chrono = "0.4"
+proptest = "1.5"
 tempfile = "3"

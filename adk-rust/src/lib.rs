@@ -641,6 +641,36 @@ pub mod ui {
     pub use adk_ui::*;
 }
 
+/// Code execution substrate.
+///
+/// First-class code execution for agents, Studio, and generated projects:
+/// - [`CodeExecutor`](code::CodeExecutor) - Backend trait for execution
+/// - [`ExecutionRequest`](code::ExecutionRequest) - Typed execution request
+/// - [`ExecutionResult`](code::ExecutionResult) - Structured execution result
+/// - [`SandboxPolicy`](code::SandboxPolicy) - Sandbox capability model
+/// - [`Workspace`](code::Workspace) - Collaborative project context
+///
+/// Available with feature: `code`
+#[cfg(feature = "code")]
+#[cfg_attr(docsrs, doc(cfg(feature = "code")))]
+pub mod code {
+    pub use adk_code::*;
+}
+
+/// Isolated code execution runtime.
+///
+/// Provides the [`SandboxBackend`](sandbox::SandboxBackend) trait and built-in backends:
+/// - [`ProcessBackend`](sandbox::ProcessBackend) - Subprocess execution with timeout and env isolation
+/// - [`WasmBackend`](sandbox::WasmBackend) - In-process WASM execution via wasmtime (requires `wasm` feature)
+/// - [`SandboxTool`](sandbox::SandboxTool) - Tool trait implementation for agent integration
+///
+/// Available with feature: `sandbox`
+#[cfg(feature = "sandbox")]
+#[cfg_attr(docsrs, doc(cfg(feature = "sandbox")))]
+pub mod sandbox {
+    pub use adk_sandbox::*;
+}
+
 /// Documentation audit system.
 ///
 /// Validates ADK-Rust documentation against actual crate implementations:

@@ -58,7 +58,9 @@ pub mod vertex;
 
 pub use event::{Event, EventActions, Events};
 pub use inmemory::InMemorySessionService;
-pub use service::{CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService};
+pub use service::{
+    AppendEventRequest, CreateRequest, DeleteRequest, GetRequest, ListRequest, SessionService,
+};
 pub use session::{KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER, Session};
 pub use state::{ReadonlyState, State};
 pub use state_utils::{extract_state_deltas, merge_states};

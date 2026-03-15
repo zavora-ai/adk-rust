@@ -76,17 +76,24 @@ export default function App() {
     setDeployMessage(null);
     try {
       const result = await api.projects.deploy(currentProject.id, {
-        register: true,
-        openSpatialOs: true,
+        register: false,
+        openSpatialOs: false,
+        pushToDeploymentPlatform: true,
+        openDeploymentConsole: true,
+        deploymentEnvironment: 'staging',
       });
       if (result.openUrl) {
         window.open(result.openUrl, '_blank', 'noopener,noreferrer');
       }
-      if (result.registration.success) {
-        setDeployMessage(`Deployed. Manifest: ${result.manifestPath}`);
+      if (result.deployment) {
+        setDeployMessage(
+          `Deployed ${result.deployment.agentName} ${result.deployment.version} to ${result.deployment.environment}. Manifest: ${result.deploymentManifestPath ?? result.manifestPath}`
+        );
+      } else if (result.registration.success) {
+        setDeployMessage(`Manifest created. Spatial OS registration complete: ${result.manifestPath}`);
       } else {
         setDeployMessage(
-          `Manifest created. Spatial OS registration failed: ${result.registration.message}`
+          `Manifest created. Deployment push skipped. Spatial OS registration: ${result.registration.message}`
         );
       }
     } catch (error) {

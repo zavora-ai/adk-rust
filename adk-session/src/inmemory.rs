@@ -1,8 +1,9 @@
 use crate::{
-    CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_APP, KEY_PREFIX_TEMP,
-    KEY_PREFIX_USER, ListRequest, Session, SessionService, State,
+    AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_APP,
+    KEY_PREFIX_TEMP, KEY_PREFIX_USER, ListRequest, Session, SessionService, State,
 };
 use adk_core::Result;
+use adk_core::identity::{AdkIdentity, AppName, SessionId, UserId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -14,27 +15,14 @@ type StateMap = HashMap<String, Value>;
 
 #[derive(Clone)]
 struct SessionData {
-    id: SessionId,
+    identity: AdkIdentity,
     events: Vec<Event>,
     state: StateMap,
     updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct SessionId {
-    app_name: String,
-    user_id: String,
-    session_id: String,
-}
-
-impl SessionId {
-    fn key(&self) -> String {
-        format!("{}:{}:{}", self.app_name, self.user_id, self.session_id)
-    }
-}
-
 pub struct InMemorySessionService {
-    sessions: Arc<RwLock<HashMap<String, SessionData>>>,
+    sessions: Arc<RwLock<HashMap<AdkIdentity, SessionData>>>,
     app_state: Arc<RwLock<HashMap<String, StateMap>>>,
     user_state: Arc<RwLock<HashMap<String, HashMap<String, StateMap>>>>,
 }
@@ -69,12 +57,25 @@ impl InMemorySessionService {
     fn merge_states(app: &StateMap, user: &StateMap, session: &StateMap) -> StateMap {
         let mut merged = session.clone();
         for (k, v) in app {
-            merged.insert(format!("{}{}", KEY_PREFIX_APP, k), v.clone());
+            merged.insert(format!("{KEY_PREFIX_APP}{k}"), v.clone());
         }
         for (k, v) in user {
-            merged.insert(format!("{}{}", KEY_PREFIX_USER, k), v.clone());
+            merged.insert(format!("{KEY_PREFIX_USER}{k}"), v.clone());
         }
         merged
+    }
+
+    /// Build an [`AdkIdentity`] from raw string fields, returning a session
+    /// error if any field fails validation.
+    fn make_identity(app_name: &str, user_id: &str, session_id: &str) -> Result<AdkIdentity> {
+        Ok(AdkIdentity::new(
+            AppName::try_from(app_name)
+                .map_err(|e| adk_core::AdkError::Session(format!("invalid app_name: {e}")))?,
+            UserId::try_from(user_id)
+                .map_err(|e| adk_core::AdkError::Session(format!("invalid user_id: {e}")))?,
+            SessionId::try_from(session_id)
+                .map_err(|e| adk_core::AdkError::Session(format!("invalid session_id: {e}")))?,
+        ))
     }
 }
 
@@ -87,13 +88,9 @@ impl Default for InMemorySessionService {
 #[async_trait]
 impl SessionService for InMemorySessionService {
     async fn create(&self, req: CreateRequest) -> Result<Box<dyn Session>> {
-        let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        let session_id_str = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        let id = SessionId {
-            app_name: req.app_name.clone(),
-            user_id: req.user_id.clone(),
-            session_id: session_id.clone(),
-        };
+        let identity = Self::make_identity(&req.app_name, &req.user_id, &session_id_str)?;
 
         let (app_delta, user_delta, session_state) = Self::extract_state_deltas(&req.state);
 
@@ -113,18 +110,18 @@ impl SessionService for InMemorySessionService {
         let merged_state = Self::merge_states(&app_state_clone, &user_state_clone, &session_state);
 
         let data = SessionData {
-            id: id.clone(),
+            identity: identity.clone(),
             events: Vec::new(),
             state: merged_state.clone(),
             updated_at: Utc::now(),
         };
 
         let mut sessions = self.sessions.write().unwrap();
-        sessions.insert(id.key(), data);
+        sessions.insert(identity.clone(), data);
         drop(sessions);
 
         Ok(Box::new(InMemorySession {
-            id,
+            identity,
             state: merged_state,
             events: Vec::new(),
             updated_at: Utc::now(),
@@ -132,15 +129,11 @@ impl SessionService for InMemorySessionService {
     }
 
     async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
-        let id = SessionId {
-            app_name: req.app_name.clone(),
-            user_id: req.user_id.clone(),
-            session_id: req.session_id.clone(),
-        };
+        let identity = Self::make_identity(&req.app_name, &req.user_id, &req.session_id)?;
 
         let sessions = self.sessions.read().unwrap();
         let data = sessions
-            .get(&id.key())
+            .get(&identity)
             .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
 
         let app_state_lock = self.app_state.read().unwrap();
@@ -167,7 +160,7 @@ impl SessionService for InMemorySessionService {
         }
 
         Ok(Box::new(InMemorySession {
-            id: data.id.clone(),
+            identity: data.identity.clone(),
             state: merged_state,
             events,
             updated_at: data.updated_at,
@@ -181,7 +174,9 @@ impl SessionService for InMemorySessionService {
         let mut result = Vec::new();
 
         for data in sessions.values() {
-            if data.id.app_name == req.app_name && data.id.user_id == req.user_id {
+            if data.identity.app_name.as_ref() == req.app_name
+                && data.identity.user_id.as_ref() == req.user_id
+            {
                 result.push(data.clone());
             }
         }
@@ -195,7 +190,7 @@ impl SessionService for InMemorySessionService {
             .take(limit)
             .map(|data| {
                 Box::new(InMemorySession {
-                    id: data.id,
+                    identity: data.identity,
                     state: data.state,
                     events: data.events,
                     updated_at: data.updated_at,
@@ -207,17 +202,19 @@ impl SessionService for InMemorySessionService {
     }
 
     async fn delete(&self, req: DeleteRequest) -> Result<()> {
-        let id =
-            SessionId { app_name: req.app_name, user_id: req.user_id, session_id: req.session_id };
+        let identity = Self::make_identity(&req.app_name, &req.user_id, &req.session_id)?;
 
         let mut sessions = self.sessions.write().unwrap();
-        sessions.remove(&id.key());
+        sessions.remove(&identity);
         Ok(())
     }
 
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
         let mut sessions = self.sessions.write().unwrap();
-        sessions.retain(|_, data| !(data.id.app_name == app_name && data.id.user_id == user_id));
+        sessions.retain(|_, data| {
+            !(data.identity.app_name.as_ref() == app_name
+                && data.identity.user_id.as_ref() == user_id)
+        });
         Ok(())
     }
 
@@ -228,7 +225,7 @@ impl SessionService for InMemorySessionService {
             let mut sessions = self.sessions.write().unwrap();
             let data = sessions
                 .values_mut()
-                .find(|d| d.id.session_id == session_id)
+                .find(|d| d.identity.session_id.as_ref() == session_id)
                 .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
 
             data.events.push(event.clone());
@@ -239,8 +236,8 @@ impl SessionService for InMemorySessionService {
             data.state.extend(session_delta.clone());
 
             (
-                data.id.app_name.clone(),
-                data.id.user_id.clone(),
+                data.identity.app_name.as_ref().to_string(),
+                data.identity.user_id.as_ref().to_string(),
                 app_delta,
                 user_delta,
                 session_delta,
@@ -262,10 +259,87 @@ impl SessionService for InMemorySessionService {
 
         Ok(())
     }
+
+    async fn append_event_for_identity(&self, req: AppendEventRequest) -> Result<()> {
+        let mut event = req.event;
+        event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
+
+        let identity = req.identity;
+
+        let (app_name_str, user_id_str, app_delta, user_delta) = {
+            let mut sessions = self.sessions.write().unwrap();
+            let data = sessions
+                .get_mut(&identity)
+                .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+
+            data.events.push(event.clone());
+            data.updated_at = event.timestamp;
+
+            let (app_delta, user_delta, session_delta) =
+                Self::extract_state_deltas(&event.actions.state_delta);
+            data.state.extend(session_delta);
+
+            (
+                identity.app_name.as_ref().to_string(),
+                identity.user_id.as_ref().to_string(),
+                app_delta,
+                user_delta,
+            )
+        };
+
+        if !app_delta.is_empty() {
+            let mut app_state_lock = self.app_state.write().unwrap();
+            let app_state = app_state_lock.entry(app_name_str.clone()).or_default();
+            app_state.extend(app_delta);
+        }
+
+        if !user_delta.is_empty() {
+            let mut user_state_lock = self.user_state.write().unwrap();
+            let user_map = user_state_lock.entry(app_name_str).or_default();
+            let user_state = user_map.entry(user_id_str).or_default();
+            user_state.extend(user_delta);
+        }
+
+        Ok(())
+    }
+
+    async fn get_for_identity(&self, identity: &AdkIdentity) -> Result<Box<dyn Session>> {
+        let sessions = self.sessions.read().unwrap();
+        let data = sessions
+            .get(identity)
+            .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+
+        let app_state_lock = self.app_state.read().unwrap();
+        let app_state = app_state_lock.get(identity.app_name.as_ref()).cloned().unwrap_or_default();
+        drop(app_state_lock);
+
+        let user_state_lock = self.user_state.read().unwrap();
+        let user_state = user_state_lock
+            .get(identity.app_name.as_ref())
+            .and_then(|m| m.get(identity.user_id.as_ref()))
+            .cloned()
+            .unwrap_or_default();
+        drop(user_state_lock);
+
+        let merged_state = Self::merge_states(&app_state, &user_state, &data.state);
+
+        Ok(Box::new(InMemorySession {
+            identity: data.identity.clone(),
+            state: merged_state,
+            events: data.events.clone(),
+            updated_at: data.updated_at,
+        }))
+    }
+
+    async fn delete_for_identity(&self, identity: &AdkIdentity) -> Result<()> {
+        let mut sessions = self.sessions.write().unwrap();
+        sessions.remove(identity);
+        Ok(())
+    }
 }
 
 struct InMemorySession {
-    id: SessionId,
+    identity: AdkIdentity,
     state: StateMap,
     events: Vec<Event>,
     updated_at: DateTime<Utc>,
@@ -273,15 +347,15 @@ struct InMemorySession {
 
 impl Session for InMemorySession {
     fn id(&self) -> &str {
-        &self.id.session_id
+        self.identity.session_id.as_ref()
     }
 
     fn app_name(&self) -> &str {
-        &self.id.app_name
+        self.identity.app_name.as_ref()
     }
 
     fn user_id(&self) -> &str {
-        &self.id.user_id
+        self.identity.user_id.as_ref()
     }
 
     fn state(&self) -> &dyn State {

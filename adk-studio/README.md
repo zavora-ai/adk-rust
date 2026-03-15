@@ -83,7 +83,7 @@ Action nodes are non-LLM programmatic nodes for deterministic workflow operation
 | **Loop** | 🔄 | Iterate over arrays or repeat operations |
 | **Merge** | 🔗 | Combine multiple branches back into single flow |
 | **Wait** | ⏱️ | Pause workflow for duration or condition |
-| **Code** | 💻 | Execute custom JavaScript in sandboxed boa_engine runtime |
+| **Code** | 💻 | Execute authored Rust in a sandbox (primary) or JavaScript transforms via embedded boa_engine (secondary) |
 | **Database** | 🗄️ | Database operations (PostgreSQL, MySQL, SQLite, MongoDB, Redis) |
 
 #### Trigger Types
@@ -250,6 +250,19 @@ All action nodes share standard properties:
 - **Google Search** - Grounded search queries
 - **Load Artifact** - Load binary artifacts into context
 
+### Code Execution
+
+Studio uses a Rust-first code execution model powered by the `adk-code` crate:
+
+- **Primary path**: Authored Rust executed in a sandbox via `RustSandboxExecutor`. The same Rust body is used in both the live runner and generated projects.
+- **Secondary scripting**: Lightweight JavaScript transforms via `EmbeddedJsExecutor` (boa_engine). Useful for data shaping and compatibility.
+- **Container execution**: Python and Node.js code runs in ephemeral Docker containers via `ContainerCommandExecutor` with strict isolation defaults.
+- **WASM guest modules**: Precompiled `.wasm` plugins via `WasmGuestExecutor` for portable sandboxed logic.
+
+Sandbox settings in the UI map to controls that the selected backend can actually enforce. If a configured limit is unsupported, Studio surfaces the incompatibility before execution or export.
+
+Browser-page JavaScript execution (via `adk-browser`) is a separate capability and is not part of the `adk-code` substrate.
+
 ### Real-Time Execution
 - Live SSE streaming with agent animations
 - Event trace panel for debugging
@@ -272,7 +285,7 @@ Action nodes generate production Rust code alongside LLM agents:
 | **HTTP** | `reqwest` | All methods, auth (Bearer/Basic/API key), JSON/form/multipart body, JSONPath extraction |
 | **Database** | `sqlx` / `mongodb` / `redis` | PostgreSQL, MySQL, SQLite via sqlx; MongoDB via native driver; Redis GET/SET/DEL/HGET/HSET/LPUSH/LRANGE |
 | **Email** | `lettre` / `imap` | SMTP send with TLS + auth + To/CC/BCC; IMAP monitor with search filters + mark-as-read |
-| **Code** | `boa_engine` | Embedded JavaScript execution, graph state as `input` object, thread-isolated sandbox |
+| **Code** | `adk-code` | Rust sandbox execution (primary, via `RustSandboxExecutor`); embedded JavaScript transforms (secondary, via `boa_engine`); container-backed Python/Node.js (via `ContainerCommandExecutor`) |
 | **Set** | native | Variable assignment with literal, expression, and secret values |
 | **Transform** | native | Map, filter, sort, reduce, flatten, group, pick, merge, template operations |
 | **Merge** | native | Combine parallel branches via waitAll, waitAny, or append strategies |

@@ -24,7 +24,43 @@ import '../../styles/codePanel.css';
 // Constants
 // ============================================
 
-const CODE_LANGUAGES: readonly CodeLanguage[] = ['javascript', 'typescript'];
+const CODE_LANGUAGES: readonly CodeLanguage[] = ['rust', 'javascript', 'typescript'];
+
+/**
+ * Backend capability metadata for each language.
+ * Surfaces which sandbox controls the backend can actually enforce,
+ * so the UI can warn before run or export.
+ * @see Requirement 5.5, 5.6, 5.7
+ */
+const BACKEND_CAPABILITIES: Record<CodeLanguage, {
+  enforceNetwork: boolean;
+  enforceFilesystem: boolean;
+  enforceMemory: boolean;
+  enforceTimeout: boolean;
+  note: string;
+}> = {
+  rust: {
+    enforceNetwork: false,
+    enforceFilesystem: false,
+    enforceMemory: false,
+    enforceTimeout: true,
+    note: 'Rust sandbox backend enforces timeout only. Network, filesystem, and memory limits are not enforced at the OS level.',
+  },
+  javascript: {
+    enforceNetwork: false,
+    enforceFilesystem: false,
+    enforceMemory: false,
+    enforceTimeout: true,
+    note: 'Embedded JS backend (boa_engine) enforces timeout only. Secondary scripting support.',
+  },
+  typescript: {
+    enforceNetwork: false,
+    enforceFilesystem: false,
+    enforceMemory: false,
+    enforceTimeout: false,
+    note: 'TypeScript has no execution backend. Transpilation is not available.',
+  },
+};
 
 const LANGUAGE_CONFIG: Record<CodeLanguage, {
   label: string;
@@ -32,9 +68,19 @@ const LANGUAGE_CONFIG: Record<CodeLanguage, {
   icon: string;
   defaultCode: string;
 }> = {
+  rust: {
+    label: 'Rust',
+    description: 'Primary code authoring mode — compiled and sandboxed',
+    icon: '🦀',
+    defaultCode: `fn run(input: serde_json::Value) -> serde_json::Value {
+    // Transform the input and return the result.
+    // Available: serde_json, std.
+    input
+}`,
+  },
   javascript: {
-    label: 'JavaScript',
-    description: 'Standard JavaScript (ES2020+)',
+    label: 'JS (Script)',
+    description: 'Secondary scripting for lightweight transforms',
     icon: '📜',
     defaultCode: `// Access input data via 'input' variable
 // Return the transformed result
@@ -47,8 +93,8 @@ const result = input.data.map(item => ({
 return result;`,
   },
   typescript: {
-    label: 'TypeScript',
-    description: 'TypeScript (transpiled to JS)',
+    label: 'TS (Script)',
+    description: 'TypeScript — no execution backend available',
     icon: '📘',
     defaultCode: `// Access input data via 'input' variable
 // Return the transformed result
@@ -192,6 +238,7 @@ export function CodePanel({ node, onChange }: CodePanelProps) {
       {/* Sandbox Configuration (Requirement 10.2) */}
       <SandboxSection
         sandbox={node.sandbox}
+        language={node.language}
         onChange={updateSandbox}
       />
       
@@ -389,14 +436,18 @@ function TypeHintsSection({
 
 interface SandboxSectionProps {
   sandbox: SandboxConfig;
+  language: CodeLanguage;
   onChange: (updates: Partial<SandboxConfig>) => void;
 }
 
 /**
  * Sandbox security configuration section.
- * @see Requirement 10.2
+ * Surfaces backend capability limitations before run or export.
+ * @see Requirement 5.5, 5.6, 5.7, 10.2
  */
-function SandboxSection({ sandbox, onChange }: SandboxSectionProps) {
+function SandboxSection({ sandbox, language, onChange }: SandboxSectionProps) {
+  const capabilities = BACKEND_CAPABILITIES[language];
+
   // Calculate security level
   const getSecurityLevel = (): 'strict' | 'relaxed' | 'open' => {
     if (!sandbox.networkAccess && !sandbox.fileSystemAccess) return 'strict';
@@ -405,6 +456,21 @@ function SandboxSection({ sandbox, onChange }: SandboxSectionProps) {
   };
   
   const securityLevel = getSecurityLevel();
+
+  // Collect unenforced controls that the user has configured
+  const unenforcedWarnings: string[] = [];
+  if (sandbox.networkAccess && !capabilities.enforceNetwork) {
+    unenforcedWarnings.push('Network access is enabled but the backend cannot enforce network isolation.');
+  }
+  if (sandbox.fileSystemAccess && !capabilities.enforceFilesystem) {
+    unenforcedWarnings.push('Filesystem access is enabled but the backend cannot enforce filesystem isolation.');
+  }
+  if (sandbox.memoryLimit > 0 && !capabilities.enforceMemory) {
+    unenforcedWarnings.push(`Memory limit (${sandbox.memoryLimit}MB) is set but the backend cannot enforce memory limits.`);
+  }
+  if (sandbox.timeLimit > 0 && !capabilities.enforceTimeout) {
+    unenforcedWarnings.push('Time limit is set but the backend cannot enforce timeout.');
+  }
   
   return (
     <CollapsibleSection title="Sandbox Security" defaultOpen={false}>
@@ -504,6 +570,24 @@ function SandboxSection({ sandbox, onChange }: SandboxSectionProps) {
           </span>
         </div>
       )}
+
+      {/* Backend capability warnings */}
+      {unenforcedWarnings.length > 0 && (
+        <div className="code-sandbox-warning" style={{ borderColor: '#F59E0B' }}>
+          <span className="code-sandbox-warning-icon">🔧</span>
+          <div className="code-sandbox-warning-text">
+            <strong>Backend limitation:</strong>
+            {unenforcedWarnings.map((w, i) => (
+              <div key={i} style={{ marginTop: 2 }}>{w}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Backend capability note */}
+      <div className="code-panel-field-help" style={{ marginTop: 8, fontSize: '0.75rem', opacity: 0.7 }}>
+        {capabilities.note}
+      </div>
       
       {/* Reset to defaults */}
       <button

@@ -32,6 +32,8 @@ full = [
     "cli",
     "graph",
     "ui",
+    "code",
+    "sandbox",
     "doc-audit",
     "realtime",
     "browser",
@@ -59,6 +61,8 @@ server = ["dep:adk-server"]
 telemetry = ["dep:adk-telemetry"]
 graph = ["dep:adk-graph"]
 ui = ["dep:adk-ui"]
+code = ["dep:adk-code"]
+sandbox = ["dep:adk-sandbox"]
 doc-audit = ["dep:adk-doc-audit"]
 realtime = ["dep:adk-realtime"]
 browser = ["dep:adk-browser"]
@@ -142,6 +146,8 @@ adk-telemetry = { workspace = true, optional = true }
 adk-cli = { workspace = true, optional = true }
 adk-graph = { workspace = true, optional = true }
 adk-ui = { workspace = true, optional = true }
+adk-code = { workspace = true, optional = true }
+adk-sandbox = { workspace = true, optional = true }
 adk-doc-audit = { workspace = true, optional = true }
 adk-realtime = { workspace = true, optional = true }
 adk-browser = { workspace = true, optional = true }

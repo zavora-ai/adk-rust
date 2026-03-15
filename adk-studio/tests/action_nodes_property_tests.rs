@@ -94,6 +94,7 @@ fn arb_trigger_type() -> impl Strategy<Value = TriggerType> {
 
 fn arb_trigger_node_config() -> impl Strategy<Value = TriggerNodeConfig> {
     (arb_standard_properties(), arb_trigger_type()).prop_map(|(standard, trigger_type)| {
+        let manual = (trigger_type == TriggerType::Manual).then(ManualTriggerConfig::default);
         let webhook = if trigger_type == TriggerType::Webhook {
             Some(WebhookConfig {
                 path: "/webhook".to_string(),
@@ -122,7 +123,7 @@ fn arb_trigger_node_config() -> impl Strategy<Value = TriggerNodeConfig> {
         } else {
             None
         };
-        TriggerNodeConfig { standard, trigger_type, webhook, schedule, event }
+        TriggerNodeConfig { standard, trigger_type, manual, webhook, schedule, event }
     })
 }
 
@@ -365,7 +366,11 @@ fn arb_wait_node_config() -> impl Strategy<Value = WaitNodeConfig> {
 // ============================================
 
 fn arb_code_language() -> impl Strategy<Value = CodeLanguage> {
-    prop_oneof![Just(CodeLanguage::Javascript), Just(CodeLanguage::Typescript),]
+    prop_oneof![
+        Just(CodeLanguage::Rust),
+        Just(CodeLanguage::Javascript),
+        Just(CodeLanguage::Typescript),
+    ]
 }
 
 fn arb_code_node_config() -> impl Strategy<Value = CodeNodeConfig> {

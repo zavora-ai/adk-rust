@@ -117,7 +117,7 @@ Built-in tools:
 | `adk-auth` | Access control | Role-based permissions, declarative scope-based security, SSO/OAuth, audit logging |
 | `adk-telemetry` | Observability | Structured logging, OpenTelemetry tracing, span helpers |
 | `adk-ui` | Dynamic UI generation | 28 components, 10 templates, React client, streaming updates |
-| `adk-studio` | Visual development | Drag-and-drop agent builder, code generation, live testing |
+| `adk-studio` | Visual development | Drag-and-drop agent builder, code generation, live testing ([separate repo](https://github.com/zavora-ai/adk-studio)) |
 
 ## Quick Start
 
@@ -364,6 +364,8 @@ ls examples/
 
 [![adk-studio](https://img.shields.io/crates/v/adk-studio.svg)](https://crates.io/crates/adk-studio)
 ![New](https://img.shields.io/badge/new-v0.3.0-brightgreen)
+
+> **Note**: ADK Studio has been extracted to its own repository: [github.com/zavora-ai/adk-studio](https://github.com/zavora-ai/adk-studio)
 
 A visual development environment for building AI agents with drag-and-drop. Design complex multi-agent workflows, compile to production Rust code, and test live — all from your browser.
 

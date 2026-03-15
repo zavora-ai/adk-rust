@@ -397,8 +397,8 @@ export function useCanvasDragDrop({
         break;
       case 'code':
         nodeConfig = {
-          ...baseProps, type: 'code', language: 'javascript',
-          code: '// Your code here\nreturn input;',
+          ...baseProps, type: 'code', language: 'rust',
+          code: 'fn run(input: serde_json::Value) -> serde_json::Value {\n    input\n}',
           sandbox: { networkAccess: false, fileSystemAccess: false, memoryLimit: 128, timeLimit: 5000 },
         };
         break;

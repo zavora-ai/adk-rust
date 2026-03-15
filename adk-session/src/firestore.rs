@@ -13,8 +13,8 @@
 //! - User state: `{root}/{app_name}/users/{user_id}/state`
 
 use crate::{
-    CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP, ListRequest, Session,
-    SessionService, State, state_utils,
+    AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
+    ListRequest, Session, SessionService, State, state_utils,
 };
 use adk_core::Result;
 use async_trait::async_trait;
@@ -607,6 +607,126 @@ impl SessionService for FirestoreSessionService {
         let event_doc = event_to_doc(&event)?;
 
         let sessions_parent = self.sessions_parent(app_name)?;
+        let events_parent = self.events_parent(app_name, session_id)?;
+        let user_state_parent = self.user_state_parent(app_name, user_id)?;
+        let root_col = self.root_collection.clone();
+
+        let mut transaction = self
+            .db
+            .begin_transaction()
+            .await
+            .map_err(|e| adk_core::AdkError::Session(format!("transaction failed: {e}")))?;
+
+        // Update app state
+        self.db
+            .fluent()
+            .update()
+            .in_col(&root_col)
+            .document_id(format!("{app_name}/app_state"))
+            .object(&app_state_doc)
+            .add_to_transaction(&mut transaction)
+            .map_err(|e| adk_core::AdkError::Session(format!("append_event failed: {e}")))?;
+
+        // Update user state
+        self.db
+            .fluent()
+            .update()
+            .in_col("state")
+            .document_id("current")
+            .parent(&user_state_parent)
+            .object(&user_state_doc)
+            .add_to_transaction(&mut transaction)
+            .map_err(|e| adk_core::AdkError::Session(format!("append_event failed: {e}")))?;
+
+        // Update session document
+        self.db
+            .fluent()
+            .update()
+            .in_col("sessions")
+            .document_id(session_id)
+            .parent(&sessions_parent)
+            .object(&updated_session)
+            .add_to_transaction(&mut transaction)
+            .map_err(|e| adk_core::AdkError::Session(format!("append_event failed: {e}")))?;
+
+        // Insert event document
+        self.db
+            .fluent()
+            .update()
+            .in_col("events")
+            .document_id(&event.id)
+            .parent(&events_parent)
+            .object(&event_doc)
+            .add_to_transaction(&mut transaction)
+            .map_err(|e| adk_core::AdkError::Session(format!("append_event failed: {e}")))?;
+
+        transaction
+            .commit()
+            .await
+            .map_err(|e| adk_core::AdkError::Session(format!("commit failed: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn append_event_for_identity(&self, req: AppendEventRequest) -> Result<()> {
+        let mut event = req.event;
+        event.actions.state_delta.retain(|k, _| !k.starts_with(KEY_PREFIX_TEMP));
+
+        let app_name = req.identity.app_name.as_ref();
+        let user_id = req.identity.user_id.as_ref();
+        let session_id = req.identity.session_id.as_ref();
+
+        // Use the identity to read the session directly by document path — no
+        // collection group query needed, so no ambiguity possible.
+        let sessions_parent = self.sessions_parent(app_name)?;
+        let session_doc: SessionDoc = self
+            .db
+            .fluent()
+            .select()
+            .by_id_in("sessions")
+            .parent(&sessions_parent)
+            .obj::<SessionDoc>()
+            .one(session_id)
+            .await
+            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+            .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+
+        let existing_state = &session_doc.state;
+        let (_, _, mut session_state) = state_utils::extract_state_deltas(existing_state);
+
+        // Load current app and user state
+        let app_state = self.read_app_state(app_name).await?;
+        let user_state = self.read_user_state(app_name, user_id).await?;
+
+        let (app_delta, user_delta, session_delta) =
+            state_utils::extract_state_deltas(&event.actions.state_delta);
+
+        let now = event.timestamp;
+
+        // Merge deltas
+        let mut new_app_state = app_state;
+        new_app_state.extend(app_delta);
+
+        let mut new_user_state = user_state;
+        new_user_state.extend(user_delta);
+
+        session_state.extend(session_delta);
+        let merged_state =
+            state_utils::merge_states(&new_app_state, &new_user_state, &session_state);
+
+        // Build updated documents
+        let updated_session = SessionDoc {
+            app_name: app_name.to_string(),
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            state: merged_state,
+            created_at: session_doc.created_at,
+            updated_at: now,
+        };
+        let app_state_doc = AppStateDoc { state: new_app_state, updated_at: now };
+        let user_state_doc = UserStateDoc { state: new_user_state, updated_at: now };
+        let event_doc = event_to_doc(&event)?;
+
         let events_parent = self.events_parent(app_name, session_id)?;
         let user_state_parent = self.user_state_parent(app_name, user_id)?;
         let root_col = self.root_collection.clone();

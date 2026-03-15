@@ -62,6 +62,9 @@ mod function_tool;
 pub mod mcp;
 pub mod toolset;
 
+#[cfg(feature = "code")]
+pub mod code_execution;
+
 pub use adk_core::{Tool, ToolContext, Toolset};
 pub use agent_tool::{AgentTool, AgentToolConfig};
 pub use builtin::{ExitLoopTool, GoogleSearchTool, LoadArtifactsTool};
@@ -70,3 +73,19 @@ pub use mcp::{McpAuth, McpHttpClientBuilder, McpTaskConfig, McpToolset, OAuth2Co
 pub use toolset::{
     BasicToolset, FilteredToolset, MergedToolset, PrefixedToolset, string_predicate,
 };
+
+#[cfg(feature = "code")]
+#[allow(deprecated)]
+pub use code_execution::RustCodeTool;
+
+#[cfg(feature = "code")]
+pub use code_execution::CodeTool;
+
+#[cfg(feature = "code")]
+pub use code_execution::FrontendCodeTool;
+
+#[cfg(feature = "code")]
+pub use code_execution::JavaScriptCodeTool;
+
+#[cfg(feature = "code")]
+pub use code_execution::PythonCodeTool;

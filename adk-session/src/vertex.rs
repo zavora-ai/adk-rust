@@ -1,6 +1,6 @@
 use crate::{
-    CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP, ListRequest, Session,
-    SessionService, State,
+    AppendEventRequest, CreateRequest, DeleteRequest, Event, Events, GetRequest, KEY_PREFIX_TEMP,
+    ListRequest, Session, SessionService, State,
 };
 use adk_core::{AdkError, Result};
 use async_trait::async_trait;
@@ -553,6 +553,39 @@ impl SessionService for VertexAiSessionService {
 
         let request = self.apply_auth(self.http_client.post(url).json(&body)).await?;
         self.send_value(request).await?;
+
+        Ok(())
+    }
+
+    async fn append_event_for_identity(&self, req: AppendEventRequest) -> Result<()> {
+        let mut event = req.event;
+
+        let app_name = req.identity.app_name.as_ref();
+        let session_id = req.identity.session_id.as_ref();
+
+        if session_id.trim().is_empty() {
+            return Err(Self::session_error("session_id is required for append_event"));
+        }
+
+        event.actions.state_delta = sanitize_state_map(event.actions.state_delta);
+
+        // Use the identity's app_name directly to resolve the session name —
+        // no scope cache lookup needed, so no ambiguity possible.
+        let session_name = if let Some(reasoning_engine) = &self.reasoning_engine {
+            self.session_name_from_engine_id(reasoning_engine, session_id)
+        } else {
+            self.session_name_from_app(app_name, session_id)?
+        };
+
+        let url = self.build_url(&format!("{}/{session_name}:appendEvent", SESSION_API_VERSION))?;
+
+        let body = build_append_event_payload(&event);
+
+        let request = self.apply_auth(self.http_client.post(url).json(&body)).await?;
+        self.send_value(request).await?;
+
+        // Remember the scope so that subsequent legacy calls can also resolve.
+        self.remember_session_scope(session_id, app_name, req.identity.user_id.as_ref());
 
         Ok(())
     }
