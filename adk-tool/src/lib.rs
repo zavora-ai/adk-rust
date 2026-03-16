@@ -66,10 +66,10 @@ pub mod toolset;
 pub mod code_execution;
 
 pub use adk_core::{AdkError, Result, Tool, ToolContext, Toolset};
-/// Re-exported for use by the `#[tool]` macro.
-pub use async_trait::async_trait;
 pub use adk_macros::tool;
 pub use agent_tool::{AgentTool, AgentToolConfig};
+/// Re-exported for use by the `#[tool]` macro.
+pub use async_trait::async_trait;
 pub use builtin::{ExitLoopTool, GoogleSearchTool, LoadArtifactsTool};
 pub use function_tool::FunctionTool;
 pub use mcp::{McpAuth, McpHttpClientBuilder, McpTaskConfig, McpToolset, OAuth2Config};

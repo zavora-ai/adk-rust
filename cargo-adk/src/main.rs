@@ -94,7 +94,11 @@ fn create_project(name: &str, template: &str, provider: &str) -> Result<(), Stri
         "rag" => generate_rag(name, provider),
         "api" => generate_api(name, provider),
         "openai" => generate_basic(name, "openai"),
-        _ => return Err(format!("unknown template '{template}'. Run `cargo adk templates` to see options")),
+        _ => {
+            return Err(format!(
+                "unknown template '{template}'. Run `cargo adk templates` to see options"
+            ));
+        }
     };
 
     // Create project structure
@@ -335,7 +339,8 @@ async fn main() -> anyhow::Result<()> {{
 "#
     );
 
-    let env = format!("{env_var}=your-api-key-here\nGOOGLE_API_KEY=your-gemini-key-for-embeddings\n");
+    let env =
+        format!("{env_var}=your-api-key-here\nGOOGLE_API_KEY=your-gemini-key-for-embeddings\n");
     (cargo, main, env)
 }
 
