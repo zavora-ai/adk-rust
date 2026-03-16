@@ -341,22 +341,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "adk-macros"
-version = "0.4.0"
-dependencies = [
- "adk-core",
- "adk-tool",
- "async-trait",
- "proc-macro2",
- "quote",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "syn 2.0.117",
- "tokio",
-]
-
-[[package]]
 name = "adk-memory"
 version = "0.4.0"
 dependencies = [
@@ -527,6 +511,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-rust-macros"
+version = "0.4.0"
+dependencies = [
+ "adk-core",
+ "async-trait",
+ "proc-macro2",
+ "quote",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "syn 2.0.117",
+ "tokio",
+]
+
+[[package]]
 name = "adk-sandbox"
 version = "0.4.0"
 dependencies = [
@@ -641,7 +640,7 @@ version = "0.4.0"
 dependencies = [
  "adk-code",
  "adk-core",
- "adk-macros",
+ "adk-rust-macros",
  "adk-sandbox",
  "adk-telemetry",
  "async-stream",

@@ -14,8 +14,17 @@ use std::time::UNIX_EPOCH;
 pub fn load_skill_index(root: impl AsRef<Path>) -> SkillResult<SkillIndex> {
     let mut skills = Vec::new();
     for path in discover_instruction_files(root)? {
-        let content = fs::read_to_string(&path)?;
-        let parsed = parse_instruction_markdown(&path, &content)?;
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        // Skip files that don't have valid skill/instruction format.
+        // This allows non-skill .md files (reference docs, READMEs, etc.)
+        // to coexist under .skills/ without causing parse errors.
+        let parsed = match parse_instruction_markdown(&path, &content) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
 
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
@@ -106,6 +115,47 @@ mod tests {
         assert_eq!(skill.name, "agents");
         assert!(skill.tags.iter().any(|t| t == "agents-md"));
         assert!(skill.body.contains("Use cargo test before commit."));
+    }
+
+    #[test]
+    fn skips_non_skill_md_files_in_subdirectories() {
+        // Reproduces issue #204: reference docs without frontmatter
+        // should be silently skipped, not cause InvalidFrontmatter errors
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join(".skills/my-skill/references")).unwrap();
+        fs::create_dir_all(root.join(".skills/my-skill/assets")).unwrap();
+
+        // Valid skill
+        fs::write(
+            root.join(".skills/my-skill/skill.md"),
+            "---\nname: my-skill\ndescription: A skill\n---\nBody",
+        )
+        .unwrap();
+
+        // Non-skill .md files (no frontmatter) — must not cause errors
+        fs::write(
+            root.join(".skills/my-skill/references/docs.md"),
+            "# Reference Documentation\nThis is supporting docs.",
+        )
+        .unwrap();
+        fs::write(
+            root.join(".skills/my-skill/assets/notes.md"),
+            "Just plain text notes.",
+        )
+        .unwrap();
+
+        // Also a random .md at skill level without frontmatter
+        fs::write(
+            root.join(".skills/my-skill/README.md"),
+            "# My Skill README\nNo frontmatter here.",
+        )
+        .unwrap();
+
+        let index = load_skill_index(root).unwrap();
+        // Only the valid skill.md should be indexed
+        assert_eq!(index.len(), 1);
+        assert_eq!(index.skills()[0].name, "my-skill");
     }
 
     #[test]

@@ -210,7 +210,7 @@ pub fn tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
         /// Auto-generated tool struct for [`#fn_name`].
         #fn_vis struct #struct_name;
 
-        #[adk_tool::async_trait]
+        #[async_trait::async_trait]
         impl adk_tool::Tool for #struct_name {
             fn name(&self) -> &str {
                 #tool_name_str

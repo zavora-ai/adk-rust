@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     # Core packages (publishable to crates.io)
     "adk-core",
-    "adk-macros",
+    "adk-rust-macros",
     "adk-agent",
     "adk-model",
     "adk-tool",
@@ -123,7 +123,7 @@ tar = "0.4"
 
 # ADK internal crates (use { workspace = true } in member crates)
 adk-core = { path = "adk-core", version = "0.4.0" }
-adk-macros = { path = "adk-macros", version = "0.4.0" }
+adk-rust-macros = { path = "adk-rust-macros", version = "0.4.0" }
 adk-agent = { path = "adk-agent", version = "0.4.0" }
 adk-model = { path = "adk-model", version = "0.4.0" }
 adk-tool = { path = "adk-tool", version = "0.4.0" }

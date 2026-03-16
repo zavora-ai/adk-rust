@@ -1,5 +1,8 @@
 use adk_core::{AdkError, Tool};
-use adk_macros::tool;
+// Alias: the #[tool] macro generates code referencing adk_tool::{Tool, AdkError, ...}
+// For testing without the circular dep, adk_core provides the same types.
+use adk_core as adk_tool;
+use adk_rust_macros::tool;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};

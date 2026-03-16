@@ -1,5 +1,5 @@
 [package]
-name = "adk-macros"
+name = "adk-rust-macros"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -21,7 +21,6 @@ syn = { version = "2", features = ["full", "extra-traits"] }
 
 [dev-dependencies]
 adk-core.workspace = true
-adk-tool.workspace = true
 async-trait.workspace = true
 schemars = "0.8"
 serde = { workspace = true }
