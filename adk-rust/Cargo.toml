@@ -170,5 +170,7 @@ anyhow = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "signal", "fs", "process", "io-util", "test-util"] }
 
 [package.metadata.docs.rs]
-all-features = true
+# Use "full" instead of all-features to avoid C library deps (espeak, cmake)
+# that don't build in docs.rs sandboxed environment.
+features = ["full"]
 rustdoc-args = ["--cfg", "docsrs"]
