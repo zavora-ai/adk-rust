@@ -66,7 +66,7 @@ pub mod toolset;
 pub mod code_execution;
 
 pub use adk_core::{AdkError, Result, Tool, ToolContext, Toolset};
-pub use adk_macros::tool;
+pub use adk_rust_macros::tool;
 pub use agent_tool::{AgentTool, AgentToolConfig};
 pub use builtin::{ExitLoopTool, GoogleSearchTool, LoadArtifactsTool};
 pub use function_tool::FunctionTool;
