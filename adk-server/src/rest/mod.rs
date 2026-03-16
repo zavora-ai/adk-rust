@@ -392,7 +392,7 @@ pub async fn shutdown_signal() {
     };
 
     #[cfg(not(unix))]
-    let terminate = pending::<()>();
+    let terminate = std::future::pending::<()>();
 
     tokio::select! {
         _ = ctrl_c => {}
