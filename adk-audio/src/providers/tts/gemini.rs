@@ -107,10 +107,7 @@ impl TtsProvider for GeminiTts {
             .json(&body)
             .send()
             .await
-            .map_err(|e| AudioError::Tts {
-                provider: "gemini".into(),
-                message: e.to_string(),
-            })?;
+            .map_err(|e| AudioError::Tts { provider: "gemini".into(), message: e.to_string() })?;
 
         if !resp.status().is_success() {
             let status = resp.status();

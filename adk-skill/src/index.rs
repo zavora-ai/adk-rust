@@ -139,11 +139,7 @@ mod tests {
             "# Reference Documentation\nThis is supporting docs.",
         )
         .unwrap();
-        fs::write(
-            root.join(".skills/my-skill/assets/notes.md"),
-            "Just plain text notes.",
-        )
-        .unwrap();
+        fs::write(root.join(".skills/my-skill/assets/notes.md"), "Just plain text notes.").unwrap();
 
         // Also a random .md at skill level without frontmatter
         fs::write(
