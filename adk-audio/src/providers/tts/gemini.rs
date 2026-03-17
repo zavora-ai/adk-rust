@@ -84,7 +84,7 @@ impl GeminiTts {
 impl TtsProvider for GeminiTts {
     async fn synthesize(&self, request: &TtsRequest) -> AudioResult<AudioFrame> {
         let voice = if request.voice.is_empty() { "Puck" } else { &request.voice };
-        let url = format!("{}?key={}", self.base_url(), self.config.api_key);
+        let url = self.base_url();
 
         let body = serde_json::json!({
             "contents": [{"parts": [{"text": request.text}]}],
@@ -100,8 +100,14 @@ impl TtsProvider for GeminiTts {
             }
         });
 
-        let resp =
-            self.client.post(&url).json(&body).send().await.map_err(|e| AudioError::Tts {
+        let resp = self
+            .client
+            .post(&url)
+            .header("x-goog-api-key", &self.config.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AudioError::Tts {
                 provider: "gemini".into(),
                 message: e.to_string(),
             })?;

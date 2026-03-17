@@ -20,8 +20,8 @@ tracing = { workspace = true }
 tempfile = "3.10"
 
 # Optional dependencies for wasm feature
-wasmtime = { version = "29", optional = true }
-wasmtime-wasi = { version = "29", optional = true }
+wasmtime = { version = "30", optional = true }
+wasmtime-wasi = { version = "30", optional = true }
 
 [features]
 default = ["process"]
