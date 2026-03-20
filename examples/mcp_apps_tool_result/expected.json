@@ -1,0 +1,84 @@
+{
+  "protocol": "mcp_apps",
+  "toolResult": {
+    "resourceUri": "ui://examples/executive-dashboard",
+    "html": "<!doctype html>\n<html>\n  <body>\n    <main>\n      <h1>Executive Dashboard</h1>\n      <p>Fallback HTML for compatibility-oriented MCP Apps hosts.</p>\n    </main>\n  </body>\n</html>",
+    "bridge": {
+      "protocolVersion": "2025-11-25",
+      "structuredContent": {
+        "surface": {
+          "id": "dashboard",
+          "title": "Executive Dashboard",
+          "cards": [
+            {
+              "label": "Revenue",
+              "value": "$128K"
+            },
+            {
+              "label": "Users",
+              "value": "4,210"
+            },
+            {
+              "label": "Retention",
+              "value": "92%"
+            }
+          ],
+          "alert": {
+            "severity": "warning",
+            "title": "Scheduled Maintenance",
+            "message": "Maintenance starts at 23:00 UTC."
+          }
+        }
+      },
+      "hostInfo": {
+        "name": "adk-server",
+        "version": "0.4.0",
+        "title": "ADK Server",
+        "description": "Additive HTTP bridge for MCP Apps initialize/message/model-context flows."
+      },
+      "hostCapabilities": {
+        "message": {
+          "text": {},
+          "structuredContent": {},
+          "resource": {},
+          "resourceLink": {}
+        },
+        "updateModelContext": {
+          "text": {},
+          "structuredContent": {},
+          "resource": {},
+          "resourceLink": {}
+        },
+        "serverResources": {
+          "listChanged": false
+        },
+        "sandbox": {}
+      },
+      "hostContext": {
+        "appName": "examples",
+        "userId": "demo-user",
+        "sessionId": "session-mcp-apps-example",
+        "theme": "light",
+        "locale": "en-US",
+        "platform": "adk-server",
+        "displayMode": "inline",
+        "availableDisplayModes": [
+          "inline"
+        ]
+      },
+      "appCapabilities": {
+        "availableDisplayModes": [
+          "inline"
+        ],
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "appInfo": {
+        "name": "ExecutiveDashboardExample",
+        "version": "0.4.0"
+      },
+      "initialized": true
+    }
+  }
+}

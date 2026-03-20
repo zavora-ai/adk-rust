@@ -1,0 +1,31 @@
+[
+  {
+    "type": "RUN_STARTED",
+    "threadId": "thread-tool-chunk",
+    "runId": "run-tool-chunk",
+    "forwardedSource": "tool-chunk-suite"
+  },
+  {
+    "type": "MESSAGES_SNAPSHOT",
+    "messageCount": 1,
+    "firstRole": "user",
+    "firstText": "stream chunked tool args"
+  },
+  {
+    "type": "TOOL_CALL_CHUNK",
+    "toolCallId": "tool-call-001",
+    "toolCallName": "render_screen",
+    "delta": "{\"surface\":{\"surfaceId\":\"chunk-main\",\"catalogId\":\"catalog\",\"components\":["
+  },
+  {
+    "type": "TOOL_CALL_CHUNK",
+    "toolCallId": "tool-call-001",
+    "toolCallName": "render_screen",
+    "delta": "{\"id\":\"root\",\"component\":\"Column\",\"children\":[]}],\"dataModel\":{\"mode\":\"chunked\"}}}"
+  },
+  {
+    "type": "RUN_FINISHED",
+    "threadId": "thread-tool-chunk",
+    "runId": "run-tool-chunk"
+  }
+]

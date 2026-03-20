@@ -1,0 +1,73 @@
+{
+  "defaultProtocol": "adk_ui",
+  "toolEnvelopeVersion": "1.0",
+  "protocols": [
+    {
+      "protocol": "adk_ui",
+      "versions": ["1.0"],
+      "implementationTier": "legacy",
+      "specTrack": "internal",
+      "features": ["legacy_components", "theme", "events"],
+      "limitations": [
+        "Deprecated for new integrations.",
+        "Does not represent a standard external protocol contract."
+      ]
+    },
+    {
+      "protocol": "a2ui",
+      "versions": ["0.9"],
+      "implementationTier": "hybrid_subset",
+      "specTrack": "draft",
+      "features": ["jsonl", "createSurface", "updateComponents", "updateDataModel"],
+      "limitations": [
+        "The runtime stream is still the generic ADK event envelope rather than a dedicated A2UI transport.",
+        "The advertised shape is aligned to the draft v0.9 specification and should be treated as draft-compatible support."
+      ]
+    },
+    {
+      "protocol": "ag_ui",
+      "versions": ["0.1"],
+      "implementationTier": "hybrid_subset",
+      "specTrack": "stable",
+      "features": [
+        "run_lifecycle",
+        "custom_events",
+        "event_stream",
+        "native_runtime_transport",
+        "native_run_input_subset",
+        "state_snapshot",
+        "messages_snapshot",
+        "stable_text_events",
+        "stable_tool_events"
+      ],
+      "limitations": [
+        "Protocol-native AG-UI transport is opt-in and currently scoped to `adk-server`; the default runtime stream remains the generic ADK wrapper for compatibility.",
+        "The framework translates generic ADK runtime events into the stable AG-UI subset at the server boundary, but it does not yet emit the full activity, reasoning, or agent-native AG-UI event families end-to-end from `adk-agent`."
+      ]
+    },
+    {
+      "protocol": "mcp_apps",
+      "versions": ["sep-1865"],
+      "implementationTier": "compatibility_subset",
+      "specTrack": "stable",
+      "features": [
+        "ui_resource_uri",
+        "tool_meta",
+        "html_resource",
+        "initialize_bridge_endpoint",
+        "message_bridge_endpoint",
+        "update_model_context_bridge_endpoint",
+        "notification_poll_endpoint",
+        "jsonrpc_bridge_envelope",
+        "runtime_bridge_request_fields",
+        "initialized_notification",
+        "resource_list_changed_notification",
+        "tool_list_changed_notification"
+      ],
+      "limitations": [
+        "The framework now exposes additive HTTP helpers plus notification polling for initialize, message, update-model-context, initialized, and list-changed host flows, but it does not yet provide a full browser postMessage transport.",
+        "Current MCP Apps support is still adapter-driven, and bridge session state remains in-memory rather than durably coupled to the runtime/session lifecycle."
+      ]
+    }
+  ]
+}

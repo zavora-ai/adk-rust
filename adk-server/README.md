@@ -213,7 +213,13 @@ When configured, the extracted `RequestContext` flows into `InvocationContext`, 
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/ui/capabilities` | GET | Supported UI protocols/features (`adk_ui`, `a2ui`, `ag_ui`, `mcp_apps`) |
+| `/api/ui/capabilities` | GET | Supported UI protocols plus capability metadata (`versions`, `features`, `implementationTier`, `specTrack`, `summary`, `limitations`) |
+| `/api/ui/initialize` | POST | Additive MCP Apps host-bridge initialize helper (direct body or JSON-RPC-like envelope) |
+| `/api/ui/message` | POST | Additive MCP Apps host-bridge message helper |
+| `/api/ui/update-model-context` | POST | Additive MCP Apps host-bridge model-context helper |
+| `/api/ui/notifications/poll` | POST | Poll queued MCP Apps host-bridge notifications |
+| `/api/ui/notifications/resources-list-changed` | POST | Queue an MCP Apps resource-list-changed notification |
+| `/api/ui/notifications/tools-list-changed` | POST | Queue an MCP Apps tool-list-changed notification |
 | `/api/ui/resources` | GET | List MCP UI resources (`ui://` entries) |
 | `/api/ui/resources/read?uri=...` | GET | Read a registered MCP UI resource |
 | `/api/ui/resources/register` | POST | Register an MCP UI resource (validated `ui://` + mime/meta) |
@@ -221,8 +227,36 @@ When configured, the extracted `RequestContext` flows into `InvocationContext`, 
 Runtime endpoints support protocol negotiation via:
 - request body field `uiProtocol` / `ui_protocol`
 - header `x-adk-ui-protocol` (takes precedence)
+- request body field `uiTransport` / `ui_transport`
+- header `x-adk-ui-transport` (takes precedence)
 
 Supported runtime profile values: `adk_ui` (default), `a2ui`, `ag_ui`, `mcp_apps`.
+
+Current support is intentionally tiered:
+- `a2ui` is a draft-aligned hybrid subset exposed through protocol-aware UI tool payloads.
+- `ag_ui` is a hybrid subset: the default stream remains the generic ADK wrapper, but clients can opt into `protocol_native` transport plus AG-UI run input fields on `/api/run_sse`.
+- `mcp_apps` is a compatibility subset with `ui://` resource registration plus additive `initialize` / `message` / `update-model-context` bridge helpers, notification polling, list-changed host flows, and runtime request fields, not a full browser `postMessage` host bridge yet.
+
+Runtime transport values:
+- `legacy_wrapper` (default) preserves the existing generic ADK SSE envelope.
+- `protocol_native` is currently available for `ag_ui` only.
+
+Use `/api/ui/capabilities` instead of assuming full upstream protocol parity.
+
+For MCP Apps tool responses, `adk-server::ui_types` now exposes a canonical additive helper:
+- `McpUiBridgeSnapshot` for typed host/app bridge state that can be promoted into tool responses
+- `McpUiToolResult` for the shared tool-result envelope
+- `McpUiToolResultBridge` for typed bridge metadata (`protocolVersion`, `structuredContent`, `hostInfo`, `hostCapabilities`, `hostContext`, `appInfo`, `appCapabilities`, `initialized`)
+
+Use `McpUiBridgeSnapshot::build_tool_result(...)` as the preferred constructor path when promoting framework bridge state into an MCP Apps tool response. `resourceUri` and inline `html` fallbacks remain available for compatibility-oriented hosts.
+
+For embedded-host mappings, the additive HTTP bridge corresponds to MCP Apps host/app methods as follows:
+- `ui/initialize` -> `/api/ui/initialize`
+- `ui/message` -> `/api/ui/message`
+- `ui/update-model-context` -> `/api/ui/update-model-context`
+- `notifications/resources/list_changed` -> `/api/ui/notifications/resources-list-changed`
+- `notifications/tools/list_changed` -> `/api/ui/notifications/tools-list-changed`
+- queued host notifications -> `/api/ui/notifications/poll`
 
 ### A2A Endpoints
 

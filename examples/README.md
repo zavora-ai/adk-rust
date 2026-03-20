@@ -13,6 +13,7 @@ For the full 120+ example collection, see the [adk-playground](https://github.co
 | `sequential` | Multi-agent workflows | `cargo run --example sequential` |
 | `graph_workflow` | Graph orchestration | `cargo run --example graph_workflow` |
 | `mcp` | MCP integration | `cargo run --example mcp` |
+| `mcp_apps_tool_result` | Canonical MCP Apps tool-result emission | `cargo run --example mcp_apps_tool_result` |
 | `eval_basic` | Evaluation framework | `cargo run --example eval_basic` |
 | `template` | Starter template | `cargo run --example template` |
 | `ralph` | Autonomous agent (standalone crate) | `cargo run -p ralph` |

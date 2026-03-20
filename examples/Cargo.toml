@@ -50,6 +50,10 @@ path = "rag_gemini/main.rs"
 name = "vision_test"
 path = "vision_test/main.rs"
 
+[[example]]
+name = "mcp_apps_tool_result"
+path = "mcp_apps_tool_result/main.rs"
+
 # Note: ralph is a standalone crate at examples/ralph/
 # Run with: cargo run -p ralph
 # Test with: cargo test -p ralph
@@ -77,6 +81,7 @@ adk-session.workspace = true
 adk-memory.workspace = true
 adk-graph.workspace = true
 adk-eval.workspace = true
+adk-server.workspace = true
 adk-rag = { workspace = true, optional = true }
 adk-cli.workspace = true
 tokio = { workspace = true, features = ["full"] }

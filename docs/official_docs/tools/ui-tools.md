@@ -550,9 +550,9 @@ All 13 render tools support protocol-aware output through the `protocol` argumen
 
 | Protocol | Description |
 |----------|-------------|
-| `a2ui` | A2UI v0.9 JSONL surfaces (default for `render_screen`, `render_page`) |
-| `ag_ui` | AG-UI adapter payload with events |
-| `mcp_apps` | MCP Apps adapter payload with resource URIs |
+| `a2ui` | A2UI v0.9-aligned JSONL surfaces (default for `render_screen`, `render_page`) |
+| `ag_ui` | Hybrid AG-UI support: compatibility wrappers by default, plus additive protocol-native runtime transport for `adk-server` clients |
+| `mcp_apps` | Compatibility MCP Apps payloads with `ui://` resources, additive bridge helpers, notification flows, runtime request fields, and HTML/resource adapters |
 
 When `protocol` is omitted, tools use their default output format (legacy `UiResponse` JSON for most tools, A2UI for `render_screen`/`render_page`/`render_kit`).
 
@@ -589,6 +589,33 @@ The legacy `adk_ui` runtime profile carries deprecation metadata:
 Replacements: `a2ui`, `ag_ui`, `mcp_apps`
 
 This metadata is exposed through `UI_PROTOCOL_CAPABILITIES` constants and surfaced by `adk-server` at `/api/ui/capabilities`.
+The capability response also reports `implementationTier`, `specTrack`, `summary`, and `limitations` so clients can distinguish hybrid or compatibility subsets from fully native protocol support.
+
+When `adk-server` is the host-facing boundary, it also exposes additive MCP Apps bridge helpers at `/api/ui/initialize`, `/api/ui/message`, `/api/ui/update-model-context`, `/api/ui/notifications/poll`, `/api/ui/notifications/resources-list-changed`, and `/api/ui/notifications/tools-list-changed`. These endpoints preserve the existing ADK runtime contracts and accept either direct request bodies or JSON-RPC-like envelopes with `ui/...` methods.
+
+For runtime consumers, `adk-server` also supports:
+- `x-adk-ui-transport: protocol_native` or `uiTransport: "protocol_native"` for AG-UI-native SSE serialization
+- AG-UI dual-path request inputs via `input` / `agUiInput` beside the existing `newMessage`
+- MCP Apps bridge envelopes inside `/api/run_sse` via `mcpAppsInitialize`, `mcpAppsRequest`, and `mcpAppsInitialized`
+
+These additions are opt-in. Existing `/api/run` and `/api/run_sse` consumers continue to receive the generic ADK wrapper unless they explicitly request a native AG-UI transport mode.
+
+For framework-owned MCP Apps tool responses, `adk-server::ui_types` now exposes:
+- `McpUiBridgeSnapshot` for typed host/app bridge state
+- `McpUiToolResult` for the additive response envelope
+- `McpUiToolResultBridge` for bridge metadata (`protocolVersion`, `structuredContent`, `hostInfo`, `hostCapabilities`, `hostContext`, `appInfo`, `appCapabilities`, `initialized`)
+
+Prefer `McpUiBridgeSnapshot::build_tool_result(...)` when promoting bridge/session state into a tool response. This standardizes the tool-result shape while preserving `resourceUri` and inline `html` fallbacks for compatibility-oriented hosts.
+
+For embedded or browser-host mappings, the additive HTTP bridge corresponds to host/app flows as follows:
+- `ui/initialize` -> `/api/ui/initialize`
+- `ui/message` -> `/api/ui/message`
+- `ui/update-model-context` -> `/api/ui/update-model-context`
+- `notifications/resources/list_changed` -> `/api/ui/notifications/resources-list-changed`
+- `notifications/tools/list_changed` -> `/api/ui/notifications/tools-list-changed`
+- queued host notifications -> `/api/ui/notifications/poll`
+
+Direct `/api/ui/*` bridge endpoints are the preferred lifecycle path for MCP Apps hosts. Runtime-side MCP Apps request fields remain available as an additive compatibility path for mixed or legacy clients.
 
 ## Examples
 
