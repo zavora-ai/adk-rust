@@ -111,14 +111,14 @@ fn test_function_call_with_thought_signature() {
     assert_eq!(function_call.args["param"], "value");
     assert_eq!(function_call.thought_signature, Some("test_thought_signature".to_string()));
 
-    // The Gemini wire format carries thoughtSignature on the enclosing Part, not inside
-    // functionCall. Standalone FunctionCall serialization must omit it.
+    // thoughtSignature is now serialized to support Gemini 3.x multi-turn tool calling.
     let serialized = serde_json::to_value(&function_call).unwrap();
     assert_eq!(
         serialized,
         json!({
             "name": "test_function",
-            "args": {"param": "value"}
+            "args": {"param": "value"},
+            "thoughtSignature": "test_thought_signature"
         })
     );
 
@@ -172,8 +172,7 @@ fn test_multi_turn_content_structure() {
     assert!(model_content.parts.is_some());
     assert_eq!(model_content.role, Some(Role::Model));
 
-    // thoughtSignature is skip_serializing — must NOT appear in serialized output
-    // (Gemini API rejects it in request payloads)
+    // thoughtSignature is now serialized to support Gemini 3.x multi-turn tool calling.
     let serialized = serde_json::to_value(&model_content).unwrap();
     assert_eq!(
         serialized,
@@ -182,8 +181,10 @@ fn test_multi_turn_content_structure() {
                 {
                     "functionCall": {
                         "name": "get_weather",
-                        "args": {"location": "Tokyo"}
-                    }
+                        "args": {"location": "Tokyo"},
+                        "thoughtSignature": "sample_thought_signature"
+                    },
+                    "thoughtSignature": "sample_thought_signature"
                 }
             ],
             "role": "model"
@@ -344,15 +345,15 @@ fn test_content_creation_with_thought_signature() {
         }
         _ => panic!("Expected Text part"),
     }
-
-    // thoughtSignature is skip_serializing — must NOT appear in serialized output
+    // thoughtSignature is now serialized when present (Gemini 3.x support).
     let serialized = serde_json::to_string(&content).unwrap();
-    assert!(!serialized.contains("thoughtSignature"));
+    assert!(serialized.contains("thoughtSignature"));
 
-    // thought field IS serialized (it's not skip_serializing)
+    // thought field IS serialized, and thoughtSignature IS serialized when present.
     let serialized_thought = serde_json::to_string(&thought_content).unwrap();
-    assert!(!serialized_thought.contains("thoughtSignature"));
+    assert!(serialized_thought.contains("thoughtSignature"));
     assert!(serialized_thought.contains("\"thought\":true"));
+
 }
 
 #[test]

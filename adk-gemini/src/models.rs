@@ -50,8 +50,8 @@ pub enum Part {
         #[serde(skip_serializing_if = "Option::is_none")]
         thought: Option<bool>,
         /// The thought signature (Gemini 2.5+ thinking models only).
-        /// Deserialized from responses but never sent back — the API rejects it in requests.
-        #[serde(rename = "thoughtSignature", default, skip_serializing)]
+        /// Preserved from responses and echoed back in conversation history for Gemini 3.x thought signature support.
+        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
         thought_signature: Option<String>,
     },
     InlineData {
@@ -65,8 +65,8 @@ pub enum Part {
         #[serde(rename = "functionCall")]
         function_call: super::tools::FunctionCall,
         /// The thought signature (Gemini 2.5+ thinking models only).
-        /// Deserialized from responses but never sent back — the API rejects it in requests.
-        #[serde(rename = "thoughtSignature", default, skip_serializing)]
+        /// Preserved from responses and echoed back in conversation history for Gemini 3.x thought signature support.
+        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
         thought_signature: Option<String>,
     },
     /// Function response (results from executing a function call)

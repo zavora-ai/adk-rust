@@ -145,7 +145,7 @@ pub struct FunctionCall {
     /// Gemini expects this at the enclosing `Part::FunctionCall` level, not inside the
     /// `functionCall` object. Preserve it in-memory for callers, but never emit it from the
     /// inner wire type.
-    #[serde(skip_serializing, default, rename = "thoughtSignature", alias = "thought_signature")]
+    #[serde(skip_serializing_if = "Option::is_none", default, rename = "thoughtSignature", alias = "thought_signature")]
     pub thought_signature: Option<String>,
 }
 
