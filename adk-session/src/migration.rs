@@ -5,8 +5,8 @@
 //! forward-only migration steps.
 //!
 //! The types ([`MigrationStep`], [`AppliedMigration`], [`MigrationError`]) are
-//! always compiled. The SQL runner functions ([`run_sql_migrations`],
-//! [`sql_schema_version`]) require the `sqlite` or `postgres` feature.
+//! always compiled. The SQL runner functions (`run_sql_migrations`,
+//! `sql_schema_version`) require the `sqlite` or `postgres` feature.
 
 use chrono::{DateTime, Utc};
 

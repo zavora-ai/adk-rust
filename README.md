@@ -931,7 +931,7 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 
 ## Roadmap
 
-**v0.4.0** (current) — Framework focus & performance:
+**v0.4.1** (current) — Framework focus & performance:
 - **Breaking: Extracted UI/Studio/Playground** — `adk-ui`, `adk-studio`, and 120+ examples moved to standalone repos. This repo is now pure Rust framework.
 - **Tiered feature presets** — Default changed from `full` to `standard` (~50s build). `minimal` (~30s), `standard` (default), `full` (~2min). Non-Gemini users no longer compile Google Cloud SDK.
 - **Consolidated 7 OpenAI-compatible providers** — Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI collapsed into `OpenAICompatibleConfig` presets (-1,000 lines). Feature flags preserved as backward-compatible aliases.

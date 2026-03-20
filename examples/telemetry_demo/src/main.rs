@@ -37,7 +37,7 @@ fn demo_structured_logging() {
     info!("--- demo 1: structured logging ---");
     tracing::trace!(detail = "finest granularity", "trace-level message");
     debug!(component = "demo", "debug-level message");
-    info!(status = "running", version = "0.4.0", "info-level message");
+    info!(status = "running", version = "0.4.1", "info-level message");
     warn!(latency_ms = 250, "warn-level: high latency detected");
     error!(error.code = "TIMEOUT", "error-level: operation timed out");
 }

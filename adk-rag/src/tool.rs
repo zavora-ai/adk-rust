@@ -1,6 +1,6 @@
 //! Agentic retrieval tool for ADK agents.
 //!
-//! The [`RagTool`] wraps a [`RagPipeline`](crate::RagPipeline) as an
+//! The [`RagTool`] wraps a [`RagPipeline`] as an
 //! [`adk_core::Tool`] so that agents can perform retrieval as a tool call.
 //!
 //! # Example

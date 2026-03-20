@@ -2,7 +2,7 @@
 
 Agent Development Kit (ADK) is a flexible and modular framework for developing and deploying AI agents. While optimized for Gemini and the Google ecosystem, ADK is model-agnostic, deployment-agnostic, and built for compatibility with other frameworks. ADK was designed to make agent development feel more like software development, making it easier for developers to create, deploy, and orchestrate agentic architectures that range from simple tasks to complex workflows.
 
-> **Note:** ADK-Rust v0.3.2 requires Rust 1.85.0 or higher
+> **Note:** ADK-Rust v0.4.1 requires Rust 1.85.0 or higher
 
 ## Installation
 
