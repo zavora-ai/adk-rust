@@ -29,7 +29,7 @@ pub fn init_telemetry(service_name: &str) -> Result<(), TelemetryError> {
     INIT.call_once(|| {
         let filter = EnvFilter::try_from_default_env()
             .or_else(|_| EnvFilter::try_new("info"))
-            .expect("Failed to create env filter");
+            .unwrap_or_else(|_| EnvFilter::new("info"));
 
         tracing_subscriber::registry()
             .with(filter)
@@ -69,17 +69,26 @@ pub fn init_with_otlp(service_name: &str, endpoint: &str) -> Result<(), Telemetr
     let endpoint = endpoint.to_string();
     let service_name = service_name.to_string();
 
+    let init_error: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
     INIT.call_once(|| {
         let resource = opentelemetry_sdk::Resource::builder_empty()
             .with_attributes([opentelemetry::KeyValue::new("service.name", service_name.clone())])
             .build();
 
         // Build OTLP span exporter
-        let span_exporter = opentelemetry_otlp::SpanExporter::builder()
+        let span_exporter = match opentelemetry_otlp::SpanExporter::builder()
             .with_tonic()
             .with_endpoint(&endpoint)
             .build()
-            .expect("Failed to build OTLP span exporter");
+        {
+            Ok(e) => e,
+            Err(e) => {
+                *init_error.lock().unwrap_or_else(|p| p.into_inner()) =
+                    Some(format!("failed to build OTLP span exporter: {e}"));
+                return;
+            }
+        };
 
         // Build tracer provider with batch exporter
         let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
@@ -91,11 +100,18 @@ pub fn init_with_otlp(service_name: &str, endpoint: &str) -> Result<(), Telemetr
         let _ = opentelemetry::global::set_tracer_provider(tracer_provider);
 
         // Initialize metrics
-        let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
+        let metric_exporter = match opentelemetry_otlp::MetricExporter::builder()
             .with_tonic()
             .with_endpoint(&endpoint)
             .build()
-            .expect("Failed to build OTLP metric exporter");
+        {
+            Ok(e) => e,
+            Err(e) => {
+                *init_error.lock().unwrap_or_else(|p| p.into_inner()) =
+                    Some(format!("failed to build OTLP metric exporter: {e}"));
+                return;
+            }
+        };
 
         let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
             .with_periodic_exporter(metric_exporter)
@@ -108,7 +124,7 @@ pub fn init_with_otlp(service_name: &str, endpoint: &str) -> Result<(), Telemetr
 
         let filter = EnvFilter::try_from_default_env()
             .or_else(|_| EnvFilter::try_new("info"))
-            .expect("Failed to create env filter");
+            .unwrap_or_else(|_| EnvFilter::new("info"));
 
         tracing_subscriber::registry()
             .with(filter)
@@ -127,6 +143,10 @@ pub fn init_with_otlp(service_name: &str, endpoint: &str) -> Result<(), Telemetr
             "telemetry initialized with OpenTelemetry"
         );
     });
+
+    if let Some(err) = init_error.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        return Err(TelemetryError::Init(err));
+    }
 
     Ok(())
 }
@@ -156,7 +176,7 @@ pub fn init_with_adk_exporter(service_name: &str) -> Result<Arc<AdkSpanExporter>
     INIT.call_once(|| {
         let filter = EnvFilter::try_from_default_env()
             .or_else(|_| EnvFilter::try_new("info"))
-            .expect("Failed to create env filter");
+            .unwrap_or_else(|_| EnvFilter::new("info"));
 
         let adk_layer = AdkSpanLayer::new(exporter_clone);
 

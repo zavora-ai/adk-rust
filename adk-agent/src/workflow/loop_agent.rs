@@ -76,16 +76,16 @@ impl LoopAgent {
     }
 
     pub fn before_callback(mut self, callback: BeforeAgentCallback) -> Self {
-        Arc::get_mut(&mut self.before_callbacks)
-            .expect("before_callbacks not yet shared")
-            .push(callback);
+        if let Some(callbacks) = Arc::get_mut(&mut self.before_callbacks) {
+            callbacks.push(callback);
+        }
         self
     }
 
     pub fn after_callback(mut self, callback: AfterAgentCallback) -> Self {
-        Arc::get_mut(&mut self.after_callbacks)
-            .expect("after_callbacks not yet shared")
-            .push(callback);
+        if let Some(callbacks) = Arc::get_mut(&mut self.after_callbacks) {
+            callbacks.push(callback);
+        }
         self
     }
 }

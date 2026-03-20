@@ -47,7 +47,10 @@ impl MutableSession {
             return;
         }
 
-        let mut state = self.state.write().unwrap();
+        let Ok(mut state) = self.state.write() else {
+            tracing::error!("state RwLock poisoned in apply_state_delta — skipping delta");
+            return;
+        };
         for (key, value) in delta {
             // Skip temp: prefixed keys (they shouldn't persist)
             if !key.starts_with("temp:") {
@@ -59,14 +62,20 @@ impl MutableSession {
     /// Append an event to the session's event list.
     /// This keeps the in-memory view consistent.
     pub fn append_event(&self, event: Event) {
-        let mut events = self.events.write().unwrap();
+        let Ok(mut events) = self.events.write() else {
+            tracing::error!("events RwLock poisoned in append_event — event dropped");
+            return;
+        };
         events.push(event);
     }
 
     /// Get a snapshot of all events in the session.
     /// Used by the runner for compaction decisions.
     pub fn events_snapshot(&self) -> Vec<Event> {
-        let events = self.events.read().unwrap();
+        let Ok(events) = self.events.read() else {
+            tracing::error!("events RwLock poisoned in events_snapshot — returning empty");
+            return Vec::new();
+        };
         events.clone()
     }
 
@@ -83,7 +92,10 @@ impl MutableSession {
         &self,
         agent_name: Option<&str>,
     ) -> Vec<adk_core::Content> {
-        let events = self.events.read().unwrap();
+        let Ok(events) = self.events.read() else {
+            tracing::error!("events RwLock poisoned in conversation_history — returning empty");
+            return Vec::new();
+        };
         let mut history = Vec::new();
 
         // Find the most recent compaction event — everything before its
@@ -168,17 +180,26 @@ impl adk_core::Session for MutableSession {
 
 impl adk_core::State for MutableSession {
     fn get(&self, key: &str) -> Option<serde_json::Value> {
-        let state = self.state.read().unwrap();
+        let Ok(state) = self.state.read() else {
+            tracing::error!("state RwLock poisoned in State::get — returning None");
+            return None;
+        };
         state.get(key).cloned()
     }
 
     fn set(&mut self, key: String, value: serde_json::Value) {
-        let mut state = self.state.write().unwrap();
+        let Ok(mut state) = self.state.write() else {
+            tracing::error!("state RwLock poisoned in State::set — value dropped");
+            return;
+        };
         state.insert(key, value);
     }
 
     fn all(&self) -> HashMap<String, serde_json::Value> {
-        let state = self.state.read().unwrap();
+        let Ok(state) = self.state.read() else {
+            tracing::error!("state RwLock poisoned in State::all — returning empty");
+            return HashMap::new();
+        };
         state.clone()
     }
 }

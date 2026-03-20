@@ -18,13 +18,13 @@ impl AdkSpanExporter {
 
     /// Get trace dict (following ADK-Go GetTraceDict method)
     pub fn get_trace_dict(&self) -> HashMap<String, HashMap<String, String>> {
-        self.trace_dict.read().unwrap().clone()
+        self.trace_dict.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Get trace by event_id (following ADK-Go pattern)
     pub fn get_trace_by_event_id(&self, event_id: &str) -> Option<HashMap<String, String>> {
         debug!("AdkSpanExporter::get_trace_by_event_id called with event_id: {}", event_id);
-        let trace_dict = self.trace_dict.read().unwrap();
+        let trace_dict = self.trace_dict.read().unwrap_or_else(|e| e.into_inner());
         let result = trace_dict.get(event_id).cloned();
         debug!("get_trace_by_event_id result for event_id '{}': {:?}", event_id, result.is_some());
         result
@@ -33,7 +33,7 @@ impl AdkSpanExporter {
     /// Get all spans for a session (by filtering spans that have matching session_id)
     pub fn get_session_trace(&self, session_id: &str) -> Vec<HashMap<String, String>> {
         debug!("AdkSpanExporter::get_session_trace called with session_id: {}", session_id);
-        let trace_dict = self.trace_dict.read().unwrap();
+        let trace_dict = self.trace_dict.read().unwrap_or_else(|e| e.into_inner());
 
         let mut spans = Vec::new();
         for (_event_id, attributes) in trace_dict.iter() {
@@ -62,7 +62,7 @@ impl AdkSpanExporter {
                     "AdkSpanExporter: Storing span '{}' with event_id '{}'",
                     span_name, event_id
                 );
-                let mut trace_dict = self.trace_dict.write().unwrap();
+                let mut trace_dict = self.trace_dict.write().unwrap_or_else(|e| e.into_inner());
                 trace_dict.insert(event_id.clone(), attributes);
                 debug!("AdkSpanExporter: Span stored, total event_ids: {}", trace_dict.len());
             } else {
@@ -98,7 +98,7 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
-        let span = ctx.span(id).expect("Span not found");
+        let Some(span) = ctx.span(id) else { return };
         let mut extensions = span.extensions_mut();
 
         // Record start time
@@ -133,7 +133,7 @@ where
     }
 
     fn on_record(&self, id: &Id, values: &tracing::span::Record<'_>, ctx: Context<'_, S>) {
-        let span = ctx.span(id).expect("Span not found");
+        let Some(span) = ctx.span(id) else { return };
         let mut extensions = span.extensions_mut();
         if let Some(fields) = extensions.get_mut::<SpanFields>() {
             let mut visitor = StringVisitor::default();
@@ -145,7 +145,7 @@ where
     }
 
     fn on_close(&self, id: Id, ctx: Context<'_, S>) {
-        let span = ctx.span(&id).expect("Span not found");
+        let Some(span) = ctx.span(&id) else { return };
         let extensions = span.extensions();
 
         // Calculate actual duration
