@@ -45,6 +45,7 @@ path = "openai_basic/main.rs"
 [[example]]
 name = "rag_gemini"
 path = "rag_gemini/main.rs"
+required-features = ["rag-gemini"]
 
 [[example]]
 name = "vision_test"
