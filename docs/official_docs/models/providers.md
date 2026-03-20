@@ -513,6 +513,8 @@ let agent = LlmAgentBuilder::new("assistant")
 
 ## Examples
 
+Examples are in the [adk-playground](https://github.com/zavora-ai/adk-playground) repo:
+
 ```bash
 # Gemini (default)
 cargo run --example quickstart

@@ -414,7 +414,7 @@ for cp in checkpoints {
 
 ## Examples
 
-All examples use real LLM integration with AgentNode:
+Examples are in the [adk-playground](https://github.com/zavora-ai/adk-playground) repo:
 
 ```bash
 # Parallel LLM agents with callbacks

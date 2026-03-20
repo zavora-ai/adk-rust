@@ -369,39 +369,14 @@ async fn main() -> AnyhowResult<()> {
 }
 ```
 
-### Run Examples
+### Examples
+
+Examples live in the dedicated [adk-playground](https://github.com/zavora-ai/adk-playground) repo (120+ examples covering every feature and provider).
 
 ```bash
-# Interactive console (Gemini)
+git clone https://github.com/zavora-ai/adk-playground.git
+cd adk-playground
 cargo run --example quickstart
-
-# OpenAI examples (requires --features openai)
-cargo run --example openai_basic --features openai
-cargo run --example openai_tools --features openai
-
-# DeepSeek examples (requires --features deepseek)
-cargo run --example deepseek_basic --features deepseek
-cargo run --example deepseek_reasoner --features deepseek
-
-# Groq examples (requires --features groq)
-cargo run --example groq_basic --features groq
-
-# Ollama examples (requires --features ollama)
-cargo run --example ollama_basic --features ollama
-
-# Multimodal examples (image analysis)
-cargo run --example gemini_multimodal
-cargo run --example anthropic_multimodal --features anthropic
-
-# REST API server
-cargo run --example server
-
-# Workflow agents
-cargo run --example sequential_agent
-cargo run --example parallel_agent
-
-# See all examples
-ls examples/
 ```
 
 ## Companion Projects
@@ -459,7 +434,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - Real-time tool calling during voice conversations
 - Multi-agent handoffs for complex workflows
 
-**Run realtime examples**:
+**Run realtime examples** (from [adk-playground](https://github.com/zavora-ai/adk-playground)):
 ```bash
 # OpenAI Realtime (WebSocket)
 cargo run --example realtime_basic --features realtime-openai
@@ -545,7 +520,7 @@ let result = agent.invoke(input, ExecutionConfig::new("thread-1")).await?;
 - **Human-in-the-Loop**: Dynamic interrupts based on state, resume from checkpoint
 - **Streaming**: Multiple modes (values, updates, messages, debug)
 
-**Run graph examples**:
+**Run graph examples** (from [adk-playground](https://github.com/zavora-ai/adk-playground)):
 ```bash
 cargo run --example graph_agent       # Parallel LLM agents with callbacks
 cargo run --example graph_workflow    # Sequential multi-agent pipeline
@@ -595,7 +570,6 @@ let agent = builder.build()?;
 **Requirements**: WebDriver (Selenium, ChromeDriver, etc.)
 ```bash
 docker run -d -p 4444:4444 selenium/standalone-chrome
-cargo run --example browser_agent
 ```
 
 ### Agent Evaluation

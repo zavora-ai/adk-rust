@@ -1237,7 +1237,7 @@ let graph_agent = GraphAgent::builder("workflow")
 
 ## Examples
 
-All examples use real LLM integration with AgentNode:
+All examples are in the [adk-playground](https://github.com/zavora-ai/adk-playground) repo and use real LLM integration with AgentNode:
 
 ```bash
 # Parallel LLM agents with before/after callbacks

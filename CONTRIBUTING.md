@@ -194,8 +194,7 @@ adk-mistralrs/     Local LLM inference via mistral.rs (GPU deps — build explic
 ### Examples
 
 ```
-examples/          120+ working examples organized by provider/feature
-examples/ralph/    Standalone autonomous agent crate (own Cargo.toml + tests/)
+examples/          README pointing to adk-playground repo (120+ examples)
 ```
 
 Examples are workspace members. Simple examples live under `examples/<name>/main.rs` with entries in `examples/Cargo.toml`. Complex examples like Ralph are standalone crates added to the root `[workspace.members]`.

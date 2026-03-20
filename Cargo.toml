@@ -33,10 +33,6 @@ members = [
     # CLI tools
     "cargo-adk",
 
-    # Examples (essential only — full collection in adk-playground repo)
-    "examples",
-    "examples/ralph",
-    "examples/telemetry_demo",
 ]
 exclude = [
     # Git-only packages with GPU dependencies (build explicitly with: cargo build -p adk-mistralrs)

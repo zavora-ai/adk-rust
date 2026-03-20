@@ -93,8 +93,7 @@ adk-ui/          Dynamic UI generation (forms, cards, tables, charts) — extrac
 ### Examples and docs
 
 ```
-examples/              7 essential examples (full collection in adk-playground repo)
-examples/ralph/        Standalone autonomous agent crate (own Cargo.toml + tests/)
+examples/              README pointing to adk-playground repo (120+ examples)
 docs/official_docs/    Comprehensive documentation site content
 ```
 
@@ -217,7 +216,6 @@ See `adk-gemini/AGENTS.md` for the full tracing conventions. The key rules:
 cargo nextest run --workspace                                # full workspace (parallel)
 cargo nextest run -p adk-core                                # single crate
 cargo nextest run -p adk-realtime --features full            # with features
-cargo test -p ralph                                          # standalone example crate
 ```
 
 - Prefer `cargo nextest run` over `cargo test` for speed (~10x faster via parallel test binary execution).
@@ -246,7 +244,7 @@ cargo test -p ralph                                          # standalone exampl
 1. Implement `adk_core::Llm` in `adk-model/src/<provider>/`
 2. Add feature flag to `adk-model/Cargo.toml`
 3. Re-export from `adk-model/src/lib.rs` behind the feature
-4. Add example under `examples/<provider>_basic/`
+4. Add example in [adk-playground](https://github.com/zavora-ai/adk-playground)
 5. Update `adk-studio` codegen if the provider should be available in Studio (separate repo: `../adk-studio/`)
 
 ### New tool
@@ -257,9 +255,7 @@ cargo test -p ralph                                          # standalone exampl
 
 ### New example
 
-Simple: `examples/<name>/main.rs` + `[[example]]` entry in `examples/Cargo.toml`.
-
-Complex (own deps/tests): standalone crate at `examples/<name>/` with own `Cargo.toml`, add to `[workspace.members]` in root `Cargo.toml`. See `examples/ralph/` as the reference.
+Add examples to the [adk-playground](https://github.com/zavora-ai/adk-playground) repo. The `examples/` directory in this workspace contains only a README pointing there.
 
 ## Commit messages
 

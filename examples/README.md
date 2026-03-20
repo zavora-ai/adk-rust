@@ -1,32 +1,20 @@
-# ADK Rust Examples
+# ADK-Rust Examples
 
-Essential examples demonstrating core ADK-Rust framework capabilities.
+Examples have moved to the dedicated playground repository:
 
-For the full 120+ example collection, see the [adk-playground](https://github.com/zavora-ai/adk-playground) repo.
+**[adk-playground](https://github.com/zavora-ai/adk-playground)** — 120+ examples covering agents, tools, workflows, MCP, evaluation, RAG, voice, browser automation, and more.
 
-## Examples
+Also available online at https://playground.adk-rust.com
 
-| Example | Capability | Run Command |
-|---------|-----------|-------------|
-| `quickstart` | Basic agent with tools | `cargo run --example quickstart` |
-| `function_tool` | Custom function tools | `cargo run --example function_tool` |
-| `sequential` | Multi-agent workflows | `cargo run --example sequential` |
-| `graph_workflow` | Graph orchestration | `cargo run --example graph_workflow` |
-| `mcp` | MCP integration | `cargo run --example mcp` |
-| `mcp_apps_tool_result` | Canonical MCP Apps tool-result emission | `cargo run --example mcp_apps_tool_result` |
-| `eval_basic` | Evaluation framework | `cargo run --example eval_basic` |
-| `template` | Starter template | `cargo run --example template` |
-| `ralph` | Autonomous agent (standalone crate) | `cargo run -p ralph` |
-
-## Prerequisites
+## Quick Start
 
 ```bash
-# Google Gemini (default provider)
-export GOOGLE_API_KEY="your-key"    # or GEMINI_API_KEY
+git clone https://github.com/zavora-ai/adk-playground.git
+cd adk-playground
+
+# Set your API key
+export GOOGLE_API_KEY="your-key"
+
+# Run any example
+cargo run --example quickstart
 ```
-
-## Tips
-
-- Use `Ctrl+C` to exit console mode
-- Copy `.env.example` to `.env` for API keys
-- Ralph is a standalone crate with its own tests: `cargo test -p ralph`

@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+#### Examples
+- **Moved to adk-playground**: All examples removed from this workspace and consolidated in the [adk-playground](https://github.com/zavora-ai/adk-playground) repo (120+ examples). The `examples/` directory now contains only a README pointing there.
+
 #### Error Handling Hardening
 - **adk-runner**: Replaced all `RwLock::unwrap()` calls in `MutableSession` with graceful error handling. Poisoned locks now log via `tracing::error` and return safe defaults (empty `Vec`, empty `HashMap`, `None`) instead of panicking. Affects `apply_state_delta`, `append_event`, `events_snapshot`, `conversation_history`, and `State` trait methods.
 - **adk-telemetry**: Replaced `expect()` calls in `init_with_otlp()` with proper error propagation — OTLP exporter build failures now return `TelemetryError::Init` instead of panicking. Replaced `expect()` with `unwrap_or_else` fallback for `EnvFilter` in all init functions. Replaced `expect()` with `let-else` early return in span `Layer` callbacks. Replaced `unwrap()` with `unwrap_or_else(into_inner)` for `RwLock` in `AdkSpanExporter`.

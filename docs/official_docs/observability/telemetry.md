@@ -373,7 +373,7 @@ export GOOGLE_API_KEY=your-key
 cargo run -p telemetry-demo
 ```
 
-See `examples/telemetry_demo/` for the full source.
+See the [adk-playground](https://github.com/zavora-ai/adk-playground) repo for the full telemetry demo source.
 
 ## Custom Telemetry in Tools
 

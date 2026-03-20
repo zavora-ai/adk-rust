@@ -230,6 +230,61 @@ Err(AdkError::Config("API key not found. Set GOOGLE_API_KEY environment variable
 Err(AdkError::Config("Invalid config".into()))
 ```
 
+### No Panics in Library Code
+
+Library crates must never panic on recoverable errors. Avoid `unwrap()`, `expect()`, and `panic!()` in `src/` code (test code is exempt).
+
+**RwLock / Mutex**: Use graceful degradation instead of `unwrap()`. A poisoned lock means another thread panicked — crashing the current thread too makes things worse.
+
+```rust
+// Bad: panics if lock is poisoned
+let state = self.state.write().unwrap();
+
+// Good: log and return a safe default
+let Ok(state) = self.state.write() else {
+    tracing::error!("state lock poisoned — returning default");
+    return Default::default();
+};
+
+// Good: recover through the poison (data may be stale but won't crash)
+let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+```
+
+**Constructors**: Return `Result` when initialization can fail (e.g., connecting to external services).
+
+```rust
+// Bad: panics if Docker is not running
+pub fn new(config: Config) -> Self {
+    let client = connect().expect("connection failed");
+    Self { client }
+}
+
+// Good: caller decides how to handle the failure
+pub fn new(config: Config) -> Result<Self, MyError> {
+    let client = connect().map_err(|e| MyError::Init(e.to_string()))?;
+    Ok(Self { client })
+}
+```
+
+**Builder methods**: Use `if let Some` instead of `expect()` for `Arc::get_mut()`:
+
+```rust
+// Bad: panics if Arc is shared
+pub fn add_callback(mut self, cb: Callback) -> Self {
+    Arc::get_mut(&mut self.callbacks).expect("not shared").push(cb);
+    self
+}
+
+// Good: silent no-op (builder pattern guarantees single ownership)
+pub fn add_callback(mut self, cb: Callback) -> Self {
+    if let Some(callbacks) = Arc::get_mut(&mut self.callbacks) {
+        callbacks.push(cb);
+    }
+    self
+}
+```
+```
+
 ## Async Patterns
 
 ### Use Tokio
