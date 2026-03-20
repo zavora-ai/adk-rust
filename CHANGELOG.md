@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.1] - 2026-03-20
+## [0.4.1] - 2026-03-21
 
 ### Changed
+
+#### Error Handling Hardening
+- **adk-runner**: Replaced all `RwLock::unwrap()` calls in `MutableSession` with graceful error handling. Poisoned locks now log via `tracing::error` and return safe defaults (empty `Vec`, empty `HashMap`, `None`) instead of panicking. Affects `apply_state_delta`, `append_event`, `events_snapshot`, `conversation_history`, and `State` trait methods.
+- **adk-telemetry**: Replaced `expect()` calls in `init_with_otlp()` with proper error propagation — OTLP exporter build failures now return `TelemetryError::Init` instead of panicking. Replaced `expect()` with `unwrap_or_else` fallback for `EnvFilter` in all init functions. Replaced `expect()` with `let-else` early return in span `Layer` callbacks. Replaced `unwrap()` with `unwrap_or_else(into_inner)` for `RwLock` in `AdkSpanExporter`.
+- **adk-code**: `DockerExecutor::new()` now returns `Result<Self, ExecutionError>` instead of panicking when the Docker daemon is unreachable.
+- **adk-agent**: Replaced `Arc::get_mut().expect()` with `if let Some` in builder methods for `LoopAgent`, `ConditionalAgent`, and `ParallelAgent`.
 
 #### Dependency Cleanup
 - **adk-agent**: Removed unused `adk-model` direct dependency and `gemini` feature forwarding. `adk-agent` source code had zero imports from `adk_model`; the dependency only existed to forward the `gemini` feature flag. No crate in the workspace referenced `adk-agent/gemini`. `adk-model` remains as a dev-dependency for tests.
@@ -32,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **MongoDB standalone deployment support**: `MongoSessionService` now auto-detects whether the connected MongoDB instance supports multi-document transactions (replica set / sharded cluster) or is running standalone. On standalone deployments, all write operations execute sequentially without transactions instead of failing with `IllegalOperation: Transaction numbers are only allowed on a replica set member or mongos`. Detection uses the `hello` command at connection time to check for `setName` in the response. New `supports_transactions()` method exposes the detected mode. The `retryWrites=false` connection string workaround is no longer required.
 - **PostgreSQL migration INT4/INT8 type mismatch**: Fixed `COALESCE(MAX(version), 0)` in the migration registry query to use `CAST(... AS BIGINT)`. PostgreSQL creates the `version` column as `INTEGER` (INT4) but the Rust code reads it as `i64` (INT8), causing a type mismatch error on migration. The cast ensures the return type matches the expected Rust type.
 - **PostgreSQL migration registry DDL**: Parameterized the migration runner macro to use `BIGINT PRIMARY KEY` for PostgreSQL and `INTEGER PRIMARY KEY` for SQLite, matching the Rust `i64` type natively. Removed the `CAST(... AS BIGINT)` workaround from SELECT queries since the column type is now correct. Applied to both `adk-session` and `adk-memory` migration runners.
+- **examples**: Added `required-features = ["rag-gemini"]` to the `rag_gemini` example entry, fixing `cargo test --workspace` compilation failure when the optional `adk-rag` dependency is not enabled.
 
 
 ## [0.4.0] - 2026-03-16
