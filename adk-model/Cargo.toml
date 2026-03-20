@@ -23,7 +23,7 @@ async-stream.workspace = true
 serde_json.workspace = true
 serde = { workspace = true }
 async-openai = { version = "0.33", optional = true, features = ["full"] }
-claudius = { version = "0.16", optional = true, default-features = false }
+claudius = { version = "0.19", optional = true, default-features = false }
 reqwest = { workspace = true, optional = true }
 anyhow.workspace = true
 tracing.workspace = true
@@ -57,3 +57,5 @@ all-providers = ["gemini", "openai", "anthropic", "deepseek", "ollama", "groq", 
 [dev-dependencies]
 proptest = "1.5"
 tokio = { workspace = true, features = ["rt", "macros"] }
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
+futures = "0.3"

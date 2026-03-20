@@ -353,7 +353,6 @@ fn test_content_creation_with_thought_signature() {
     let serialized_thought = serde_json::to_string(&thought_content).unwrap();
     assert!(serialized_thought.contains("thoughtSignature"));
     assert!(serialized_thought.contains("\"thought\":true"));
-
 }
 
 #[test]

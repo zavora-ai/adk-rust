@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
 
 ### Thinking Mode
 
-Gemini 3 models support level-based thinking, while Gemini 2.5 uses budget-based thinking:
+Gemini 3 models support level-based thinking, while Gemini 2.5 uses budget-based thinking. When using thinking mode with function calling, Gemini 2.5+ and 3.x models return `thoughtSignature` values that must be echoed back in subsequent turns to preserve reasoning context. ADK-Rust handles this automatically — signatures are serialized when present and omitted when `None`.
 
 ```rust
 use adk_gemini::{Gemini, ThinkingLevel};

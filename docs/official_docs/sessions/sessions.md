@@ -234,6 +234,105 @@ async fn main() -> anyhow::Result<()> {
 > adk-session = { version = "0.4", features = ["postgres"] }
 > ```
 
+### MongoSessionService
+
+Stores sessions in MongoDB. Supports both standalone and replica-set deployments out of the box.
+
+On startup, `MongoSessionService::new()` auto-detects whether the connected MongoDB instance is part of a replica set by issuing a `hello` command. If a replica set (or sharded cluster) is detected, all multi-document writes use transactions for atomicity. On standalone deployments, operations execute sequentially without transactions — the upsert-based writes are idempotent, so partial failures leave state recoverable.
+
+```rust
+use adk_session::{MongoSessionService, SessionService, CreateRequest};
+use std::collections::HashMap;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Works with both standalone and replica-set MongoDB
+    let session_service = MongoSessionService::new(
+        "mongodb://user:pass@localhost:27017",
+        "my_sessions_db",
+    ).await?;
+
+    // Run migrations (creates indexes)
+    session_service.migrate().await?;
+
+    // Check deployment mode
+    if session_service.supports_transactions() {
+        println!("Replica set detected — transactions enabled");
+    } else {
+        println!("Standalone mode — sequential writes");
+    }
+
+    let session = session_service.create(CreateRequest {
+        app_name: "my_app".to_string(),
+        user_id: "user_123".to_string(),
+        session_id: None,
+        state: HashMap::new(),
+    }).await?;
+
+    println!("Session persisted: {}", session.id());
+    Ok(())
+}
+```
+
+> **Note**: Requires the `mongodb` feature flag:
+> ```toml
+> adk-session = { version = "0.4", features = ["mongodb"] }
+> ```
+
+#### MongoDB deployment modes
+
+| Deployment | Transactions | Behavior |
+|------------|-------------|----------|
+| Standalone | No | Sequential upserts, idempotent writes |
+| Replica Set | Yes | Multi-document ACID transactions |
+| Sharded Cluster | Yes | Multi-document ACID transactions |
+
+The `retryWrites=false` connection string parameter is no longer required for standalone deployments. The service handles this transparently.
+
+#### MongoDB collections
+
+`MongoSessionService` uses four collections:
+
+- `sessions` — session documents with session-level state
+- `events` — event documents linked by `session_id`
+- `app_states` — application-level state keyed by `app_name`
+- `user_states` — user-level state keyed by `(app_name, user_id)`
+
+### Neo4jSessionService
+
+Stores sessions as graph nodes in Neo4j. Relationships between sessions, events, and state tiers are modeled as graph edges.
+
+```rust
+use adk_session::{Neo4jSessionService, SessionService, CreateRequest};
+use std::collections::HashMap;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let session_service = Neo4jSessionService::new(
+        "bolt://localhost:7687",
+        "neo4j",
+        "password",
+    ).await?;
+
+    session_service.migrate().await?;
+
+    let session = session_service.create(CreateRequest {
+        app_name: "my_app".to_string(),
+        user_id: "user_123".to_string(),
+        session_id: None,
+        state: HashMap::new(),
+    }).await?;
+
+    println!("Session persisted: {}", session.id());
+    Ok(())
+}
+```
+
+> **Note**: Requires the `neo4j` feature flag:
+> ```toml
+> adk-session = { version = "0.4", features = ["neo4j"] }
+> ```
+
 ### RedisSessionService
 
 Stores sessions in Redis. Ideal for low-latency, high-throughput deployments.

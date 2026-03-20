@@ -138,6 +138,8 @@ impl Llm for AzureOpenAIClient {
         request: LlmRequest,
         _stream: bool, // Azure OpenAI always uses streaming internally
     ) -> Result<adk_core::LlmResponseStream, AdkError> {
+        let usage_span =
+            adk_telemetry::llm_generate_span("azure-openai", &self.deployment_id, _stream);
         let deployment_id = self.deployment_id.clone();
         let client = self.client.clone();
         let retry_config = self.retry_config.clone();
@@ -212,6 +214,6 @@ impl Llm for AzureOpenAIClient {
             yield adk_response;
         };
 
-        Ok(Box::pin(stream))
+        Ok(crate::usage_tracking::with_usage_tracking(Box::pin(stream), usage_span))
     }
 }

@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.4.1] - 2026-03-20
+
+### Changed
+
+#### Dependency Cleanup
+- **adk-agent**: Removed unused `adk-model` direct dependency and `gemini` feature forwarding. `adk-agent` source code had zero imports from `adk_model`; the dependency only existed to forward the `gemini` feature flag. No crate in the workspace referenced `adk-agent/gemini`. `adk-model` remains as a dev-dependency for tests.
+- **adk-guardrail**: Set `jsonschema = { version = "0.43", optional = true, default-features = false }` to eliminate `reqwest 0.13` from the dependency tree. ADK does not use remote JSON Schema `$ref` resolution, so the network features are unnecessary.
+- **adk-model (anthropic)**: Upgraded `claudius` from 0.16 to 0.19, eliminating `reqwest 0.11` from the dependency tree. The claudius 0.19 API takes `&params` instead of `params` in `.stream()`. Note: claudius 0.19 uses `reqwest 0.13` internally, so there is still a reqwest version duplicate with the workspace's `reqwest 0.12`, but the older `reqwest 0.11` is gone.
+- **adk-telemetry**: Upgraded OpenTelemetry stack from 0.21 to 0.28 (`opentelemetry 0.28`, `opentelemetry_sdk 0.28`, `opentelemetry-otlp 0.28`, `tracing-opentelemetry 0.29`). This eliminates duplicate `axum`, `hyper`, `http`, `h2`, and `tower` crates — the old OTel stack pulled `tonic 0.9` → `axum 0.6` → `hyper 0.14` → `http 0.2`, while `adk-server` uses `axum 0.8` → `hyper 1.x` → `http 1.x`. Updated `init_with_otlp()` to use new 0.28 builder APIs (`SdkTracerProvider`, `SpanExporter::builder`, `MetricExporter::builder`, `SdkMeterProvider`). Updated `shutdown_telemetry()` to replace the global provider with a no-op (the `shutdown_tracer_provider()` global function was removed in OTel 0.28).
+
+#### Examples
+- **telemetry_demo**: Updated to use OTel 0.28 APIs — `.build()` instead of `.init()` for metrics instruments. Replaced mock/simulated LLM calls with real Gemini API calls. The demo now requires `GOOGLE_API_KEY` and demonstrates actual token usage recording via `with_usage_tracking` for both non-streaming and streaming responses.
+
+### Fixed
+
+#### adk-gemini
+- **Gemini 3.x thought_signature serialization**: Changed `#[serde(skip_serializing)]` to `#[serde(skip_serializing_if = "Option::is_none")]` on `thought_signature` fields in `Part::Text`, `Part::FunctionCall`, and the tools `FunctionCall` struct. Gemini 3.x models require `thought_signature` to be echoed back in multi-turn function calling; the previous behavior silently dropped it, causing 400 errors on the second LLM call after tool execution. Backward compatible — field is omitted when `None`.
+
+#### adk-tool
+- **AgentTool infinite loop on empty sub-agent responses**: `AgentToolInvocationContext::run_config()` now returns `StreamingMode::None` instead of `StreamingMode::SSE`. In SSE mode, the sub-agent's final event often contained empty text (actual content was spread across earlier partial chunks), causing the coordinator to re-call the same tool indefinitely. Non-streaming mode accumulates the full response before yielding a single complete event. Additionally, `extract_response` now skips empty text parts and falls back to collecting text from all events.
+
+#### adk-session
+- **MongoDB standalone deployment support**: `MongoSessionService` now auto-detects whether the connected MongoDB instance supports multi-document transactions (replica set / sharded cluster) or is running standalone. On standalone deployments, all write operations execute sequentially without transactions instead of failing with `IllegalOperation: Transaction numbers are only allowed on a replica set member or mongos`. Detection uses the `hello` command at connection time to check for `setName` in the response. New `supports_transactions()` method exposes the detected mode. The `retryWrites=false` connection string workaround is no longer required.
+- **PostgreSQL migration INT4/INT8 type mismatch**: Fixed `COALESCE(MAX(version), 0)` in the migration registry query to use `CAST(... AS BIGINT)`. PostgreSQL creates the `version` column as `INTEGER` (INT4) but the Rust code reads it as `i64` (INT8), causing a type mismatch error on migration. The cast ensures the return type matches the expected Rust type.
+- **PostgreSQL migration registry DDL**: Parameterized the migration runner macro to use `BIGINT PRIMARY KEY` for PostgreSQL and `INTEGER PRIMARY KEY` for SQLite, matching the Rust `i64` type natively. Removed the `CAST(... AS BIGINT)` workaround from SELECT queries since the column type is now correct. Applied to both `adk-session` and `adk-memory` migration runners.
+
+
 ## [0.4.0] - 2026-03-16
 
 ### Added
@@ -45,7 +74,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Consolidated OpenAI-compatible providers**: Replaced 7 near-identical provider modules (fireworks, together, mistral, perplexity, cerebras, sambanova, xai) with `OpenAICompatibleConfig` presets. Each was ~150 lines wrapping the same `OpenAICompatible` client — now 7 preset constructors totaling 63 lines. Usage: `OpenAICompatible::new(OpenAICompatibleConfig::fireworks(key, model))`. Feature flags preserved as backward-compatible aliases (`fireworks = ["openai"]`). `all-providers` simplified from 15 to 8 flags.
 
 #### adk-telemetry
+- **Standardized LLM token usage telemetry**: New `llm_generate_span(provider, model, stream)` creates spans with pre-declared `gen_ai.usage.*` fields following OpenTelemetry GenAI semantic conventions. New `LlmUsage` struct and `record_llm_usage(&usage)` record token counts (input, output, total, cache read/creation, thinking, audio input/output) on the current span. All 8 fields are optional-aware — only non-None values are recorded.
 - **Proper error type**: Replaced `Box<dyn std::error::Error>` with `TelemetryError` (thiserror) in all init functions. Convention-compliant typed errors.
+
+#### adk-model
+- **Unified token usage tracking across all providers**: New `usage_tracking::with_usage_tracking(stream, span)` wraps any `LlmResponseStream` to automatically record `gen_ai.usage.*` fields on the tracing span. Applied to all 10 providers: Gemini, OpenAI, OpenAI-compatible (Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI), Anthropic, Ollama, Bedrock, DeepSeek, Groq, Azure AI, Azure OpenAI. Previously only Anthropic recorded token counts; now all providers emit standardized telemetry including cache, thinking, and audio token counts.
 
 #### adk-plugin
 - **Removed unused dependencies**: `async-trait` and `serde` removed from Cargo.toml (never imported).

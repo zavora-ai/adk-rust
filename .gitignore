@@ -86,3 +86,4 @@ CLAUDE.md
 mistral-rs-ref/
 adk-server/src/.DS_Store
 .DS_Store
+*.bak

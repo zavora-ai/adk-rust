@@ -237,7 +237,7 @@ for (call, signature) in response.function_calls_with_thoughts() {
 }
 ```
 
-> **Note**: `thoughtSignature` is a Part-level field, not part of the `functionCall` object. The `FunctionCall` struct carries the signature internally for convenience during deserialization, but it is serialized only at the Part level when sending requests to the API.
+> **Note**: `thoughtSignature` is serialized at both the Part level and inside the `FunctionCall` object when present. Gemini 3.x models require the signature in both locations for multi-turn function calling. The field uses `skip_serializing_if = "Option::is_none"`, so it is omitted entirely when `None` — backward compatible with older models that don't return thought signatures.
 
 ### Structured JSON Output
 

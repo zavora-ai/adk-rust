@@ -615,12 +615,14 @@ impl Llm for GeminiModel {
     )]
     async fn generate_content(&self, req: LlmRequest, stream: bool) -> Result<LlmResponseStream> {
         adk_telemetry::info!("Generating content");
+        let usage_span = adk_telemetry::llm_generate_span("gemini", &self.model_name, stream);
         // Retries only cover request setup/execution. Stream failures after the stream starts
         // are yielded to the caller and are not replayed automatically.
-        execute_with_retry(&self.retry_config, is_retryable_model_error, || {
+        let result = execute_with_retry(&self.retry_config, is_retryable_model_error, || {
             self.generate_content_internal(req.clone(), stream)
         })
-        .await
+        .await?;
+        Ok(crate::usage_tracking::with_usage_tracking(result, usage_span))
     }
 }
 

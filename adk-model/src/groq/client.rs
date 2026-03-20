@@ -119,6 +119,7 @@ impl Llm for GroqClient {
         request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
+        let usage_span = adk_telemetry::llm_generate_span("groq", &self.config.model, stream);
         let api_url = self.api_url();
         let api_key = self.config.api_key.clone();
         let chat_request = self.build_request(&request, stream);
@@ -347,6 +348,6 @@ impl Llm for GroqClient {
             }
         };
 
-        Ok(Box::pin(response_stream))
+        Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
     }
 }

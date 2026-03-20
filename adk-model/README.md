@@ -498,6 +498,7 @@ See [Ollama library](https://ollama.com/library) for all available models.
 - **Async** - Full async/await support with backpressure
 - **Retry** - Automatic retry with exponential backoff
 - **Generation Config** - Temperature, top_p, top_k, max_tokens
+- **Token Usage Telemetry** - Automatic `gen_ai.usage.*` span recording for all providers via `adk-telemetry`
 
 ## Environment Variables
 

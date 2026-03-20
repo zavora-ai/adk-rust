@@ -757,12 +757,8 @@ pub(crate) fn poll_mcp_ui_bridge_notifications(
     let mut registry = bridge_registry()
         .write()
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "bridge registry poisoned".to_string()))?;
-    let session = ensure_bridge_session(
-        &mut registry,
-        &params.app_name,
-        &params.user_id,
-        &params.session_id,
-    );
+    let session =
+        ensure_bridge_session(&mut registry, &params.app_name, &params.user_id, &params.session_id);
     let notifications = queued_notifications(session);
     if params.drain {
         session.pending_notifications.clear();
@@ -789,12 +785,8 @@ fn notify_mcp_ui_bridge_list_changed(
     let mut registry = bridge_registry()
         .write()
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "bridge registry poisoned".to_string()))?;
-    let session = ensure_bridge_session(
-        &mut registry,
-        &params.app_name,
-        &params.user_id,
-        &params.session_id,
-    );
+    let session =
+        ensure_bridge_session(&mut registry, &params.app_name, &params.user_id, &params.session_id);
     let revision = {
         let target = revision_selector(session);
         *target += 1;
@@ -831,11 +823,9 @@ pub(crate) fn notify_mcp_ui_resource_list_changed(
 pub(crate) fn notify_mcp_ui_tool_list_changed(
     params: McpUiListChangedParams,
 ) -> Result<McpUiListChangedResult, (StatusCode, String)> {
-    notify_mcp_ui_bridge_list_changed(
-        params,
-        "ui/notifications/tools/list_changed",
-        |session| &mut session.tool_list_revision,
-    )
+    notify_mcp_ui_bridge_list_changed(params, "ui/notifications/tools/list_changed", |session| {
+        &mut session.tool_list_revision
+    })
 }
 
 pub(crate) fn mark_mcp_ui_initialized(
@@ -922,8 +912,7 @@ pub(crate) async fn ui_notify_resources_list_changed(
 pub(crate) async fn ui_notify_tools_list_changed(
     Json(input): Json<McpUiBridgeInput<McpUiListChangedParams>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let (params, response_mode) =
-        parse_bridge_input(input, "ui/notifications/tools/list_changed")?;
+    let (params, response_mode) = parse_bridge_input(input, "ui/notifications/tools/list_changed")?;
     let result = notify_mcp_ui_tool_list_changed(params)?;
     bridge_result_json(response_mode, result)
 }

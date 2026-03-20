@@ -1,0 +1,21 @@
+[package]
+name = "telemetry-demo"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Comprehensive demonstration of ADK telemetry and tracing capabilities with real LLM calls"
+
+[[bin]]
+name = "telemetry-demo"
+path = "src/main.rs"
+
+[dependencies]
+adk-core.workspace = true
+adk-model = { workspace = true, features = ["gemini"] }
+adk-telemetry.workspace = true
+tokio = { workspace = true, features = ["full"] }
+futures.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+opentelemetry = "0.28"
+dotenvy = "0.15"

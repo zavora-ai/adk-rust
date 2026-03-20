@@ -101,6 +101,7 @@ impl Llm for BedrockClient {
         request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
+        let usage_span = adk_telemetry::llm_generate_span("bedrock", &self.model_id, stream);
         let bedrock_input = adk_request_to_bedrock(
             &request.contents,
             &request.tools,
@@ -115,9 +116,11 @@ impl Llm for BedrockClient {
         })?;
 
         if stream {
-            self.generate_streaming(bedrock_input).await
+            let result = self.generate_streaming(bedrock_input).await?;
+            Ok(crate::usage_tracking::with_usage_tracking(result, usage_span))
         } else {
-            self.generate_non_streaming(bedrock_input).await
+            let result = self.generate_non_streaming(bedrock_input).await?;
+            Ok(crate::usage_tracking::with_usage_tracking(result, usage_span))
         }
     }
 }

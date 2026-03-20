@@ -340,8 +340,6 @@ impl Llm for AnthropicClient {
             anthropic.model = %self.model,
             anthropic.request_type = if stream { "stream" } else { "unary" },
             anthropic.request_id = field::Empty,
-            gen_ai.usage.input_tokens = field::Empty,
-            gen_ai.usage.output_tokens = field::Empty,
         )
     )]
     async fn generate_content(
@@ -349,6 +347,7 @@ impl Llm for AnthropicClient {
         request: LlmRequest,
         stream: bool,
     ) -> Result<adk_core::LlmResponseStream, AdkError> {
+        let usage_span = adk_telemetry::llm_generate_span("anthropic", &self.model, stream);
         let model = self.model.clone();
         let max_tokens = self.max_tokens;
         let client = self.client.clone();
@@ -371,9 +370,10 @@ impl Llm for AnthropicClient {
                     let request = request_for_retry.clone();
                     let thinking_ref = thinking_config.as_ref();
                     async move {
-                        let params = Self::build_message_params(model_ref, max_tokens, &request, prompt_caching, thinking_ref)?;
+                        let mut params = Self::build_message_params(model_ref, max_tokens, &request, prompt_caching, thinking_ref)?;
+                        params.stream = true;
                         client_ref
-                            .stream(params)
+                            .stream(&params)
                             .await
                             .map_err(convert_claudius_error)
                     }
@@ -469,11 +469,6 @@ impl Llm for AnthropicClient {
                             current_tool_index = None;
                         }
                         MessageStreamEvent::MessageDelta(delta_event) => {
-                            // Requirement 11.3: Record output token usage on the tracing span
-                            Span::current().record(
-                                "gen_ai.usage.output_tokens",
-                                delta_event.usage.output_tokens as i64,
-                            );
                             // Check for stop reason
                             if let Some(stop_reason) = &delta_event.delta.stop_reason {
                                 let finish_reason = match stop_reason {
@@ -531,11 +526,6 @@ impl Llm for AnthropicClient {
                         // Requirement 3.5: Log unrecognized events at debug level
                         MessageStreamEvent::MessageStart(start_event) => {
                             debug!("message_start event received");
-                            // Requirement 11.3: Record input token usage on the tracing span
-                            Span::current().record(
-                                "gen_ai.usage.input_tokens",
-                                start_event.message.usage.input_tokens as i64,
-                            );
                             // Store input tokens for the final UsageMetadata
                             stream_input_tokens = start_event.message.usage.input_tokens;
                             // Store cache token counts for propagation to the final MessageDelta
@@ -578,10 +568,6 @@ impl Llm for AnthropicClient {
                 // the actual `request-id` header value.
                 Span::current().record("anthropic.request_id", message.id.as_str());
 
-                // Requirement 11.3: Record token usage on the tracing span
-                Span::current().record("gen_ai.usage.input_tokens", message.usage.input_tokens as i64);
-                Span::current().record("gen_ai.usage.output_tokens", message.usage.output_tokens as i64);
-
                 // Requirement 6.3: Extract cache usage tokens into provider metadata
                 let (_response, _cache_metadata) = convert::from_anthropic_message(&message);
 
@@ -589,7 +575,7 @@ impl Llm for AnthropicClient {
             }
         };
 
-        Ok(Box::pin(response_stream))
+        Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
     }
 }
 

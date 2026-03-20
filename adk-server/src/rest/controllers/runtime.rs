@@ -1021,10 +1021,8 @@ where
     let selected_initial_state = ag_ui_input.as_ref().and_then(|input| input.state.clone());
     let selected_messages_snapshot =
         ag_ui_input.as_ref().and_then(messages_snapshot_from_ag_ui_input);
-    let selected_activity_events = ag_ui_input
-        .as_ref()
-        .map(activity_events_from_ag_ui_input)
-        .unwrap_or_default();
+    let selected_activity_events =
+        ag_ui_input.as_ref().map(activity_events_from_ag_ui_input).unwrap_or_default();
 
     Box::pin(async_stream::stream! {
         let native_ag_ui = profile == UiProfile::AgUi && transport == UiTransportMode::ProtocolNative;

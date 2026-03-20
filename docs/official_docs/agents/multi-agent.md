@@ -723,6 +723,8 @@ let coordinator = LlmAgentBuilder::new("coordinator")
     .build()?;
 ```
 
+AgentTool runs sub-agents in non-streaming mode (`StreamingMode::None`) internally, so the sub-agent accumulates its full response before returning it to the parent. This prevents issues where partial streaming chunks could produce empty results.
+
 This enables seamless data flow between parent and child agents when using the AgentTool pattern.
 
 ## Running Multi-Agent Systems

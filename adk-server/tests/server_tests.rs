@@ -452,11 +452,7 @@ fn summarize_ag_ui_native_events(events: &[Value]) -> Value {
 }
 
 fn summarize_ui_capabilities(payload: &Value) -> Value {
-    let protocols = payload
-        .get("protocols")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let protocols = payload.get("protocols").and_then(Value::as_array).cloned().unwrap_or_default();
 
     json!({
         "defaultProtocol": payload["default_protocol"],
@@ -1200,8 +1196,7 @@ async fn test_mcp_ui_notification_endpoints_emit_list_changed_contract() {
         &poll_after_drain_json,
     );
     let expected_summary: Value =
-        serde_json::from_str(include_str!("fixtures/mcp_ui_notifications_summary.json"))
-            .unwrap();
+        serde_json::from_str(include_str!("fixtures/mcp_ui_notifications_summary.json")).unwrap();
     assert_eq!(summary, expected_summary);
 }
 

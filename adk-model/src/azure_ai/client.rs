@@ -89,6 +89,7 @@ impl Llm for AzureAIClient {
         request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
+        let usage_span = adk_telemetry::llm_generate_span("azure-ai", &self.model, stream);
         let api_url = self.api_url();
         let api_key = self.api_key.clone();
         let model = self.model.clone();
@@ -228,7 +229,7 @@ impl Llm for AzureAIClient {
             }
         };
 
-        Ok(Box::pin(response_stream))
+        Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
     }
 }
 

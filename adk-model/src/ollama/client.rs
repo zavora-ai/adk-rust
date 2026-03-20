@@ -104,6 +104,7 @@ impl Llm for OllamaModel {
         request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream> {
+        let usage_span = adk_telemetry::llm_generate_span("ollama", &self.model_name, stream);
         let model = self.model_name.clone();
         let client = self.client.clone();
         let options = self.build_options(&request);
@@ -177,6 +178,6 @@ impl Llm for OllamaModel {
             }
         };
 
-        Ok(Box::pin(response_stream))
+        Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
     }
 }

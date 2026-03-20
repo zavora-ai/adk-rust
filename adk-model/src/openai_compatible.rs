@@ -198,6 +198,8 @@ impl Llm for OpenAICompatible {
     ) -> Result<LlmResponseStream, AdkError> {
         let model = self.model.clone();
         let provider_name = self.provider_name.clone();
+        let span_provider = provider_name.clone();
+        let span_model = model.clone();
         let http = self.http.clone();
         let api_key = self.api_key.clone();
         let base_url = self.base_url.clone();
@@ -205,6 +207,8 @@ impl Llm for OpenAICompatible {
         let request_for_retry = request.clone();
         let reasoning_effort = self.reasoning_effort.clone();
         let organization_id = self.organization_id.clone();
+
+        let usage_span = adk_telemetry::llm_generate_span(&span_provider, &span_model, _stream);
 
         let stream = try_stream! {
             let response = execute_with_retry(&retry_config, is_retryable_model_error, || {
@@ -312,6 +316,6 @@ impl Llm for OpenAICompatible {
             yield adk_response;
         };
 
-        Ok(Box::pin(stream))
+        Ok(crate::usage_tracking::with_usage_tracking(Box::pin(stream), usage_span))
     }
 }

@@ -217,6 +217,7 @@ pub mod openai;
 pub mod openai_compatible;
 pub mod provider;
 pub mod retry;
+pub mod usage_tracking;
 
 #[cfg(feature = "anthropic")]
 pub use anthropic::AnthropicClient;

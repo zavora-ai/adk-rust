@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 
-> **🚀 v0.4.0 Released!** Focused, leaner framework. Extracted UI/Studio to standalone repos. Tiered feature presets (standard default builds in ~50s, not ~2min). Consolidated 7 OpenAI-compatible providers into presets (-1,000 lines). Vertex AI deps now opt-in. OpenAI reasoning model support (o3, gpt-5-mini). Gemini thinking model fix for multi-turn tool calling. `#[tool]` proc macro and `cargo-adk` scaffolding CLI. All 25 crates audited, documented, and tested. See [CHANGELOG](CHANGELOG.md) for full details.
+> **🚀 v0.4.1 Released!** Dependency cleanup: eliminated reqwest 0.11, upgraded OpenTelemetry to 0.28, removed unused adk-model coupling from adk-agent. Fixed Gemini 3.x thought_signature serialization, AgentTool infinite loop, MongoDB standalone support, PostgreSQL migration type mismatch. See [CHANGELOG](CHANGELOG.md) for full details.
 >
 > **Contributors:** Many thanks to [@mikefaille](https://github.com/mikefaille) — AdkIdentity design, realtime audio, LiveKit bridge, skill system. [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI-compatible providers, xAI, multimodal content. [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [@danielsan](https://github.com/danielsan) — Google deps issue & PR (#181, #203), RAG crash report (#205). [@CodingFlow](https://github.com/CodingFlow) — Gemini 3 thinking level, global endpoint, citationSources (#177, #178, #179). [@ctylx](https://github.com/ctylx) — skill discovery fix (#204). [@poborin](https://github.com/poborin) — project config proposal (#176). [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 

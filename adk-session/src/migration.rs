@@ -62,7 +62,7 @@ impl std::error::Error for MigrationError {}
 /// monomorphised copy, avoiding complex generic trait bounds.
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 macro_rules! impl_sql_migration_runner {
-    ($mod_name:ident, $pool_ty:ty) => {
+    ($mod_name:ident, $pool_ty:ty, $int_type:expr) => {
         pub mod $mod_name {
             use super::MigrationError;
             use chrono::Utc;
@@ -93,10 +93,11 @@ macro_rules! impl_sql_migration_runner {
                 // Step 1: Create registry table if missing
                 let create_sql = format!(
                     "CREATE TABLE IF NOT EXISTS {registry_table} (\
-                        version INTEGER PRIMARY KEY, \
+                        version {} PRIMARY KEY, \
                         description TEXT NOT NULL, \
                         applied_at TEXT NOT NULL\
-                    )"
+                    )",
+                    $int_type
                 );
                 sqlx::query(&create_sql).execute(pool).await.map_err(|e| {
                     adk_core::AdkError::Session(format!("migration registry creation failed: {e}"))
@@ -235,7 +236,7 @@ macro_rules! impl_sql_migration_runner {
 }
 
 #[cfg(feature = "sqlite")]
-impl_sql_migration_runner!(sqlite_runner, sqlx::SqlitePool);
+impl_sql_migration_runner!(sqlite_runner, sqlx::SqlitePool, "INTEGER");
 
 #[cfg(feature = "postgres")]
-impl_sql_migration_runner!(pg_runner, sqlx::PgPool);
+impl_sql_migration_runner!(pg_runner, sqlx::PgPool, "BIGINT");
