@@ -40,7 +40,7 @@ hf-hub = { version = "0.4", optional = true }
 # Kokoro phonemizer (optional — requires espeak-ng system library)
 espeak-rs = { version = "0.1", optional = true }
 ndarray = { version = "0.16", optional = true }
-ndarray-npy = { version = "0.9", optional = true }
+ndarray-npy = { version = "0.10", optional = true }
 
 # Candle-based TTS (optional)
 candle-core = { version = "0.9", optional = true }
