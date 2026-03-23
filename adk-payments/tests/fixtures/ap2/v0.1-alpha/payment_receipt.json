@@ -1,0 +1,17 @@
+{
+  "payment_mandate_id": "pm_12345",
+  "timestamp": "2026-03-22T10:02:00Z",
+  "payment_id": "pay_12345",
+  "amount": {
+    "currency": "USD",
+    "value": 125.0
+  },
+  "payment_status": {
+    "merchant_confirmation_id": "pay_12345",
+    "psp_confirmation_id": "psp_12345"
+  },
+  "payment_method_details": {
+    "method_name": "CARD",
+    "token": "tok_123"
+  }
+}

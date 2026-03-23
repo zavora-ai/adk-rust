@@ -31,6 +31,7 @@ ADK-Rust provides a comprehensive framework for building AI agents in Rust, feat
 - **Tool ecosystem**: Function tools, Google Search, MCP (Model Context Protocol) integration
 - **RAG pipeline**: Document chunking, vector embeddings, semantic search with 6 vector store backends
 - **Security**: Role-based access control, declarative scope-based tool security, SSO/OAuth, audit logging
+- **Agentic commerce**: ACP and AP2 payment orchestration with durable transaction journals and evidence-backed recall
 - **Production features**: Session management, artifact storage, memory systems, REST/A2A APIs
 - **Developer experience**: Interactive CLI, 120+ working examples, comprehensive documentation
 
@@ -126,6 +127,7 @@ Built-in tools:
 - **Memory System**: Long-term memory with semantic search and vector embeddings
 - **Servers**: REST API with SSE streaming, A2A protocol for agent-to-agent communication
 - **Guardrails**: PII redaction, content filtering, JSON schema validation
+- **Payments**: ACP and AP2 commerce support through `adk-payments`
 - **Observability**: OpenTelemetry tracing, structured logging
 
 ## Core Crates
@@ -142,6 +144,7 @@ Built-in tools:
 | `adk-session` | Session and state management | SQLite/in-memory backends, conversation history, state persistence |
 | `adk-artifact` | Artifact storage system | File-based storage, MIME type handling, image/PDF/video support |
 | `adk-memory` | Long-term memory | Vector embeddings, semantic search, Qdrant integration |
+| `adk-payments` | Agentic commerce orchestration | ACP/AP2 adapters, canonical transaction kernel, durable journals, evidence-backed payment flows |
 | `adk-rag` | RAG pipeline | Document chunking, embeddings, vector search, reranking, 6 backends |
 | `adk-runner` | Agent execution runtime | Context management, event streaming, session lifecycle, callbacks |
 | `adk-server` | Production API servers | REST API, A2A protocol, middleware, health checks |
@@ -878,6 +881,7 @@ cargo build --release
 
 - **Wiki**: [GitHub Wiki](https://github.com/zavora-ai/adk-rust/wiki) - Comprehensive guides and tutorials
 - **API Reference**: [docs.rs/adk-rust](https://docs.rs/adk-rust) - Full API documentation
+- **Official payments docs**: [Payments and Commerce](docs/official_docs/security/payments.md) - ACP/AP2 support, agentic commerce journeys, and validation paths
 - **Examples**: [examples/README.md](examples/README.md) - 120+ working examples with detailed explanations
 
 ## Performance

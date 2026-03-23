@@ -1,0 +1,8 @@
+{
+  "uri": "https://github.com/google-agentic-commerce/ap2/tree/v0.1",
+  "description": "This agent supports AP2 shopper flows",
+  "required": false,
+  "params": {
+    "roles": ["merchant", "shopper"]
+  }
+}

@@ -6,6 +6,10 @@ Examples have moved to the dedicated playground repository:
 
 Also available online at https://playground.adk-rust.com
 
+## Local Validation Crates
+
+- `examples/payments` - agentic commerce scenario index for ACP/AP2 validation paths
+
 ## Quick Start
 
 ```bash

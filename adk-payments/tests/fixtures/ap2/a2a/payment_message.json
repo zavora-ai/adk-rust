@@ -1,0 +1,41 @@
+{
+  "messageId": "payment-msg-1",
+  "contextId": "payments-context",
+  "taskId": "payments-task",
+  "role": "user",
+  "parts": [
+    {
+      "kind": "data",
+      "data": {
+        "ap2.mandates.PaymentMandate": {
+          "payment_mandate_contents": {
+            "payment_mandate_id": "pm_12345",
+            "payment_details_id": "order_shoes_123",
+            "payment_details_total": {
+              "label": "Total",
+              "amount": {
+                "currency": "USD",
+                "value": 125.0
+              },
+              "refund_period": 30
+            },
+            "payment_response": {
+              "request_id": "order_shoes_123",
+              "method_name": "CARD",
+              "details": {
+                "token": {
+                  "id": "tok_123",
+                  "url": "https://credentials.example/token"
+                }
+              },
+              "payer_email": "shopper@example.com"
+            },
+            "merchant_agent": "merchant-agent-1",
+            "timestamp": "2026-03-22T10:01:00Z"
+          },
+          "user_authorization": "user_authz_vp_123"
+        }
+      }
+    }
+  ]
+}

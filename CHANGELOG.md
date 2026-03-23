@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### adk-payments
+- Added `adk-payments`, a new agentic commerce crate with a canonical transaction kernel, durable transaction journals, evidence-backed storage, and ACP/AP2 protocol adapters.
+- Added end-to-end payment validation assets including protocol fixtures, integration tests, and a local `examples/payments` scenario index.
+
+#### Documentation
+- Added payments documentation to the root README, official docs index, crate README, and a dedicated `docs/official_docs/security/payments.md` guide.
+
 ## [0.4.1] - 2026-03-21
 
 ### Changed

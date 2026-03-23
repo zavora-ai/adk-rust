@@ -746,6 +746,20 @@ pub mod auth {
     pub use adk_auth::*;
 }
 
+/// Agentic commerce and payment orchestration.
+///
+/// Provides protocol-neutral payment primitives and adapters for:
+/// - ACP stable `2026-01-30`
+/// - ACP experimental surfaces behind `acp-experimental`
+/// - AP2 `v0.1-alpha` as of `2026-03-22`
+///
+/// Available with feature: `payments`
+#[cfg(feature = "payments")]
+#[cfg_attr(docsrs, doc(cfg(feature = "payments")))]
+pub mod payment {
+    pub use adk_payments::*;
+}
+
 /// Plugin system for extending agent behavior.
 ///
 /// Extensible callback architecture for agent lifecycle hooks:

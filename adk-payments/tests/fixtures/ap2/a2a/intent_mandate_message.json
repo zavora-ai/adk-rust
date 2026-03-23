@@ -1,0 +1,19 @@
+{
+  "messageId": "msg-intent-001",
+  "contextId": "ctx-shopping-001",
+  "taskId": "task-buy-shoes",
+  "role": "user",
+  "parts": [
+    {
+      "kind": "data",
+      "data": {
+        "ap2.mandates.IntentMandate": {
+          "user_cart_confirmation_required": true,
+          "natural_language_description": "Buy running shoes under $200 from SportsMart",
+          "merchants": ["SportsMart"],
+          "intent_expiry": "2026-04-01T12:00:00Z"
+        }
+      }
+    }
+  ]
+}

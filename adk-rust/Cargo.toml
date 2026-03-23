@@ -75,6 +75,7 @@ guardrail = ["dep:adk-guardrail"]
 auth = ["dep:adk-auth"]
 plugin = ["dep:adk-plugin"]
 rag = ["dep:adk-rag"]
+payments = ["dep:adk-payments"]
 
 # Model provider features (forwarded to adk-model)
 gemini = ["models", "adk-model/gemini"]
@@ -156,6 +157,7 @@ adk-guardrail = { workspace = true, optional = true }
 adk-auth = { workspace = true, optional = true }
 adk-plugin = { workspace = true, optional = true }
 adk-rag = { workspace = true, optional = true }
+adk-payments = { workspace = true, optional = true }
 adk-audio = { workspace = true, optional = true }
 
 # Re-export common dependencies
@@ -172,5 +174,5 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time",
 [package.metadata.docs.rs]
 # Use "full" instead of all-features to avoid C library deps (espeak, cmake)
 # that don't build in docs.rs sandboxed environment.
-features = ["full"]
+features = ["full", "payments"]
 rustdoc-args = ["--cfg", "docsrs"]
