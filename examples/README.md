@@ -11,6 +11,9 @@ Also available online at https://playground.adk-rust.com
 A small number of live integration crates still live in this repository while their
 playground versions are being finalized:
 
+- `examples/openai_server_tools` — full OpenAI native-tool example matrix covering every exported wrapper
+- `examples/anthropic_server_tools` — full Anthropic native-tool example matrix for the pinned `claudius` surface
+- `examples/gemini3_builtin_tools` — full Gemini native-tool example matrix plus multi-turn mixed-tool validation
 - `examples/openai_responses` — end-to-end OpenAI Responses validation
 - `examples/openrouter` — end-to-end OpenRouter validation through the ADK agent stack
 - `examples/bedrock_test` — Bedrock smoke testing

@@ -67,6 +67,10 @@ fn gemini_error_to_adk(e: &adk_gemini::ClientError) -> adk_core::AdkError {
 }
 
 impl GeminiModel {
+    fn gemini_part_thought_signature(value: &serde_json::Value) -> Option<String> {
+        value.get("thoughtSignature").and_then(serde_json::Value::as_str).map(str::to_string)
+    }
+
     pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Result<Self> {
         let model_name = model.into();
         let client = Gemini::with_model(api_key.into(), model_name.clone())
@@ -224,22 +228,16 @@ impl GeminiModel {
                             id: None,
                         });
                     }
-                    adk_gemini::Part::ToolCall { tool_call, thought_signature } => {
-                        // Embed thought_signature into the server_tool_call Value
-                        // so it survives the round-trip through ADK Part::ServerToolCall
-                        let mut val = tool_call.clone();
-                        if let (Some(sig), Some(obj)) = (thought_signature, val.as_object_mut()) {
-                            obj.insert(
-                                "_thought_signature".to_string(),
-                                serde_json::Value::String(sig.clone()),
-                            );
+                    adk_gemini::Part::ToolCall { .. } | adk_gemini::Part::ExecutableCode { .. } => {
+                        if let Ok(value) = serde_json::to_value(p) {
+                            converted_parts.push(Part::ServerToolCall { server_tool_call: value });
                         }
-                        converted_parts.push(Part::ServerToolCall { server_tool_call: val });
                     }
-                    adk_gemini::Part::ToolResponse { tool_response } => {
-                        converted_parts.push(Part::ServerToolResponse {
-                            server_tool_response: tool_response.clone(),
-                        });
+                    adk_gemini::Part::ToolResponse { .. }
+                    | adk_gemini::Part::CodeExecutionResult { .. } => {
+                        let value = serde_json::to_value(p).unwrap_or(serde_json::Value::Null);
+                        converted_parts
+                            .push(Part::ServerToolResponse { server_tool_response: value });
                     }
                 }
             }
@@ -343,6 +341,78 @@ impl GeminiModel {
             serde_json::Value::Object(_) => response,
             other => serde_json::json!({ "result": other }),
         }
+    }
+
+    fn merge_object_value(
+        target: &mut serde_json::Map<String, serde_json::Value>,
+        value: serde_json::Value,
+    ) {
+        if let serde_json::Value::Object(object) = value {
+            for (key, value) in object {
+                target.insert(key, value);
+            }
+        }
+    }
+
+    fn build_gemini_tools(
+        tools: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<(Vec<adk_gemini::Tool>, adk_gemini::ToolConfig)> {
+        let mut gemini_tools = Vec::new();
+        let mut function_declarations = Vec::new();
+        let mut has_provider_native_tools = false;
+        let mut tool_config_json = serde_json::Map::new();
+
+        for (name, tool_decl) in tools {
+            if let Some(provider_tool) = tool_decl.get("x-adk-gemini-tool") {
+                let tool = serde_json::from_value::<adk_gemini::Tool>(provider_tool.clone())
+                    .map_err(|error| {
+                        adk_core::AdkError::model(format!(
+                            "failed to deserialize Gemini native tool '{name}': {error}"
+                        ))
+                    })?;
+                has_provider_native_tools = true;
+                gemini_tools.push(tool);
+            } else if let Ok(func_decl) =
+                serde_json::from_value::<adk_gemini::FunctionDeclaration>(tool_decl.clone())
+            {
+                function_declarations.push(func_decl);
+            } else {
+                return Err(adk_core::AdkError::model(format!(
+                    "failed to deserialize Gemini tool '{name}' as a function declaration"
+                )));
+            }
+
+            if let Some(tool_config) = tool_decl.get("x-adk-gemini-tool-config") {
+                Self::merge_object_value(&mut tool_config_json, tool_config.clone());
+            }
+        }
+
+        let has_function_declarations = !function_declarations.is_empty();
+        if has_function_declarations {
+            gemini_tools.push(adk_gemini::Tool::with_functions(function_declarations));
+        }
+
+        if has_provider_native_tools && has_function_declarations {
+            tool_config_json.insert(
+                "includeServerSideToolInvocations".to_string(),
+                serde_json::Value::Bool(true),
+            );
+        }
+
+        let tool_config = if tool_config_json.is_empty() {
+            adk_gemini::ToolConfig::default()
+        } else {
+            serde_json::from_value::<adk_gemini::ToolConfig>(serde_json::Value::Object(
+                tool_config_json,
+            ))
+            .map_err(|error| {
+                adk_core::AdkError::model(format!(
+                    "failed to deserialize Gemini tool configuration: {error}"
+                ))
+            })?
+        };
+
+        Ok((gemini_tools, tool_config))
     }
 
     fn stream_chunks_from_response(
@@ -485,20 +555,45 @@ impl GeminiModel {
                                 });
                             }
                             Part::ServerToolCall { server_tool_call } => {
-                                // Extract embedded thought_signature for round-trip
-                                let mut tc = server_tool_call.clone();
-                                let sig = tc
-                                    .as_object_mut()
-                                    .and_then(|obj| obj.remove("_thought_signature"))
-                                    .and_then(|v| v.as_str().map(String::from));
+                                if let Ok(native_part) = serde_json::from_value::<adk_gemini::Part>(
+                                    server_tool_call.clone(),
+                                ) {
+                                    match native_part {
+                                        adk_gemini::Part::ToolCall { .. }
+                                        | adk_gemini::Part::ExecutableCode { .. } => {
+                                            gemini_parts.push(native_part);
+                                            continue;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+
                                 gemini_parts.push(adk_gemini::Part::ToolCall {
-                                    tool_call: tc,
-                                    thought_signature: sig,
+                                    tool_call: server_tool_call.clone(),
+                                    thought_signature: Self::gemini_part_thought_signature(
+                                        server_tool_call,
+                                    ),
                                 });
                             }
                             Part::ServerToolResponse { server_tool_response } => {
+                                if let Ok(native_part) = serde_json::from_value::<adk_gemini::Part>(
+                                    server_tool_response.clone(),
+                                ) {
+                                    match native_part {
+                                        adk_gemini::Part::ToolResponse { .. }
+                                        | adk_gemini::Part::CodeExecutionResult { .. } => {
+                                            gemini_parts.push(native_part);
+                                            continue;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+
                                 gemini_parts.push(adk_gemini::Part::ToolResponse {
                                     tool_response: server_tool_response.clone(),
+                                    thought_signature: Self::gemini_part_thought_signature(
+                                        server_tool_response,
+                                    ),
                                 });
                             }
                             _ => {}
@@ -575,51 +670,12 @@ impl GeminiModel {
 
         // Add tools
         if !req.tools.is_empty() {
-            let mut function_declarations = Vec::new();
-            let mut has_google_search = false;
-            let mut has_url_context = false;
-
-            for (name, tool_decl) in &req.tools {
-                if name == "google_search" {
-                    has_google_search = true;
-                    continue;
-                }
-                if name == "url_context" {
-                    has_url_context = true;
-                    continue;
-                }
-
-                // Deserialize our tool declaration into adk_gemini::FunctionDeclaration
-                if let Ok(func_decl) =
-                    serde_json::from_value::<adk_gemini::FunctionDeclaration>(tool_decl.clone())
-                {
-                    function_declarations.push(func_decl);
-                }
-            }
-
-            let has_function_declarations = !function_declarations.is_empty();
-
-            if has_function_declarations {
-                let tool = adk_gemini::Tool::with_functions(function_declarations);
+            let (gemini_tools, tool_config) = Self::build_gemini_tools(&req.tools)?;
+            for tool in gemini_tools {
                 builder = builder.with_tool(tool);
             }
-
-            if has_google_search {
-                // Enable built-in Google Search
-                let tool = adk_gemini::Tool::google_search();
-                builder = builder.with_tool(tool);
-            }
-
-            if has_url_context {
-                // Enable built-in URL Context
-                let tool = adk_gemini::Tool::url_context();
-                builder = builder.with_tool(tool);
-            }
-
-            // Set include_server_side_tool_invocations when BOTH built-in tools
-            // AND function calling tools are present (Gemini 3 mixed mode)
-            if (has_google_search || has_url_context) && has_function_declarations {
-                builder = builder.with_server_side_tool_invocations();
+            if tool_config != adk_gemini::ToolConfig::default() {
+                builder = builder.with_tool_config(tool_config);
             }
         }
 
@@ -693,21 +749,12 @@ impl GeminiModel {
             .with_system_instruction(system_instruction)
             .with_ttl(std::time::Duration::from_secs(u64::from(ttl_seconds)));
 
-        // Convert ADK tool definitions to Gemini FunctionDeclarations
-        let mut function_declarations = Vec::new();
-        for (name, tool_decl) in tools {
-            if name == "google_search" {
-                continue;
-            }
-            if let Ok(func_decl) =
-                serde_json::from_value::<adk_gemini::FunctionDeclaration>(tool_decl.clone())
-            {
-                function_declarations.push(func_decl);
-            }
+        let (gemini_tools, tool_config) = Self::build_gemini_tools(tools)?;
+        if !gemini_tools.is_empty() {
+            cache_builder = cache_builder.with_tools(gemini_tools);
         }
-        if !function_declarations.is_empty() {
-            cache_builder = cache_builder
-                .with_tools(vec![adk_gemini::Tool::with_functions(function_declarations)]);
+        if tool_config != adk_gemini::ToolConfig::default() {
+            cache_builder = cache_builder.with_tool_config(tool_config);
         }
 
         let handle = cache_builder
@@ -755,6 +802,79 @@ impl Llm for GeminiModel {
         })
         .await?;
         Ok(crate::usage_tracking::with_usage_tracking(result, usage_span))
+    }
+}
+
+#[cfg(test)]
+mod native_tool_tests {
+    use super::*;
+
+    #[test]
+    fn test_build_gemini_tools_supports_native_tool_metadata() {
+        let mut tools = std::collections::HashMap::new();
+        tools.insert(
+            "google_search".to_string(),
+            serde_json::json!({
+                "x-adk-gemini-tool": {
+                    "google_search": {}
+                }
+            }),
+        );
+        tools.insert(
+            "lookup_weather".to_string(),
+            serde_json::json!({
+                "name": "lookup_weather",
+                "description": "lookup weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": { "type": "string" }
+                    }
+                }
+            }),
+        );
+
+        let (gemini_tools, tool_config) =
+            GeminiModel::build_gemini_tools(&tools).expect("tool conversion should succeed");
+
+        assert_eq!(gemini_tools.len(), 2);
+        assert_eq!(tool_config.include_server_side_tool_invocations, Some(true));
+    }
+
+    #[test]
+    fn test_build_gemini_tools_merges_native_tool_config() {
+        let mut tools = std::collections::HashMap::new();
+        tools.insert(
+            "google_maps".to_string(),
+            serde_json::json!({
+                "x-adk-gemini-tool": {
+                    "google_maps": {
+                        "enable_widget": true
+                    }
+                },
+                "x-adk-gemini-tool-config": {
+                    "retrievalConfig": {
+                        "latLng": {
+                            "latitude": 1.23,
+                            "longitude": 4.56
+                        }
+                    }
+                }
+            }),
+        );
+
+        let (_gemini_tools, tool_config) =
+            GeminiModel::build_gemini_tools(&tools).expect("tool conversion should succeed");
+
+        assert_eq!(
+            tool_config.retrieval_config,
+            Some(serde_json::json!({
+                "latLng": {
+                    "latitude": 1.23,
+                    "longitude": 4.56
+                }
+            }))
+        );
     }
 }
 

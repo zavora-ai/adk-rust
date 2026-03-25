@@ -17,8 +17,34 @@ pub enum Tool {
         /// The Google Search configuration
         google_search: GoogleSearchConfig,
     },
+    /// Google Maps tool
+    GoogleMaps {
+        /// The Google Maps configuration
+        google_maps: Value,
+    },
+    /// Code execution tool
+    CodeExecution {
+        /// The code execution configuration
+        code_execution: Value,
+    },
     URLContext {
         url_context: URLContextConfig,
+    },
+    /// File search tool
+    FileSearch {
+        /// The file search configuration
+        file_search: Value,
+    },
+    /// Computer use tool
+    ComputerUse {
+        /// The computer use configuration
+        computer_use: Value,
+    },
+    /// MCP server tool
+    McpServer {
+        /// The MCP server configuration
+        #[serde(rename = "mcp_server")]
+        mcp_server: Value,
     },
 }
 
@@ -49,6 +75,31 @@ impl Tool {
     /// Create a new URL Context tool
     pub fn url_context() -> Self {
         Self::URLContext { url_context: URLContextConfig {} }
+    }
+
+    /// Create a new Google Maps tool
+    pub fn google_maps(config: Value) -> Self {
+        Self::GoogleMaps { google_maps: config }
+    }
+
+    /// Create a new code execution tool
+    pub fn code_execution() -> Self {
+        Self::CodeExecution { code_execution: Value::Object(Default::default()) }
+    }
+
+    /// Create a new file search tool
+    pub fn file_search(config: Value) -> Self {
+        Self::FileSearch { file_search: config }
+    }
+
+    /// Create a new computer use tool
+    pub fn computer_use(config: Value) -> Self {
+        Self::ComputerUse { computer_use: config }
+    }
+
+    /// Create a new MCP server tool
+    pub fn mcp_server(config: Value) -> Self {
+        Self::McpServer { mcp_server: config }
     }
 }
 
@@ -251,6 +302,9 @@ pub struct ToolConfig {
     /// (`toolCall`/`toolResponse`) in the response instead of silently truncating.
     #[serde(skip_serializing_if = "Option::is_none", rename = "includeServerSideToolInvocations")]
     pub include_server_side_tool_invocations: Option<bool>,
+    /// Retrieval configuration used by provider-native tools such as Google Maps.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "retrievalConfig")]
+    pub retrieval_config: Option<Value>,
 }
 
 /// Configuration for function calling
@@ -281,6 +335,7 @@ mod tests {
         let config = ToolConfig {
             function_calling_config: None,
             include_server_side_tool_invocations: Some(true),
+            retrieval_config: None,
         };
 
         let json = serde_json::to_value(&config).unwrap();
@@ -296,6 +351,7 @@ mod tests {
     fn tool_config_default_omits_server_side_flag() {
         let config = ToolConfig::default();
         assert_eq!(config.include_server_side_tool_invocations, None);
+        assert_eq!(config.retrieval_config, None);
 
         let json = serde_json::to_value(&config).unwrap();
         assert!(json.get("includeServerSideToolInvocations").is_none());

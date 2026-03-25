@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Provider-native built-in tool support (adk-tool, adk-model, adk-gemini, examples)
+- Added typed built-in tool wrappers for Gemini (`GoogleMapsTool`, `GeminiCodeExecutionTool`, `GeminiFileSearchTool`, `GeminiComputerUseTool`), OpenAI Responses (`OpenAIWebSearchTool`, `OpenAIFileSearchTool`, `OpenAICodeInterpreterTool`, `OpenAIImageGenerationTool`, `OpenAIComputerUseTool`, `OpenAIMcpTool`, `OpenAILocalShellTool`, `OpenAIShellTool`, `OpenAIApplyPatchTool`), and Anthropic (`WebSearchTool`, native bash, native text editor variants).
+- Added a provider-native declaration path to the shared `Tool` API so agents can mix built-in tools with ordinary `FunctionTool`s without relying on opaque `GenerateContentConfig.extensions` blobs.
+- Expanded Gemini wire models to understand additional native tool declarations and code-execution parts, and updated the OpenAI/Anthropic examples to use the new typed wrappers directly.
+
+### Changed
+
+#### Built-in tool adapters
+- **adk-model (OpenAI Responses)**: Native OpenAI tool declarations now deserialize from tool metadata instead of only `extensions["openai"]["built_in_tools"]`. Server-side tool outputs are preserved as typed Responses `Item` payloads so they survive streaming finalization and stateless round-trips.
+- **adk-model (Anthropic)**: Native Anthropic tool declarations now deserialize from tool metadata, streamed `server_tool_use` / `web_search_tool_result` blocks are preserved in final streamed responses, and string tool results are no longer double-JSON-encoded.
+- **adk-model (Gemini)**: Gemini native tools are now metadata-driven instead of name-driven, mixed built-in/function tool detection works for the broader Gemini tool surface, and native tool config such as `retrievalConfig` is forwarded correctly.
+
 #### AP2 alpha adapter (adk-payments)
 - Added typed AP2 alpha mandate, payment request, payment response, and payment receipt models plus an `Ap2Adapter` that routes human-present and human-not-present flows through the shared checkout, payment, intervention, journal, and evidence services.
 - Added `ap2-a2a` AgentCard and A2A container helpers, `ap2-mcp` safe MCP-facing mandate and receipt views, AP2 fixture coverage, and end-to-end AP2 integration tests.

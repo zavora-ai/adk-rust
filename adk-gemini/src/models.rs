@@ -92,6 +92,28 @@ pub enum Part {
     ToolResponse {
         #[serde(rename = "toolResponse")]
         tool_response: serde_json::Value,
+        /// The thought signature (Gemini 3.x thinking models).
+        /// Must be preserved and echoed back in conversation history.
+        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
+    },
+    /// Generated code emitted by Gemini code execution.
+    ExecutableCode {
+        #[serde(rename = "executableCode")]
+        executable_code: serde_json::Value,
+        /// The thought signature (Gemini 3.x thinking models).
+        /// Must be preserved and echoed back in conversation history.
+        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
+    },
+    /// Result emitted by Gemini code execution.
+    CodeExecutionResult {
+        #[serde(rename = "codeExecutionResult")]
+        code_execution_result: serde_json::Value,
+        /// The thought signature (Gemini 3.x thinking models).
+        /// Must be preserved and echoed back in conversation history.
+        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
     },
 }
 
@@ -360,12 +382,13 @@ mod tests {
 
     #[test]
     fn test_tool_response_deserialize_and_roundtrip() {
-        let json = r#"{"toolResponse": {"name": "google_search", "output": {"results": []}}}"#;
+        let json = r#"{"toolResponse": {"name": "google_search", "output": {"results": []}}, "thoughtSignature": "sig_123"}"#;
         let part: Part = serde_json::from_str(json).expect("should deserialize toolResponse");
         match &part {
-            Part::ToolResponse { tool_response } => {
+            Part::ToolResponse { tool_response, thought_signature } => {
                 assert_eq!(tool_response["name"], "google_search");
                 assert_eq!(tool_response["output"]["results"], serde_json::json!([]));
+                assert_eq!(thought_signature.as_deref(), Some("sig_123"));
             }
             other => panic!("expected Part::ToolResponse, got {other:?}"),
         }
@@ -374,5 +397,36 @@ mod tests {
         let deserialized: Part =
             serde_json::from_str(&serialized).expect("should deserialize again");
         assert_eq!(part, deserialized);
+    }
+
+    #[test]
+    fn test_code_execution_parts_preserve_thought_signature() {
+        let executable = serde_json::json!({
+            "executableCode": { "language": "python", "code": "print(1)" },
+            "thoughtSignature": "sig_exec"
+        });
+        let result = serde_json::json!({
+            "codeExecutionResult": { "outcome": "OUTCOME_OK", "output": "1" },
+            "thoughtSignature": "sig_result"
+        });
+
+        let executable_part: Part =
+            serde_json::from_value(executable).expect("should deserialize executable code");
+        let result_part: Part =
+            serde_json::from_value(result).expect("should deserialize code execution result");
+
+        match executable_part {
+            Part::ExecutableCode { thought_signature, .. } => {
+                assert_eq!(thought_signature.as_deref(), Some("sig_exec"));
+            }
+            other => panic!("expected Part::ExecutableCode, got {other:?}"),
+        }
+
+        match result_part {
+            Part::CodeExecutionResult { thought_signature, .. } => {
+                assert_eq!(thought_signature.as_deref(), Some("sig_result"));
+            }
+            other => panic!("expected Part::CodeExecutionResult, got {other:?}"),
+        }
     }
 }

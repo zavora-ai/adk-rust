@@ -13,6 +13,7 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 - **FunctionTool** - Create tools from async Rust functions
 - **AgentTool** - Use agents as callable tools for composition (runs sub-agents in non-streaming mode for reliable response capture)
 - **GoogleSearchTool** - Web search via Gemini's grounding
+- **Provider-native wrappers** - Typed declarations for Gemini, Anthropic, and OpenAI built-in tools
 - **McpToolset** - Model Context Protocol integration (local & remote servers)
 - **BasicToolset** - Group multiple tools together
 - **FilteredToolset** - Filter tools from any toolset by predicate

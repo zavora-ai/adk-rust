@@ -98,6 +98,8 @@ impl From<AnthropicApiError> for AdkError {
 pub enum ConversionError {
     /// The MIME type is not supported by the Anthropic API.
     UnsupportedMimeType(String),
+    /// A provider-native tool declaration could not be deserialized.
+    InvalidToolDeclaration(String),
 }
 
 impl std::fmt::Display for ConversionError {
@@ -106,6 +108,7 @@ impl std::fmt::Display for ConversionError {
             ConversionError::UnsupportedMimeType(mime) => {
                 write!(f, "unsupported MIME type for Anthropic API: {mime}")
             }
+            ConversionError::InvalidToolDeclaration(message) => write!(f, "{message}"),
         }
     }
 }

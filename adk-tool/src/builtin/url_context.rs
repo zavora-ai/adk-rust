@@ -1,6 +1,6 @@
 use adk_core::{Result, Tool, ToolContext};
 use async_trait::async_trait;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 /// UrlContext is a built-in tool that is automatically invoked by Gemini
@@ -28,6 +28,16 @@ impl Tool for UrlContextTool {
 
     fn is_builtin(&self) -> bool {
         true
+    }
+
+    fn declaration(&self) -> Value {
+        json!({
+            "name": self.name(),
+            "description": self.description(),
+            "x-adk-gemini-tool": {
+                "url_context": {}
+            }
+        })
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {

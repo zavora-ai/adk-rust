@@ -9,12 +9,15 @@ use adk_core::{
     UsageMetadata,
 };
 use async_openai::types::responses::{
-    CreateResponse, CreateResponseArgs, EasyInputContent, EasyInputMessage, FunctionCallOutput,
-    FunctionCallOutputItemParam, FunctionTool, FunctionToolCall, InputContent, InputImageContent,
-    InputItem, InputParam, Item, OutputItem, OutputMessageContent, Reasoning,
+    ApplyPatchToolCallItemParam, ApplyPatchToolCallOutputItemParam, CreateResponse,
+    CreateResponseArgs, EasyInputContent, EasyInputMessage, FunctionCallOutput,
+    FunctionCallOutputItemParam, FunctionShellCallItemParam, FunctionShellCallOutputItemParam,
+    FunctionTool, FunctionToolCall, IncludeEnum, InputContent, InputImageContent, InputItem,
+    InputParam, Item, OutputItem, OutputMessageContent, Reasoning,
     ReasoningEffort as OaiReasoningEffort, ReasoningSummary as OaiReasoningSummary, Response,
-    ResponseUsage, Role, Status, SummaryPart, Tool,
+    ResponseUsage, Role, Status, SummaryPart, Tool, Truncation,
 };
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 
 use super::config::{ReasoningEffort, ReasoningSummary};
@@ -22,6 +25,37 @@ use super::config::{ReasoningEffort, ReasoningSummary};
 /// Convert a list of ADK `Content` items to Responses API `InputItem` list.
 pub fn contents_to_input_items(contents: &[Content]) -> Vec<InputItem> {
     contents.iter().flat_map(content_to_input_items).collect()
+}
+
+/// Returns true when the request includes any OpenAI-native tool declarations.
+pub fn request_uses_native_tools(request: &LlmRequest) -> bool {
+    request.tools.values().any(|decl| decl.get("x-adk-openai-tool").is_some())
+        || request
+            .config
+            .as_ref()
+            .and_then(|config| config.extensions.get("openai"))
+            .and_then(|value| value.get("built_in_tools"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|tools| !tools.is_empty())
+}
+
+fn request_uses_computer_use_tool(request: &LlmRequest) -> bool {
+    request.tools.values().any(|decl| {
+        decl.get("x-adk-openai-tool")
+            .and_then(|tool| tool.get("type"))
+            .and_then(serde_json::Value::as_str)
+            == Some("computer_use_preview")
+    }) || request
+        .config
+        .as_ref()
+        .and_then(|config| config.extensions.get("openai"))
+        .and_then(|value| value.get("built_in_tools"))
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|tools| {
+            tools.iter().any(|tool| {
+                tool.get("type").and_then(serde_json::Value::as_str) == Some("computer_use_preview")
+            })
+        })
 }
 
 /// Convert a single ADK `Content` to one or more `InputItem`s.
@@ -123,8 +157,16 @@ fn content_to_input_items(content: &Content) -> Vec<InputItem> {
                 // FileData is not directly mapped to Responses API input items.
                 // Could be extended in the future.
             }
-            // Server-side tool parts are Gemini-specific; skip for OpenAI
-            Part::ServerToolCall { .. } | Part::ServerToolResponse { .. } => {}
+            Part::ServerToolCall { server_tool_call } => {
+                if let Ok(item) = serde_json::from_value::<Item>(server_tool_call.clone()) {
+                    items.push(InputItem::Item(item));
+                }
+            }
+            Part::ServerToolResponse { server_tool_response } => {
+                if let Ok(item) = serde_json::from_value::<Item>(server_tool_response.clone()) {
+                    items.push(InputItem::Item(item));
+                }
+            }
         }
     }
 
@@ -132,19 +174,32 @@ fn content_to_input_items(content: &Content) -> Vec<InputItem> {
 }
 
 /// Convert ADK tools map to Responses API `Tool` list.
-pub fn convert_tools(tools: &HashMap<String, serde_json::Value>) -> Vec<Tool> {
+pub fn convert_tools(tools: &HashMap<String, serde_json::Value>) -> Result<Vec<Tool>, AdkError> {
     tools
         .iter()
         .map(|(name, decl)| {
-            let description = decl.get("description").and_then(|d| d.as_str()).map(String::from);
-            let parameters = decl.get("parameters").cloned();
+            if let Some(provider_tool) = decl.get("x-adk-openai-tool") {
+                serde_json::from_value::<Tool>(provider_tool.clone()).map_err(|error| {
+                    AdkError::new(
+                        ErrorComponent::Model,
+                        ErrorCategory::InvalidInput,
+                        "model.openai_responses.invalid_tool",
+                        format!("failed to deserialize OpenAI native tool '{name}': {error}"),
+                    )
+                    .with_provider("openai-responses")
+                })
+            } else {
+                let description =
+                    decl.get("description").and_then(|d| d.as_str()).map(String::from);
+                let parameters = decl.get("parameters").cloned();
 
-            Tool::Function(FunctionTool {
-                name: name.clone(),
-                description,
-                parameters,
-                strict: None,
-            })
+                Ok(Tool::Function(FunctionTool {
+                    name: name.clone(),
+                    description,
+                    parameters,
+                    strict: None,
+                }))
+            }
         })
         .collect()
 }
@@ -203,7 +258,7 @@ pub fn build_create_response(
     let input = InputParam::Items(input_items);
 
     // 4. Convert tools
-    let mut tools_vec = convert_tools(&request.tools);
+    let mut tools_vec = convert_tools(&request.tools)?;
 
     // 9. Read extensions["openai"]["built_in_tools"] → append to tools array
     let extensions = config.map(|c| &c.extensions);
@@ -211,15 +266,55 @@ pub fn build_create_response(
 
     if let Some(built_in_tools) = openai_ext.and_then(|o| o.get("built_in_tools")) {
         if let Some(arr) = built_in_tools.as_array() {
-            for tool_value in arr {
-                if let Ok(tool) = serde_json::from_value::<Tool>(tool_value.clone()) {
-                    tools_vec.push(tool);
-                }
+            for (index, tool_value) in arr.iter().enumerate() {
+                let tool = serde_json::from_value::<Tool>(tool_value.clone()).map_err(|error| {
+                    AdkError::new(
+                        ErrorComponent::Model,
+                        ErrorCategory::InvalidInput,
+                        "model.openai_responses.invalid_tool",
+                        format!(
+                            "failed to deserialize OpenAI built-in tool at index {index}: {error}"
+                        ),
+                    )
+                    .with_provider("openai-responses")
+                })?;
+                tools_vec.push(tool);
             }
         }
     }
 
     let tools = if tools_vec.is_empty() { None } else { Some(tools_vec) };
+
+    let include = openai_ext
+        .and_then(|o| o.get("include"))
+        .map(|value| {
+            serde_json::from_value::<Vec<IncludeEnum>>(value.clone()).map_err(|error| {
+                AdkError::new(
+                    ErrorComponent::Model,
+                    ErrorCategory::InvalidInput,
+                    "model.openai_responses.invalid_include",
+                    format!("failed to deserialize OpenAI include list: {error}"),
+                )
+                .with_provider("openai-responses")
+            })
+        })
+        .transpose()?;
+
+    let max_tool_calls = openai_ext
+        .and_then(|o| o.get("max_tool_calls"))
+        .and_then(|value| value.as_u64())
+        .map(|value| {
+            u32::try_from(value).map_err(|_| {
+                AdkError::new(
+                    ErrorComponent::Model,
+                    ErrorCategory::InvalidInput,
+                    "model.openai_responses.invalid_max_tool_calls",
+                    format!("OpenAI max_tool_calls '{value}' exceeds u32"),
+                )
+                .with_provider("openai-responses")
+            })
+        })
+        .transpose()?;
 
     // 5. Forward temperature, top_p, max_output_tokens
     let temperature = config.and_then(|c| c.temperature);
@@ -272,8 +367,14 @@ pub fn build_create_response(
     if let Some(inst) = instructions {
         builder.instructions(inst);
     }
+    if let Some(include) = include {
+        builder.include(include);
+    }
     if let Some(t) = tools {
         builder.tools(t);
+    }
+    if let Some(max_tool_calls) = max_tool_calls {
+        builder.max_tool_calls(max_tool_calls);
     }
     if let Some(temp) = temperature {
         builder.temperature(temp);
@@ -286,6 +387,9 @@ pub fn build_create_response(
     }
     if let Some(r) = reasoning {
         builder.reasoning(r);
+    }
+    if request_uses_computer_use_tool(request) {
+        builder.truncation(Truncation::Auto);
     }
     if let Some(prev_id) = previous_response_id {
         builder.previous_response_id(prev_id);
@@ -375,31 +479,87 @@ fn output_item_to_parts(item: &OutputItem) -> Vec<Part> {
                 thought_signature: None,
             }]
         }
-        // Built-in tool outputs: emit as ServerToolCall/ServerToolResponse parts
-        OutputItem::WebSearchCall(ws) => {
-            if let Ok(val) = serde_json::to_value(ws) {
-                vec![Part::ServerToolCall { server_tool_call: val }]
-            } else {
-                vec![]
-            }
-        }
+        OutputItem::WebSearchCall(ws) => response_item_part(Item::WebSearchCall(ws.clone()), false),
         OutputItem::FileSearchCall(fs) => {
-            if let Ok(val) = serde_json::to_value(fs) {
-                vec![Part::ServerToolCall { server_tool_call: val }]
-            } else {
-                vec![]
-            }
+            response_item_part(Item::FileSearchCall(fs.clone()), false)
         }
-        OutputItem::CodeInterpreterCall(ci) => {
-            if let Ok(val) = serde_json::to_value(ci) {
-                vec![Part::ServerToolCall { server_tool_call: val }]
-            } else {
-                vec![]
-            }
+        OutputItem::ComputerCall(call) => {
+            response_item_part(Item::ComputerCall(call.clone()), false)
         }
-        // Other variants not yet mapped
-        _ => vec![],
+        OutputItem::ImageGenerationCall(call) => {
+            response_item_part(Item::ImageGenerationCall(call.clone()), false)
+        }
+        OutputItem::CodeInterpreterCall(call) => {
+            response_item_part(Item::CodeInterpreterCall(call.clone()), false)
+        }
+        OutputItem::LocalShellCall(call) => {
+            response_item_part(Item::LocalShellCall(call.clone()), false)
+        }
+        OutputItem::ShellCall(call) => bridge_response_item::<FunctionShellCallItemParam, _>(call)
+            .map(|item| response_item_part(Item::ShellCall(item), false))
+            .unwrap_or_default(),
+        OutputItem::ShellCallOutput(output) => {
+            bridge_response_item::<FunctionShellCallOutputItemParam, _>(output)
+                .map(|item| response_item_part(Item::ShellCallOutput(item), true))
+                .unwrap_or_default()
+        }
+        OutputItem::ApplyPatchCall(call) => {
+            bridge_response_item::<ApplyPatchToolCallItemParam, _>(call)
+                .map(|item| response_item_part(Item::ApplyPatchCall(item), false))
+                .unwrap_or_default()
+        }
+        OutputItem::ApplyPatchCallOutput(output) => {
+            bridge_response_item::<ApplyPatchToolCallOutputItemParam, _>(output)
+                .map(|item| response_item_part(Item::ApplyPatchCallOutput(item), true))
+                .unwrap_or_default()
+        }
+        OutputItem::McpCall(call) => response_item_part(Item::McpCall(call.clone()), false),
+        OutputItem::McpListTools(list) => {
+            response_item_part(Item::McpListTools(list.clone()), false)
+        }
+        OutputItem::McpApprovalRequest(request) => {
+            response_item_part(Item::McpApprovalRequest(request.clone()), false)
+        }
+        OutputItem::CustomToolCall(call) => {
+            response_item_part(Item::CustomToolCall(call.clone()), false)
+        }
+        _ => Vec::new(),
     }
+}
+
+fn response_item_part(item: Item, is_output: bool) -> Vec<Part> {
+    serde_json::to_value(item)
+        .ok()
+        .map(|value| {
+            if is_output {
+                vec![Part::ServerToolResponse { server_tool_response: value }]
+            } else {
+                vec![Part::ServerToolCall { server_tool_call: value }]
+            }
+        })
+        .unwrap_or_default()
+}
+
+fn bridge_response_item<Input, Output>(output: &Output) -> Option<Input>
+where
+    Input: DeserializeOwned,
+    Output: serde::Serialize,
+{
+    serde_json::to_value(output).ok().and_then(|value| serde_json::from_value(value).ok())
+}
+
+fn reasoning_history_parts(response: &Response) -> Vec<serde_json::Value> {
+    response
+        .output
+        .iter()
+        .filter_map(|item| match item {
+            OutputItem::Reasoning(reasoning) => {
+                response_item_part(Item::Reasoning(reasoning.clone()), false).into_iter().next()
+            }
+            _ => None,
+        })
+        .filter_map(|part| serde_json::to_value(part).ok())
+        .collect()
 }
 
 /// Convert Responses API usage to ADK `UsageMetadata`.
@@ -461,20 +621,44 @@ fn build_provider_metadata(response: &Response) -> Option<serde_json::Value> {
     for item in &response.output {
         match item {
             OutputItem::WebSearchCall(ws) => {
-                if let Ok(val) = serde_json::to_value(ws) {
-                    built_in_outputs.push(val);
-                }
+                built_in_outputs.extend(serde_json::to_value(Item::WebSearchCall(ws.clone())).ok())
             }
             OutputItem::FileSearchCall(fs) => {
-                if let Ok(val) = serde_json::to_value(fs) {
-                    built_in_outputs.push(val);
-                }
+                built_in_outputs.extend(serde_json::to_value(Item::FileSearchCall(fs.clone())).ok())
             }
-            OutputItem::CodeInterpreterCall(ci) => {
-                if let Ok(val) = serde_json::to_value(ci) {
-                    built_in_outputs.push(val);
-                }
+            OutputItem::ComputerCall(call) => {
+                built_in_outputs.extend(serde_json::to_value(Item::ComputerCall(call.clone())).ok())
             }
+            OutputItem::ImageGenerationCall(call) => built_in_outputs
+                .extend(serde_json::to_value(Item::ImageGenerationCall(call.clone())).ok()),
+            OutputItem::CodeInterpreterCall(call) => built_in_outputs
+                .extend(serde_json::to_value(Item::CodeInterpreterCall(call.clone())).ok()),
+            OutputItem::LocalShellCall(call) => built_in_outputs
+                .extend(serde_json::to_value(Item::LocalShellCall(call.clone())).ok()),
+            OutputItem::ShellCall(call) => built_in_outputs.extend(
+                bridge_response_item::<FunctionShellCallItemParam, _>(call)
+                    .and_then(|item| serde_json::to_value(Item::ShellCall(item)).ok()),
+            ),
+            OutputItem::ShellCallOutput(output) => built_in_outputs.extend(
+                bridge_response_item::<FunctionShellCallOutputItemParam, _>(output)
+                    .and_then(|item| serde_json::to_value(Item::ShellCallOutput(item)).ok()),
+            ),
+            OutputItem::ApplyPatchCall(call) => built_in_outputs.extend(
+                bridge_response_item::<ApplyPatchToolCallItemParam, _>(call)
+                    .and_then(|item| serde_json::to_value(Item::ApplyPatchCall(item)).ok()),
+            ),
+            OutputItem::ApplyPatchCallOutput(output) => built_in_outputs.extend(
+                bridge_response_item::<ApplyPatchToolCallOutputItemParam, _>(output)
+                    .and_then(|item| serde_json::to_value(Item::ApplyPatchCallOutput(item)).ok()),
+            ),
+            OutputItem::McpCall(call) => {
+                built_in_outputs.extend(serde_json::to_value(Item::McpCall(call.clone())).ok())
+            }
+            OutputItem::McpListTools(list) => {
+                built_in_outputs.extend(serde_json::to_value(Item::McpListTools(list.clone())).ok())
+            }
+            OutputItem::McpApprovalRequest(request) => built_in_outputs
+                .extend(serde_json::to_value(Item::McpApprovalRequest(request.clone())).ok()),
             _ => {}
         }
     }
@@ -486,5 +670,208 @@ fn build_provider_metadata(response: &Response) -> Option<serde_json::Value> {
         );
     }
 
+    let history_parts = reasoning_history_parts(response);
+    if !history_parts.is_empty() {
+        openai.insert(
+            "conversation_history_parts".to_string(),
+            serde_json::Value::Array(history_parts),
+        );
+    }
+
     Some(serde_json::json!({ "openai": openai }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use adk_core::{GenerateContentConfig, LlmRequest};
+    use async_openai::types::responses::{
+        OutputStatus, WebSearchActionSearch, WebSearchToolCall, WebSearchToolCallAction,
+        WebSearchToolCallStatus,
+    };
+
+    #[test]
+    fn test_convert_tools_supports_native_openai_tool_declarations() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "local_shell".to_string(),
+            serde_json::json!({
+                "x-adk-openai-tool": {
+                    "type": "local_shell"
+                }
+            }),
+        );
+
+        let converted = convert_tools(&tools).expect("tool conversion should succeed");
+        assert_eq!(converted.len(), 1);
+        let value = serde_json::to_value(&converted[0]).expect("tool should serialize");
+        assert_eq!(value["type"], "local_shell");
+    }
+
+    #[test]
+    fn test_server_tool_parts_round_trip_as_openai_items() {
+        let parts = output_item_to_parts(&OutputItem::WebSearchCall(WebSearchToolCall {
+            action: WebSearchToolCallAction::Search(WebSearchActionSearch {
+                query: "rust".to_string(),
+                sources: None,
+            }),
+            id: "ws_123".to_string(),
+            status: WebSearchToolCallStatus::Completed,
+        }));
+
+        assert!(matches!(parts[0], Part::ServerToolCall { .. }));
+
+        let items = contents_to_input_items(&[Content { role: "model".to_string(), parts }]);
+
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            InputItem::Item(Item::WebSearchCall(call)) => {
+                assert_eq!(call.id, "ws_123");
+                assert_eq!(call.status, WebSearchToolCallStatus::Completed);
+            }
+            other => panic!("expected web_search_call item, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_server_tool_response_round_trip_as_openai_items() {
+        let content = Content {
+            role: "model".to_string(),
+            parts: vec![Part::ServerToolResponse {
+                server_tool_response: serde_json::json!({
+                    "type": "shell_call_output",
+                    "id": "sh_out_123",
+                    "call_id": "call_123",
+                    "output": [{
+                        "stdout": "ok",
+                        "stderr": "",
+                        "type": "exit",
+                        "exit_code": 0
+                    }],
+                    "max_output_length": 1024
+                }),
+            }],
+        };
+
+        let items = contents_to_input_items(&[content]);
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            InputItem::Item(Item::ShellCallOutput(output)) => {
+                assert_eq!(output.call_id, "call_123");
+                assert_eq!(output.output.len(), 1);
+            }
+            other => panic!("expected shell_call_output item, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_build_create_response_rejects_invalid_extension_builtin_tool() {
+        let mut extensions = serde_json::Map::new();
+        extensions.insert(
+            "openai".to_string(),
+            serde_json::json!({
+                "built_in_tools": [
+                    {
+                        "type": "not_a_real_tool"
+                    }
+                ]
+            }),
+        );
+
+        let request = LlmRequest {
+            model: "gpt-5".to_string(),
+            contents: vec![],
+            config: Some(GenerateContentConfig { extensions, ..Default::default() }),
+            tools: HashMap::new(),
+        };
+
+        let error = build_create_response("gpt-5", &request, None, None)
+            .expect_err("invalid built-in tool should fail");
+
+        assert_eq!(error.code, "model.openai_responses.invalid_tool");
+    }
+
+    #[test]
+    fn test_request_uses_native_tools_detects_native_declarations() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "openai_web_search".to_string(),
+            serde_json::json!({
+                "x-adk-openai-tool": {
+                    "type": "web_search_2025_08_26"
+                }
+            }),
+        );
+
+        let request =
+            LlmRequest { model: "gpt-5.4".to_string(), contents: vec![], config: None, tools };
+
+        assert!(request_uses_native_tools(&request));
+    }
+
+    #[test]
+    fn test_build_create_response_sets_auto_truncation_for_computer_use() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "openai_computer_use".to_string(),
+            serde_json::json!({
+                "x-adk-openai-tool": {
+                    "type": "computer_use_preview",
+                    "environment": "browser",
+                    "display_width": 1440,
+                    "display_height": 900
+                }
+            }),
+        );
+
+        let request = LlmRequest {
+            model: "computer-use-preview".to_string(),
+            contents: vec![],
+            config: None,
+            tools,
+        };
+
+        let built = build_create_response("computer-use-preview", &request, None, None)
+            .expect("request should build");
+        assert_eq!(built.truncation, Some(Truncation::Auto));
+    }
+
+    #[test]
+    fn test_provider_metadata_includes_reasoning_history_parts() {
+        let response: Response = serde_json::from_value(serde_json::json!({
+            "id": "resp_123",
+            "object": "response",
+            "created_at": 0,
+            "model": "gpt-5.4",
+            "status": "completed",
+            "output": [
+                {
+                    "id": "rs_123",
+                    "type": "reasoning",
+                    "summary": [
+                        {
+                            "type": "summary_text",
+                            "text": "thinking"
+                        }
+                    ],
+                    "encrypted_content": "sealed"
+                }
+            ],
+            "usage": {
+                "input_tokens": 1,
+                "input_tokens_details": { "cached_tokens": 0 },
+                "output_tokens": 1,
+                "output_tokens_details": { "reasoning_tokens": 1 },
+                "total_tokens": 2
+            }
+        }))
+        .expect("response should deserialize");
+
+        let metadata = build_provider_metadata(&response).expect("metadata should exist");
+        let parts = metadata["openai"]["conversation_history_parts"]
+            .as_array()
+            .expect("history parts should be present");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0]["server_tool_call"]["type"], "reasoning");
+    }
 }

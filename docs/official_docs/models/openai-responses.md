@@ -303,27 +303,19 @@ let agent = LlmAgentBuilder::new("flexible_reasoner")
 
 ### Built-In Tools
 
-The Responses API supports OpenAI-hosted tools. Pass them via extensions:
+The Responses API supports OpenAI-hosted tools. Prefer the typed wrappers from `adk-tool`:
 
 ```rust
+use adk_tool::OpenAIWebSearchTool;
+use std::sync::Arc;
+
 let agent = LlmAgentBuilder::new("researcher")
     .model(model)
-    .generate_content_config(GenerateContentConfig {
-        extensions: {
-            let mut ext = std::collections::HashMap::new();
-            ext.insert("openai".to_string(), serde_json::json!({
-                "built_in_tools": [
-                    { "type": "web_search_preview" }
-                ]
-            }));
-            ext
-        },
-        ..Default::default()
-    })
+    .tool(Arc::new(OpenAIWebSearchTool::new().preview()))
     .build()?;
 ```
 
-Available built-in tools: `web_search_preview`, `file_search`, `code_interpreter`.
+Available wrappers include `OpenAIWebSearchTool`, `OpenAIFileSearchTool`, `OpenAICodeInterpreterTool`, `OpenAIImageGenerationTool`, `OpenAIComputerUseTool`, `OpenAIMcpTool`, `OpenAILocalShellTool`, `OpenAIShellTool`, and `OpenAIApplyPatchTool`.
 
 ### Previous Response ID
 

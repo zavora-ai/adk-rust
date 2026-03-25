@@ -2,6 +2,8 @@
 
 ADK-Rust provides several built-in tools that extend agent capabilities without requiring custom implementation. These tools are ready to use out of the box and integrate seamlessly with the agent framework.
 
+Provider-native tools are now declared through the normal `Tool` API instead of provider-specific `GenerateContentConfig.extensions` blobs. This means you can mix native tools such as Gemini Google Search, Anthropic Web Search, or OpenAI Responses web search with ordinary `FunctionTool` instances in the same agent.
+
 ## Overview
 
 | Tool | Purpose | Use Case |
@@ -9,6 +11,11 @@ ADK-Rust provides several built-in tools that extend agent capabilities without 
 | `#[tool]` macro | Zero-boilerplate custom tools | Any custom function — [see Function Tools](function-tools.md) |
 | `FunctionTool` | Manual custom tool registration | Dynamic tools, closures |
 | `GoogleSearchTool` | Web search via Gemini | Real-time information retrieval |
+| `UrlContextTool` | Gemini URL grounding | Summarize or reason over live URLs |
+| `GoogleMapsTool` | Gemini Google Maps grounding | Places, routes, and local context |
+| `GeminiCodeExecutionTool` | Gemini native code execution | Server-side Python execution |
+| `WebSearchTool` | Anthropic native web search | Claude server-side web search |
+| `OpenAIWebSearchTool` | OpenAI Responses web search | OpenAI-hosted retrieval |
 | `AgentTool` | Wrap agents as callable tools | Agent composition and delegation |
 | `ExitLoopTool` | Loop termination | Controlling LoopAgent iterations |
 | `LoadArtifactsTool` | Artifact loading | Accessing stored binary data |

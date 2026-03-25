@@ -73,7 +73,14 @@ pub use adk_rust_macros::tool;
 pub use agent_tool::{AgentTool, AgentToolConfig};
 pub use async_trait::async_trait;
 pub use builtin::{
-    ExitLoopTool, GoogleSearchTool, LoadArtifactsTool, UrlContextTool, WebSearchTool,
+    AnthropicBashTool20241022, AnthropicBashTool20250124, AnthropicTextEditorTool20250124,
+    AnthropicTextEditorTool20250429, AnthropicTextEditorTool20250728, ExitLoopTool,
+    GeminiCodeExecutionTool, GeminiComputerEnvironment, GeminiComputerUseTool,
+    GeminiFileSearchTool, GoogleMapsContext, GoogleMapsTool, GoogleSearchTool, LoadArtifactsTool,
+    OpenAIApplyPatchTool, OpenAIApproximateLocation, OpenAICodeInterpreterTool,
+    OpenAIComputerEnvironment, OpenAIComputerUseTool, OpenAIFileSearchTool,
+    OpenAIImageGenerationTool, OpenAILocalShellTool, OpenAIMcpTool, OpenAIShellTool,
+    OpenAIWebSearchTool, UrlContextTool, WebSearchTool, WebSearchUserLocation,
 };
 pub use function_tool::FunctionTool;
 pub use mcp::{McpAuth, McpHttpClientBuilder, McpTaskConfig, McpToolset, OAuth2Config};

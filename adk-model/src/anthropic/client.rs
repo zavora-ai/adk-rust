@@ -5,7 +5,7 @@ use super::convert;
 use super::error::AnthropicApiError;
 use super::rate_limit::RateLimitInfo;
 use crate::retry::{RetryConfig, ServerRetryHint, execute_with_retry, is_retryable_model_error};
-use adk_core::{AdkError, FinishReason, Llm, LlmRequest, Part};
+use adk_core::{AdkError, ErrorCategory, ErrorComponent, FinishReason, Llm, LlmRequest, Part};
 use async_stream::try_stream;
 use async_trait::async_trait;
 use claudius::{
@@ -143,7 +143,7 @@ impl AnthropicClient {
         let mut tools = if request.tools.is_empty() {
             Vec::new()
         } else {
-            convert::convert_tools(&request.tools)
+            convert::convert_tools(&request.tools)?
         };
 
         // Read extensions["anthropic"]["built_in_tools"] → append to tools array
@@ -152,12 +152,22 @@ impl AnthropicClient {
             config.and_then(|c| c.extensions.get("anthropic")).and_then(|v| v.as_object());
         if let Some(built_in_tools) = anthropic_ext.and_then(|o| o.get("built_in_tools")) {
             if let Some(arr) = built_in_tools.as_array() {
-                for tool_value in arr {
-                    if let Ok(tool) =
-                        serde_json::from_value::<claudius::ToolUnionParam>(tool_value.clone())
-                    {
-                        tools.push(tool);
-                    }
+                for (index, tool_value) in arr.iter().enumerate() {
+                    let tool = serde_json::from_value::<claudius::ToolUnionParam>(
+                        tool_value.clone(),
+                    )
+                    .map_err(|error| {
+                        AdkError::new(
+                            ErrorComponent::Model,
+                            ErrorCategory::InvalidInput,
+                            "model.anthropic.invalid_tool",
+                            format!(
+                                "failed to deserialize Anthropic built-in tool at index {index}: {error}"
+                            ),
+                        )
+                        .with_provider("anthropic")
+                    })?;
+                    tools.push(tool);
                 }
             }
         }
@@ -402,6 +412,7 @@ impl Llm for AnthropicClient {
                 // Track tool calls being built
                 let mut current_tool_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, args_json)
                 let mut current_tool_index: Option<usize> = None;
+                let mut pending_server_parts: Vec<Part> = Vec::new();
 
                 // Track usage from MessageStart for propagation to final MessageDelta
                 let mut stream_input_tokens: i32 = 0;
@@ -437,17 +448,33 @@ impl Llm for AnthropicClient {
                         MessageStreamEvent::ContentBlockStart(start_event) => {
                             // Check if this is a tool_use block
                             let index = start_event.index;
-                            if let ContentBlock::ToolUse(tool_use) = start_event.content_block {
-                                current_tool_index = Some(index);
-                                // Ensure vector is large enough
-                                while current_tool_calls.len() <= index {
-                                    current_tool_calls.push((String::new(), String::new(), String::new()));
+                            match start_event.content_block {
+                                ContentBlock::ToolUse(tool_use) => {
+                                    current_tool_index = Some(index);
+                                    while current_tool_calls.len() <= index {
+                                        current_tool_calls
+                                            .push((String::new(), String::new(), String::new()));
+                                    }
+                                    current_tool_calls[index] = (
+                                        tool_use.id.clone(),
+                                        tool_use.name.clone(),
+                                        String::new(),
+                                    );
                                 }
-                                current_tool_calls[index] = (
-                                    tool_use.id.clone(),
-                                    tool_use.name.clone(),
-                                    String::new(),
-                                );
+                                ContentBlock::ServerToolUse(server_tool_use) => {
+                                    if let Ok(val) = serde_json::to_value(server_tool_use) {
+                                        pending_server_parts
+                                            .push(Part::ServerToolCall { server_tool_call: val });
+                                    }
+                                }
+                                ContentBlock::WebSearchToolResult(web_search_result) => {
+                                    if let Ok(val) = serde_json::to_value(web_search_result) {
+                                        pending_server_parts.push(Part::ServerToolResponse {
+                                            server_tool_response: val,
+                                        });
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                         MessageStreamEvent::ContentBlockDelta(ContentBlockDeltaEvent { index, delta }) => {
@@ -496,21 +523,49 @@ impl Llm for AnthropicClient {
                                 };
 
                                 // If we have accumulated tool calls, emit them
+                                let mut parts = pending_server_parts.drain(..).collect::<Vec<_>>();
                                 if !current_tool_calls.is_empty() {
-                                    let tool_calls: Vec<_> = current_tool_calls
+                                    let tool_calls = current_tool_calls
                                         .drain(..)
                                         .filter(|(id, name, _)| !id.is_empty() && !name.is_empty())
                                         .map(|(id, name, args_str)| {
                                             let args: serde_json::Value = serde_json::from_str(&args_str)
                                                 .unwrap_or(serde_json::json!({}));
-                                            (id, name, args)
+                                            Part::FunctionCall {
+                                                name,
+                                                args,
+                                                id: Some(id),
+                                                thought_signature: None,
+                                            }
                                         })
-                                        .collect();
+                                        .collect::<Vec<_>>();
+                                    parts.extend(tool_calls);
+                                }
 
-                                    if !tool_calls.is_empty() {
-                                        yield convert::create_tool_call_response(tool_calls, finish_reason);
-                                        continue;
-                                    }
+                                if !parts.is_empty() {
+                                    yield adk_core::LlmResponse {
+                                        content: Some(adk_core::Content {
+                                            role: "model".to_string(),
+                                            parts,
+                                        }),
+                                        usage_metadata: Some(adk_core::UsageMetadata {
+                                            prompt_token_count: stream_input_tokens,
+                                            candidates_token_count: delta_event.usage.output_tokens,
+                                            total_token_count: stream_input_tokens + delta_event.usage.output_tokens,
+                                            cache_read_input_token_count: stream_cache_read_tokens,
+                                            cache_creation_input_token_count: stream_cache_creation_tokens,
+                                            ..Default::default()
+                                        }),
+                                        finish_reason,
+                                        citation_metadata: None,
+                                        partial: false,
+                                        turn_complete: true,
+                                        interrupted: false,
+                                        error_code: None,
+                                        error_message: None,
+                                        provider_metadata: None,
+                                    };
+                                    continue;
                                 }
 
                                 // Emit final message
@@ -599,7 +654,7 @@ impl Llm for AnthropicClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adk_core::{Content, LlmRequest, Part};
+    use adk_core::{Content, GenerateContentConfig, LlmRequest, Part};
     use claudius::SystemPrompt;
 
     fn make_request(contents: Vec<Content>) -> LlmRequest {
@@ -837,6 +892,34 @@ mod tests {
 
         assert!(params.system.is_none());
         assert!(params.messages.is_empty());
+    }
+
+    #[test]
+    fn test_invalid_extension_builtin_tool_returns_error() {
+        let mut request = make_request(vec![]);
+        let mut extensions = serde_json::Map::new();
+        extensions.insert(
+            "anthropic".to_string(),
+            serde_json::json!({
+                "built_in_tools": [
+                    {
+                        "type": "web_fetch_20250910"
+                    }
+                ]
+            }),
+        );
+        request.config = Some(GenerateContentConfig { extensions, ..Default::default() });
+
+        let error = AnthropicClient::build_message_params(
+            "claude-sonnet-4-5-20250929",
+            4096,
+            &request,
+            false,
+            None,
+        )
+        .expect_err("invalid built-in tool should fail");
+
+        assert_eq!(error.code, "model.anthropic.invalid_tool");
     }
 
     /// Requirement 3.3: Ping events are treated as keep-alive no-ops and don't produce

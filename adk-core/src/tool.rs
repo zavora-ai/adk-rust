@@ -9,6 +9,43 @@ pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
 
+    /// Returns the tool declaration that should be exposed to model providers.
+    ///
+    /// The default implementation produces the standard ADK function-tool
+    /// declaration (`name`, `description`, optional `parameters`, optional
+    /// `response`). Provider-specific built-in tools may override this to attach
+    /// additional metadata that the provider adapters understand.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn declaration(&self) -> serde_json::Value {
+    ///     serde_json::json!({
+    ///         "name": self.name(),
+    ///         "description": self.description(),
+    ///         "x-adk-openai-tool": {
+    ///             "type": "web_search_2025_08_26"
+    ///         }
+    ///     })
+    /// }
+    /// ```
+    fn declaration(&self) -> Value {
+        let mut decl = serde_json::json!({
+            "name": self.name(),
+            "description": self.enhanced_description(),
+        });
+
+        if let Some(params) = self.parameters_schema() {
+            decl["parameters"] = params;
+        }
+
+        if let Some(response) = self.response_schema() {
+            decl["response"] = response;
+        }
+
+        decl
+    }
+
     /// Returns an enhanced description that may include additional notes.
     /// For long-running tools, this includes a warning not to call the tool
     /// again if it has already returned a pending status.

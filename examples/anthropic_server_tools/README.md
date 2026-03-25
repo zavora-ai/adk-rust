@@ -1,36 +1,33 @@
-# Anthropic Server-Side Tools Example
+# Anthropic Native Tools Example Matrix
 
-Demonstrates Anthropic's web search tool (`web_search_20250305`) running server-side alongside user-defined function calling tools.
-
-## Setup
-
-```bash
-cp .env.example .env
-# Edit .env with your Anthropic API key
-```
+This crate exercises every Anthropic native tool wrapper currently exposed by `adk-tool` and supported by the pinned `claudius` SDK surface in this repo.
 
 ## Run
 
 ```bash
+export ANTHROPIC_API_KEY=sk-ant-your-key-here
 cargo run --manifest-path examples/anthropic_server_tools/Cargo.toml
 ```
 
-## Scenarios
+Optional:
 
-1. Web search + function tool coexistence — verifies `ServerToolCall`/`ServerToolResponse` parts flow through when Anthropic executes web search server-side
-2. Custom function tool still works — verifies client-side function calling works alongside server-side web search
-
-## How It Works
-
-The web search tool is configured via `GenerateContentConfig` extensions:
-
-```rust
-let mut extensions = serde_json::Map::new();
-extensions.insert("anthropic".to_string(), json!({
-    "built_in_tools": [
-        { "type": "web_search_20250305", "name": "web_search" }
-    ]
-}));
+```bash
+export ANTHROPIC_MODEL=claude-sonnet-4-20250514
 ```
 
-The Anthropic client reads `extensions["anthropic"]["built_in_tools"]` and appends them to the tools list sent to the API. Server-side tool results appear as `Part::ServerToolCall` and `Part::ServerToolResponse` in the response stream.
+## Coverage
+
+| Scenario | Wrapper(s) | Notes |
+| --- | --- | --- |
+| Web search + function tool | `WebSearchTool` | Preserves Anthropic server-tool parts alongside a local function tool |
+| Bash 20241022 + function tool | `AnthropicBashTool20241022` | End-to-end agent loop with native bash execution |
+| Bash 20250124 + function tool | `AnthropicBashTool20250124` | End-to-end agent loop with native bash execution |
+| Text editor 20250124 multi-turn | `AnthropicTextEditorTool20250124` | Real file edit workflow across two turns |
+| Text editor 20250429 multi-turn | `AnthropicTextEditorTool20250429` | Real file edit workflow across two turns |
+| Text editor 20250728 multi-turn | `AnthropicTextEditorTool20250728` | Real file edit workflow across two turns |
+
+## Notes
+
+- The text-editor scenarios create a temporary file, ask the agent to edit it across multiple turns, and then verify the resulting file contents.
+- Anthropic web search is demonstrated as a true server-side native tool.
+- Anthropic bash and text-editor tools are demonstrated through the standard ADK agent tool loop, because that is how the current implementation executes them.

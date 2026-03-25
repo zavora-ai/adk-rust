@@ -13,6 +13,13 @@ use claudius::{
 use serde_json::Value;
 use std::collections::HashMap;
 
+fn tool_result_content(value: &Value) -> ToolResultBlockContent {
+    match value {
+        Value::String(text) => ToolResultBlockContent::String(text.clone()),
+        other => ToolResultBlockContent::String(serde_json::to_string(other).unwrap_or_default()),
+    }
+}
+
 /// Convert ADK Content to Claudius MessageParam.
 ///
 /// When `prompt_caching` is true, eligible content blocks will have
@@ -62,9 +69,7 @@ pub fn content_to_message(
             Part::FunctionResponse { function_response, id } => {
                 Some(ContentBlock::ToolResult(ToolResultBlock {
                     tool_use_id: id.clone().unwrap_or_else(|| "unknown".to_string()),
-                    content: Some(ToolResultBlockContent::String(
-                        serde_json::to_string(&function_response.response).unwrap_or_default(),
-                    )),
+                    content: Some(tool_result_content(&function_response.response)),
                     is_error: None,
                     cache_control: None,
                 }))
@@ -156,10 +161,22 @@ pub fn content_to_message(
 }
 
 /// Convert ADK tools to Claudius ToolUnionParam format.
-pub fn convert_tools(tools: &HashMap<String, Value>) -> Vec<ToolUnionParam> {
+pub fn convert_tools(
+    tools: &HashMap<String, Value>,
+) -> Result<Vec<ToolUnionParam>, ConversionError> {
     tools
         .iter()
         .map(|(name, decl)| {
+            if let Some(provider_tool) = decl.get("x-adk-anthropic-tool") {
+                return serde_json::from_value::<ToolUnionParam>(provider_tool.clone()).map_err(
+                    |error| {
+                        ConversionError::InvalidToolDeclaration(format!(
+                            "failed to deserialize Anthropic native tool '{name}': {error}"
+                        ))
+                    },
+                );
+            }
+
             let description = decl.get("description").and_then(|d| d.as_str()).map(String::from);
 
             let input_schema = decl.get("parameters").cloned().unwrap_or(serde_json::json!({
@@ -172,7 +189,7 @@ pub fn convert_tools(tools: &HashMap<String, Value>) -> Vec<ToolUnionParam> {
                 tool_param = tool_param.with_description(desc);
             }
 
-            ToolUnionParam::CustomTool(tool_param)
+            Ok(ToolUnionParam::CustomTool(tool_param))
         })
         .collect()
 }
@@ -319,35 +336,6 @@ pub fn extract_cache_usage(usage: &claudius::Usage) -> HashMap<String, String> {
         metadata.insert("anthropic.cache_read_input_tokens".to_string(), tokens.to_string());
     }
     metadata
-}
-
-/// Create final response with tool calls.
-pub fn create_tool_call_response(
-    tool_calls: Vec<(String, String, Value)>, // (id, name, args)
-    finish_reason: Option<FinishReason>,
-) -> LlmResponse {
-    let parts: Vec<Part> = tool_calls
-        .into_iter()
-        .map(|(id, name, args)| Part::FunctionCall {
-            name,
-            args,
-            id: Some(id),
-            thought_signature: None,
-        })
-        .collect();
-
-    LlmResponse {
-        content: Some(Content { role: "model".to_string(), parts }),
-        usage_metadata: None,
-        finish_reason,
-        citation_metadata: None,
-        partial: false,
-        turn_complete: true,
-        interrupted: false,
-        error_code: None,
-        error_message: None,
-        provider_metadata: None,
-    }
 }
 
 /// Build MessageCreateParams from LlmRequest.
@@ -606,8 +594,48 @@ mod tests {
             }),
         );
 
-        let claude_tools = convert_tools(&tools);
+        let claude_tools = convert_tools(&tools).expect("tool conversion should succeed");
         assert_eq!(claude_tools.len(), 1);
+    }
+
+    #[test]
+    fn test_convert_tools_supports_native_anthropic_tool_declarations() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "bash".to_string(),
+            serde_json::json!({
+                "x-adk-anthropic-tool": {
+                    "type": "bash_20250124",
+                    "name": "bash"
+                }
+            }),
+        );
+
+        let claude_tools = convert_tools(&tools).expect("tool conversion should succeed");
+        assert_eq!(claude_tools.len(), 1);
+        let value = serde_json::to_value(&claude_tools[0]).expect("tool should serialize");
+        assert_eq!(value["type"], "bash_20250124");
+        assert_eq!(value["name"], "bash");
+    }
+
+    #[test]
+    fn test_function_response_string_is_not_double_encoded() {
+        let content = Content {
+            role: "function".to_string(),
+            parts: vec![Part::FunctionResponse {
+                function_response: adk_core::FunctionResponseData {
+                    name: "bash".to_string(),
+                    response: Value::String("hello".to_string()),
+                },
+                id: Some("tool_123".to_string()),
+            }],
+        };
+
+        let message = content_to_message(&content, false).expect("content should convert");
+        let json = serde_json::to_value(message).expect("message should serialize");
+        let block = &json["content"][0];
+        assert_eq!(block["type"], "tool_result");
+        assert_eq!(block["content"], "hello");
     }
 
     #[test]

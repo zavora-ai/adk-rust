@@ -246,6 +246,12 @@ impl ContentBuilder {
         self
     }
 
+    /// Sets the full tool configuration payload.
+    pub fn with_tool_config(mut self, tool_config: ToolConfig) -> Self {
+        self.tool_config = Some(tool_config);
+        self
+    }
+
     /// Sets the thinking configuration for the request (Gemini 2.5 series only).
     pub fn with_thinking_config(mut self, thinking_config: ThinkingConfig) -> Self {
         self.generation_config.get_or_insert_with(Default::default).thinking_config =

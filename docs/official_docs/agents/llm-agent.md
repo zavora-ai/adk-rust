@@ -282,8 +282,7 @@ let weather_tool = FunctionTool::new(
     },
 );
 ```
-> **⚠️ Note: Current Limitation**: Built-in tools like `GoogleSearchTool` are currently incompatible with `FunctionTool` in the same agent. Use either built-in tools OR custom `FunctionTool`s, but not both together. 
-**💡 Workaround**: Create separate subagents, each with their own tool type, and coordinate them using a master LLMAgent, workflow agents or multi-agent patterns.
+Built-in provider-native tools can now be mixed with `FunctionTool` instances in the same agent. ADK forwards the native tool declarations to the provider while still executing ordinary function tools locally.
 
 ### Build a Multi-Tool Agent
 
@@ -693,7 +692,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .model(Arc::new(model))
         .tool(Arc::new(weather))
         .tool(Arc::new(calc))
-        // .tool(Arc::new(GoogleSearchTool::new()))  // Currently unsupported with FunctionTool
+        // .tool(Arc::new(GoogleSearchTool::new()))  // Provider-native tools can be mixed with FunctionTool
         .output_key("last_response")
         .build()?;
 

@@ -189,7 +189,9 @@ impl Llm for OpenAIResponsesClient {
             self.reasoning_summary,
         )?;
 
-        if stream {
+        let uses_native_tools = responses_convert::request_uses_native_tools(&request);
+
+        if stream && !uses_native_tools {
             // Explicitly set stream=true — async-openai's create_stream() does NOT
             // set this field automatically, causing the server to return JSON instead
             // of text/event-stream, which triggers an InvalidContentType error.
@@ -241,23 +243,32 @@ impl Llm for OpenAIResponsesClient {
                             // via delta events) and mark the turn complete.
                             ResponseStreamEvent::ResponseCompleted(evt) => {
                                 let full = responses_convert::from_response(&evt.response);
-                                // Extract only function-call parts (text/thinking already streamed)
-                                let fc_parts: Vec<Part> = full
+                                // Extract only non-textual protocol parts (text/thinking were already
+                                // streamed via delta events, but tool protocol items need to survive).
+                                let trailing_parts: Vec<Part> = full
                                     .content
                                     .as_ref()
                                     .map(|c| {
                                         c.parts
                                             .iter()
-                                            .filter(|p| matches!(p, Part::FunctionCall { .. }))
+                                            .filter(|part| {
+                                                !matches!(
+                                                    part,
+                                                    Part::Text { .. } | Part::Thinking { .. }
+                                                )
+                                            })
                                             .cloned()
                                             .collect()
                                     })
                                     .unwrap_or_default();
 
-                                let content = if fc_parts.is_empty() {
+                                let content = if trailing_parts.is_empty() {
                                     None
                                 } else {
-                                    Some(Content { role: "model".to_string(), parts: fc_parts })
+                                    Some(Content {
+                                        role: "model".to_string(),
+                                        parts: trailing_parts,
+                                    })
                                 };
 
                                 Some(Ok(LlmResponse {
@@ -306,6 +317,12 @@ impl Llm for OpenAIResponsesClient {
 
             Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
         } else {
+            if stream && uses_native_tools {
+                adk_telemetry::debug!(
+                    "OpenAI native tools detected; using non-streaming responses path to avoid upstream SSE item parsing drift"
+                );
+            }
+
             // Non-streaming path
             let client = self.client.clone();
             let retry_config = self.retry_config.clone();
