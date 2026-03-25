@@ -34,7 +34,7 @@ jobs:
         name: devenv
     - run: nix profile install nixpkgs#devenv
     - name: Check formatting
-      run: devenv shell ws-fmt -- --check
+      run: CI=true devenv shell ws-fmt -- --check
 
   # ── Lint: clippy (parallel with test) ──────────────────────────
   clippy:
@@ -68,7 +68,7 @@ jobs:
         restore-keys: clippy-${{ runner.os }}-
 
     - name: Run clippy
-      run: devenv shell ws-clippy --message-format=json | tee clippy.json
+      run: CI=true devenv shell ws-clippy --message-format=json | tee clippy.json
 
     - name: Annotate clippy warnings
       if: always()
@@ -111,7 +111,7 @@ jobs:
         restore-keys: test-${{ runner.os }}-
 
     - name: Run tests
-      run: devenv shell ws-test-ci | tee test.log
+      run: CI=true devenv shell ws-test-ci | tee test.log
 
     - name: Test summary
       if: always()

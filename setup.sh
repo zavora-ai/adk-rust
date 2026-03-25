@@ -8,7 +8,7 @@
 set -euo pipefail
 
 # --- Constants ---
-DEVENV_VERSION="v1.11.2"
+DEVENV_VERSION="v2.0.6"
 
 # --- Helper Functions ---
 
@@ -30,6 +30,31 @@ install_nix() {
         log "Installing Nix..."
         curl -L https://nixos.org/nix/install | sh -s -- --daemon
         log "Nix installed. Please restart your shell or run: source /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh"
+
+        # Explicitly source Nix environment profiles immediately after Nix installation
+        # so subsequent script commands function properly in the current session.
+        if [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then
+            source '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'
+        elif [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix.sh' ]; then
+            source '/nix/var/nix/profiles/default/etc/profile.d/nix.sh'
+        fi
+
+        # Append sourcing logic to ~/.bashrc to ensure Nix is available in non-login shells.
+        # Only modify the file automatically if running in CI mode to prevent duplicate entries or overwriting user configs.
+        if [ "${CI:-false}" = "true" ]; then
+            if ! grep -q "nix-daemon.sh" "$HOME/.bashrc" 2>/dev/null; then
+                echo 'if [ -e "/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh" ]; then source "/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh"; elif [ -e "/nix/var/nix/profiles/default/etc/profile.d/nix.sh" ]; then source "/nix/var/nix/profiles/default/etc/profile.d/nix.sh"; fi' >> "$HOME/.bashrc"
+            fi
+        else
+            log "Manual step: Please add the following to your ~/.bashrc or shell profile to enable Nix:"
+            echo 'if [ -e "/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh" ]; then source "/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh"; elif [ -e "/nix/var/nix/profiles/default/etc/profile.d/nix.sh" ]; then source "/nix/var/nix/profiles/default/etc/profile.d/nix.sh"; fi'
+        fi
+
+        # Configure nix.conf to enable experimental features required by devenv (nix-command flakes).
+        mkdir -p "$HOME/.config/nix"
+        if ! grep -q "experimental-features = nix-command flakes" "$HOME/.config/nix/nix.conf" 2>/dev/null; then
+            echo "experimental-features = nix-command flakes" >> "$HOME/.config/nix/nix.conf"
+        fi
     fi
 }
 
@@ -48,11 +73,16 @@ install_cachix() {
 
 install_devenv() {
     log "Checking devenv installation"
+    local installed_version=""
     if command_exists "devenv"; then
-        log "devenv is already installed."
+        installed_version=$(devenv version 2>/dev/null || devenv --version 2>/dev/null || true)
+    fi
+
+    if [[ "$installed_version" == *"devenv ${DEVENV_VERSION#v}"* || "$installed_version" == *"devenv $DEVENV_VERSION"* ]]; then
+        log "devenv $DEVENV_VERSION is already installed."
     else
         log "Installing devenv $DEVENV_VERSION..."
-        nix profile install "github:cachix/devenv/$DEVENV_VERSION"
+        nix profile install "github:cachix/devenv/$DEVENV_VERSION#devenv" --extra-experimental-features 'nix-command flakes'
     fi
 }
 
