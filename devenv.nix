@@ -11,7 +11,7 @@
 # This gives identical toolchains on Linux, macOS, and CI.
 # =============================================================================
 
-{ pkgs, lib, config, ... }:
+{ pkgs, lib, config, inputs, ... }:
 
 {
   # --------------------------------------------------------------------------
@@ -63,6 +63,8 @@
     glib
     pkgs.glib.dev
     libva
+    dbus               # Required for libdbus-sys (used by keyring in adk-cli for secure credential storage)
+    pkgs.dbus.dev
 
     # Protobuf (for gRPC codegen if needed)
     protobuf
@@ -103,8 +105,8 @@
     # Explicitly set PROTOC for build-scripts (e.g., lance-encoding)
     PROTOC = "${pkgs.protobuf}/bin/protoc";
 
-    # Ensure pkg-config can find glib
-    PKG_CONFIG_PATH = "${pkgs.glib.dev}/lib/pkgconfig:$PKG_CONFIG_PATH";
+    # Ensure pkg-config can find glib and dbus
+    PKG_CONFIG_PATH = "${pkgs.glib.dev}/lib/pkgconfig:${pkgs.dbus.dev}/lib/pkgconfig:$PKG_CONFIG_PATH";
   };
 
   # --------------------------------------------------------------------------
