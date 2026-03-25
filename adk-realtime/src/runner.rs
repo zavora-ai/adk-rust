@@ -367,6 +367,19 @@ impl RealtimeRunner {
         Ok(())
     }
 
+    /// Public method to expose `next_event` from the inner session
+    pub async fn next_event(&self) -> Option<Result<ServerEvent>> {
+        let guard = self.session.read().await;
+        if let Some(session) = guard.as_ref() {
+            // Some sessions might yield inside next_event, but just in case, yield here too
+            tokio::task::yield_now().await;
+            session.next_event().await
+        } else {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            None
+        }
+    }
+
     /// Process a single event.
     async fn handle_event(&self, event: ServerEvent) -> Result<()> {
         match event {
