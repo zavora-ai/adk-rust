@@ -56,29 +56,29 @@ impl BrowserSession {
         let caps = self.build_capabilities()?;
         let driver = WebDriver::new(&self.config.webdriver_url, caps)
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to start browser: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Failed to start browser: {}", e)))?;
 
         // Set timeouts
         driver
             .set_page_load_timeout(Duration::from_secs(self.config.page_load_timeout_secs))
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to set page load timeout: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Failed to set page load timeout: {}", e)))?;
 
         driver
             .set_script_timeout(Duration::from_secs(self.config.script_timeout_secs))
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to set script timeout: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Failed to set script timeout: {}", e)))?;
 
         driver
             .set_implicit_wait_timeout(Duration::from_secs(self.config.implicit_wait_secs))
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to set implicit wait: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Failed to set implicit wait: {}", e)))?;
 
         // Set viewport size
         driver
             .set_window_rect(0, 0, self.config.viewport_width, self.config.viewport_height)
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to set viewport: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Failed to set viewport: {}", e)))?;
 
         *driver_guard = Some(driver);
         Ok(())
@@ -92,7 +92,7 @@ impl BrowserSession {
             driver
                 .quit()
                 .await
-                .map_err(|e| AdkError::Tool(format!("Failed to quit browser: {}", e)))?;
+                .map_err(|e| AdkError::tool(format!("Failed to quit browser: {}", e)))?;
         }
 
         Ok(())
@@ -142,9 +142,7 @@ impl BrowserSession {
 
         let guard = self.driver.read().await;
         guard.clone().ok_or_else(|| {
-            AdkError::Tool(
-                "Failed to start browser session: driver is None after ensure_started()".into(),
-            )
+            AdkError::tool("Failed to start browser session: driver is None after ensure_started()")
         })
     }
 
@@ -181,7 +179,7 @@ impl BrowserSession {
     pub async fn navigate(&self, url: &str) -> Result<()> {
         let driver = self.live_driver().await?;
 
-        driver.goto(url).await.map_err(|e| AdkError::Tool(format!("Navigation failed: {}", e)))?;
+        driver.goto(url).await.map_err(|e| AdkError::tool(format!("Navigation failed: {}", e)))?;
 
         Ok(())
     }
@@ -194,14 +192,14 @@ impl BrowserSession {
             .current_url()
             .await
             .map(|u| u.to_string())
-            .map_err(|e| AdkError::Tool(format!("Failed to get URL: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Failed to get URL: {}", e)))
     }
 
     /// Get the page title.
     pub async fn title(&self) -> Result<String> {
         let driver = self.live_driver().await?;
 
-        driver.title().await.map_err(|e| AdkError::Tool(format!("Failed to get title: {}", e)))
+        driver.title().await.map_err(|e| AdkError::tool(format!("Failed to get title: {}", e)))
     }
 
     /// Find an element by CSS selector.
@@ -211,7 +209,7 @@ impl BrowserSession {
         driver
             .find(By::Css(selector))
             .await
-            .map_err(|e| AdkError::Tool(format!("Element not found '{}': {}", selector, e)))
+            .map_err(|e| AdkError::tool(format!("Element not found '{}': {}", selector, e)))
     }
 
     /// Find multiple elements by CSS selector.
@@ -221,7 +219,7 @@ impl BrowserSession {
         driver
             .find_all(By::Css(selector))
             .await
-            .map_err(|e| AdkError::Tool(format!("Elements query failed '{}': {}", selector, e)))
+            .map_err(|e| AdkError::tool(format!("Elements query failed '{}': {}", selector, e)))
     }
 
     /// Find element by XPath.
@@ -231,7 +229,7 @@ impl BrowserSession {
         driver
             .find(By::XPath(xpath))
             .await
-            .map_err(|e| AdkError::Tool(format!("XPath not found '{}': {}", xpath, e)))
+            .map_err(|e| AdkError::tool(format!("XPath not found '{}': {}", xpath, e)))
     }
 
     /// Click an element by selector.
@@ -240,7 +238,7 @@ impl BrowserSession {
         element
             .click()
             .await
-            .map_err(|e| AdkError::Tool(format!("Click failed on '{}': {}", selector, e)))
+            .map_err(|e| AdkError::tool(format!("Click failed on '{}': {}", selector, e)))
     }
 
     /// Type text into an element.
@@ -249,7 +247,7 @@ impl BrowserSession {
         element
             .send_keys(text)
             .await
-            .map_err(|e| AdkError::Tool(format!("Type failed on '{}': {}", selector, e)))
+            .map_err(|e| AdkError::tool(format!("Type failed on '{}': {}", selector, e)))
     }
 
     /// Clear an input field.
@@ -258,7 +256,7 @@ impl BrowserSession {
         element
             .clear()
             .await
-            .map_err(|e| AdkError::Tool(format!("Clear failed on '{}': {}", selector, e)))
+            .map_err(|e| AdkError::tool(format!("Clear failed on '{}': {}", selector, e)))
     }
 
     /// Get text content of an element.
@@ -267,7 +265,7 @@ impl BrowserSession {
         element
             .text()
             .await
-            .map_err(|e| AdkError::Tool(format!("Get text failed on '{}': {}", selector, e)))
+            .map_err(|e| AdkError::tool(format!("Get text failed on '{}': {}", selector, e)))
     }
 
     /// Get an attribute value.
@@ -276,7 +274,7 @@ impl BrowserSession {
         element
             .attr(attribute)
             .await
-            .map_err(|e| AdkError::Tool(format!("Get attribute failed: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Get attribute failed: {}", e)))
     }
 
     /// Take a screenshot (returns base64-encoded PNG).
@@ -286,7 +284,7 @@ impl BrowserSession {
         let screenshot = driver
             .screenshot_as_png_base64()
             .await
-            .map_err(|e| AdkError::Tool(format!("Screenshot failed: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Screenshot failed: {}", e)))?;
 
         Ok(screenshot)
     }
@@ -297,7 +295,7 @@ impl BrowserSession {
         let screenshot = element
             .screenshot_as_png_base64()
             .await
-            .map_err(|e| AdkError::Tool(format!("Element screenshot failed: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Element screenshot failed: {}", e)))?;
 
         Ok(screenshot)
     }
@@ -309,7 +307,7 @@ impl BrowserSession {
         let result = driver
             .execute(script, vec![])
             .await
-            .map_err(|e| AdkError::Tool(format!("Script execution failed: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Script execution failed: {}", e)))?;
 
         // thirtyfour's ScriptRet provides .json() which returns &Value directly
         Ok(result.json().clone())
@@ -322,7 +320,7 @@ impl BrowserSession {
         let result = driver
             .execute_async(script, vec![])
             .await
-            .map_err(|e| AdkError::Tool(format!("Async script failed: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Async script failed: {}", e)))?;
 
         Ok(result.json().clone())
     }
@@ -337,7 +335,7 @@ impl BrowserSession {
             .first()
             .await
             .map_err(|e| {
-                AdkError::Tool(format!(
+                AdkError::tool(format!(
                     "Timeout waiting for '{}' after {}s: {}",
                     selector, timeout_secs, e
                 ))
@@ -359,7 +357,7 @@ impl BrowserSession {
             .first()
             .await
             .map_err(|e| {
-                AdkError::Tool(format!("Timeout waiting for clickable '{}': {}", selector, e))
+                AdkError::tool(format!("Timeout waiting for clickable '{}': {}", selector, e))
             })
     }
 
@@ -370,14 +368,14 @@ impl BrowserSession {
         driver
             .source()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to get page source: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Failed to get page source: {}", e)))
     }
 
     /// Go back in history.
     pub async fn back(&self) -> Result<()> {
         let driver = self.live_driver().await?;
 
-        driver.back().await.map_err(|e| AdkError::Tool(format!("Back navigation failed: {}", e)))
+        driver.back().await.map_err(|e| AdkError::tool(format!("Back navigation failed: {}", e)))
     }
 
     /// Go forward in history.
@@ -387,14 +385,14 @@ impl BrowserSession {
         driver
             .forward()
             .await
-            .map_err(|e| AdkError::Tool(format!("Forward navigation failed: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Forward navigation failed: {}", e)))
     }
 
     /// Refresh the current page.
     pub async fn refresh(&self) -> Result<()> {
         let driver = self.live_driver().await?;
 
-        driver.refresh().await.map_err(|e| AdkError::Tool(format!("Refresh failed: {}", e)))
+        driver.refresh().await.map_err(|e| AdkError::tool(format!("Refresh failed: {}", e)))
     }
 
     // =========================================================================
@@ -408,7 +406,7 @@ impl BrowserSession {
         let cookies = driver
             .get_all_cookies()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to get cookies: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Failed to get cookies: {}", e)))?;
 
         Ok(cookies
             .into_iter()
@@ -431,7 +429,7 @@ impl BrowserSession {
         let cookie = driver
             .get_named_cookie(name)
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to get cookie '{}': {}", name, e)))?;
+            .map_err(|e| AdkError::tool(format!("Failed to get cookie '{}': {}", name, e)))?;
 
         Ok(serde_json::json!({
             "name": cookie.name,
@@ -473,7 +471,7 @@ impl BrowserSession {
         driver
             .add_cookie(cookie)
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to add cookie: {e}")))
+            .map_err(|e| AdkError::tool(format!("Failed to add cookie: {e}")))
     }
 
     /// Delete a cookie.
@@ -483,7 +481,7 @@ impl BrowserSession {
         driver
             .delete_cookie(name)
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to delete cookie: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Failed to delete cookie: {}", e)))
     }
 
     /// Delete all cookies.
@@ -493,7 +491,7 @@ impl BrowserSession {
         driver
             .delete_all_cookies()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to delete all cookies: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Failed to delete all cookies: {}", e)))
     }
 
     // =========================================================================
@@ -507,12 +505,12 @@ impl BrowserSession {
         let windows = driver
             .windows()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to get windows: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Failed to get windows: {}", e)))?;
 
         let current = driver
             .window()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to get current window: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Failed to get current window: {}", e)))?;
 
         Ok((windows.into_iter().map(|w| w.to_string()).collect(), current.to_string()))
     }
@@ -524,7 +522,7 @@ impl BrowserSession {
         let handle = driver
             .new_tab()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to open new tab: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Failed to open new tab: {}", e)))?;
 
         Ok(handle.to_string())
     }
@@ -536,7 +534,7 @@ impl BrowserSession {
         let handle = driver
             .new_window()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to open new window: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Failed to open new window: {}", e)))?;
 
         Ok(handle.to_string())
     }
@@ -549,7 +547,7 @@ impl BrowserSession {
         driver
             .switch_to_window(window_handle)
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to switch window: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Failed to switch window: {}", e)))
     }
 
     /// Close the current window.
@@ -559,7 +557,7 @@ impl BrowserSession {
         driver
             .close_window()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to close window: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Failed to close window: {}", e)))
     }
 
     /// Maximize window.
@@ -569,7 +567,7 @@ impl BrowserSession {
         driver
             .maximize_window()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to maximize window: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Failed to maximize window: {}", e)))
     }
 
     /// Minimize window.
@@ -579,7 +577,7 @@ impl BrowserSession {
         driver
             .minimize_window()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to minimize window: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Failed to minimize window: {}", e)))
     }
 
     /// Set window size and position.
@@ -589,7 +587,7 @@ impl BrowserSession {
         driver
             .set_window_rect(x as i64, y as i64, width, height)
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to set window rect: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Failed to set window rect: {}", e)))
     }
 
     // =========================================================================
@@ -603,7 +601,7 @@ impl BrowserSession {
         driver
             .enter_frame(index)
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to switch to frame {}: {}", index, e)))
+            .map_err(|e| AdkError::tool(format!("Failed to switch to frame {}: {}", index, e)))
     }
 
     /// Switch to frame by selector.
@@ -613,7 +611,7 @@ impl BrowserSession {
         element
             .enter_frame()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to switch to frame: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Failed to switch to frame: {}", e)))
     }
 
     /// Switch to parent frame.
@@ -623,7 +621,7 @@ impl BrowserSession {
         driver
             .enter_parent_frame()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to switch to parent frame: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Failed to switch to parent frame: {}", e)))
     }
 
     /// Switch to default content.
@@ -633,7 +631,7 @@ impl BrowserSession {
         driver
             .enter_default_frame()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to switch to default content: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Failed to switch to default content: {}", e)))
     }
 
     // =========================================================================
@@ -649,7 +647,7 @@ impl BrowserSession {
         source
             .js_drag_to(&target)
             .await
-            .map_err(|e| AdkError::Tool(format!("Drag and drop failed: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Drag and drop failed: {}", e)))
     }
 
     /// Right-click (context click).
@@ -673,7 +671,7 @@ impl BrowserSession {
 
         let result = self.execute_script(&script).await?;
         if result.as_bool() != Some(true) {
-            return Err(AdkError::Tool(format!("Element not found: {}", selector)));
+            return Err(AdkError::tool(format!("Element not found: {}", selector)));
         }
         Ok(())
     }
@@ -681,7 +679,7 @@ impl BrowserSession {
     /// Focus an element.
     pub async fn focus_element(&self, selector: &str) -> Result<()> {
         let element = self.find_element(selector).await?;
-        element.focus().await.map_err(|e| AdkError::Tool(format!("Focus failed: {}", e)))
+        element.focus().await.map_err(|e| AdkError::tool(format!("Focus failed: {}", e)))
     }
 
     /// Get element state.
@@ -749,7 +747,7 @@ impl BrowserSession {
             element
                 .send_keys(&key_sequence)
                 .await
-                .map_err(|e| AdkError::Tool(format!("Key press failed: {e}")))?;
+                .map_err(|e| AdkError::tool(format!("Key press failed: {e}")))?;
         } else {
             // Send to active element via WebDriver
             let driver = self.live_driver().await?;
@@ -757,11 +755,11 @@ impl BrowserSession {
             let active = driver
                 .active_element()
                 .await
-                .map_err(|e| AdkError::Tool(format!("No active element: {e}")))?;
+                .map_err(|e| AdkError::tool(format!("No active element: {e}")))?;
             active
                 .send_keys(&key_sequence)
                 .await
-                .map_err(|e| AdkError::Tool(format!("Key press failed: {e}")))?;
+                .map_err(|e| AdkError::tool(format!("Key press failed: {e}")))?;
         }
 
         Ok(())
@@ -773,7 +771,7 @@ impl BrowserSession {
         element
             .send_keys(file_path)
             .await
-            .map_err(|e| AdkError::Tool(format!("File upload failed: {}", e)))
+            .map_err(|e| AdkError::tool(format!("File upload failed: {}", e)))
     }
 
     /// Print page to PDF.
@@ -793,7 +791,7 @@ impl BrowserSession {
         driver
             .print_page_base64(params)
             .await
-            .map_err(|e| AdkError::Tool(format!("Print to PDF failed: {}", e)))
+            .map_err(|e| AdkError::tool(format!("Print to PDF failed: {}", e)))
     }
 
     /// Build browser capabilities based on configuration.
@@ -803,22 +801,22 @@ impl BrowserSession {
                 let mut caps = DesiredCapabilities::chrome();
                 if self.config.headless {
                     caps.add_arg("--headless=new").map_err(|e| {
-                        AdkError::Tool(format!("Failed to add headless arg: {}", e))
+                        AdkError::tool(format!("Failed to add headless arg: {}", e))
                     })?;
                 }
                 caps.add_arg("--no-sandbox")
-                    .map_err(|e| AdkError::Tool(format!("Failed to add no-sandbox: {}", e)))?;
+                    .map_err(|e| AdkError::tool(format!("Failed to add no-sandbox: {}", e)))?;
                 caps.add_arg("--disable-dev-shm-usage")
-                    .map_err(|e| AdkError::Tool(format!("Failed to add disable-dev-shm: {}", e)))?;
+                    .map_err(|e| AdkError::tool(format!("Failed to add disable-dev-shm: {}", e)))?;
 
                 if let Some(ref ua) = self.config.user_agent {
                     caps.add_arg(&format!("--user-agent={}", ua))
-                        .map_err(|e| AdkError::Tool(format!("Failed to add user-agent: {}", e)))?;
+                        .map_err(|e| AdkError::tool(format!("Failed to add user-agent: {}", e)))?;
                 }
 
                 for arg in &self.config.browser_args {
                     caps.add_arg(arg).map_err(|e| {
-                        AdkError::Tool(format!("Failed to add arg '{}': {}", arg, e))
+                        AdkError::tool(format!("Failed to add arg '{}': {}", arg, e))
                     })?;
                 }
 
@@ -828,7 +826,7 @@ impl BrowserSession {
                 let mut caps = DesiredCapabilities::firefox();
                 if self.config.headless {
                     caps.add_arg("-headless")
-                        .map_err(|e| AdkError::Tool(format!("Failed to add headless: {}", e)))?;
+                        .map_err(|e| AdkError::tool(format!("Failed to add headless: {}", e)))?;
                 }
                 caps.into()
             }
@@ -837,7 +835,7 @@ impl BrowserSession {
                 let mut caps = DesiredCapabilities::edge();
                 if self.config.headless {
                     caps.add_arg("--headless")
-                        .map_err(|e| AdkError::Tool(format!("Failed to add headless: {}", e)))?;
+                        .map_err(|e| AdkError::tool(format!("Failed to add headless: {}", e)))?;
                 }
                 caps.into()
             }

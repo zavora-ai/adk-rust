@@ -70,7 +70,7 @@ impl FirestoreSessionService {
         let root_collection =
             config.root_collection.unwrap_or_else(|| DEFAULT_ROOT_COLLECTION.to_string());
         let db = FirestoreDb::new(&config.project_id).await.map_err(|e| {
-            adk_core::AdkError::Session(format!("firestore connection failed: {e}"))
+            adk_core::AdkError::session(format!("firestore connection failed: {e}"))
         })?;
         Ok(Self { db, root_collection })
     }
@@ -167,11 +167,11 @@ struct UserStateDoc {
 
 fn event_to_doc(event: &Event) -> std::result::Result<EventDoc, adk_core::AdkError> {
     let llm_response = serde_json::to_value(&event.llm_response)
-        .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
     let actions = serde_json::to_value(&event.actions)
-        .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
     let long_running_tool_ids = serde_json::to_value(&event.long_running_tool_ids)
-        .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
 
     Ok(EventDoc {
         id: event.id.clone(),
@@ -187,11 +187,11 @@ fn event_to_doc(event: &Event) -> std::result::Result<EventDoc, adk_core::AdkErr
 
 fn doc_to_event(doc: &EventDoc) -> std::result::Result<Event, adk_core::AdkError> {
     let llm_response = serde_json::from_value(doc.llm_response.clone())
-        .map_err(|e| adk_core::AdkError::Session(format!("deserialize failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("deserialize failed: {e}")))?;
     let actions = serde_json::from_value(doc.actions.clone())
-        .map_err(|e| adk_core::AdkError::Session(format!("deserialize failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("deserialize failed: {e}")))?;
     let long_running_tool_ids = serde_json::from_value(doc.long_running_tool_ids.clone())
-        .map_err(|e| adk_core::AdkError::Session(format!("deserialize failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("deserialize failed: {e}")))?;
 
     Ok(Event {
         id: doc.id.clone(),
@@ -238,7 +238,7 @@ impl FirestoreSessionService {
         let parent = self
             .db
             .parent_path(&self.root_collection, app_name)
-            .map_err(|e| adk_core::AdkError::Session(format!("path error: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("path error: {e}")))?;
         Ok(parent.to_string())
     }
 
@@ -251,9 +251,9 @@ impl FirestoreSessionService {
         let parent = self
             .db
             .parent_path(&self.root_collection, app_name)
-            .map_err(|e| adk_core::AdkError::Session(format!("path error: {e}")))?
+            .map_err(|e| adk_core::AdkError::session(format!("path error: {e}")))?
             .at("sessions", session_id)
-            .map_err(|e| adk_core::AdkError::Session(format!("path error: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("path error: {e}")))?;
         Ok(parent.to_string())
     }
 
@@ -266,9 +266,9 @@ impl FirestoreSessionService {
         let parent = self
             .db
             .parent_path(&self.root_collection, app_name)
-            .map_err(|e| adk_core::AdkError::Session(format!("path error: {e}")))?
+            .map_err(|e| adk_core::AdkError::session(format!("path error: {e}")))?
             .at("users", user_id)
-            .map_err(|e| adk_core::AdkError::Session(format!("path error: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("path error: {e}")))?;
         Ok(parent.to_string())
     }
 
@@ -285,7 +285,7 @@ impl FirestoreSessionService {
             .obj::<AppStateDoc>()
             .one(format!("{app_name}/app_state"))
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
         Ok(doc.map(|d| d.state).unwrap_or_default())
     }
 
@@ -305,7 +305,7 @@ impl FirestoreSessionService {
             .obj::<UserStateDoc>()
             .one("current")
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
         Ok(doc.map(|d| d.state).unwrap_or_default())
     }
 }
@@ -355,7 +355,7 @@ impl SessionService for FirestoreSessionService {
             .db
             .begin_transaction()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
         // Upsert app state
         self.db
@@ -365,7 +365,7 @@ impl SessionService for FirestoreSessionService {
             .document_id(format!("{app_name_clone}/app_state"))
             .object(&app_state_doc)
             .add_to_transaction(&mut transaction)
-            .map_err(|e| adk_core::AdkError::Session(format!("create failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("create failed: {e}")))?;
 
         // Upsert user state
         self.db
@@ -376,7 +376,7 @@ impl SessionService for FirestoreSessionService {
             .parent(&user_state_parent)
             .object(&user_state_doc)
             .add_to_transaction(&mut transaction)
-            .map_err(|e| adk_core::AdkError::Session(format!("create failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("create failed: {e}")))?;
 
         // Create session document
         self.db
@@ -387,12 +387,12 @@ impl SessionService for FirestoreSessionService {
             .parent(&sessions_parent)
             .object(&session_doc)
             .add_to_transaction(&mut transaction)
-            .map_err(|e| adk_core::AdkError::Session(format!("create failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("create failed: {e}")))?;
 
         transaction
             .commit()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("commit failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
 
         Ok(Box::new(FirestoreSession {
             app_name: req.app_name,
@@ -417,8 +417,8 @@ impl SessionService for FirestoreSessionService {
             .obj::<SessionDoc>()
             .one(&req.session_id)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
-            .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+            .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
         // Read events subcollection ordered by timestamp
         let events_parent = self.events_parent(&req.app_name, &req.session_id)?;
@@ -432,7 +432,7 @@ impl SessionService for FirestoreSessionService {
             .obj::<EventDoc>()
             .query()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let mut events: Vec<Event> =
             event_docs.iter().filter_map(|d| doc_to_event(d).ok()).collect();
@@ -469,7 +469,7 @@ impl SessionService for FirestoreSessionService {
             .obj::<SessionDoc>()
             .query()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let offset = req.offset.unwrap_or(0);
         let sessions: Vec<Box<dyn Session>> = session_docs
@@ -503,7 +503,7 @@ impl SessionService for FirestoreSessionService {
             .obj::<EventDoc>()
             .query()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("delete failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("delete failed: {e}")))?;
 
         let sessions_parent = self.sessions_parent(&req.app_name)?;
 
@@ -511,7 +511,7 @@ impl SessionService for FirestoreSessionService {
             .db
             .begin_transaction()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
         // Delete all event documents
         for event_doc in &event_docs {
@@ -522,7 +522,7 @@ impl SessionService for FirestoreSessionService {
                 .parent(&events_parent)
                 .document_id(&event_doc.id)
                 .add_to_transaction(&mut transaction)
-                .map_err(|e| adk_core::AdkError::Session(format!("delete failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::session(format!("delete failed: {e}")))?;
         }
 
         // Delete session document
@@ -533,12 +533,12 @@ impl SessionService for FirestoreSessionService {
             .parent(&sessions_parent)
             .document_id(&req.session_id)
             .add_to_transaction(&mut transaction)
-            .map_err(|e| adk_core::AdkError::Session(format!("delete failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("delete failed: {e}")))?;
 
         transaction
             .commit()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("commit failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
 
         Ok(())
     }
@@ -561,11 +561,10 @@ impl SessionService for FirestoreSessionService {
             .obj::<SessionDoc>()
             .query()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
-        let session_doc = session_docs
-            .first()
-            .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+        let session_doc =
+            session_docs.first().ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
         let app_name = &session_doc.app_name;
         let user_id = &session_doc.user_id;
@@ -615,7 +614,7 @@ impl SessionService for FirestoreSessionService {
             .db
             .begin_transaction()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
         // Update app state
         self.db
@@ -625,7 +624,7 @@ impl SessionService for FirestoreSessionService {
             .document_id(format!("{app_name}/app_state"))
             .object(&app_state_doc)
             .add_to_transaction(&mut transaction)
-            .map_err(|e| adk_core::AdkError::Session(format!("append_event failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("append_event failed: {e}")))?;
 
         // Update user state
         self.db
@@ -636,7 +635,7 @@ impl SessionService for FirestoreSessionService {
             .parent(&user_state_parent)
             .object(&user_state_doc)
             .add_to_transaction(&mut transaction)
-            .map_err(|e| adk_core::AdkError::Session(format!("append_event failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("append_event failed: {e}")))?;
 
         // Update session document
         self.db
@@ -647,7 +646,7 @@ impl SessionService for FirestoreSessionService {
             .parent(&sessions_parent)
             .object(&updated_session)
             .add_to_transaction(&mut transaction)
-            .map_err(|e| adk_core::AdkError::Session(format!("append_event failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("append_event failed: {e}")))?;
 
         // Insert event document
         self.db
@@ -658,12 +657,12 @@ impl SessionService for FirestoreSessionService {
             .parent(&events_parent)
             .object(&event_doc)
             .add_to_transaction(&mut transaction)
-            .map_err(|e| adk_core::AdkError::Session(format!("append_event failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("append_event failed: {e}")))?;
 
         transaction
             .commit()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("commit failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
 
         Ok(())
     }
@@ -688,8 +687,8 @@ impl SessionService for FirestoreSessionService {
             .obj::<SessionDoc>()
             .one(session_id)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
-            .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+            .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
         let existing_state = &session_doc.state;
         let (_, _, mut session_state) = state_utils::extract_state_deltas(existing_state);
@@ -735,7 +734,7 @@ impl SessionService for FirestoreSessionService {
             .db
             .begin_transaction()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
         // Update app state
         self.db
@@ -745,7 +744,7 @@ impl SessionService for FirestoreSessionService {
             .document_id(format!("{app_name}/app_state"))
             .object(&app_state_doc)
             .add_to_transaction(&mut transaction)
-            .map_err(|e| adk_core::AdkError::Session(format!("append_event failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("append_event failed: {e}")))?;
 
         // Update user state
         self.db
@@ -756,7 +755,7 @@ impl SessionService for FirestoreSessionService {
             .parent(&user_state_parent)
             .object(&user_state_doc)
             .add_to_transaction(&mut transaction)
-            .map_err(|e| adk_core::AdkError::Session(format!("append_event failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("append_event failed: {e}")))?;
 
         // Update session document
         self.db
@@ -767,7 +766,7 @@ impl SessionService for FirestoreSessionService {
             .parent(&sessions_parent)
             .object(&updated_session)
             .add_to_transaction(&mut transaction)
-            .map_err(|e| adk_core::AdkError::Session(format!("append_event failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("append_event failed: {e}")))?;
 
         // Insert event document
         self.db
@@ -778,12 +777,12 @@ impl SessionService for FirestoreSessionService {
             .parent(&events_parent)
             .object(&event_doc)
             .add_to_transaction(&mut transaction)
-            .map_err(|e| adk_core::AdkError::Session(format!("append_event failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("append_event failed: {e}")))?;
 
         transaction
             .commit()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("commit failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
 
         Ok(())
     }
@@ -856,6 +855,10 @@ impl State for FirestoreSession {
     }
 
     fn set(&mut self, key: String, value: Value) {
+        if let Err(msg) = adk_core::validate_state_key(&key) {
+            tracing::warn!(key = %key, "rejecting invalid state key: {msg}");
+            return;
+        }
         self.state.insert(key, value);
     }
 

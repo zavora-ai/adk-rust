@@ -10,15 +10,28 @@ Access control and authentication for Rust Agent Development Kit (ADK-Rust).
 
 `adk-auth` provides enterprise-grade access control for AI agents:
 
-- **Declarative Scope-Based Security** - Tools declare required scopes, framework enforces automatically
-- **Role-Based Access** - Define roles with tool/agent permissions (allow/deny, deny precedence)
-- **Audit Logging** - Log all access attempts to JSONL files
-- **SSO/OAuth** - JWT validation with Google, Azure AD, Okta, Auth0, and generic OIDC providers
-- **Auth Bridge** - Flow authenticated identity from HTTP requests into agent execution via `adk-server`
+- Declarative scope-based security — tools declare required scopes, framework enforces automatically
+- Role-based access control — define roles with allow/deny permissions, deny takes precedence
+- Audit logging — log all access attempts to JSONL files
+- SSO/OAuth — JWT validation with Google, Azure AD, Okta, Auth0, and generic OIDC providers
+- Auth bridge — flow authenticated identity from HTTP requests into agent execution via `adk-server`
+
+## Installation
+
+```toml
+[dependencies]
+adk-auth = "0.5.0"
+
+# With SSO/JWT validation
+adk-auth = { version = "0.5.0", features = ["sso"] }
+
+# With auth bridge for adk-server identity flow (implies sso)
+adk-auth = { version = "0.5.0", features = ["auth-bridge"] }
+```
 
 ## Features
 
-Core Role Based Access Control (RBAC), scope-based security, and audit logging are always available with no feature flags required.
+Core RBAC, scope-based security, and audit logging are always available with no feature flags.
 
 | Feature | Description |
 |---------|-------------|
@@ -53,6 +66,14 @@ let protected = guard.protect(transfer);
 // All scope checks (allowed + denied) are logged
 ```
 
+You can also use the extension trait for inline wrapping:
+
+```rust
+use adk_auth::ScopeToolExt;
+
+let protected = my_tool.with_scope_guard(ContextScopeResolver);
+```
+
 Pluggable resolvers:
 
 | Resolver | Source |
@@ -85,6 +106,16 @@ let ac = AccessControl::builder()
 // Protect tools
 let middleware = AuthMiddleware::new(ac);
 let protected_tools = middleware.protect_all(tools);
+```
+
+Deny always takes precedence over allow, regardless of role assignment order. If a user has both an `editor` role (allow all tools) and a `restricted` role (deny `code_exec`), `code_exec` is denied.
+
+You can also use the extension trait:
+
+```rust
+use adk_auth::ToolExt;
+
+let protected = my_tool.with_access_control(Arc::new(ac));
 ```
 
 ## Combining RBAC + Scopes
@@ -130,19 +161,33 @@ let claims = sso.check_token(token, &Permission::Tool("search".into())).await?;
 println!("User: {}", claims.user_id());
 ```
 
-`user_id_from_email()` only uses the email claim when `email_verified == true`; otherwise it falls back to `sub`.
+### User ID Claim Selection
+
+The `ClaimsMapper` builder controls which JWT claim becomes the `user_id`:
+
+| Method | Claim | Fallback |
+|--------|-------|----------|
+| `user_id_from_sub()` (default) | `sub` | — |
+| `user_id_from_email()` | `email` (only when `email_verified == true`) | `sub` |
+| `user_id_from_preferred_username()` | `preferred_username` | `sub` |
+| `user_id_from_claim("custom")` | Any custom claim | `sub` |
 
 ## Providers
 
 | Provider | Usage |
 |----------|-------|
-| **Google** | `GoogleProvider::new(client_id)` |
-| **Azure AD** | `AzureADProvider::new(tenant_id, client_id)` or `::multi_tenant(client_id).with_allowed_tenants(["tenant-id"])` |
-| **Okta** | `OktaProvider::new(domain, client_id)` or `::with_auth_server(domain, server_id, client_id)` |
-| **Auth0** | `Auth0Provider::new(domain, audience)` |
-| **Generic OIDC** | `OidcProvider::from_discovery(issuer, client_id).await` or `::new(issuer, client_id, jwks_uri)` |
+| Google | `GoogleProvider::new(client_id)` |
+| Azure AD | `AzureADProvider::new(tenant_id, client_id)` or `::multi_tenant(client_id).with_allowed_tenants(["tenant-id"])` |
+| Okta | `OktaProvider::new(domain, client_id)` or `::with_auth_server(domain, server_id, client_id)` |
+| Auth0 | `Auth0Provider::new(domain, audience)` |
+| Generic OIDC | `OidcProvider::from_discovery(issuer, client_id).await` or `::new(issuer, client_id, jwks_uri)` |
+| Custom JWT | `JwtValidator::builder().issuer(iss).jwks_uri(uri).audience(aud).build()?` |
 
 `AzureADProvider::multi_tenant()` accepts tokens from any tenant targeting the configured audience unless you restrict it with `with_allowed_tenants(...)`.
+
+`OidcProvider::from_discovery()` rejects discovery documents whose `issuer` does not match the requested issuer URL.
+
+All providers implement the `TokenValidator` trait — you can implement it for any custom identity provider.
 
 ## Auth Bridge
 
@@ -161,8 +206,8 @@ let extractor = JwtRequestContextExtractor::builder()
 The extractor maps:
 
 - `user_id` from the configured `ClaimsMapper`
-- `scopes` from JWT `scope` and `scp` claims
-- `metadata` including issuer, subject, email, and tenant ID when present
+- `scopes` from JWT `scope` (space-delimited string) and `scp` (array) claims, deduplicated
+- `metadata` including issuer, subject, email, tenant ID, and hosted domain when present
 
 ## Audit Logging
 
@@ -178,17 +223,42 @@ Output:
 {"timestamp":"2025-01-01T10:30:00Z","user":"bob","event_type":"tool_access","resource":"search","outcome":"allowed"}
 ```
 
+Implement the `AuditSink` trait for custom destinations (database, external service, etc.).
+
+## Error Types
+
+| Type | When |
+|------|------|
+| `AccessDenied` | RBAC check fails (user lacks permission) |
+| `AuthError` | Role not found, audit sink failure |
+| `ScopeDenied` | Scope check fails (missing required scopes) |
+| `TokenError` | JWT validation failure (expired, bad signature, missing claims) |
+| `SsoError` | Token validation or access denied in SSO flow |
+
 ## Examples
 
+Examples live in the [adk-playground](https://github.com/zavora-ai/adk-playground) repo:
+
 ```bash
-cargo run -p adk-examples --example auth_basic                  # RBAC basics
-cargo run -p adk-examples --example auth_audit                  # Audit logging
-cargo run -p adk-examples --example auth_bridge                 # Auth bridge with server
-cargo run -p adk-examples --example auth_sso --features sso     # SSO integration
-cargo run -p adk-examples --example auth_jwt --features sso     # JWT validation
-cargo run -p adk-examples --example auth_oidc --features sso    # OIDC discovery
-cargo run -p adk-examples --example auth_google --features sso  # Google Identity
+git clone https://github.com/zavora-ai/adk-playground.git
+cd adk-playground
+
+cargo run --example auth_basic                  # RBAC basics
+cargo run --example auth_audit                  # Audit logging
+cargo run --example auth_bridge                 # Auth bridge with server
+cargo run --example auth_sso --features sso     # SSO integration
+cargo run --example auth_jwt --features sso     # JWT validation
+cargo run --example auth_oidc --features sso    # OIDC discovery
+cargo run --example auth_google --features sso  # Google Identity
 ```
+
+## Security Notes
+
+- Prefer short-lived access tokens and rotate signing keys regularly.
+- The JWKS cache refreshes hourly by default; lower the refresh interval with `JwksCache::with_refresh_interval()` if your IdP rotates keys aggressively.
+- `OidcProvider::from_discovery()` rejects discovery documents whose `issuer` does not match the requested issuer URL.
+- Token revocation and blacklist checks are not built in. If you need immediate revocation, enforce it in a custom `TokenValidator` or request extractor.
+- `JwtValidator` rejects symmetric algorithms (HS256/HS384/HS512) and EdDSA — only RSA and EC algorithms are supported with JWKS-based validation.
 
 ## License
 
@@ -197,10 +267,3 @@ Apache-2.0
 ## Part of ADK-Rust
 
 This crate is part of the [ADK-Rust](https://adk-rust.com) framework for building AI agents in Rust.
-
-## Security Notes
-
-- Prefer short-lived access tokens and rotate signing keys regularly.
-- The JWKS cache refreshes hourly by default; lower the refresh interval if your IdP rotates keys aggressively.
-- `OidcProvider::from_discovery()` now rejects discovery documents whose `issuer` does not match the requested issuer URL.
-- Token revocation and blacklist checks are not built in. If you need immediate revocation, enforce it in a custom `TokenValidator` or request extractor.

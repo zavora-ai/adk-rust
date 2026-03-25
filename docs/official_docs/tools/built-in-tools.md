@@ -61,7 +61,7 @@ The tool implementation returns an error if called directly because the actual s
 ```rust
 // This is handled internally - you don't call it directly
 async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
-    Err(AdkError::Tool("GoogleSearch is handled internally by Gemini".to_string()))
+    Err(AdkError::tool("GoogleSearch is handled internally by Gemini"))
 }
 ```
 

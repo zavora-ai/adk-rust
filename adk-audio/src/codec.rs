@@ -23,6 +23,36 @@ pub enum AudioFormat {
     Ogg,
 }
 
+impl AudioFormat {
+    /// Returns `true` if this format has a working `encode()` implementation.
+    ///
+    /// Currently only `Pcm16` and `Wav` support encoding.
+    pub fn supports_encode(&self) -> bool {
+        match self {
+            AudioFormat::Pcm16 => true,
+            AudioFormat::Wav => true,
+            AudioFormat::Opus => false,
+            AudioFormat::Mp3 => false,
+            AudioFormat::Flac => false,
+            AudioFormat::Ogg => false,
+        }
+    }
+
+    /// Returns `true` if this format has a working `decode()` implementation.
+    ///
+    /// Currently only `Pcm16` and `Wav` support decoding.
+    pub fn supports_decode(&self) -> bool {
+        match self {
+            AudioFormat::Pcm16 => true,
+            AudioFormat::Wav => true,
+            AudioFormat::Opus => false,
+            AudioFormat::Mp3 => false,
+            AudioFormat::Flac => false,
+            AudioFormat::Ogg => false,
+        }
+    }
+}
+
 /// Decode encoded bytes into a PCM16 `AudioFrame`.
 ///
 /// Currently supports WAV and raw PCM16. Other formats return

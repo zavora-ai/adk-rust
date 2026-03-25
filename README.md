@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 
-> **🚀 v0.4.1 Released!** Dependency cleanup: eliminated reqwest 0.11, upgraded OpenTelemetry to 0.28, removed unused adk-model coupling from adk-agent. Fixed Gemini 3.x thought_signature serialization, AgentTool infinite loop, MongoDB standalone support, PostgreSQL migration type mismatch. See [CHANGELOG](CHANGELOG.md) for full details.
+> **🚀 v0.5.0 Released!** Structured error envelope (`AdkError` redesign), OpenAI Responses API client, OpenRouter deep integration, config validation, typed `Runner::run()` parameters, `labs` feature preset. Breaking: `AdkError` is now a multi-axis struct, `Runner::run()` takes `UserId`/`SessionId` types. See [CHANGELOG](CHANGELOG.md) for full details and migration guide.
 >
 > **Contributors:** Many thanks to [@mikefaille](https://github.com/mikefaille) — AdkIdentity design, realtime audio, LiveKit bridge, skill system. [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI-compatible providers, xAI, multimodal content. [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [@danielsan](https://github.com/danielsan) — Google deps issue & PR (#181, #203), RAG crash report (#205). [@CodingFlow](https://github.com/CodingFlow) — Gemini 3 thinking level, global endpoint, citationSources (#177, #178, #179). [@ctylx](https://github.com/ctylx) — skill discovery fix (#204). [@poborin](https://github.com/poborin) — project config proposal (#176). [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 
@@ -68,6 +68,7 @@ ADK supports multiple LLM providers with a unified API:
 |----------|---------------|--------------|
 | Gemini | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-pro-preview`, `gemini-3-flash-preview` | (default) |
 | OpenAI | `gpt-5`, `gpt-5-mini`, `gpt-5-nano` | `openai` |
+| OpenAI Responses API | `gpt-4.1`, `o3`, `o4-mini` | `openai` |
 | Anthropic | `claude-sonnet-4-5-20250929`, `claude-opus-4-5-20251101`, `claude-haiku-4-5-20251001` | `anthropic` |
 | DeepSeek | `deepseek-chat`, `deepseek-reasoner` | `deepseek` |
 | Groq | `meta-llama/llama-4-scout-17b-16e-instruct`, `llama-3.3-70b-versatile` | `groq` |
@@ -183,10 +184,10 @@ Requires Rust 1.85 or later (Rust 2024 edition). Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.4"  # Standard: agents, models, tools, sessions, runner, server, CLI
+adk-rust = "0.5.0"  # Standard: agents, models, tools, sessions, runner, server, CLI
 
 # Need graph, browser, eval, realtime, audio, RAG?
-# adk-rust = { version = "0.4", features = ["full"] }
+# adk-rust = { version = "0.5.0", features = ["full"] }
 ```
 
 Set your API key:
@@ -268,6 +269,32 @@ async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("OPENAI_API_KEY")?;
     let model = OpenAIClient::new(OpenAIConfig::new(api_key, "gpt-5-mini"))?;
+
+    let agent = LlmAgentBuilder::new("assistant")
+        .instruction("You are a helpful assistant.")
+        .model(Arc::new(model))
+        .build()?;
+
+    Launcher::new(Arc::new(agent)).run().await?;
+    Ok(())
+}
+```
+
+### OpenAI Responses API Example
+
+Uses the `/v1/responses` endpoint — recommended for reasoning models (o3, o4-mini) and built-in tools:
+
+```rust
+use adk_rust::prelude::*;
+use adk_rust::Launcher;
+use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig};
+
+#[tokio::main]
+async fn main() -> AnyhowResult<()> {
+    dotenvy::dotenv().ok();
+    let api_key = std::env::var("OPENAI_API_KEY")?;
+    let config = OpenAIResponsesConfig::new(api_key, "gpt-4.1-mini");
+    let model = OpenAIResponsesClient::new(config)?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .instruction("You are a helpful assistant.")
@@ -726,20 +753,20 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 # Standard (default) — agents, models, tools, sessions, runner, server, CLI, guardrails, auth
-adk-rust = "0.4"
+adk-rust = "0.5.0"
 
 # Full — adds graph, browser, eval, realtime, audio, RAG, code, sandbox
-adk-rust = { version = "0.4", features = ["full"] }
+adk-rust = { version = "0.5.0", features = ["full"] }
 
 # Minimal — just agents + Gemini + runner (fastest build)
-adk-rust = { version = "0.4", default-features = false, features = ["minimal"] }
+adk-rust = { version = "0.5.0", default-features = false, features = ["minimal"] }
 
 # Or individual crates for finer control
-adk-core = "0.4"
-adk-agent = "0.4"
-adk-model = { version = "0.4", features = ["openai", "anthropic"] }
-adk-tool = "0.4"
-adk-runner = "0.4"
+adk-core = "0.5.0"
+adk-agent = "0.5.0"
+adk-model = { version = "0.5.0", features = ["openai", "anthropic"] }
+adk-tool = "0.5.0"
+adk-runner = "0.5.0"
 ```
 
 ## Examples
@@ -761,6 +788,7 @@ See [examples/](examples/) directory for complete, runnable examples:
 - `openai_tools/` - OpenAI with function calling
 - `openai_workflow/` - Multi-agent workflows with OpenAI
 - `openai_structured/` - Structured JSON output
+- `openai_responses/` - Responses API with reasoning models, tool calling, and multi-turn
 
 **DeepSeek Integration** (requires `--features deepseek`)
 - `deepseek_basic/` - Basic DeepSeek chat
@@ -909,20 +937,21 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 
 ## Roadmap
 
-**v0.4.1** (current) — Framework focus & performance:
-- **Breaking: Extracted UI/Studio/Playground** — `adk-ui`, `adk-studio`, and 120+ examples moved to standalone repos. This repo is now pure Rust framework.
-- **Tiered feature presets** — Default changed from `full` to `standard` (~50s build). `minimal` (~30s), `standard` (default), `full` (~2min). Non-Gemini users no longer compile Google Cloud SDK.
-- **Consolidated 7 OpenAI-compatible providers** — Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI collapsed into `OpenAICompatibleConfig` presets (-1,000 lines). Feature flags preserved as backward-compatible aliases.
-- **Vertex AI deps opt-in** — `adk-gemini` default changed from `[studio, vertex]` to `[studio]`. Google Cloud deps only compile with `features = ["gemini-vertex"]`.
-- **OpenAI reasoning model support** — Direct reqwest calls replace async-openai HTTP client, extracting `reasoning_content` from o3/gpt-5-mini. Empty text filtering for thinking models.
-- **Gemini thinking model fix** — `thoughtSignature` no longer serialized in request payloads, fixing 400 errors in multi-turn tool calling with thinking models (#205).
-- **Full crate audit** — All 25 crates: doc comments on all public items, stale versions bumped, dead code removed, convention violations fixed, shared utilities extracted.
-- **CI overhaul** — Split into parallel fmt/clippy/test gates with nextest (~11x faster).
-- **Dep bumps** — chrono 0.4.44, surrealdb 3.0.1, jsonschema 0.43, strum 0.28, rmcp 0.17.
-- **Multimodal vision** — Anthropic `FileData` → `ImageBlock`, Bedrock `InlineData` → `ContentBlock::Image`.
+**v0.5.0** (current) — Structured errors, OpenAI Responses API, OpenRouter, production hardening:
+- **Breaking: Structured Error Envelope** — `AdkError` redesigned from flat enum to multi-axis struct with `ErrorComponent`, `ErrorCategory`, `RetryHint`, `http_status_code()`, `to_problem_json()`. All crates migrated. Backward-compatible constructors preserved.
+- **Breaking: Typed Runner parameters** — `Runner::run()` now takes `UserId` and `SessionId` types instead of raw strings.
+- **OpenAI Responses API** — New `OpenAIResponsesClient` for `/v1/responses` with reasoning summaries, built-in tools, and server-side state.
+- **OpenRouter deep integration** — Native `OpenRouterClient` with chat, responses, routing, discovery, and credits APIs.
+- **Config validation** — `ThinkingConfig::validate()` and `GenerationConfig::validate()` in adk-gemini reject invalid configs before sending.
+- **`labs` feature preset** — Experimental crates (`code`, `sandbox`, `audio`) moved out of `full` into `labs`.
+- **Debug endpoint honesty** — `get_graph` and `get_eval_sets` return 501 instead of fake 200s.
+- **Error handling hardening** — Eliminated panic-on-error paths across 4 crates, upgraded OTel to 0.28, eliminated reqwest 0.11.
+- **Bug fixes** — Gemini 3.x thought_signature, AgentTool infinite loop, MongoDB standalone, PostgreSQL migration types.
 
 <details>
-<summary>v0.3.x and earlier</summary>
+<summary>v0.4.0 and earlier</summary>
+
+**v0.4.0**: Framework focus & performance. Extracted UI/Studio/Playground to standalone repos. Tiered feature presets (`minimal`/`standard`/`full`). Consolidated 7 OpenAI-compatible providers. Vertex AI deps opt-in. `cargo-adk` scaffolding CLI. `#[tool]` proc macro. nextest CI. Multimodal vision for Bedrock/OpenAI/Anthropic.
 
 **v0.3.2**: 8 new LLM providers, RAG pipeline, scope-based security, Models Discovery API, Gemini 3 support, generation config, Vertex AI Live, realtime audio transports, response parsing hardening.
 

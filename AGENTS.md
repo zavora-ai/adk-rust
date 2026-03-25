@@ -10,7 +10,7 @@ Rust Agent Development Kit — a modular workspace of publishable crates for bui
 - Copy `.env.example` to `.env` for API keys. Never commit `.env` files or secrets.
 - `adk-mistralrs` is excluded from the workspace (GPU deps). Build it explicitly: `cargo build --manifest-path adk-mistralrs/Cargo.toml`.
 - `CMAKE_POLICY_VERSION_MINIMUM=3.5` is needed for cmake 4.x compatibility (audiopus).
-- **Performance**: Incremental compilation is **DISABLED** (`incremental = false`) in `.cargo/config.toml` for `sccache` compatibility.
+- **Performance**: `.cargo/config.toml` sets `incremental = false` globally for `sccache` compatibility, but `Cargo.toml` `[profile.dev]` overrides this with `incremental = true` for local dev builds. CI uses the `ci` profile where the config.toml setting applies.
 
 ## Quality gates
 
@@ -123,13 +123,16 @@ All opt-in, no defaults:
 
 ### adk-rust (umbrella)
 
-Three presets control which crates are compiled:
+Four presets control which crates are compiled:
 
 - `standard` **(default)** — agents, models, gemini, tools, skills, sessions, artifacts, memory, runner, telemetry, guardrail, auth, plugin. Everything needed to build and run agents.
-- `full` — standard + graph, code, sandbox, realtime, browser, eval, rag, audio. All specialist crates.
+- `full` — standard + graph, realtime, browser, eval, rag. All stable specialist crates. Does **not** include experimental crates.
+- `labs` — standard + code, sandbox, audio. Experimental crates that may have unstable APIs.
 - `minimal` — agents, gemini, runner. Fastest possible build.
 
-Individual features (`agents`, `models`, `tools`, `sessions`, `server`, `graph`, `realtime`, `eval`, `browser`, `auth`, `guardrail`, `plugin`, `telemetry`, `cli`, `skills`, `artifacts`, `memory`, etc.) can be selected independently.
+To compile everything (stable + experimental): `features = ["full", "labs"]`.
+
+Individual features (`agents`, `models`, `tools`, `sessions`, `server`, `graph`, `realtime`, `eval`, `browser`, `auth`, `guardrail`, `plugin`, `telemetry`, `cli`, `skills`, `artifacts`, `memory`, `code`, `sandbox`, `audio`, etc.) can be selected independently.
 
 ## Rust conventions
 
@@ -184,6 +187,37 @@ When implementing `Llm`:
 - `generate_content()` takes `LlmRequest` and `bool` (stream flag), returns `Result<LlmResponseStream>`.
 
 ## Error handling
+
+`AdkError` is a structured error envelope with component, category, code, message, retry hint, and details:
+
+```rust
+use adk_core::{AdkError, ErrorComponent, ErrorCategory};
+
+// Structured error with full context
+let err = AdkError::new(
+    ErrorComponent::Model,
+    ErrorCategory::RateLimited,
+    "model.openai.rate_limited",
+    "OpenAI API rate limit exceeded",
+)
+.with_provider("openai")
+.with_upstream_status(429);
+
+// Backward-compatible convenience constructors (for migration)
+let err = AdkError::model("something went wrong");
+let err = AdkError::session("not found");
+
+// Category checks
+err.is_retryable();    // true for RateLimited, Unavailable, Timeout
+err.is_not_found();
+err.is_unauthorized();
+
+// HTTP response generation
+err.http_status_code(); // 429
+err.to_problem_json();  // structured JSON error body
+```
+
+For crate-local errors, use `thiserror` enums internally and implement `From<CrateLocalError> for AdkError` at the boundary:
 
 ```rust
 use thiserror::Error;

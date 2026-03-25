@@ -31,8 +31,8 @@ use std::time::Instant;
 use async_trait::async_trait;
 use tracing::{Span, instrument};
 use wasmtime::{Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, Trap};
-use wasmtime_wasi::pipe::{MemoryInputPipe, MemoryOutputPipe};
-use wasmtime_wasi::preview1;
+use wasmtime_wasi::p1;
+use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 use wasmtime_wasi::{I32Exit, WasiCtxBuilder};
 
 use crate::backend::{BackendCapabilities, EnforcedLimits, SandboxBackend};
@@ -62,7 +62,7 @@ pub struct WasmBackend {
 
 /// Store data combining WASI context with resource limits.
 struct WasmStoreData {
-    wasi: preview1::WasiP1Ctx,
+    wasi: p1::WasiP1Ctx,
     limits: StoreLimits,
 }
 
@@ -71,7 +71,6 @@ impl WasmBackend {
     pub fn new() -> Self {
         let mut config = wasmtime::Config::new();
         config.epoch_interruption(true);
-        config.async_support(false);
         let engine =
             Engine::new(&config).expect("failed to create wasmtime engine with epoch support");
         Self { engine }
@@ -127,7 +126,7 @@ impl WasmBackend {
 
         // Link WASI functions.
         let mut linker: Linker<WasmStoreData> = Linker::new(&engine);
-        preview1::add_to_linker_sync(&mut linker, |data| &mut data.wasi).map_err(|e| {
+        p1::add_to_linker_sync(&mut linker, |data| &mut data.wasi).map_err(|e| {
             SandboxError::ExecutionFailed(format!("failed to link WASI functions: {e}"))
         })?;
 

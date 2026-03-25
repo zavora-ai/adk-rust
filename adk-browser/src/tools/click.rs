@@ -59,7 +59,7 @@ impl Tool for ClickTool {
         let selector = args
             .get("selector")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing 'selector' parameter".to_string()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("Missing 'selector' parameter"))?;
 
         let wait_timeout = args.get("wait_timeout").and_then(|v| v.as_u64()).unwrap_or(10);
 
@@ -69,7 +69,7 @@ impl Tool for ClickTool {
         element
             .click()
             .await
-            .map_err(|e| adk_core::AdkError::Tool(format!("Click failed: {}", e)))?;
+            .map_err(|e| adk_core::AdkError::tool(format!("Click failed: {}", e)))?;
 
         // Get element info for response
         let tag_name = element.tag_name().await.unwrap_or_else(|_| "unknown".to_string());
@@ -130,7 +130,7 @@ impl Tool for DoubleClickTool {
         let selector = args
             .get("selector")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing 'selector' parameter".to_string()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("Missing 'selector' parameter"))?;
 
         let escaped = crate::escape::escape_js_string(selector);
 
@@ -143,7 +143,7 @@ impl Tool for DoubleClickTool {
 
         let tag_name = result.as_str().unwrap_or("unknown");
         if tag_name == "unknown" && result.is_null() {
-            return Err(adk_core::AdkError::Tool(format!("Element not found: {selector}")));
+            return Err(adk_core::AdkError::tool(format!("Element not found: {selector}")));
         }
 
         Ok(json!({

@@ -245,6 +245,7 @@ pub fn convert_tools(tools: &HashMap<String, serde_json::Value>) -> Vec<ChatComp
 ///
 /// Used by [`AzureOpenAIClient`](super::client::AzureOpenAIClient) which still
 /// goes through `async-openai`'s typed client.
+#[allow(dead_code)]
 pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse {
     let content = resp.choices.first().map(|choice| {
         let mut parts = Vec::new();
@@ -312,6 +313,7 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
         interrupted: false,
         error_code: None,
         error_message: None,
+        provider_metadata: None,
     }
 }
 
@@ -420,6 +422,7 @@ pub fn from_raw_openai_response(json: &serde_json::Value) -> LlmResponse {
         interrupted: false,
         error_code: None,
         error_message: None,
+        provider_metadata: None,
     }
 }
 

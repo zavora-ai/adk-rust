@@ -428,22 +428,38 @@ use adk_session::SqliteSessionService;
 
 ## Error Handling
 
-The API uses standard HTTP status codes:
+The API uses structured error responses with HTTP status codes derived from the error category:
 
-| Status Code | Meaning |
-|-------------|---------|
-| 200 | Success |
-| 204 | Success (No Content) |
-| 400 | Bad Request |
-| 404 | Not Found |
-| 500 | Internal Server Error |
+| Status Code | Category | Meaning |
+|-------------|----------|---------|
+| 200 | — | Success |
+| 204 | — | Success (No Content) |
+| 400 | `invalid_input` | Bad Request — invalid parameters or config |
+| 401 | `unauthorized` | Missing or invalid credentials |
+| 403 | `forbidden` | Valid credentials, insufficient permissions |
+| 404 | `not_found` | Resource not found |
+| 408 | `timeout` | Operation timed out |
+| 429 | `rate_limited` | Upstream rate limit exceeded |
+| 500 | `internal` | Internal server error |
+| 501 | `unsupported` | Feature not supported |
+| 503 | `unavailable` | Upstream service unavailable |
 
-**Error Response Format:**
+**Error Response Format (Problem JSON):**
 ```json
 {
-  "error": "Error message description"
+  "error": {
+    "code": "model.openai.rate_limited",
+    "message": "OpenAI rate limit exceeded",
+    "component": "model",
+    "category": "rate_limited",
+    "requestId": "req-abc123",
+    "retryAfter": 5000,
+    "upstreamStatusCode": 429
+  }
 }
 ```
+
+Fields `requestId`, `retryAfter`, and `upstreamStatusCode` are included when available (null otherwise).
 
 ## CORS Configuration
 

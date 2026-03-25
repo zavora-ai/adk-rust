@@ -127,6 +127,19 @@ pub fn content_to_message(
                     Some(ContentBlock::Text(TextBlock::new(thinking.clone())))
                 }
             }
+            // Server-side tool parts: convert back to Anthropic types when possible
+            Part::ServerToolCall { server_tool_call } => {
+                serde_json::from_value::<claudius::ServerToolUseBlock>(server_tool_call.clone())
+                    .ok()
+                    .map(ContentBlock::ServerToolUse)
+            }
+            Part::ServerToolResponse { server_tool_response } => {
+                serde_json::from_value::<claudius::WebSearchToolResultBlock>(
+                    server_tool_response.clone(),
+                )
+                .ok()
+                .map(ContentBlock::WebSearchToolResult)
+            }
         })
         .collect();
 
@@ -195,6 +208,16 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
                     });
                 }
             }
+            ContentBlock::ServerToolUse(server_tool_use) => {
+                if let Ok(val) = serde_json::to_value(server_tool_use) {
+                    parts.push(Part::ServerToolCall { server_tool_call: val });
+                }
+            }
+            ContentBlock::WebSearchToolResult(web_search_result) => {
+                if let Ok(val) = serde_json::to_value(web_search_result) {
+                    parts.push(Part::ServerToolResponse { server_tool_response: val });
+                }
+            }
             _ => {}
         }
     }
@@ -232,6 +255,7 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
             interrupted: false,
             error_code: None,
             error_message: None,
+            provider_metadata: None,
         },
         cache_meta,
     )
@@ -252,6 +276,7 @@ pub fn from_text_delta(text: &str) -> LlmResponse {
         interrupted: false,
         error_code: None,
         error_message: None,
+        provider_metadata: None,
     }
 }
 
@@ -280,6 +305,7 @@ pub fn from_stream_error(error_type: &str, message: &str) -> LlmResponse {
         interrupted: false,
         error_code: Some(error_type.to_string()),
         error_message: Some(message.to_string()),
+        provider_metadata: None,
     }
 }
 
@@ -320,6 +346,7 @@ pub fn create_tool_call_response(
         interrupted: false,
         error_code: None,
         error_message: None,
+        provider_metadata: None,
     }
 }
 

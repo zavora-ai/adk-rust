@@ -491,19 +491,27 @@ if let Some(theme) = state.get("user:theme") {
 
 ## Error Handling
 
-ADK uses a unified error type for all operations:
+ADK uses a unified structured error type for all operations:
 
 ```rust
-pub enum AdkError {
-    Agent(String),      // Agent execution errors
-    Tool(String),       // Tool execution errors
-    Model(String),      // LLM API errors
-    Session(String),    // Session storage errors
-    Artifact(String),   // Artifact storage errors
-    Config(String),     // Configuration errors
-    Io(std::io::Error), // File/network I/O errors
-    Json(serde_json::Error), // JSON parsing errors
-}
+use adk_core::{AdkError, ErrorComponent, ErrorCategory};
+
+// AdkError is a struct with component, category, code, message, retry hint, and details
+let err = AdkError::new(
+    ErrorComponent::Model,
+    ErrorCategory::RateLimited,
+    "model.openai.rate_limited",
+    "Too many requests",
+);
+
+// Backward-compatible shorthand (produces .legacy codes)
+let err = AdkError::model("something went wrong");
+
+// Check error properties
+err.is_retryable();    // true for RateLimited, Unavailable, Timeout
+err.is_not_found();    // category == NotFound
+err.http_status_code(); // 429 for RateLimited
+err.to_problem_json(); // structured JSON for HTTP responses
 
 pub type Result<T> = std::result::Result<T, AdkError>;
 ```
@@ -514,15 +522,17 @@ pub type Result<T> = std::result::Result<T, AdkError>;
 async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
     let city = args["city"]
         .as_str()
-        .ok_or_else(|| AdkError::Tool("Missing 'city' parameter".into()))?;
+        .ok_or_else(|| AdkError::tool("Missing 'city' parameter"))?;
     
     let response = reqwest::get(&format!("https://api.weather.com/{}", city))
         .await
-        .map_err(|e| AdkError::Tool(format!("API error: {}", e)))?;
+        .map_err(|e| AdkError::tool(format!("API error: {e}")))?;
     
     Ok(json!({ "weather": "sunny" }))
 }
 ```
+
+See [Development Guidelines](../development/development-guidelines.md#error-handling) for the full error handling guide.
 
 ---
 

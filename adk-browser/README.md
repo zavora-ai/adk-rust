@@ -2,9 +2,25 @@
 
 Browser automation tools for ADK-Rust agents using WebDriver (via [thirtyfour](https://crates.io/crates/thirtyfour)).
 
+## Installation
+
+```toml
+[dependencies]
+adk-browser = "0.5.0"
+```
+
+Or via the umbrella crate:
+
+```toml
+[dependencies]
+adk-rust = { version = "0.5.0", features = ["browser"] }
+```
+
 ## Overview
 
 This crate provides 46 browser automation tools as ADK `Tool` implementations, allowing LLM agents to interact with web pages. Tools are organized into categories and can be selectively enabled via profiles or builder toggles.
+
+`BrowserToolset` implements the `adk_core::Toolset` trait, so it integrates directly with `LlmAgentBuilder::toolset()`.
 
 ## Requirements
 
@@ -50,7 +66,7 @@ Instead of using all 46 tools (which can overwhelm LLM context windows), use a p
 |---------|-------|----------|
 | `Minimal` | 19 | Navigation + interaction + extraction + wait + screenshot |
 | `FormFilling` | 19 | Same as Minimal — optimized for form-filling agents |
-| `Scraping` | 13 | Navigation + extraction + screenshot + scroll (no interaction) |
+| `Scraping` | 14 | Navigation + extraction + screenshot + JS/scroll (no interaction) |
 | `Full` | 46 | All tools — use only when full browser control is needed |
 
 ```rust,ignore
@@ -362,6 +378,52 @@ tokio::select! {
         pool.cleanup_all().await;
     }
 }
+```
+
+## Utility Functions
+
+### shared_session
+
+Convenience function to create an `Arc<BrowserSession>`:
+
+```rust,ignore
+use adk_browser::shared_session;
+
+let browser = shared_session(BrowserConfig::default());
+```
+
+### escape_js_string
+
+Escapes a string for safe interpolation into JavaScript code, preventing CSS selector injection:
+
+```rust,ignore
+use adk_browser::escape_js_string;
+
+let safe = escape_js_string("div[data-id='test']");
+```
+
+### ElementState
+
+Returned by `browser_element_state` and `BrowserSession::get_element_state()`:
+
+```rust,ignore
+pub struct ElementState {
+    pub is_displayed: bool,
+    pub is_enabled: bool,
+    pub is_selected: bool,
+    pub is_clickable: bool,
+}
+```
+
+### Prelude
+
+For convenient imports:
+
+```rust,ignore
+use adk_browser::prelude::*;
+// Imports: BrowserConfig, BrowserType, BrowserSessionPool,
+//          BrowserSession, shared_session, BrowserProfile,
+//          BrowserToolset, minimal_browser_tools, readonly_browser_tools
 ```
 
 ## License

@@ -1,6 +1,6 @@
 # adk-model
 
-LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, OpenAI, xAI, Anthropic, DeepSeek, Groq, Ollama, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, Amazon Bedrock, and Azure AI Inference.
+LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, OpenAI, OpenRouter, xAI, Anthropic, DeepSeek, Groq, Ollama, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, Amazon Bedrock, and Azure AI Inference.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-model.svg)](https://crates.io/crates/adk-model)
 [![Documentation](https://docs.rs/adk-model/badge.svg)](https://docs.rs/adk-model)
@@ -12,6 +12,7 @@ LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, Op
 
 - **Gemini** - Google's Gemini models (3 Pro, 3 Flash, 2.5 Pro, 2.5 Flash, etc.)
 - **OpenAI** - GPT-5.1, GPT-5, GPT-5 Mini, GPT-4o (legacy)
+- **OpenRouter** - Native chat, responses, routing, discovery, and credits APIs
 - **xAI** - Grok models through the OpenAI-compatible API
 - **Anthropic** - Claude Opus 4.5, Claude Sonnet 4.5, Claude Haiku 4.5, Claude 4
 - **DeepSeek** - DeepSeek R1, DeepSeek V3.1, DeepSeek-Chat with thinking mode
@@ -34,14 +35,21 @@ The crate implements the `Llm` trait from `adk-core`, allowing models to be used
 
 ```toml
 [dependencies]
-adk-model = "0.4"
+adk-model = "0.5.0"
+```
+
+Enable provider-specific features as needed:
+
+```toml
+[dependencies]
+adk-model = { version = "0.5.0", features = ["openrouter"] }
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.4", features = ["models"] }
+adk-rust = { version = "0.5.0", features = ["models"] }
 ```
 
 ## Quick Start
@@ -85,6 +93,121 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+### OpenRouter
+
+```rust
+use adk_core::{Content, Llm, LlmRequest};
+use adk_model::openrouter::{OpenRouterClient, OpenRouterConfig};
+use futures::StreamExt;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("OPENROUTER_API_KEY")?;
+    let client = OpenRouterClient::new(
+        OpenRouterConfig::new(api_key, "openai/gpt-4.1-mini")
+            .with_http_referer("https://github.com/zavora-ai/adk-rust")
+            .with_title("ADK-Rust"),
+    )?;
+
+    let request = LlmRequest::new(
+        "openai/gpt-4.1-mini",
+        vec![Content::new("user").with_text("Reply in one short sentence.")],
+    );
+    let mut stream = client.generate_content(request, true).await?;
+
+    while let Some(item) = stream.next().await {
+        let _response = item?;
+    }
+
+    Ok(())
+}
+```
+
+For native OpenRouter discovery and provider features, call `OpenRouterClient` directly:
+
+```rust
+use adk_model::openrouter::{OpenRouterClient, OpenRouterConfig};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("OPENROUTER_API_KEY")?;
+    let client = OpenRouterClient::new(
+        OpenRouterConfig::new(api_key, "openai/gpt-4.1-mini")
+            .with_http_referer("https://github.com/zavora-ai/adk-rust")
+            .with_title("ADK-Rust"),
+    )?;
+
+    let models = client.list_models().await?;
+    let credits = client.get_credits().await?;
+
+    println!("models: {}", models.data.len());
+    println!("credits remaining: {}", credits.data.total_credits - credits.data.total_usage);
+    Ok(())
+}
+```
+
+### OpenRouter Scope Boundary
+
+Use the native `OpenRouterClient` APIs when you need:
+
+- model discovery or credits
+- exact chat or responses payloads
+- OpenRouter routing, fallback, provider preferences, or plugins
+- built-in tools such as web search
+- raw provider metadata and annotations
+
+Use the generic `Llm` adapter when you need OpenRouter inside ADK agents and runners. The adapter
+supports streaming, tool calling, reasoning parts, multimodal requests, and OpenRouter-specific
+request tuning through `OpenRouterRequestOptions`, but it intentionally maps provider-native
+responses into the generic `LlmRequest` and `LlmResponse` shape.
+
+For live end-to-end validation and agentic examples, see:
+
+- `examples/openrouter`
+- `adk-model/examples/openrouter_chat.rs`
+- `adk-model/examples/openrouter_responses.rs`
+- `adk-model/examples/openrouter_adapter.rs`
+- `adk-model/examples/openrouter_discovery.rs`
+
+### OpenAI Responses API
+
+The [Responses API](https://platform.openai.com/docs/api-reference/responses) (`/v1/responses`) is OpenAI's recommended endpoint for their latest models, including reasoning models with summaries and built-in tools.
+
+```rust
+use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig};
+use adk_agent::LlmAgentBuilder;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = std::env::var("OPENAI_API_KEY")?;
+    let config = OpenAIResponsesConfig::new(api_key, "gpt-4.1-mini");
+    let model = OpenAIResponsesClient::new(config)?;
+
+    let agent = LlmAgentBuilder::new("assistant")
+        .model(Arc::new(model))
+        .build()?;
+
+    Ok(())
+}
+```
+
+For reasoning models with summaries:
+
+```rust
+use adk_model::openai::{
+    OpenAIResponsesClient, OpenAIResponsesConfig,
+    ReasoningEffort, ReasoningSummary,
+};
+
+let config = OpenAIResponsesConfig::new(api_key, "o4-mini")
+    .with_reasoning_effort(ReasoningEffort::Medium)
+    .with_reasoning_summary(ReasoningSummary::Detailed);
+let model = OpenAIResponsesClient::new(config)?;
+```
+
+See the [full Responses API documentation](../docs/official_docs/models/openai-responses.md) and the `examples/openai_responses/` example for a complete 7-scenario demo.
 
 #### OpenAI Reasoning Effort
 
@@ -558,24 +681,24 @@ Enable specific providers with feature flags:
 ```toml
 [dependencies]
 # All providers (default)
-adk-model = { version = "0.4", features = ["all-providers"] }
+adk-model = { version = "0.5.0", features = ["all-providers"] }
 
 # Individual providers
-adk-model = { version = "0.4", features = ["gemini"] }
-adk-model = { version = "0.4", features = ["openai"] }
-adk-model = { version = "0.4", features = ["xai"] }
-adk-model = { version = "0.4", features = ["anthropic"] }
-adk-model = { version = "0.4", features = ["deepseek"] }
-adk-model = { version = "0.4", features = ["groq"] }
-adk-model = { version = "0.4", features = ["ollama"] }
-adk-model = { version = "0.4", features = ["fireworks"] }
-adk-model = { version = "0.4", features = ["together"] }
-adk-model = { version = "0.4", features = ["mistral"] }
-adk-model = { version = "0.4", features = ["perplexity"] }
-adk-model = { version = "0.4", features = ["cerebras"] }
-adk-model = { version = "0.4", features = ["sambanova"] }
-adk-model = { version = "0.4", features = ["bedrock"] }
-adk-model = { version = "0.4", features = ["azure-ai"] }
+adk-model = { version = "0.5.0", features = ["gemini"] }
+adk-model = { version = "0.5.0", features = ["openai"] }
+adk-model = { version = "0.5.0", features = ["xai"] }
+adk-model = { version = "0.5.0", features = ["anthropic"] }
+adk-model = { version = "0.5.0", features = ["deepseek"] }
+adk-model = { version = "0.5.0", features = ["groq"] }
+adk-model = { version = "0.5.0", features = ["ollama"] }
+adk-model = { version = "0.5.0", features = ["fireworks"] }
+adk-model = { version = "0.5.0", features = ["together"] }
+adk-model = { version = "0.5.0", features = ["mistral"] }
+adk-model = { version = "0.5.0", features = ["perplexity"] }
+adk-model = { version = "0.5.0", features = ["cerebras"] }
+adk-model = { version = "0.5.0", features = ["sambanova"] }
+adk-model = { version = "0.5.0", features = ["bedrock"] }
+adk-model = { version = "0.5.0", features = ["azure-ai"] }
 ```
 
 ## Related Crates

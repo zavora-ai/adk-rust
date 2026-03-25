@@ -2,16 +2,10 @@
 
 use super::config::{AzureConfig, OpenAIConfig};
 use super::convert;
-use crate::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig};
+use crate::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig, build_request_json};
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
-use adk_core::{AdkError, Llm, LlmRequest, LlmResponseStream};
-use async_openai::{
-    Client,
-    config::AzureConfig as AsyncAzureConfig,
-    types::chat::{
-        CreateChatCompletionRequestArgs, ReasoningEffort, ResponseFormat, ResponseFormatJsonSchema,
-    },
-};
+use adk_core::{AdkError, ErrorCategory, ErrorComponent, Llm, LlmRequest, LlmResponseStream};
+use async_openai::types::chat::ReasoningEffort;
 use async_stream::try_stream;
 use async_trait::async_trait;
 
@@ -91,7 +85,10 @@ impl Llm for OpenAIClient {
 
 /// Azure OpenAI client.
 pub struct AzureOpenAIClient {
-    client: Client<AsyncAzureConfig>,
+    http: reqwest::Client,
+    api_key: String,
+    api_base: String,
+    api_version: String,
     deployment_id: String,
     retry_config: RetryConfig,
 }
@@ -99,14 +96,11 @@ pub struct AzureOpenAIClient {
 impl AzureOpenAIClient {
     /// Create a new Azure OpenAI client.
     pub fn new(config: AzureConfig) -> Result<Self, AdkError> {
-        let azure_config = AsyncAzureConfig::new()
-            .with_api_base(&config.api_base)
-            .with_api_version(&config.api_version)
-            .with_deployment_id(&config.deployment_id)
-            .with_api_key(&config.api_key);
-
         Ok(Self {
-            client: Client::with_config(azure_config),
+            http: reqwest::Client::new(),
+            api_key: config.api_key,
+            api_base: config.api_base,
+            api_version: config.api_version,
             deployment_id: config.deployment_id,
             retry_config: RetryConfig::default(),
         })
@@ -136,81 +130,96 @@ impl Llm for AzureOpenAIClient {
     async fn generate_content(
         &self,
         request: LlmRequest,
-        _stream: bool, // Azure OpenAI always uses streaming internally
+        _stream: bool, // Azure OpenAI always uses non-streaming internally
     ) -> Result<adk_core::LlmResponseStream, AdkError> {
         let usage_span =
             adk_telemetry::llm_generate_span("azure-openai", &self.deployment_id, _stream);
         let deployment_id = self.deployment_id.clone();
-        let client = self.client.clone();
+        let http = self.http.clone();
+        let api_key = self.api_key.clone();
+        let api_base = self.api_base.clone();
+        let api_version = self.api_version.clone();
         let retry_config = self.retry_config.clone();
         let request_for_retry = request.clone();
 
         let stream = try_stream! {
             let response = execute_with_retry(&retry_config, is_retryable_model_error, || {
                 let deployment_id = deployment_id.clone();
-                let client = client.clone();
+                let http = http.clone();
+                let api_key = api_key.clone();
+                let api_base = api_base.clone();
+                let api_version = api_version.clone();
                 let request = request_for_retry.clone();
                 async move {
-                    let messages: Vec<_> = request
-                        .contents
-                        .iter()
-                        .map(convert::content_to_message)
-                        .collect();
+                    let body = build_request_json(&deployment_id, &request, &None)?;
 
-                    let mut request_builder = CreateChatCompletionRequestArgs::default();
-                    request_builder.model(&deployment_id).messages(messages);
+                    let url = format!(
+                        "{api_base}/openai/deployments/{deployment_id}/chat/completions?api-version={api_version}"
+                    );
 
-                    if !request.tools.is_empty() {
-                        let tools = convert::convert_tools(&request.tools);
-                        request_builder.tools(tools);
-                    }
-
-                    if let Some(config) = &request.config {
-                        if let Some(temp) = config.temperature {
-                            request_builder.temperature(temp);
-                        }
-                        if let Some(top_p) = config.top_p {
-                            request_builder.top_p(top_p);
-                        }
-                        if let Some(max_tokens) = config.max_output_tokens {
-                            request_builder.max_completion_tokens(max_tokens as u32);
-                        }
-
-                        if let Some(schema) = &config.response_schema {
-                            let mut schema_with_strict = schema.clone();
-                            if let Some(obj) = schema_with_strict.as_object_mut() {
-                                obj.insert(
-                                    "additionalProperties".to_string(),
-                                    serde_json::json!(false),
-                                );
-                            }
-                            let json_schema = ResponseFormatJsonSchema {
-                                name: deployment_id.replace(['-', '.', '/'], "_"),
-                                description: None,
-                                schema: Some(schema_with_strict),
-                                strict: Some(true),
-                            };
-                            request_builder
-                                .response_format(ResponseFormat::JsonSchema { json_schema });
-                        }
-                    }
-
-                    let openai_request = request_builder
-                        .build()
-                        .map_err(|e| AdkError::Model(format!("Failed to build request: {e}")))?;
-
-                    // Use non-streaming create() — async-openai 0.33's create_stream() has a
-                    // reqwest-eventsource compatibility bug. See openai_compatible.rs.
-                    client
-                        .chat()
-                        .create(openai_request)
+                    let http_resp = http
+                        .post(&url)
+                        .header("api-key", &api_key)
+                        .json(&body)
+                        .send()
                         .await
-                        .map_err(|e| AdkError::Model(format!("Azure OpenAI API error: {e}")))
+                        .map_err(|e| {
+                            AdkError::new(
+                                ErrorComponent::Model,
+                                ErrorCategory::Unavailable,
+                                "model.azure_openai.request",
+                                format!("Azure OpenAI request error: {e}"),
+                            )
+                            .with_provider("azure-openai")
+                        })?;
+
+                    if !http_resp.status().is_success() {
+                        let status_code = http_resp.status().as_u16();
+                        let body_text = http_resp.text().await.unwrap_or_default();
+                        let msg = format!("Azure OpenAI API error (HTTP {status_code}): {body_text}");
+                        let (category, code, status) = match status_code {
+                            429 => (ErrorCategory::RateLimited, "model.azure_openai.rate_limited", Some(429u16)),
+                            503 => (ErrorCategory::Unavailable, "model.azure_openai.unavailable", Some(503u16)),
+                            529 => (ErrorCategory::Unavailable, "model.azure_openai.overloaded", Some(529u16)),
+                            408 => (ErrorCategory::Timeout, "model.azure_openai.timeout", Some(408u16)),
+                            401 => (ErrorCategory::Unauthorized, "model.azure_openai.unauthorized", Some(401u16)),
+                            404 => (ErrorCategory::NotFound, "model.azure_openai.not_found", Some(404u16)),
+                            _ if status_code >= 500 => (ErrorCategory::Internal, "model.azure_openai.api_error", Some(status_code)),
+                            _ => (ErrorCategory::Internal, "model.azure_openai.api_error", Some(status_code)),
+                        };
+                        let mut err = AdkError::new(ErrorComponent::Model, category, code, msg)
+                            .with_provider("azure-openai");
+                        if let Some(sc) = status {
+                            err = err.with_upstream_status(sc);
+                        }
+                        return Err(err);
+                    }
+
+                    let raw_json: serde_json::Value = http_resp.json().await.map_err(|e| {
+                        AdkError::new(
+                            ErrorComponent::Model,
+                            ErrorCategory::Internal,
+                            "model.azure_openai.parse",
+                            format!("Azure OpenAI response parse error: {e}"),
+                        )
+                        .with_provider("azure-openai")
+                    })?;
+
+                    tracing::debug!(
+                        provider = "azure-openai",
+                        model = %deployment_id,
+                        has_reasoning = raw_json
+                            .pointer("/choices/0/message/reasoning_content")
+                            .is_some(),
+                        "azure openai chat completion response"
+                    );
+
+                    Ok(raw_json)
                 }
             })
             .await?;
 
-            let adk_response = convert::from_openai_response(&response);
+            let adk_response = convert::from_raw_openai_response(&response);
             yield adk_response;
         };
 

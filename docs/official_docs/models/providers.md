@@ -41,14 +41,14 @@ Add the providers you need to your `Cargo.toml`:
 ```toml
 [dependencies]
 # Pick one or more providers:
-adk-model = { version = "0.4", features = ["gemini"] }        # Google Gemini (default)
-adk-model = { version = "0.4", features = ["openai"] }        # OpenAI GPT-5
-adk-model = { version = "0.4", features = ["anthropic"] }     # Anthropic Claude
-adk-model = { version = "0.4", features = ["deepseek"] }      # DeepSeek
-adk-model = { version = "0.4", features = ["groq"] }          # Groq (ultra-fast)
+adk-model = { version = "0.5.0", features = ["gemini"] }        # Google Gemini (default)
+adk-model = { version = "0.5.0", features = ["openai"] }        # OpenAI GPT-5
+adk-model = { version = "0.5.0", features = ["anthropic"] }     # Anthropic Claude
+adk-model = { version = "0.5.0", features = ["deepseek"] }      # DeepSeek
+adk-model = { version = "0.5.0", features = ["groq"] }          # Groq (ultra-fast)
 
 # Or all cloud providers at once:
-adk-model = { version = "0.4", features = ["all-providers"] }
+adk-model = { version = "0.5.0", features = ["all-providers"] }
 ```
 
 ## Step 2: Set Your API Key
@@ -155,6 +155,7 @@ It has green eyes and distinctive striped markings typical of tabby cats.
 > - 🎯 Consistent, predictable outputs
 > - 📋 **Structured output** with JSON schema enforcement
 > - 🧠 **Reasoning effort** control for o1/o3 reasoning models
+> - 🆕 **[Responses API](./openai-responses.md)** — dedicated client for `/v1/responses` with reasoning summaries, built-in tools, and server-side state
 
 ### Complete Working Example
 

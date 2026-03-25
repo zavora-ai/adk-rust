@@ -23,6 +23,15 @@ pub trait Tool: Send + Sync {
     fn is_long_running(&self) -> bool {
         false
     }
+
+    /// Indicates whether this tool is a built-in server-side tool (e.g., `google_search`, `url_context`).
+    ///
+    /// Built-in tools are executed server-side by the model provider and should not be
+    /// executed locally by the agent. The default implementation returns `false`.
+    fn is_builtin(&self) -> bool {
+        false
+    }
+
     fn parameters_schema(&self) -> Option<Value> {
         None
     }

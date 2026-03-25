@@ -5,7 +5,7 @@
 
 use adk_core::{
     Agent, BaseEventsSummarizer, Content, Event, EventActions, EventCompaction, EventStream,
-    EventsCompactionConfig, InvocationContext, Part, Result,
+    EventsCompactionConfig, InvocationContext, Part, Result, SessionId, UserId,
 };
 use adk_runner::{Runner, RunnerConfig};
 use adk_session::{InMemorySessionService, SessionService};
@@ -137,16 +137,20 @@ async fn test_e2e_compaction_with_inmemory_session() {
 
     // Invocation 1
     let content1 = Content::new("user").with_text("Hello");
-    let mut stream =
-        runner.run("user-1".to_string(), "sess-e2e".to_string(), content1).await.unwrap();
+    let mut stream = runner
+        .run(UserId::new("user-1").unwrap(), SessionId::new("sess-e2e").unwrap(), content1)
+        .await
+        .unwrap();
     while let Some(r) = stream.next().await {
         assert!(r.is_ok(), "Invocation 1 failed: {:?}", r.err());
     }
 
     // Invocation 2 — should trigger compaction (interval=2)
     let content2 = Content::new("user").with_text("How are you?");
-    let mut stream =
-        runner.run("user-1".to_string(), "sess-e2e".to_string(), content2).await.unwrap();
+    let mut stream = runner
+        .run(UserId::new("user-1").unwrap(), SessionId::new("sess-e2e").unwrap(), content2)
+        .await
+        .unwrap();
     while let Some(r) = stream.next().await {
         assert!(r.is_ok(), "Invocation 2 failed: {:?}", r.err());
     }

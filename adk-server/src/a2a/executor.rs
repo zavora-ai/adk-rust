@@ -2,7 +2,7 @@ use crate::a2a::{
     Message, TaskState, TaskStatus, TaskStatusUpdateEvent, UpdateEvent, events::message_to_event,
     metadata::to_invocation_meta, processor::EventProcessor,
 };
-use adk_core::Result;
+use adk_core::{Result, SessionId, UserId};
 use adk_runner::{Runner, RunnerConfig};
 use adk_session::{CreateRequest, GetRequest};
 use futures::StreamExt;
@@ -82,10 +82,15 @@ impl Executor {
         let content = event
             .llm_response
             .content
-            .ok_or_else(|| adk_core::AdkError::Agent("Event has no content".to_string()))?;
+            .ok_or_else(|| adk_core::AdkError::agent("Event has no content"))?;
 
-        let mut event_stream =
-            runner.run(meta.user_id.clone(), meta.session_id.clone(), content).await?;
+        let mut event_stream = runner
+            .run(
+                UserId::new(meta.user_id.clone())?,
+                SessionId::new(meta.session_id.clone())?,
+                content,
+            )
+            .await?;
 
         // Process events
         while let Some(result) = event_stream.next().await {

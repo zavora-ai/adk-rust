@@ -79,6 +79,15 @@ impl MutableSession {
         events.clone()
     }
 
+    /// Return the number of accumulated events without cloning the full list.
+    pub fn events_len(&self) -> usize {
+        let Ok(events) = self.events.read() else {
+            tracing::error!("events RwLock poisoned in events_len — returning 0");
+            return 0;
+        };
+        events.len()
+    }
+
     /// Build conversation history, optionally filtered for a specific agent.
     ///
     /// When `agent_name` is `Some`, events authored by other agents (not "user",
@@ -164,9 +173,7 @@ impl adk_core::Session for MutableSession {
     }
 
     fn state(&self) -> &dyn adk_core::State {
-        // SAFETY: We implement State for MutableSession, so this cast is valid.
-        // This pattern allows us to return a reference to self as a State trait object.
-        unsafe { &*(self as *const Self as *const dyn adk_core::State) }
+        self
     }
 
     fn conversation_history(&self) -> Vec<adk_core::Content> {
@@ -188,6 +195,10 @@ impl adk_core::State for MutableSession {
     }
 
     fn set(&mut self, key: String, value: serde_json::Value) {
+        if let Err(msg) = adk_core::validate_state_key(&key) {
+            tracing::warn!(key = %key, "rejecting invalid state key: {msg}");
+            return;
+        }
         let Ok(mut state) = self.state.write() else {
             tracing::error!("state RwLock poisoned in State::set — value dropped");
             return;
@@ -223,26 +234,23 @@ pub struct InvocationContext {
 }
 
 impl InvocationContext {
-    pub fn new(
+    /// Create a new invocation context from validated typed identifiers.
+    pub fn new_typed(
         invocation_id: String,
         agent: Arc<dyn Agent>,
-        user_id: String,
-        app_name: String,
-        session_id: String,
+        user_id: UserId,
+        app_name: AppName,
+        session_id: SessionId,
         user_content: Content,
         session: Arc<dyn AdkSession>,
-    ) -> Self {
+    ) -> adk_core::Result<Self> {
         let identity = ExecutionIdentity {
-            adk: AdkIdentity {
-                app_name: AppName::new_unchecked(app_name),
-                user_id: UserId::new_unchecked(user_id),
-                session_id: SessionId::new_unchecked(session_id),
-            },
-            invocation_id: InvocationId::new_unchecked(invocation_id),
+            adk: AdkIdentity { app_name, user_id, session_id },
+            invocation_id: InvocationId::try_from(invocation_id)?,
             branch: String::new(),
             agent_name: agent.name().to_string(),
         };
-        Self {
+        Ok(Self {
             identity,
             agent,
             user_content,
@@ -252,7 +260,57 @@ impl InvocationContext {
             ended: Arc::new(AtomicBool::new(false)),
             session: Arc::new(MutableSession::new(session)),
             request_context: None,
-        }
+        })
+    }
+
+    pub fn new(
+        invocation_id: String,
+        agent: Arc<dyn Agent>,
+        user_id: String,
+        app_name: String,
+        session_id: String,
+        user_content: Content,
+        session: Arc<dyn AdkSession>,
+    ) -> adk_core::Result<Self> {
+        Self::new_typed(
+            invocation_id,
+            agent,
+            UserId::try_from(user_id)?,
+            AppName::try_from(app_name)?,
+            SessionId::try_from(session_id)?,
+            user_content,
+            session,
+        )
+    }
+
+    /// Create an invocation context that reuses an existing mutable session and
+    /// validated typed identifiers.
+    pub fn with_mutable_session_typed(
+        invocation_id: String,
+        agent: Arc<dyn Agent>,
+        user_id: UserId,
+        app_name: AppName,
+        session_id: SessionId,
+        user_content: Content,
+        session: Arc<MutableSession>,
+    ) -> adk_core::Result<Self> {
+        let identity = ExecutionIdentity {
+            adk: AdkIdentity { app_name, user_id, session_id },
+            invocation_id: InvocationId::try_from(invocation_id)?,
+            branch: String::new(),
+            agent_name: agent.name().to_string(),
+        };
+        Ok(Self {
+            identity,
+            agent,
+            user_content,
+            artifacts: None,
+            memory: None,
+            run_config: RunConfig::default(),
+            ended: Arc::new(AtomicBool::new(false)),
+            session,
+            request_context: None,
+        })
     }
 
     /// Create an InvocationContext with an existing MutableSession.
@@ -266,28 +324,16 @@ impl InvocationContext {
         session_id: String,
         user_content: Content,
         session: Arc<MutableSession>,
-    ) -> Self {
-        let identity = ExecutionIdentity {
-            adk: AdkIdentity {
-                app_name: AppName::new_unchecked(app_name),
-                user_id: UserId::new_unchecked(user_id),
-                session_id: SessionId::new_unchecked(session_id),
-            },
-            invocation_id: InvocationId::new_unchecked(invocation_id),
-            branch: String::new(),
-            agent_name: agent.name().to_string(),
-        };
-        Self {
-            identity,
+    ) -> adk_core::Result<Self> {
+        Self::with_mutable_session_typed(
+            invocation_id,
             agent,
+            UserId::try_from(user_id)?,
+            AppName::try_from(app_name)?,
+            SessionId::try_from(session_id)?,
             user_content,
-            artifacts: None,
-            memory: None,
-            run_config: RunConfig::default(),
-            ended: Arc::new(AtomicBool::new(false)),
             session,
-            request_context: None,
-        }
+        )
     }
 
     pub fn with_branch(mut self, branch: String) -> Self {

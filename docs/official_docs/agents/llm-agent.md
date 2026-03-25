@@ -15,7 +15,7 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.4"
+adk-rust = "0.5.0"
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 serde_json = "1.0"
@@ -31,6 +31,7 @@ Replace `src/main.rs`:
 
 ```rust
 use adk_rust::prelude::*;
+use adk_rust::{SessionId, UserId};
 use adk_rust::Launcher;
 use std::sync::Arc;
 
@@ -168,6 +169,7 @@ Here's a complete working example:
 
 ```rust
 use adk_rust::prelude::*;
+use adk_rust::{SessionId, UserId};
 use adk_rust::runner::{Runner, RunnerConfig};
 use adk_rust::session::{CreateRequest, InMemorySessionService, SessionService};
 use adk_rust::futures::StreamExt;
@@ -214,8 +216,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // 4. Run the agent - instruction becomes:
     // "You are helping Alice. Their role is Senior Developer..."
     let mut response_stream = runner.run(
-        "user123".to_string(),
-        session.id().to_string(),
+        UserId::new("user123")?,
+        SessionId::new(session.id())?,
         Content::new("user").with_text("Explain async/await in Rust"),
     ).await?;
 
@@ -296,7 +298,7 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.4", features = ["tools"] }
+adk-rust = { version = "0.5.0", features = ["tools"] }
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 serde_json = "1.0"

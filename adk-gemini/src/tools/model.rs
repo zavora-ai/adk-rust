@@ -247,6 +247,10 @@ pub struct ToolConfig {
     /// The function calling config
     #[serde(skip_serializing_if = "Option::is_none")]
     pub function_calling_config: Option<FunctionCallingConfig>,
+    /// When true, tells Gemini 3 to include server-side tool invocation parts
+    /// (`toolCall`/`toolResponse`) in the response instead of silently truncating.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "includeServerSideToolInvocations")]
+    pub include_server_side_tool_invocations: Option<bool>,
 }
 
 /// Configuration for function calling
@@ -266,4 +270,34 @@ pub enum FunctionCallingMode {
     Any,
     /// The model must not use function calling
     None,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_config_include_server_side_tool_invocations_serde_round_trip() {
+        let config = ToolConfig {
+            function_calling_config: None,
+            include_server_side_tool_invocations: Some(true),
+        };
+
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["includeServerSideToolInvocations"], true);
+        // field should use camelCase on the wire
+        assert!(json.get("include_server_side_tool_invocations").is_none());
+
+        let deserialized: ToolConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, config);
+    }
+
+    #[test]
+    fn tool_config_default_omits_server_side_flag() {
+        let config = ToolConfig::default();
+        assert_eq!(config.include_server_side_tool_invocations, None);
+
+        let json = serde_json::to_value(&config).unwrap();
+        assert!(json.get("includeServerSideToolInvocations").is_none());
+    }
 }

@@ -212,7 +212,7 @@ async fn test_function_tool_long_running_returns_pending_status() {
 #[tokio::test]
 async fn test_function_tool_error() {
     let tool = FunctionTool::new("fail", "Always fails", |_ctx, _args| async move {
-        Err(adk_core::AdkError::Tool("intentional error".to_string()))
+        Err(adk_core::AdkError::tool("intentional error"))
     });
 
     let ctx = Arc::new(MockToolContext::new()) as Arc<dyn ToolContext>;

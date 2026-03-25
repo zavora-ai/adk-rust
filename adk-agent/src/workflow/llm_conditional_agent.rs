@@ -29,7 +29,8 @@
 //! ```
 
 use adk_core::{
-    Agent, Content, Event, EventStream, InvocationContext, Llm, LlmRequest, Part, Result,
+    AfterAgentCallback, Agent, BeforeAgentCallback, CallbackContext, Content, Event, EventStream,
+    InvocationContext, Llm, LlmRequest, Part, Result,
 };
 use adk_skill::{SelectionPolicy, SkillIndex, load_skill_index};
 use async_stream::stream;
@@ -68,6 +69,8 @@ pub struct LlmConditionalAgent {
     skills_index: Option<Arc<SkillIndex>>,
     skill_policy: SelectionPolicy,
     max_skill_chars: usize,
+    before_callbacks: Arc<Vec<BeforeAgentCallback>>,
+    after_callbacks: Arc<Vec<AfterAgentCallback>>,
 }
 
 pub struct LlmConditionalAgentBuilder {
@@ -80,6 +83,8 @@ pub struct LlmConditionalAgentBuilder {
     skills_index: Option<Arc<SkillIndex>>,
     skill_policy: SelectionPolicy,
     max_skill_chars: usize,
+    before_callbacks: Vec<BeforeAgentCallback>,
+    after_callbacks: Vec<AfterAgentCallback>,
 }
 
 impl LlmConditionalAgentBuilder {
@@ -95,6 +100,8 @@ impl LlmConditionalAgentBuilder {
             skills_index: None,
             skill_policy: SelectionPolicy::default(),
             max_skill_chars: 2000,
+            before_callbacks: Vec::new(),
+            after_callbacks: Vec::new(),
         }
     }
 
@@ -138,7 +145,7 @@ impl LlmConditionalAgentBuilder {
     }
 
     pub fn with_skills_from_root(mut self, root: impl AsRef<std::path::Path>) -> Result<Self> {
-        let index = load_skill_index(root).map_err(|e| adk_core::AdkError::Agent(e.to_string()))?;
+        let index = load_skill_index(root).map_err(|e| adk_core::AdkError::agent(e.to_string()))?;
         self.skills_index = Some(Arc::new(index));
         Ok(self)
     }
@@ -153,15 +160,27 @@ impl LlmConditionalAgentBuilder {
         self
     }
 
+    /// Add a before-agent callback.
+    pub fn before_callback(mut self, callback: BeforeAgentCallback) -> Self {
+        self.before_callbacks.push(callback);
+        self
+    }
+
+    /// Add an after-agent callback.
+    pub fn after_callback(mut self, callback: AfterAgentCallback) -> Self {
+        self.after_callbacks.push(callback);
+        self
+    }
+
     /// Build the LlmConditionalAgent.
     pub fn build(self) -> Result<LlmConditionalAgent> {
         let instruction = self.instruction.ok_or_else(|| {
-            adk_core::AdkError::Agent("Instruction is required for LlmConditionalAgent".to_string())
+            adk_core::AdkError::agent("Instruction is required for LlmConditionalAgent")
         })?;
 
         if self.routes.is_empty() {
-            return Err(adk_core::AdkError::Agent(
-                "At least one route is required for LlmConditionalAgent".to_string(),
+            return Err(adk_core::AdkError::agent(
+                "At least one route is required for LlmConditionalAgent",
             ));
         }
 
@@ -182,6 +201,8 @@ impl LlmConditionalAgentBuilder {
             skills_index: self.skills_index,
             skill_policy: self.skill_policy,
             max_skill_chars: self.max_skill_chars,
+            before_callbacks: Arc::new(self.before_callbacks),
+            after_callbacks: Arc::new(self.after_callbacks),
         })
     }
 }
@@ -237,8 +258,39 @@ impl Agent for LlmConditionalAgent {
         let default_agent = self.default_agent.clone();
         let invocation_id = run_ctx.invocation_id().to_string();
         let agent_name = self.name.clone();
+        let before_callbacks = self.before_callbacks.clone();
+        let after_callbacks = self.after_callbacks.clone();
 
         let s = stream! {
+            // ===== BEFORE AGENT CALLBACKS =====
+            for callback in before_callbacks.as_ref() {
+                match callback(run_ctx.clone() as Arc<dyn CallbackContext>).await {
+                    Ok(Some(content)) => {
+                        let mut early_event = Event::new(&invocation_id);
+                        early_event.author = agent_name.clone();
+                        early_event.llm_response.content = Some(content);
+                        yield Ok(early_event);
+
+                        for after_cb in after_callbacks.as_ref() {
+                            match after_cb(run_ctx.clone() as Arc<dyn CallbackContext>).await {
+                                Ok(Some(after_content)) => {
+                                    let mut after_event = Event::new(&invocation_id);
+                                    after_event.author = agent_name.clone();
+                                    after_event.llm_response.content = Some(after_content);
+                                    yield Ok(after_event);
+                                    return;
+                                }
+                                Ok(None) => continue,
+                                Err(e) => { yield Err(e); return; }
+                            }
+                        }
+                        return;
+                    }
+                    Ok(None) => continue,
+                    Err(e) => { yield Err(e); return; }
+                }
+            }
+
             // Build classification request
             let user_content = run_ctx.user_content().clone();
             let user_text: String = user_content.parts.iter()
@@ -317,7 +369,7 @@ impl Agent for LlmConditionalAgent {
             } else {
                 // No matching route and no default
                 let mut error_event = Event::new(&invocation_id);
-                error_event.author = agent_name;
+                error_event.author = agent_name.clone();
                 error_event.llm_response.content = Some(
                     Content::new("model").with_text(format!(
                         "No route found for classification '{}'. Available routes: {:?}",
@@ -326,6 +378,21 @@ impl Agent for LlmConditionalAgent {
                     ))
                 );
                 yield Ok(error_event);
+            }
+
+            // ===== AFTER AGENT CALLBACKS =====
+            for callback in after_callbacks.as_ref() {
+                match callback(run_ctx.clone() as Arc<dyn CallbackContext>).await {
+                    Ok(Some(content)) => {
+                        let mut after_event = Event::new(&invocation_id);
+                        after_event.author = agent_name.clone();
+                        after_event.llm_response.content = Some(content);
+                        yield Ok(after_event);
+                        break;
+                    }
+                    Ok(None) => continue,
+                    Err(e) => { yield Err(e); return; }
+                }
             }
         };
 

@@ -235,6 +235,17 @@ impl ContentBuilder {
         self
     }
 
+    /// Enables server-side tool invocations in the response (Gemini 3 with built-in tools).
+    ///
+    /// When set, Gemini 3 will include `toolCall`/`toolResponse` parts in the response
+    /// instead of silently truncating when built-in tools are used alongside function calling tools.
+    pub fn with_server_side_tool_invocations(mut self) -> Self {
+        self.tool_config
+            .get_or_insert_with(Default::default)
+            .include_server_side_tool_invocations = Some(true);
+        self
+    }
+
     /// Sets the thinking configuration for the request (Gemini 2.5 series only).
     pub fn with_thinking_config(mut self, thinking_config: ThinkingConfig) -> Self {
         self.generation_config.get_or_insert_with(Default::default).thinking_config =

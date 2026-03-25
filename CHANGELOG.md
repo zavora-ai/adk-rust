@@ -9,16 +9,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-#### adk-payments
-- Added `adk-payments`, a new agentic commerce crate with a canonical transaction kernel, durable transaction journals, evidence-backed storage, and ACP/AP2 protocol adapters.
-- Added end-to-end payment validation assets including protocol fixtures, integration tests, and a local `examples/payments` scenario index.
+#### AP2 alpha adapter (adk-payments)
+- Added typed AP2 alpha mandate, payment request, payment response, and payment receipt models plus an `Ap2Adapter` that routes human-present and human-not-present flows through the shared checkout, payment, intervention, journal, and evidence services.
+- Added `ap2-a2a` AgentCard and A2A container helpers, `ap2-mcp` safe MCP-facing mandate and receipt views, AP2 fixture coverage, and end-to-end AP2 integration tests.
 
-#### Documentation
-- Added payments documentation to the root README, official docs index, crate README, and a dedicated `docs/official_docs/security/payments.md` guide.
+#### Agentic commerce validation and docs (adk-payments)
+- Added a shared multi-actor integration harness for shopper, merchant, credentials-provider, payment-processor, and webhook actors, and rewired ACP/AP2 end-to-end tests to use the shared journal, memory, and evidence plumbing.
+- Added payments documentation updates in `adk-payments/README.md`, `docs/official_docs/security/payments.md`, and `examples/payments/README.md`, plus a local `examples/payments` scenario index for the supported commerce journeys.
 
-## [0.4.1] - 2026-03-21
+## [0.5.0] - 2026-03-22
+
+### Added
+
+#### OpenAI Responses API client (adk-model)
+- **`OpenAIResponsesClient`**: Dedicated client for OpenAI's `/v1/responses` endpoint — the successor to Chat Completions. Implements `adk_core::Llm` with full streaming, tool calling, and multi-turn support.
+- **`OpenAIResponsesConfig`**: Configuration type with `with_reasoning_effort()`, `with_reasoning_summary()`, `with_organization()`, `with_project()`, `with_base_url()`.
+- **`ReasoningSummary`** enum (`Auto`, `Concise`, `Detailed`): Controls reasoning summary generation for o-series models. Summaries appear as `Part::Thinking` in the response stream.
+- **Streaming deduplication**: `ResponseCompleted` events extract only function calls and usage metadata — text/thinking content already streamed via delta events is not re-emitted.
+- **Provider metadata**: Every response includes `provider_metadata.openai.response_id` for server-side state and debugging.
+- **Documentation**: Full docs page at `docs/official_docs/models/openai-responses.md`, updated `providers.md`, `adk-model/README.md`, and root `README.md`.
+- **Example**: `examples/openai_responses/` — standalone crate with 7 scenarios (basic, streaming, reasoning, tools, multi-turn, system instructions, generation config).
+
+#### OpenRouter deep integration (adk-model, adk-rust, examples)
+- **`openrouter` feature on `adk-rust`**: The umbrella crate now re-exports `OpenRouterClient`, `OpenRouterConfig`, `OpenRouterApiMode`, `OpenRouterRequestOptions`, and related types behind a dedicated `openrouter` feature.
+- **Native OpenRouter examples**: Added `adk-model/examples/openrouter_chat.rs`, `openrouter_responses.rs`, `openrouter_adapter.rs`, and `openrouter_discovery.rs` plus shared support modules for live provider validation.
+- **Agentic OpenRouter validation crate**: Added `examples/openrouter` as a standalone example crate mirroring the `examples/openai_responses` style and covering chat, streaming, tools, responses mode, multimodal input, routing, discovery, and sessioned runner flows.
+- **Ignored live contracts**: Added `adk-model/tests/openrouter_contract_tests.rs` and wired OpenRouter into the shared provider contract harness for ignored live validation.
+
+#### Config validation (adk-gemini)
+- **`ThinkingConfig::validate()`**: Pre-send validation that rejects mutually exclusive `thinking_budget` + `thinking_level` combinations before the request reaches the Gemini API.
+- **`GenerationConfig::validate()`**: Pre-send validation for `temperature` (0.0–2.0), `top_p` (0.0–1.0), `top_k` (> 0), `max_output_tokens` (> 0), and delegates to `ThinkingConfig::validate()` when present. Validation is wired at the request boundary — invalid configs return `AdkError` instead of sending malformed requests.
+
+#### Audio codec capability queries (adk-audio)
+- **`AudioFormat::supports_encode()`**: Returns `true` for formats with working `encode()` implementations (`Pcm16`, `Wav`), `false` for all others. Uses exhaustive `match` so new variants force a decision.
+- **`AudioFormat::supports_decode()`**: Returns `true` for formats with working `decode()` implementations (`Pcm16`, `Wav`), `false` for all others.
+
+#### Feature presets (adk-rust)
+- **`labs` feature preset**: New preset for experimental crates (`code`, `sandbox`, `audio`). Use `features = ["labs"]` to opt in to experimental functionality.
 
 ### Changed
+
+#### OpenRouter production hardening
+- **Streaming finalization**: The OpenRouter chat adapter now emits exactly one final `LlmResponse` chunk even when OpenRouter streams `finish_reason` and usage metadata in separate SSE frames.
+- **Tool-call mapping**: Chat-mode tool responses now round-trip as `role="tool"` messages with `tool_call_id`, and streamed tool-call deltas tolerate missing `role`, `type`, and function `name` fields that appear in real OpenRouter streams.
+- **Documentation**: Updated `adk-model` crate docs and README to document native OpenRouter APIs, the generic `Llm` adapter boundary, and the local example entry points.
+
+#### Feature presets (adk-rust)
+- **`full` feature preset no longer includes experimental crates**: `full` now compiles only stable specialist crates (`graph`, `realtime`, `browser`, `eval`, `rag`). Experimental crates (`code`, `sandbox`, `audio`) moved to the new `labs` preset. Use `features = ["full", "labs"]` to get everything.
+
+#### Debug endpoint honesty (adk-server)
+- **`get_graph` returns 501 Not Implemented**: Previously returned HTTP 200 with a hardcoded fake DOT graph string. Now returns HTTP 501 with `{ "error": "graph generation is not yet implemented" }`.
+- **`get_eval_sets` returns 501 Not Implemented**: Previously returned HTTP 200 with an empty array stub. Now returns HTTP 501 with `{ "error": "eval sets are not yet implemented" }`.
+- **`get_event` returns 404 when event not found**: Previously returned HTTP 200 with a stub JSON body containing an empty `invocationId`. Now returns HTTP 404 Not Found. Existing successful path (event found in span exporter) is unchanged.
+
+#### Production hardening
+- **adk-core**: Added validated `new()` constructors for `AppName`, `UserId`, `SessionId`, and `InvocationId` so trust-boundary code can use an explicit safe constructor instead of relying on `TryFrom`.
+- **adk-runner**: `Runner::run()` now accepts typed `UserId` and `SessionId` parameters. Migration: `runner.run("user".to_string(), "session".to_string(), content)` becomes `runner.run(UserId::new("user")?, SessionId::new("session")?, content)`.
+- **adk-runner**: Added `MutableSession::events_len()` and updated compaction checks to avoid cloning the full event list for count-only access.
+- **adk-audio**: AssemblyAI, Deepgram, and MLX `transcribe_stream()` stubs now return explicit `AudioError::Stt` errors instead of silently succeeding with empty streams.
+- **adk-audio**: MLX STT placeholder errors now clearly state that local Whisper inference is not yet implemented and recommend using a cloud STT provider.
+
+#### Structured Error Envelope (Breaking)
+- **adk-core**: Replaced flat `AdkError` enum with a multi-axis struct separating component (where), category (what kind), code (machine key), message (human text), retry hint, and error details. This is a deliberate breaking change targeting pre-1.0.
+- **adk-core**: Added `ErrorComponent` (14 variants) and `ErrorCategory` (10 variants) enums for structured error classification.
+- **adk-core**: Added `RetryHint` with `should_retry`, `retry_after_ms`, and `max_attempts` fields for structured retry guidance.
+- **adk-core**: Added `http_status_code()` and `to_problem_json()` methods on `AdkError` for HTTP error response generation.
+- **adk-core**: Backward-compatible constructors (`agent()`, `model()`, `tool()`, `session()`, etc.) preserved with `.legacy` code suffix.
+- **adk-model**: All providers (Gemini, OpenAI, Anthropic, DeepSeek, Groq, Azure AI, Ollama) now emit structured errors with proper `ErrorCategory` based on HTTP status codes (429→RateLimited, 503→Unavailable, etc.).
+- **adk-model**: `is_retryable_model_error()` now checks `error.retry.should_retry` as single source of truth, with fallback to message parsing for legacy errors.
+- **adk-model**: `execute_with_retry_hint()` extracts `retry_after` from structured `AdkError` fields.
+- **adk-server**: Runtime controller uses `AdkError::http_status_code()` and `to_problem_json()` for error responses instead of hardcoded 500s.
+- **All crates**: Migrated from `AdkError::Variant("msg".into())` to `AdkError::variant("msg")` method syntax.
+- **Boundary crates**: Added `From<CrateLocalError> for AdkError` impls in adk-realtime, adk-graph, adk-guardrail, adk-auth, adk-code, adk-skill, adk-sandbox, adk-eval, adk-rag.
+
+### Changed (from 0.4.1)
 
 #### Examples
 - **Moved to adk-playground**: All examples removed from this workspace and consolidated in the [adk-playground](https://github.com/zavora-ai/adk-playground) repo (120+ examples). The `examples/` directory now contains only a README pointing there.

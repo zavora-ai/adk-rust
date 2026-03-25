@@ -393,6 +393,11 @@ pub enum Error {
     Io {
         source: std::io::Error,
     },
+
+    #[snafu(display("invalid generation config: {message}"))]
+    InvalidGenerationConfig {
+        message: String,
+    },
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -447,6 +452,10 @@ impl GeminiClient {
         &self,
         request: GenerateContentRequest,
     ) -> Result<GenerationResponse, Error> {
+        if let Some(ref gc) = request.generation_config {
+            gc.validate().map_err(|message| Error::InvalidGenerationConfig { message })?;
+        }
+
         let response = self.backend.generate_content(request).await?;
 
         if let Some(usage) = &response.usage_metadata {
@@ -474,6 +483,10 @@ impl GeminiClient {
         &self,
         request: GenerateContentRequest,
     ) -> Result<backend::BackendStream<GenerationResponse>, Error> {
+        if let Some(ref gc) = request.generation_config {
+            gc.validate().map_err(|message| Error::InvalidGenerationConfig { message })?;
+        }
+
         self.backend.generate_content_stream(request).await
     }
 

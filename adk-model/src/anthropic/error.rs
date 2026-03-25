@@ -57,8 +57,27 @@ impl std::fmt::Display for AnthropicApiError {
 impl std::error::Error for AnthropicApiError {}
 
 impl From<AnthropicApiError> for AdkError {
-    fn from(e: AnthropicApiError) -> Self {
-        AdkError::Model(e.to_string())
+    fn from(err: AnthropicApiError) -> Self {
+        use adk_core::{ErrorCategory, ErrorComponent};
+        let msg = err.to_string();
+        let category = match err.status_code {
+            401 => ErrorCategory::Unauthorized,
+            403 => ErrorCategory::Forbidden,
+            404 => ErrorCategory::NotFound,
+            408 => ErrorCategory::Timeout,
+            429 => ErrorCategory::RateLimited,
+            503 | 529 => ErrorCategory::Unavailable,
+            s if s >= 500 => ErrorCategory::Internal,
+            _ => ErrorCategory::InvalidInput,
+        };
+        let mut adk_err =
+            AdkError::new(ErrorComponent::Model, category, "model.anthropic.api_error", msg)
+                .with_upstream_status(err.status_code)
+                .with_provider("anthropic");
+        if let Some(ref rid) = err.request_id {
+            adk_err = adk_err.with_request_id(rid.clone());
+        }
+        adk_err
     }
 }
 
@@ -94,8 +113,8 @@ impl std::fmt::Display for ConversionError {
 impl std::error::Error for ConversionError {}
 
 impl From<ConversionError> for AdkError {
-    fn from(e: ConversionError) -> Self {
-        AdkError::Model(e.to_string())
+    fn from(err: ConversionError) -> Self {
+        AdkError::model(err.to_string())
     }
 }
 
@@ -142,8 +161,11 @@ mod tests {
             request_id: Some("req_xyz".to_string()),
         };
         let adk_err: AdkError = err.into();
-        assert!(matches!(adk_err, AdkError::Model(_)));
+        assert!(adk_err.is_model());
         assert!(adk_err.to_string().contains("529"));
+        assert_eq!(adk_err.details.upstream_status_code, Some(529));
+        assert_eq!(adk_err.details.provider.as_deref(), Some("anthropic"));
+        assert!(adk_err.is_retryable(), "529 should be retryable (Unavailable category)");
     }
 
     #[test]
@@ -157,7 +179,7 @@ mod tests {
     fn test_conversion_error_into_adk_error() {
         let err = ConversionError::UnsupportedMimeType("video/mp4".to_string());
         let adk_err: AdkError = err.into();
-        assert!(matches!(adk_err, AdkError::Model(_)));
+        assert!(adk_err.is_model());
         assert!(adk_err.to_string().contains("video/mp4"));
     }
 }

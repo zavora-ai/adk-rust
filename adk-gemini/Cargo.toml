@@ -221,19 +221,19 @@ version = "^0.3.1"
 version = "^0.3"
 
 [dependencies.google-cloud-aiplatform-v1]
-version = "1.7.0"
+version = "1.8.0"
 features = ["prediction-service", "default-rustls-provider"]
 default-features = false
 optional = true
 
 [dependencies.google-cloud-auth]
-version = "1.4.0"
+version = "1.7.0"
 default-features = false
 features = ["default-rustls-provider"]
 optional = true
 
 [dependencies.google-cloud-gax]
-version = "1.7.0"
+version = "1.8.0"
 default-features = false
 optional = true
 
@@ -294,8 +294,15 @@ version = "0.1.41"
 version = "^2.4"
 features = ["serde"]
 
+[[test]]
+name = "config_validation_tests"
+path = "tests/config_validation_tests.rs"
+
 [dev-dependencies.display-error-chain]
 version = "0.2"
+
+[dev-dependencies.proptest]
+version = "1"
 
 [dev-dependencies.tokio]
 version = "^1.47"

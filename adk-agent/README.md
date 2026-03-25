@@ -10,27 +10,27 @@ Agent implementations for ADK-Rust (LLM, Custom, Workflow agents).
 
 `adk-agent` provides ready-to-use agent implementations for [ADK-Rust](https://github.com/zavora-ai/adk-rust):
 
-- **LlmAgent** - Core agent powered by LLM reasoning with tools and callbacks
-- **CustomAgent** - Define custom logic without LLM
-- **SequentialAgent** - Execute agents in sequence
-- **ParallelAgent** - Execute agents concurrently
-- **LoopAgent** - Iterate until exit condition or max iterations
-- **ConditionalAgent** - Branch based on conditions
-- **LlmConditionalAgent** - LLM-powered routing to sub-agents
-- **LlmEventSummarizer** - LLM-based context compaction for long conversations
+- `LlmAgent` — core agent powered by LLM reasoning with tools, callbacks, guardrails, and skills
+- `CustomAgent` — define custom logic without LLM
+- `SequentialAgent` — execute agents in sequence
+- `ParallelAgent` — execute agents concurrently
+- `LoopAgent` — iterate until exit condition or max iterations
+- `ConditionalAgent` — branch based on a function condition
+- `LlmConditionalAgent` — LLM-powered multi-way routing to sub-agents
+- `LlmEventSummarizer` — LLM-based context compaction for long conversations
 
 ## Installation
 
 ```toml
 [dependencies]
-adk-agent = "0.4"
+adk-agent = "0.5.0"
 ```
 
-Or use the meta-crate:
+Or use the umbrella crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.4", features = ["agents"] }
+adk-rust = { version = "0.5.0", features = ["agents"] }
 ```
 
 ## Quick Start
@@ -62,18 +62,32 @@ let agent = LlmAgentBuilder::new("assistant")
 | `instruction(text)` | Set static instruction |
 | `instruction_provider(fn)` | Set dynamic instruction provider |
 | `global_instruction(text)` | Set global instruction (shared across agents) |
+| `global_instruction_provider(fn)` | Set dynamic global instruction provider |
+| `generate_content_config(config)` | Set full `GenerateContentConfig` (temperature, top_p, etc.) |
+| `temperature(f32)` | Shorthand for setting temperature only |
+| `top_p(f32)` | Shorthand for setting top_p only |
+| `top_k(i32)` | Shorthand for setting top_k only |
+| `max_output_tokens(i32)` | Shorthand for setting max output tokens only |
 | `with_skills(index)` | Attach a preloaded skills index |
 | `with_auto_skills()` | Auto-load skills from `.skills/` in current directory |
 | `with_skills_from_root(path)` | Auto-load skills from `.skills/` under a specific root |
 | `with_skill_policy(policy)` | Configure matching policy (`top_k`, threshold, tags) |
-| `with_skill_budget(chars)` | Cap injected skill content length |
-| `tool(tool)` | Add a tool |
+| `with_skill_budget(chars)` | Cap injected skill content length (default: 2000) |
+| `tool(tool)` | Add a static tool |
+| `toolset(toolset)` | Add a dynamic toolset for per-invocation tool resolution |
 | `sub_agent(agent)` | Add a sub-agent for transfers |
 | `max_iterations(n)` | Set maximum LLM round-trips (default: 100) |
 | `tool_timeout(duration)` | Set per-tool execution timeout (default: 5 min) |
-| `require_tool_confirmation(names)` | Require user confirmation for specific tools |
+| `default_retry_budget(budget)` | Set default retry policy for all tools |
+| `tool_retry_budget(name, budget)` | Set retry policy for a specific tool |
+| `circuit_breaker_threshold(n)` | Disable tools after N consecutive failures |
+| `on_tool_error(callback)` | Add fallback handler for tool failures |
+| `require_tool_confirmation(name)` | Require user confirmation for a specific tool |
 | `require_tool_confirmation_for_all()` | Require user confirmation for all tools |
 | `tool_confirmation_policy(policy)` | Set custom tool confirmation policy |
+| `disallow_transfer_to_parent(bool)` | Prevent agent from transferring back to parent |
+| `disallow_transfer_to_peers(bool)` | Prevent agent from transferring to sibling agents |
+| `include_contents(mode)` | Control content inclusion in sub-agent context |
 | `input_schema(json)` | Set input JSON schema |
 | `output_schema(json)` | Set output JSON schema |
 | `output_key(key)` | Set state key for output |
@@ -85,28 +99,39 @@ let agent = LlmAgentBuilder::new("assistant")
 | `after_model_callback(fn)` | Add after-model callback |
 | `before_tool_callback(fn)` | Add before-tool callback |
 | `after_tool_callback(fn)` | Add after-tool callback |
-| `toolset(toolset)` | Add a dynamic toolset for per-invocation tool resolution |
-| `default_retry_budget(budget)` | Set default retry policy for all tools |
-| `tool_retry_budget(name, budget)` | Set retry policy for a specific tool |
-| `circuit_breaker_threshold(n)` | Disable tools after N consecutive failures |
-| `on_tool_error(callback)` | Add fallback handler for tool failures |
+| `after_tool_callback_full(fn)` | Rich after-tool callback with tool, args, and response |
 | `build()` | Build the LlmAgent |
 
-### Backward Compatibility
+### Generation Config
 
-Existing builder paths remain valid and unchanged:
+Control LLM generation parameters per-agent. Use the shorthand methods for common settings or provide a full config:
 
 ```rust
-let agent = LlmAgentBuilder::new("assistant")
-    .description("Helpful AI assistant")
-    .instruction("Be helpful and concise.")
+use adk_core::GenerateContentConfig;
+
+// Shorthand
+let agent = LlmAgentBuilder::new("creative")
     .model(model)
+    .temperature(0.9)
+    .max_output_tokens(4096)
+    .build()?;
+
+// Full config
+let agent = LlmAgentBuilder::new("precise")
+    .model(model)
+    .generate_content_config(GenerateContentConfig {
+        temperature: Some(0.2),
+        top_p: Some(0.95),
+        top_k: Some(40),
+        max_output_tokens: Some(2048),
+        ..Default::default()
+    })
     .build()?;
 ```
 
-Skills are opt-in. No skill content is injected unless you call a skills method.
+### Skills
 
-### Minimal Skills Usage
+Skills are opt-in. No skill content is injected unless you call a skills method:
 
 ```rust
 let agent = LlmAgentBuilder::new("assistant")
@@ -114,6 +139,8 @@ let agent = LlmAgentBuilder::new("assistant")
     .with_auto_skills()? // loads .skills/**/*.md when present
     .build()?;
 ```
+
+Skills are also supported on all workflow agents (`LoopAgent`, `SequentialAgent`, `ParallelAgent`, `ConditionalAgent`, `LlmConditionalAgent`).
 
 ### Workflow Agents
 
@@ -140,6 +167,8 @@ let iterator = LoopAgent::new("iterator", vec![worker.clone()])
 // Default max iterations is 1000 (DEFAULT_LOOP_MAX_ITERATIONS)
 ```
 
+All workflow agents support `.with_description()`, `.before_callback()`, `.after_callback()`, and the full skills API (`with_skills`, `with_auto_skills`, `with_skill_policy`, `with_skill_budget`).
+
 ### Conditional Agents
 
 ```rust
@@ -162,8 +191,11 @@ let llm_router = LlmConditionalAgent::builder("smart_router", model)
     .instruction("Route to the appropriate specialist based on the query.")
     .route("support", support_agent)
     .route("sales", sales_agent)
+    .default_route(fallback_agent)
     .build()?;
 ```
+
+`LlmConditionalAgent` normalizes the LLM's classification to lowercase and does substring matching against route labels, so the LLM doesn't need to produce an exact match.
 
 ### Multi-Agent Systems
 
@@ -176,6 +208,113 @@ let coordinator = LlmAgentBuilder::new("coordinator")
     .sub_agent(sales_agent)
     .build()?;
 ```
+
+Control transfer behavior:
+
+```rust
+let agent = LlmAgentBuilder::new("leaf")
+    .model(model)
+    .disallow_transfer_to_parent(true)  // can't transfer back up
+    .disallow_transfer_to_peers(true)   // can't transfer to siblings
+    .build()?;
+```
+
+### Toolset Support
+
+Use `.toolset()` for context-dependent tools that need per-invocation resolution — for example, per-user browser sessions from a pool. Toolsets are resolved at the start of each `run()` call using the invocation's `ReadonlyContext`.
+
+```rust,ignore
+use adk_agent::LlmAgentBuilder;
+use adk_browser::{BrowserToolset, BrowserSessionPool, BrowserProfile};
+use std::sync::Arc;
+
+let pool = Arc::new(BrowserSessionPool::new(config, 10));
+
+let browser_toolset = BrowserToolset::with_pool_and_profile(
+    pool.clone(),
+    BrowserProfile::Full,
+);
+
+let agent = LlmAgentBuilder::new("browser_agent")
+    .description("Multi-tenant browser agent")
+    .instruction("Help users browse the web.")
+    .model(model)
+    .toolset(Arc::new(browser_toolset))
+    .build()?;
+```
+
+Static tools (`.tool()`) and dynamic toolsets (`.toolset()`) can be mixed on the same agent. Duplicate tool names across static tools and toolsets produce a deterministic error at resolution time.
+
+### Retry Budget
+
+Configure automatic retries for transient tool failures:
+
+```rust,ignore
+use adk_core::RetryBudget;
+use std::time::Duration;
+
+let agent = LlmAgentBuilder::new("resilient_agent")
+    .model(model)
+    .tool(Arc::new(my_tool))
+    .default_retry_budget(RetryBudget::new(2, Duration::from_secs(1)))
+    .tool_retry_budget("browser_navigate", RetryBudget::new(3, Duration::from_millis(500)))
+    .build()?;
+```
+
+Per-tool budgets take precedence over the default. When no budget is configured, tools execute once.
+
+### Circuit Breaker
+
+Temporarily disable tools after repeated consecutive failures within an invocation:
+
+```rust,ignore
+let agent = LlmAgentBuilder::new("guarded_agent")
+    .model(model)
+    .toolset(Arc::new(browser_toolset))
+    .circuit_breaker_threshold(5)
+    .build()?;
+```
+
+After 5 consecutive failures for a given tool, the circuit breaker opens and returns an immediate error to the LLM without executing the tool. Resets at the start of each new invocation.
+
+### Tool Error Callbacks
+
+Register `on_tool_error` callbacks to provide fallback results when tools fail (after retries are exhausted):
+
+```rust,ignore
+let agent = LlmAgentBuilder::new("fallback_agent")
+    .model(model)
+    .tool(Arc::new(my_tool))
+    .on_tool_error(Box::new(|ctx, tool, args, error| {
+        Box::pin(async move {
+            tracing::warn!(tool = tool.name(), error = %error, "tool failed");
+            // Return Ok(Some(value)) to substitute a fallback result
+            // Return Ok(None) to propagate the original error to the LLM
+            Ok(None)
+        })
+    }))
+    .build()?;
+```
+
+Multiple callbacks can be registered. They are tried in order — the first to return `Some(value)` wins.
+
+### Rich After-Tool Callbacks
+
+`after_tool_callback_full` receives the tool, arguments, and response value — aligned with the Python/Go ADK callback model. Return `Ok(None)` to keep the original response, or `Ok(Some(value))` to replace it:
+
+```rust,ignore
+let agent = LlmAgentBuilder::new("auditing_agent")
+    .model(model)
+    .after_tool_callback_full(Box::new(|ctx, tool, args, response| {
+        Box::pin(async move {
+            tracing::info!(tool = tool.name(), "tool completed");
+            Ok(None) // keep original response
+        })
+    }))
+    .build()?;
+```
+
+These run after the legacy `after_tool_callback` chain.
 
 ### Guardrails
 
@@ -201,7 +340,6 @@ use adk_agent::CustomAgentBuilder;
 let custom = CustomAgentBuilder::new("processor")
     .description("Custom data processor")
     .handler(|_ctx| async move {
-        // Custom logic here
         let mut event = Event::new("custom-invocation");
         event.author = "processor".to_string();
         event.llm_response.content = Some(Content::new("model").with_text("Processed!"));
@@ -210,105 +348,21 @@ let custom = CustomAgentBuilder::new("processor")
     .build()?;
 ```
 
-### Toolset Support
+## Tool Call Markup Normalization
 
-Use `.toolset()` for context-dependent tools that need per-invocation resolution — for example, per-user browser sessions from a pool. Toolsets are resolved at the start of each `run()` call using the invocation's `ReadonlyContext`.
+The `tool_call_markup` module handles LLMs that emit tool calls as text markup (e.g., `<tool_call>...</tool_call>`) instead of structured function calls. `normalize_content` parses these text blocks into proper `Part::FunctionCall` parts so the tool execution loop can handle them:
 
-```rust,ignore
-use adk_agent::LlmAgentBuilder;
-use adk_browser::{BrowserToolset, BrowserSessionPool, BrowserProfile};
-use std::sync::Arc;
+```rust
+use adk_agent::normalize_content;
 
-let pool = Arc::new(BrowserSessionPool::new(config, 10));
-
-// Pool-backed toolset: each user gets their own browser session
-let browser_toolset = BrowserToolset::with_pool_and_profile(
-    pool.clone(),
-    BrowserProfile::Full,
-);
-
-let agent = LlmAgentBuilder::new("browser_agent")
-    .description("Multi-tenant browser agent")
-    .instruction("Help users browse the web.")
-    .model(model)
-    .toolset(Arc::new(browser_toolset))
-    .build()?;
+normalize_content(&mut content);
 ```
 
-Static tools (`.tool()`) and dynamic toolsets (`.toolset()`) can be mixed on the same agent. Duplicate tool names across static tools and toolsets produce a deterministic error at resolution time.
-
-### Retry Budget
-
-Configure automatic retries for transient tool failures with `RetryBudget`. Set a default policy for all tools and override per tool name:
-
-```rust,ignore
-use adk_core::RetryBudget;
-use std::time::Duration;
-
-let agent = LlmAgentBuilder::new("resilient_agent")
-    .model(model)
-    .tool(Arc::new(my_tool))
-    .default_retry_budget(RetryBudget::new(2, Duration::from_secs(1)))
-    .tool_retry_budget("browser_navigate", RetryBudget::new(3, Duration::from_millis(500)))
-    .build()?;
-```
-
-Per-tool budgets take precedence over the default. When no budget is configured, tools execute once (current behavior).
-
-### Circuit Breaker
-
-Temporarily disable tools after repeated consecutive failures within an invocation. This prevents the agent from wasting LLM iterations on a consistently failing tool:
-
-```rust,ignore
-let agent = LlmAgentBuilder::new("guarded_agent")
-    .model(model)
-    .toolset(Arc::new(browser_toolset))
-    .circuit_breaker_threshold(5)
-    .build()?;
-```
-
-After 5 consecutive failures for a given tool, the circuit breaker opens and returns an immediate error to the LLM without executing the tool. The breaker resets at the start of each new invocation.
-
-### Tool Error Callbacks
-
-Register `on_tool_error` callbacks to provide fallback results when tools fail (after retries are exhausted):
-
-```rust,ignore
-let agent = LlmAgentBuilder::new("fallback_agent")
-    .model(model)
-    .tool(Arc::new(my_tool))
-    .on_tool_error(Box::new(|ctx, tool, args, error| {
-        Box::pin(async move {
-            tracing::warn!(tool = tool.name(), error = %error, "tool failed");
-            // Return Ok(Some(value)) to substitute a fallback result
-            // Return Ok(None) to propagate the original error to the LLM
-            Ok(None)
-        })
-    }))
-    .build()?;
-```
-
-Multiple callbacks can be registered. They are tried in order — the first to return `Some(value)` wins.
-
-## Features
-
-- Dynamic toolset resolution for per-invocation tool provisioning
-- Automatic tool execution loop (with configurable timeout: `DEFAULT_TOOL_TIMEOUT` = 5 min)
-- Configurable retry budgets (default and per-tool)
-- Circuit breaker for consecutive tool failures
-- Tool error callbacks with fallback result substitution
-- Configurable max iterations (`DEFAULT_MAX_ITERATIONS` = 100 for LlmAgent, `DEFAULT_LOOP_MAX_ITERATIONS` = 1000 for LoopAgent)
-- Agent transfer between sub-agents (with validation against registered sub-agents)
-- Streaming event output
-- Callback hooks at every stage
-- Input/output guardrails
-- Schema validation
-- Tool confirmation policies (`ToolConfirmationPolicy::Never`, `Always`, `PerTool`)
-- Context compaction via `LlmEventSummarizer`
+This is applied automatically inside `LlmAgent` — you only need it if building custom agent logic.
 
 ## Context Compaction
 
-`LlmEventSummarizer` uses an LLM to summarize older conversation events, reducing context size for long-running sessions. This is the Rust equivalent of ADK Python's `LlmEventSummarizer`.
+`LlmEventSummarizer` uses an LLM to summarize older conversation events, reducing context size for long-running sessions:
 
 ```rust
 use adk_agent::LlmEventSummarizer;
@@ -326,15 +380,23 @@ let compaction_config = EventsCompactionConfig {
 };
 ```
 
-Pass `compaction_config` to `RunnerConfig` to enable automatic compaction. See [Context Compaction](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/sessions/context-compaction.md) for full details.
+Pass `compaction_config` to `RunnerConfig` to enable automatic compaction.
+
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| (default) | All agent types, callbacks, skills, toolsets, retry/circuit breaker |
+| `guardrails` | Input/output guardrails via `adk-guardrail` |
 
 ## Related Crates
 
-- [adk-rust](https://crates.io/crates/adk-rust) - Meta-crate with all components
-- [adk-core](https://crates.io/crates/adk-core) - Core `Agent` trait
-- [adk-model](https://crates.io/crates/adk-model) - LLM integrations
-- [adk-tool](https://crates.io/crates/adk-tool) - Tool system
-- [adk-guardrail](https://crates.io/crates/adk-guardrail) - Guardrails
+- [adk-rust](https://crates.io/crates/adk-rust) — Umbrella crate
+- [adk-core](https://crates.io/crates/adk-core) — Core `Agent` trait
+- [adk-model](https://crates.io/crates/adk-model) — LLM integrations
+- [adk-tool](https://crates.io/crates/adk-tool) — Tool system
+- [adk-guardrail](https://crates.io/crates/adk-guardrail) — Guardrails
+- [adk-skill](https://crates.io/crates/adk-skill) — Skill discovery and injection
 
 ## License
 

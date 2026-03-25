@@ -35,16 +35,21 @@ standard = [
     "auth",
 ]
 
-# Full — standard + all specialist crates (~2min clean build)
+# Full — standard + all stable specialist crates (~2min clean build)
 full = [
     "standard",
     "graph",
-    "code",
-    "sandbox",
     "realtime",
     "browser",
     "eval",
     "rag",
+]
+
+# Labs — standard + experimental crates (code, sandbox, audio)
+labs = [
+    "standard",
+    "code",
+    "sandbox",
     "audio",
 ]
 
@@ -81,6 +86,7 @@ payments = ["dep:adk-payments"]
 gemini = ["models", "adk-model/gemini"]
 gemini-vertex = ["gemini", "adk-model/gemini-vertex"]
 openai = ["models", "adk-model/openai"]
+openrouter = ["models", "adk-model/openrouter"]
 anthropic = ["models", "adk-model/anthropic"]
 deepseek = ["models", "adk-model/deepseek"]
 groq = ["models", "adk-model/groq"]

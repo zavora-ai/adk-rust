@@ -80,7 +80,7 @@ impl Tool for RagTool {
         let query = args
             .get("query")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AdkError::Tool("missing required 'query' parameter".into()))?;
+            .ok_or_else(|| AdkError::tool("missing required 'query' parameter"))?;
 
         let collection =
             args.get("collection").and_then(|v| v.as_str()).unwrap_or(&self.default_collection);
@@ -98,12 +98,12 @@ impl Tool for RagTool {
 
         let results = results.map_err(|e| {
             error!(error = %e, "rag_search failed");
-            AdkError::Tool(format!("RAG search failed: {e}"))
+            AdkError::tool(format!("RAG search failed: {e}"))
         })?;
 
         serde_json::to_value(&results).map_err(|e| {
             error!(error = %e, "failed to serialize search results");
-            AdkError::Tool(format!("failed to serialize results: {e}"))
+            AdkError::tool(format!("failed to serialize results: {e}"))
         })
     }
 }

@@ -81,10 +81,16 @@ pub fn is_retryable_error_message(message: &str) -> bool {
 
 #[must_use]
 pub fn is_retryable_model_error(error: &AdkError) -> bool {
-    match error {
-        AdkError::Model(message) => is_retryable_error_message(message),
-        _ => false,
+    // Primary: use structured retry hint (single source of truth)
+    if error.retry.should_retry {
+        return true;
     }
+    // Fallback: for backward-compat `.legacy` errors during transition,
+    // check the error message for retryable patterns
+    if error.code.ends_with(".legacy") && error.is_model() {
+        return is_retryable_error_message(&error.message);
+    }
+    false
 }
 
 fn next_retry_delay(current: Duration, retry_config: &RetryConfig) -> Duration {
@@ -163,10 +169,15 @@ where
             Err(error) if attempt < retry_config.max_retries && classify_error(&error) => {
                 attempt += 1;
 
-                // Requirement 5.1: Use server-provided retry-after when present,
-                // Requirement 5.4: Fall back to exponential backoff otherwise.
-                let effective_delay =
-                    if attempt == 1 { server_delay.unwrap_or(delay) } else { delay };
+                // Priority: 1) structured retry_after from AdkError, 2) server hint, 3) backoff
+                let error_retry_after = error.retry.retry_after();
+                let effective_delay = if let Some(d) = error_retry_after {
+                    d
+                } else if attempt == 1 {
+                    server_delay.unwrap_or(delay)
+                } else {
+                    delay
+                };
 
                 adk_telemetry::warn!(
                     attempt = attempt,
@@ -204,7 +215,7 @@ mod tests {
             async move {
                 let attempt = attempts.fetch_add(1, Ordering::SeqCst);
                 if attempt < 2 {
-                    return Err(AdkError::Model("HTTP 429 rate limit".to_string()));
+                    return Err(AdkError::model("HTTP 429 rate limit"));
                 }
                 Ok("ok")
             }
@@ -228,13 +239,13 @@ mod tests {
             let attempts = Arc::clone(&attempts);
             async move {
                 attempts.fetch_add(1, Ordering::SeqCst);
-                Err::<(), _>(AdkError::Model("HTTP 400 bad request".to_string()))
+                Err::<(), _>(AdkError::model("HTTP 400 bad request"))
             }
         })
         .await
         .expect_err("operation should fail without retries");
 
-        assert!(matches!(error, AdkError::Model(_)));
+        assert!(error.is_model());
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
@@ -247,13 +258,13 @@ mod tests {
             let attempts = Arc::clone(&attempts);
             async move {
                 attempts.fetch_add(1, Ordering::SeqCst);
-                Err::<(), _>(AdkError::Model("HTTP 429 too many requests".to_string()))
+                Err::<(), _>(AdkError::model("HTTP 429 too many requests"))
             }
         })
         .await
         .expect_err("disabled retries should return first error");
 
-        assert!(matches!(error, AdkError::Model(_)));
+        assert!(error.is_model());
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
@@ -290,7 +301,7 @@ mod tests {
                 async move {
                     let attempt = attempts.fetch_add(1, Ordering::SeqCst);
                     if attempt < 1 {
-                        return Err(AdkError::Model("HTTP 429 rate limit".to_string()));
+                        return Err(AdkError::model("HTTP 429 rate limit"));
                     }
                     Ok("ok")
                 }
@@ -317,7 +328,7 @@ mod tests {
             async move {
                 let attempt = attempts.fetch_add(1, Ordering::SeqCst);
                 if attempt == 0 {
-                    return Err(AdkError::Model("HTTP 529 overloaded".to_string()));
+                    return Err(AdkError::model("HTTP 529 overloaded"));
                 }
                 Ok("recovered")
             }
@@ -352,7 +363,7 @@ mod tests {
                 let attempt = ts.len();
                 ts.push(now);
                 if attempt < 3 {
-                    return Err(AdkError::Model("HTTP 429 rate limit".to_string()));
+                    return Err(AdkError::model("HTTP 429 rate limit"));
                 }
                 Ok("done")
             }

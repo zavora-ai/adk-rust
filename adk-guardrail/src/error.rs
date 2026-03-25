@@ -26,3 +26,22 @@ pub enum GuardrailError {
 
 /// Convenience alias for guardrail operations.
 pub type Result<T> = std::result::Result<T, GuardrailError>;
+
+impl From<GuardrailError> for adk_core::AdkError {
+    fn from(err: GuardrailError) -> Self {
+        use adk_core::{ErrorCategory, ErrorComponent};
+        let (category, code) = match &err {
+            GuardrailError::ValidationFailed { .. } => {
+                (ErrorCategory::InvalidInput, "guardrail.validation_failed")
+            }
+            GuardrailError::MultipleFailures(_) => {
+                (ErrorCategory::InvalidInput, "guardrail.multiple_failures")
+            }
+            GuardrailError::Schema(_) => (ErrorCategory::InvalidInput, "guardrail.schema"),
+            GuardrailError::Regex(_) => (ErrorCategory::InvalidInput, "guardrail.regex"),
+            GuardrailError::Internal(_) => (ErrorCategory::Internal, "guardrail.internal"),
+        };
+        adk_core::AdkError::new(ErrorComponent::Guardrail, category, code, err.to_string())
+            .with_source(err)
+    }
+}

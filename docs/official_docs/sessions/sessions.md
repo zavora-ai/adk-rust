@@ -198,7 +198,7 @@ async fn main() -> anyhow::Result<()> {
 
 > **Note**: The `SqliteSessionService` requires the `sqlite` feature flag:
 > ```toml
-> adk-session = { version = "0.4", features = ["sqlite"] }
+> adk-session = { version = "0.5.0", features = ["sqlite"] }
 > ```
 
 ### PostgresSessionService
@@ -231,7 +231,7 @@ async fn main() -> anyhow::Result<()> {
 
 > **Note**: Requires the `postgres` feature flag:
 > ```toml
-> adk-session = { version = "0.4", features = ["postgres"] }
+> adk-session = { version = "0.5.0", features = ["postgres"] }
 > ```
 
 ### MongoSessionService
@@ -276,7 +276,7 @@ async fn main() -> anyhow::Result<()> {
 
 > **Note**: Requires the `mongodb` feature flag:
 > ```toml
-> adk-session = { version = "0.4", features = ["mongodb"] }
+> adk-session = { version = "0.5.0", features = ["mongodb"] }
 > ```
 
 #### MongoDB deployment modes
@@ -330,7 +330,7 @@ async fn main() -> anyhow::Result<()> {
 
 > **Note**: Requires the `neo4j` feature flag:
 > ```toml
-> adk-session = { version = "0.4", features = ["neo4j"] }
+> adk-session = { version = "0.5.0", features = ["neo4j"] }
 > ```
 
 ### RedisSessionService
@@ -346,7 +346,7 @@ let session_service = RedisSessionService::new(config).await?;
 
 > **Note**: Requires the `redis` feature flag:
 > ```toml
-> adk-session = { version = "0.4", features = ["redis"] }
+> adk-session = { version = "0.5.0", features = ["redis"] }
 > ```
 
 ## Schema Migrations
@@ -486,6 +486,7 @@ Sessions are typically managed by the `Runner` when executing agents. The Runner
 
 ```rust
 use adk_rust::prelude::*;
+use adk_rust::{SessionId, UserId};
 use adk_runner::{Runner, RunnerConfig};
 use adk_session::InMemorySessionService;
 use std::sync::Arc;
@@ -516,8 +517,8 @@ async fn main() -> anyhow::Result<()> {
     // Run with user and session IDs
     let user_content = Content::new("user").with_text("Hello!");
     let stream = runner.run(
-        "user_123".to_string(),
-        "session_abc".to_string(),
+        UserId::new("user_123")?,
+        SessionId::new("session_abc")?,
         user_content,
     ).await?;
 

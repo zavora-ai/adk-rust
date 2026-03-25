@@ -356,13 +356,13 @@ The generated `Cargo.toml` automatically includes the correct `adk-model` featur
 
 ```toml
 # Only Gemini
-adk-model = { version = "0.4", default-features = false, features = ["gemini"] }
+adk-model = { version = "0.5.0", default-features = false, features = ["gemini"] }
 
 # Mixed providers (e.g., Gemini + Anthropic)
-adk-model = { version = "0.4", default-features = false, features = ["gemini", "anthropic"] }
+adk-model = { version = "0.5.0", default-features = false, features = ["gemini", "anthropic"] }
 
 # Ollama only (no API key needed)
-adk-model = { version = "0.4", default-features = false, features = ["ollama"] }
+adk-model = { version = "0.5.0", default-features = false, features = ["ollama"] }
 ```
 
 ### Generated Code with Action Nodes

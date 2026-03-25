@@ -34,7 +34,7 @@ impl AnthropicClient {
     /// Create a new Anthropic client.
     pub fn new(config: AnthropicConfig) -> Result<Self, AdkError> {
         let client = Anthropic::new(Some(config.api_key.clone()))
-            .map_err(|e| AdkError::Model(format!("Failed to create Anthropic client: {}", e)))?;
+            .map_err(|e| AdkError::model(format!("Failed to create Anthropic client: {e}")))?;
 
         Ok(Self {
             client,
@@ -140,11 +140,27 @@ impl AnthropicClient {
         let system_prompt =
             if system_parts.is_empty() { None } else { Some(system_parts.join("\n")) };
 
-        let tools = if request.tools.is_empty() {
+        let mut tools = if request.tools.is_empty() {
             Vec::new()
         } else {
             convert::convert_tools(&request.tools)
         };
+
+        // Read extensions["anthropic"]["built_in_tools"] → append to tools array
+        let config = request.config.as_ref();
+        let anthropic_ext =
+            config.and_then(|c| c.extensions.get("anthropic")).and_then(|v| v.as_object());
+        if let Some(built_in_tools) = anthropic_ext.and_then(|o| o.get("built_in_tools")) {
+            if let Some(arr) = built_in_tools.as_array() {
+                for tool_value in arr {
+                    if let Ok(tool) =
+                        serde_json::from_value::<claudius::ToolUnionParam>(tool_value.clone())
+                    {
+                        tools.push(tool);
+                    }
+                }
+            }
+        }
 
         // Requirement 7.3: Force temperature to 1.0 when thinking is enabled
         let temperature = if thinking.is_some() {
@@ -515,6 +531,7 @@ impl Llm for AnthropicClient {
                                     interrupted: false,
                                     error_code: None,
                                     error_message: None,
+                                    provider_metadata: None,
                                 };
                             }
                         }

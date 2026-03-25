@@ -384,11 +384,12 @@ When running an agent, you receive a stream of events. Here's how to process the
 ### Processing Events from Runner
 
 ```rust
+use adk_core::{SessionId, UserId};
 use futures::StreamExt;
 
 let mut stream = runner.run(
-    "user_123".to_string(),
-    "session_id".to_string(),
+    UserId::new("user_123")?,
+    SessionId::new("session_id")?,
     user_input,
 ).await?;
 

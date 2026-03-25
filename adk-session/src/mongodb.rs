@@ -55,9 +55,9 @@ impl MongoSessionService {
     pub async fn new(connection_string: &str, database_name: &str) -> Result<Self> {
         let client_options = mongodb::options::ClientOptions::parse(connection_string)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("mongodb connection failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("mongodb connection failed: {e}")))?;
         let client = Client::with_options(client_options)
-            .map_err(|e| adk_core::AdkError::Session(format!("mongodb connection failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("mongodb connection failed: {e}")))?;
         let db = client.database(database_name);
 
         // Detect replica set support via hello command.
@@ -104,7 +104,7 @@ impl MongoSessionService {
             )
             .await
             .map_err(|e| {
-                adk_core::AdkError::Session(format!("migration registry creation failed: {e}"))
+                adk_core::AdkError::session(format!("migration registry creation failed: {e}"))
             })?;
 
         let mut max_applied = self.read_max_applied_version().await?;
@@ -121,7 +121,7 @@ impl MongoSessionService {
 
         let max_compiled = Self::MONGO_SESSION_MIGRATIONS.last().map(|s| s.0).unwrap_or(0);
         if max_applied > max_compiled {
-            return Err(adk_core::AdkError::Session(format!(
+            return Err(adk_core::AdkError::session(format!(
                 "schema version mismatch: database is at v{max_applied} but code only knows up to v{max_compiled}. Upgrade your ADK version."
             )));
         }
@@ -131,7 +131,7 @@ impl MongoSessionService {
                 continue;
             }
             run_mongo_session_step(&self.db, version).await.map_err(|e| {
-                adk_core::AdkError::Session(format!(
+                adk_core::AdkError::session(format!(
                     "{}",
                     crate::migration::MigrationError {
                         version,
@@ -147,7 +147,7 @@ impl MongoSessionService {
 
     pub async fn schema_version(&self) -> Result<i64> {
         let collections = self.db.list_collection_names().await.map_err(|e| {
-            adk_core::AdkError::Session(format!("schema version query failed: {e}"))
+            adk_core::AdkError::session(format!("schema version query failed: {e}"))
         })?;
         if !collections.contains(&Self::REGISTRY_COLLECTION.to_string()) {
             return Ok(0);
@@ -160,7 +160,7 @@ impl MongoSessionService {
         let registry = self.db.collection::<Document>(Self::REGISTRY_COLLECTION);
         let opts = FindOneOptions::builder().sort(doc! { "version": -1 }).build();
         let result = registry.find_one(doc! {}).with_options(opts).await.map_err(|e| {
-            adk_core::AdkError::Session(format!("migration registry read failed: {e}"))
+            adk_core::AdkError::session(format!("migration registry read failed: {e}"))
         })?;
         match result {
             Some(doc) => Ok(doc.get_i64("version").unwrap_or(0)),
@@ -171,7 +171,7 @@ impl MongoSessionService {
     async fn detect_existing_tables(&self) -> Result<bool> {
         let collections =
             self.db.list_collection_names().await.map_err(|e| {
-                adk_core::AdkError::Session(format!("baseline detection failed: {e}"))
+                adk_core::AdkError::session(format!("baseline detection failed: {e}"))
             })?;
         Ok(collections.contains(&"sessions".to_string()))
     }
@@ -183,7 +183,7 @@ impl MongoSessionService {
             .insert_one(doc! { "version": version, "description": description, "applied_at": now })
             .await
             .map_err(|e| {
-                adk_core::AdkError::Session(format!(
+                adk_core::AdkError::session(format!(
                     "{}",
                     crate::migration::MigrationError {
                         version,
@@ -200,10 +200,10 @@ impl MongoSessionService {
         if self.supports_transactions {
             let mut s =
                 self.db.client().start_session().await.map_err(|e| {
-                    adk_core::AdkError::Session(format!("session start failed: {e}"))
+                    adk_core::AdkError::session(format!("session start failed: {e}"))
                 })?;
             s.start_transaction().await.map_err(|e| {
-                adk_core::AdkError::Session(format!("transaction start failed: {e}"))
+                adk_core::AdkError::session(format!("transaction start failed: {e}"))
             })?;
             Ok(Some(s))
         } else {
@@ -216,7 +216,7 @@ impl MongoSessionService {
         if let Some(s) = session {
             s.commit_transaction()
                 .await
-                .map_err(|e| adk_core::AdkError::Session(format!("commit failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
         }
         Ok(())
     }
@@ -227,7 +227,7 @@ impl MongoSessionService {
 async fn run_mongo_session_step(db: &Database, version: i64) -> Result<()> {
     match version {
         1 => mongo_session_v1(db).await,
-        _ => Err(adk_core::AdkError::Session(format!("unknown migration version: {version}"))),
+        _ => Err(adk_core::AdkError::session(format!("unknown migration version: {version}"))),
     }
 }
 
@@ -245,7 +245,7 @@ async fn mongo_session_v1(db: &Database) -> Result<()> {
                 .build(),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("index creation failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("index creation failed: {e}")))?;
 
     db.collection::<Document>("events")
         .create_index(
@@ -255,7 +255,7 @@ async fn mongo_session_v1(db: &Database) -> Result<()> {
                 .build(),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("index creation failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("index creation failed: {e}")))?;
 
     db.collection::<Document>("app_states")
         .create_index(
@@ -270,7 +270,7 @@ async fn mongo_session_v1(db: &Database) -> Result<()> {
                 .build(),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("index creation failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("index creation failed: {e}")))?;
 
     db.collection::<Document>("user_states")
         .create_index(
@@ -285,7 +285,7 @@ async fn mongo_session_v1(db: &Database) -> Result<()> {
                 .build(),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("index creation failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("index creation failed: {e}")))?;
 
     Ok(())
 }
@@ -296,9 +296,9 @@ fn state_to_bson(
     state: &HashMap<String, Value>,
 ) -> std::result::Result<Document, adk_core::AdkError> {
     let json_value = serde_json::to_value(state)
-        .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
     let bson_value = bson::to_bson(&json_value)
-        .map_err(|e| adk_core::AdkError::Session(format!("bson conversion failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("bson conversion failed: {e}")))?;
     match bson_value {
         bson::Bson::Document(doc) => Ok(doc),
         _ => Ok(Document::new()),
@@ -357,7 +357,7 @@ impl SessionService for MongoSessionService {
             app_coll.find_one(doc! { "app_name": &req.app_name }),
             txn.as_mut()
         )
-        .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+        .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         .and_then(|d| d.get_document("state").ok().map(bson_to_state))
         .unwrap_or_default();
         let mut new_app = existing_app;
@@ -369,14 +369,14 @@ impl SessionService for MongoSessionService {
                 doc! { "$set": { "app_name": &req.app_name, "state": &app_bson, "updated_at": bson_now } }
             ).with_options(UpdateOptions::builder().upsert(true).build()),
             txn.as_mut()
-        ).map_err(|e| adk_core::AdkError::Session(format!("insert failed: {e}")))?;
+        ).map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
         // User state
         let existing_user: HashMap<String, Value> = with_optional_session!(
             user_coll.find_one(doc! { "app_name": &req.app_name, "user_id": &req.user_id }),
             txn.as_mut()
         )
-        .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+        .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         .and_then(|d| d.get_document("state").ok().map(bson_to_state))
         .unwrap_or_default();
         let mut new_user = existing_user;
@@ -388,7 +388,7 @@ impl SessionService for MongoSessionService {
                 doc! { "$set": { "app_name": &req.app_name, "user_id": &req.user_id, "state": &user_bson, "updated_at": bson_now } }
             ).with_options(UpdateOptions::builder().upsert(true).build()),
             txn.as_mut()
-        ).map_err(|e| adk_core::AdkError::Session(format!("insert failed: {e}")))?;
+        ).map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
         // Session
         let merged = state_utils::merge_states(&new_app, &new_user, &session_state);
@@ -400,7 +400,7 @@ impl SessionService for MongoSessionService {
             }),
             txn.as_mut()
         )
-        .map_err(|e| adk_core::AdkError::Session(format!("insert failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
         MongoSessionService::maybe_commit(&mut txn).await?;
 
@@ -419,8 +419,8 @@ impl SessionService for MongoSessionService {
         let sess_coll = self.db.collection::<Document>("sessions");
         let session_doc = sess_coll
             .find_one(doc! { "app_name": &req.app_name, "user_id": &req.user_id, "session_id": &req.session_id })
-            .await.map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
-            .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+            .await.map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+            .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
         let state = session_doc.get_document("state").map(bson_to_state).unwrap_or_default();
         let updated_at = session_doc
@@ -432,17 +432,17 @@ impl SessionService for MongoSessionService {
         let mut cursor = events_coll
             .find(doc! { "app_name": &req.app_name, "user_id": &req.user_id, "session_id": &req.session_id })
             .with_options(FindOptions::builder().sort(doc! { "timestamp": 1 }).build())
-            .await.map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .await.map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let mut events: Vec<Event> = Vec::new();
         while cursor
             .advance()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         {
             let doc = cursor
                 .deserialize_current()
-                .map_err(|e| adk_core::AdkError::Session(format!("deserialize failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::session(format!("deserialize failed: {e}")))?;
             if let Some(event) = doc_to_event(&doc) {
                 events.push(event);
             }
@@ -477,17 +477,17 @@ impl SessionService for MongoSessionService {
             .find(doc! { "app_name": &req.app_name, "user_id": &req.user_id })
             .with_options(opts)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let mut sessions: Vec<Box<dyn Session>> = Vec::new();
         while cursor
             .advance()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         {
             let doc = cursor
                 .deserialize_current()
-                .map_err(|e| adk_core::AdkError::Session(format!("deserialize failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::session(format!("deserialize failed: {e}")))?;
             sessions.push(Box::new(MongoSession {
                 app_name: req.app_name.clone(),
                 user_id: req.user_id.clone(),
@@ -511,9 +511,9 @@ impl SessionService for MongoSessionService {
 
         let mut txn = self.maybe_start_transaction().await?;
         with_optional_session!(ev_coll.delete_many(filter.clone()), txn.as_mut())
-            .map_err(|e| adk_core::AdkError::Session(format!("delete failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("delete failed: {e}")))?;
         with_optional_session!(sess_coll.delete_one(filter), txn.as_mut())
-            .map_err(|e| adk_core::AdkError::Session(format!("delete failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("delete failed: {e}")))?;
         MongoSessionService::maybe_commit(&mut txn).await?;
         Ok(())
     }
@@ -533,8 +533,8 @@ impl SessionService for MongoSessionService {
             sess_coll.find_one(doc! { "session_id": session_id }),
             txn.as_mut()
         )
-        .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
-        .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+        .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+        .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
         let app_name = session_doc.get_str("app_name").unwrap_or_default().to_string();
         let user_id = session_doc.get_str("user_id").unwrap_or_default().to_string();
@@ -544,7 +544,7 @@ impl SessionService for MongoSessionService {
 
         let cur_app: HashMap<String, Value> =
             with_optional_session!(app_coll.find_one(doc! { "app_name": &app_name }), txn.as_mut())
-                .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+                .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
                 .and_then(|d| d.get_document("state").ok().map(bson_to_state))
                 .unwrap_or_default();
 
@@ -552,7 +552,7 @@ impl SessionService for MongoSessionService {
             user_coll.find_one(doc! { "app_name": &app_name, "user_id": &user_id }),
             txn.as_mut()
         )
-        .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+        .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         .and_then(|d| d.get_document("state").ok().map(bson_to_state))
         .unwrap_or_default();
 
@@ -567,7 +567,7 @@ impl SessionService for MongoSessionService {
             app_coll.update_one(doc! { "app_name": &app_name }, doc! { "$set": { "app_name": &app_name, "state": &app_bson, "updated_at": bson_ts } })
                 .with_options(UpdateOptions::builder().upsert(true).build()),
             txn.as_mut()
-        ).map_err(|e| adk_core::AdkError::Session(format!("insert failed: {e}")))?;
+        ).map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
         let mut new_user = cur_user;
         new_user.extend(user_delta);
@@ -576,7 +576,7 @@ impl SessionService for MongoSessionService {
             user_coll.update_one(doc! { "app_name": &app_name, "user_id": &user_id }, doc! { "$set": { "app_name": &app_name, "user_id": &user_id, "state": &user_bson, "updated_at": bson_ts } })
                 .with_options(UpdateOptions::builder().upsert(true).build()),
             txn.as_mut()
-        ).map_err(|e| adk_core::AdkError::Session(format!("insert failed: {e}")))?;
+        ).map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
         sess_state.extend(session_delta);
         let merged = state_utils::merge_states(&new_app, &new_user, &sess_state);
@@ -588,21 +588,21 @@ impl SessionService for MongoSessionService {
             ),
             txn.as_mut()
         )
-        .map_err(|e| adk_core::AdkError::Session(format!("update failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
 
         let llm_bson = bson::to_bson(&event.llm_response)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
         let act_bson = bson::to_bson(&event.actions)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
         let tid_bson = bson::to_bson(&event.long_running_tool_ids)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
         with_optional_session!(
             ev_coll.insert_one(doc! {
                 "id": &event.id, "session_id": session_id, "app_name": &app_name, "user_id": &user_id,
                 "invocation_id": &event.invocation_id, "branch": &event.branch, "author": &event.author,
                 "timestamp": bson_ts, "llm_response": llm_bson, "actions": act_bson, "long_running_tool_ids": tid_bson,
             }), txn.as_mut()
-        ).map_err(|e| adk_core::AdkError::Session(format!("insert failed: {e}")))?;
+        ).map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
         MongoSessionService::maybe_commit(&mut txn).await?;
         Ok(())
@@ -634,8 +634,8 @@ impl SessionService for MongoSessionService {
             ),
             txn.as_mut()
         )
-        .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
-        .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+        .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+        .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
         let existing_state =
             session_doc.get_document("state").map(bson_to_state).unwrap_or_default();
@@ -643,7 +643,7 @@ impl SessionService for MongoSessionService {
 
         let cur_app: HashMap<String, Value> =
             with_optional_session!(app_coll.find_one(doc! { "app_name": app_name }), txn.as_mut())
-                .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+                .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
                 .and_then(|d| d.get_document("state").ok().map(bson_to_state))
                 .unwrap_or_default();
 
@@ -651,7 +651,7 @@ impl SessionService for MongoSessionService {
             user_coll.find_one(doc! { "app_name": app_name, "user_id": user_id }),
             txn.as_mut()
         )
-        .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+        .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         .and_then(|d| d.get_document("state").ok().map(bson_to_state))
         .unwrap_or_default();
 
@@ -666,7 +666,7 @@ impl SessionService for MongoSessionService {
             app_coll.update_one(doc! { "app_name": app_name }, doc! { "$set": { "app_name": app_name, "state": &app_bson, "updated_at": bson_ts } })
                 .with_options(UpdateOptions::builder().upsert(true).build()),
             txn.as_mut()
-        ).map_err(|e| adk_core::AdkError::Session(format!("insert failed: {e}")))?;
+        ).map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
         let mut new_user = cur_user;
         new_user.extend(user_delta);
@@ -675,7 +675,7 @@ impl SessionService for MongoSessionService {
             user_coll.update_one(doc! { "app_name": app_name, "user_id": user_id }, doc! { "$set": { "app_name": app_name, "user_id": user_id, "state": &user_bson, "updated_at": bson_ts } })
                 .with_options(UpdateOptions::builder().upsert(true).build()),
             txn.as_mut()
-        ).map_err(|e| adk_core::AdkError::Session(format!("insert failed: {e}")))?;
+        ).map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
         sess_state.extend(session_delta);
         let merged = state_utils::merge_states(&new_app, &new_user, &sess_state);
@@ -687,21 +687,21 @@ impl SessionService for MongoSessionService {
             ),
             txn.as_mut()
         )
-        .map_err(|e| adk_core::AdkError::Session(format!("update failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
 
         let llm_bson = bson::to_bson(&event.llm_response)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
         let act_bson = bson::to_bson(&event.actions)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
         let tid_bson = bson::to_bson(&event.long_running_tool_ids)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
         with_optional_session!(
             ev_coll.insert_one(doc! {
                 "id": &event.id, "session_id": session_id, "app_name": app_name, "user_id": user_id,
                 "invocation_id": &event.invocation_id, "branch": &event.branch, "author": &event.author,
                 "timestamp": bson_ts, "llm_response": llm_bson, "actions": act_bson, "long_running_tool_ids": tid_bson,
             }), txn.as_mut()
-        ).map_err(|e| adk_core::AdkError::Session(format!("insert failed: {e}")))?;
+        ).map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
         MongoSessionService::maybe_commit(&mut txn).await?;
         Ok(())
@@ -715,9 +715,9 @@ impl SessionService for MongoSessionService {
 
         let mut txn = self.maybe_start_transaction().await?;
         with_optional_session!(ev_coll.delete_many(filter.clone()), txn.as_mut())
-            .map_err(|e| adk_core::AdkError::Session(format!("delete_all_sessions failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("delete_all_sessions failed: {e}")))?;
         with_optional_session!(sess_coll.delete_many(filter), txn.as_mut())
-            .map_err(|e| adk_core::AdkError::Session(format!("delete_all_sessions failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("delete_all_sessions failed: {e}")))?;
         MongoSessionService::maybe_commit(&mut txn).await?;
         Ok(())
     }
@@ -727,7 +727,7 @@ impl SessionService for MongoSessionService {
         self.db
             .run_command(doc! { "ping": 1 })
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("health check failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("health check failed: {e}")))?;
         Ok(())
     }
 }
@@ -799,6 +799,10 @@ impl State for MongoSession {
         self.state.get(key).cloned()
     }
     fn set(&mut self, key: String, value: Value) {
+        if let Err(msg) = adk_core::validate_state_key(&key) {
+            tracing::warn!(key = %key, "rejecting invalid state key: {msg}");
+            return;
+        }
         self.state.insert(key, value);
     }
     fn all(&self) -> HashMap<String, Value> {

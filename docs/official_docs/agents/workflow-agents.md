@@ -15,7 +15,7 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.4"
+adk-rust = "0.5.0"
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 ```
@@ -531,6 +531,7 @@ To see what's happening inside a workflow, enable tracing:
 
 ```rust
 use adk_rust::prelude::*;
+use adk_rust::{SessionId, UserId};
 use adk_rust::runner::{Runner, RunnerConfig};
 use adk_rust::futures::StreamExt;
 use std::sync::Arc;
@@ -556,8 +557,8 @@ let session = session_service.create(CreateRequest {
 }).await?;
 
 let mut stream = runner.run(
-    "user".to_string(),
-    session.id().to_string(), 
+    UserId::new("user")?,
+    SessionId::new(session.id())?,
     Content::new("user").with_text("Analyze Rust"),
 ).await?;
 

@@ -8,7 +8,7 @@ use crate::rest::controllers::ui::{
 use crate::ui_protocol::{
     SUPPORTED_UI_PROTOCOLS, UI_PROTOCOL_CAPABILITIES, normalize_runtime_ui_protocol,
 };
-use adk_core::RequestContext;
+use adk_core::{RequestContext, SessionId, UserId};
 use axum::{
     Json,
     extract::{Path, State},
@@ -199,6 +199,18 @@ impl UiProfile {
 }
 
 type RuntimeError = (StatusCode, String);
+
+/// Convert an `AdkError` into a `RuntimeError` using the structured error envelope.
+///
+/// Uses `AdkError::http_status_code()` for the HTTP status and
+/// `AdkError::to_problem_json()` for the response body. The problem JSON
+/// includes `retry_after_ms` when the error carries retry guidance.
+fn adk_err_to_runtime(err: adk_core::AdkError) -> RuntimeError {
+    let status =
+        StatusCode::from_u16(err.http_status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let body = err.to_problem_json().to_string();
+    (status, body)
+}
 
 fn parse_ui_profile(raw: &str) -> Option<UiProfile> {
     match normalize_runtime_ui_protocol(raw)? {
@@ -662,12 +674,7 @@ async fn apply_state_delta_to_session(
     session_service
         .append_event_for_identity(adk_session::AppendEventRequest { identity, event })
         .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to apply input state to session: {}", error),
-            )
-        })
+        .map_err(adk_err_to_runtime)
 }
 
 fn merge_runtime_state_delta(
@@ -1172,10 +1179,12 @@ pub async fn run_sse(
             .map_err(|_| (StatusCode::NOT_FOUND, "session not found".to_string()))?;
 
         // Load agent
-        let agent =
-            controller.config.agent_loader.load_agent(&app_name).await.map_err(|_| {
-                (StatusCode::INTERNAL_SERVER_ERROR, "failed to load agent".to_string())
-            })?;
+        let agent = controller
+            .config
+            .agent_loader
+            .load_agent(&app_name)
+            .await
+            .map_err(adk_err_to_runtime)?;
 
         // Create runner
         let runner = adk_runner::Runner::new(adk_runner::RunnerConfig {
@@ -1192,7 +1201,7 @@ pub async fn run_sse(
             request_context,
             cancellation_token: None,
         })
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create runner".to_string()))?;
+        .map_err(adk_err_to_runtime)?;
 
         // Build content with attachments
         let content = build_content_with_attachments(&req.new_message, &req.attachments)?;
@@ -1203,10 +1212,14 @@ pub async fn run_sse(
         }
 
         // Run agent
+        let typed_user_id =
+            UserId::new(effective_user_id).map_err(|err| adk_err_to_runtime(err.into()))?;
+        let typed_session_id =
+            SessionId::new(session_id.clone()).map_err(|err| adk_err_to_runtime(err.into()))?;
         let event_stream = runner
-            .run(effective_user_id, session_id.clone(), content)
+            .run(typed_user_id, typed_session_id, content)
             .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to run agent".to_string()))?;
+            .map_err(adk_err_to_runtime)?;
 
         // Convert to SSE stream
         let sse_stream =
@@ -1317,9 +1330,7 @@ pub async fn run_sse_compat(
                 state: merged_state_delta.clone(),
             })
             .await
-            .map_err(|_| {
-                (StatusCode::INTERNAL_SERVER_ERROR, "failed to create session".to_string())
-            })?;
+            .map_err(adk_err_to_runtime)?;
     } else {
         apply_state_delta_to_session(
             &controller.config.session_service,
@@ -1352,12 +1363,8 @@ pub async fn run_sse_compat(
     }
 
     // Load agent
-    let agent = controller
-        .config
-        .agent_loader
-        .load_agent(&app_name)
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to load agent".to_string()))?;
+    let agent =
+        controller.config.agent_loader.load_agent(&app_name).await.map_err(adk_err_to_runtime)?;
 
     // Create runner with streaming config from request
     let streaming_mode =
@@ -1377,13 +1384,15 @@ pub async fn run_sse_compat(
         request_context,
         cancellation_token: None,
     })
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to create runner".to_string()))?;
+    .map_err(adk_err_to_runtime)?;
 
     // Run agent with full content (text + inline data)
-    let event_stream = runner
-        .run(effective_user_id, session_id.clone(), content)
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to run agent".to_string()))?;
+    let typed_user_id =
+        UserId::new(effective_user_id).map_err(|err| adk_err_to_runtime(err.into()))?;
+    let typed_session_id =
+        SessionId::new(session_id.clone()).map_err(|err| adk_err_to_runtime(err.into()))?;
+    let event_stream =
+        runner.run(typed_user_id, typed_session_id, content).await.map_err(adk_err_to_runtime)?;
 
     // Convert to SSE stream
     let sse_stream = build_runtime_sse_stream(

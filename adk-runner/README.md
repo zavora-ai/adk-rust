@@ -22,14 +22,14 @@ Agent execution runtime for ADK-Rust.
 
 ```toml
 [dependencies]
-adk-runner = "0.4"
+adk-runner = "0.5.0"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.4", features = ["runner"] }
+adk-rust = { version = "0.5.0", features = ["runner"] }
 ```
 
 ## Quick Start
@@ -38,7 +38,7 @@ adk-rust = { version = "0.4", features = ["runner"] }
 use adk_runner::{Runner, RunnerConfig};
 use adk_session::InMemorySessionService;
 use adk_artifact::InMemoryArtifactService;
-use adk_core::Content;
+use adk_core::{Content, SessionId, UserId};
 use std::sync::Arc;
 
 // Create services
@@ -61,8 +61,8 @@ let runner = Runner::new(config)?;
 
 // Run agent for a user/session
 let mut stream = runner.run(
-    "user_123".to_string(),
-    "session_456".to_string(),
+    UserId::new("user_123")?,
+    SessionId::new("session_456")?,
     Content::new("user").with_text("Hello!"),
 ).await?;
 

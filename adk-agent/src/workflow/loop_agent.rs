@@ -60,7 +60,7 @@ impl LoopAgent {
     }
 
     pub fn with_skills_from_root(mut self, root: impl AsRef<std::path::Path>) -> Result<Self> {
-        let index = load_skill_index(root).map_err(|e| adk_core::AdkError::Agent(e.to_string()))?;
+        let index = load_skill_index(root).map_err(|e| adk_core::AdkError::agent(e.to_string()))?;
         self.skills_index = Some(Arc::new(index));
         Ok(self)
     }
@@ -123,6 +123,10 @@ impl State for StateTrackingState {
     }
 
     fn set(&mut self, key: String, value: serde_json::Value) {
+        if let Err(msg) = adk_core::validate_state_key(&key) {
+            tracing::warn!(key = %key, "rejecting invalid state key: {msg}");
+            return;
+        }
         self.values.write().unwrap_or_else(|e| e.into_inner()).insert(key, value);
     }
 

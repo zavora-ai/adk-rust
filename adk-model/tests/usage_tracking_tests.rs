@@ -59,6 +59,7 @@ fn make_usage(
         thinking_token_count: thinking,
         audio_input_token_count: audio_in,
         audio_output_token_count: audio_out,
+        ..Default::default()
     }
 }
 
@@ -201,7 +202,7 @@ async fn test_handles_error_responses() {
     let (_guard, captured) = setup_capture();
 
     let stream: adk_core::LlmResponseStream =
-        Box::pin(futures::stream::once(async { Err(AdkError::Model("test error".into())) }));
+        Box::pin(futures::stream::once(async { Err(AdkError::model("test error")) }));
 
     let span = adk_telemetry::llm_generate_span("test", "test-model", false);
     let tracked = adk_model::usage_tracking::with_usage_tracking(stream, span);

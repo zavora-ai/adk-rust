@@ -118,17 +118,17 @@ impl RedisSessionService {
             Config { server: ServerConfig::new_clustered(hosts), ..Default::default() }
         } else {
             Config::from_url(&config.url)
-                .map_err(|e| adk_core::AdkError::Session(format!("redis connection failed: {e}")))?
+                .map_err(|e| adk_core::AdkError::session(format!("redis connection failed: {e}")))?
         };
 
         let client = Builder::from_config(redis_config)
             .build()
-            .map_err(|e| adk_core::AdkError::Session(format!("redis connection failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis connection failed: {e}")))?;
 
         client
             .init()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis connection failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis connection failed: {e}")))?;
 
         Ok(Self { client, ttl: config.ttl })
     }
@@ -139,11 +139,11 @@ impl RedisSessionService {
             let seconds = ttl.as_secs() as i64;
             let _: () =
                 self.client.expire(session_k, seconds, None).await.map_err(|e| {
-                    adk_core::AdkError::Session(format!("redis expire failed: {e}"))
+                    adk_core::AdkError::session(format!("redis expire failed: {e}"))
                 })?;
             let _: () =
                 self.client.expire(events_k, seconds, None).await.map_err(|e| {
-                    adk_core::AdkError::Session(format!("redis expire failed: {e}"))
+                    adk_core::AdkError::session(format!("redis expire failed: {e}"))
                 })?;
         }
         Ok(())
@@ -155,7 +155,7 @@ impl RedisSessionService {
             .client
             .hgetall(key)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis hgetall failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis hgetall failed: {e}")))?;
         let mut map = HashMap::new();
         for (k, v) in raw {
             let val: Value = serde_json::from_str(&v).unwrap_or(Value::String(v));
@@ -176,14 +176,14 @@ impl RedisSessionService {
         let mut fields: Vec<(String, String)> = Vec::with_capacity(state.len());
         for (k, v) in state {
             let serialized = serde_json::to_string(v).map_err(|e| {
-                adk_core::AdkError::Session(format!("serialize state value failed: {e}"))
+                adk_core::AdkError::session(format!("serialize state value failed: {e}"))
             })?;
             fields.push((k.clone(), serialized));
         }
         let _: () = trx
             .hset(key, fields)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis hset failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis hset failed: {e}")))?;
         Ok(())
     }
 }
@@ -213,7 +213,7 @@ impl SessionService for RedisSessionService {
         // Session metadata hash
         let session_k = session_key(&req.app_name, &req.user_id, &session_id);
         let state_json = serde_json::to_string(&merged_state)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize state failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize state failed: {e}")))?;
         let session_fields: Vec<(String, String)> = vec![
             ("app_name".into(), req.app_name.clone()),
             ("user_id".into(), req.user_id.clone()),
@@ -225,7 +225,7 @@ impl SessionService for RedisSessionService {
         let _: () = trx
             .hset(&session_k, session_fields)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis hset failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis hset failed: {e}")))?;
 
         // App state hash
         Self::write_state_hash(&trx, &app_state_key(&req.app_name), &app_state).await?;
@@ -239,7 +239,7 @@ impl SessionService for RedisSessionService {
         let _: () = trx
             .sadd(&idx_k, &session_id)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis sadd failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis sadd failed: {e}")))?;
 
         // Reverse lookup: session_id → app_name:user_id
         let lk = lookup_key(&session_id);
@@ -247,12 +247,12 @@ impl SessionService for RedisSessionService {
         let _: () = trx
             .set(&lk, lookup_val, None, None, false)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis set failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis set failed: {e}")))?;
 
         let _: () = trx
             .exec(true)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis transaction failed: {e}")))?;
 
         // Apply TTL outside transaction
         let events_k = events_key(&req.app_name, &req.user_id, &session_id);
@@ -276,16 +276,16 @@ impl SessionService for RedisSessionService {
             .client
             .exists(&session_k)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis exists failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis exists failed: {e}")))?;
         if !exists {
-            return Err(adk_core::AdkError::Session("session not found".into()));
+            return Err(adk_core::AdkError::session("session not found"));
         }
 
         let raw: HashMap<String, String> = self
             .client
             .hgetall(&session_k)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis hgetall failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis hgetall failed: {e}")))?;
 
         let updated_at: DateTime<Utc> =
             raw.get("updated_at").and_then(|s| s.parse().ok()).unwrap_or_else(Utc::now);
@@ -299,7 +299,7 @@ impl SessionService for RedisSessionService {
             .client
             .zrange(&events_k, 0, -1, None, false, None, true)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis zrange failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis zrange failed: {e}")))?;
 
         let mut events: Vec<Event> = raw_events
             .into_iter()
@@ -331,7 +331,7 @@ impl SessionService for RedisSessionService {
             .client
             .smembers(&idx_k)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis smembers failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis smembers failed: {e}")))?;
 
         let offset = req.offset.unwrap_or(0);
         let limit = req.limit.unwrap_or(usize::MAX);
@@ -341,7 +341,7 @@ impl SessionService for RedisSessionService {
             let session_k = session_key(&req.app_name, &req.user_id, &sid);
             let raw: HashMap<String, String> =
                 self.client.hgetall(&session_k).await.map_err(|e| {
-                    adk_core::AdkError::Session(format!("redis hgetall failed: {e}"))
+                    adk_core::AdkError::session(format!("redis hgetall failed: {e}"))
                 })?;
 
             if raw.is_empty() {
@@ -378,15 +378,15 @@ impl SessionService for RedisSessionService {
         let _: () = trx
             .del(vec![session_k, events_k, lk])
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis del failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis del failed: {e}")))?;
         let _: () = trx
             .srem(&idx_k, &req.session_id)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis srem failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis srem failed: {e}")))?;
         let _: () = trx
             .exec(true)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis transaction failed: {e}")))?;
 
         Ok(())
     }
@@ -402,15 +402,15 @@ impl SessionService for RedisSessionService {
             .client
             .get(&lk)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis get failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis get failed: {e}")))?;
 
         let lookup_val =
-            lookup_val.ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+            lookup_val.ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
         // Parse "app_name:user_id" — split on first ':'
         let (app_name, user_id) = lookup_val
             .split_once(':')
-            .ok_or_else(|| adk_core::AdkError::Session("corrupt session lookup entry".into()))?;
+            .ok_or_else(|| adk_core::AdkError::session("corrupt session lookup entry"))?;
 
         let session_k = session_key(app_name, user_id, session_id);
 
@@ -419,9 +419,9 @@ impl SessionService for RedisSessionService {
             .client
             .exists(&session_k)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis exists failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis exists failed: {e}")))?;
         if !exists {
-            return Err(adk_core::AdkError::Session("session not found".into()));
+            return Err(adk_core::AdkError::session("session not found"));
         }
 
         // Read existing session state
@@ -429,7 +429,7 @@ impl SessionService for RedisSessionService {
             .client
             .hgetall(&session_k)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis hgetall failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis hgetall failed: {e}")))?;
 
         let existing_state: HashMap<String, Value> =
             raw.get("state").and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default();
@@ -454,7 +454,7 @@ impl SessionService for RedisSessionService {
 
         // Serialize event for sorted set
         let event_json = serde_json::to_string(&event)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
         let score = event.timestamp.timestamp_millis() as f64;
 
         // Atomic write
@@ -465,7 +465,7 @@ impl SessionService for RedisSessionService {
 
         // Update session merged state and timestamp
         let merged_state_json = serde_json::to_string(&merged_state)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize state failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize state failed: {e}")))?;
         let _: () = trx
             .hset(
                 &session_k,
@@ -475,19 +475,19 @@ impl SessionService for RedisSessionService {
                 ],
             )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis hset failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis hset failed: {e}")))?;
 
         // Add event to sorted set
         let events_k = events_key(app_name, user_id, session_id);
         let _: () = trx
             .zadd(&events_k, None, None, false, false, (score, event_json))
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis zadd failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis zadd failed: {e}")))?;
 
         let _: () = trx
             .exec(true)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis transaction failed: {e}")))?;
 
         // Refresh TTL
         self.apply_ttl(&session_k, &events_k).await?;
@@ -516,9 +516,9 @@ impl SessionService for RedisSessionService {
             .client
             .exists(&session_k)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis exists failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis exists failed: {e}")))?;
         if !exists {
-            return Err(adk_core::AdkError::Session("session not found".into()));
+            return Err(adk_core::AdkError::session("session not found"));
         }
 
         // Read existing session state
@@ -526,7 +526,7 @@ impl SessionService for RedisSessionService {
             .client
             .hgetall(&session_k)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis hgetall failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis hgetall failed: {e}")))?;
 
         let existing_state: HashMap<String, Value> =
             raw.get("state").and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default();
@@ -551,7 +551,7 @@ impl SessionService for RedisSessionService {
 
         // Serialize event for sorted set
         let event_json = serde_json::to_string(&event)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
         let score = event.timestamp.timestamp_millis() as f64;
 
         // Atomic write
@@ -562,7 +562,7 @@ impl SessionService for RedisSessionService {
 
         // Update session merged state and timestamp
         let merged_state_json = serde_json::to_string(&merged_state)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize state failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize state failed: {e}")))?;
         let _: () = trx
             .hset(
                 &session_k,
@@ -572,19 +572,19 @@ impl SessionService for RedisSessionService {
                 ],
             )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis hset failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis hset failed: {e}")))?;
 
         // Add event to sorted set
         let events_k = events_key(app_name, user_id, sid);
         let _: () = trx
             .zadd(&events_k, None, None, false, false, (score, event_json))
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis zadd failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis zadd failed: {e}")))?;
 
         let _: () = trx
             .exec(true)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis transaction failed: {e}")))?;
 
         // Refresh TTL
         self.apply_ttl(&session_k, &events_k).await?;
@@ -599,7 +599,7 @@ impl SessionService for RedisSessionService {
             .client
             .smembers(&idx_k)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis smembers failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis smembers failed: {e}")))?;
 
         if session_ids.is_empty() {
             return Ok(());
@@ -613,16 +613,16 @@ impl SessionService for RedisSessionService {
             let _: () = trx
                 .del(vec![sk, ek, lk])
                 .await
-                .map_err(|e| adk_core::AdkError::Session(format!("redis del failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::session(format!("redis del failed: {e}")))?;
         }
         let _: () = trx
             .del(&idx_k)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis del failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis del failed: {e}")))?;
         let _: () = trx
             .exec(true)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("redis transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("redis transaction failed: {e}")))?;
 
         Ok(())
     }
@@ -633,7 +633,7 @@ impl SessionService for RedisSessionService {
             .client
             .ping(None)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("health check failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("health check failed: {e}")))?;
         Ok(())
     }
 }
@@ -680,6 +680,10 @@ impl State for RedisSession {
     }
 
     fn set(&mut self, key: String, value: Value) {
+        if let Err(msg) = adk_core::validate_state_key(&key) {
+            tracing::warn!(key = %key, "rejecting invalid state key: {msg}");
+            return;
+        }
         self.state.insert(key, value);
     }
 

@@ -470,6 +470,10 @@ impl State for AgentToolSession {
     }
 
     fn set(&mut self, key: String, value: Value) {
+        if let Err(msg) = adk_core::validate_state_key(&key) {
+            tracing::warn!(key = %key, "rejecting invalid state key: {msg}");
+            return;
+        }
         if let Ok(mut state) = self.state.write() {
             state.insert(key, value);
         }

@@ -183,51 +183,200 @@ fn complex_builder(...) { }
 
 ## Error Handling
 
-### Use `adk_core::AdkError`
+### Structured Error Envelope
 
-All errors should use the centralized error type:
+`AdkError` is a structured error type with component (where), category (what kind), code (machine key), message (human text), retry hint, and optional details:
 
 ```rust
-use adk_core::{AdkError, Result};
+use adk_core::{AdkError, ErrorComponent, ErrorCategory, Result};
 
 // Return Result<T> (aliased to Result<T, AdkError>)
 pub async fn my_function() -> Result<String> {
-    // Use ? for propagation
     let data = fetch_data().await?;
 
-    // Create errors with appropriate variants
     if data.is_empty() {
-        return Err(AdkError::Tool("No data found".into()));
+        return Err(AdkError::new(
+            ErrorComponent::Tool,
+            ErrorCategory::NotFound,
+            "tool.data.not_found",
+            "No data found for the given query",
+        ));
     }
 
     Ok(data)
 }
 ```
 
-### Error Variants
+### Choosing Component and Category
 
-Use the appropriate error variant:
+`ErrorComponent` identifies where the failure happened (the origin subsystem, not the trait boundary it surfaces through):
 
-| Variant | Use Case |
-|---------|----------|
-| `AdkError::Agent(String)` | Agent execution errors |
-| `AdkError::Model(String)` | LLM provider errors |
-| `AdkError::Tool(String)` | Tool execution errors |
-| `AdkError::Session(String)` | Session management errors |
-| `AdkError::Artifact(String)` | Artifact storage errors |
-| `AdkError::Config(String)` | Configuration errors |
-| `AdkError::Network(String)` | HTTP/network errors |
+| Component | Use When |
+|-----------|----------|
+| `Agent` | Agent orchestration, sub-agent dispatch |
+| `Model` | LLM provider calls, response parsing |
+| `Tool` | Tool execution, parameter validation |
+| `Session` | Session persistence, state management |
+| `Memory` | Memory/RAG operations |
+| `Graph` | Graph workflow execution |
+| `Auth` | Authentication, authorization |
+| `Server` | HTTP server, configuration |
+
+`ErrorCategory` classifies what went wrong:
+
+| Category | HTTP | Use When |
+|----------|------|----------|
+| `InvalidInput` | 400 | Bad parameters, config, request body |
+| `Unauthorized` | 401 | Missing or invalid credentials |
+| `Forbidden` | 403 | Valid credentials, insufficient permissions |
+| `NotFound` | 404 | Resource doesn't exist |
+| `RateLimited` | 429 | Upstream rate limit (retryable) |
+| `Timeout` | 408 | Operation exceeded time limit (retryable) |
+| `Unavailable` | 503 | Upstream service down (retryable) |
+| `Cancelled` | 499 | Cancelled by caller or system |
+| `Internal` | 500 | Bugs, invariant violations |
+| `Unsupported` | 501 | Feature not supported |
+
+### Convenience Constructors
+
+For common patterns:
+
+```rust
+// Structured (preferred for new code)
+AdkError::not_found(ErrorComponent::Session, "session.not_found", "Session xyz not found")
+AdkError::rate_limited(ErrorComponent::Model, "model.openai.rate_limited", "Too many requests")
+AdkError::unauthorized(ErrorComponent::Auth, "auth.token_expired", "Bearer token expired")
+AdkError::timeout(ErrorComponent::Tool, "tool.execution_timeout", "Tool timed out after 30s")
+
+// Backward-compatible (for migration — produces .legacy codes)
+AdkError::tool("No data found")
+AdkError::model("Provider returned 500")
+AdkError::session("Session not found")
+```
+
+### Builder API
+
+Attach structured metadata for richer error context:
+
+```rust
+let err = AdkError::new(
+    ErrorComponent::Model,
+    ErrorCategory::RateLimited,
+    "model.openai.rate_limited",
+    "OpenAI rate limit exceeded",
+)
+.with_provider("openai")
+.with_upstream_status(429)
+.with_request_id("req-abc123")
+.with_retry(RetryHint {
+    should_retry: true,
+    retry_after_ms: Some(5000),
+    max_attempts: Some(3),
+});
+```
+
+### Retry Hints
+
+Retryable categories (`RateLimited`, `Unavailable`, `Timeout`) automatically set `should_retry: true`. Check retryability with `err.is_retryable()`, which reads `retry.should_retry` as the single source of truth:
+
+```rust
+if err.is_retryable() {
+    if let Some(delay) = err.retry.retry_after() {
+        tokio::time::sleep(delay).await;
+    }
+    // retry the operation
+}
+```
+
+### Category Checks
+
+```rust
+err.is_retryable()    // retry.should_retry (RateLimited, Unavailable, Timeout by default)
+err.is_not_found()    // category == NotFound
+err.is_unauthorized() // category == Unauthorized
+err.is_rate_limited() // category == RateLimited
+err.is_timeout()      // category == Timeout
+```
+
+### Component Checks (backward compat)
+
+```rust
+err.is_model()   // component == Model
+err.is_tool()    // component == Tool
+err.is_session() // component == Session
+err.is_config()  // code == "config.legacy" (temporary bridge)
+```
+
+### HTTP Status and Problem JSON
+
+`AdkError` maps directly to HTTP responses:
+
+```rust
+let status = err.http_status_code(); // u16 based on category
+let body = err.to_problem_json();    // structured JSON error body
+// body: { "error": { "code", "message", "component", "category", "requestId", "retryAfter", ... } }
+```
+
+### Crate-Local Errors with From Impls
+
+Crates with domain-specific errors implement `From<CrateLocalError> for AdkError`:
+
+```rust
+// In your crate
+#[derive(Debug, thiserror::Error)]
+pub enum MyToolError {
+    #[error("connection failed: {0}")]
+    ConnectionFailed(String),
+    #[error("timeout after {0}ms")]
+    Timeout(u64),
+}
+
+impl From<MyToolError> for AdkError {
+    fn from(err: MyToolError) -> Self {
+        let (category, code) = match &err {
+            MyToolError::ConnectionFailed(_) => (ErrorCategory::Unavailable, "mytool.connection"),
+            MyToolError::Timeout(_) => (ErrorCategory::Timeout, "mytool.timeout"),
+        };
+        AdkError::new(ErrorComponent::Tool, category, code, err.to_string())
+            .with_source(err)
+    }
+}
+```
+
+### No Blanket From Impls
+
+`std::io::Error` and `serde_json::Error` cross too many subsystem boundaries for a single blanket conversion. Use explicit `map_err` with the correct component:
+
+```rust
+// Good: explicit component and category
+let data = std::fs::read_to_string(path)
+    .map_err(|e| AdkError::new(
+        ErrorComponent::Session,
+        ErrorCategory::Internal,
+        "session.io_read",
+        format!("failed to read session file: {e}"),
+    ).with_source(e))?;
+
+// Good: for quick migration
+let data = serde_json::from_str(&raw)
+    .map_err(|e| AdkError::session(format!("JSON parse failed: {e}")))?;
+```
 
 ### Error Messages
 
 Write clear, actionable error messages:
 
 ```rust
-// Good: Specific and actionable
-Err(AdkError::Config("API key not found. Set GOOGLE_API_KEY environment variable.".into()))
+// Good: specific and actionable
+AdkError::new(
+    ErrorComponent::Model,
+    ErrorCategory::InvalidInput,
+    "model.missing_api_key",
+    "API key not found. Set GOOGLE_API_KEY environment variable.",
+)
 
-// Bad: Vague
-Err(AdkError::Config("Invalid config".into()))
+// Bad: vague
+AdkError::model("Invalid config")
 ```
 
 ### No Panics in Library Code
@@ -516,7 +665,7 @@ Use `///` for public items:
 ///
 /// # Errors
 ///
-/// Returns `AdkError::Agent` if the model is not set.
+/// Returns an error with component `Agent` if the model is not set.
 pub fn new(name: impl Into<String>) -> Self {
     // ...
 }

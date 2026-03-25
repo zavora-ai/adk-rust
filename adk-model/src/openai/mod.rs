@@ -17,7 +17,12 @@
 mod client;
 mod config;
 pub(crate) mod convert;
+mod responses_client;
+mod responses_convert;
 
 pub use crate::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig};
 pub use client::{AzureOpenAIClient, OpenAIClient};
-pub use config::{AzureConfig, OpenAIConfig, ReasoningEffort};
+pub use config::{
+    AzureConfig, OpenAIConfig, OpenAIResponsesConfig, ReasoningEffort, ReasoningSummary,
+};
+pub use responses_client::OpenAIResponsesClient;

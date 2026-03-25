@@ -1,4 +1,5 @@
 //! # adk-rag
+#![allow(clippy::result_large_err)]
 //!
 //! Retrieval-Augmented Generation for ADK-Rust agents.
 //!

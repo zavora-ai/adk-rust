@@ -38,6 +38,7 @@ impl SequencedModel {
             interrupted: false,
             error_code: None,
             error_message: None,
+            provider_metadata: None,
         }
     }
 
@@ -55,6 +56,7 @@ impl SequencedModel {
             interrupted: false,
             error_code: None,
             error_message: None,
+            provider_metadata: None,
         }
     }
 }
@@ -340,7 +342,7 @@ async fn test_before_tool_callback_error_aborts_tool_execution() {
         .model(model)
         .tool(tool)
         .before_tool_callback(Box::new(|_ctx| {
-            Box::pin(async move { Err(adk_core::AdkError::Agent("blocked".to_string())) })
+            Box::pin(async move { Err(adk_core::AdkError::agent("blocked")) })
         }))
         .build()
         .unwrap();

@@ -90,14 +90,14 @@ impl RedisMemoryService {
     /// Connect to Redis for memory storage.
     pub async fn new(config: RedisMemoryConfig) -> Result<Self> {
         let redis_config = Config::from_url(&config.url)
-            .map_err(|e| adk_core::AdkError::Memory(format!("invalid redis url: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("invalid redis url: {e}")))?;
         let client = Builder::from_config(redis_config)
             .build()
-            .map_err(|e| adk_core::AdkError::Memory(format!("redis client build failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("redis client build failed: {e}")))?;
         client
             .init()
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("redis connection failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("redis connection failed: {e}")))?;
         Ok(Self { client, ttl: config.ttl })
     }
 }
@@ -128,30 +128,30 @@ impl MemoryService for RedisMemoryService {
                 timestamp: entry.timestamp,
             };
             let json = serde_json::to_string(&stored)
-                .map_err(|e| adk_core::AdkError::Memory(format!("serialization failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
             pipeline
                 .rpush::<(), _, _>(&key, json)
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("rpush failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("rpush failed: {e}")))?;
         }
 
         // Track this session in the user's index
         pipeline
             .sadd::<(), _, _>(&idx, session_id)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("sadd failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("sadd failed: {e}")))?;
 
         if let Some(ttl) = self.ttl {
             pipeline
                 .expire::<(), _>(&key, ttl.as_secs() as i64, None)
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("expire failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("expire failed: {e}")))?;
         }
 
         pipeline
             .all::<()>()
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("pipeline exec failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("pipeline exec failed: {e}")))?;
 
         Ok(())
     }
@@ -169,7 +169,7 @@ impl MemoryService for RedisMemoryService {
             .client
             .smembers(&idx)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("smembers failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("smembers failed: {e}")))?;
 
         let mut memories = Vec::new();
 
@@ -179,7 +179,7 @@ impl MemoryService for RedisMemoryService {
                 .client
                 .lrange(&key, 0, -1)
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("lrange failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("lrange failed: {e}")))?;
 
             for raw in &raw_entries {
                 let stored: StoredEntry = match serde_json::from_str(raw) {
@@ -214,7 +214,7 @@ impl MemoryService for RedisMemoryService {
             .client
             .smembers(&idx)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("smembers failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("smembers failed: {e}")))?;
 
         if !session_ids.is_empty() {
             let keys: Vec<String> =
@@ -224,16 +224,16 @@ impl MemoryService for RedisMemoryService {
                 pipeline
                     .del::<(), _>(key)
                     .await
-                    .map_err(|e| adk_core::AdkError::Memory(format!("del failed: {e}")))?;
+                    .map_err(|e| adk_core::AdkError::memory(format!("del failed: {e}")))?;
             }
             pipeline
                 .del::<(), _>(&idx)
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("del failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("del failed: {e}")))?;
             pipeline
                 .all::<()>()
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("pipeline exec failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("pipeline exec failed: {e}")))?;
         }
 
         Ok(())
@@ -248,15 +248,15 @@ impl MemoryService for RedisMemoryService {
         pipeline
             .del::<(), _>(&key)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("del failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("del failed: {e}")))?;
         pipeline
             .srem::<(), _, _>(&idx, session_id)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("srem failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("srem failed: {e}")))?;
         pipeline
             .all::<()>()
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("pipeline exec failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("pipeline exec failed: {e}")))?;
 
         Ok(())
     }
@@ -266,7 +266,7 @@ impl MemoryService for RedisMemoryService {
         self.client
             .ping::<String>(None)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("health check failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("health check failed: {e}")))?;
         Ok(())
     }
 }

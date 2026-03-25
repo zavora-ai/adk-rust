@@ -84,3 +84,33 @@ impl From<reqwest::Error> for TokenError {
         TokenError::JwksFetchError(err.to_string())
     }
 }
+
+impl From<TokenError> for adk_core::AdkError {
+    fn from(err: TokenError) -> Self {
+        use adk_core::{ErrorCategory, ErrorComponent};
+        let (category, code) = match &err {
+            TokenError::Expired => (ErrorCategory::Unauthorized, "auth.token_expired"),
+            TokenError::NotYetValid => (ErrorCategory::Unauthorized, "auth.token_not_yet_valid"),
+            TokenError::InvalidSignature => (ErrorCategory::Unauthorized, "auth.invalid_signature"),
+            TokenError::InvalidIssuer { .. } => {
+                (ErrorCategory::Unauthorized, "auth.invalid_issuer")
+            }
+            TokenError::InvalidAudience { .. } => {
+                (ErrorCategory::Unauthorized, "auth.invalid_audience")
+            }
+            TokenError::MissingClaim(_) => (ErrorCategory::Unauthorized, "auth.missing_claim"),
+            TokenError::JwksFetchError(_) => (ErrorCategory::Unavailable, "auth.jwks_fetch"),
+            TokenError::JwksParseError(_) => (ErrorCategory::Internal, "auth.jwks_parse"),
+            TokenError::KeyNotFound(_) => (ErrorCategory::NotFound, "auth.key_not_found"),
+            TokenError::DecodingError(_) => (ErrorCategory::Unauthorized, "auth.decoding"),
+            TokenError::InvalidFormat(_) => (ErrorCategory::InvalidInput, "auth.invalid_format"),
+            TokenError::UnsupportedAlgorithm(_) => {
+                (ErrorCategory::Unsupported, "auth.unsupported_algorithm")
+            }
+            TokenError::DiscoveryError(_) => (ErrorCategory::Unavailable, "auth.discovery"),
+            TokenError::ValidationError(_) => (ErrorCategory::Unauthorized, "auth.validation"),
+        };
+        adk_core::AdkError::new(ErrorComponent::Auth, category, code, err.to_string())
+            .with_source(err)
+    }
+}

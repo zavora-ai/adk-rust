@@ -223,6 +223,8 @@ pub fn content_to_message(content: &Content) -> Message {
             Part::Thinking { thinking, .. } => {
                 reasoning_parts.push(thinking.clone());
             }
+            // Server-side tool parts are Gemini-specific; skip for DeepSeek
+            Part::ServerToolCall { .. } | Part::ServerToolResponse { .. } => {}
         }
     }
 
@@ -342,6 +344,7 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
         interrupted: false,
         error_code: None,
         error_message: None,
+        provider_metadata: None,
     }
 }
 
@@ -370,6 +373,7 @@ pub fn create_tool_call_response(
         interrupted: false,
         error_code: None,
         error_message: None,
+        provider_metadata: None,
     }
 }
 

@@ -77,7 +77,7 @@ impl Artifacts for MockArtifacts {
         if name == "welcome.txt" {
             Ok(adk_core::Part::Text { text: "Welcome to ADK!".to_string() })
         } else {
-            Err(AdkError::Agent("Artifact not found".to_string()))
+            Err(AdkError::agent("Artifact not found"))
         }
     }
 
@@ -243,8 +243,8 @@ async fn test_empty_artifact_name_error() {
     let result = inject_session_state(&ctx, template).await;
 
     match result {
-        Err(AdkError::Agent(msg)) => {
-            assert!(msg.contains("must include a file name after 'artifact.'"));
+        Err(ref e) if e.is_agent() => {
+            assert!(e.message.contains("must include a file name after 'artifact.'"));
         }
         _ => panic!("Expected AdkError::Agent with empty artifact-name guidance"),
     }
@@ -257,8 +257,8 @@ async fn test_empty_optional_artifact_name_error() {
     let result = inject_session_state(&ctx, template).await;
 
     match result {
-        Err(AdkError::Agent(msg)) => {
-            assert!(msg.contains("must include a file name after 'artifact.'"));
+        Err(ref e) if e.is_agent() => {
+            assert!(e.message.contains("must include a file name after 'artifact.'"));
         }
         _ => panic!("Expected AdkError::Agent for optional empty artifact name"),
     }

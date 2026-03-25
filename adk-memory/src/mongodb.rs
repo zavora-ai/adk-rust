@@ -101,7 +101,7 @@ impl MongoMemoryService {
             )
             .await
             .map_err(|e| {
-                adk_core::AdkError::Memory(format!("migration registry creation failed: {e}"))
+                adk_core::AdkError::memory(format!("migration registry creation failed: {e}"))
             })?;
 
         // Step 2: Read current max applied version
@@ -124,7 +124,7 @@ impl MongoMemoryService {
 
         // Step 5: Version mismatch check
         if max_applied > max_compiled {
-            return Err(adk_core::AdkError::Memory(format!(
+            return Err(adk_core::AdkError::memory(format!(
                 "schema version mismatch: database is at v{max_applied} \
                  but code only knows up to v{max_compiled}. \
                  Upgrade your ADK version."
@@ -138,7 +138,7 @@ impl MongoMemoryService {
             }
 
             run_mongo_memory_step(&self.db, version).await.map_err(|e| {
-                adk_core::AdkError::Memory(format!(
+                adk_core::AdkError::memory(format!(
                     "{}",
                     crate::migration::MigrationError {
                         version,
@@ -160,7 +160,7 @@ impl MongoMemoryService {
         // Check if registry collection exists
         let collections =
             self.db.list_collection_names().await.map_err(|e| {
-                adk_core::AdkError::Memory(format!("schema version query failed: {e}"))
+                adk_core::AdkError::memory(format!("schema version query failed: {e}"))
             })?;
         if !collections.contains(&Self::REGISTRY_COLLECTION.to_string()) {
             return Ok(0);
@@ -176,7 +176,7 @@ impl MongoMemoryService {
         let registry = self.db.collection::<Document>(Self::REGISTRY_COLLECTION);
         let opts = FindOneOptions::builder().sort(doc! { "version": -1 }).build();
         let result = registry.find_one(doc! {}).with_options(opts).await.map_err(|e| {
-            adk_core::AdkError::Memory(format!("migration registry read failed: {e}"))
+            adk_core::AdkError::memory(format!("migration registry read failed: {e}"))
         })?;
 
         match result {
@@ -192,7 +192,7 @@ impl MongoMemoryService {
     async fn detect_existing_tables(&self) -> Result<bool> {
         let collections =
             self.db.list_collection_names().await.map_err(|e| {
-                adk_core::AdkError::Memory(format!("baseline detection failed: {e}"))
+                adk_core::AdkError::memory(format!("baseline detection failed: {e}"))
             })?;
         Ok(collections.contains(&"memory_entries".to_string()))
     }
@@ -209,7 +209,7 @@ impl MongoMemoryService {
             })
             .await
             .map_err(|e| {
-                adk_core::AdkError::Memory(format!(
+                adk_core::AdkError::memory(format!(
                     "{}",
                     crate::migration::MigrationError {
                         version,
@@ -230,7 +230,7 @@ impl MongoMemoryService {
 async fn run_mongo_memory_step(db: &Database, version: i64) -> Result<()> {
     match version {
         1 => mongo_memory_v1(db).await,
-        _ => Err(adk_core::AdkError::Memory(format!("unknown migration version: {version}"))),
+        _ => Err(adk_core::AdkError::memory(format!("unknown migration version: {version}"))),
     }
 }
 
@@ -253,7 +253,7 @@ async fn mongo_memory_v1(db: &Database) -> Result<()> {
                 .build(),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Memory(format!("index creation failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::memory(format!("index creation failed: {e}")))?;
 
     // Text index on content_text for fallback search
     collection
@@ -266,7 +266,7 @@ async fn mongo_memory_v1(db: &Database) -> Result<()> {
                 .build(),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Memory(format!("text index creation failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::memory(format!("text index creation failed: {e}")))?;
 
     Ok(())
 }
@@ -297,7 +297,7 @@ impl MemoryService for MongoMemoryService {
                 .map(|t| if t.is_empty() { " ".to_string() } else { t.clone() })
                 .collect();
             Some(provider.embed(&non_empty_texts).await.map_err(|e| {
-                adk_core::AdkError::Memory(format!("embedding generation failed: {e}"))
+                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
             })?)
         } else {
             None
@@ -306,9 +306,9 @@ impl MemoryService for MongoMemoryService {
         let mut documents = Vec::with_capacity(entries.len());
         for (i, entry) in entries.iter().enumerate() {
             let content_json = serde_json::to_value(&entry.content)
-                .map_err(|e| adk_core::AdkError::Memory(format!("serialization failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
             let content_bson = mongodb::bson::to_bson(&content_json)
-                .map_err(|e| adk_core::AdkError::Memory(format!("bson conversion failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("bson conversion failed: {e}")))?;
 
             let timestamp = BsonDateTime::from_millis(entry.timestamp.timestamp_millis());
 
@@ -334,7 +334,7 @@ impl MemoryService for MongoMemoryService {
         collection
             .insert_many(documents)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("add_session failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("add_session failed: {e}")))?;
 
         Ok(())
     }
@@ -349,7 +349,7 @@ impl MemoryService for MongoMemoryService {
             let query_embedding = provider
                 .embed(std::slice::from_ref(&req.query))
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("query embedding failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("query embedding failed: {e}")))?;
             let query_vec: Vec<mongodb::bson::Bson> =
                 query_embedding[0].iter().map(|&v| mongodb::bson::Bson::Double(v as f64)).collect();
 
@@ -374,13 +374,13 @@ impl MemoryService for MongoMemoryService {
             let mut cursor = collection.aggregate(pipeline).await.map_err(|e| {
                 let msg = e.to_string();
                 if msg.contains("PlanExecutor") || msg.contains("$vectorSearch") {
-                    adk_core::AdkError::Memory(
+                    adk_core::AdkError::memory(
                         "vector search index not available: Atlas Vector Search index \
                          'memory_embedding_index' must be created via Atlas UI/API"
                             .to_string(),
                     )
                 } else {
-                    adk_core::AdkError::Memory(format!("search failed: {e}"))
+                    adk_core::AdkError::memory(format!("search failed: {e}"))
                 }
             })?;
 
@@ -388,10 +388,10 @@ impl MemoryService for MongoMemoryService {
             while cursor
                 .advance()
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("search cursor failed: {e}")))?
+                .map_err(|e| adk_core::AdkError::memory(format!("search cursor failed: {e}")))?
             {
                 let doc = cursor.deserialize_current().map_err(|e| {
-                    adk_core::AdkError::Memory(format!("search deserialization failed: {e}"))
+                    adk_core::AdkError::memory(format!("search deserialization failed: {e}"))
                 })?;
                 results.push(doc);
             }
@@ -409,16 +409,16 @@ impl MemoryService for MongoMemoryService {
                 .sort(doc! { "score": { "$meta": "textScore" } })
                 .limit(limit)
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("search failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?;
 
             let mut results = Vec::new();
             while cursor
                 .advance()
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("search cursor failed: {e}")))?
+                .map_err(|e| adk_core::AdkError::memory(format!("search cursor failed: {e}")))?
             {
                 let doc = cursor.deserialize_current().map_err(|e| {
-                    adk_core::AdkError::Memory(format!("search deserialization failed: {e}"))
+                    adk_core::AdkError::memory(format!("search deserialization failed: {e}"))
                 })?;
                 results.push(doc);
             }
@@ -457,7 +457,7 @@ impl MemoryService for MongoMemoryService {
         collection
             .delete_many(doc! { "app_name": app_name, "user_id": user_id })
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("delete_user failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("delete_user failed: {e}")))?;
         Ok(())
     }
 
@@ -471,7 +471,7 @@ impl MemoryService for MongoMemoryService {
                 "session_id": session_id,
             })
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("delete_session failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("delete_session failed: {e}")))?;
         Ok(())
     }
 
@@ -480,7 +480,7 @@ impl MemoryService for MongoMemoryService {
         self.db
             .run_command(doc! { "ping": 1 })
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("health check failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("health check failed: {e}")))?;
         Ok(())
     }
 }

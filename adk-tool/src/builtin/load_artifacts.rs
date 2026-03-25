@@ -55,20 +55,19 @@ impl Tool for LoadArtifactsTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let artifact_service = ctx
-            .artifacts()
-            .ok_or_else(|| AdkError::Tool("ArtifactService not available".to_string()))?;
+        let artifact_service =
+            ctx.artifacts().ok_or_else(|| AdkError::tool("ArtifactService not available"))?;
 
         let artifact_names = args["artifact_names"]
             .as_array()
-            .ok_or_else(|| AdkError::Tool("artifact_names must be an array".to_string()))?;
+            .ok_or_else(|| AdkError::tool("artifact_names must be an array"))?;
 
         let mut results = Vec::new();
 
         for name_value in artifact_names {
             let name = name_value
                 .as_str()
-                .ok_or_else(|| AdkError::Tool("artifact name must be a string".to_string()))?;
+                .ok_or_else(|| AdkError::tool("artifact name must be a string"))?;
 
             match artifact_service.load(name).await {
                 Ok(part) => {

@@ -233,7 +233,7 @@ impl LlmAgentBuilder {
 
     /// Auto-load skills from `.skills/` under a custom root directory.
     pub fn with_skills_from_root(mut self, root: impl AsRef<std::path::Path>) -> Result<Self> {
-        let index = load_skill_index(root).map_err(|e| adk_core::AdkError::Agent(e.to_string()))?;
+        let index = load_skill_index(root).map_err(|e| adk_core::AdkError::agent(e.to_string()))?;
         self.skills_index = Some(Arc::new(index));
         Ok(self)
     }
@@ -509,13 +509,12 @@ impl LlmAgentBuilder {
     }
 
     pub fn build(self) -> Result<LlmAgent> {
-        let model =
-            self.model.ok_or_else(|| adk_core::AdkError::Agent("Model is required".to_string()))?;
+        let model = self.model.ok_or_else(|| adk_core::AdkError::agent("Model is required"))?;
 
         let mut seen_names = std::collections::HashSet::new();
         for agent in &self.sub_agents {
             if !seen_names.insert(agent.name()) {
-                return Err(adk_core::AdkError::Agent(format!(
+                return Err(adk_core::AdkError::agent(format!(
                     "Duplicate sub-agent name: {}",
                     agent.name()
                 )));
@@ -979,18 +978,16 @@ impl Agent for LlmAgent {
                     let name = tool.name().to_string();
                     // Check static-vs-toolset conflict
                     if static_tool_names.contains(&name) {
-                        yield Err(adk_core::AdkError::Agent(format!(
-                            "Duplicate tool name '{}': conflict between static tool and toolset '{}'",
-                            name,
+                        yield Err(adk_core::AdkError::agent(format!(
+                            "Duplicate tool name '{name}': conflict between static tool and toolset '{}'",
                             toolset.name()
                         )));
                         return;
                     }
                     // Check toolset-vs-toolset conflict
                     if let Some(other_toolset_name) = toolset_source.get(&name) {
-                        yield Err(adk_core::AdkError::Agent(format!(
-                            "Duplicate tool name '{}': conflict between toolset '{}' and toolset '{}'",
-                            name,
+                        yield Err(adk_core::AdkError::agent(format!(
+                            "Duplicate tool name '{name}': conflict between toolset '{}' and toolset '{}'",
                             other_toolset_name,
                             toolset.name()
                         )));
@@ -1115,8 +1112,8 @@ impl Agent for LlmAgent {
             loop {
                 iteration += 1;
                 if iteration > max_iterations {
-                    yield Err(adk_core::AdkError::Agent(
-                        format!("Max iterations ({}) exceeded", max_iterations)
+                    yield Err(adk_core::AdkError::agent(
+                        format!("Max iterations ({max_iterations}) exceeded")
                     ));
                     return;
                 }
@@ -1208,6 +1205,7 @@ impl Agent for LlmAgent {
                     let mut cached_event = Event::new(&invocation_id);
                     cached_event.author = agent_name.clone();
                     cached_event.llm_response.content = accumulated_content.clone();
+                    cached_event.llm_response.provider_metadata = cached_response.provider_metadata.clone();
                     cached_event.llm_request = Some(serde_json::to_string(&request).unwrap_or_default());
                     cached_event.provider_metadata.insert("gcp.vertex.agent.llm_request".to_string(), serde_json::to_string(&request).unwrap_or_default());
                     cached_event.provider_metadata.insert("gcp.vertex.agent.llm_response".to_string(), serde_json::to_string(&cached_response).unwrap_or_default());
@@ -1307,6 +1305,7 @@ impl Agent for LlmAgent {
                             partial_event.llm_response.finish_reason = chunk.finish_reason;
                             partial_event.llm_response.usage_metadata = chunk.usage_metadata.clone();
                             partial_event.llm_response.content = chunk.content.clone();
+                            partial_event.llm_response.provider_metadata = chunk.provider_metadata.clone();
 
                             // Populate long_running_tool_ids
                             if let Some(ref content) = chunk.content {
@@ -1352,6 +1351,7 @@ impl Agent for LlmAgent {
                         if let Some(ref last) = last_chunk {
                             final_event.llm_response.finish_reason = last.finish_reason;
                             final_event.llm_response.usage_metadata = last.usage_metadata.clone();
+                            final_event.llm_response.provider_metadata = last.provider_metadata.clone();
                             final_event.provider_metadata.insert("gcp.vertex.agent.llm_response".to_string(), serde_json::to_string(last).unwrap_or_default());
                         }
 
@@ -1600,6 +1600,12 @@ impl Agent for LlmAgent {
 
                             if response_content.is_none() {
                                 if let Some(tool) = tool_map.get(name) {
+                                    // Skip execution of built-in tools (e.g., google_search, url_context)
+                                    // These are handled server-side by the model provider
+                                    if tool.is_builtin() {
+                                        adk_telemetry::debug!(tool.name = %name, "skipping built-in tool execution");
+                                        continue;
+                                    }
                                     // ✅ Use AgentToolContext that preserves parent context
                                     let tool_ctx: Arc<dyn ToolContext> = Arc::new(AgentToolContext::new(
                                         ctx.clone(),

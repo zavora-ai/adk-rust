@@ -45,7 +45,7 @@ pub(crate) async fn enforce_guardrails(
 ) -> Result<Content> {
     let result = GuardrailExecutor::run(guardrails, content)
         .await
-        .map_err(|err| AdkError::Agent(format!("{phase} guardrail failed: {err}")))?;
+        .map_err(|err| AdkError::agent(format!("{phase} guardrail failed: {err}")))?;
 
     if !result.passed {
         let failures = result
@@ -54,7 +54,7 @@ pub(crate) async fn enforce_guardrails(
             .map(|(name, reason, severity)| format!("{name} ({severity:?}): {reason}"))
             .collect::<Vec<_>>()
             .join("; ");
-        return Err(AdkError::Agent(format!("{phase} guardrails blocked content: {failures}")));
+        return Err(AdkError::agent(format!("{phase} guardrails blocked content: {failures}")));
     }
 
     Ok(result.transformed_content.unwrap_or_else(|| content.clone()))

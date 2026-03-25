@@ -109,7 +109,7 @@ impl Llm for BedrockClient {
             self.prompt_caching.as_ref(),
         )
         .map_err(|e| {
-            AdkError::Model(format!(
+            AdkError::model(format!(
                 "Bedrock request conversion failed for region={}, model={}: {e}",
                 self.region, self.model_id
             ))
@@ -144,14 +144,14 @@ impl BedrockClient {
             .send()
             .await
             .map_err(|e| {
-                AdkError::Model(format!(
+                AdkError::model(format!(
                     "Bedrock API error for region={}, model={}: {e}",
                     self.region, self.model_id
                 ))
             })?;
 
         let output = response.output.ok_or_else(|| {
-            AdkError::Model(format!("Bedrock response missing output for model={}", self.model_id))
+            AdkError::model(format!("Bedrock response missing output for model={}", self.model_id))
         })?;
 
         let adk_response =
@@ -182,7 +182,7 @@ impl BedrockClient {
             .send()
             .await
             .map_err(|e| {
-                AdkError::Model(format!(
+                AdkError::model(format!(
                     "Bedrock API error for region={}, model={}: {e}",
                     self.region, self.model_id
                 ))
@@ -205,7 +205,7 @@ impl BedrockClient {
             let mut pending_usage: Option<adk_core::UsageMetadata> = None;
 
             while let Some(event) = stream_output.stream.recv().await.map_err(|e| {
-                AdkError::Model(format!(
+                AdkError::model(format!(
                     "Bedrock stream error for region={region}, model={model_id}: {e}"
                 ))
             })? {
@@ -277,6 +277,7 @@ impl BedrockClient {
                                 interrupted: false,
                                 error_code: None,
                                 error_message: None,
+                                provider_metadata: None,
                             };
                         }
 
@@ -300,6 +301,7 @@ impl BedrockClient {
                                 interrupted: false,
                                 error_code: None,
                                 error_message: None,
+                                provider_metadata: None,
                             };
                         }
                     }

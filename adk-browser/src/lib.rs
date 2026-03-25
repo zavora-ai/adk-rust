@@ -1,4 +1,5 @@
 //! # adk-browser
+#![allow(clippy::result_large_err)]
 //!
 //! Browser automation tools for ADK agents using WebDriver (via thirtyfour).
 //!

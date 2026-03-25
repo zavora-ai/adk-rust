@@ -15,13 +15,13 @@ const POSTGRES_ERROR_PREFIXES: &[&str] = &[
     "session not found",
 ];
 
-/// Construct an `AdkError::Session` the same way `PostgresSessionService` does:
-/// `AdkError::Session(format!("{prefix}: {detail}"))`.
+/// Construct an `AdkError::session` the same way `PostgresSessionService` does:
+/// `AdkError::session(format!("{prefix}: {detail}"))`.
 fn make_postgres_error(prefix: &str, detail: &str) -> AdkError {
     if detail.is_empty() {
-        AdkError::Session(prefix.to_string())
+        AdkError::session(prefix.to_string())
     } else {
-        AdkError::Session(format!("{prefix}: {detail}"))
+        AdkError::session(format!("{prefix}: {detail}"))
     }
 }
 
@@ -39,8 +39,8 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(200))]
 
     /// **Feature: production-backends, Property 8: Error Variant Correctness (PostgreSQL portion)**
-    /// *For any* error produced by `PostgresSessionService`, the error is an `AdkError::Session`
-    /// variant with a non-empty context message.
+    /// *For any* error produced by `PostgresSessionService`, the error is a session error
+    /// with a non-empty context message.
     /// **Validates: Requirements 16.1, 16.2**
     #[test]
     fn prop_postgres_errors_are_session_variant_with_context(
@@ -49,39 +49,35 @@ proptest! {
     ) {
         let err = make_postgres_error(prefix, &detail);
 
-        // Must be the Session variant
-        match &err {
-            AdkError::Session(msg) => {
-                // Message must be non-empty
-                prop_assert!(!msg.is_empty(), "error message must not be empty");
-                // Message must contain the prefix
-                prop_assert!(
-                    msg.starts_with(prefix),
-                    "error message '{}' must start with prefix '{}'", msg, prefix
-                );
-                // Message must contain the detail
-                prop_assert!(
-                    msg.contains(&detail),
-                    "error message '{}' must contain detail '{}'", msg, detail
-                );
-            }
-            other => {
-                prop_assert!(false, "expected AdkError::Session, got: {:?}", other);
-            }
-        }
+        // Must be a session error
+        prop_assert!(err.is_session(), "expected session error, got: {:?}", err);
+
+        let msg = &err.message;
+        // Message must be non-empty
+        prop_assert!(!msg.is_empty(), "error message must not be empty");
+        // Message must contain the prefix
+        prop_assert!(
+            msg.starts_with(prefix),
+            "error message '{msg}' must start with prefix '{prefix}'"
+        );
+        // Message must contain the detail
+        prop_assert!(
+            msg.contains(&detail),
+            "error message '{msg}' must contain detail '{detail}'"
+        );
 
         // Display output must also be non-empty and contain the context
         let display = err.to_string();
         prop_assert!(!display.is_empty(), "Display output must not be empty");
         prop_assert!(
             display.contains(prefix),
-            "Display '{}' must contain prefix '{}'", display, prefix
+            "Display '{display}' must contain prefix '{prefix}'"
         );
     }
 
     /// **Feature: production-backends, Property 8: Error Variant Correctness (bare messages)**
-    /// *For any* bare error message (no detail suffix), the error is still an `AdkError::Session`
-    /// variant with a non-empty context message.
+    /// *For any* bare error message (no detail suffix), the error is still a session error
+    /// with a non-empty context message.
     /// **Validates: Requirements 16.1, 16.2**
     #[test]
     fn prop_postgres_bare_errors_are_session_variant(
@@ -89,15 +85,11 @@ proptest! {
     ) {
         let err = make_postgres_error(prefix, "");
 
-        match &err {
-            AdkError::Session(msg) => {
-                prop_assert!(!msg.is_empty(), "bare error message must not be empty");
-                prop_assert_eq!(msg.as_str(), prefix);
-            }
-            other => {
-                prop_assert!(false, "expected AdkError::Session, got: {:?}", other);
-            }
-        }
+        prop_assert!(err.is_session(), "expected session error, got: {:?}", err);
+
+        let msg = &err.message;
+        prop_assert!(!msg.is_empty(), "bare error message must not be empty");
+        prop_assert_eq!(msg.as_str(), prefix);
     }
 
     /// **Feature: production-backends, Property 8: Session errors implement std::error::Error**
@@ -111,33 +103,26 @@ proptest! {
     ) {
         let err = make_postgres_error(prefix, &detail);
 
-        // AdkError implements std::error::Error via thiserror
+        // AdkError implements std::error::Error
         let std_err: &dyn std::error::Error = &err;
         let display = std_err.to_string();
         prop_assert!(!display.is_empty(), "std::error::Error display must not be empty");
-        // The Display format is "Session error: {msg}"
         prop_assert!(
             display.contains(prefix),
-            "std error display '{}' must contain prefix '{}'", display, prefix
+            "std error display '{display}' must contain prefix '{prefix}'"
         );
     }
 }
 
-/// Verify that every known error prefix produces a valid `AdkError::Session`.
+/// Verify that every known error prefix produces a valid session error.
 /// This is a unit-style exhaustive check complementing the property tests.
 #[test]
 fn test_all_postgres_error_prefixes_produce_session_variant() {
     for prefix in POSTGRES_ERROR_PREFIXES {
-        let err = AdkError::Session(format!("{prefix}: some underlying error"));
-        match &err {
-            AdkError::Session(msg) => {
-                assert!(!msg.is_empty(), "prefix '{prefix}' produced empty message");
-                assert!(
-                    msg.starts_with(prefix),
-                    "prefix '{prefix}' not at start of message '{msg}'"
-                );
-            }
-            other => panic!("expected AdkError::Session for prefix '{prefix}', got: {other:?}"),
-        }
+        let err = AdkError::session(format!("{prefix}: some underlying error"));
+        assert!(err.is_session(), "expected session error for prefix '{prefix}', got: {err:?}");
+        let msg = &err.message;
+        assert!(!msg.is_empty(), "prefix '{prefix}' produced empty message");
+        assert!(msg.starts_with(prefix), "prefix '{prefix}' not at start of message '{msg}'");
     }
 }

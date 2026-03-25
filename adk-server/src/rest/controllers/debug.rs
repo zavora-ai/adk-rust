@@ -119,22 +119,26 @@ pub async fn get_graph(
     State(_controller): State<DebugController>,
     Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Path((_app_name, user_id, _session_id, _event_id)): Path<(String, String, String, String)>,
-) -> Result<Json<GraphResponse>, StatusCode> {
-    authorize_path_user_id(&request_context, &user_id)?;
+) -> Result<Json<GraphResponse>, (StatusCode, Json<serde_json::Value>)> {
+    authorize_path_user_id(&request_context, &user_id)
+        .map_err(|s| (s, Json(serde_json::json!({"error": "forbidden"}))))?;
 
-    // Stub: Return a simple DOT graph
-    let dot_src = "digraph G { Agent -> User [label=\"response\"]; }".to_string();
-    Ok(Json(GraphResponse { dot_src }))
+    Err((
+        StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({"error": "graph generation is not yet implemented"})),
+    ))
 }
 
-/// Get evaluation sets for an app (stub - returns empty array)
+/// Get evaluation sets for an app
 pub async fn get_eval_sets(
     State(_controller): State<DebugController>,
     Extension(_request_context): Extension<Option<adk_core::RequestContext>>,
     Path(_app_name): Path<String>,
-) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
-    // Stub: Return empty array - eval sets not yet implemented
-    Ok(Json(Vec::new()))
+) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, Json<serde_json::Value>)> {
+    Err((
+        StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({"error": "eval sets are not yet implemented"})),
+    ))
 }
 
 /// Get event data by event_id - returns event with invocationId for trace linking
@@ -171,11 +175,6 @@ pub async fn get_event(
         }
     }
 
-    // Event not found - return a minimal stub to prevent UI errors
-    Ok(Json(serde_json::json!({
-        "id": event_id,
-        "invocationId": "",
-        "appName": app_name,
-        "sessionId": session_id
-    })))
+    // Event not found
+    Err(StatusCode::NOT_FOUND)
 }

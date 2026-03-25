@@ -48,12 +48,12 @@ impl Tool for DragAndDropTool {
         let source = args
             .get("source_selector")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AdkError::Tool("Missing 'source_selector' parameter".to_string()))?;
+            .ok_or_else(|| AdkError::tool("Missing 'source_selector' parameter"))?;
 
         let target = args
             .get("target_selector")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AdkError::Tool("Missing 'target_selector' parameter".to_string()))?;
+            .ok_or_else(|| AdkError::tool("Missing 'target_selector' parameter"))?;
 
         self.browser.drag_and_drop(source, target).await?;
 
@@ -103,7 +103,7 @@ impl Tool for RightClickTool {
         let selector = args
             .get("selector")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AdkError::Tool("Missing 'selector' parameter".to_string()))?;
+            .ok_or_else(|| AdkError::tool("Missing 'selector' parameter"))?;
 
         self.browser.right_click(selector).await?;
 
@@ -152,7 +152,7 @@ impl Tool for FocusTool {
         let selector = args
             .get("selector")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AdkError::Tool("Missing 'selector' parameter".to_string()))?;
+            .ok_or_else(|| AdkError::tool("Missing 'selector' parameter"))?;
 
         self.browser.focus_element(selector).await?;
 
@@ -201,7 +201,7 @@ impl Tool for ElementStateTool {
         let selector = args
             .get("selector")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AdkError::Tool("Missing 'selector' parameter".to_string()))?;
+            .ok_or_else(|| AdkError::tool("Missing 'selector' parameter"))?;
 
         let state = self.browser.get_element_state(selector).await?;
 
@@ -263,7 +263,7 @@ impl Tool for PressKeyTool {
         let key = args
             .get("key")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AdkError::Tool("Missing 'key' parameter".to_string()))?;
+            .ok_or_else(|| AdkError::tool("Missing 'key' parameter"))?;
 
         let selector = args.get("selector").and_then(|v| v.as_str());
         let modifiers: Vec<&str> = args
@@ -325,12 +325,12 @@ impl Tool for FileUploadTool {
         let selector = args
             .get("selector")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AdkError::Tool("Missing 'selector' parameter".to_string()))?;
+            .ok_or_else(|| AdkError::tool("Missing 'selector' parameter"))?;
 
         let file_path = args
             .get("file_path")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AdkError::Tool("Missing 'file_path' parameter".to_string()))?;
+            .ok_or_else(|| AdkError::tool("Missing 'file_path' parameter"))?;
 
         self.browser.upload_file(selector, file_path).await?;
 

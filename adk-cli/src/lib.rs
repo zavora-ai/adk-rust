@@ -1,4 +1,5 @@
 //! # adk-cli
+#![allow(clippy::result_large_err)]
 //!
 //! Command-line launcher for ADK agents.
 //!

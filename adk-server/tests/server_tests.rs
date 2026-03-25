@@ -25,7 +25,7 @@ struct MockAgentLoader;
 #[async_trait]
 impl adk_core::AgentLoader for MockAgentLoader {
     async fn load_agent(&self, _app_name: &str) -> adk_core::Result<Arc<dyn adk_core::Agent>> {
-        Err(adk_core::AdkError::Agent("not implemented".to_string()))
+        Err(adk_core::AdkError::agent("not implemented"))
     }
 
     fn list_agents(&self) -> Vec<String> {
@@ -95,7 +95,7 @@ impl SessionService for UnhealthySessionService {
     }
 
     async fn health_check(&self) -> adk_core::Result<()> {
-        Err(adk_core::AdkError::Session("backend unavailable".to_string()))
+        Err(adk_core::AdkError::session("backend unavailable"))
     }
 }
 
@@ -569,7 +569,7 @@ async fn test_health_check_reports_unhealthy_backend() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "unhealthy");
     assert_eq!(json["components"]["session"]["status"], "unhealthy");
-    assert_eq!(json["components"]["session"]["error"], "Session error: backend unavailable");
+    assert_eq!(json["components"]["session"]["error"], "session.internal: backend unavailable");
 }
 
 #[tokio::test]

@@ -1,0 +1,17 @@
+[package]
+name = "bedrock-test-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-rust = { path = "../../adk-rust", features = ["bedrock"] }
+adk-tool = { path = "../../adk-tool" }
+schemars = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.40", features = ["full"] }
+anyhow = "1.0"
+dotenvy = "0.15"

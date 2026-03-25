@@ -153,7 +153,7 @@ impl Agent for GraphAgent {
                     yield Ok(event);
                 }
                 Err(e) => {
-                    yield Err(adk_core::AdkError::Agent(e.to_string()));
+                    yield Err(adk_core::AdkError::agent(e.to_string()));
                 }
             }
         };

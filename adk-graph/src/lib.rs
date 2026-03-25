@@ -1,4 +1,5 @@
 //! # adk-graph
+#![allow(clippy::result_large_err)]
 //!
 //! Graph-based workflow orchestration for ADK-Rust agents, inspired by LangGraph.
 //!

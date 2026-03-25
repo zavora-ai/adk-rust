@@ -502,12 +502,12 @@ async fn process_document(ctx: &ToolContext, filename: &str) -> Result<Value> {
             let result = match mime_type.as_str() {
                 "application/pdf" => process_pdf(&data)?,
                 "image/jpeg" | "image/png" => process_image(&data)?,
-                _ => return Err(AdkError::Artifact("Unsupported type".into())),
+                _ => return Err(AdkError::artifact("Unsupported type")),
             };
             
             Ok(json!({ "result": result }))
         }
-        _ => Err(AdkError::Artifact("Expected binary data".into())),
+        _ => Err(AdkError::artifact("Expected binary data")),
     }
 }
 ```

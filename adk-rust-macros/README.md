@@ -12,7 +12,7 @@ Proc macros for ADK-Rust — `#[tool]` attribute for zero-boilerplate tool regis
 
 ```toml
 [dependencies]
-adk-rust-macros = "0.4.1"
+adk-rust-macros = "0.5.0"
 ```
 
 ## Usage

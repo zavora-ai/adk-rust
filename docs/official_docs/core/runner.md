@@ -16,7 +16,7 @@ The `Runner` manages the complete lifecycle of agent execution:
 
 ```toml
 [dependencies]
-adk-runner = "0.4"
+adk-runner = "0.5.0"
 ```
 
 ## RunnerConfig
@@ -61,14 +61,14 @@ let runner = Runner::new(config)?;
 Execute an agent with user input:
 
 ```rust
-use adk_core::Content;
+use adk_core::{Content, SessionId, UserId};
 use futures::StreamExt;
 
 let user_content = Content::new("user").with_text("Hello!");
 
 let mut stream = runner.run(
-    "user-123".to_string(),
-    "session-456".to_string(),
+    UserId::new("user-123")?,
+    SessionId::new("session-456")?,
     user_content,
 ).await?;
 
@@ -272,6 +272,7 @@ For advanced scenarios, use Runner directly:
 
 ```rust
 use adk_runner::{Runner, RunnerConfig};
+use adk_core::{SessionId, UserId};
 use adk_session::SqliteSessionService;
 use adk_artifact::S3ArtifactService;
 use adk_memory::QdrantMemoryService;
@@ -292,9 +293,11 @@ let runner = Runner::new(config)?;
 
 // Use in HTTP handler
 async fn chat_handler(runner: &Runner, request: ChatRequest) -> Response {
+    let user_id = UserId::new(request.user_id)?;
+    let session_id = SessionId::new(request.session_id)?;
     let stream = runner.run(
-        request.user_id,
-        request.session_id,
+        user_id,
+        session_id,
         request.content,
     ).await?;
     

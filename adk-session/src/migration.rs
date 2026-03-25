@@ -100,17 +100,17 @@ macro_rules! impl_sql_migration_runner {
                     $int_type
                 );
                 sqlx::query(&create_sql).execute(pool).await.map_err(|e| {
-                    adk_core::AdkError::Session(format!("migration registry creation failed: {e}"))
+                    adk_core::AdkError::session(format!("migration registry creation failed: {e}"))
                 })?;
 
                 // Step 2: Read current max applied version
                 let max_sql =
                     format!("SELECT COALESCE(MAX(version), 0) AS max_v FROM {registry_table}");
                 let row = sqlx::query(&max_sql).fetch_one(pool).await.map_err(|e| {
-                    adk_core::AdkError::Session(format!("migration registry read failed: {e}"))
+                    adk_core::AdkError::session(format!("migration registry read failed: {e}"))
                 })?;
                 let mut max_applied: i64 = row.try_get("max_v").map_err(|e| {
-                    adk_core::AdkError::Session(format!("migration registry read failed: {e}"))
+                    adk_core::AdkError::session(format!("migration registry read failed: {e}"))
                 })?;
 
                 // Step 3: Baseline detection — if registry is empty but
@@ -126,7 +126,7 @@ macro_rules! impl_sql_migration_runner {
                                  VALUES ({v}, '{desc}', '{now}')"
                             );
                             sqlx::query(&ins).execute(pool).await.map_err(|e| {
-                                adk_core::AdkError::Session(format!(
+                                adk_core::AdkError::session(format!(
                                     "{}",
                                     MigrationError {
                                         version: v,
@@ -145,7 +145,7 @@ macro_rules! impl_sql_migration_runner {
 
                 // Step 5: Version mismatch check
                 if max_applied > max_compiled {
-                    return Err(adk_core::AdkError::Session(format!(
+                    return Err(adk_core::AdkError::session(format!(
                         "schema version mismatch: database is at v{max_applied} \
                          but code only knows up to v{max_compiled}. \
                          Upgrade your ADK version."
@@ -159,7 +159,7 @@ macro_rules! impl_sql_migration_runner {
                     }
 
                     let mut tx = pool.begin().await.map_err(|e| {
-                        adk_core::AdkError::Session(format!(
+                        adk_core::AdkError::session(format!(
                             "{}",
                             MigrationError {
                                 version,
@@ -172,7 +172,7 @@ macro_rules! impl_sql_migration_runner {
                     // Execute the migration SQL (raw_sql supports multiple
                     // semicolon-separated statements in a single call).
                     sqlx::raw_sql(sql).execute(&mut *tx).await.map_err(|e| {
-                        adk_core::AdkError::Session(format!(
+                        adk_core::AdkError::session(format!(
                             "{}",
                             MigrationError {
                                 version,
@@ -190,7 +190,7 @@ macro_rules! impl_sql_migration_runner {
                          VALUES ({version}, '{description}', '{now}')"
                     );
                     sqlx::query(&rec).execute(&mut *tx).await.map_err(|e| {
-                        adk_core::AdkError::Session(format!(
+                        adk_core::AdkError::session(format!(
                             "{}",
                             MigrationError {
                                 version,
@@ -201,7 +201,7 @@ macro_rules! impl_sql_migration_runner {
                     })?;
 
                     tx.commit().await.map_err(|e| {
-                        adk_core::AdkError::Session(format!(
+                        adk_core::AdkError::session(format!(
                             "{}",
                             MigrationError {
                                 version,
