@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-03-26
 
 ### Added
 
@@ -47,10 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Agentic commerce validation and docs (adk-payments)
 - Added a shared multi-actor integration harness for shopper, merchant, credentials-provider, payment-processor, and webhook actors, and rewired ACP/AP2 end-to-end tests to use the shared journal, memory, and evidence plumbing.
 - Added payments documentation updates in `adk-payments/README.md`, `docs/official_docs/security/payments.md`, and `examples/payments/README.md`, plus a local `examples/payments` scenario index for the supported commerce journeys.
-
-## [0.5.0] - 2026-03-22
-
-### Added
 
 #### OpenAI Responses API client (adk-model)
 - **`OpenAIResponsesClient`**: Dedicated client for OpenAI's `/v1/responses` endpoint — the successor to Chat Completions. Implements `adk_core::Llm` with full streaming, tool calling, and multi-turn support.
