@@ -686,8 +686,7 @@ mod tests {
     use super::*;
     use adk_core::{GenerateContentConfig, LlmRequest};
     use async_openai::types::responses::{
-        WebSearchActionSearch, WebSearchToolCall, WebSearchToolCallAction,
-        WebSearchToolCallStatus,
+        WebSearchActionSearch, WebSearchToolCall, WebSearchToolCallAction, WebSearchToolCallStatus,
     };
 
     #[test]
