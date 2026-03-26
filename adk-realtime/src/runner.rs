@@ -243,7 +243,7 @@ impl RealtimeRunnerBuilder {
 
         Ok(RealtimeRunner {
             model,
-            config,
+            config: Arc::new(RwLock::new(config)),
             runner_config: self.runner_config,
             tools: self.tools,
             event_handler: self.event_handler.unwrap_or_else(|| Arc::new(NoOpEventHandler)),
@@ -292,7 +292,7 @@ impl RealtimeRunnerBuilder {
 /// ```
 pub struct RealtimeRunner {
     model: BoxedModel,
-    config: RealtimeConfig,
+    config: Arc<RwLock<RealtimeConfig>>,
     runner_config: RunnerConfig,
     tools: HashMap<String, (ToolDefinition, Arc<dyn ToolHandler>)>,
     event_handler: Arc<dyn EventHandler>,
@@ -308,7 +308,8 @@ impl RealtimeRunner {
 
     /// Connect to the realtime provider.
     pub async fn connect(&self) -> Result<()> {
-        let session = self.model.connect(self.config.clone()).await?;
+        let config = self.config.read().await.clone();
+        let session = self.model.connect(config).await?;
         let mut guard = self.session.write().await;
         *guard = Some(session);
         Ok(())
@@ -340,7 +341,7 @@ impl RealtimeRunner {
     /// queue a transport resumption (Phantom Reconnect), executing it only when the session
     /// is in a resumable state (Idle) to prevent data corruption.
     pub async fn update_session(&self, config: SessionUpdateConfig) -> Result<()> {
-        let mut full_config = self.config.clone();
+        let mut full_config = self.config.write().await;
 
         // Merge the updates from `SessionUpdateConfig` into `full_config`
         if let Some(instruction) = &config.0.instruction {
@@ -355,11 +356,17 @@ impl RealtimeRunner {
         if let Some(temp) = config.0.temperature {
             full_config.temperature = Some(temp);
         }
+        if let Some(extra) = &config.0.extra {
+            full_config.extra = Some(extra.clone());
+        }
+
+        let cloned_config = full_config.clone();
+        drop(full_config);
 
         let guard = self.session.read().await;
         let session = guard.as_ref().ok_or_else(|| RealtimeError::connection("Not connected"))?;
 
-        match session.mutate_context(full_config.clone()).await? {
+        match session.mutate_context(cloned_config).await? {
             ContextMutationOutcome::Applied => {
                 tracing::info!("Context mutated natively mid-flight.");
                 Ok(())
@@ -553,6 +560,18 @@ impl RealtimeRunner {
             ServerEvent::FunctionCallDone { call_id, name, arguments, .. } => {
                 if self.runner_config.auto_execute_tools {
                     self.execute_tool_call(&call_id, &name, &arguments).await?;
+                }
+            }
+            ServerEvent::SessionUpdated { session, .. } => {
+                // Check if the generic session update contains a Gemini resumption token
+                if let Some(resumption) = session.get("sessionResumption") {
+                    if let Some(token) = resumption.get("resumeToken").and_then(|t| t.as_str()) {
+                        tracing::info!("Received Gemini sessionResumption token, saving for future reconnects.");
+                        let mut config = self.config.write().await;
+                        let mut extra = config.extra.clone().unwrap_or_else(|| serde_json::json!({}));
+                        extra["resumeToken"] = serde_json::Value::String(token.to_string());
+                        config.extra = Some(extra);
+                    }
                 }
             }
             ServerEvent::Error { error, .. } => {
