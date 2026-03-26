@@ -83,6 +83,15 @@ pub trait RealtimeSession: Send + Sync {
 
     /// Close the session gracefully.
     async fn close(&self) -> Result<()>;
+
+    /// Attempt to update the session parameters mid-flight.
+    ///
+    /// For providers that support native hot-swapping (e.g., OpenAI), this
+    /// updates the parameters without tearing down the connection and returns `Ok(())`.
+    /// For providers that require a static configuration (e.g., Gemini), this
+    /// returns `Err(RealtimeError::RequiresReconnection(config))` to signal
+    /// the runner to perform a Phantom Reconnect.
+    async fn update_context(&self, config: crate::config::RealtimeConfig) -> Result<()>;
 }
 
 /// Extension trait for RealtimeSession with convenience methods.

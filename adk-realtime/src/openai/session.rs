@@ -377,6 +377,11 @@ impl RealtimeSession for OpenAIRealtimeSession {
 
         Ok(())
     }
+
+    async fn update_context(&self, config: crate::config::RealtimeConfig) -> Result<()> {
+        tracing::info!("Updating OpenAI Realtime session context natively");
+        self.configure_session(config).await
+    }
 }
 
 /// Generate a random WebSocket key.

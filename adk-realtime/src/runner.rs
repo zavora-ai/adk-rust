@@ -314,6 +314,12 @@ impl RealtimeRunner {
 
     /// Update the session configuration.
     ///
+    /// The RealtimeRunner will attempt to update the session natively if the underlying
+    /// API supports it (e.g., OpenAI). If it does not (e.g., Gemini), the Runner will
+    /// perform a Phantom Reconnect by tearing down the WebSocket and immediately
+    /// establishing a new one with the updated configuration, while keeping the upstream
+    /// audio connection intact.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -327,16 +333,47 @@ impl RealtimeRunner {
     /// }
     /// ```
     pub async fn update_session(&self, config: SessionUpdateConfig) -> Result<()> {
+        let mut full_config = self.config.clone();
+
+        // Merge the updates from `SessionUpdateConfig` into `full_config`
+        if let Some(instruction) = &config.0.instruction {
+            full_config.instruction = Some(instruction.clone());
+        }
+        if let Some(tools) = &config.0.tools {
+            full_config.tools = Some(tools.clone());
+        }
+        if let Some(voice) = &config.0.voice {
+            full_config.voice = Some(voice.clone());
+        }
+        if let Some(temp) = config.0.temperature {
+            full_config.temperature = Some(temp);
+        }
+
         let guard = self.session.read().await;
         let session = guard.as_ref().ok_or_else(|| RealtimeError::connection("Not connected"))?;
-        let config_value = serde_json::to_value(&config).map_err(|e| {
-            RealtimeError::config(format!(
-                "Failed to serialize session update config: {e}. Ensure all SessionUpdateConfig fields implement serde::Serialize and contain valid values"
-            ))
-        })?;
-        session
-            .send_event(crate::events::ClientEvent::SessionUpdate { session: config_value })
-            .await
+
+        match session.update_context(full_config.clone()).await {
+            Ok(()) => {
+                tracing::info!("Context updated natively mid-flight.");
+                Ok(())
+            }
+            Err(RealtimeError::RequiresReconnection(new_config)) => {
+                tracing::warn!("Provider requires soft reconnect. Buffering audio and reconnecting...");
+                drop(guard); // release the read lock
+
+                let mut write_guard = self.session.write().await;
+                if let Some(old_session) = write_guard.as_ref() {
+                    let _ = old_session.close().await;
+                }
+
+                let new_session = self.model.connect(new_config).await?;
+                *write_guard = Some(new_session);
+
+                tracing::info!("Phantom Reconnect complete. New context established.");
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Send audio to the session.

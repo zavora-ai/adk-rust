@@ -649,6 +649,11 @@ impl RealtimeSession for GeminiRealtimeSession {
         let _ = sender.send(Message::Close(None)).await;
         Ok(())
     }
+
+    async fn update_context(&self, config: crate::config::RealtimeConfig) -> Result<()> {
+        tracing::warn!("Gemini API does not support native mid-flight context swaps; signalling Phantom Reconnect.");
+        Err(RealtimeError::RequiresReconnection(config))
+    }
 }
 
 impl std::fmt::Debug for GeminiRealtimeSession {
