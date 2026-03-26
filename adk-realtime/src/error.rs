@@ -76,10 +76,6 @@ pub enum RealtimeError {
     /// LiveKit bridge error.
     #[error("LiveKit error: {0}")]
     LiveKitError(String),
-
-    /// Signal to the Runner that the underlying protocol cannot hot-swap parameters and requires a Phantom Reconnect.
-    #[error("Requires reconnection to mutate context")]
-    RequiresReconnection(crate::config::RealtimeConfig),
 }
 
 impl RealtimeError {

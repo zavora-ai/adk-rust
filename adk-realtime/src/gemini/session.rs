@@ -7,7 +7,7 @@ use crate::audio::AudioChunk;
 use crate::config::{RealtimeConfig, ToolDefinition};
 use crate::error::{RealtimeError, Result};
 use crate::events::{ClientEvent, ServerEvent, ToolResponse};
-use crate::session::RealtimeSession;
+use crate::session::{ContextMutationOutcome, RealtimeSession};
 use async_trait::async_trait;
 use base64::Engine;
 use futures::stream::Stream;
@@ -650,9 +650,9 @@ impl RealtimeSession for GeminiRealtimeSession {
         Ok(())
     }
 
-    async fn update_context(&self, config: crate::config::RealtimeConfig) -> Result<()> {
-        tracing::warn!("Gemini API does not support native mid-flight context swaps; signalling Phantom Reconnect.");
-        Err(RealtimeError::RequiresReconnection(config))
+    async fn mutate_context(&self, config: crate::config::RealtimeConfig) -> Result<ContextMutationOutcome> {
+        tracing::info!("Gemini API does not support native mid-flight context swaps; signalling resumption needed.");
+        Ok(ContextMutationOutcome::RequiresResumption(config))
     }
 }
 

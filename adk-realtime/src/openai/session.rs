@@ -4,7 +4,7 @@ use crate::audio::AudioChunk;
 use crate::config::RealtimeConfig;
 use crate::error::{RealtimeError, Result};
 use crate::events::{ClientEvent, ServerEvent, ToolResponse};
-use crate::session::RealtimeSession;
+use crate::session::{ContextMutationOutcome, RealtimeSession};
 use async_trait::async_trait;
 use futures::stream::Stream;
 use futures::{SinkExt, StreamExt};
@@ -378,9 +378,10 @@ impl RealtimeSession for OpenAIRealtimeSession {
         Ok(())
     }
 
-    async fn update_context(&self, config: crate::config::RealtimeConfig) -> Result<()> {
+    async fn mutate_context(&self, config: crate::config::RealtimeConfig) -> Result<ContextMutationOutcome> {
         tracing::info!("Updating OpenAI Realtime session context natively");
-        self.configure_session(config).await
+        self.configure_session(config).await?;
+        Ok(ContextMutationOutcome::Applied)
     }
 }
 

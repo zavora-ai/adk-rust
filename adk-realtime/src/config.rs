@@ -19,7 +19,7 @@ pub enum VadMode {
 }
 
 /// VAD configuration options.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VadConfig {
     /// VAD mode to use.
     #[serde(rename = "type")]
@@ -84,7 +84,7 @@ impl VadConfig {
 }
 
 /// Tool/function definition for realtime sessions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolDefinition {
     /// Tool name.
     pub name: String,
@@ -116,7 +116,7 @@ impl ToolDefinition {
 }
 
 /// Configuration for a realtime session.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct RealtimeConfig {
     /// Model to use (provider-specific).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -224,7 +224,7 @@ impl From<RealtimeConfig> for SessionUpdateConfig {
 }
 
 /// Transcription configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptionConfig {
     /// Transcription model to use.
     pub model: String,

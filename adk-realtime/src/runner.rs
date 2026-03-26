@@ -7,11 +7,30 @@ use crate::config::{RealtimeConfig, SessionUpdateConfig, ToolDefinition};
 use crate::error::{RealtimeError, Result};
 use crate::events::{ServerEvent, ToolCall, ToolResponse};
 use crate::model::BoxedModel;
-use crate::session::BoxedSession;
+use crate::session::{BoxedSession, ContextMutationOutcome};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+/// Internal state machine tracking the resumability status of the RealtimeRunner.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RunnerState {
+    /// Runner is ready to accept transport resumption immediately.
+    Idle,
+    /// Model is currently generating a response; tearing down the connection would corrupt context.
+    Generating,
+    /// A tool is currently executing; teardown would cause tool loss.
+    ExecutingTool,
+    /// A context mutation was queued while the runner was busy, and must be executed once Idle.
+    PendingResumption(crate::config::RealtimeConfig),
+}
+
+impl Default for RunnerState {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
 
 /// Handler for tool/function calls from the realtime model.
 #[async_trait]
@@ -229,6 +248,7 @@ impl RealtimeRunnerBuilder {
             tools: self.tools,
             event_handler: self.event_handler.unwrap_or_else(|| Arc::new(NoOpEventHandler)),
             session: Arc::new(RwLock::new(None)),
+            state: Arc::new(RwLock::new(RunnerState::Idle)),
         })
     }
 }
@@ -277,6 +297,7 @@ pub struct RealtimeRunner {
     tools: HashMap<String, (ToolDefinition, Arc<dyn ToolHandler>)>,
     event_handler: Arc<dyn EventHandler>,
     session: Arc<RwLock<Option<BoxedSession>>>,
+    state: Arc<RwLock<RunnerState>>,
 }
 
 impl RealtimeRunner {
@@ -314,24 +335,10 @@ impl RealtimeRunner {
 
     /// Update the session configuration.
     ///
-    /// The RealtimeRunner will attempt to update the session natively if the underlying
+    /// The RealtimeRunner will attempt to mutate the session natively if the underlying
     /// API supports it (e.g., OpenAI). If it does not (e.g., Gemini), the Runner will
-    /// perform a Phantom Reconnect by tearing down the WebSocket and immediately
-    /// establishing a new one with the updated configuration, while keeping the upstream
-    /// audio connection intact.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use adk_realtime::config::{SessionUpdateConfig, RealtimeConfig};
-    ///
-    /// async fn example(runner: &adk_realtime::RealtimeRunner) {
-    ///     let update = SessionUpdateConfig(
-    ///         RealtimeConfig::default().with_instruction("You are now a pirate.")
-    ///     );
-    ///     runner.update_session(update).await.unwrap();
-    /// }
-    /// ```
+    /// queue a transport resumption (Phantom Reconnect), executing it only when the session
+    /// is in a resumable state (Idle) to prevent data corruption.
     pub async fn update_session(&self, config: SessionUpdateConfig) -> Result<()> {
         let mut full_config = self.config.clone();
 
@@ -352,28 +359,42 @@ impl RealtimeRunner {
         let guard = self.session.read().await;
         let session = guard.as_ref().ok_or_else(|| RealtimeError::connection("Not connected"))?;
 
-        match session.update_context(full_config.clone()).await {
-            Ok(()) => {
-                tracing::info!("Context updated natively mid-flight.");
+        match session.mutate_context(full_config.clone()).await? {
+            ContextMutationOutcome::Applied => {
+                tracing::info!("Context mutated natively mid-flight.");
                 Ok(())
             }
-            Err(RealtimeError::RequiresReconnection(new_config)) => {
-                tracing::warn!("Provider requires soft reconnect. Buffering audio and reconnecting...");
-                drop(guard); // release the read lock
-
-                let mut write_guard = self.session.write().await;
-                if let Some(old_session) = write_guard.as_ref() {
-                    let _ = old_session.close().await;
+            ContextMutationOutcome::RequiresResumption(new_config) => {
+                drop(guard); // release the read lock before potential async ops
+                let mut state_guard = self.state.write().await;
+                if *state_guard == RunnerState::Idle {
+                    drop(state_guard);
+                    tracing::info!("Runner is idle. Executing resumption immediately.");
+                    self.execute_resumption(new_config).await?;
+                } else {
+                    tracing::info!("Runner is busy ({:?}). Queueing resumption.", *state_guard);
+                    *state_guard = RunnerState::PendingResumption(new_config);
                 }
-
-                let new_session = self.model.connect(new_config).await?;
-                *write_guard = Some(new_session);
-
-                tracing::info!("Phantom Reconnect complete. New context established.");
                 Ok(())
             }
-            Err(e) => Err(e),
         }
+    }
+
+    /// Internal helper to execute a transport resumption (teardown and rebuild).
+    async fn execute_resumption(&self, new_config: crate::config::RealtimeConfig) -> Result<()> {
+        tracing::warn!("Executing transport resumption with new configuration.");
+        let mut write_guard = self.session.write().await;
+        if let Some(old_session) = write_guard.as_ref() {
+            let _ = old_session.close().await;
+        }
+
+        // Reconnect via the generic model interface.
+        // Note: The `RealtimeModel` or the adapter could manage an official resumption handle internally if available.
+        let new_session = self.model.connect(new_config).await?;
+        *write_guard = Some(new_session);
+
+        tracing::info!("Resumption complete. New transport established.");
+        Ok(())
     }
 
     /// Send audio to the session.
@@ -492,6 +513,23 @@ impl RealtimeRunner {
 
     /// Process a single event.
     async fn handle_event(&self, event: ServerEvent) -> Result<()> {
+        // Track state transitions before forwarding the event
+        match &event {
+            ServerEvent::ResponseCreated { .. } | ServerEvent::SpeechStarted { .. } => {
+                let mut state = self.state.write().await;
+                if let RunnerState::Idle = *state {
+                    *state = RunnerState::Generating;
+                }
+            }
+            ServerEvent::FunctionCallDone { .. } => {
+                let mut state = self.state.write().await;
+                if let RunnerState::Generating | RunnerState::Idle = *state {
+                    *state = RunnerState::ExecutingTool;
+                }
+            }
+            _ => {}
+        }
+
         match event {
             ServerEvent::AudioDelta { delta, item_id, .. } => {
                 self.event_handler.on_audio(&delta, &item_id).await?;
@@ -510,6 +548,7 @@ impl RealtimeRunner {
             }
             ServerEvent::ResponseDone { .. } => {
                 self.event_handler.on_response_done().await?;
+                self.check_resumption_queue().await?;
             }
             ServerEvent::FunctionCallDone { call_id, name, arguments, .. } => {
                 if self.runner_config.auto_execute_tools {
@@ -523,6 +562,27 @@ impl RealtimeRunner {
             _ => {
                 // Ignore other events
             }
+        }
+        Ok(())
+    }
+
+    /// Safely transitions the runner back to Idle and executes any queued resumptions.
+    async fn check_resumption_queue(&self) -> Result<()> {
+        let mut state = self.state.write().await;
+
+        let pending = if let RunnerState::PendingResumption(config) = &*state {
+            Some(config.clone())
+        } else {
+            None
+        };
+
+        if let Some(config) = pending {
+            tracing::info!("Executing queued resumption after turn completion.");
+            *state = RunnerState::Idle;
+            drop(state); // Free lock before async execution
+            self.execute_resumption(config).await?;
+        } else {
+            *state = RunnerState::Idle;
         }
         Ok(())
     }
