@@ -182,8 +182,6 @@ pub struct GeminiRealtimeSession {
     sender: Arc<Mutex<WsSink>>,
     receiver: Arc<Mutex<WsSource>>,
     audio_buffer: Arc<Mutex<Vec<u8>>>,
-    #[allow(dead_code)]
-    resumption_token: Arc<Mutex<Option<String>>>,
 }
 
 impl GeminiRealtimeSession {
@@ -276,7 +274,6 @@ impl GeminiRealtimeSession {
             sender: Arc::new(Mutex::new(sink)),
             receiver: Arc::new(Mutex::new(source)),
             audio_buffer: Arc::new(Mutex::new(Vec::new())),
-            resumption_token: Arc::new(Mutex::new(None)),
         };
 
         session.send_setup(model, config).await?;
