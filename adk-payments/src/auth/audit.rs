@@ -101,10 +101,8 @@ fn payment_audit_event(
             "scopes": request.scopes,
             "metadata": request.metadata,
         },
-        "sessionIdentity": record.session_identity.as_ref().map(|identity| json!({
-            "appName": identity.app_name.as_ref(),
-            "userId": identity.user_id.as_ref(),
-            "sessionId": identity.session_id.as_ref(),
+        "sessionIdentity": record.session_identity.as_ref().map(|_identity| json!({
+            "present": true,
         })),
         "protocolActor": {
             "actorId": record.initiated_by.actor_id,
@@ -117,9 +115,7 @@ fn payment_audit_event(
     AuditEvent {
         timestamp: Utc::now(),
         user: request.user_id.clone(),
-        session_id: request.session_id.clone().or_else(|| {
-            record.session_identity.as_ref().map(|identity| identity.session_id.to_string())
-        }),
+        session_id: None, // redacted — sensitive identifier
         event_type: AuditEventType::PermissionCheck,
         resource: operation.audit_resource().to_string(),
         outcome: outcome.clone(),
@@ -247,7 +243,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].resource, "payments.checkout.complete");
         assert_eq!(events[0].user, "alice");
-        assert_eq!(events[0].session_id.as_deref(), Some("session-123"));
+        assert_eq!(events[0].session_id, None);
 
         let metadata = events[0].metadata.as_ref().unwrap();
         assert_eq!(metadata["transactionId"], "tx-audit");
@@ -257,6 +253,6 @@ mod tests {
         assert_eq!(metadata["interventionOccurred"], true);
         assert_eq!(metadata["authenticatedRequest"]["tenantId"], "tenant-1");
         assert_eq!(metadata["protocolActor"]["actorId"], "merchant-agent");
-        assert_eq!(metadata["sessionIdentity"]["appName"], "commerce-app");
+        assert_eq!(metadata["sessionIdentity"]["present"], true);
     }
 }

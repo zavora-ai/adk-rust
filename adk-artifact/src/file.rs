@@ -39,6 +39,54 @@ impl FileArtifactService {
         Ok(())
     }
 
+    /// Validates a path component (app_name, user_id, session_id) used to build artifact paths.
+    ///
+    /// Rejects empty values, directory separators, and traversal patterns.
+    fn validate_path_component(component: &str, field: &str) -> Result<()> {
+        if component.is_empty() {
+            return Err(adk_core::AdkError::artifact(format!(
+                "invalid artifact {field}: empty value"
+            )));
+        }
+
+        if component.contains('/')
+            || component.contains('\\')
+            || component == "."
+            || component == ".."
+            || component.contains("..")
+        {
+            return Err(adk_core::AdkError::artifact(format!(
+                "invalid artifact {field} '{component}': path separators and traversal patterns are not allowed"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Ensures the given path stays within the configured base directory.
+    fn ensure_within_base_dir(&self, path: &Path) -> Result<()> {
+        let canonical_base = self.base_dir.canonicalize().map_err(|e| {
+            adk_core::AdkError::artifact(format!("canonicalize base dir failed: {e}"))
+        })?;
+
+        // For paths that may not exist yet, resolve relative to canonical base
+        let canonical_path = match path.canonicalize() {
+            Ok(canonical) => canonical,
+            Err(_) => {
+                let relative = path.strip_prefix(&self.base_dir).unwrap_or(path);
+                canonical_base.join(relative)
+            }
+        };
+
+        if !canonical_path.starts_with(&canonical_base) {
+            return Err(adk_core::AdkError::artifact(
+                "artifact path escapes configured base directory",
+            ));
+        }
+
+        Ok(())
+    }
+
     fn is_user_scoped(file_name: &str) -> bool {
         file_name.starts_with("user:")
     }
@@ -148,6 +196,9 @@ impl FileArtifactService {
 impl ArtifactService for FileArtifactService {
     async fn save(&self, req: SaveRequest) -> Result<SaveResponse> {
         Self::validate_file_name(&req.file_name)?;
+        Self::validate_path_component(&req.app_name, "app name")?;
+        Self::validate_path_component(&req.user_id, "user id")?;
+        Self::validate_path_component(&req.session_id, "session id")?;
 
         let version = match req.version {
             Some(version) => version,
@@ -169,6 +220,7 @@ impl ArtifactService for FileArtifactService {
             &req.file_name,
             version,
         );
+        self.ensure_within_base_dir(&path)?;
         let payload = serde_json::to_vec(&req.part)
             .map_err(|error| adk_core::AdkError::artifact(error.to_string()))?;
         fs::write(path, payload)
@@ -180,6 +232,9 @@ impl ArtifactService for FileArtifactService {
 
     async fn load(&self, req: LoadRequest) -> Result<LoadResponse> {
         Self::validate_file_name(&req.file_name)?;
+        Self::validate_path_component(&req.app_name, "app name")?;
+        Self::validate_path_component(&req.user_id, "user id")?;
+        Self::validate_path_component(&req.session_id, "session id")?;
 
         let version = match req.version {
             Some(version) => version,
@@ -213,6 +268,9 @@ impl ArtifactService for FileArtifactService {
 
     async fn delete(&self, req: DeleteRequest) -> Result<()> {
         Self::validate_file_name(&req.file_name)?;
+        Self::validate_path_component(&req.app_name, "app name")?;
+        Self::validate_path_component(&req.user_id, "user id")?;
+        Self::validate_path_component(&req.session_id, "session id")?;
 
         if let Some(version) = req.version {
             let path = self.version_path(
@@ -249,6 +307,9 @@ impl ArtifactService for FileArtifactService {
     }
 
     async fn list(&self, req: ListRequest) -> Result<ListResponse> {
+        Self::validate_path_component(&req.app_name, "app name")?;
+        Self::validate_path_component(&req.user_id, "user id")?;
+        Self::validate_path_component(&req.session_id, "session id")?;
         let session_dir =
             self.base_dir.join(&req.app_name).join(&req.user_id).join(&req.session_id);
         let user_dir = self.base_dir.join(&req.app_name).join(&req.user_id).join(USER_SCOPED_DIR);
@@ -261,6 +322,9 @@ impl ArtifactService for FileArtifactService {
 
     async fn versions(&self, req: VersionsRequest) -> Result<VersionsResponse> {
         Self::validate_file_name(&req.file_name)?;
+        Self::validate_path_component(&req.app_name, "app name")?;
+        Self::validate_path_component(&req.user_id, "user id")?;
+        Self::validate_path_component(&req.session_id, "session id")?;
         let versions = self
             .read_versions(&req.app_name, &req.user_id, &req.session_id, &req.file_name)
             .await?;

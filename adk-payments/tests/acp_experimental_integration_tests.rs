@@ -394,7 +394,9 @@ async fn acp_experimental_routes_support_discovery_delegate_auth_and_signed_webh
     let identity = create_identity(session_service.as_ref()).await;
     let store = Arc::new(SessionBackedTransactionStore::new(session_service.clone()));
     let backend = Arc::new(ExperimentalBackend::new(store.clone()));
-    let webhook_secret = b"merchant-webhook-secret";
+    let webhook_secret = std::env::var("TEST_WEBHOOK_SECRET")
+        .unwrap_or_else(|_| "test-only-webhook-secret-not-for-production".to_string())
+        .into_bytes();
 
     let stable = AcpRouterBuilder::new(AcpContextTemplate {
         session_identity: Some(identity.clone()),
@@ -452,7 +454,7 @@ async fn acp_experimental_routes_support_discovery_delegate_auth_and_signed_webh
         mode: CommerceMode::HumanPresent,
     })
     .with_merchant_webhook_verification(AcpMerchantWebhookVerificationConfig::new(
-        webhook_secret.to_vec(),
+        webhook_secret.clone(),
     ))
     .with_verification(
         AcpVerificationConfig::strict()
@@ -608,7 +610,7 @@ async fn acp_experimental_routes_support_discovery_delegate_auth_and_signed_webh
             ]
         }
     });
-    let (payload, signature) = sign_webhook(webhook_secret, &webhook_body, Utc::now().timestamp());
+    let (payload, signature) = sign_webhook(&webhook_secret, &webhook_body, Utc::now().timestamp());
     let (status, _, webhook_response) = response_parts(
         &mut app,
         Request::builder()
