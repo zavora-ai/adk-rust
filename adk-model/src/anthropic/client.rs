@@ -523,7 +523,7 @@ impl Llm for AnthropicClient {
                                 };
 
                                 // If we have accumulated tool calls, emit them
-                                let mut parts = pending_server_parts.drain(..).collect::<Vec<_>>();
+                                let mut parts = std::mem::take(&mut pending_server_parts);
                                 if !current_tool_calls.is_empty() {
                                     let tool_calls = current_tool_calls
                                         .drain(..)

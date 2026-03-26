@@ -30,6 +30,7 @@ members = [
     "adk-audio",
     "adk-deploy",
     "adk-payments",
+    "adk-action",
 
     # CLI tools
     "cargo-adk",
@@ -147,3 +148,4 @@ adk-rag = { path = "adk-rag", version = "0.5.0" }
 adk-audio = { path = "adk-audio", version = "0.5.0" }
 adk-deploy = { path = "adk-deploy", version = "0.5.0" }
 adk-payments = { path = "adk-payments", version = "0.5.0" }
+adk-action = { path = "adk-action", version = "0.5.0" }

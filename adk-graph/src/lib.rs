@@ -76,6 +76,11 @@ pub mod node;
 pub mod state;
 pub mod stream;
 
+#[cfg(feature = "action")]
+pub mod action;
+#[cfg(feature = "action")]
+pub mod workflow;
+
 // Re-exports
 pub use agent::{GraphAgent, GraphAgentBuilder};
 pub use checkpoint::{Checkpointer, MemoryCheckpointer};
@@ -107,6 +112,9 @@ pub mod prelude {
 
     #[cfg(feature = "sqlite")]
     pub use crate::checkpoint::SqliteCheckpointer;
+
+    #[cfg(feature = "action")]
+    pub use crate::action::ActionNodeExecutor;
 
     // Re-export commonly used serde_json
     pub use serde_json::{Value, json};

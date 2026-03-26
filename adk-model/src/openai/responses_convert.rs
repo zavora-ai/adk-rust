@@ -686,7 +686,7 @@ mod tests {
     use super::*;
     use adk_core::{GenerateContentConfig, LlmRequest};
     use async_openai::types::responses::{
-        OutputStatus, WebSearchActionSearch, WebSearchToolCall, WebSearchToolCallAction,
+        WebSearchActionSearch, WebSearchToolCall, WebSearchToolCallAction,
         WebSearchToolCallStatus,
     };
 
@@ -745,8 +745,10 @@ mod tests {
                     "output": [{
                         "stdout": "ok",
                         "stderr": "",
-                        "type": "exit",
-                        "exit_code": 0
+                        "outcome": {
+                            "type": "exit",
+                            "exit_code": 0
+                        }
                     }],
                     "max_output_length": 1024
                 }),

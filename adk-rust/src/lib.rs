@@ -813,6 +813,21 @@ pub mod rag {
     pub use adk_rag::*;
 }
 
+/// Shared action node types for graph workflows.
+///
+/// Provides the type definitions for all 14 action node types:
+/// - Trigger nodes (manual, webhook, schedule, event)
+/// - Data nodes (HTTP, Set, Transform)
+/// - Control flow nodes (Switch, Loop, Merge, Wait)
+/// - Compute nodes (Code)
+/// - Infrastructure nodes (Database)
+/// - Communication nodes (Email, Notification, RSS, File)
+///
+/// Available with feature: `action`
+#[cfg(feature = "action")]
+#[cfg_attr(docsrs, doc(cfg(feature = "action")))]
+pub use adk_action;
+
 // ============================================================================
 // Prelude
 // ============================================================================

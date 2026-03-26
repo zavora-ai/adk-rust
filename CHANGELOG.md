@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Action Node Graph Standardization (adk-action, adk-graph, adk-rust)
+- **`adk-action` crate**: New shared crate containing all 14 action node type definitions, `StandardProperties`, `ActionError` enum, and variable interpolation utilities. Zero runtime dependencies beyond `serde`, `serde_json`, `thiserror`, and `regex`.
+- **`ActionNodeExecutor`** in `adk-graph`: Implements the `Node` trait for any `ActionNodeConfig`, applying error handling (stop/continue/retry/fallback), timeout enforcement, and skip conditions uniformly across all node types.
+- **14 action node executors**: Set, Transform, Switch, Loop, Merge, Wait, File, Code (Rust), Manual Trigger, HTTP, Code (JS/TS), Database (SQL/MongoDB/Redis), Email (IMAP/SMTP), Notification (Slack/Discord/Teams/webhook), RSS/Feed.
+- **`TriggerRuntime`**: Background infrastructure for webhook routes (Axum), cron scheduling (`tokio-cron-scheduler`), and event subscriptions (`tokio::sync::mpsc`).
+- **`WorkflowSchema`**: Serializable interchange format for graph workflows with `from_json()` and `build_graph()` methods, enabling adk-studio projects to be loaded and executed by adk-graph.
+- **`GraphAgentBuilder` extensions**: `action_node()` and `from_workflow_schema()` methods for convenient action node integration.
+- **Feature flags**: `action` (core nodes, no extra deps), `action-trigger`, `action-http`, `action-db`, `action-db-mongo`, `action-db-redis`, `action-code`, `action-email`, `action-rss`, `action-full`. Forwarded through `adk-rust` umbrella crate.
+- **10 correctness properties**: Property-based tests across both crates covering round-trip serialization, error mode retry counts, switch condition determinism, interpolation idempotence, backward compatibility, and notification payload formats.
+
+### Fixed
+
+#### adk-model
+- Fixed `test_server_tool_response_round_trip_as_openai_items` test — JSON fixture had `outcome` fields flattened instead of nested, causing deserialization mismatch with `async-openai` 0.33 structs.
+- Removed unused `OutputStatus` import in `responses_convert.rs`.
+- Replaced `drain(..).collect()` with `std::mem::take()` in Anthropic streaming client per clippy `drain_collect` lint.
+
+### Changed
+
 #### Provider-native built-in tool support (adk-tool, adk-model, adk-gemini, examples)
 - Added typed built-in tool wrappers for Gemini (`GoogleMapsTool`, `GeminiCodeExecutionTool`, `GeminiFileSearchTool`, `GeminiComputerUseTool`), OpenAI Responses (`OpenAIWebSearchTool`, `OpenAIFileSearchTool`, `OpenAICodeInterpreterTool`, `OpenAIImageGenerationTool`, `OpenAIComputerUseTool`, `OpenAIMcpTool`, `OpenAILocalShellTool`, `OpenAIShellTool`, `OpenAIApplyPatchTool`), and Anthropic (`WebSearchTool`, native bash, native text editor variants).
 - Added a provider-native declaration path to the shared `Tool` API so agents can mix built-in tools with ordinary `FunctionTool`s without relying on opaque `GenerateContentConfig.extensions` blobs.

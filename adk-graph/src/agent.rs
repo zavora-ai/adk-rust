@@ -73,6 +73,18 @@ impl GraphAgent {
         }
     }
 
+    /// Build a `GraphAgent` from a `WorkflowSchema`.
+    ///
+    /// Delegates to `schema.build_graph()` to construct the graph from the
+    /// workflow schema's action nodes, edges, and conditions.
+    #[cfg(feature = "action")]
+    pub fn from_workflow_schema(
+        name: &str,
+        schema: &crate::workflow::WorkflowSchema,
+    ) -> Result<Self> {
+        schema.build_graph(name)
+    }
+
     /// Get the underlying compiled graph
     pub fn graph(&self) -> &CompiledGraph {
         &self.graph
@@ -408,6 +420,59 @@ impl GraphAgentBuilder {
             let event_clone = event.clone();
             Box::pin(callback(ctx, event_clone))
         }));
+        self
+    }
+
+    /// Add an action node to the graph.
+    ///
+    /// Wraps the `ActionNodeConfig` in an `ActionNodeExecutor` and registers it
+    /// as a node. If the config is a `SwitchNodeConfig`, conditional edges are
+    /// also auto-registered from the switch conditions.
+    #[cfg(feature = "action")]
+    pub fn action_node(mut self, config: adk_action::ActionNodeConfig) -> Self {
+        use crate::action::ActionNodeExecutor;
+
+        // If this is a Switch node, register conditional edges
+        if let adk_action::ActionNodeConfig::Switch(ref switch_config) = config {
+            let conditions = switch_config.conditions.clone();
+            let eval_mode = switch_config.evaluation_mode.clone();
+            let default_branch = switch_config.default_branch.clone();
+            let source = config.standard().id.clone();
+
+            let mut targets_map: HashMap<String, EdgeTarget> = HashMap::new();
+            for condition in &conditions {
+                targets_map.insert(
+                    condition.output_port.clone(),
+                    EdgeTarget::Node(condition.output_port.clone()),
+                );
+            }
+            if let Some(ref default) = default_branch {
+                let target = if default == END {
+                    EdgeTarget::End
+                } else {
+                    EdgeTarget::Node(default.clone())
+                };
+                targets_map.insert(default.clone(), target);
+            }
+            targets_map.insert(END.to_string(), EdgeTarget::End);
+
+            let router = Arc::new(move |state: &State| -> String {
+                match crate::action::switch::evaluate_switch_conditions(
+                    &conditions,
+                    state,
+                    &eval_mode,
+                    default_branch.as_deref(),
+                ) {
+                    Ok(ports) => ports.into_iter().next().unwrap_or_else(|| END.to_string()),
+                    Err(_) => END.to_string(),
+                }
+            });
+
+            self.edges.push(Edge::Conditional { source, router, targets: targets_map });
+        }
+
+        let executor = ActionNodeExecutor::new(config);
+        self.nodes.push(Arc::new(executor));
         self
     }
 
