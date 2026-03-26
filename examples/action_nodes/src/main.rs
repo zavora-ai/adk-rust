@@ -1,18 +1,18 @@
 //! Action Nodes Example
 //!
-//! Demonstrates all core action node types in adk-graph:
+//! Demonstrates all action node types in adk-graph.
 //!
-//! 1. **Set Node** — Initialize, merge, and delete state variables
-//! 2. **Transform Node** — Template interpolation and JSONPath extraction
-//! 3. **Switch Node** — Conditional routing with typed operators
-//! 4. **Loop Node** — forEach, while, and times iteration
-//! 5. **Merge Node** — Combine parallel branch results
-//! 6. **Wait Node** — Fixed-duration delays
-//! 7. **File Node** — Read, write, list, and delete files
-//! 8. **Trigger Node** — Manual trigger with input
-//! 9. **WorkflowSchema** — Load and execute a graph from JSON
+//! **Core scenarios** (no extra deps):
+//! 1–10: Set, Transform, Switch, Loop, Merge, Wait, File, Trigger, WorkflowSchema, Error Handling
 //!
-//! Run: `cargo run -p action-nodes-example`
+//! **Feature-gated scenarios** (run with `--features http`):
+//! 11: HTTP Node — GET/POST with auth, interpolation, status validation
+//! 12: Code Node — Rust mode JSON eval and interpolation
+//! 13: Database Node — Config validation (placeholder executors)
+//! 14: Notification Node — Slack/Discord/Teams/webhook payload dispatch
+//!
+//! Run core:  `cargo run -p action-nodes-example`
+//! Run all:   `cargo run -p action-nodes-example --features full`
 
 mod scenarios;
 
@@ -28,9 +28,10 @@ async fn main() -> Result<()> {
         .init();
 
     println!("═══════════════════════════════════════════════════");
-    println!("  ADK Action Nodes — All Core Scenarios");
+    println!("  ADK Action Nodes — All Scenarios");
     println!("═══════════════════════════════════════════════════\n");
 
+    // Core scenarios (always available)
     scenarios::set_node::run().await?;
     scenarios::transform_node::run().await?;
     scenarios::switch_node::run().await?;
@@ -42,7 +43,25 @@ async fn main() -> Result<()> {
     scenarios::workflow_schema::run().await?;
     scenarios::error_handling::run().await?;
 
-    println!("\n═══════════════════════════════════════════════════");
+    // Always-available feature-gated scenarios
+    scenarios::code_node::run().await?;
+
+    // HTTP-dependent scenarios
+    #[cfg(feature = "http")]
+    {
+        scenarios::http_node::run().await?;
+        scenarios::database_node::run().await?;
+        scenarios::notification_node::run().await?;
+    }
+
+    #[cfg(not(feature = "http"))]
+    {
+        println!("── Feature-gated scenarios ────────────────────");
+        println!("  HTTP, Database, Notification nodes require --features http");
+        println!("  Run: cargo run -p action-nodes-example --features full\n");
+    }
+
+    println!("═══════════════════════════════════════════════════");
     println!("  All scenarios completed successfully!");
     println!("═══════════════════════════════════════════════════");
 

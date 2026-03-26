@@ -8,3 +8,12 @@ pub mod transform_node;
 pub mod trigger_node;
 pub mod wait_node;
 pub mod workflow_schema;
+
+// Feature-gated scenarios
+pub mod code_node;
+#[cfg(feature = "http")]
+pub mod database_node;
+#[cfg(feature = "http")]
+pub mod http_node;
+#[cfg(feature = "http")]
+pub mod notification_node;
