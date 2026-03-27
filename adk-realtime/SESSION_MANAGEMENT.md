@@ -1,4 +1,4 @@
-# Realtime Session Architecture & Cognitive Handoffs
+# Realtime Session Architecture & Context Mutation
 
 This document explains how `adk-realtime` handles **mid-session context changes**—for example, swapping instructions or tools—without tearing down the upstream media transport (such as LiveKit over WebRTC). The design stays provider-agnostic even though provider realtime APIs behave differently. OpenAI supports live session updates with `session.update`, while Gemini Live uses **session resumption** to continue a session across connections. [OpenAI Realtime conversations](https://developers.openai.com/api/docs/guides/realtime-conversations), [Gemini Live session management](https://ai.google.dev/gemini-api/docs/live-session)
 
