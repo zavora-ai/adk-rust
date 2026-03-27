@@ -343,6 +343,25 @@ impl RealtimeRunner {
     ///
     /// The RealtimeRunner will attempt to mutate the session natively if the underlying
     /// API supports it (e.g., OpenAI). If it does not (e.g., Gemini), the Runner will
+    /// Internal helper to merge a `SessionUpdateConfig` into a base `RealtimeConfig`.
+    fn merge_config(base: &mut RealtimeConfig, update: &SessionUpdateConfig) {
+        if let Some(instruction) = &update.0.instruction {
+            base.instruction = Some(instruction.clone());
+        }
+        if let Some(tools) = &update.0.tools {
+            base.tools = Some(tools.clone());
+        }
+        if let Some(voice) = &update.0.voice {
+            base.voice = Some(voice.clone());
+        }
+        if let Some(temp) = update.0.temperature {
+            base.temperature = Some(temp);
+        }
+        if let Some(extra) = &update.0.extra {
+            base.extra = Some(extra.clone());
+        }
+    }
+
     /// Update the session configuration.
     ///
     /// Delegates to [`update_session_with_bridge`] with no bridge message.
@@ -363,23 +382,7 @@ impl RealtimeRunner {
         bridge_message: Option<String>,
     ) -> Result<()> {
         let mut full_config = self.config.write().await;
-
-        // Merge the updates from `SessionUpdateConfig` into `full_config`
-        if let Some(instruction) = &config.0.instruction {
-            full_config.instruction = Some(instruction.clone());
-        }
-        if let Some(tools) = &config.0.tools {
-            full_config.tools = Some(tools.clone());
-        }
-        if let Some(voice) = &config.0.voice {
-            full_config.voice = Some(voice.clone());
-        }
-        if let Some(temp) = config.0.temperature {
-            full_config.temperature = Some(temp);
-        }
-        if let Some(extra) = &config.0.extra {
-            full_config.extra = Some(extra.clone());
-        }
+        Self::merge_config(&mut full_config, &config);
 
         let cloned_config = full_config.clone();
         drop(full_config);
@@ -435,6 +438,10 @@ impl RealtimeRunner {
         // Reconnect via the generic model interface.
         let new_session = self.model.connect(new_config).await?;
 
+        // Swap pointer before injecting events so that it is the active runner session.
+        *write_guard = Some(new_session);
+        drop(write_guard); // Free the lock explicitly
+
         // Inject bridge message into the new session if provided
         if let Some(msg) = bridge_message {
             tracing::info!("Injecting bridge message post-resumption.");
@@ -442,10 +449,8 @@ impl RealtimeRunner {
                 role: "user".to_string(),
                 parts: vec![adk_core::types::Part::Text { text: msg }],
             };
-            new_session.send_event(event).await?;
+            self.send_client_event(event).await?;
         }
-
-        *write_guard = Some(new_session);
 
         tracing::info!("Resumption complete. New transport established.");
         Ok(())
@@ -569,7 +574,7 @@ impl RealtimeRunner {
     async fn handle_event(&self, event: ServerEvent) -> Result<()> {
         // Track state transitions before forwarding the event
         match &event {
-            ServerEvent::ResponseCreated { .. } | ServerEvent::SpeechStarted { .. } => {
+            ServerEvent::ResponseCreated { .. } => {
                 let mut state = self.state.write().await;
                 if let RunnerState::Idle = *state {
                     *state = RunnerState::Generating;
