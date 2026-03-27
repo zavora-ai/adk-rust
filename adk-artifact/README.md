@@ -90,7 +90,7 @@ Persists artifacts to the local filesystem. Each version is stored as a JSON-ser
 ```rust
 use adk_artifact::FileArtifactService;
 
-let service = FileArtifactService::new("/var/data/artifacts");
+let service = FileArtifactService::new("/var/data/artifacts")?;
 ```
 
 `FileArtifactService` includes a `health_check()` method that verifies the base directory is writable.

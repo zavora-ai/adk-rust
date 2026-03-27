@@ -9,14 +9,29 @@ use tokio::fs;
 const USER_SCOPED_DIR: &str = "_user_scoped_";
 
 /// Persist artifacts on the local filesystem.
+///
+/// The base directory is created and canonicalized at construction time.
 pub struct FileArtifactService {
+    /// Canonical (absolute, resolved) base directory. Set once at construction.
     base_dir: PathBuf,
 }
 
 impl FileArtifactService {
     /// Create a new filesystem-backed artifact service rooted at `base_dir`.
-    pub fn new(base_dir: impl Into<PathBuf>) -> Self {
-        Self { base_dir: base_dir.into() }
+    ///
+    /// Creates the directory if it doesn't exist and stores the canonical path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or canonicalized.
+    pub fn new(base_dir: impl Into<PathBuf>) -> Result<Self> {
+        let raw = base_dir.into();
+        std::fs::create_dir_all(&raw)
+            .map_err(|e| adk_core::AdkError::artifact(format!("create base dir failed: {e}")))?;
+        let canonical = raw.canonicalize().map_err(|e| {
+            adk_core::AdkError::artifact(format!("canonicalize base dir failed: {e}"))
+        })?;
+        Ok(Self { base_dir: canonical })
     }
 
     fn validate_file_name(file_name: &str) -> Result<()> {
@@ -226,13 +241,8 @@ impl ArtifactService for FileArtifactService {
         Self::validate_path_component(&req.session_id, "session id")?;
         Self::validate_file_name(&req.file_name)?;
 
-        // Bootstrap base_dir synchronously so we can canonicalize it.
-        // base_dir is configuration-controlled, not direct user input per-request.
-        std::fs::create_dir_all(&self.base_dir)
-            .map_err(|e| adk_core::AdkError::artifact(format!("create base dir failed: {e}")))?;
-        let canonical_base = self.base_dir.canonicalize().map_err(|e| {
-            adk_core::AdkError::artifact(format!("canonicalize base dir failed: {e}"))
-        })?;
+        // base_dir is already canonical from construction
+        let canonical_base = &self.base_dir;
 
         // Build path from canonical base + validated segments (no user data in base)
         let canonical_dir = if Self::is_user_scoped(&req.file_name) {
@@ -394,7 +404,7 @@ mod tests {
     #[tokio::test]
     async fn user_scoped_artifacts_are_visible_across_sessions() {
         let tempdir = tempfile::tempdir().unwrap();
-        let service = FileArtifactService::new(tempdir.path());
+        let service = FileArtifactService::new(tempdir.path()).unwrap();
 
         service
             .save(SaveRequest {
