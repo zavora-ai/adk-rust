@@ -43,9 +43,7 @@ impl InMemoryArtifactService {
 
     fn validate_file_name(file_name: &str) -> Result<()> {
         if file_name.is_empty() {
-            return Err(adk_core::AdkError::Artifact(
-                "invalid artifact file name: empty name".to_string(),
-            ));
+            return Err(adk_core::AdkError::artifact("invalid artifact file name: empty name"));
         }
 
         // Prevent path traversal and path-like names; artifacts are logical keys, not paths.
@@ -55,7 +53,7 @@ impl InMemoryArtifactService {
             || file_name == ".."
             || file_name.contains("..")
         {
-            return Err(adk_core::AdkError::Artifact(format!(
+            return Err(adk_core::AdkError::artifact(format!(
                 "invalid artifact file name '{}': path separators and traversal patterns are not allowed",
                 file_name
             )));
@@ -137,13 +135,13 @@ impl ArtifactService for InMemoryArtifactService {
             let artifacts = self.artifacts.read().unwrap();
             let part = artifacts
                 .get(&key)
-                .ok_or_else(|| adk_core::AdkError::Artifact("artifact not found".into()))?;
+                .ok_or_else(|| adk_core::AdkError::artifact("artifact not found"))?;
 
             Ok(LoadResponse { part: part.clone() })
         } else {
             let (_, part) = self
                 .find_latest_version(&req.app_name, &req.user_id, &session_id, &req.file_name)
-                .ok_or_else(|| adk_core::AdkError::Artifact("artifact not found".into()))?;
+                .ok_or_else(|| adk_core::AdkError::artifact("artifact not found"))?;
 
             Ok(LoadResponse { part })
         }
@@ -212,7 +210,7 @@ impl ArtifactService for InMemoryArtifactService {
             .collect();
 
         if versions.is_empty() {
-            return Err(adk_core::AdkError::Artifact("artifact not found".into()));
+            return Err(adk_core::AdkError::artifact("artifact not found"));
         }
 
         versions.sort_by(|a, b| b.cmp(a));

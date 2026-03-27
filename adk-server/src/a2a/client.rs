@@ -26,11 +26,11 @@ impl A2aClient {
         let client = reqwest::Client::new();
         let response =
             client.get(&url).send().await.map_err(|e| {
-                adk_core::AdkError::Agent(format!("Failed to fetch agent card: {}", e))
+                adk_core::AdkError::agent(format!("Failed to fetch agent card: {}", e))
             })?;
 
         if !response.status().is_success() {
-            return Err(adk_core::AdkError::Agent(format!(
+            return Err(adk_core::AdkError::agent(format!(
                 "Failed to fetch agent card: HTTP {}",
                 response.status()
             )));
@@ -39,7 +39,7 @@ impl A2aClient {
         let card: AgentCard = response
             .json()
             .await
-            .map_err(|e| adk_core::AdkError::Agent(format!("Failed to parse agent card: {}", e)))?;
+            .map_err(|e| adk_core::AdkError::agent(format!("Failed to parse agent card: {}", e)))?;
 
         Ok(card)
     }
@@ -62,7 +62,7 @@ impl A2aClient {
             method: "message/send".to_string(),
             params: Some(
                 serde_json::to_value(MessageSendParams { message, config: None })
-                    .map_err(|e| adk_core::AdkError::Agent(e.to_string()))?,
+                    .map_err(|e| adk_core::AdkError::agent(e.to_string()))?,
             ),
             id: Some(Value::String(uuid::Uuid::new_v4().to_string())),
         };
@@ -73,10 +73,10 @@ impl A2aClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| adk_core::AdkError::Agent(format!("Request failed: {}", e)))?;
+            .map_err(|e| adk_core::AdkError::agent(format!("Request failed: {}", e)))?;
 
         if !response.status().is_success() {
-            return Err(adk_core::AdkError::Agent(format!(
+            return Err(adk_core::AdkError::agent(format!(
                 "Request failed: HTTP {}",
                 response.status()
             )));
@@ -85,7 +85,7 @@ impl A2aClient {
         let rpc_response: JsonRpcResponse = response
             .json()
             .await
-            .map_err(|e| adk_core::AdkError::Agent(format!("Failed to parse response: {}", e)))?;
+            .map_err(|e| adk_core::AdkError::agent(format!("Failed to parse response: {}", e)))?;
 
         Ok(rpc_response)
     }
@@ -102,7 +102,7 @@ impl A2aClient {
             method: "message/stream".to_string(),
             params: Some(
                 serde_json::to_value(MessageSendParams { message, config: None })
-                    .map_err(|e| adk_core::AdkError::Agent(e.to_string()))?,
+                    .map_err(|e| adk_core::AdkError::agent(e.to_string()))?,
             ),
             id: Some(Value::String(uuid::Uuid::new_v4().to_string())),
         };
@@ -113,10 +113,10 @@ impl A2aClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| adk_core::AdkError::Agent(format!("Request failed: {}", e)))?;
+            .map_err(|e| adk_core::AdkError::agent(format!("Request failed: {}", e)))?;
 
         if !response.status().is_success() {
-            return Err(adk_core::AdkError::Agent(format!(
+            return Err(adk_core::AdkError::agent(format!(
                 "Request failed: HTTP {}",
                 response.status()
             )));
@@ -132,7 +132,7 @@ impl A2aClient {
                 let chunk = match chunk_result {
                     Ok(c) => c,
                     Err(e) => {
-                        yield Err(adk_core::AdkError::Agent(format!("Stream error: {}", e)));
+                        yield Err(adk_core::AdkError::agent(format!("Stream error: {}", e)));
                         break;
                     }
                 };
@@ -162,7 +162,7 @@ impl A2aClient {
                                         yield Ok(UpdateEvent::TaskArtifactUpdate(artifact_event));
                                     }
                                 } else if let Some(error) = rpc_response.error {
-                                    yield Err(adk_core::AdkError::Agent(format!(
+                                    yield Err(adk_core::AdkError::agent(format!(
                                         "RPC error: {} ({})",
                                         error.message, error.code
                                     )));

@@ -19,7 +19,7 @@ pub trait Session: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`AdkError::Config`](adk_core::AdkError::Config) when the
+    /// Returns [`AdkError::config`](adk_core::AdkError::config) when the
     /// underlying string is not a valid identifier.
     fn try_app_name(&self) -> Result<AppName> {
         Ok(AppName::try_from(self.app_name())?)
@@ -32,7 +32,7 @@ pub trait Session: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`AdkError::Config`](adk_core::AdkError::Config) when the
+    /// Returns [`AdkError::config`](adk_core::AdkError::config) when the
     /// underlying string is not a valid identifier.
     fn try_user_id(&self) -> Result<UserId> {
         Ok(UserId::try_from(self.user_id())?)
@@ -45,7 +45,7 @@ pub trait Session: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`AdkError::Config`](adk_core::AdkError::Config) when the
+    /// Returns [`AdkError::config`](adk_core::AdkError::config) when the
     /// underlying string is not a valid identifier.
     fn try_session_id(&self) -> Result<SessionId> {
         Ok(SessionId::try_from(self.id())?)

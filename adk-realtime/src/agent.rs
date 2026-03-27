@@ -332,8 +332,7 @@ impl RealtimeAgentBuilder {
 
     /// Build the RealtimeAgent.
     pub fn build(self) -> Result<RealtimeAgent> {
-        let model =
-            self.model.ok_or_else(|| AdkError::Agent("RealtimeModel is required".to_string()))?;
+        let model = self.model.ok_or_else(|| AdkError::agent("RealtimeModel is required"))?;
 
         Ok(RealtimeAgent {
             name: self.name,
@@ -570,14 +569,14 @@ impl Agent for RealtimeAgent {
             for tool in &toolset_tools {
                 let name = tool.name().to_string();
                 if static_tool_names.contains(&name) {
-                    return Err(AdkError::Agent(format!(
+                    return Err(AdkError::agent(format!(
                         "Duplicate tool name '{}': conflict between static tool and toolset '{}'",
                         name,
                         toolset.name()
                     )));
                 }
                 if let Some(other_toolset_name) = toolset_source.get(&name) {
-                    return Err(AdkError::Agent(format!(
+                    return Err(AdkError::agent(format!(
                         "Duplicate tool name '{}': conflict between toolset '{}' and toolset '{}'",
                         name,
                         other_toolset_name,
@@ -615,7 +614,7 @@ impl Agent for RealtimeAgent {
             let session = match model.connect(config).await {
                 Ok(s) => s,
                 Err(e) => {
-                    yield Err(AdkError::Model(format!("Failed to connect: {}", e)));
+                    yield Err(AdkError::model(format!("Failed to connect: {}", e)));
                     return;
                 }
             };
@@ -637,12 +636,12 @@ impl Agent for RealtimeAgent {
             for part in &user_content.parts {
                 if let Part::Text { text } = part {
                     if let Err(e) = session.send_text(text).await {
-                        yield Err(AdkError::Model(format!("Failed to send text: {}", e)));
+                        yield Err(AdkError::model(format!("Failed to send text: {}", e)));
                         return;
                     }
                     // Request a response
                     if let Err(e) = session.create_response().await {
-                        yield Err(AdkError::Model(format!("Failed to create response: {}", e)));
+                        yield Err(AdkError::model(format!("Failed to create response: {}", e)));
                         return;
                     }
                 }
@@ -795,7 +794,7 @@ impl Agent for RealtimeAgent {
                                     output: result,
                                 };
                                 if let Err(e) = session.send_tool_response(response).await {
-                                    yield Err(AdkError::Model(format!("Failed to send tool response: {}", e)));
+                                    yield Err(AdkError::model(format!("Failed to send tool response: {}", e)));
                                     let _ = session.close().await;
                                     return;
                                 }
@@ -806,7 +805,7 @@ impl Agent for RealtimeAgent {
                             }
 
                             ServerEvent::Error { error, .. } => {
-                                yield Err(AdkError::Model(format!(
+                                yield Err(AdkError::model(format!(
                                     "Realtime error: {} - {}",
                                     error.code.unwrap_or_default(),
                                     error.message
@@ -820,7 +819,7 @@ impl Agent for RealtimeAgent {
                         }
                     }
                     Some(Err(e)) => {
-                        yield Err(AdkError::Model(format!("Session error: {}", e)));
+                        yield Err(AdkError::model(format!("Session error: {}", e)));
                         break;
                     }
                     None => {

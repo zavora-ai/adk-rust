@@ -82,7 +82,7 @@ impl Tool for GetCookieTool {
         let name = args
             .get("name")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AdkError::Tool("Missing 'name' parameter".to_string()))?;
+            .ok_or_else(|| AdkError::tool("Missing 'name' parameter"))?;
 
         let cookie = self.browser.get_cookie(name).await?;
         Ok(json!({
@@ -150,12 +150,12 @@ impl Tool for AddCookieTool {
         let name = args
             .get("name")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AdkError::Tool("Missing 'name' parameter".to_string()))?;
+            .ok_or_else(|| AdkError::tool("Missing 'name' parameter"))?;
 
         let value = args
             .get("value")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AdkError::Tool("Missing 'value' parameter".to_string()))?;
+            .ok_or_else(|| AdkError::tool("Missing 'value' parameter"))?;
 
         let domain = args.get("domain").and_then(|v| v.as_str());
         let path = args.get("path").and_then(|v| v.as_str());
@@ -209,7 +209,7 @@ impl Tool for DeleteCookieTool {
         let name = args
             .get("name")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AdkError::Tool("Missing 'name' parameter".to_string()))?;
+            .ok_or_else(|| AdkError::tool("Missing 'name' parameter"))?;
 
         self.browser.delete_cookie(name).await?;
 

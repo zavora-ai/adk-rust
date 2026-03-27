@@ -191,11 +191,11 @@ impl Llm for OpenAIClient {
                 .chat()
                 .create_stream(openai_request)
                 .await
-                .map_err(|e| AdkError::Model(format!("OpenAI error: {}", e)))?;
+                .map_err(|e| AdkError::model(format!("OpenAI error: {e}")))?;
 
             // Process stream chunks
             while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|e| AdkError::Model(format!("Stream error: {}", e)))?;
+                let chunk = chunk.map_err(|e| AdkError::model(format!("Stream error: {e}")))?;
                 let response = convert::from_openai_chunk(&chunk)?;
                 yield response;
             }

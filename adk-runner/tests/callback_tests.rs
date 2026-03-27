@@ -176,7 +176,7 @@ async fn test_callback_error_handling() {
     let mut callbacks = Callbacks::new();
 
     callbacks.add_before_model(Box::new(|_ctx| {
-        Box::pin(async move { Err(adk_core::AdkError::Agent("Test error".to_string())) })
+        Box::pin(async move { Err(adk_core::AdkError::agent("Test error")) })
     }));
 
     let ctx = Arc::new(MockCallbackContext::new("test-inv"));

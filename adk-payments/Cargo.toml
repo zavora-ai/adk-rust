@@ -1,0 +1,54 @@
+[package]
+name = "adk-payments"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Protocol-neutral agentic commerce and payment orchestration for ADK-Rust"
+documentation = "https://docs.rs/adk-payments"
+keywords = ["adk", "payments", "commerce", "agents", "protocols"]
+categories = ["api-bindings", "asynchronous", "web-programming"]
+readme = "README.md"
+
+[features]
+default = []
+acp = ["dep:axum", "dep:tokio", "dep:uuid"]
+acp-experimental = ["acp", "dep:hmac"]
+ap2 = []
+ap2-a2a = ["ap2"]
+ap2-mcp = ["ap2"]
+
+[dependencies]
+adk-core.workspace = true
+adk-artifact.workspace = true
+adk-auth.workspace = true
+adk-guardrail.workspace = true
+adk-memory.workspace = true
+adk-session.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+hex.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hmac = { version = "0.12", optional = true }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"], optional = true }
+uuid = { workspace = true, optional = true }
+axum = { version = "0.8", features = ["macros"], optional = true }
+
+[dev-dependencies]
+http-body-util = "0.1"
+jsonschema = { version = "0.45", default-features = false }
+serde_yaml = "0.9"
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
+tower = { version = "0.5", features = ["util"] }
+trybuild = "1"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

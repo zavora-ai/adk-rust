@@ -141,11 +141,11 @@ let order_tool = FunctionTool::new(
         // Required parameters - return error if missing
         let product_id = args.get("product_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| adk_core::AdkError::Tool("product_id is required".into()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("product_id is required"))?;
         
         let quantity = args.get("quantity")
             .and_then(|v| v.as_i64())
-            .ok_or_else(|| adk_core::AdkError::Tool("quantity is required".into()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("quantity is required"))?;
         
         // Optional parameter with default
         let priority = args.get("priority")
@@ -202,7 +202,7 @@ let calculator = FunctionTool::new(
             Operation::Subtract => params.a - params.b,
             Operation::Multiply => params.a * params.b,
             Operation::Divide if params.b != 0.0 => params.a / params.b,
-            Operation::Divide => return Err(adk_core::AdkError::Tool("Cannot divide by zero".into())),
+            Operation::Divide => return Err(adk_core::AdkError::tool("Cannot divide by zero")),
         };
         Ok(json!({ "result": result }))
     },
@@ -234,25 +234,48 @@ The LLM automatically chooses the right tool based on the user's request.
 
 ## Error Handling
 
-Return `AdkError::Tool` for tool-specific errors:
+Return errors with the `Tool` component for tool-specific failures:
 
 ```rust
+use adk_core::{AdkError, ErrorComponent, ErrorCategory};
+
 let divide_tool = FunctionTool::new(
     "divide",
     "Divide two numbers",
     |_ctx, args| async move {
         let a = args.get("a").and_then(|v| v.as_f64())
-            .ok_or_else(|| adk_core::AdkError::Tool("Parameter 'a' is required".into()))?;
+            .ok_or_else(|| AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::InvalidInput,
+                "tool.divide.missing_param",
+                "Parameter 'a' is required",
+            ))?;
         let b = args.get("b").and_then(|v| v.as_f64())
-            .ok_or_else(|| adk_core::AdkError::Tool("Parameter 'b' is required".into()))?;
+            .ok_or_else(|| AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::InvalidInput,
+                "tool.divide.missing_param",
+                "Parameter 'b' is required",
+            ))?;
         
         if b == 0.0 {
-            return Err(adk_core::AdkError::Tool("Cannot divide by zero".into()));
+            return Err(AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::InvalidInput,
+                "tool.divide.division_by_zero",
+                "Cannot divide by zero",
+            ));
         }
         
         Ok(json!({ "result": a / b }))
     },
 );
+```
+
+For quick migration, the backward-compatible shorthand also works:
+
+```rust
+Err(AdkError::tool("Parameter 'a' is required"))
 ```
 
 Error messages are passed to the LLM, which can retry or ask for different input.

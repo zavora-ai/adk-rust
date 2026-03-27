@@ -600,6 +600,10 @@ impl adk_core::State for GraphState {
     }
 
     fn set(&mut self, key: String, value: serde_json::Value) {
+        if let Err(msg) = adk_core::validate_state_key(&key) {
+            tracing::warn!(key = %key, "rejecting invalid state key: {msg}");
+            return;
+        }
         if let Ok(mut data) = self.data.write() {
             data.insert(key, value);
         }

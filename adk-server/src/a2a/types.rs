@@ -106,7 +106,7 @@ impl MessageBuilder {
             role: self.role.unwrap_or(Role::User),
             parts: self.parts,
             metadata: self.metadata,
-            message_id: self.message_id.unwrap_or_default(),
+            message_id: self.message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             task_id: self.task_id,
             context_id: self.context_id,
         }
@@ -129,6 +129,7 @@ pub struct Artifact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
 pub enum TaskState {
     Submitted,
     Working,
@@ -261,11 +262,26 @@ impl AgentCardBuilder {
         self
     }
 
-    pub fn build(self) -> AgentCard {
-        AgentCard {
-            name: self.name.unwrap_or_default(),
-            description: self.description.unwrap_or_default(),
-            url: self.url.unwrap_or_default(),
+    /// Build the `AgentCard`, returning an error if required fields are missing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a descriptive error string when `name`, `description`, or `url`
+    /// have not been set (or were set to empty strings).
+    pub fn build(self) -> std::result::Result<AgentCard, String> {
+        let name =
+            self.name.filter(|s| !s.is_empty()).ok_or("AgentCard requires a non-empty 'name'")?;
+        let description = self
+            .description
+            .filter(|s| !s.is_empty())
+            .ok_or("AgentCard requires a non-empty 'description'")?;
+        let url =
+            self.url.filter(|s| !s.is_empty()).ok_or("AgentCard requires a non-empty 'url'")?;
+
+        Ok(AgentCard {
+            name,
+            description,
+            url,
             version: self.version.unwrap_or_else(|| "1.0.0".to_string()),
             protocol_version: "0.3.0".to_string(),
             capabilities: self.capabilities.unwrap_or(AgentCapabilities {
@@ -275,6 +291,6 @@ impl AgentCardBuilder {
                 extensions: None,
             }),
             skills: self.skills,
-        }
+        })
     }
 }

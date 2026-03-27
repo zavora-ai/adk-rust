@@ -14,7 +14,7 @@ struct MockAgentLoader;
 #[async_trait]
 impl adk_core::AgentLoader for MockAgentLoader {
     async fn load_agent(&self, _app_name: &str) -> adk_core::Result<Arc<dyn adk_core::Agent>> {
-        Err(adk_core::AdkError::Agent("not implemented".to_string()))
+        Err(adk_core::AdkError::agent("not implemented"))
     }
 
     fn list_agents(&self) -> Vec<String> {

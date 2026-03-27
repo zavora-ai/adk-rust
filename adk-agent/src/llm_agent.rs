@@ -107,6 +107,38 @@ impl LlmAgent {
     ) -> Result<Content> {
         enforce_guardrails(output_guardrails, &content, "output").await
     }
+
+    fn history_parts_from_provider_metadata(
+        provider_metadata: Option<&serde_json::Value>,
+    ) -> Vec<Part> {
+        let Some(provider_metadata) = provider_metadata else {
+            return Vec::new();
+        };
+
+        let history_parts = provider_metadata
+            .get("conversation_history_parts")
+            .or_else(|| {
+                provider_metadata
+                    .get("openai")
+                    .and_then(|openai| openai.get("conversation_history_parts"))
+            })
+            .and_then(serde_json::Value::as_array);
+
+        history_parts
+            .into_iter()
+            .flatten()
+            .filter_map(|value| serde_json::from_value::<Part>(value.clone()).ok())
+            .collect()
+    }
+
+    fn augment_content_for_history(
+        content: &Content,
+        provider_metadata: Option<&serde_json::Value>,
+    ) -> Content {
+        let mut augmented = content.clone();
+        augmented.parts.extend(Self::history_parts_from_provider_metadata(provider_metadata));
+        augmented
+    }
 }
 
 pub struct LlmAgentBuilder {
@@ -233,7 +265,7 @@ impl LlmAgentBuilder {
 
     /// Auto-load skills from `.skills/` under a custom root directory.
     pub fn with_skills_from_root(mut self, root: impl AsRef<std::path::Path>) -> Result<Self> {
-        let index = load_skill_index(root).map_err(|e| adk_core::AdkError::Agent(e.to_string()))?;
+        let index = load_skill_index(root).map_err(|e| adk_core::AdkError::agent(e.to_string()))?;
         self.skills_index = Some(Arc::new(index));
         Ok(self)
     }
@@ -509,13 +541,12 @@ impl LlmAgentBuilder {
     }
 
     pub fn build(self) -> Result<LlmAgent> {
-        let model =
-            self.model.ok_or_else(|| adk_core::AdkError::Agent("Model is required".to_string()))?;
+        let model = self.model.ok_or_else(|| adk_core::AdkError::agent("Model is required"))?;
 
         let mut seen_names = std::collections::HashSet::new();
         for agent in &self.sub_agents {
             if !seen_names.insert(agent.name()) {
-                return Err(adk_core::AdkError::Agent(format!(
+                return Err(adk_core::AdkError::agent(format!(
                     "Duplicate sub-agent name: {}",
                     agent.name()
                 )));
@@ -979,18 +1010,16 @@ impl Agent for LlmAgent {
                     let name = tool.name().to_string();
                     // Check static-vs-toolset conflict
                     if static_tool_names.contains(&name) {
-                        yield Err(adk_core::AdkError::Agent(format!(
-                            "Duplicate tool name '{}': conflict between static tool and toolset '{}'",
-                            name,
+                        yield Err(adk_core::AdkError::agent(format!(
+                            "Duplicate tool name '{name}': conflict between static tool and toolset '{}'",
                             toolset.name()
                         )));
                         return;
                     }
                     // Check toolset-vs-toolset conflict
                     if let Some(other_toolset_name) = toolset_source.get(&name) {
-                        yield Err(adk_core::AdkError::Agent(format!(
-                            "Duplicate tool name '{}': conflict between toolset '{}' and toolset '{}'",
-                            name,
+                        yield Err(adk_core::AdkError::agent(format!(
+                            "Duplicate tool name '{name}': conflict between toolset '{}' and toolset '{}'",
                             other_toolset_name,
                             toolset.name()
                         )));
@@ -1024,25 +1053,12 @@ impl Agent for LlmAgent {
             };
 
             // Build tool declarations for Gemini
-            // Uses enhanced_description() which includes NOTE for long-running tools
+            // Uses Tool::declaration() so provider-native built-ins can attach
+            // adapter-specific metadata while regular function tools retain the
+            // standard name/description/schema shape.
             let mut tool_declarations = std::collections::HashMap::new();
             for tool in &resolved_tools {
-                // Build FunctionDeclaration JSON with enhanced description
-                // For long-running tools, this includes a warning not to call again if pending
-                let mut decl = serde_json::json!({
-                    "name": tool.name(),
-                    "description": tool.enhanced_description(),
-                });
-
-                if let Some(params) = tool.parameters_schema() {
-                    decl["parameters"] = params;
-                }
-
-                if let Some(response) = tool.response_schema() {
-                    decl["response"] = response;
-                }
-
-                tool_declarations.insert(tool.name().to_string(), decl);
+                tool_declarations.insert(tool.name().to_string(), tool.declaration());
             }
 
             // Build the list of valid transfer targets.
@@ -1115,8 +1131,8 @@ impl Agent for LlmAgent {
             loop {
                 iteration += 1;
                 if iteration > max_iterations {
-                    yield Err(adk_core::AdkError::Agent(
-                        format!("Max iterations ({}) exceeded", max_iterations)
+                    yield Err(adk_core::AdkError::agent(
+                        format!("Max iterations ({max_iterations}) exceeded")
                     ));
                     return;
                 }
@@ -1186,11 +1202,13 @@ impl Agent for LlmAgent {
 
                 // Determine streaming source: cached response or real model
                 let mut accumulated_content: Option<Content> = None;
+                let mut final_provider_metadata: Option<serde_json::Value> = None;
 
                 if let Some(cached_response) = model_response_override {
                     // Use callback-provided response (e.g., from cache)
                     // Yield it as an event
                     accumulated_content = cached_response.content.clone();
+                    final_provider_metadata = cached_response.provider_metadata.clone();
                     normalize_option_content(&mut accumulated_content);
                     if let Some(content) = accumulated_content.take() {
                         let has_function_calls = content
@@ -1208,6 +1226,7 @@ impl Agent for LlmAgent {
                     let mut cached_event = Event::new(&invocation_id);
                     cached_event.author = agent_name.clone();
                     cached_event.llm_response.content = accumulated_content.clone();
+                    cached_event.llm_response.provider_metadata = cached_response.provider_metadata.clone();
                     cached_event.llm_request = Some(serde_json::to_string(&request).unwrap_or_default());
                     cached_event.provider_metadata.insert("gcp.vertex.agent.llm_request".to_string(), serde_json::to_string(&request).unwrap_or_default());
                     cached_event.provider_metadata.insert("gcp.vertex.agent.llm_response".to_string(), serde_json::to_string(&cached_response).unwrap_or_default());
@@ -1307,6 +1326,7 @@ impl Agent for LlmAgent {
                             partial_event.llm_response.finish_reason = chunk.finish_reason;
                             partial_event.llm_response.usage_metadata = chunk.usage_metadata.clone();
                             partial_event.llm_response.content = chunk.content.clone();
+                            partial_event.llm_response.provider_metadata = chunk.provider_metadata.clone();
 
                             // Populate long_running_tool_ids
                             if let Some(ref content) = chunk.content {
@@ -1352,6 +1372,8 @@ impl Agent for LlmAgent {
                         if let Some(ref last) = last_chunk {
                             final_event.llm_response.finish_reason = last.finish_reason;
                             final_event.llm_response.usage_metadata = last.usage_metadata.clone();
+                            final_event.llm_response.provider_metadata = last.provider_metadata.clone();
+                            final_provider_metadata = last.provider_metadata.clone();
                             final_event.provider_metadata.insert("gcp.vertex.agent.llm_response".to_string(), serde_json::to_string(last).unwrap_or_default());
                         }
 
@@ -1396,7 +1418,10 @@ impl Agent for LlmAgent {
 
                 // Add final content to history
                 if let Some(ref content) = accumulated_content {
-                    conversation_history.push(content.clone());
+                    conversation_history.push(Self::augment_content_for_history(
+                        content,
+                        final_provider_metadata.as_ref(),
+                    ));
 
                     // Handle output_key: save final agent output to state_delta
                     if let Some(ref output_key) = output_key {
@@ -1600,6 +1625,12 @@ impl Agent for LlmAgent {
 
                             if response_content.is_none() {
                                 if let Some(tool) = tool_map.get(name) {
+                                    // Skip execution of built-in tools (e.g., google_search, url_context)
+                                    // These are handled server-side by the model provider
+                                    if tool.is_builtin() {
+                                        adk_telemetry::debug!(tool.name = %name, "skipping built-in tool execution");
+                                        continue;
+                                    }
                                     // ✅ Use AgentToolContext that preserves parent context
                                     let tool_ctx: Arc<dyn ToolContext> = Arc::new(AgentToolContext::new(
                                         ctx.clone(),

@@ -259,7 +259,7 @@ pub trait SessionService: Send + Sync {
     /// The default implementation returns an error.
     async fn delete_all_sessions(&self, app_name: &str, user_id: &str) -> Result<()> {
         let _ = (app_name, user_id);
-        Err(adk_core::AdkError::Session("delete_all_sessions not implemented".into()))
+        Err(adk_core::AdkError::session("delete_all_sessions not implemented"))
     }
 
     /// Verify backend connectivity.

@@ -70,11 +70,11 @@ impl InMemorySessionService {
     fn make_identity(app_name: &str, user_id: &str, session_id: &str) -> Result<AdkIdentity> {
         Ok(AdkIdentity::new(
             AppName::try_from(app_name)
-                .map_err(|e| adk_core::AdkError::Session(format!("invalid app_name: {e}")))?,
+                .map_err(|e| adk_core::AdkError::session(format!("invalid app_name: {e}")))?,
             UserId::try_from(user_id)
-                .map_err(|e| adk_core::AdkError::Session(format!("invalid user_id: {e}")))?,
+                .map_err(|e| adk_core::AdkError::session(format!("invalid user_id: {e}")))?,
             SessionId::try_from(session_id)
-                .map_err(|e| adk_core::AdkError::Session(format!("invalid session_id: {e}")))?,
+                .map_err(|e| adk_core::AdkError::session(format!("invalid session_id: {e}")))?,
         ))
     }
 }
@@ -134,7 +134,7 @@ impl SessionService for InMemorySessionService {
         let sessions = self.sessions.read().unwrap();
         let data = sessions
             .get(&identity)
-            .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+            .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
         let app_state_lock = self.app_state.read().unwrap();
         let app_state = app_state_lock.get(&req.app_name).cloned().unwrap_or_default();
@@ -226,7 +226,7 @@ impl SessionService for InMemorySessionService {
             let data = sessions
                 .values_mut()
                 .find(|d| d.identity.session_id.as_ref() == session_id)
-                .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+                .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
             data.events.push(event.clone());
             data.updated_at = event.timestamp;
@@ -270,7 +270,7 @@ impl SessionService for InMemorySessionService {
             let mut sessions = self.sessions.write().unwrap();
             let data = sessions
                 .get_mut(&identity)
-                .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+                .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
             data.events.push(event.clone());
             data.updated_at = event.timestamp;
@@ -307,7 +307,7 @@ impl SessionService for InMemorySessionService {
         let sessions = self.sessions.read().unwrap();
         let data = sessions
             .get(identity)
-            .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+            .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
         let app_state_lock = self.app_state.read().unwrap();
         let app_state = app_state_lock.get(identity.app_name.as_ref()).cloned().unwrap_or_default();
@@ -377,6 +377,10 @@ impl State for InMemorySession {
     }
 
     fn set(&mut self, key: String, value: Value) {
+        if let Err(msg) = adk_core::validate_state_key(&key) {
+            tracing::warn!(key = %key, "rejecting invalid state key: {msg}");
+            return;
+        }
         self.state.insert(key, value);
     }
 

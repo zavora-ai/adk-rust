@@ -60,7 +60,7 @@ impl Tool for SwitchToFrameTool {
                 "switched_to_frame": sel
             }))
         } else {
-            Err(AdkError::Tool("Must provide either 'index' or 'selector'".to_string()))
+            Err(AdkError::tool("Must provide either 'index' or 'selector'"))
         }
     }
 }

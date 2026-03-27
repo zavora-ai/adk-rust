@@ -51,3 +51,24 @@ pub enum RagError {
 
 /// A convenience result type for RAG operations.
 pub type Result<T> = std::result::Result<T, RagError>;
+
+impl From<RagError> for adk_core::AdkError {
+    fn from(err: RagError) -> Self {
+        use adk_core::{ErrorCategory, ErrorComponent};
+        // If it's already wrapping an AdkError, unwrap it
+        if let RagError::AdkError(inner) = err {
+            return inner;
+        }
+        let (category, code) = match &err {
+            RagError::EmbeddingError { .. } => (ErrorCategory::Internal, "memory.embedding"),
+            RagError::VectorStoreError { .. } => (ErrorCategory::Internal, "memory.vector_store"),
+            RagError::ChunkingError(_) => (ErrorCategory::Internal, "memory.chunking"),
+            RagError::RerankerError { .. } => (ErrorCategory::Internal, "memory.reranker"),
+            RagError::ConfigError(_) => (ErrorCategory::InvalidInput, "memory.rag_config"),
+            RagError::PipelineError(_) => (ErrorCategory::Internal, "memory.rag_pipeline"),
+            RagError::AdkError(_) => unreachable!(),
+        };
+        adk_core::AdkError::new(ErrorComponent::Memory, category, code, err.to_string())
+            .with_source(err)
+    }
+}

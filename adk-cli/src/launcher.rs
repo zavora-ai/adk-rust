@@ -32,7 +32,7 @@
 use adk_artifact::ArtifactService;
 use adk_core::{
     Agent, CacheCapable, Content, ContextCacheConfig, EventsCompactionConfig, Memory, Part, Result,
-    RunConfig, StreamingMode,
+    RunConfig, SessionId, StreamingMode, UserId,
 };
 use adk_runner::{Runner, RunnerConfig};
 use adk_server::{
@@ -290,7 +290,7 @@ impl Launcher {
         let session_id = session.id().to_string();
 
         let mut rl = DefaultEditor::new()
-            .map_err(|e| adk_core::AdkError::Config(format!("failed to init readline: {e}")))?;
+            .map_err(|e| adk_core::AdkError::config(format!("failed to init readline: {e}")))?;
 
         print_banner(agent.name());
 
@@ -335,8 +335,13 @@ impl Launcher {
                         request_context: None,
                         cancellation_token: Some(cancellation_token.clone()),
                     })?;
-                    let mut events =
-                        runner.run(user_id.clone(), session_id.clone(), user_content).await?;
+                    let mut events = runner
+                        .run(
+                            UserId::new(user_id.clone())?,
+                            SessionId::new(session_id.clone())?,
+                            user_content,
+                        )
+                        .await?;
                     let mut printer = StreamPrinter::new(thinking_mode);
                     let mut current_agent = String::new();
                     let mut printed_header = false;
@@ -516,13 +521,18 @@ impl Launcher {
         let app = self.build_app()?;
 
         let addr = format!("0.0.0.0:{port}");
-        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        let listener = tokio::net::TcpListener::bind(&addr)
+            .await
+            .map_err(|e| adk_core::AdkError::config(format!("failed to bind {addr}: {e}")))?;
 
         println!("ADK Server starting on http://localhost:{port}");
         println!("Open http://localhost:{port} in your browser");
         println!("Press Ctrl+C to stop\n");
 
-        axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+            .map_err(|e| adk_core::AdkError::config(format!("server error: {e}")))?;
 
         Ok(())
     }
@@ -643,6 +653,16 @@ impl StreamPrinter {
             Part::FileData { mime_type, file_uri } => {
                 self.flush_pending_thinking();
                 print!("\n[file-data] mime={mime_type} uri={file_uri}\n");
+                let _ = io::stdout().flush();
+            }
+            Part::ServerToolCall { server_tool_call } => {
+                self.flush_pending_thinking();
+                print!("\n[server-tool-call] {server_tool_call}\n");
+                let _ = io::stdout().flush();
+            }
+            Part::ServerToolResponse { server_tool_response } => {
+                self.flush_pending_thinking();
+                print!("\n[server-tool-response] {}B\n", server_tool_response.to_string().len());
                 let _ = io::stdout().flush();
             }
         }

@@ -5,7 +5,7 @@ use super::convert;
 use super::error::AnthropicApiError;
 use super::rate_limit::RateLimitInfo;
 use crate::retry::{RetryConfig, ServerRetryHint, execute_with_retry, is_retryable_model_error};
-use adk_core::{AdkError, FinishReason, Llm, LlmRequest, Part};
+use adk_core::{AdkError, ErrorCategory, ErrorComponent, FinishReason, Llm, LlmRequest, Part};
 use async_stream::try_stream;
 use async_trait::async_trait;
 use claudius::{
@@ -34,7 +34,7 @@ impl AnthropicClient {
     /// Create a new Anthropic client.
     pub fn new(config: AnthropicConfig) -> Result<Self, AdkError> {
         let client = Anthropic::new(Some(config.api_key.clone()))
-            .map_err(|e| AdkError::Model(format!("Failed to create Anthropic client: {}", e)))?;
+            .map_err(|e| AdkError::model(format!("Failed to create Anthropic client: {e}")))?;
 
         Ok(Self {
             client,
@@ -140,11 +140,37 @@ impl AnthropicClient {
         let system_prompt =
             if system_parts.is_empty() { None } else { Some(system_parts.join("\n")) };
 
-        let tools = if request.tools.is_empty() {
+        let mut tools = if request.tools.is_empty() {
             Vec::new()
         } else {
-            convert::convert_tools(&request.tools)
+            convert::convert_tools(&request.tools)?
         };
+
+        // Read extensions["anthropic"]["built_in_tools"] → append to tools array
+        let config = request.config.as_ref();
+        let anthropic_ext =
+            config.and_then(|c| c.extensions.get("anthropic")).and_then(|v| v.as_object());
+        if let Some(built_in_tools) = anthropic_ext.and_then(|o| o.get("built_in_tools")) {
+            if let Some(arr) = built_in_tools.as_array() {
+                for (index, tool_value) in arr.iter().enumerate() {
+                    let tool = serde_json::from_value::<claudius::ToolUnionParam>(
+                        tool_value.clone(),
+                    )
+                    .map_err(|error| {
+                        AdkError::new(
+                            ErrorComponent::Model,
+                            ErrorCategory::InvalidInput,
+                            "model.anthropic.invalid_tool",
+                            format!(
+                                "failed to deserialize Anthropic built-in tool at index {index}: {error}"
+                            ),
+                        )
+                        .with_provider("anthropic")
+                    })?;
+                    tools.push(tool);
+                }
+            }
+        }
 
         // Requirement 7.3: Force temperature to 1.0 when thinking is enabled
         let temperature = if thinking.is_some() {
@@ -340,8 +366,6 @@ impl Llm for AnthropicClient {
             anthropic.model = %self.model,
             anthropic.request_type = if stream { "stream" } else { "unary" },
             anthropic.request_id = field::Empty,
-            gen_ai.usage.input_tokens = field::Empty,
-            gen_ai.usage.output_tokens = field::Empty,
         )
     )]
     async fn generate_content(
@@ -349,6 +373,7 @@ impl Llm for AnthropicClient {
         request: LlmRequest,
         stream: bool,
     ) -> Result<adk_core::LlmResponseStream, AdkError> {
+        let usage_span = adk_telemetry::llm_generate_span("anthropic", &self.model, stream);
         let model = self.model.clone();
         let max_tokens = self.max_tokens;
         let client = self.client.clone();
@@ -371,9 +396,10 @@ impl Llm for AnthropicClient {
                     let request = request_for_retry.clone();
                     let thinking_ref = thinking_config.as_ref();
                     async move {
-                        let params = Self::build_message_params(model_ref, max_tokens, &request, prompt_caching, thinking_ref)?;
+                        let mut params = Self::build_message_params(model_ref, max_tokens, &request, prompt_caching, thinking_ref)?;
+                        params.stream = true;
                         client_ref
-                            .stream(params)
+                            .stream(&params)
                             .await
                             .map_err(convert_claudius_error)
                     }
@@ -386,6 +412,7 @@ impl Llm for AnthropicClient {
                 // Track tool calls being built
                 let mut current_tool_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, args_json)
                 let mut current_tool_index: Option<usize> = None;
+                let mut pending_server_parts: Vec<Part> = Vec::new();
 
                 // Track usage from MessageStart for propagation to final MessageDelta
                 let mut stream_input_tokens: i32 = 0;
@@ -421,17 +448,33 @@ impl Llm for AnthropicClient {
                         MessageStreamEvent::ContentBlockStart(start_event) => {
                             // Check if this is a tool_use block
                             let index = start_event.index;
-                            if let ContentBlock::ToolUse(tool_use) = start_event.content_block {
-                                current_tool_index = Some(index);
-                                // Ensure vector is large enough
-                                while current_tool_calls.len() <= index {
-                                    current_tool_calls.push((String::new(), String::new(), String::new()));
+                            match start_event.content_block {
+                                ContentBlock::ToolUse(tool_use) => {
+                                    current_tool_index = Some(index);
+                                    while current_tool_calls.len() <= index {
+                                        current_tool_calls
+                                            .push((String::new(), String::new(), String::new()));
+                                    }
+                                    current_tool_calls[index] = (
+                                        tool_use.id.clone(),
+                                        tool_use.name.clone(),
+                                        String::new(),
+                                    );
                                 }
-                                current_tool_calls[index] = (
-                                    tool_use.id.clone(),
-                                    tool_use.name.clone(),
-                                    String::new(),
-                                );
+                                ContentBlock::ServerToolUse(server_tool_use) => {
+                                    if let Ok(val) = serde_json::to_value(server_tool_use) {
+                                        pending_server_parts
+                                            .push(Part::ServerToolCall { server_tool_call: val });
+                                    }
+                                }
+                                ContentBlock::WebSearchToolResult(web_search_result) => {
+                                    if let Ok(val) = serde_json::to_value(web_search_result) {
+                                        pending_server_parts.push(Part::ServerToolResponse {
+                                            server_tool_response: val,
+                                        });
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                         MessageStreamEvent::ContentBlockDelta(ContentBlockDeltaEvent { index, delta }) => {
@@ -469,11 +512,6 @@ impl Llm for AnthropicClient {
                             current_tool_index = None;
                         }
                         MessageStreamEvent::MessageDelta(delta_event) => {
-                            // Requirement 11.3: Record output token usage on the tracing span
-                            Span::current().record(
-                                "gen_ai.usage.output_tokens",
-                                delta_event.usage.output_tokens as i64,
-                            );
                             // Check for stop reason
                             if let Some(stop_reason) = &delta_event.delta.stop_reason {
                                 let finish_reason = match stop_reason {
@@ -485,21 +523,49 @@ impl Llm for AnthropicClient {
                                 };
 
                                 // If we have accumulated tool calls, emit them
+                                let mut parts = std::mem::take(&mut pending_server_parts);
                                 if !current_tool_calls.is_empty() {
-                                    let tool_calls: Vec<_> = current_tool_calls
+                                    let tool_calls = current_tool_calls
                                         .drain(..)
                                         .filter(|(id, name, _)| !id.is_empty() && !name.is_empty())
                                         .map(|(id, name, args_str)| {
                                             let args: serde_json::Value = serde_json::from_str(&args_str)
                                                 .unwrap_or(serde_json::json!({}));
-                                            (id, name, args)
+                                            Part::FunctionCall {
+                                                name,
+                                                args,
+                                                id: Some(id),
+                                                thought_signature: None,
+                                            }
                                         })
-                                        .collect();
+                                        .collect::<Vec<_>>();
+                                    parts.extend(tool_calls);
+                                }
 
-                                    if !tool_calls.is_empty() {
-                                        yield convert::create_tool_call_response(tool_calls, finish_reason);
-                                        continue;
-                                    }
+                                if !parts.is_empty() {
+                                    yield adk_core::LlmResponse {
+                                        content: Some(adk_core::Content {
+                                            role: "model".to_string(),
+                                            parts,
+                                        }),
+                                        usage_metadata: Some(adk_core::UsageMetadata {
+                                            prompt_token_count: stream_input_tokens,
+                                            candidates_token_count: delta_event.usage.output_tokens,
+                                            total_token_count: stream_input_tokens + delta_event.usage.output_tokens,
+                                            cache_read_input_token_count: stream_cache_read_tokens,
+                                            cache_creation_input_token_count: stream_cache_creation_tokens,
+                                            ..Default::default()
+                                        }),
+                                        finish_reason,
+                                        citation_metadata: None,
+                                        partial: false,
+                                        turn_complete: true,
+                                        interrupted: false,
+                                        error_code: None,
+                                        error_message: None,
+                                        provider_metadata: None,
+                                    };
+                                    continue;
                                 }
 
                                 // Emit final message
@@ -520,6 +586,7 @@ impl Llm for AnthropicClient {
                                     interrupted: false,
                                     error_code: None,
                                     error_message: None,
+                                    provider_metadata: None,
                                 };
                             }
                         }
@@ -531,11 +598,6 @@ impl Llm for AnthropicClient {
                         // Requirement 3.5: Log unrecognized events at debug level
                         MessageStreamEvent::MessageStart(start_event) => {
                             debug!("message_start event received");
-                            // Requirement 11.3: Record input token usage on the tracing span
-                            Span::current().record(
-                                "gen_ai.usage.input_tokens",
-                                start_event.message.usage.input_tokens as i64,
-                            );
                             // Store input tokens for the final UsageMetadata
                             stream_input_tokens = start_event.message.usage.input_tokens;
                             // Store cache token counts for propagation to the final MessageDelta
@@ -578,10 +640,6 @@ impl Llm for AnthropicClient {
                 // the actual `request-id` header value.
                 Span::current().record("anthropic.request_id", message.id.as_str());
 
-                // Requirement 11.3: Record token usage on the tracing span
-                Span::current().record("gen_ai.usage.input_tokens", message.usage.input_tokens as i64);
-                Span::current().record("gen_ai.usage.output_tokens", message.usage.output_tokens as i64);
-
                 // Requirement 6.3: Extract cache usage tokens into provider metadata
                 let (_response, _cache_metadata) = convert::from_anthropic_message(&message);
 
@@ -589,14 +647,14 @@ impl Llm for AnthropicClient {
             }
         };
 
-        Ok(Box::pin(response_stream))
+        Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adk_core::{Content, LlmRequest, Part};
+    use adk_core::{Content, GenerateContentConfig, LlmRequest, Part};
     use claudius::SystemPrompt;
 
     fn make_request(contents: Vec<Content>) -> LlmRequest {
@@ -834,6 +892,34 @@ mod tests {
 
         assert!(params.system.is_none());
         assert!(params.messages.is_empty());
+    }
+
+    #[test]
+    fn test_invalid_extension_builtin_tool_returns_error() {
+        let mut request = make_request(vec![]);
+        let mut extensions = serde_json::Map::new();
+        extensions.insert(
+            "anthropic".to_string(),
+            serde_json::json!({
+                "built_in_tools": [
+                    {
+                        "type": "web_fetch_20250910"
+                    }
+                ]
+            }),
+        );
+        request.config = Some(GenerateContentConfig { extensions, ..Default::default() });
+
+        let error = AnthropicClient::build_message_params(
+            "claude-sonnet-4-5-20250929",
+            4096,
+            &request,
+            false,
+            None,
+        )
+        .expect_err("invalid built-in tool should fail");
+
+        assert_eq!(error.code, "model.anthropic.invalid_tool");
     }
 
     /// Requirement 3.3: Ping events are treated as keep-alive no-ops and don't produce

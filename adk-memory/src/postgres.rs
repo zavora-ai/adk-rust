@@ -16,7 +16,7 @@
 use crate::embedding::EmbeddingProvider;
 use crate::migration::pg_runner;
 use crate::service::*;
-use adk_core::{Part, Result};
+use adk_core::Result;
 use async_trait::async_trait;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
@@ -142,7 +142,7 @@ impl PostgresMemoryServiceBuilder {
     /// Connect and build the service.
     pub async fn build(self) -> Result<PostgresMemoryService> {
         let pool = PgPool::connect(&self.database_url).await.map_err(|e| {
-            adk_core::AdkError::Memory(format!("memory database connection failed: {e}"))
+            adk_core::AdkError::memory(format!("memory database connection failed: {e}"))
         })?;
         let use_halfvec = needs_halfvec(&self.embedding_provider);
         Ok(PostgresMemoryService {
@@ -170,7 +170,7 @@ impl PostgresMemoryService {
         embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
     ) -> Result<Self> {
         let pool = PgPool::connect(database_url).await.map_err(|e| {
-            adk_core::AdkError::Memory(format!("memory database connection failed: {e}"))
+            adk_core::AdkError::memory(format!("memory database connection failed: {e}"))
         })?;
         let use_halfvec = needs_halfvec(&embedding_provider);
         Ok(Self { pool, embedding_provider, vector_index: VectorIndexType::default(), use_halfvec })
@@ -242,7 +242,7 @@ impl PostgresMemoryService {
         let dims = self.embedding_provider.as_ref().map(|p| p.dimensions()).unwrap_or(1536);
 
         if self.use_halfvec && dims > PGVECTOR_MAX_HALFVEC_INDEX_DIMS {
-            return Err(adk_core::AdkError::Memory(format!(
+            return Err(adk_core::AdkError::memory(format!(
                 "embedding dimension {dims} exceeds pgvector halfvec index limit of \
                  {PGVECTOR_MAX_HALFVEC_INDEX_DIMS}. Reduce dimensions in your embedding provider \
                  or use VectorIndexType::None for exact search."
@@ -344,7 +344,7 @@ impl PostgresMemoryService {
             .execute(pool)
             .await
             .map_err(|e| {
-                adk_core::AdkError::Memory(format!("advisory lock acquisition failed: {e}"))
+                adk_core::AdkError::memory(format!("advisory lock acquisition failed: {e}"))
             })?;
 
         let result = pg_runner::run_sql_migrations(pool, Self::REGISTRY_TABLE, steps, || async {
@@ -356,7 +356,7 @@ impl PostgresMemoryService {
             )
             .fetch_one(pool)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("baseline detection failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("baseline detection failed: {e}")))?;
             let exists: bool = row.try_get("exists_flag").unwrap_or(false);
             Ok(exists)
         })
@@ -401,7 +401,7 @@ impl MemoryService for PostgresMemoryService {
                 .map(|t| if t.is_empty() { " ".to_string() } else { t.clone() })
                 .collect();
             Some(provider.embed(&non_empty_texts).await.map_err(|e| {
-                adk_core::AdkError::Memory(format!("embedding generation failed: {e}"))
+                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
             })?)
         } else {
             None
@@ -409,7 +409,7 @@ impl MemoryService for PostgresMemoryService {
 
         for (i, entry) in entries.iter().enumerate() {
             let content_json = serde_json::to_value(&entry.content)
-                .map_err(|e| adk_core::AdkError::Memory(format!("serialization failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
             let text = &texts[i];
 
             if let Some(ref embs) = embeddings {
@@ -432,7 +432,7 @@ impl MemoryService for PostgresMemoryService {
                 .bind(text)
                 .execute(&self.pool)
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("insert failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
             } else {
                 sqlx::query(
                     r#"
@@ -451,7 +451,7 @@ impl MemoryService for PostgresMemoryService {
                 .bind(text)
                 .execute(&self.pool)
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("insert failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
             }
         }
 
@@ -467,10 +467,10 @@ impl MemoryService for PostgresMemoryService {
             let query_embedding = provider
                 .embed(std::slice::from_ref(&req.query))
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("query embedding failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("query embedding failed: {e}")))?;
             let query_vec =
                 pgvector::Vector::from(query_embedding.into_iter().next().ok_or_else(|| {
-                    adk_core::AdkError::Memory(
+                    adk_core::AdkError::memory(
                         "embedding provider returned empty result".to_string(),
                     )
                 })?);
@@ -495,7 +495,7 @@ impl MemoryService for PostgresMemoryService {
                     .bind(limit)
                     .fetch_all(&self.pool)
                     .await
-                    .map_err(|e| adk_core::AdkError::Memory(format!("search failed: {e}")))?
+                    .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?
             } else {
                 sqlx::query(
                     r#"
@@ -512,7 +512,7 @@ impl MemoryService for PostgresMemoryService {
                 .bind(limit)
                 .fetch_all(&self.pool)
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("search failed: {e}")))?
+                .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?
             }
         } else {
             // Full-text search fallback
@@ -532,7 +532,7 @@ impl MemoryService for PostgresMemoryService {
             .bind(limit)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("search failed: {e}")))?
+            .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?
         };
 
         let min_score = req.min_score;
@@ -572,7 +572,7 @@ impl MemoryService for PostgresMemoryService {
             .bind(user_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("delete_user failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("delete_user failed: {e}")))?;
         Ok(())
     }
 
@@ -586,7 +586,7 @@ impl MemoryService for PostgresMemoryService {
         .bind(session_id)
         .execute(&self.pool)
         .await
-        .map_err(|e| adk_core::AdkError::Memory(format!("delete_session failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::memory(format!("delete_session failed: {e}")))?;
         Ok(())
     }
 
@@ -595,7 +595,7 @@ impl MemoryService for PostgresMemoryService {
         sqlx::query("SELECT 1")
             .execute(&self.pool)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("health check failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("health check failed: {e}")))?;
         Ok(())
     }
 }

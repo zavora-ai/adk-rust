@@ -407,9 +407,14 @@ impl InvocationContext for AgentToolInvocationContext {
     }
 
     fn run_config(&self) -> &RunConfig {
-        // Use default config for sub-agent (SSE mode)
-        static DEFAULT_CONFIG: std::sync::OnceLock<RunConfig> = std::sync::OnceLock::new();
-        DEFAULT_CONFIG.get_or_init(RunConfig::default)
+        // Use None streaming mode for sub-agent so responses are fully accumulated
+        // before being returned. SSE mode yields partial chunks which makes
+        // extract_response unable to capture the complete text.
+        static AGENT_TOOL_CONFIG: std::sync::OnceLock<RunConfig> = std::sync::OnceLock::new();
+        AGENT_TOOL_CONFIG.get_or_init(|| RunConfig {
+            streaming_mode: adk_core::StreamingMode::None,
+            ..RunConfig::default()
+        })
     }
 
     fn end_invocation(&self) {
@@ -465,6 +470,10 @@ impl State for AgentToolSession {
     }
 
     fn set(&mut self, key: String, value: Value) {
+        if let Err(msg) = adk_core::validate_state_key(&key) {
+            tracing::warn!(key = %key, "rejecting invalid state key: {msg}");
+            return;
+        }
         if let Ok(mut state) = self.state.write() {
             state.insert(key, value);
         }

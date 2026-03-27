@@ -55,7 +55,7 @@ impl adk_core::Tool for TranscribeTool {
         // Decode base64 audio
         use bytes::Bytes;
         let data = base64_decode(audio_b64)
-            .map_err(|e| adk_core::AdkError::Tool(format!("transcribe: invalid base64: {e}")))?;
+            .map_err(|e| adk_core::AdkError::tool(format!("transcribe: invalid base64: {e}")))?;
         let frame = crate::frame::AudioFrame::new(Bytes::from(data), sample_rate, 1);
 
         let opts = SttOptions { language, ..Default::default() };
@@ -63,7 +63,7 @@ impl adk_core::Tool for TranscribeTool {
             .stt
             .transcribe(&frame, &opts)
             .await
-            .map_err(|e| adk_core::AdkError::Tool(format!("transcribe: {e}")))?;
+            .map_err(|e| adk_core::AdkError::tool(format!("transcribe: {e}")))?;
 
         Ok(serde_json::json!({
             "text": transcript.text,

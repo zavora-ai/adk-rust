@@ -57,7 +57,7 @@ impl adk_core::Tool for GenerateMusicTool {
             .music
             .generate(&request)
             .await
-            .map_err(|e| adk_core::AdkError::Tool(format!("generate_music: {e}")))?;
+            .map_err(|e| adk_core::AdkError::tool(format!("generate_music: {e}")))?;
 
         Ok(serde_json::json!({
             "duration_ms": frame.duration_ms

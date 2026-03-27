@@ -118,6 +118,7 @@ impl McpHttpClientBuilder {
     pub async fn connect(
         self,
     ) -> Result<super::McpToolset<impl rmcp::service::Service<rmcp::RoleClient>>> {
+        use adk_core::{ErrorCategory, ErrorComponent};
         use rmcp::ServiceExt;
         use rmcp::transport::streamable_http_client::{
             StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
@@ -129,10 +130,14 @@ impl McpHttpClientBuilder {
             McpAuth::Bearer(token) => Some(token.clone()),
             McpAuth::OAuth2(config) => {
                 // Get token from OAuth2 flow
-                let token = config
-                    .get_or_refresh_token()
-                    .await
-                    .map_err(|e| AdkError::Tool(format!("OAuth2 authentication failed: {}", e)))?;
+                let token = config.get_or_refresh_token().await.map_err(|e| {
+                    AdkError::new(
+                        ErrorComponent::Tool,
+                        ErrorCategory::Unauthorized,
+                        "mcp.oauth.token_fetch",
+                        format!("OAuth2 authentication failed: {e}"),
+                    )
+                })?;
                 Some(token)
             }
             McpAuth::ApiKey { .. } => {
@@ -158,7 +163,7 @@ impl McpHttpClientBuilder {
         let client = ()
             .serve(transport)
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to connect to MCP server: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Failed to connect to MCP server: {e}")))?;
 
         Ok(super::McpToolset::new(client))
     }
@@ -166,10 +171,9 @@ impl McpHttpClientBuilder {
     /// Connect to the MCP server (stub when http-transport feature is disabled).
     #[cfg(not(feature = "http-transport"))]
     pub async fn connect(self) -> Result<()> {
-        Err(AdkError::Tool(
+        Err(AdkError::tool(
             "HTTP transport requires the 'http-transport' feature. \
-             Add `adk-tool = { features = [\"http-transport\"] }` to your Cargo.toml"
-                .to_string(),
+             Add `adk-tool = { features = [\"http-transport\"] }` to your Cargo.toml",
         ))
     }
 }

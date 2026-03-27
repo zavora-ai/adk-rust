@@ -330,7 +330,7 @@ async fn authorize_tool_scopes(
             missing_scopes = ?denied.missing,
             "scope check failed"
         );
-        return Err(adk_core::AdkError::Tool(denied.to_string()));
+        return Err(adk_core::AdkError::tool(denied.to_string()));
     }
 
     Ok(())

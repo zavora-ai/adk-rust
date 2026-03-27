@@ -25,6 +25,16 @@ pub struct MlxSttProvider {
 }
 
 impl MlxSttProvider {
+    /// Create a test instance without downloading a model.
+    #[doc(hidden)]
+    pub fn with_dummy() -> Self {
+        Self {
+            config: MlxSttConfig::default(),
+            model_path: std::path::PathBuf::from("/tmp/model"),
+            tokenizer: tokenizers::Tokenizer::new(tokenizers::models::bpe::BPE::default()),
+        }
+    }
+
     /// Load model from HuggingFace Hub or local cache.
     pub async fn new(config: MlxSttConfig, registry: &LocalModelRegistry) -> AudioResult<Self> {
         let model_path = registry.get_or_download(&config.model_id).await?;
@@ -70,8 +80,8 @@ impl SttProvider for MlxSttProvider {
         Err(AudioError::Stt {
             provider: "MLX".into(),
             message: format!(
-                "MLX Whisper inference not yet wired: mel spectrogram {}×{} frames. \
-                 Model at: {}",
+                "MLX Whisper inference is not yet implemented — use a cloud STT provider instead. \
+                 mel spectrogram {}×{} frames. Model at: {}",
                 mel.n_frames,
                 mel.n_mels,
                 self.model_path.display()
@@ -84,7 +94,36 @@ impl SttProvider for MlxSttProvider {
         _audio: Pin<Box<dyn Stream<Item = AudioFrame> + Send>>,
         _opts: &SttOptions,
     ) -> AudioResult<Pin<Box<dyn Stream<Item = AudioResult<Transcript>> + Send>>> {
-        // Windowed 30s fallback — accumulate frames and transcribe each window
-        Ok(Box::pin(futures::stream::empty()))
+        Err(AudioError::Stt {
+            provider: "MLX".into(),
+            message: "streaming transcription not yet implemented".into(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn transcribe_stream_returns_explicit_unimplemented_error() {
+        let provider = MlxSttProvider {
+            config: MlxSttConfig::default(),
+            model_path: std::path::PathBuf::from("/tmp/model"),
+            tokenizer: tokenizers::Tokenizer::new(tokenizers::models::bpe::BPE::default()),
+        };
+
+        let result = provider
+            .transcribe_stream(Box::pin(futures::stream::empty()), &SttOptions::default())
+            .await;
+
+        match result {
+            Err(AudioError::Stt { provider, message }) => {
+                assert_eq!(provider, "MLX");
+                assert!(message.contains("not yet implemented"));
+            }
+            Err(err) => panic!("unexpected audio error: {err}"),
+            Ok(_) => panic!("expected explicit STT error"),
+        }
     }
 }

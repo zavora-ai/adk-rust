@@ -2,7 +2,7 @@
 
 use adk_core::{
     Agent, BaseEventsSummarizer, Content, Event, EventActions, EventCompaction, EventStream,
-    EventsCompactionConfig, InvocationContext, Part, Result,
+    EventsCompactionConfig, InvocationContext, Part, Result, SessionId, UserId,
 };
 use adk_runner::{MutableSession, Runner, RunnerConfig};
 use adk_session::{Events, GetRequest, Session, SessionService, State};
@@ -352,7 +352,10 @@ async fn test_runner_triggers_compaction_at_interval() {
     .unwrap();
 
     let content = Content::new("user").with_text("Hello");
-    let mut stream = runner.run("user-1".to_string(), "sess-1".to_string(), content).await.unwrap();
+    let mut stream = runner
+        .run(UserId::new("user-1").unwrap(), SessionId::new("sess-1").unwrap(), content)
+        .await
+        .unwrap();
 
     // Drain the stream
     while let Some(result) = stream.next().await {
@@ -411,7 +414,10 @@ async fn test_runner_no_compaction_before_interval() {
     .unwrap();
 
     let content = Content::new("user").with_text("Hello");
-    let mut stream = runner.run("user-1".to_string(), "sess-1".to_string(), content).await.unwrap();
+    let mut stream = runner
+        .run(UserId::new("user-1").unwrap(), SessionId::new("sess-1").unwrap(), content)
+        .await
+        .unwrap();
 
     while let Some(result) = stream.next().await {
         assert!(result.is_ok());

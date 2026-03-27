@@ -42,14 +42,14 @@ impl SessionResolver {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BrowserProfile {
-    /// 6 tools: navigate, click, type, extract_text, wait_for_element, screenshot.
+    /// 19 tools: navigation + interaction + extraction + wait + screenshot.
     /// Best for simple browsing tasks.
     Minimal,
-    /// 8 tools: Minimal + select, clear.
+    /// 19 tools: same categories as Minimal (navigation + interaction + extraction + wait + screenshot).
     /// Best for form-filling agents.
     FormFilling,
-    /// 7 tools: navigate, extract_text, extract_attribute, extract_links, page_info, screenshot, scroll.
-    /// Best for data extraction / scraping agents.
+    /// 14 tools: navigation + extraction + screenshot + JS (scroll, hover, evaluate, alert).
+    /// Best for data extraction / scraping agents (no interaction tools).
     Scraping,
     /// All 46 tools. Use only when the agent needs full browser control.
     Full,
@@ -324,10 +324,9 @@ impl BrowserToolset {
     pub fn try_all_tools(&self) -> Result<Vec<Arc<dyn Tool>>> {
         match &self.resolver {
             SessionResolver::Fixed(session) => Ok(self.build_tools(session.clone())),
-            SessionResolver::Pool(_) => Err(adk_core::AdkError::Tool(
+            SessionResolver::Pool(_) => Err(adk_core::AdkError::tool(
                 "Cannot resolve tools synchronously for a pool-backed BrowserToolset. \
-                 Use Toolset::tools(ctx) instead."
-                    .into(),
+                 Use Toolset::tools(ctx) instead.",
             )),
         }
     }

@@ -51,15 +51,22 @@
 //! # Standard (default) — agents, models, tools, sessions, runner, guardrails, auth
 //! adk-rust = "0.4"
 //!
-//! # Full — standard + graph, browser, eval, realtime, audio, RAG, code, sandbox
+//! # Full — standard + all stable specialist crates (graph, realtime, browser, eval, rag)
+//! # Does NOT include experimental crates (code, sandbox, audio) — use `labs` for those
 //! adk-rust = { version = "0.4", features = ["full"] }
+//!
+//! # Labs — standard + experimental crates (code, sandbox, audio)
+//! adk-rust = { version = "0.4", features = ["labs"] }
+//!
+//! # Full + Labs — everything including experimental crates
+//! adk-rust = { version = "0.4", features = ["full", "labs"] }
 //!
 //! # Minimal — just agents + Gemini + runner (fastest build)
 //! adk-rust = { version = "0.4", default-features = false, features = ["minimal"] }
 //!
 //! # Custom — pick exactly what you need
 //! adk-rust = { version = "0.4", default-features = false, features = [
-//!     "agents", "gemini", "tools", "sessions", "openai"
+//!     "agents", "gemini", "tools", "sessions", "openai", "openrouter"
 //! ] }
 //! ```
 //!
@@ -76,7 +83,7 @@
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> Result<()> {
-//! let api_key = std::env::var("GOOGLE_API_KEY").map_err(|e| AdkError::Config(e.to_string()))?;
+//! let api_key = std::env::var("GOOGLE_API_KEY").map_err(|e| AdkError::config(e.to_string()))?;
 //! let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
 //!
 //! let agent = LlmAgentBuilder::new("researcher")
@@ -421,9 +428,9 @@
 //! | `eval` | Agent evaluation | full |
 //! | `realtime` | Voice/audio streaming | full |
 //! | `rag` | RAG pipeline | full |
-//! | `audio` | Audio processing | full |
-//! | `code` | Code execution | full |
-//! | `sandbox` | Sandboxed execution | full |
+//! | `code` | Code execution | labs (experimental) |
+//! | `sandbox` | Sandboxed execution | labs (experimental) |
+//! | `audio` | Audio processing | labs (experimental) |
 //!
 //! ## Examples
 //!
@@ -640,7 +647,7 @@ pub mod graph {
     pub use adk_graph::*;
 }
 
-/// Code execution substrate.
+/// Code execution substrate (experimental — `labs` preset).
 ///
 /// First-class code execution for agents, Studio, and generated projects:
 /// - [`CodeExecutor`](code::CodeExecutor) - Backend trait for execution
@@ -656,11 +663,11 @@ pub mod code {
     pub use adk_code::*;
 }
 
-/// Isolated code execution runtime.
+/// Isolated code execution runtime (experimental — `labs` preset).
 ///
 /// Provides the [`SandboxBackend`](sandbox::SandboxBackend) trait and built-in backends:
 /// - [`ProcessBackend`](sandbox::ProcessBackend) - Subprocess execution with timeout and env isolation
-/// - [`WasmBackend`](sandbox::WasmBackend) - In-process WASM execution via wasmtime (requires `wasm` feature)
+/// - `WasmBackend` - In-process WASM execution via wasmtime (requires `wasm` feature)
 /// - [`SandboxTool`](sandbox::SandboxTool) - Tool trait implementation for agent integration
 ///
 /// Available with feature: `sandbox`
@@ -746,6 +753,20 @@ pub mod auth {
     pub use adk_auth::*;
 }
 
+/// Agentic commerce and payment orchestration.
+///
+/// Provides protocol-neutral payment primitives and adapters for:
+/// - ACP stable `2026-01-30`
+/// - ACP experimental surfaces behind `acp-experimental`
+/// - AP2 `v0.1-alpha` as of `2026-03-22`
+///
+/// Available with feature: `payments`
+#[cfg(feature = "payments")]
+#[cfg_attr(docsrs, doc(cfg(feature = "payments")))]
+pub mod payment {
+    pub use adk_payments::*;
+}
+
 /// Plugin system for extending agent behavior.
 ///
 /// Extensible callback architecture for agent lifecycle hooks:
@@ -759,13 +780,13 @@ pub mod plugin {
     pub use adk_plugin::*;
 }
 
-/// Audio processing pipeline (TTS, STT, music, FX).
+/// Audio processing pipeline (experimental — `labs` preset).
 ///
 /// Provides audio capabilities for agents:
 /// - [`TtsProvider`](audio::TtsProvider) - Text-to-speech synthesis
 /// - [`SttProvider`](audio::SttProvider) - Speech-to-text transcription
 /// - [`AudioProcessor`](audio::AudioProcessor) - Audio effects processing
-/// - [`AudioPipeline`](audio::AudioPipeline) - Composable audio pipelines
+/// - `AudioPipeline` - Composable audio pipelines
 /// - Cloud providers: ElevenLabs, OpenAI, Gemini, Cartesia, Deepgram, AssemblyAI
 /// - Local inference: MLX (Apple Silicon), ONNX Runtime
 ///
@@ -791,6 +812,21 @@ pub mod audio {
 pub mod rag {
     pub use adk_rag::*;
 }
+
+/// Shared action node types for graph workflows.
+///
+/// Provides the type definitions for all 14 action node types:
+/// - Trigger nodes (manual, webhook, schedule, event)
+/// - Data nodes (HTTP, Set, Transform)
+/// - Control flow nodes (Switch, Loop, Merge, Wait)
+/// - Compute nodes (Code)
+/// - Infrastructure nodes (Database)
+/// - Communication nodes (Email, Notification, RSS, File)
+///
+/// Available with feature: `action`
+#[cfg(feature = "action")]
+#[cfg_attr(docsrs, doc(cfg(feature = "action")))]
+pub use adk_action;
 
 // ============================================================================
 // Prelude
@@ -836,6 +872,13 @@ pub mod prelude {
     #[cfg(feature = "openai")]
     pub use crate::model::openai::{OpenAIClient, OpenAIConfig};
 
+    #[cfg(feature = "openrouter")]
+    pub use crate::model::openrouter::{
+        OpenRouterApiMode, OpenRouterClient, OpenRouterConfig, OpenRouterPlugin,
+        OpenRouterProviderPreferences, OpenRouterReasoningConfig, OpenRouterRequestOptions,
+        OpenRouterResponseTool,
+    };
+
     #[cfg(feature = "anthropic")]
     pub use crate::model::anthropic::{AnthropicClient, AnthropicConfig};
 
@@ -863,6 +906,7 @@ pub mod prelude {
     #[cfg(feature = "tools")]
     pub use crate::tool::{
         BasicToolset, ExitLoopTool, FunctionTool, GoogleSearchTool, LoadArtifactsTool, McpToolset,
+        UrlContextTool, WebSearchTool,
     };
 
     // Skills

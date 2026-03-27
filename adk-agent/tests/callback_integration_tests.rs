@@ -124,7 +124,7 @@ fn test_llm_agent_stores_callbacks() {
 #[tokio::test]
 async fn test_callback_error_handling() {
     let error_callback = Box::new(|_ctx: Arc<dyn CallbackContext>| {
-        Box::pin(async move { Err(adk_core::AdkError::Agent("Callback error".to_string())) })
+        Box::pin(async move { Err(adk_core::AdkError::agent("Callback error")) })
             as std::pin::Pin<
                 Box<dyn std::future::Future<Output = adk_core::Result<Option<Content>>> + Send>,
             >
@@ -134,12 +134,9 @@ async fn test_callback_error_handling() {
     let result = error_callback(ctx).await;
 
     assert!(result.is_err());
-    match result {
-        Err(adk_core::AdkError::Agent(msg)) => {
-            assert_eq!(msg, "Callback error");
-        }
-        _ => panic!("Expected Agent error"),
-    }
+    let err = result.unwrap_err();
+    assert!(err.is_agent());
+    assert_eq!(err.message, "Callback error");
 }
 
 #[tokio::test]

@@ -56,11 +56,11 @@ impl Tool for NavigateTool {
         let url = args
             .get("url")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing 'url' parameter".to_string()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("Missing 'url' parameter"))?;
 
         // Validate URL
         url::Url::parse(url)
-            .map_err(|e| adk_core::AdkError::Tool(format!("Invalid URL '{}': {}", url, e)))?;
+            .map_err(|e| adk_core::AdkError::tool(format!("Invalid URL '{}': {}", url, e)))?;
 
         // Navigate
         self.browser.navigate(url).await?;

@@ -2,7 +2,9 @@
 
 use super::config::OllamaConfig;
 use super::convert;
-use adk_core::{AdkError, Llm, LlmRequest, LlmResponseStream, Result};
+use adk_core::{
+    AdkError, ErrorCategory, ErrorComponent, Llm, LlmRequest, LlmResponseStream, Result,
+};
 use async_stream::try_stream;
 use async_trait::async_trait;
 use ollama_rs::Ollama;
@@ -24,8 +26,15 @@ impl OllamaModel {
     pub fn new(config: OllamaConfig) -> Result<Self> {
         // Parse host URL to extract host and port
         let host = config.host.trim_end_matches('/');
-        let client = Ollama::try_new(host)
-            .map_err(|e| AdkError::Model(format!("Failed to create Ollama client: {}", e)))?;
+        let client = Ollama::try_new(host).map_err(|e| {
+            AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::InvalidInput,
+                "model.ollama.client_init",
+                format!("Failed to create Ollama client: {e}"),
+            )
+            .with_provider("ollama")
+        })?;
 
         Ok(Self { client, model_name: config.model.clone(), config })
     }
@@ -93,6 +102,25 @@ impl OllamaModel {
     }
 }
 
+/// Map an Ollama error message to a structured `AdkError`.
+///
+/// Ollama errors don't carry HTTP status codes directly, so we classify
+/// based on message content.
+fn ollama_error_to_adk(msg: &str) -> AdkError {
+    let upper = msg.to_ascii_uppercase();
+    let (category, code) =
+        if upper.contains("CONNECTION REFUSED") || upper.contains("CONNECT ERROR") {
+            (ErrorCategory::Unavailable, "model.ollama.unavailable")
+        } else if upper.contains("TIMEOUT") || upper.contains("TIMED OUT") {
+            (ErrorCategory::Timeout, "model.ollama.timeout")
+        } else if upper.contains("NOT FOUND") || upper.contains("NO SUCH MODEL") {
+            (ErrorCategory::NotFound, "model.ollama.not_found")
+        } else {
+            (ErrorCategory::Internal, "model.ollama.error")
+        };
+    AdkError::new(ErrorComponent::Model, category, code, msg).with_provider("ollama")
+}
+
 #[async_trait]
 impl Llm for OllamaModel {
     fn name(&self) -> &str {
@@ -104,6 +132,7 @@ impl Llm for OllamaModel {
         request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream> {
+        let usage_span = adk_telemetry::llm_generate_span("ollama", &self.model_name, stream);
         let model = self.model_name.clone();
         let client = self.client.clone();
         let options = self.build_options(&request);
@@ -137,7 +166,10 @@ impl Llm for OllamaModel {
                 let stream_result = client
                     .send_chat_messages_stream(chat_request)
                     .await
-                    .map_err(|e| AdkError::Model(format!("Ollama stream error: {}", e)))?;
+                    .map_err(|e| {
+                        let msg = format!("Ollama stream error: {e}");
+                        ollama_error_to_adk(&msg)
+                    })?;
 
                 let mut pinned_stream = std::pin::pin!(stream_result);
 
@@ -162,7 +194,12 @@ impl Llm for OllamaModel {
                             }
                         }
                         Err(e) => {
-                            Err(AdkError::Model(format!("Stream chunk error: {:?}", e)))?;
+                            Err(AdkError::new(
+                                ErrorComponent::Model,
+                                ErrorCategory::Internal,
+                                "model.ollama.stream_chunk",
+                                format!("Stream chunk error: {e:?}"),
+                            ).with_provider("ollama"))?;
                         }
                     }
                 }
@@ -171,12 +208,15 @@ impl Llm for OllamaModel {
                 let response = client
                     .send_chat_messages(chat_request)
                     .await
-                    .map_err(|e| AdkError::Model(format!("Ollama error: {}", e)))?;
+                    .map_err(|e| {
+                        let msg = format!("Ollama error: {e}");
+                        ollama_error_to_adk(&msg)
+                    })?;
 
                 yield convert::chat_response_to_llm_response(&response, false);
             }
         };
 
-        Ok(Box::pin(response_stream))
+        Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
     }
 }

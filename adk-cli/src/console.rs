@@ -4,7 +4,7 @@
 //! the same REPL with additional configuration options (memory, artifacts,
 //! streaming mode, etc.).
 
-use adk_core::Agent;
+use adk_core::{Agent, SessionId, UserId};
 use adk_runner::{Runner, RunnerConfig};
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use anyhow::Result;
@@ -66,7 +66,9 @@ pub async fn run_console(agent: Arc<dyn Agent>, app_name: String, user_id: Strin
                 print!("\nAgent -> ");
 
                 let session_id = session.id().to_string();
-                let mut events = runner.run(user_id.clone(), session_id, user_content).await?;
+                let mut events = runner
+                    .run(UserId::new(user_id.clone())?, SessionId::new(session_id)?, user_content)
+                    .await?;
                 let mut printer = StreamPrinter::default();
 
                 while let Some(event) = events.next().await {

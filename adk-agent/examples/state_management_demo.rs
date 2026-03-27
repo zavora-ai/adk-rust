@@ -1,3 +1,4 @@
+#![allow(clippy::result_large_err)]
 use adk_agent::{CustomAgentBuilder, LlmAgentBuilder, SequentialAgent};
 use adk_core::{
     Agent, CallbackContext, Content, Event, InvocationContext, Memory, Part, ReadonlyContext,

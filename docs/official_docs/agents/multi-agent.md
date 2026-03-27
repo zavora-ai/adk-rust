@@ -45,7 +45,7 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.4", features = ["agents", "models", "cli"] }
+adk-rust = { version = "0.5.0", features = ["agents", "models", "cli"] }
 tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 ```
@@ -722,6 +722,8 @@ let coordinator = LlmAgentBuilder::new("coordinator")
     .tool(Arc::new(processor_tool))
     .build()?;
 ```
+
+AgentTool runs sub-agents in non-streaming mode (`StreamingMode::None`) internally, so the sub-agent accumulates its full response before returning it to the parent. This prevents issues where partial streaming chunks could produce empty results.
 
 This enables seamless data flow between parent and child agents when using the AgentTool pattern.
 

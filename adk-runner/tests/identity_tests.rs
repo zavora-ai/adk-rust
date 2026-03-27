@@ -114,7 +114,8 @@ fn make_ctx(
         session.to_string(),
         content,
         Arc::new(MockSession),
-    );
+    )
+    .expect("test identity values must be valid");
     if branch.is_empty() { ctx } else { ctx.with_branch(branch.to_string()) }
 }
 

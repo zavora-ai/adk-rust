@@ -1,0 +1,66 @@
+{
+  "artifactId": "cart-artifact-1",
+  "name": "Cart Mandate",
+  "parts": [
+    {
+      "kind": "data",
+      "data": {
+        "ap2.mandates.CartMandate": {
+          "contents": {
+            "id": "cart_shoes_123",
+            "user_cart_confirmation_required": false,
+            "payment_request": {
+              "method_data": [
+                {
+                  "supported_methods": "CARD",
+                  "data": {
+                    "payment_processor_url": "https://processor.example/pay"
+                  }
+                }
+              ],
+              "details": {
+                "id": "order_shoes_123",
+                "display_items": [
+                  {
+                    "label": "Red Running Shoes",
+                    "amount": {
+                      "currency": "USD",
+                      "value": 120.0
+                    },
+                    "refund_period": 30
+                  }
+                ],
+                "shipping_options": [
+                  {
+                    "id": "standard",
+                    "label": "Standard",
+                    "amount": {
+                      "currency": "USD",
+                      "value": 5.0
+                    },
+                    "selected": true
+                  }
+                ],
+                "total": {
+                  "label": "Total",
+                  "amount": {
+                    "currency": "USD",
+                    "value": 125.0
+                  },
+                  "refund_period": 30
+                }
+              },
+              "options": {
+                "request_shipping": true
+              }
+            },
+            "cart_expiry": "2026-04-01T12:05:00Z",
+            "merchant_name": "Merchant Example"
+          },
+          "merchant_authorization": "merchant_jwt_123",
+          "timestamp": "2026-03-22T10:00:00Z"
+        }
+      }
+    }
+  ]
+}

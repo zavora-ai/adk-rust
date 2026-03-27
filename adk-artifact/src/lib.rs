@@ -1,4 +1,5 @@
 //! # adk-artifact
+#![allow(clippy::result_large_err)]
 //!
 //! Binary artifact storage for ADK agents.
 //!

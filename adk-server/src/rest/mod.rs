@@ -104,6 +104,7 @@ fn build_cors_layer(config: &ServerConfig) -> CorsLayer {
             header::AUTHORIZATION,
             HeaderName::from_static(REQUEST_ID_HEADER),
             HeaderName::from_static("x-adk-ui-protocol"),
+            HeaderName::from_static("x-adk-ui-transport"),
         ]);
 
     if config.security.allowed_origins.is_empty() {
@@ -248,6 +249,18 @@ pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> 
         .route("/list-apps", get(controllers::apps::list_apps_compat))
         .with_state(apps_controller)
         .route("/ui/capabilities", get(controllers::ui::ui_capabilities))
+        .route("/ui/initialize", post(controllers::ui::ui_initialize))
+        .route("/ui/message", post(controllers::ui::ui_message))
+        .route("/ui/update-model-context", post(controllers::ui::ui_update_model_context))
+        .route("/ui/notifications/poll", post(controllers::ui::ui_poll_notifications))
+        .route(
+            "/ui/notifications/resources-list-changed",
+            post(controllers::ui::ui_notify_resources_list_changed),
+        )
+        .route(
+            "/ui/notifications/tools-list-changed",
+            post(controllers::ui::ui_notify_tools_list_changed),
+        )
         .route("/ui/resources", get(controllers::ui::list_ui_resources))
         .route("/ui/resources/read", get(controllers::ui::read_ui_resource))
         .route("/ui/resources/register", post(controllers::ui::register_ui_resource));

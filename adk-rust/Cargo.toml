@@ -35,16 +35,21 @@ standard = [
     "auth",
 ]
 
-# Full — standard + all specialist crates (~2min clean build)
+# Full — standard + all stable specialist crates (~2min clean build)
 full = [
     "standard",
     "graph",
-    "code",
-    "sandbox",
     "realtime",
     "browser",
     "eval",
     "rag",
+]
+
+# Labs — standard + experimental crates (code, sandbox, audio)
+labs = [
+    "standard",
+    "code",
+    "sandbox",
     "audio",
 ]
 
@@ -75,11 +80,13 @@ guardrail = ["dep:adk-guardrail"]
 auth = ["dep:adk-auth"]
 plugin = ["dep:adk-plugin"]
 rag = ["dep:adk-rag"]
+payments = ["dep:adk-payments"]
 
 # Model provider features (forwarded to adk-model)
 gemini = ["models", "adk-model/gemini"]
 gemini-vertex = ["gemini", "adk-model/gemini-vertex"]
 openai = ["models", "adk-model/openai"]
+openrouter = ["models", "adk-model/openrouter"]
 anthropic = ["models", "adk-model/anthropic"]
 deepseek = ["models", "adk-model/deepseek"]
 groq = ["models", "adk-model/groq"]
@@ -121,6 +128,16 @@ audio-mlx = ["audio", "adk-audio/mlx"]
 audio-onnx = ["audio", "adk-audio/onnx"]
 audio-all = ["audio", "adk-audio/all"]
 
+# Action node features (forwarded to adk-graph)
+action = ["graph", "dep:adk-action", "adk-graph/action"]
+action-http = ["action", "adk-graph/action-http"]
+action-trigger = ["action", "adk-graph/action-trigger"]
+action-db = ["action", "adk-graph/action-db"]
+action-code = ["action", "adk-graph/action-code"]
+action-email = ["action", "adk-graph/action-email"]
+action-rss = ["action", "adk-graph/action-rss"]
+action-full = ["action", "adk-graph/action-full"]
+
 # ONNX audio model features (forwarded to adk-audio)
 whisper-onnx = ["audio", "adk-audio/whisper-onnx"]
 distil-whisper = ["audio", "adk-audio/distil-whisper"]
@@ -156,7 +173,9 @@ adk-guardrail = { workspace = true, optional = true }
 adk-auth = { workspace = true, optional = true }
 adk-plugin = { workspace = true, optional = true }
 adk-rag = { workspace = true, optional = true }
+adk-payments = { workspace = true, optional = true }
 adk-audio = { workspace = true, optional = true }
+adk-action = { workspace = true, optional = true }
 
 # Re-export common dependencies
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "signal", "fs", "process", "io-util"] }
@@ -172,5 +191,5 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time",
 [package.metadata.docs.rs]
 # Use "full" instead of all-features to avoid C library deps (espeak, cmake)
 # that don't build in docs.rs sandboxed environment.
-features = ["full"]
+features = ["full", "payments"]
 rustdoc-args = ["--cfg", "docsrs"]

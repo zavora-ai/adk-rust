@@ -1,0 +1,23 @@
+[package]
+name = "adk-action"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared action node types for ADK-Rust graph workflows"
+repository = "https://github.com/zavora-ai/adk-rust"
+documentation = "https://docs.rs/adk-action"
+keywords = ["ai", "agents", "workflow", "action", "nodes"]
+categories = ["science", "asynchronous"]
+
+[dependencies]
+adk-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+regex = { workspace = true }
+
+[dev-dependencies]
+proptest = "1.5"
+serde_json.workspace = true

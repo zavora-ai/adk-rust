@@ -170,6 +170,7 @@ impl RecordingModel {
             interrupted: false,
             error_code: None,
             error_message: None,
+            provider_metadata: None,
         }
     }
 
@@ -184,6 +185,7 @@ impl RecordingModel {
             interrupted: false,
             error_code: None,
             error_message: None,
+            provider_metadata: None,
         }
     }
 }

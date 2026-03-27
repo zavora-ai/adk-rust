@@ -116,9 +116,9 @@ impl RemoteA2aAgentBuilder {
     }
 
     pub fn build(self) -> Result<RemoteA2aAgent> {
-        let agent_url = self.agent_url.ok_or_else(|| {
-            adk_core::AdkError::Agent("RemoteA2aAgent requires agent_url".to_string())
-        })?;
+        let agent_url = self
+            .agent_url
+            .ok_or_else(|| adk_core::AdkError::agent("RemoteA2aAgent requires agent_url"))?;
 
         Ok(RemoteA2aAgent::new(RemoteA2aConfig {
             name: self.name,

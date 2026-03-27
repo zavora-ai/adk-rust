@@ -1,6 +1,7 @@
 //! # adk-core
 //!
 //! Core traits and types for ADK agents, tools, sessions, and events.
+#![allow(clippy::result_large_err)]
 //!
 //! ## Overview
 //!
@@ -86,7 +87,7 @@ pub use context::{
     ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest, ToolOutcome,
     validate_state_key,
 };
-pub use error::{AdkError, Result};
+pub use error::{AdkError, ErrorCategory, ErrorComponent, ErrorDetails, Result, RetryHint};
 pub use event::{
     Event, EventActions, EventCompaction, KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER,
 };
@@ -103,3 +104,7 @@ pub use tool::{
     RetryBudget, Tool, ToolContext, ToolPredicate, ToolRegistry, Toolset, ValidationMode,
 };
 pub use types::{Content, FunctionResponseData, MAX_INLINE_DATA_SIZE, Part};
+
+// Re-export async_trait so the #[tool] macro's generated code can reference it
+// via adk_tool::async_trait (adk_tool re-exports from adk_core).
+pub use async_trait::async_trait;

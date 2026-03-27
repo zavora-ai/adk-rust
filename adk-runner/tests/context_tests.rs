@@ -1,7 +1,7 @@
 use adk_core::{
-    Agent, CallbackContext, Content, Event, FunctionResponseData,
+    Agent, AppName, CallbackContext, Content, Event, FunctionResponseData,
     InvocationContext as InvocationContextTrait, Part, ReadonlyContext, RunConfig,
-    Session as CoreSession, StreamingMode,
+    Session as CoreSession, SessionId, StreamingMode, UserId,
 };
 use adk_runner::{InvocationContext, MutableSession};
 use adk_session::{Events, Session, State};
@@ -118,7 +118,8 @@ fn test_context_creation() {
         "session-789".to_string(),
         content.clone(),
         Arc::new(MockSessionWithState::new()),
-    );
+    )
+    .unwrap();
 
     assert_eq!(ctx.invocation_id(), "inv-123");
     assert_eq!(ctx.agent_name(), "test_agent");
@@ -127,6 +128,28 @@ fn test_context_creation() {
     assert_eq!(ctx.session_id(), "session-789");
     assert_eq!(ctx.branch(), "");
     assert_eq!(ctx.user_content().role, "user");
+}
+
+#[test]
+fn test_context_creation_with_typed_ids() {
+    let agent = Arc::new(MockAgent { name: "test_agent".to_string() });
+    let content = Content::new("user");
+
+    let ctx = InvocationContext::new_typed(
+        "inv-typed".to_string(),
+        agent,
+        UserId::new("user-456").unwrap(),
+        AppName::new("test-app").unwrap(),
+        SessionId::new("session-789").unwrap(),
+        content,
+        Arc::new(MockSessionWithState::new()),
+    )
+    .unwrap();
+
+    assert_eq!(ctx.invocation_id(), "inv-typed");
+    assert_eq!(ctx.user_id(), "user-456");
+    assert_eq!(ctx.app_name(), "test-app");
+    assert_eq!(ctx.session_id(), "session-789");
 }
 
 #[test]
@@ -144,6 +167,7 @@ fn test_context_with_branch() {
         content,
         Arc::new(MockSessionWithState::new()),
     )
+    .unwrap()
     .with_branch("main.sub".to_string());
 
     assert_eq!(ctx.branch(), "main.sub");
@@ -166,6 +190,7 @@ fn test_context_with_run_config() {
         content,
         Arc::new(MockSessionWithState::new()),
     )
+    .unwrap()
     .with_run_config(config);
 
     assert_eq!(ctx.run_config().streaming_mode, StreamingMode::SSE);
@@ -185,7 +210,8 @@ fn test_context_end_invocation() {
         "session-789".to_string(),
         content,
         Arc::new(MockSessionWithState::new()),
-    );
+    )
+    .unwrap();
 
     assert!(!ctx.ended());
     ctx.end_invocation();
@@ -206,7 +232,8 @@ fn test_context_agent_access() {
         "session-789".to_string(),
         content,
         Arc::new(MockSessionWithState::new()),
-    );
+    )
+    .unwrap();
 
     let retrieved_agent = ctx.agent();
     assert_eq!(retrieved_agent.name(), "test_agent");
@@ -226,7 +253,8 @@ fn test_context_optional_services() {
         "session-789".to_string(),
         content,
         Arc::new(MockSessionWithState::new()),
-    );
+    )
+    .unwrap();
 
     assert!(ctx.artifacts().is_none());
     assert!(ctx.memory().is_none());
@@ -295,7 +323,8 @@ fn test_mutable_session_shared_across_contexts() {
         "session-789".to_string(),
         content.clone(),
         Arc::new(MockSessionWithState::new()),
-    );
+    )
+    .unwrap();
 
     // Get the mutable session from ctx1 and apply a state delta
     let mut delta = HashMap::new();
@@ -311,7 +340,8 @@ fn test_mutable_session_shared_across_contexts() {
         "session-789".to_string(),
         content,
         ctx1.mutable_session().clone(),
-    );
+    )
+    .unwrap();
 
     // ctx2 should see the state set by ctx1
     assert_eq!(
@@ -355,6 +385,8 @@ fn test_mutable_session_event_accumulation() {
         parts: vec![Part::Text { text: "Hi there!".to_string() }],
     });
     mutable.append_event(event2);
+
+    assert_eq!(mutable.events_len(), 2);
 
     // Check conversation history
     let history = mutable.conversation_history();

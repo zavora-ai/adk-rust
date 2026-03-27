@@ -1,0 +1,64 @@
+[
+  {
+    "type": "RUN_STARTED",
+    "threadId": "thread-native",
+    "runId": "run-native",
+    "forwardedSource": "test-suite"
+  },
+  {
+    "type": "STATE_SNAPSHOT",
+    "snapshot": {
+      "app:mode": "inspect",
+      "count": 2
+    }
+  },
+  {
+    "type": "MESSAGES_SNAPSHOT",
+    "messageCount": 2,
+    "firstRole": "user",
+    "firstText": "hello native"
+  },
+  {
+    "type": "ACTIVITY_SNAPSHOT",
+    "messageId": "activity-native-1",
+    "activityType": "PROMPT_CONTEXT",
+    "content": {
+      "label": "Prompt queued",
+      "status": "queued"
+    },
+    "replace": true
+  },
+  {
+    "type": "ACTIVITY_DELTA",
+    "messageId": "activity-native-1",
+    "activityType": "PROMPT_CONTEXT",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/status",
+        "value": "streaming"
+      },
+      {
+        "op": "add",
+        "path": "/transport",
+        "value": "protocol_native"
+      }
+    ]
+  },
+  {
+    "type": "TEXT_MESSAGE_START",
+    "role": "assistant"
+  },
+  {
+    "type": "TEXT_MESSAGE_CONTENT",
+    "delta": "hello from stream"
+  },
+  {
+    "type": "TEXT_MESSAGE_END"
+  },
+  {
+    "type": "RUN_FINISHED",
+    "threadId": "thread-native",
+    "runId": "run-native"
+  }
+]

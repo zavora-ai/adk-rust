@@ -42,3 +42,18 @@ pub enum AuthError {
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 }
+
+impl From<AuthError> for adk_core::AdkError {
+    fn from(err: AuthError) -> Self {
+        use adk_core::{ErrorCategory, ErrorComponent};
+        let (category, code) = match &err {
+            AuthError::AccessDenied(_) => (ErrorCategory::Forbidden, "auth.access_denied"),
+            AuthError::RoleNotFound(_) => (ErrorCategory::NotFound, "auth.role_not_found"),
+            AuthError::UserNotFound(_) => (ErrorCategory::NotFound, "auth.user_not_found"),
+            AuthError::AuditError(_) => (ErrorCategory::Internal, "auth.audit"),
+            AuthError::IoError(_) => (ErrorCategory::Internal, "auth.io"),
+        };
+        adk_core::AdkError::new(ErrorComponent::Auth, category, code, err.to_string())
+            .with_source(err)
+    }
+}

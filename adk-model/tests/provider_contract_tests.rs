@@ -1,4 +1,7 @@
-use adk_core::{AdkError, Content, Llm, LlmRequest, LlmResponse, Part, Result};
+#![allow(clippy::result_large_err)]
+use adk_core::{
+    AdkError, Content, GenerateContentConfig, Llm, LlmRequest, LlmResponse, Part, Result,
+};
 use adk_model::RetryConfig;
 use futures::StreamExt;
 use serde_json::json;
@@ -17,6 +20,8 @@ use adk_model::groq::{GroqClient, GroqConfig};
 use adk_model::ollama::{OllamaConfig, OllamaModel};
 #[cfg(feature = "openai")]
 use adk_model::openai::{AzureConfig, AzureOpenAIClient, OpenAIClient, OpenAIConfig};
+#[cfg(feature = "openrouter")]
+use adk_model::openrouter::{OpenRouterApiMode, OpenRouterClient, OpenRouterConfig};
 #[cfg(feature = "xai")]
 use adk_model::xai::{XAIClient, XAIConfig};
 
@@ -77,12 +82,13 @@ impl ProviderSpec {
 }
 
 fn required_env(var: &str) -> Result<String> {
-    env::var(var).map_err(|_| AdkError::Model(format!("missing required env var: {var}")))
+    env::var(var).map_err(|_| AdkError::model(format!("missing required env var: {var}")))
 }
 
 fn base_request(model_name: &str, prompt: &str) -> LlmRequest {
     let content = Content::new("user").with_text(prompt);
     LlmRequest::new(model_name, vec![content])
+        .with_config(GenerateContentConfig { max_output_tokens: Some(256), ..Default::default() })
 }
 
 fn tools_request(model_name: &str) -> LlmRequest {
@@ -445,6 +451,26 @@ fn ollama_cheapest_spec() -> ProviderSpec {
     }
 }
 
+#[cfg(feature = "openrouter")]
+fn openrouter_cheapest_spec() -> ProviderSpec {
+    ProviderSpec {
+        name: "openrouter-cheapest",
+        model_env_candidates: &["OPENROUTER_CHEAPEST_MODEL", "OPENROUTER_MODEL"],
+        default_model: "openai/gpt-4.1-mini",
+        required_envs: &["OPENROUTER_API_KEY"],
+        supports_tools: true,
+        build_model: |model_name| {
+            let api_key = required_env("OPENROUTER_API_KEY")?;
+            Ok(Box::new(OpenRouterClient::new(
+                OpenRouterConfig::new(api_key, model_name)
+                    .with_http_referer("https://github.com/zavora-ai/adk-rust")
+                    .with_title("ADK-Rust Provider Contract Tests")
+                    .with_default_api_mode(OpenRouterApiMode::ChatCompletions),
+            )?))
+        },
+    }
+}
+
 #[cfg(feature = "gemini")]
 provider_contract_tests!(gemini_cheapest_provider, gemini_cheapest_spec);
 #[cfg(feature = "openai")]
@@ -485,6 +511,8 @@ provider_contract_tests!(deepseek_cheapest_provider, deepseek_cheapest_spec);
 provider_contract_tests!(groq_cheapest_provider, groq_cheapest_spec);
 #[cfg(feature = "ollama")]
 provider_contract_tests!(ollama_cheapest_provider, ollama_cheapest_spec);
+#[cfg(feature = "openrouter")]
+provider_contract_tests!(openrouter_cheapest_provider, openrouter_cheapest_spec);
 
 #[cfg(feature = "fireworks")]
 fn fireworks_cheapest_spec() -> ProviderSpec {

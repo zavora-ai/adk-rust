@@ -43,7 +43,7 @@
 //!     ExecutionLanguage, ExecutionPayload, ExecutionRequest, SandboxPolicy,
 //! };
 //!
-//! let executor = DockerExecutor::new(DockerConfig::python());
+//! let executor = DockerExecutor::new(DockerConfig::python())?;
 //! executor.start().await?;
 //!
 //! let result = executor.execute(ExecutionRequest {
@@ -238,7 +238,7 @@ mod docker_impl {
     /// # async fn example() -> Result<(), adk_code::ExecutionError> {
     /// use adk_code::{CodeExecutor, DockerExecutor, DockerConfig};
     ///
-    /// let executor = DockerExecutor::new(DockerConfig::python());
+    /// let executor = DockerExecutor::new(DockerConfig::python())?;
     /// executor.start().await?;
     /// assert!(executor.is_running().await);
     ///
@@ -264,10 +264,17 @@ mod docker_impl {
         ///
         /// This does NOT start the container — call [`start`](CodeExecutor::start)
         /// or set `auto_start: true` (the default) to have it start on first execute.
-        pub fn new(config: DockerConfig) -> Self {
-            let docker =
-                Docker::connect_with_local_defaults().expect("failed to connect to Docker daemon");
-            Self { config, docker, state: RwLock::new(None) }
+        /// # Errors
+        ///
+        /// Returns [`ExecutionError::InternalError`] if the Docker daemon is
+        /// unreachable (not installed, not running, or socket permission denied).
+        pub fn new(config: DockerConfig) -> std::result::Result<Self, ExecutionError> {
+            let docker = Docker::connect_with_local_defaults().map_err(|e| {
+                ExecutionError::InternalError(format!(
+                    "failed to connect to Docker daemon: {e}. Is Docker installed and running?"
+                ))
+            })?;
+            Ok(Self { config, docker, state: RwLock::new(None) })
         }
 
         /// Create with a custom Docker connection.

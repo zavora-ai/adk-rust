@@ -1,4 +1,5 @@
 //! # adk-server
+#![allow(clippy::result_large_err)]
 //!
 //! HTTP server and A2A protocol for ADK agents.
 //!

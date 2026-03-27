@@ -576,7 +576,7 @@ let agent = LlmAgentBuilder::new("error_handling_agent")
         Box::pin(async move {
             // Validate something critical
             if ctx.user_id().is_empty() {
-                return Err(AdkError::Agent("User ID is required".to_string()));
+                return Err(AdkError::agent("User ID is required"));
             }
             Ok(None)
         })

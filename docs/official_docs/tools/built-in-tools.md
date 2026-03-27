@@ -2,6 +2,8 @@
 
 ADK-Rust provides several built-in tools that extend agent capabilities without requiring custom implementation. These tools are ready to use out of the box and integrate seamlessly with the agent framework.
 
+Provider-native tools are now declared through the normal `Tool` API instead of provider-specific `GenerateContentConfig.extensions` blobs. This means you can mix native tools such as Gemini Google Search, Anthropic Web Search, or OpenAI Responses web search with ordinary `FunctionTool` instances in the same agent.
+
 ## Overview
 
 | Tool | Purpose | Use Case |
@@ -9,6 +11,12 @@ ADK-Rust provides several built-in tools that extend agent capabilities without 
 | `#[tool]` macro | Zero-boilerplate custom tools | Any custom function — [see Function Tools](function-tools.md) |
 | `FunctionTool` | Manual custom tool registration | Dynamic tools, closures |
 | `GoogleSearchTool` | Web search via Gemini | Real-time information retrieval |
+| `UrlContextTool` | Gemini URL grounding | Summarize or reason over live URLs |
+| `GoogleMapsTool` | Gemini Google Maps grounding | Places, routes, and local context |
+| `GeminiCodeExecutionTool` | Gemini native code execution | Server-side Python execution |
+| `WebSearchTool` | Anthropic native web search | Claude server-side web search |
+| `OpenAIWebSearchTool` | OpenAI Responses web search | OpenAI-hosted retrieval |
+| `AgentTool` | Wrap agents as callable tools | Agent composition and delegation |
 | `ExitLoopTool` | Loop termination | Controlling LoopAgent iterations |
 | `LoadArtifactsTool` | Artifact loading | Accessing stored binary data |
 
@@ -60,7 +68,7 @@ The tool implementation returns an error if called directly because the actual s
 ```rust
 // This is handled internally - you don't call it directly
 async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
-    Err(AdkError::Tool("GoogleSearch is handled internally by Gemini".to_string()))
+    Err(AdkError::tool("GoogleSearch is handled internally by Gemini"))
 }
 ```
 
@@ -88,6 +96,56 @@ async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Valu
 // - "Who won the latest championship game?"
 // - "What are the current stock prices for tech companies?"
 ```
+
+## AgentTool
+
+`AgentTool` wraps any agent as a callable tool, enabling agent composition where a parent agent can invoke a child agent as part of its tool-calling workflow. State changes and artifacts from the sub-agent are automatically forwarded to the parent context.
+
+### Basic Usage
+
+```rust
+use adk_rust::prelude::*;
+use adk_tool::AgentTool;
+use std::sync::Arc;
+
+let sub_agent = LlmAgentBuilder::new("summarizer")
+    .description("Summarizes text content")
+    .instruction("Summarize the provided text concisely.")
+    .model(model.clone())
+    .build()?;
+
+let agent_tool = AgentTool::new(Arc::new(sub_agent));
+
+let coordinator = LlmAgentBuilder::new("coordinator")
+    .instruction("Use the summarizer tool when asked to summarize content.")
+    .model(model.clone())
+    .tool(Arc::new(agent_tool))
+    .build()?;
+```
+
+### How It Works
+
+1. The parent agent decides to call the wrapped agent as a tool
+2. `AgentTool` creates an invocation context with `StreamingMode::None`
+3. The sub-agent runs to completion and accumulates its full response
+4. The response text is returned to the parent agent
+5. State deltas and artifact deltas are forwarded to the parent context
+
+### Tool Details
+
+| Property | Value |
+|----------|-------|
+| Name | Same as the wrapped agent's name |
+| Description | Same as the wrapped agent's description |
+| Parameters | `request`: string (the input to send to the sub-agent) |
+| Returns | `{"response": "..."}` with the sub-agent's text output |
+
+### Key Behavior
+
+- Sub-agents run in non-streaming mode internally for reliable response capture
+- State changes (`output_key`) from the sub-agent propagate to the parent session
+- Artifacts saved by the sub-agent are forwarded to the parent context
+- See [Multi-Agent Systems](../agents/multi-agent.md) for more on agent composition patterns
 
 ## ExitLoopTool
 

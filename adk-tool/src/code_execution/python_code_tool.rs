@@ -104,7 +104,7 @@ impl Tool for PythonCodeTool {
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let code = args["code"]
             .as_str()
-            .ok_or_else(|| adk_core::AdkError::Tool("missing 'code' parameter".to_string()))?
+            .ok_or_else(|| adk_core::AdkError::tool("missing 'code' parameter"))?
             .to_string();
 
         let input = args.get("input").cloned();
@@ -123,7 +123,7 @@ impl Tool for PythonCodeTool {
             .executor
             .execute(request)
             .await
-            .map_err(|e| adk_core::AdkError::Tool(format!("Python execution failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::tool(format!("Python execution failed: {e}")))?;
 
         Ok(json!({
             "status": result.status,

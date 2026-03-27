@@ -315,7 +315,7 @@ impl OnnxSttProvider {
             message: format!("failed to create {session_name} session builder: {e}"),
         })?;
 
-        let builder = Self::apply_execution_provider(builder, ep, session_name);
+        let mut builder = Self::apply_execution_provider(builder, ep, session_name);
 
         builder.commit_from_file(onnx_path).map_err(|e| AudioError::Stt {
             provider: "ONNX".into(),

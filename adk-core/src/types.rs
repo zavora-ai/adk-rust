@@ -75,6 +75,16 @@ pub enum Part {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    /// Server-side tool call data from Gemini 3 built-in tool invocations.
+    /// Stored as opaque JSON to avoid coupling core types to provider-specific schemas.
+    ServerToolCall {
+        server_tool_call: serde_json::Value,
+    },
+    /// Server-side tool response data from Gemini 3 built-in tool invocations.
+    /// Stored as opaque JSON to avoid coupling core types to provider-specific schemas.
+    ServerToolResponse {
+        server_tool_response: serde_json::Value,
+    },
 }
 
 impl Content {
@@ -404,5 +414,48 @@ mod tests {
         let part: Part = serde_json::from_str(json).unwrap();
         assert!(!part.is_thinking());
         assert_eq!(part.text(), Some("hello world"));
+    }
+
+    #[test]
+    fn test_server_tool_call_round_trip() {
+        let payload = serde_json::json!({
+            "toolCallId": "tc_001",
+            "toolName": "google_search",
+            "args": {"query": "Rust programming"}
+        });
+        let part = Part::ServerToolCall { server_tool_call: payload.clone() };
+        let json = serde_json::to_string(&part).unwrap();
+        let deserialized: Part = serde_json::from_str(&json).unwrap();
+        assert_eq!(part, deserialized);
+        assert!(json.contains("server_tool_call"));
+
+        // Accessors return None/false for server tool call
+        assert_eq!(part.text(), None);
+        assert_eq!(part.mime_type(), None);
+        assert_eq!(part.file_uri(), None);
+        assert!(!part.is_media());
+        assert!(!part.is_thinking());
+        assert_eq!(part.thinking_text(), None);
+    }
+
+    #[test]
+    fn test_server_tool_response_round_trip() {
+        let payload = serde_json::json!({
+            "toolCallId": "tc_001",
+            "output": {"results": [{"title": "Rust Lang", "url": "https://rust-lang.org"}]}
+        });
+        let part = Part::ServerToolResponse { server_tool_response: payload.clone() };
+        let json = serde_json::to_string(&part).unwrap();
+        let deserialized: Part = serde_json::from_str(&json).unwrap();
+        assert_eq!(part, deserialized);
+        assert!(json.contains("server_tool_response"));
+
+        // Accessors return None/false for server tool response
+        assert_eq!(part.text(), None);
+        assert_eq!(part.mime_type(), None);
+        assert_eq!(part.file_uri(), None);
+        assert!(!part.is_media());
+        assert!(!part.is_thinking());
+        assert_eq!(part.thinking_text(), None);
     }
 }

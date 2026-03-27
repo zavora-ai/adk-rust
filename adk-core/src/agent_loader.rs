@@ -33,9 +33,8 @@ impl AgentLoader for SingleAgentLoader {
         if name.is_empty() || name == self.agent.name() {
             Ok(self.agent.clone())
         } else {
-            Err(AdkError::Config(format!(
-                "Cannot load agent '{}' - use empty string or '{}'",
-                name,
+            Err(AdkError::config(format!(
+                "Cannot load agent '{name}' - use empty string or '{}'",
                 self.agent.name()
             )))
         }
@@ -62,9 +61,7 @@ impl MultiAgentLoader {
     /// Returns an error if duplicate agent names are found.
     pub fn new(agents: Vec<Arc<dyn crate::Agent>>) -> Result<Self> {
         if agents.is_empty() {
-            return Err(AdkError::Config(
-                "MultiAgentLoader requires at least one agent".to_string(),
-            ));
+            return Err(AdkError::config("MultiAgentLoader requires at least one agent"));
         }
 
         let mut agent_map = HashMap::new();
@@ -73,7 +70,7 @@ impl MultiAgentLoader {
         for agent in agents {
             let name = agent.name().to_string();
             if agent_map.contains_key(&name) {
-                return Err(AdkError::Config(format!("Duplicate agent name: {}", name)));
+                return Err(AdkError::config(format!("Duplicate agent name: {name}")));
             }
             agent_map.insert(name, agent);
         }
@@ -90,9 +87,8 @@ impl AgentLoader for MultiAgentLoader {
         }
 
         self.agent_map.get(name).cloned().ok_or_else(|| {
-            AdkError::Config(format!(
-                "Agent '{}' not found. Available agents: {:?}",
-                name,
+            AdkError::config(format!(
+                "Agent '{name}' not found. Available agents: {:?}",
                 self.list_agents()
             ))
         })

@@ -95,22 +95,21 @@ async fn replace_match(ctx: &dyn InvocationContext, content: &str) -> Result<Str
     // Handle artifact.{name} pattern
     if let Some(file_name) = var_name.strip_prefix("artifact.") {
         if file_name.is_empty() {
-            return Err(AdkError::Agent(
-                "Invalid artifact name '': must include a file name after 'artifact.'".to_string(),
+            return Err(AdkError::agent(
+                "Invalid artifact name '': must include a file name after 'artifact.'",
             ));
         }
 
         // Reject path traversal attempts in artifact names
         if file_name.contains("..") || file_name.contains('/') || file_name.contains('\\') {
-            return Err(AdkError::Agent(format!(
-                "Invalid artifact name '{}': must not contain path separators or '..'",
-                file_name
+            return Err(AdkError::agent(format!(
+                "Invalid artifact name '{file_name}': must not contain path separators or '..'"
             )));
         }
 
         let artifacts = ctx
             .artifacts()
-            .ok_or_else(|| AdkError::Agent("Artifact service is not initialized".to_string()))?;
+            .ok_or_else(|| AdkError::agent("Artifact service is not initialized"))?;
 
         match artifacts.load(file_name).await {
             Ok(part) => {
@@ -123,7 +122,7 @@ async fn replace_match(ctx: &dyn InvocationContext, content: &str) -> Result<Str
                 if optional {
                     Ok(String::new())
                 } else {
-                    Err(AdkError::Agent(format!("Failed to load artifact {}: {}", file_name, e)))
+                    Err(AdkError::agent(format!("Failed to load artifact {file_name}: {e}")))
                 }
             }
         }
@@ -142,7 +141,7 @@ async fn replace_match(ctx: &dyn InvocationContext, content: &str) -> Result<Str
                 if optional {
                     Ok(String::new())
                 } else {
-                    Err(AdkError::Agent(format!("State variable '{}' not found", var_name)))
+                    Err(AdkError::agent(format!("State variable '{var_name}' not found")))
                 }
             }
         }

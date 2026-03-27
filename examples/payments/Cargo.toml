@@ -1,0 +1,18 @@
+[package]
+name = "payments-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-payments = { path = "../../adk-payments", features = ["acp", "acp-experimental", "ap2", "ap2-a2a", "ap2-mcp"] }
+adk-core = { path = "../../adk-core" }
+adk-session = { path = "../../adk-session" }
+adk-artifact = { path = "../../adk-artifact" }
+adk-memory = { path = "../../adk-memory" }
+tokio = { version = "1.40", features = ["full"] }
+serde_json = "1.0"
+chrono = "0.4"
+anyhow = "1.0"

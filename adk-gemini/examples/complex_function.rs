@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Part::FunctionCall { function_call, .. } = part {
                     function_queue.push_front(function_call.clone());
                 }
-                if let Part::FunctionResponse { function_response } = part {
+                if let Part::FunctionResponse { function_response, .. } = part {
                     if let Some(last_call) = function_queue.pop_front() {
                         if last_call.name != function_response.name {
                             warn!(

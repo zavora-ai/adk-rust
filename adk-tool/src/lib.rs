@@ -67,8 +67,21 @@ pub mod code_execution;
 
 pub use adk_core::{AdkError, Result, Tool, ToolContext, Toolset};
 pub use adk_rust_macros::tool;
+
+// Re-export async_trait so the #[tool] macro's generated code can reference it
+// without requiring users to add async-trait as a direct dependency.
 pub use agent_tool::{AgentTool, AgentToolConfig};
-pub use builtin::{ExitLoopTool, GoogleSearchTool, LoadArtifactsTool};
+pub use async_trait::async_trait;
+pub use builtin::{
+    AnthropicBashTool20241022, AnthropicBashTool20250124, AnthropicTextEditorTool20250124,
+    AnthropicTextEditorTool20250429, AnthropicTextEditorTool20250728, ExitLoopTool,
+    GeminiCodeExecutionTool, GeminiComputerEnvironment, GeminiComputerUseTool,
+    GeminiFileSearchTool, GoogleMapsContext, GoogleMapsTool, GoogleSearchTool, LoadArtifactsTool,
+    OpenAIApplyPatchTool, OpenAIApproximateLocation, OpenAICodeInterpreterTool,
+    OpenAIComputerEnvironment, OpenAIComputerUseTool, OpenAIFileSearchTool,
+    OpenAIImageGenerationTool, OpenAILocalShellTool, OpenAIMcpTool, OpenAIShellTool,
+    OpenAIWebSearchTool, UrlContextTool, WebSearchTool, WebSearchUserLocation,
+};
 pub use function_tool::FunctionTool;
 pub use mcp::{McpAuth, McpHttpClientBuilder, McpTaskConfig, McpToolset, OAuth2Config};
 pub use toolset::{

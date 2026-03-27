@@ -68,12 +68,12 @@ impl Tool for TypeTool {
         let selector = args
             .get("selector")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing 'selector' parameter".to_string()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("Missing 'selector' parameter"))?;
 
         let text = args
             .get("text")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing 'text' parameter".to_string()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("Missing 'text' parameter"))?;
 
         let clear_first = args.get("clear_first").and_then(|v| v.as_bool()).unwrap_or(true);
 
@@ -87,21 +87,21 @@ impl Tool for TypeTool {
             element
                 .clear()
                 .await
-                .map_err(|e| adk_core::AdkError::Tool(format!("Clear failed: {}", e)))?;
+                .map_err(|e| adk_core::AdkError::tool(format!("Clear failed: {}", e)))?;
         }
 
         // Type the text
         element
             .send_keys(text)
             .await
-            .map_err(|e| adk_core::AdkError::Tool(format!("Type failed: {}", e)))?;
+            .map_err(|e| adk_core::AdkError::tool(format!("Type failed: {}", e)))?;
 
         // Press Enter if requested
         if press_enter {
             element
                 .send_keys("\n")
                 .await
-                .map_err(|e| adk_core::AdkError::Tool(format!("Enter key failed: {}", e)))?;
+                .map_err(|e| adk_core::AdkError::tool(format!("Enter key failed: {}", e)))?;
         }
 
         // Get the current value
@@ -158,7 +158,7 @@ impl Tool for ClearTool {
         let selector = args
             .get("selector")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing 'selector' parameter".to_string()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("Missing 'selector' parameter"))?;
 
         self.browser.clear(selector).await?;
 
@@ -222,7 +222,7 @@ impl Tool for SelectTool {
         let selector = args
             .get("selector")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing 'selector' parameter".to_string()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("Missing 'selector' parameter"))?;
 
         let value = args.get("value").and_then(|v| v.as_str());
         let text = args.get("text").and_then(|v| v.as_str());
@@ -260,7 +260,7 @@ impl Tool for SelectTool {
                     "page": context
                 }));
             } else {
-                return Err(adk_core::AdkError::Tool(format!(
+                return Err(adk_core::AdkError::tool(format!(
                     "Option with text '{}' not found",
                     txt
                 )));
@@ -288,12 +288,10 @@ impl Tool for SelectTool {
                     "page": context
                 }));
             } else {
-                return Err(adk_core::AdkError::Tool(format!("Option at index {} not found", idx)));
+                return Err(adk_core::AdkError::tool(format!("Option at index {} not found", idx)));
             }
         } else {
-            return Err(adk_core::AdkError::Tool(
-                "Must specify 'value', 'text', or 'index'".to_string(),
-            ));
+            return Err(adk_core::AdkError::tool("Must specify 'value', 'text', or 'index'"));
         };
 
         // Click the option

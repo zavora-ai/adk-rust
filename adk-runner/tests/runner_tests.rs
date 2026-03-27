@@ -1,4 +1,4 @@
-use adk_core::{Agent, Content, EventStream, InvocationContext, Part, Result};
+use adk_core::{Agent, Content, EventStream, InvocationContext, Part, Result, SessionId, UserId};
 use adk_plugin::{Plugin, PluginConfig, PluginManager};
 use adk_runner::{Runner, RunnerConfig};
 use adk_session::{Event, Events, GetRequest, Session, SessionService, State};
@@ -193,7 +193,9 @@ async fn test_runner_run() {
     let content =
         Content { role: "user".to_string(), parts: vec![Part::Text { text: "Hello".to_string() }] };
 
-    let result = runner.run("user123".to_string(), "session456".to_string(), content).await;
+    let result = runner
+        .run(UserId::new("user123").unwrap(), SessionId::new("session456").unwrap(), content)
+        .await;
 
     assert!(result.is_ok());
 }
@@ -414,8 +416,10 @@ async fn test_plugin_callback_order_and_mutation() {
     .unwrap();
 
     let content = Content::new("user").with_text("hello");
-    let mut stream =
-        runner.run("user123".to_string(), "session456".to_string(), content).await.unwrap();
+    let mut stream = runner
+        .run(UserId::new("user123").unwrap(), SessionId::new("session456").unwrap(), content)
+        .await
+        .unwrap();
 
     let mut events = Vec::new();
     while let Some(event) = stream.next().await {
@@ -450,7 +454,7 @@ async fn test_plugin_error_propagates_from_on_user_message() {
     let plugin = Plugin::new(PluginConfig {
         name: "failing-plugin".to_string(),
         on_user_message: Some(Box::new(|_ctx, _content| {
-            Box::pin(async move { Err(adk_core::AdkError::Agent("boom".to_string())) })
+            Box::pin(async move { Err(adk_core::AdkError::agent("boom")) })
         })),
         ..Default::default()
     });
@@ -473,8 +477,8 @@ async fn test_plugin_error_propagates_from_on_user_message() {
 
     let mut stream = runner
         .run(
-            "user123".to_string(),
-            "session456".to_string(),
+            UserId::new("user123").unwrap(),
+            SessionId::new("session456").unwrap(),
             Content::new("user").with_text("hello"),
         )
         .await
@@ -523,8 +527,8 @@ async fn test_skill_injector_plugin_mutates_user_prompt() {
 
     let mut stream = runner
         .run(
-            "user123".to_string(),
-            "session456".to_string(),
+            UserId::new("user123").unwrap(),
+            SessionId::new("session456").unwrap(),
             Content::new("user").with_text("Please search this repository quickly"),
         )
         .await
@@ -582,8 +586,8 @@ async fn test_runner_with_auto_skills_mutates_user_prompt() {
 
     let mut stream = runner
         .run(
-            "user123".to_string(),
-            "session456".to_string(),
+            UserId::new("user123").unwrap(),
+            SessionId::new("session456").unwrap(),
             Content::new("user").with_text("Please search this repository quickly"),
         )
         .await

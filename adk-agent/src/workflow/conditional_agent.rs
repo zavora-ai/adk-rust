@@ -101,16 +101,16 @@ impl ConditionalAgent {
     }
 
     pub fn before_callback(mut self, callback: BeforeAgentCallback) -> Self {
-        Arc::get_mut(&mut self.before_callbacks)
-            .expect("before_callbacks not yet shared")
-            .push(callback);
+        if let Some(callbacks) = Arc::get_mut(&mut self.before_callbacks) {
+            callbacks.push(callback);
+        }
         self
     }
 
     pub fn after_callback(mut self, callback: AfterAgentCallback) -> Self {
-        Arc::get_mut(&mut self.after_callbacks)
-            .expect("after_callbacks not yet shared")
-            .push(callback);
+        if let Some(callbacks) = Arc::get_mut(&mut self.after_callbacks) {
+            callbacks.push(callback);
+        }
         self
     }
 
@@ -124,7 +124,7 @@ impl ConditionalAgent {
     }
 
     pub fn with_skills_from_root(mut self, root: impl AsRef<std::path::Path>) -> Result<Self> {
-        let index = load_skill_index(root).map_err(|e| adk_core::AdkError::Agent(e.to_string()))?;
+        let index = load_skill_index(root).map_err(|e| adk_core::AdkError::agent(e.to_string()))?;
         self.skills_index = Some(Arc::new(index));
         Ok(self)
     }
