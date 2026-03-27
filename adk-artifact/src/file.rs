@@ -228,9 +228,8 @@ impl ArtifactService for FileArtifactService {
 
         // Bootstrap base_dir synchronously so we can canonicalize it.
         // base_dir is configuration-controlled, not direct user input per-request.
-        std::fs::create_dir_all(&self.base_dir).map_err(|e| {
-            adk_core::AdkError::artifact(format!("create base dir failed: {e}"))
-        })?;
+        std::fs::create_dir_all(&self.base_dir)
+            .map_err(|e| adk_core::AdkError::artifact(format!("create base dir failed: {e}")))?;
         let canonical_base = self.base_dir.canonicalize().map_err(|e| {
             adk_core::AdkError::artifact(format!("canonicalize base dir failed: {e}"))
         })?;
