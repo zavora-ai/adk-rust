@@ -615,15 +615,13 @@ impl RealtimeRunner {
                 }
             }
             ServerEvent::SessionUpdated { session, .. } => {
-                // Check if the generic session update contains a Gemini resumption token
-                if let Some(resumption) = session.get("sessionResumption") {
-                    if let Some(token) = resumption.get("resumeToken").and_then(|t| t.as_str()) {
-                        tracing::info!("Received Gemini sessionResumption token, saving for future reconnects.");
-                        let mut config = self.config.write().await;
-                        let mut extra = config.extra.clone().unwrap_or_else(|| serde_json::json!({}));
-                        extra["resumeToken"] = serde_json::Value::String(token.to_string());
-                        config.extra = Some(extra);
-                    }
+                // Check if the generic session update contains a resumption token
+                if let Some(token) = session.get("resumeToken").and_then(|t| t.as_str()) {
+                    tracing::info!("Received Gemini sessionResumption token, saving for future reconnects.");
+                    let mut config = self.config.write().await;
+                    let mut extra = config.extra.clone().unwrap_or_else(|| serde_json::json!({}));
+                    extra["resumeToken"] = serde_json::Value::String(token.to_string());
+                    config.extra = Some(extra);
                 }
             }
             ServerEvent::Error { error, .. } => {

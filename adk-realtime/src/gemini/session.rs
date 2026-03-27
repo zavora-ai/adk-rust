@@ -105,7 +105,14 @@ struct GeminiSetup {
     #[serde(skip_serializing_if = "Option::is_none")]
     cached_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    session_id: Option<String>,
+    system_resumption: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_resumption_config: Option<SessionResumptionConfig>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SessionResumptionConfig {
+    handle: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -320,13 +327,13 @@ impl GeminiRealtimeSession {
 
         let tools = convert_tools(config.tools);
 
-        // If we have a resumption token stored in extra config, use it.
-        // The token is a string we map to the session_id field in setup based on Gemini API docs.
-        let resumption_token = if let Some(extra) = &config.extra {
-            extra.get("resumeToken").and_then(|t| t.as_str()).map(|s| s.to_string())
-        } else {
-            None
-        };
+        // If we have a resumption token stored in extra config, use it to hydrate the handle.
+        let session_resumption_config = config.extra.as_ref()
+            .and_then(|ext| ext.get("resumeToken"))
+            .and_then(|t| t.as_str())
+            .map(|token| SessionResumptionConfig {
+                handle: token.to_string(),
+            });
 
         let setup = GeminiClientMessage {
             setup: Some(GeminiSetup {
@@ -335,7 +342,8 @@ impl GeminiRealtimeSession {
                 generation_config: Some(generation_config),
                 tools,
                 cached_content: config.cached_content,
-                session_id: resumption_token,
+                system_resumption: Some(true),
+                session_resumption_config,
             }),
             realtime_input: None,
             tool_response: None,
@@ -455,12 +463,15 @@ impl GeminiRealtimeSession {
             }
         }
 
-        // Check for sessionResumption
-        if let Some(_resumption) = value.get("sessionResumption") {
-            return Ok(ServerEvent::SessionUpdated {
-                event_id: uuid::Uuid::new_v4().to_string(),
-                session: value.clone(),
-            });
+        // Catch the Server Update for sessionResumptionUpdate
+        if let Some(resumption_update) = value.get("sessionResumptionUpdate") {
+            if let Some(token) = resumption_update.get("resumeToken").and_then(|t| t.as_str()) {
+                tracing::debug!("Received new Gemini 2.5 Native resumption token");
+                return Ok(ServerEvent::SessionUpdated {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    session: json!({ "resumeToken": token }),
+                });
+            }
         }
 
         // Check for tool calls
