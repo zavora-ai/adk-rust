@@ -233,7 +233,7 @@ features = ["default-rustls-provider"]
 optional = true
 
 [dependencies.google-cloud-gax]
-version = "1.8.0"
+version = "1.9.0"
 default-features = false
 optional = true
 
