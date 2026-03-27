@@ -91,29 +91,45 @@ impl FileArtifactService {
         file_name.starts_with("user:")
     }
 
-    fn artifact_dir(
+    /// Build a safe artifact directory path from validated components.
+    ///
+    /// All components must pass `validate_path_component` before calling this.
+    /// The returned path is guaranteed to be under `self.base_dir`.
+    fn safe_artifact_dir(
         &self,
         app_name: &str,
         user_id: &str,
         session_id: &str,
         file_name: &str,
-    ) -> PathBuf {
-        if Self::is_user_scoped(file_name) {
+    ) -> Result<PathBuf> {
+        Self::validate_path_component(app_name, "app name")?;
+        Self::validate_path_component(user_id, "user id")?;
+        Self::validate_path_component(session_id, "session id")?;
+        Self::validate_file_name(file_name)?;
+
+        let dir = if Self::is_user_scoped(file_name) {
             self.base_dir.join(app_name).join(user_id).join(USER_SCOPED_DIR).join(file_name)
         } else {
             self.base_dir.join(app_name).join(user_id).join(session_id).join(file_name)
-        }
+        };
+
+        // Verify the constructed path hasn't escaped base_dir
+        self.ensure_within_base_dir(&dir)?;
+        Ok(dir)
     }
 
-    fn version_path(
+    /// Build a safe version file path from validated components.
+    fn safe_version_path(
         &self,
         app_name: &str,
         user_id: &str,
         session_id: &str,
         file_name: &str,
         version: i64,
-    ) -> PathBuf {
-        self.artifact_dir(app_name, user_id, session_id, file_name).join(format!("v{version}.json"))
+    ) -> Result<PathBuf> {
+        let dir = self.safe_artifact_dir(app_name, user_id, session_id, file_name)?;
+        let path = dir.join(format!("v{version}.json"));
+        Ok(path)
     }
 
     async fn read_versions(
@@ -123,8 +139,7 @@ impl FileArtifactService {
         session_id: &str,
         file_name: &str,
     ) -> Result<Vec<i64>> {
-        let dir = self.artifact_dir(app_name, user_id, session_id, file_name);
-        self.ensure_within_base_dir(&dir)?;
+        let dir = self.safe_artifact_dir(app_name, user_id, session_id, file_name)?;
         let mut entries = match fs::read_dir(&dir).await {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -196,11 +211,6 @@ impl FileArtifactService {
 #[async_trait]
 impl ArtifactService for FileArtifactService {
     async fn save(&self, req: SaveRequest) -> Result<SaveResponse> {
-        Self::validate_file_name(&req.file_name)?;
-        Self::validate_path_component(&req.app_name, "app name")?;
-        Self::validate_path_component(&req.user_id, "user id")?;
-        Self::validate_path_component(&req.session_id, "session id")?;
-
         let version = match req.version {
             Some(version) => version,
             None => self
@@ -210,18 +220,18 @@ impl ArtifactService for FileArtifactService {
                 .unwrap_or(1),
         };
 
-        let dir = self.artifact_dir(&req.app_name, &req.user_id, &req.session_id, &req.file_name);
+        let dir =
+            self.safe_artifact_dir(&req.app_name, &req.user_id, &req.session_id, &req.file_name)?;
         fs::create_dir_all(&dir)
             .await
             .map_err(|e| adk_core::AdkError::artifact(format!("create dir failed: {e}")))?;
-        let path = self.version_path(
+        let path = self.safe_version_path(
             &req.app_name,
             &req.user_id,
             &req.session_id,
             &req.file_name,
             version,
-        );
-        self.ensure_within_base_dir(&path)?;
+        )?;
         let payload = serde_json::to_vec(&req.part)
             .map_err(|error| adk_core::AdkError::artifact(error.to_string()))?;
         fs::write(path, payload)
@@ -232,11 +242,6 @@ impl ArtifactService for FileArtifactService {
     }
 
     async fn load(&self, req: LoadRequest) -> Result<LoadResponse> {
-        Self::validate_file_name(&req.file_name)?;
-        Self::validate_path_component(&req.app_name, "app name")?;
-        Self::validate_path_component(&req.user_id, "user id")?;
-        Self::validate_path_component(&req.session_id, "session id")?;
-
         let version = match req.version {
             Some(version) => version,
             None => {
@@ -245,15 +250,14 @@ impl ArtifactService for FileArtifactService {
             }
         };
 
-        let payload = fs::read(self.version_path(
+        let path = self.safe_version_path(
             &req.app_name,
             &req.user_id,
             &req.session_id,
             &req.file_name,
             version,
-        ))
-        .await
-        .map_err(|error| {
+        )?;
+        let payload = fs::read(&path).await.map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 adk_core::AdkError::artifact("artifact not found")
             } else {
@@ -268,19 +272,14 @@ impl ArtifactService for FileArtifactService {
     }
 
     async fn delete(&self, req: DeleteRequest) -> Result<()> {
-        Self::validate_file_name(&req.file_name)?;
-        Self::validate_path_component(&req.app_name, "app name")?;
-        Self::validate_path_component(&req.user_id, "user id")?;
-        Self::validate_path_component(&req.session_id, "session id")?;
-
         if let Some(version) = req.version {
-            let path = self.version_path(
+            let path = self.safe_version_path(
                 &req.app_name,
                 &req.user_id,
                 &req.session_id,
                 &req.file_name,
                 version,
-            );
+            )?;
             match fs::remove_file(path).await {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -291,8 +290,12 @@ impl ArtifactService for FileArtifactService {
                 }
             }
         } else {
-            let dir =
-                self.artifact_dir(&req.app_name, &req.user_id, &req.session_id, &req.file_name);
+            let dir = self.safe_artifact_dir(
+                &req.app_name,
+                &req.user_id,
+                &req.session_id,
+                &req.file_name,
+            )?;
             match fs::remove_dir_all(dir).await {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -311,9 +314,16 @@ impl ArtifactService for FileArtifactService {
         Self::validate_path_component(&req.app_name, "app name")?;
         Self::validate_path_component(&req.user_id, "user id")?;
         Self::validate_path_component(&req.session_id, "session id")?;
-        let session_dir =
-            self.base_dir.join(&req.app_name).join(&req.user_id).join(&req.session_id);
-        let user_dir = self.base_dir.join(&req.app_name).join(&req.user_id).join(USER_SCOPED_DIR);
+
+        // Build paths from validated components only
+        let app = req.app_name.clone();
+        let user = req.user_id.clone();
+        let session = req.session_id.clone();
+        let session_dir = self.base_dir.join(&app).join(&user).join(&session);
+        let user_dir = self.base_dir.join(&app).join(&user).join(USER_SCOPED_DIR);
+
+        self.ensure_within_base_dir(&session_dir)?;
+        self.ensure_within_base_dir(&user_dir)?;
 
         let mut names = Self::list_scope_dir(&session_dir).await?;
         names.extend(Self::list_scope_dir(&user_dir).await?);
@@ -322,10 +332,7 @@ impl ArtifactService for FileArtifactService {
     }
 
     async fn versions(&self, req: VersionsRequest) -> Result<VersionsResponse> {
-        Self::validate_file_name(&req.file_name)?;
-        Self::validate_path_component(&req.app_name, "app name")?;
-        Self::validate_path_component(&req.user_id, "user id")?;
-        Self::validate_path_component(&req.session_id, "session id")?;
+        // Validation happens inside read_versions → safe_artifact_dir
         let versions = self
             .read_versions(&req.app_name, &req.user_id, &req.session_id, &req.file_name)
             .await?;
