@@ -130,12 +130,13 @@ pub(crate) fn delegate_payment_command(
     request: AcpDelegatePaymentRequest,
     context: CommerceContext,
 ) -> DelegatePaymentCommand {
-    let billing_address = request.billing_address.clone().map(|address| {
-        // Redact sensitive fields — only keep country for risk/compliance
-        json!({
-            "country": address.country,
-        })
-    });
+    let billing_address: Option<serde_json::Value> = if request.billing_address.is_some() {
+        // Only record presence and country for risk/compliance — full address is PII
+        let country = request.billing_address.as_ref().and_then(|a| a.country.clone());
+        Some(json!({ "country": country }))
+    } else {
+        None
+    };
 
     DelegatePaymentCommand {
         context,

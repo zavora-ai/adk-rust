@@ -101,9 +101,7 @@ fn payment_audit_event(
             "scopes": request.scopes,
             "metadata": request.metadata,
         },
-        "sessionIdentity": record.session_identity.as_ref().map(|_identity| json!({
-            "present": true,
-        })),
+        "sessionIdentity": record.session_identity.is_some(),
         "protocolActor": {
             "actorId": record.initiated_by.actor_id,
             "role": record.initiated_by.role,
@@ -253,6 +251,6 @@ mod tests {
         assert_eq!(metadata["interventionOccurred"], true);
         assert_eq!(metadata["authenticatedRequest"]["tenantId"], "tenant-1");
         assert_eq!(metadata["protocolActor"]["actorId"], "merchant-agent");
-        assert_eq!(metadata["sessionIdentity"]["present"], true);
+        assert_eq!(metadata["sessionIdentity"], true);
     }
 }

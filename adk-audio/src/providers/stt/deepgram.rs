@@ -48,6 +48,7 @@ impl DeepgramStt {
 #[async_trait]
 impl SttProvider for DeepgramStt {
     async fn transcribe(&self, audio: &AudioFrame, opts: &SttOptions) -> AudioResult<Transcript> {
+        assert!(self.base_url.starts_with("https://"), "Deepgram requires HTTPS");
         let wav_bytes = frame_to_wav_bytes(audio)?;
 
         let mut params = vec!["model=nova-2".to_string(), "smart_format=true".to_string()];

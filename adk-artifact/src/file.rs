@@ -124,6 +124,7 @@ impl FileArtifactService {
         file_name: &str,
     ) -> Result<Vec<i64>> {
         let dir = self.artifact_dir(app_name, user_id, session_id, file_name);
+        self.ensure_within_base_dir(&dir)?;
         let mut entries = match fs::read_dir(&dir).await {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

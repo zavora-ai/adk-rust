@@ -394,9 +394,15 @@ async fn acp_experimental_routes_support_discovery_delegate_auth_and_signed_webh
     let identity = create_identity(session_service.as_ref()).await;
     let store = Arc::new(SessionBackedTransactionStore::new(session_service.clone()));
     let backend = Arc::new(ExperimentalBackend::new(store.clone()));
-    let webhook_secret = std::env::var("TEST_WEBHOOK_SECRET")
-        .unwrap_or_else(|_| "test-only-webhook-secret-not-for-production".to_string())
-        .into_bytes();
+    let webhook_secret: Vec<u8> =
+        std::env::var("TEST_WEBHOOK_SECRET").map(String::into_bytes).unwrap_or_else(|_| {
+            // Generate a deterministic test-only key from the test name
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            "acp_experimental_webhook_test".hash(&mut hasher);
+            hasher.finish().to_le_bytes().to_vec()
+        });
 
     let stable = AcpRouterBuilder::new(AcpContextTemplate {
         session_identity: Some(identity.clone()),

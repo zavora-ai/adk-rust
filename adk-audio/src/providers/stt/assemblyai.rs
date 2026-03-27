@@ -50,7 +50,8 @@ impl SttProvider for AssemblyAiStt {
     async fn transcribe(&self, audio: &AudioFrame, opts: &SttOptions) -> AudioResult<Transcript> {
         let wav_bytes = frame_to_wav_bytes(audio)?;
 
-        // Step 1: Upload audio
+        // Step 1: Upload audio (base_url is always HTTPS — enforced at construction)
+        assert!(self.base_url.starts_with("https://"), "AssemblyAI requires HTTPS");
         let upload_url = format!("{}/v2/upload", self.base_url);
         let upload_resp = self
             .client
