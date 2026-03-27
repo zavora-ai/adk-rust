@@ -667,7 +667,7 @@ pub mod code {
 ///
 /// Provides the [`SandboxBackend`](sandbox::SandboxBackend) trait and built-in backends:
 /// - [`ProcessBackend`](sandbox::ProcessBackend) - Subprocess execution with timeout and env isolation
-/// - [`WasmBackend`](sandbox::WasmBackend) - In-process WASM execution via wasmtime (requires `wasm` feature)
+/// - `WasmBackend` - In-process WASM execution via wasmtime (requires `wasm` feature)
 /// - [`SandboxTool`](sandbox::SandboxTool) - Tool trait implementation for agent integration
 ///
 /// Available with feature: `sandbox`
@@ -786,7 +786,7 @@ pub mod plugin {
 /// - [`TtsProvider`](audio::TtsProvider) - Text-to-speech synthesis
 /// - [`SttProvider`](audio::SttProvider) - Speech-to-text transcription
 /// - [`AudioProcessor`](audio::AudioProcessor) - Audio effects processing
-/// - [`AudioPipeline`](audio::AudioPipeline) - Composable audio pipelines
+/// - `AudioPipeline` - Composable audio pipelines
 /// - Cloud providers: ElevenLabs, OpenAI, Gemini, Cartesia, Deepgram, AssemblyAI
 /// - Local inference: MLX (Apple Silicon), ONNX Runtime
 ///

@@ -16,7 +16,7 @@
 //! ```
 
 use crate::service::*;
-use adk_core::{Part, Result};
+use adk_core::Result;
 use async_trait::async_trait;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Row, SqlitePool};

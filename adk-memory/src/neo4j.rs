@@ -28,7 +28,7 @@
 
 use crate::embedding::EmbeddingProvider;
 use crate::service::*;
-use adk_core::{Part, Result};
+use adk_core::Result;
 use async_trait::async_trait;
 use chrono::DateTime;
 use neo4rs::Graph;

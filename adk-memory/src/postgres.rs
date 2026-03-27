@@ -16,7 +16,7 @@
 use crate::embedding::EmbeddingProvider;
 use crate::migration::pg_runner;
 use crate::service::*;
-use adk_core::{Part, Result};
+use adk_core::Result;
 use async_trait::async_trait;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;

@@ -17,7 +17,7 @@
 
 use crate::embedding::EmbeddingProvider;
 use crate::service::*;
-use adk_core::{Part, Result};
+use adk_core::Result;
 use async_trait::async_trait;
 use chrono::Utc;
 use mongodb::bson::{DateTime as BsonDateTime, Document, doc};
