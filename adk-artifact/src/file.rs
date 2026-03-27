@@ -220,21 +220,53 @@ impl ArtifactService for FileArtifactService {
                 .unwrap_or(1),
         };
 
-        let dir =
-            self.safe_artifact_dir(&req.app_name, &req.user_id, &req.session_id, &req.file_name)?;
-        fs::create_dir_all(&dir)
+        // Validate all components reject traversal patterns
+        Self::validate_path_component(&req.app_name, "app name")?;
+        Self::validate_path_component(&req.user_id, "user id")?;
+        Self::validate_path_component(&req.session_id, "session id")?;
+        Self::validate_file_name(&req.file_name)?;
+
+        // Ensure base_dir exists and get its canonical form
+        fs::create_dir_all(&self.base_dir)
+            .await
+            .map_err(|e| adk_core::AdkError::artifact(format!("create base dir failed: {e}")))?;
+        let canonical_base = self.base_dir.canonicalize().map_err(|e| {
+            adk_core::AdkError::artifact(format!("canonicalize base dir failed: {e}"))
+        })?;
+
+        // Build path from canonical base + validated segments (no user data in base)
+        let canonical_dir = if Self::is_user_scoped(&req.file_name) {
+            canonical_base
+                .join(&req.app_name)
+                .join(&req.user_id)
+                .join(USER_SCOPED_DIR)
+                .join(&req.file_name)
+        } else {
+            canonical_base
+                .join(&req.app_name)
+                .join(&req.user_id)
+                .join(&req.session_id)
+                .join(&req.file_name)
+        };
+
+        fs::create_dir_all(&canonical_dir)
             .await
             .map_err(|e| adk_core::AdkError::artifact(format!("create dir failed: {e}")))?;
-        let path = self.safe_version_path(
-            &req.app_name,
-            &req.user_id,
-            &req.session_id,
-            &req.file_name,
-            version,
-        )?;
+
+        // Final canonicalization check after directory exists
+        let verified_dir = canonical_dir.canonicalize().map_err(|e| {
+            adk_core::AdkError::artifact(format!("canonicalize artifact dir failed: {e}"))
+        })?;
+        if !verified_dir.starts_with(&canonical_base) {
+            return Err(adk_core::AdkError::artifact(
+                "artifact path escapes configured base directory",
+            ));
+        }
+
+        let write_path = verified_dir.join(format!("v{version}.json"));
         let payload = serde_json::to_vec(&req.part)
             .map_err(|error| adk_core::AdkError::artifact(error.to_string()))?;
-        fs::write(path, payload)
+        fs::write(write_path, payload)
             .await
             .map_err(|e| adk_core::AdkError::artifact(format!("write failed: {e}")))?;
 
