@@ -198,22 +198,26 @@ impl GeminiBackend for VertexBackend {
         let content: google_cloud_aiplatform_v1::model::Content =
             serde_json::from_value(content_value).context(GoogleCloudRequestDeserializeSnafu)?;
 
-        let mut vertex_request =
-            google_cloud_aiplatform_v1::model::EmbedContentRequest::new().set_content(content);
-
+        // Build EmbedContentConfig with title, task_type, output_dimensionality
+        let mut config =
+            google_cloud_aiplatform_v1::model::embed_content_request::EmbedContentConfig::new();
         if let Some(title) = request.title {
-            vertex_request = vertex_request.set_title(title);
+            config = config.set_title(title);
         }
         if let Some(task_type) = request.task_type {
             let task_type =
                 google_cloud_aiplatform_v1::model::embed_content_request::EmbeddingTaskType::from(
                     task_type.as_ref(),
                 );
-            vertex_request = vertex_request.set_task_type(task_type);
+            config = config.set_task_type(task_type);
         }
         if let Some(output_dimensionality) = request.output_dimensionality {
-            vertex_request = vertex_request.set_output_dimensionality(output_dimensionality);
+            config = config.set_output_dimensionality(output_dimensionality);
         }
+
+        let vertex_request = google_cloud_aiplatform_v1::model::EmbedContentRequest::new()
+            .set_content(content)
+            .set_embed_content_config(config);
 
         let url = Url::parse(&format!(
             "{}/v1/{}:embedContent",

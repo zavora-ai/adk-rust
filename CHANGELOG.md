@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Gemini built-in tool tracing example (examples)
+- **`gemini_search_bug`**: Standalone example reproducing GitHub Issue #224 — demonstrates Google Search + URL Context + function tool coexistence through the ADK runner with full `ServerToolCall`/`ServerToolResponse` tracing, thought signature propagation, and grounding metadata display. Uses `gemini-3-pro-preview` with `include_server_side_tool_invocations` to surface the complete tool call chain.
+
 #### Action Node Graph Standardization (adk-action, adk-graph, adk-rust)
 - **`adk-action` crate**: New shared crate containing all 14 action node type definitions, `StandardProperties`, `ActionError` enum, and variable interpolation utilities. Zero runtime dependencies beyond `serde`, `serde_json`, `thiserror`, and `regex`.
 - **`ActionNodeExecutor`** in `adk-graph`: Implements the `Node` trait for any `ActionNodeConfig`, applying error handling (stop/continue/retry/fallback), timeout enforcement, and skip conditions uniformly across all node types.
@@ -27,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced `drain(..).collect()` with `std::mem::take()` in Anthropic streaming client per clippy `drain_collect` lint.
 
 ### Changed
+
+#### Dependency upgrade (adk-gemini)
+- **google-cloud-aiplatform-v1 1.8.0 → 1.9.0**: Migrated `EmbedContentRequest` from deprecated top-level `title`, `task_type`, and `output_dimensionality` fields to the new `EmbedContentConfig` struct. Eliminates 3 deprecation warnings on every build.
 
 #### Provider-native built-in tool support (adk-tool, adk-model, adk-gemini, examples)
 - Added typed built-in tool wrappers for Gemini (`GoogleMapsTool`, `GeminiCodeExecutionTool`, `GeminiFileSearchTool`, `GeminiComputerUseTool`), OpenAI Responses (`OpenAIWebSearchTool`, `OpenAIFileSearchTool`, `OpenAICodeInterpreterTool`, `OpenAIImageGenerationTool`, `OpenAIComputerUseTool`, `OpenAIMcpTool`, `OpenAILocalShellTool`, `OpenAIShellTool`, `OpenAIApplyPatchTool`), and Anthropic (`WebSearchTool`, native bash, native text editor variants).

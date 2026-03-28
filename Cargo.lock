@@ -646,13 +646,13 @@ version = "0.5.0"
 dependencies = [
  "opentelemetry 0.28.0",
  "opentelemetry-otlp",
- "opentelemetry_sdk",
+ "opentelemetry_sdk 0.28.0",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "tracing-opentelemetry",
+ "tracing-opentelemetry 0.29.0",
  "tracing-subscriber",
 ]
 
@@ -6308,9 +6308,9 @@ dependencies = [
 
 [[package]]
 name = "google-cloud-aiplatform-v1"
-version = "1.8.0"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32138387efd4e96de5a1ffdf70053d48059d5ac17ad9c7a9406315cb9bbfed55"
+checksum = "af392dd3f316edca5dd8ca54d8004c76553e4287c8787f8d23564d22a776db58"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6324,7 +6324,6 @@ dependencies = [
  "google-cloud-rpc",
  "google-cloud-type",
  "google-cloud-wkt",
- "lazy_static",
  "serde",
  "serde_json",
  "serde_with",
@@ -6333,9 +6332,9 @@ dependencies = [
 
 [[package]]
 name = "google-cloud-api"
-version = "1.3.0"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f90898c75e98534a2d1f4fe161551d00beb01b0d198df11836e0970dc896b11"
+checksum = "b0e179ddf515d736516801405d5a5bb2518dd777a0304a546552b7663a92023f"
 dependencies = [
  "bytes",
  "google-cloud-wkt",
@@ -6393,9 +6392,9 @@ dependencies = [
 
 [[package]]
 name = "google-cloud-gax-internal"
-version = "0.7.10"
+version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7395094c1dc7284155a48530aa1a49d52c876ce1b392dfcdf7e6b32540d042a2"
+checksum = "65d462b4fcee5f495bfb58edbf4a9250c230a1079d410bdcb8505bc5f713dcee"
 dependencies = [
  "bytes",
  "futures",
@@ -6408,6 +6407,7 @@ dependencies = [
  "lazy_static",
  "opentelemetry 0.31.0",
  "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk 0.31.0",
  "percent-encoding",
  "pin-project",
  "reqwest 0.13.2",
@@ -6418,13 +6418,14 @@ dependencies = [
  "tokio",
  "tonic 0.14.5",
  "tracing",
+ "tracing-opentelemetry 0.32.1",
 ]
 
 [[package]]
 name = "google-cloud-iam-v1"
-version = "1.6.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f436945fb3c581a3ef32f37e47756690006de7177934c6405cc0d4db799c8975"
+checksum = "30ce870ac18f3e0a474000cd57eab8bf3c64af8b5ed820468df8612182709c9a"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6432,7 +6433,6 @@ dependencies = [
  "google-cloud-gax-internal",
  "google-cloud-type",
  "google-cloud-wkt",
- "lazy_static",
  "serde",
  "serde_json",
  "serde_with",
@@ -6441,16 +6441,15 @@ dependencies = [
 
 [[package]]
 name = "google-cloud-location"
-version = "1.6.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b2ae8094e3343b721d97412c7f8c80d2824e29293938bb01918963f2fb64909"
+checksum = "9929c1cec55461f86983fde945f08ec35d2a2fbb19fa239a7a9a1fe8d131f10e"
 dependencies = [
  "async-trait",
  "bytes",
  "google-cloud-gax",
  "google-cloud-gax-internal",
  "google-cloud-wkt",
- "lazy_static",
  "serde",
  "serde_json",
  "serde_with",
@@ -6459,9 +6458,9 @@ dependencies = [
 
 [[package]]
 name = "google-cloud-longrunning"
-version = "1.7.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "767db5d07fff5361d01058764e724c4335b9899aa6c973c3bb2ae8d3bd4eacd8"
+checksum = "ebab215997c51f786852840fec8c76174b8a4af96d08e5fc1569742805baab09"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6469,7 +6468,6 @@ dependencies = [
  "google-cloud-gax-internal",
  "google-cloud-rpc",
  "google-cloud-wkt",
- "lazy_static",
  "serde",
  "serde_json",
  "serde_with",
@@ -6478,9 +6476,9 @@ dependencies = [
 
 [[package]]
 name = "google-cloud-lro"
-version = "1.3.1"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ef3969c85cf6b163c655f7ddcdee5bb5c3241f680ab648951239ef9cd4ffb0f"
+checksum = "82a4f93a1ec8e6e5448899877ea6021e0f5d06e6b08ccd9b0bd99bc837ca357b"
 dependencies = [
  "google-cloud-gax",
  "google-cloud-longrunning",
@@ -6505,9 +6503,9 @@ dependencies = [
 
 [[package]]
 name = "google-cloud-type"
-version = "1.2.0"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9390ac2f3f9882ff42956b25ea65b9f546c8dd44c131726d75a96bf744ec75f6"
+checksum = "c310636aa7b660539c3f9259ae7a1fa2fd8bd7965a471bf6467094493cdb715a"
 dependencies = [
  "bytes",
  "google-cloud-wkt",
@@ -9706,7 +9704,11 @@ version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b84bcd6ae87133e903af7ef497404dda70c60d0ea14895fc8a5e6722754fc2a0"
 dependencies = [
+ "futures-core",
+ "futures-sink",
  "js-sys",
+ "pin-project-lite",
+ "thiserror 2.0.18",
  "tracing",
 ]
 
@@ -9736,7 +9738,7 @@ dependencies = [
  "opentelemetry 0.28.0",
  "opentelemetry-http",
  "opentelemetry-proto",
- "opentelemetry_sdk",
+ "opentelemetry_sdk 0.28.0",
  "prost 0.13.5",
  "reqwest 0.12.28",
  "thiserror 2.0.18",
@@ -9752,7 +9754,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56f8870d3024727e99212eb3bb1762ec16e255e3e6f58eeb3dc8db1aa226746d"
 dependencies = [
  "opentelemetry 0.28.0",
- "opentelemetry_sdk",
+ "opentelemetry_sdk 0.28.0",
  "prost 0.13.5",
  "tonic 0.12.3",
 ]
@@ -9782,6 +9784,21 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+]
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e14ae4f5991976fd48df6d843de219ca6d31b01daaab2dad5af2badeded372bd"
+dependencies = [
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
+ "opentelemetry 0.31.0",
+ "percent-encoding",
+ "rand 0.9.2",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -14434,11 +14451,25 @@ dependencies = [
  "js-sys",
  "once_cell",
  "opentelemetry 0.28.0",
- "opentelemetry_sdk",
+ "opentelemetry_sdk 0.28.0",
  "smallvec",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-subscriber",
+ "web-time",
+]
+
+[[package]]
+name = "tracing-opentelemetry"
+version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ac28f2d093c6c477eaa76b23525478f38de514fa9aeb1285738d4b97a9552fc"
+dependencies = [
+ "js-sys",
+ "opentelemetry 0.31.0",
+ "tracing",
+ "tracing-core",
  "tracing-subscriber",
  "web-time",
 ]

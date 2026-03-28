@@ -1,0 +1,22 @@
+[package]
+name = "gemini-search-bug"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-core = { path = "../../adk-core" }
+adk-agent = { path = "../../adk-agent" }
+adk-gemini = { path = "../../adk-gemini" }
+adk-model = { path = "../../adk-model", features = ["gemini", "gemini-vertex"] }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+adk-tool = { path = "../../adk-tool" }
+tokio = { version = "1.40", features = ["full"] }
+futures = "0.3"
+serde_json = "1.0"
+async-trait = "0.1"
+dotenvy = "0.15"
+anyhow = "1.0"
