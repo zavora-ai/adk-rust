@@ -101,6 +101,10 @@ required-features = ["livekit", "openai"]
 name = "openai_webrtc"
 required-features = ["openai-webrtc"]
 
+[[bench]]
+name = "livekit_pcm_bench"
+harness = false
+
 [features]
 default = []
 # Enable OpenAI Realtime API support
