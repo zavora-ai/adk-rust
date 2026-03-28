@@ -219,7 +219,6 @@ impl AnthropicClient {
             anthropic_config.thinking.as_ref(),
             anthropic_config.effort,
             anthropic_config.fast_mode,
-            anthropic_config.citations,
             anthropic_config.inference_geo.as_deref(),
             anthropic_config.service_tier.as_deref(),
             anthropic_config.context_management.as_ref(),

@@ -28,10 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = Anthropic::new(None)?;
     let r = client
-        .send(MessageCreateParams::simple(
-            "Say hello in one word.",
-            KnownModel::ClaudeSonnet46,
-        ))
+        .send(MessageCreateParams::simple("Say hello in one word.", KnownModel::ClaudeSonnet46))
         .await?;
 
     for b in &r.content {
