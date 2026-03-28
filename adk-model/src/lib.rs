@@ -1,8 +1,9 @@
 //! # adk-model
+#![allow(clippy::result_large_err)]
 //!
-//! LLM model integrations for ADK (Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama,
-//! Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, Amazon Bedrock,
-//! Azure AI Inference).
+//! LLM model integrations for ADK (Gemini, OpenAI, OpenRouter, Anthropic, DeepSeek, Groq,
+//! Ollama, Fireworks AI, Together AI, Mistral AI, Perplexity, Cerebras, SambaNova, Amazon
+//! Bedrock, Azure AI Inference).
 //!
 //! ## Overview
 //!
@@ -15,6 +16,7 @@
 //! - `AnthropicClient` - Anthropic Claude models — requires `anthropic` feature
 //! - `DeepSeekClient` - DeepSeek models — requires `deepseek` feature
 //! - `GroqClient` - Groq ultra-fast inference — requires `groq` feature
+//! - `OpenRouterClient` - OpenRouter-native chat, responses, and discovery APIs — requires `openrouter` feature
 //! - `OllamaModel` - Local LLMs via Ollama — requires `ollama` feature
 //! - `BedrockClient` - Amazon Bedrock via AWS SDK — requires `bedrock` feature
 //! - `AzureAIClient` - Azure AI Inference endpoints — requires `azure-ai` feature
@@ -42,6 +44,38 @@
 //!     "gpt-5-mini",
 //! )).unwrap();
 //! ```
+//!
+//! ### OpenRouter
+//!
+//! ```rust,ignore
+//! use adk_core::{Content, Llm, LlmRequest};
+//! use adk_model::openrouter::{OpenRouterClient, OpenRouterConfig};
+//! use futures::StreamExt;
+//!
+//! let client = OpenRouterClient::new(
+//!     OpenRouterConfig::new(
+//!         std::env::var("OPENROUTER_API_KEY").unwrap(),
+//!         "openai/gpt-4.1-mini",
+//!     )
+//!     .with_http_referer("https://github.com/zavora-ai/adk-rust")
+//!     .with_title("ADK-Rust"),
+//! ).unwrap();
+//!
+//! let request = LlmRequest::new(
+//!     "openai/gpt-4.1-mini",
+//!     vec![Content::new("user").with_text("Reply in one short sentence.")],
+//! );
+//!
+//! # tokio_test::block_on(async {
+//! let mut stream = client.generate_content(request, true).await.unwrap();
+//! while let Some(item) = stream.next().await {
+//!     let _response = item.unwrap();
+//! }
+//! # });
+//! ```
+//!
+//! Native OpenRouter APIs such as model discovery, credits, routing configuration, plugins, and
+//! exact Responses payload access remain available on [`OpenRouterClient`] itself.
 //!
 //! ### Anthropic
 //!
@@ -186,6 +220,7 @@
 //! |----------|-------------|---------|
 //! | Amazon Bedrock | `bedrock` | AWS IAM credentials |
 //! | Azure AI Inference | `azure-ai` | `AZURE_AI_API_KEY` |
+//! | OpenRouter | `openrouter` | `OPENROUTER_API_KEY` |
 //!
 //! ## Features
 //!
@@ -194,6 +229,28 @@
 //! - Multimodal input (text, images, audio, video, PDF)
 //! - Generation configuration (temperature, top_p, etc.)
 //! - OpenAI-compatible APIs (Ollama, vLLM, etc.)
+//!
+//! ## OpenRouter Scope Boundary
+//!
+//! [`OpenRouterClient`] exposes the provider's native surfaces:
+//!
+//! - chat completions
+//! - responses
+//! - model discovery and credits
+//! - provider routing and fallback
+//! - OpenRouter plugins and built-in tools
+//! - exact provider metadata and annotations
+//!
+//! The generic [`Llm`] adapter exists for agent compatibility and covers text generation,
+//! streaming, reasoning parts, tool/function calling, and OpenRouter request options through
+//! [`openrouter::OpenRouterRequestOptions`].
+//!
+//! Use the native OpenRouter APIs whenever you need exact request or response parity, discovery,
+//! or provider-specific features that do not fit the generic [`LlmRequest`] / [`LlmResponse`]
+//! shape without information loss.
+//!
+//! For end-to-end agentic validation, see the local `examples/openrouter` crate and the
+//! `adk-model/examples/openrouter_*` binaries.
 
 #[cfg(feature = "anthropic")]
 pub mod anthropic;
@@ -215,8 +272,11 @@ pub mod ollama;
 pub mod openai;
 #[cfg(feature = "openai")]
 pub mod openai_compatible;
+#[cfg(feature = "openrouter")]
+pub mod openrouter;
 pub mod provider;
 pub mod retry;
+pub mod usage_tracking;
 
 #[cfg(feature = "anthropic")]
 pub use anthropic::AnthropicClient;
@@ -237,6 +297,8 @@ pub use ollama::{OllamaConfig, OllamaModel};
 pub use openai::{AzureConfig, AzureOpenAIClient, OpenAIClient, OpenAIConfig, ReasoningEffort};
 #[cfg(feature = "openai")]
 pub use openai_compatible::{OpenAICompatible, OpenAICompatibleConfig};
+#[cfg(feature = "openrouter")]
+pub use openrouter::{OpenRouterApiMode, OpenRouterClient, OpenRouterConfig};
 pub use provider::ModelProvider;
 pub use retry::RetryConfig;
 pub use retry::ServerRetryHint;

@@ -188,7 +188,7 @@ impl Tool for SwitchWindowTool {
         let handle = args
             .get("handle")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AdkError::Tool("Missing 'handle' parameter".to_string()))?;
+            .ok_or_else(|| AdkError::tool("Missing 'handle' parameter"))?;
 
         self.browser.switch_to_window(handle).await?;
 
@@ -368,14 +368,12 @@ impl Tool for SetWindowSizeTool {
         let width = args
             .get("width")
             .and_then(|v| v.as_u64())
-            .ok_or_else(|| AdkError::Tool("Missing 'width' parameter".to_string()))?
-            as u32;
+            .ok_or_else(|| AdkError::tool("Missing 'width' parameter"))? as u32;
 
-        let height = args
-            .get("height")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| AdkError::Tool("Missing 'height' parameter".to_string()))?
-            as u32;
+        let height =
+            args.get("height")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| AdkError::tool("Missing 'height' parameter"))? as u32;
 
         let x = args.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let y = args.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;

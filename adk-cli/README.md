@@ -92,6 +92,15 @@ adk-rust skills match --query "web scraping"  # rank skills by relevance
 All skills commands accept `--json` for machine-readable output and `--path`
 to specify the project root (defaults to `.`).
 
+`skills match` additional options:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--top-k` | `3` | Maximum number of matched skills to return |
+| `--min-score` | `1.0` | Minimum score threshold |
+| `--include-tag` | _(none)_ | Include only skills containing at least one of these tags (repeatable) |
+| `--exclude-tag` | _(none)_ | Exclude skills containing any of these tags (repeatable) |
+
 ### `adk-rust deploy` subcommands
 
 These commands target the external `adk-platform` deployment product. In
@@ -102,6 +111,8 @@ integration layer; the control plane and operator console live in the separate
 ```bash
 adk-rust deploy login --endpoint http://127.0.0.1:8090 --token <bearer-token>
 adk-rust deploy logout
+adk-rust deploy init                                    # create starter manifest
+adk-rust deploy init --agent-name my-agent --binary target/release/my-agent
 adk-rust deploy validate --path adk-deploy.toml
 adk-rust deploy build --path adk-deploy.toml
 adk-rust deploy push --path adk-deploy.toml --env staging
@@ -111,7 +122,14 @@ adk-rust deploy metrics --env production
 adk-rust deploy promote --deployment-id <id>
 adk-rust deploy rollback --deployment-id <id>
 adk-rust deploy secret set --env production OPENAI_API_KEY sk-...
+adk-rust deploy secret list --env production
+adk-rust deploy secret delete --env production OPENAI_API_KEY
 ```
+
+`deploy init` creates a starter `adk-deploy.toml` manifest in the current
+directory. Pass `--path` to write to a different location, `--agent-name` to
+set the agent name, and `--binary` to set the binary path. Fails if the file
+already exists.
 
 Deploy credentials are stored in the OS credential store keyed by control-plane
 endpoint. The saved CLI config keeps the endpoint and workspace metadata, but
@@ -164,6 +182,35 @@ Launcher::new(Arc::new(agent))
     .await?;
 ```
 
+### Builder methods
+
+| Method | Description |
+|--------|-------------|
+| `new(agent)` | Create a launcher with the given `Arc<dyn Agent>` |
+| `app_name(name)` | Custom application name (defaults to agent name) |
+| `with_session_service(svc)` | Custom `SessionService` (defaults to `InMemorySessionService`) |
+| `with_artifact_service(svc)` | Custom `ArtifactService` for binary artifact storage |
+| `with_memory_service(svc)` | Custom `Memory` service for semantic search |
+| `with_compaction(config)` | Enable runner-level context compaction in serve mode |
+| `with_context_cache(config, model)` | Enable automatic prompt cache lifecycle management |
+| `with_security_config(config)` | Custom server security settings |
+| `with_request_context_extractor(ext)` | Request context extractor for authenticated deployments |
+| `with_a2a_base_url(url)` | Enable A2A routes when building or serving |
+| `with_telemetry(config)` | Configure telemetry initialization for serve mode |
+| `with_shutdown_grace_period(dur)` | Maximum graceful shutdown window for the web server |
+| `with_streaming_mode(mode)` | Set streaming mode (currently affects console mode only) |
+| `with_thinking_mode(mode)` | Control how thinking content is rendered in console mode |
+
+### Execution methods
+
+| Method | Description |
+|--------|-------------|
+| `run()` | Parse CLI args and dispatch to chat or serve |
+| `run_console_directly()` | Start the REPL without CLI parsing |
+| `run_serve_directly(port)` | Start the web server without CLI parsing |
+| `build_app()` | Build an `axum::Router` for custom composition |
+| `build_app_with_a2a(base_url)` | Build an `axum::Router` with A2A routes enabled |
+
 ### Production server composition
 
 For production apps that need custom routes, middleware, or ownership of the
@@ -183,28 +230,24 @@ let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
 axum::serve(listener, app).await?;
 ```
 
-You can also enable A2A explicitly with `build_app_with_a2a(...)`.
+### Telemetry modes
 
-### Serve-mode configuration
+| Variant | Description |
+|---------|-------------|
+| `TelemetryConfig::AdkExporter` | Default in-memory ADK exporter with configurable `service_name` |
+| `TelemetryConfig::Otlp` | Initialize OTLP export |
+| `TelemetryConfig::None` | Skip launcher-managed telemetry initialization |
 
-`Launcher` now forwards several server/runtime settings that previously required
-manual `ServerConfig` wiring:
+### Thinking display modes
 
-```rust
-Launcher::new(Arc::new(agent))
-    .with_compaction(compaction_config)
-    .with_context_cache(context_cache_config, cache_capable_model)
-    .with_a2a_base_url("https://agent.example.com")
-    .with_telemetry(TelemetryConfig::AdkExporter {
-        service_name: "my-agent".to_string(),
-    });
-```
+| Variant | Description |
+|---------|-------------|
+| `ThinkingDisplayMode::Auto` | Show thinking in a dimmed block, auto-close on next text |
+| `ThinkingDisplayMode::Show` | Always show thinking content |
+| `ThinkingDisplayMode::Hide` | Suppress all thinking content (both `<think>` tags and `Thinking` parts) |
 
-Available telemetry modes:
-
-- `TelemetryConfig::AdkExporter` — default in-memory ADK exporter
-- `TelemetryConfig::Otlp` — initialize OTLP export
-- `TelemetryConfig::None` — skip launcher-managed telemetry initialization
+The `StreamPrinter` type handles rendering of streamed response parts including
+text, thinking blocks, function calls/responses, inline data, and file data.
 
 ## Configuration Priority
 
@@ -229,6 +272,7 @@ Resolution order (highest wins):
 - [adk-server](https://crates.io/crates/adk-server) — HTTP server
 - [adk-runner](https://crates.io/crates/adk-runner) — execution runtime
 - [adk-skill](https://crates.io/crates/adk-skill) — skill discovery
+- [adk-deploy](https://crates.io/crates/adk-deploy) — deployment manifest and bundling
 
 ## License
 

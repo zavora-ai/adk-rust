@@ -18,7 +18,7 @@ adk-core.workspace = true
 async-trait.workspace = true
 async-stream.workspace = true
 futures.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "time", "fs", "io-util", "macros"] }
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
@@ -29,10 +29,31 @@ tracing.workspace = true
 # Optional SQLite checkpointer
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"], optional = true }
 
+# Optional action node dependencies
+adk-action = { workspace = true, optional = true }
+regex = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+tokio-cron-scheduler = { version = "0.13", optional = true }
+
 [features]
 default = []
 sqlite = ["sqlx"]
-full = ["sqlite"]
+
+# Action node feature flags
+action = ["dep:adk-action", "dep:regex"]
+action-trigger = ["action", "dep:tokio-cron-scheduler"]
+action-http = ["action", "dep:reqwest"]
+action-db = ["action"]
+action-db-mongo = ["action"]
+action-db-redis = ["action"]
+action-code = ["action"]
+action-email = ["action"]
+action-rss = ["action-http"]
+action-full = ["action", "action-trigger", "action-http", "action-db", "action-code", "action-email", "action-rss"]
+
+full = ["sqlite", "action-full"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
+proptest = "1.5"
+adk-action = { workspace = true }

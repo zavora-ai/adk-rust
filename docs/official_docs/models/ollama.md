@@ -97,7 +97,7 @@ ollama pull codellama:13b     # Code generation
 
 ```toml
 [dependencies]
-adk-model = { version = "0.4", features = ["ollama"] }
+adk-model = { version = "0.5.0", features = ["ollama"] }
 ```
 
 ---
@@ -157,7 +157,7 @@ async fn main() -> anyhow::Result<()> {
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.4", features = ["cli", "ollama"] }
+adk-rust = { version = "0.5.0", features = ["cli", "ollama"] }
 tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 anyhow = "1.0"

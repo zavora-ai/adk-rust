@@ -50,3 +50,22 @@ impl From<std::io::Error> for SandboxError {
         SandboxError::ExecutionFailed(format!("I/O error: {err}"))
     }
 }
+
+impl From<SandboxError> for adk_core::AdkError {
+    fn from(err: SandboxError) -> Self {
+        use adk_core::{ErrorCategory, ErrorComponent};
+        let (category, code) = match &err {
+            SandboxError::Timeout { .. } => (ErrorCategory::Timeout, "code.sandbox_timeout"),
+            SandboxError::MemoryExceeded { .. } => (ErrorCategory::Internal, "code.sandbox_memory"),
+            SandboxError::ExecutionFailed(_) => (ErrorCategory::Internal, "code.sandbox_execution"),
+            SandboxError::InvalidRequest(_) => {
+                (ErrorCategory::InvalidInput, "code.sandbox_invalid_request")
+            }
+            SandboxError::BackendUnavailable(_) => {
+                (ErrorCategory::Unavailable, "code.sandbox_unavailable")
+            }
+        };
+        adk_core::AdkError::new(ErrorComponent::Code, category, code, err.to_string())
+            .with_source(err)
+    }
+}

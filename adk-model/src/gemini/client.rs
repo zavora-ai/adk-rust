@@ -1,8 +1,8 @@
 use crate::attachment;
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
-    CacheCapable, CitationMetadata, CitationSource, Content, FinishReason, Llm, LlmRequest,
-    LlmResponse, LlmResponseStream, Part, Result, UsageMetadata,
+    CacheCapable, CitationMetadata, CitationSource, Content, ErrorCategory, ErrorComponent,
+    FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part, Result, UsageMetadata,
 };
 use adk_gemini::Gemini;
 use async_trait::async_trait;
@@ -15,11 +15,66 @@ pub struct GeminiModel {
     retry_config: RetryConfig,
 }
 
+/// Convert a Gemini client error to a structured `AdkError` with proper category and retry hints.
+fn gemini_error_to_adk(e: &adk_gemini::ClientError) -> adk_core::AdkError {
+    fn format_error_chain(e: &dyn std::error::Error) -> String {
+        let mut msg = e.to_string();
+        let mut source = e.source();
+        while let Some(s) = source {
+            msg.push_str(": ");
+            msg.push_str(&s.to_string());
+            source = s.source();
+        }
+        msg
+    }
+
+    let message = format_error_chain(e);
+
+    // Extract status code from BadResponse variant via Display output
+    // BadResponse format: "bad response from server; code {code}; description: ..."
+    let (category, code, status_code) = if message.contains("code 429")
+        || message.contains("RESOURCE_EXHAUSTED")
+        || message.contains("rate limit")
+    {
+        (ErrorCategory::RateLimited, "model.gemini.rate_limited", Some(429u16))
+    } else if message.contains("code 503") || message.contains("UNAVAILABLE") {
+        (ErrorCategory::Unavailable, "model.gemini.unavailable", Some(503))
+    } else if message.contains("code 529") || message.contains("OVERLOADED") {
+        (ErrorCategory::Unavailable, "model.gemini.overloaded", Some(529))
+    } else if message.contains("code 408")
+        || message.contains("DEADLINE_EXCEEDED")
+        || message.contains("TIMEOUT")
+    {
+        (ErrorCategory::Timeout, "model.gemini.timeout", Some(408))
+    } else if message.contains("code 401") || message.contains("Invalid API key") {
+        (ErrorCategory::Unauthorized, "model.gemini.unauthorized", Some(401))
+    } else if message.contains("code 400") {
+        (ErrorCategory::InvalidInput, "model.gemini.bad_request", Some(400))
+    } else if message.contains("code 404") {
+        (ErrorCategory::NotFound, "model.gemini.not_found", Some(404))
+    } else if message.contains("invalid generation config") {
+        (ErrorCategory::InvalidInput, "model.gemini.invalid_config", None)
+    } else {
+        (ErrorCategory::Internal, "model.gemini.internal", None)
+    };
+
+    let mut err = adk_core::AdkError::new(ErrorComponent::Model, category, code, message)
+        .with_provider("gemini");
+    if let Some(sc) = status_code {
+        err = err.with_upstream_status(sc);
+    }
+    err
+}
+
 impl GeminiModel {
+    fn gemini_part_thought_signature(value: &serde_json::Value) -> Option<String> {
+        value.get("thoughtSignature").and_then(serde_json::Value::as_str).map(str::to_string)
+    }
+
     pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Result<Self> {
         let model_name = model.into();
         let client = Gemini::with_model(api_key.into(), model_name.clone())
-            .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+            .map_err(|e| adk_core::AdkError::model(e.to_string()))?;
 
         Ok(Self { client, model_name, retry_config: RetryConfig::default() })
     }
@@ -41,7 +96,7 @@ impl GeminiModel {
             location,
             model_name.clone(),
         )
-        .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+        .map_err(|e| adk_core::AdkError::model(e.to_string()))?;
 
         Ok(Self { client, model_name, retry_config: RetryConfig::default() })
     }
@@ -63,7 +118,7 @@ impl GeminiModel {
             location.as_ref(),
             model_name.clone(),
         )
-        .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+        .map_err(|e| adk_core::AdkError::model(e.to_string()))?;
 
         Ok(Self { client, model_name, retry_config: RetryConfig::default() })
     }
@@ -83,7 +138,7 @@ impl GeminiModel {
             location.as_ref(),
             model_name.clone(),
         )
-        .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+        .map_err(|e| adk_core::AdkError::model(e.to_string()))?;
 
         Ok(Self { client, model_name, retry_config: RetryConfig::default() })
     }
@@ -105,7 +160,7 @@ impl GeminiModel {
             location.as_ref(),
             model_name.clone(),
         )
-        .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+        .map_err(|e| adk_core::AdkError::model(e.to_string()))?;
 
         Ok(Self { client, model_name, retry_config: RetryConfig::default() })
     }
@@ -144,7 +199,7 @@ impl GeminiModel {
                     adk_gemini::Part::InlineData { inline_data } => {
                         let decoded =
                             BASE64_STANDARD.decode(&inline_data.data).map_err(|error| {
-                                adk_core::AdkError::Model(format!(
+                                adk_core::AdkError::model(format!(
                                     "failed to decode inline data from gemini response: {error}"
                                 ))
                             })?;
@@ -161,7 +216,7 @@ impl GeminiModel {
                             thought_signature: thought_signature.clone(),
                         });
                     }
-                    adk_gemini::Part::FunctionResponse { function_response } => {
+                    adk_gemini::Part::FunctionResponse { function_response, .. } => {
                         converted_parts.push(Part::FunctionResponse {
                             function_response: adk_core::FunctionResponseData {
                                 name: function_response.name.clone(),
@@ -172,6 +227,17 @@ impl GeminiModel {
                             },
                             id: None,
                         });
+                    }
+                    adk_gemini::Part::ToolCall { .. } | adk_gemini::Part::ExecutableCode { .. } => {
+                        if let Ok(value) = serde_json::to_value(p) {
+                            converted_parts.push(Part::ServerToolCall { server_tool_call: value });
+                        }
+                    }
+                    adk_gemini::Part::ToolResponse { .. }
+                    | adk_gemini::Part::CodeExecutionResult { .. } => {
+                        let value = serde_json::to_value(p).unwrap_or(serde_json::Value::Null);
+                        converted_parts
+                            .push(Part::ServerToolResponse { server_tool_response: value });
                     }
                 }
             }
@@ -247,6 +313,14 @@ impl GeminiModel {
                 }
             });
 
+        // Serialize grounding metadata into provider_metadata so consumers
+        // can access structured grounding data (search queries, sources, supports).
+        let provider_metadata = resp
+            .candidates
+            .first()
+            .and_then(|c| c.grounding_metadata.as_ref())
+            .and_then(|g| serde_json::to_value(g).ok());
+
         Ok(LlmResponse {
             content,
             usage_metadata,
@@ -257,6 +331,7 @@ impl GeminiModel {
             interrupted: false,
             error_code: None,
             error_message: None,
+            provider_metadata,
         })
     }
 
@@ -266,6 +341,78 @@ impl GeminiModel {
             serde_json::Value::Object(_) => response,
             other => serde_json::json!({ "result": other }),
         }
+    }
+
+    fn merge_object_value(
+        target: &mut serde_json::Map<String, serde_json::Value>,
+        value: serde_json::Value,
+    ) {
+        if let serde_json::Value::Object(object) = value {
+            for (key, value) in object {
+                target.insert(key, value);
+            }
+        }
+    }
+
+    fn build_gemini_tools(
+        tools: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<(Vec<adk_gemini::Tool>, adk_gemini::ToolConfig)> {
+        let mut gemini_tools = Vec::new();
+        let mut function_declarations = Vec::new();
+        let mut has_provider_native_tools = false;
+        let mut tool_config_json = serde_json::Map::new();
+
+        for (name, tool_decl) in tools {
+            if let Some(provider_tool) = tool_decl.get("x-adk-gemini-tool") {
+                let tool = serde_json::from_value::<adk_gemini::Tool>(provider_tool.clone())
+                    .map_err(|error| {
+                        adk_core::AdkError::model(format!(
+                            "failed to deserialize Gemini native tool '{name}': {error}"
+                        ))
+                    })?;
+                has_provider_native_tools = true;
+                gemini_tools.push(tool);
+            } else if let Ok(func_decl) =
+                serde_json::from_value::<adk_gemini::FunctionDeclaration>(tool_decl.clone())
+            {
+                function_declarations.push(func_decl);
+            } else {
+                return Err(adk_core::AdkError::model(format!(
+                    "failed to deserialize Gemini tool '{name}' as a function declaration"
+                )));
+            }
+
+            if let Some(tool_config) = tool_decl.get("x-adk-gemini-tool-config") {
+                Self::merge_object_value(&mut tool_config_json, tool_config.clone());
+            }
+        }
+
+        let has_function_declarations = !function_declarations.is_empty();
+        if has_function_declarations {
+            gemini_tools.push(adk_gemini::Tool::with_functions(function_declarations));
+        }
+
+        if has_provider_native_tools && has_function_declarations {
+            tool_config_json.insert(
+                "includeServerSideToolInvocations".to_string(),
+                serde_json::Value::Bool(true),
+            );
+        }
+
+        let tool_config = if tool_config_json.is_empty() {
+            adk_gemini::ToolConfig::default()
+        } else {
+            serde_json::from_value::<adk_gemini::ToolConfig>(serde_json::Value::Object(
+                tool_config_json,
+            ))
+            .map_err(|error| {
+                adk_core::AdkError::model(format!(
+                    "failed to deserialize Gemini tool configuration: {error}"
+                ))
+            })?
+        };
+
+        Ok((gemini_tools, tool_config))
     }
 
     fn stream_chunks_from_response(
@@ -297,6 +444,7 @@ impl GeminiModel {
             interrupted: false,
             error_code: None,
             error_message: None,
+            provider_metadata: None,
         };
 
         (vec![synthetic_partial, response], true)
@@ -307,19 +455,23 @@ impl GeminiModel {
         req: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream> {
-        // Helper to format the full error chain (Display + all source errors)
-        fn format_error_chain(e: &dyn std::error::Error) -> String {
-            let mut msg = e.to_string();
-            let mut source = e.source();
-            while let Some(s) = source {
-                msg.push_str(": ");
-                msg.push_str(&s.to_string());
-                source = s.source();
-            }
-            msg
-        }
-
         let mut builder = self.client.generate_content();
+
+        // Build a map of function_name → thought_signature from FunctionCall parts
+        // in model content. Gemini 3.x requires thought_signature on FunctionResponse
+        // parts when thinking is active, but adk_core::Part::FunctionResponse doesn't
+        // carry it (it's Gemini-specific). We recover it here at the provider boundary.
+        let mut fn_call_signatures: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for content in &req.contents {
+            if content.role == "model" {
+                for part in &content.parts {
+                    if let Part::FunctionCall { name, thought_signature: Some(sig), .. } = part {
+                        fn_call_signatures.insert(name.clone(), sig.clone());
+                    }
+                }
+            }
+        }
 
         // Add contents using proper builder methods
         for content in &req.contents {
@@ -402,6 +554,48 @@ impl GeminiModel {
                                     thought_signature: thought_signature.clone(),
                                 });
                             }
+                            Part::ServerToolCall { server_tool_call } => {
+                                if let Ok(native_part) = serde_json::from_value::<adk_gemini::Part>(
+                                    server_tool_call.clone(),
+                                ) {
+                                    match native_part {
+                                        adk_gemini::Part::ToolCall { .. }
+                                        | adk_gemini::Part::ExecutableCode { .. } => {
+                                            gemini_parts.push(native_part);
+                                            continue;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+
+                                gemini_parts.push(adk_gemini::Part::ToolCall {
+                                    tool_call: server_tool_call.clone(),
+                                    thought_signature: Self::gemini_part_thought_signature(
+                                        server_tool_call,
+                                    ),
+                                });
+                            }
+                            Part::ServerToolResponse { server_tool_response } => {
+                                if let Ok(native_part) = serde_json::from_value::<adk_gemini::Part>(
+                                    server_tool_response.clone(),
+                                ) {
+                                    match native_part {
+                                        adk_gemini::Part::ToolResponse { .. }
+                                        | adk_gemini::Part::CodeExecutionResult { .. } => {
+                                            gemini_parts.push(native_part);
+                                            continue;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+
+                                gemini_parts.push(adk_gemini::Part::ToolResponse {
+                                    tool_response: server_tool_response.clone(),
+                                    thought_signature: Self::gemini_part_thought_signature(
+                                        server_tool_response,
+                                    ),
+                                });
+                            }
                             _ => {}
                         }
                     }
@@ -417,18 +611,32 @@ impl GeminiModel {
                     }
                 }
                 "function" => {
-                    // For function responses
+                    // For function responses, build content directly to attach thought_signature
+                    // recovered from the preceding FunctionCall (Gemini 3.x requirement)
+                    let mut gemini_parts = Vec::new();
                     for part in &content.parts {
                         if let Part::FunctionResponse { function_response, .. } = part {
-                            builder = builder
-                                .with_function_response(
+                            let sig = fn_call_signatures.get(&function_response.name).cloned();
+                            gemini_parts.push(adk_gemini::Part::FunctionResponse {
+                                function_response: adk_gemini::tools::FunctionResponse::new(
                                     &function_response.name,
                                     Self::gemini_function_response_payload(
                                         function_response.response.clone(),
                                     ),
-                                )
-                                .map_err(|e| adk_core::AdkError::Model(e.to_string()))?;
+                                ),
+                                thought_signature: sig,
+                            });
                         }
+                    }
+                    if !gemini_parts.is_empty() {
+                        let fn_content = adk_gemini::Content {
+                            role: Some(adk_gemini::Role::User),
+                            parts: Some(gemini_parts),
+                        };
+                        builder = builder.with_message(adk_gemini::Message {
+                            content: fn_content,
+                            role: adk_gemini::Role::User,
+                        });
                     }
                 }
                 _ => {}
@@ -462,32 +670,12 @@ impl GeminiModel {
 
         // Add tools
         if !req.tools.is_empty() {
-            let mut function_declarations = Vec::new();
-            let mut has_google_search = false;
-
-            for (name, tool_decl) in &req.tools {
-                if name == "google_search" {
-                    has_google_search = true;
-                    continue;
-                }
-
-                // Deserialize our tool declaration into adk_gemini::FunctionDeclaration
-                if let Ok(func_decl) =
-                    serde_json::from_value::<adk_gemini::FunctionDeclaration>(tool_decl.clone())
-                {
-                    function_declarations.push(func_decl);
-                }
-            }
-
-            if !function_declarations.is_empty() {
-                let tool = adk_gemini::Tool::with_functions(function_declarations);
+            let (gemini_tools, tool_config) = Self::build_gemini_tools(&req.tools)?;
+            for tool in gemini_tools {
                 builder = builder.with_tool(tool);
             }
-
-            if has_google_search {
-                // Enable built-in Google Search
-                let tool = adk_gemini::Tool::google_search();
-                builder = builder.with_tool(tool);
+            if tool_config != adk_gemini::ToolConfig::default() {
+                builder = builder.with_tool_config(tool_config);
             }
         }
 
@@ -495,7 +683,7 @@ impl GeminiModel {
             adk_telemetry::debug!("Executing streaming request");
             let response_stream = builder.execute_stream().await.map_err(|e| {
                 adk_telemetry::error!(error = %e, "Model request failed");
-                adk_core::AdkError::Model(format_error_chain(&e))
+                gemini_error_to_adk(&e)
             })?;
 
             let mapped_stream = async_stream::stream! {
@@ -521,7 +709,7 @@ impl GeminiModel {
                         }
                         Err(e) => {
                             adk_telemetry::error!(error = %e, "Stream error");
-                            yield Err(adk_core::AdkError::Model(format_error_chain(&e)));
+                            yield Err(gemini_error_to_adk(&e));
                         }
                     }
                 }
@@ -532,7 +720,7 @@ impl GeminiModel {
             adk_telemetry::debug!("Executing blocking request");
             let response = builder.execute().await.map_err(|e| {
                 adk_telemetry::error!(error = %e, "Model request failed");
-                adk_core::AdkError::Model(format_error_chain(&e))
+                gemini_error_to_adk(&e)
             })?;
 
             let llm_response = Self::convert_response(&response)?;
@@ -561,27 +749,18 @@ impl GeminiModel {
             .with_system_instruction(system_instruction)
             .with_ttl(std::time::Duration::from_secs(u64::from(ttl_seconds)));
 
-        // Convert ADK tool definitions to Gemini FunctionDeclarations
-        let mut function_declarations = Vec::new();
-        for (name, tool_decl) in tools {
-            if name == "google_search" {
-                continue;
-            }
-            if let Ok(func_decl) =
-                serde_json::from_value::<adk_gemini::FunctionDeclaration>(tool_decl.clone())
-            {
-                function_declarations.push(func_decl);
-            }
+        let (gemini_tools, tool_config) = Self::build_gemini_tools(tools)?;
+        if !gemini_tools.is_empty() {
+            cache_builder = cache_builder.with_tools(gemini_tools);
         }
-        if !function_declarations.is_empty() {
-            cache_builder = cache_builder
-                .with_tools(vec![adk_gemini::Tool::with_functions(function_declarations)]);
+        if tool_config != adk_gemini::ToolConfig::default() {
+            cache_builder = cache_builder.with_tool_config(tool_config);
         }
 
         let handle = cache_builder
             .execute()
             .await
-            .map_err(|e| adk_core::AdkError::Model(format!("cache creation failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::model(format!("cache creation failed: {e}")))?;
 
         Ok(handle.name().to_string())
     }
@@ -592,7 +771,7 @@ impl GeminiModel {
         handle
             .delete()
             .await
-            .map_err(|(_, e)| adk_core::AdkError::Model(format!("cache deletion failed: {e}")))?;
+            .map_err(|(_, e)| adk_core::AdkError::model(format!("cache deletion failed: {e}")))?;
         Ok(())
     }
 }
@@ -615,12 +794,87 @@ impl Llm for GeminiModel {
     )]
     async fn generate_content(&self, req: LlmRequest, stream: bool) -> Result<LlmResponseStream> {
         adk_telemetry::info!("Generating content");
+        let usage_span = adk_telemetry::llm_generate_span("gemini", &self.model_name, stream);
         // Retries only cover request setup/execution. Stream failures after the stream starts
         // are yielded to the caller and are not replayed automatically.
-        execute_with_retry(&self.retry_config, is_retryable_model_error, || {
+        let result = execute_with_retry(&self.retry_config, is_retryable_model_error, || {
             self.generate_content_internal(req.clone(), stream)
         })
-        .await
+        .await?;
+        Ok(crate::usage_tracking::with_usage_tracking(result, usage_span))
+    }
+}
+
+#[cfg(test)]
+mod native_tool_tests {
+    use super::*;
+
+    #[test]
+    fn test_build_gemini_tools_supports_native_tool_metadata() {
+        let mut tools = std::collections::HashMap::new();
+        tools.insert(
+            "google_search".to_string(),
+            serde_json::json!({
+                "x-adk-gemini-tool": {
+                    "google_search": {}
+                }
+            }),
+        );
+        tools.insert(
+            "lookup_weather".to_string(),
+            serde_json::json!({
+                "name": "lookup_weather",
+                "description": "lookup weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": { "type": "string" }
+                    }
+                }
+            }),
+        );
+
+        let (gemini_tools, tool_config) =
+            GeminiModel::build_gemini_tools(&tools).expect("tool conversion should succeed");
+
+        assert_eq!(gemini_tools.len(), 2);
+        assert_eq!(tool_config.include_server_side_tool_invocations, Some(true));
+    }
+
+    #[test]
+    fn test_build_gemini_tools_merges_native_tool_config() {
+        let mut tools = std::collections::HashMap::new();
+        tools.insert(
+            "google_maps".to_string(),
+            serde_json::json!({
+                "x-adk-gemini-tool": {
+                    "google_maps": {
+                        "enable_widget": true
+                    }
+                },
+                "x-adk-gemini-tool-config": {
+                    "retrievalConfig": {
+                        "latLng": {
+                            "latitude": 1.23,
+                            "longitude": 4.56
+                        }
+                    }
+                }
+            }),
+        );
+
+        let (_gemini_tools, tool_config) =
+            GeminiModel::build_gemini_tools(&tools).expect("tool conversion should succeed");
+
+        assert_eq!(
+            tool_config.retrieval_config,
+            Some(serde_json::json!({
+                "latLng": {
+                    "latitude": 1.23,
+                    "longitude": 4.56
+                }
+            }))
+        );
     }
 }
 
@@ -675,6 +929,7 @@ mod tests {
             interrupted: false,
             error_code: None,
             error_message: None,
+            provider_metadata: None,
         };
 
         let (chunks, saw_partial) = GeminiModel::stream_chunks_from_response(response, false);
@@ -699,6 +954,7 @@ mod tests {
             interrupted: false,
             error_code: None,
             error_message: None,
+            provider_metadata: None,
         };
 
         let (chunks, saw_partial) = GeminiModel::stream_chunks_from_response(response, true);
@@ -721,7 +977,7 @@ mod tests {
             async move {
                 let attempt = attempts.fetch_add(1, Ordering::SeqCst);
                 if attempt < 2 {
-                    return Err(AdkError::Model("code 429 RESOURCE_EXHAUSTED".to_string()));
+                    return Err(AdkError::model("code 429 RESOURCE_EXHAUSTED"));
                 }
                 Ok("ok")
             }
@@ -745,13 +1001,13 @@ mod tests {
             let attempts = Arc::clone(&attempts);
             async move {
                 attempts.fetch_add(1, Ordering::SeqCst);
-                Err::<(), _>(AdkError::Model("code 400 invalid request".to_string()))
+                Err::<(), _>(AdkError::model("code 400 invalid request"))
             }
         })
         .await
         .expect_err("non-retryable error should return immediately");
 
-        assert!(matches!(error, AdkError::Model(_)));
+        assert!(error.is_model());
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
@@ -764,13 +1020,13 @@ mod tests {
             let attempts = Arc::clone(&attempts);
             async move {
                 attempts.fetch_add(1, Ordering::SeqCst);
-                Err::<(), _>(AdkError::Model("code 429 RESOURCE_EXHAUSTED".to_string()))
+                Err::<(), _>(AdkError::model("code 429 RESOURCE_EXHAUSTED"))
             }
         })
         .await
         .expect_err("disabled retries should return first error");
 
-        assert!(matches!(error, AdkError::Model(_)));
+        assert!(error.is_model());
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 

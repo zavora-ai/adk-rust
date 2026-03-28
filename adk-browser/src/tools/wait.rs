@@ -65,7 +65,7 @@ impl Tool for WaitForElementTool {
         let selector = args
             .get("selector")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing 'selector' parameter".to_string()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("Missing 'selector' parameter"))?;
 
         let timeout = args.get("timeout").and_then(|v| v.as_u64()).unwrap_or(30);
 
@@ -130,7 +130,7 @@ impl Tool for WaitTool {
         let seconds = args
             .get("seconds")
             .and_then(|v| v.as_f64())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing 'seconds' parameter".to_string()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("Missing 'seconds' parameter"))?;
 
         // Cap at 30 seconds
         let seconds = seconds.min(30.0);
@@ -190,7 +190,7 @@ impl Tool for WaitForPageLoadTool {
             }
 
             if start.elapsed().as_secs() > timeout {
-                return Err(adk_core::AdkError::Tool(format!(
+                return Err(adk_core::AdkError::tool(format!(
                     "Page load timeout after {}s",
                     timeout
                 )));
@@ -253,7 +253,7 @@ impl Tool for WaitForTextTool {
         let text = args
             .get("text")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing 'text' parameter".to_string()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("Missing 'text' parameter"))?;
 
         let timeout = args.get("timeout").and_then(|v| v.as_u64()).unwrap_or(30);
 
@@ -273,7 +273,7 @@ impl Tool for WaitForTextTool {
             }
 
             if start.elapsed().as_secs() > timeout {
-                return Err(adk_core::AdkError::Tool(format!(
+                return Err(adk_core::AdkError::tool(format!(
                     "Text '{}' not found after {}s",
                     text, timeout
                 )));

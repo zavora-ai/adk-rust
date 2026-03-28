@@ -62,7 +62,7 @@ impl Neo4jSessionService {
     pub async fn new(uri: &str, username: &str, password: &str) -> Result<Self> {
         let graph = Graph::new(uri, username, password)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("neo4j connection failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("neo4j connection failed: {e}")))?;
         Ok(Self { graph })
     }
 
@@ -113,7 +113,7 @@ impl Neo4jSessionService {
             )))
             .await
             .map_err(|e| {
-                adk_core::AdkError::Session(format!("migration registry creation failed: {e}"))
+                adk_core::AdkError::session(format!("migration registry creation failed: {e}"))
             })?;
 
         // Step 2: Read current max applied version
@@ -136,7 +136,7 @@ impl Neo4jSessionService {
 
         // Step 5: Version mismatch check
         if max_applied > max_compiled {
-            return Err(adk_core::AdkError::Session(format!(
+            return Err(adk_core::AdkError::session(format!(
                 "schema version mismatch: database is at v{max_applied} \
                  but code only knows up to v{max_compiled}. \
                  Upgrade your ADK version."
@@ -151,7 +151,7 @@ impl Neo4jSessionService {
 
             for cypher in cypher_statements {
                 self.graph.run(neo4rs::query(cypher)).await.map_err(|e| {
-                    adk_core::AdkError::Session(format!(
+                    adk_core::AdkError::session(format!(
                         "{}",
                         crate::migration::MigrationError {
                             version,
@@ -179,11 +179,11 @@ impl Neo4jSessionService {
         let query_str =
             format!("OPTIONAL MATCH (m:{}) RETURN max(m.version) AS max_v", Self::REGISTRY_LABEL,);
         let mut row_stream = self.graph.execute(neo4rs::query(&query_str)).await.map_err(|e| {
-            adk_core::AdkError::Session(format!("migration registry read failed: {e}"))
+            adk_core::AdkError::session(format!("migration registry read failed: {e}"))
         })?;
 
         if let Some(row) = row_stream.next().await.map_err(|e| {
-            adk_core::AdkError::Session(format!("migration registry read failed: {e}"))
+            adk_core::AdkError::session(format!("migration registry read failed: {e}"))
         })? {
             // max() returns null when no nodes exist; treat as 0
             Ok(row.get::<i64>("max_v").unwrap_or(0))
@@ -200,12 +200,12 @@ impl Neo4jSessionService {
                 "SHOW CONSTRAINTS YIELD name WHERE name = 'session_unique' RETURN name",
             ))
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("baseline detection failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("baseline detection failed: {e}")))?;
 
         let found = row_stream
             .next()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("baseline detection failed: {e}")))?
+            .map_err(|e| adk_core::AdkError::session(format!("baseline detection failed: {e}")))?
             .is_some();
 
         Ok(found)
@@ -225,7 +225,7 @@ impl Neo4jSessionService {
             )
             .await
             .map_err(|e| {
-                adk_core::AdkError::Session(format!(
+                adk_core::AdkError::session(format!(
                     "{}",
                     crate::migration::MigrationError {
                         version,
@@ -243,7 +243,7 @@ fn state_to_json_string(
     state: &HashMap<String, Value>,
 ) -> std::result::Result<String, adk_core::AdkError> {
     serde_json::to_string(state)
-        .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))
+        .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))
 }
 
 /// Deserialize a JSON string from Neo4j into a `HashMap<String, Value>`.
@@ -257,7 +257,7 @@ fn json_string_to_state(
         return Ok(HashMap::new());
     }
     serde_json::from_str::<HashMap<String, Value>>(s)
-        .map_err(|e| adk_core::AdkError::Session(format!("deserialize state failed: {e}")))
+        .map_err(|e| adk_core::AdkError::session(format!("deserialize state failed: {e}")))
 }
 
 /// Convert a Neo4j row to an `Event`.
@@ -307,7 +307,7 @@ impl SessionService for Neo4jSessionService {
             .graph
             .start_txn()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
         // Load existing app state and merge with delta
         let mut row_stream = txn
@@ -318,13 +318,13 @@ impl SessionService for Neo4jSessionService {
                 .param("app_name", req.app_name.clone()),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let mut app_state: HashMap<String, Value> = HashMap::new();
         if let Some(row) = row_stream
             .next(&mut txn)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         {
             if let Ok(state_str) = row.get::<String>("state") {
                 app_state = json_string_to_state(&state_str)?;
@@ -344,7 +344,7 @@ impl SessionService for Neo4jSessionService {
             .param("now", now_str.clone()),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("create failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("create failed: {e}")))?;
 
         // Load existing user state and merge with delta
         let mut row_stream = txn
@@ -357,13 +357,13 @@ impl SessionService for Neo4jSessionService {
                 .param("user_id", req.user_id.clone()),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let mut user_state: HashMap<String, Value> = HashMap::new();
         if let Some(row) = row_stream
             .next(&mut txn)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         {
             if let Ok(state_str) = row.get::<String>("state") {
                 user_state = json_string_to_state(&state_str)?;
@@ -384,7 +384,7 @@ impl SessionService for Neo4jSessionService {
             .param("now", now_str.clone()),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("create failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("create failed: {e}")))?;
 
         // Create merged state for the session
         let merged_state = state_utils::merge_states(&app_state, &user_state, &session_state);
@@ -409,7 +409,7 @@ impl SessionService for Neo4jSessionService {
             .param("now", now_str.clone()),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("create failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("create failed: {e}")))?;
 
         // Create relationships: Session -> AppState, Session -> UserState
         txn.run(
@@ -424,11 +424,11 @@ impl SessionService for Neo4jSessionService {
             .param("session_id", session_id.clone()),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("create failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("create failed: {e}")))?;
 
         txn.commit()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("commit failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
 
         Ok(Box::new(Neo4jSession {
             app_name: req.app_name,
@@ -457,13 +457,13 @@ impl SessionService for Neo4jSessionService {
                 .param("session_id", req.session_id.clone()),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let row = row_stream
             .next()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
-            .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+            .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
         let state_str = row.get::<String>("state").unwrap_or_default();
         let updated_at_str = row.get::<String>("updated_at").unwrap_or_default();
@@ -492,13 +492,13 @@ impl SessionService for Neo4jSessionService {
                 .param("session_id", req.session_id.clone()),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let mut events: Vec<Event> = Vec::new();
         while let Some(row) = event_stream
             .next()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         {
             if let Some(event) = row_to_event(&row) {
                 events.push(event);
@@ -544,13 +544,13 @@ impl SessionService for Neo4jSessionService {
                 .param("limit", limit),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let mut sessions: Vec<Box<dyn Session>> = Vec::new();
         while let Some(row) = row_stream
             .next()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         {
             let session_id = row.get::<String>("session_id").unwrap_or_default();
             let state_str = row.get::<String>("state").unwrap_or_default();
@@ -579,7 +579,7 @@ impl SessionService for Neo4jSessionService {
             .graph
             .start_txn()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
         // DETACH DELETE session and connected event nodes
         txn.run(
@@ -594,11 +594,11 @@ impl SessionService for Neo4jSessionService {
             .param("session_id", req.session_id),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("delete failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("delete failed: {e}")))?;
 
         txn.commit()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("commit failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
 
         Ok(())
     }
@@ -611,7 +611,7 @@ impl SessionService for Neo4jSessionService {
             .graph
             .start_txn()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
         // Find the session
         let mut row_stream = txn
@@ -623,13 +623,13 @@ impl SessionService for Neo4jSessionService {
                 .param("session_id", session_id.to_string()),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let row = row_stream
             .next(&mut txn)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
-            .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+            .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
         let app_name = row.get::<String>("app_name").unwrap_or_default();
         let user_id = row.get::<String>("user_id").unwrap_or_default();
@@ -646,13 +646,13 @@ impl SessionService for Neo4jSessionService {
                 .param("app_name", app_name.clone()),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let mut app_state: HashMap<String, Value> = HashMap::new();
         if let Some(row) = app_stream
             .next(&mut txn)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         {
             if let Ok(state_str) = row.get::<String>("state") {
                 app_state = json_string_to_state(&state_str)?;
@@ -670,13 +670,13 @@ impl SessionService for Neo4jSessionService {
                 .param("user_id", user_id.clone()),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let mut user_state: HashMap<String, Value> = HashMap::new();
         if let Some(row) = user_stream
             .next(&mut txn)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         {
             if let Ok(state_str) = row.get::<String>("state") {
                 user_state = json_string_to_state(&state_str)?;
@@ -702,7 +702,7 @@ impl SessionService for Neo4jSessionService {
             .param("now", now_str.clone()),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("update failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
 
         // Update user state
         user_state.extend(user_delta);
@@ -719,7 +719,7 @@ impl SessionService for Neo4jSessionService {
             .param("now", now_str.clone()),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("update failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
 
         // Update session merged state
         session_state.extend(session_delta);
@@ -739,15 +739,15 @@ impl SessionService for Neo4jSessionService {
             .param("now", now_str.clone()),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("update failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
 
         // Serialize event fields to JSON strings
         let llm_response_json = serde_json::to_string(&event.llm_response)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
         let actions_json = serde_json::to_string(&event.actions)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
         let tool_ids_json = serde_json::to_string(&event.long_running_tool_ids)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
 
         // Create Event node linked to Session via HAS_EVENT
         txn.run(
@@ -779,11 +779,11 @@ impl SessionService for Neo4jSessionService {
             .param("long_running_tool_ids", tool_ids_json),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("insert failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
         txn.commit()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("commit failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
 
         Ok(())
     }
@@ -805,7 +805,7 @@ impl SessionService for Neo4jSessionService {
             .graph
             .start_txn()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
         // Use the full composite key — no ambiguity possible.
         let mut row_stream = txn
@@ -820,13 +820,13 @@ impl SessionService for Neo4jSessionService {
                 .param("session_id", session_id.clone()),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let row = row_stream
             .next(&mut txn)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
-            .ok_or_else(|| adk_core::AdkError::Session("session not found".into()))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+            .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
 
         let existing_state_str = row.get::<String>("state").unwrap_or_default();
         let existing_state = json_string_to_state(&existing_state_str)?;
@@ -841,13 +841,13 @@ impl SessionService for Neo4jSessionService {
                 .param("app_name", app_name.clone()),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let mut app_state: HashMap<String, Value> = HashMap::new();
         if let Some(row) = app_stream
             .next(&mut txn)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         {
             if let Ok(state_str) = row.get::<String>("state") {
                 app_state = json_string_to_state(&state_str)?;
@@ -865,13 +865,13 @@ impl SessionService for Neo4jSessionService {
                 .param("user_id", user_id.clone()),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?;
 
         let mut user_state: HashMap<String, Value> = HashMap::new();
         if let Some(row) = user_stream
             .next(&mut txn)
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("query failed: {e}")))?
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
         {
             if let Ok(state_str) = row.get::<String>("state") {
                 user_state = json_string_to_state(&state_str)?;
@@ -897,7 +897,7 @@ impl SessionService for Neo4jSessionService {
             .param("now", now_str.clone()),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("update failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
 
         // Update user state
         user_state.extend(user_delta);
@@ -914,7 +914,7 @@ impl SessionService for Neo4jSessionService {
             .param("now", now_str.clone()),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("update failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
 
         // Update session merged state
         session_state.extend(session_delta);
@@ -934,15 +934,15 @@ impl SessionService for Neo4jSessionService {
             .param("now", now_str.clone()),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("update failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("update failed: {e}")))?;
 
         // Serialize event fields to JSON strings
         let llm_response_json = serde_json::to_string(&event.llm_response)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
         let actions_json = serde_json::to_string(&event.actions)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
         let tool_ids_json = serde_json::to_string(&event.long_running_tool_ids)
-            .map_err(|e| adk_core::AdkError::Session(format!("serialize failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("serialize failed: {e}")))?;
 
         // Create Event node linked to Session via HAS_EVENT
         txn.run(
@@ -974,11 +974,11 @@ impl SessionService for Neo4jSessionService {
             .param("long_running_tool_ids", tool_ids_json),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("insert failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("insert failed: {e}")))?;
 
         txn.commit()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("commit failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
 
         Ok(())
     }
@@ -989,7 +989,7 @@ impl SessionService for Neo4jSessionService {
             .graph
             .start_txn()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("transaction failed: {e}")))?;
 
         txn.run(
             neo4rs::query(
@@ -1001,11 +1001,11 @@ impl SessionService for Neo4jSessionService {
             .param("user_id", user_id.to_string()),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Session(format!("delete_all_sessions failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::session(format!("delete_all_sessions failed: {e}")))?;
 
         txn.commit()
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("commit failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("commit failed: {e}")))?;
 
         Ok(())
     }
@@ -1016,7 +1016,7 @@ impl SessionService for Neo4jSessionService {
             .graph
             .execute(neo4rs::query("RETURN 1"))
             .await
-            .map_err(|e| adk_core::AdkError::Session(format!("health check failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::session(format!("health check failed: {e}")))?;
         Ok(())
     }
 }
@@ -1062,6 +1062,10 @@ impl State for Neo4jSession {
     }
 
     fn set(&mut self, key: String, value: Value) {
+        if let Err(msg) = adk_core::validate_state_key(&key) {
+            tracing::warn!(key = %key, "rejecting invalid state key: {msg}");
+            return;
+        }
         self.state.insert(key, value);
     }
 

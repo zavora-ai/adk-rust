@@ -44,10 +44,10 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-graph = { version = "0.4", features = ["sqlite"] }
-adk-agent = "0.4"
-adk-model = "0.4"
-adk-core = "0.4"
+adk-graph = { version = "0.5.0", features = ["sqlite"] }
+adk-agent = "0.5.0"
+adk-model = "0.5.0"
+adk-core = "0.5.0"
 ```
 
 ### Basic Graph with AgentNode
@@ -414,7 +414,7 @@ for cp in checkpoints {
 
 ## Examples
 
-All examples use real LLM integration with AgentNode:
+Examples are in the [adk-playground](https://github.com/zavora-ai/adk-playground) repo:
 
 ```bash
 # Parallel LLM agents with callbacks

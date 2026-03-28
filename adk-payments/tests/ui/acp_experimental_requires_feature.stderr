@@ -1,0 +1,14 @@
+error[E0432]: unresolved import `adk_payments::protocol::acp::experimental`
+ --> tests/ui/acp_experimental_requires_feature.rs:1:34
+  |
+1 | use adk_payments::protocol::acp::experimental::AcpExperimentalRouterBuilder;
+  |                                  ^^^^^^^^^^^^ could not find `experimental` in `acp`
+  |
+note: found an item that was configured out
+ --> src/protocol/acp/mod.rs
+  |
+  | #[cfg(feature = "acp-experimental")]
+  |       ---------------------------- the item is gated behind the `acp-experimental` feature
+  | #[cfg_attr(docsrs, doc(cfg(feature = "acp-experimental")))]
+  | pub mod experimental;
+  |         ^^^^^^^^^^^^

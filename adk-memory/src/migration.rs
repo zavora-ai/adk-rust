@@ -5,8 +5,8 @@
 //! forward-only migration steps.
 //!
 //! The types ([`MigrationStep`], [`AppliedMigration`], [`MigrationError`]) are
-//! always compiled. The SQL runner functions ([`run_sql_migrations`],
-//! [`sql_schema_version`]) require the `sqlite-memory` or `database-memory` feature.
+//! always compiled. The SQL runner functions (`run_sql_migrations`,
+//! `sql_schema_version`) require the `sqlite-memory` or `database-memory` feature.
 
 use chrono::{DateTime, Utc};
 
@@ -62,7 +62,7 @@ impl std::error::Error for MigrationError {}
 /// its own monomorphised copy, avoiding complex generic trait bounds.
 #[cfg(any(feature = "sqlite-memory", feature = "database-memory"))]
 macro_rules! impl_sql_migration_runner {
-    ($mod_name:ident, $pool_ty:ty) => {
+    ($mod_name:ident, $pool_ty:ty, $int_type:expr) => {
         pub mod $mod_name {
             use super::MigrationError;
             use chrono::Utc;
@@ -93,23 +93,24 @@ macro_rules! impl_sql_migration_runner {
                 // Step 1: Create registry table if missing
                 let create_sql = format!(
                     "CREATE TABLE IF NOT EXISTS {registry_table} (\
-                        version INTEGER PRIMARY KEY, \
+                        version {} PRIMARY KEY, \
                         description TEXT NOT NULL, \
                         applied_at TEXT NOT NULL\
-                    )"
+                    )",
+                    $int_type
                 );
                 sqlx::query(&create_sql).execute(pool).await.map_err(|e| {
-                    adk_core::AdkError::Memory(format!("migration registry creation failed: {e}"))
+                    adk_core::AdkError::memory(format!("migration registry creation failed: {e}"))
                 })?;
 
                 // Step 2: Read current max applied version
                 let max_sql =
                     format!("SELECT COALESCE(MAX(version), 0) AS max_v FROM {registry_table}");
                 let row = sqlx::query(&max_sql).fetch_one(pool).await.map_err(|e| {
-                    adk_core::AdkError::Memory(format!("migration registry read failed: {e}"))
+                    adk_core::AdkError::memory(format!("migration registry read failed: {e}"))
                 })?;
                 let mut max_applied: i64 = row.try_get("max_v").map_err(|e| {
-                    adk_core::AdkError::Memory(format!("migration registry read failed: {e}"))
+                    adk_core::AdkError::memory(format!("migration registry read failed: {e}"))
                 })?;
 
                 // Step 3: Baseline detection — if registry is empty but
@@ -125,7 +126,7 @@ macro_rules! impl_sql_migration_runner {
                                  VALUES ({v}, '{desc}', '{now}')"
                             );
                             sqlx::query(&ins).execute(pool).await.map_err(|e| {
-                                adk_core::AdkError::Memory(format!(
+                                adk_core::AdkError::memory(format!(
                                     "{}",
                                     MigrationError {
                                         version: v,
@@ -144,7 +145,7 @@ macro_rules! impl_sql_migration_runner {
 
                 // Step 5: Version mismatch check
                 if max_applied > max_compiled {
-                    return Err(adk_core::AdkError::Memory(format!(
+                    return Err(adk_core::AdkError::memory(format!(
                         "schema version mismatch: database is at v{max_applied} \
                          but code only knows up to v{max_compiled}. \
                          Upgrade your ADK version."
@@ -158,7 +159,7 @@ macro_rules! impl_sql_migration_runner {
                     }
 
                     let mut tx = pool.begin().await.map_err(|e| {
-                        adk_core::AdkError::Memory(format!(
+                        adk_core::AdkError::memory(format!(
                             "{}",
                             MigrationError {
                                 version,
@@ -171,7 +172,7 @@ macro_rules! impl_sql_migration_runner {
                     // Execute the migration SQL (raw_sql supports multiple
                     // semicolon-separated statements in a single call).
                     sqlx::raw_sql(sql).execute(&mut *tx).await.map_err(|e| {
-                        adk_core::AdkError::Memory(format!(
+                        adk_core::AdkError::memory(format!(
                             "{}",
                             MigrationError {
                                 version,
@@ -189,7 +190,7 @@ macro_rules! impl_sql_migration_runner {
                          VALUES ({version}, '{description}', '{now}')"
                     );
                     sqlx::query(&rec).execute(&mut *tx).await.map_err(|e| {
-                        adk_core::AdkError::Memory(format!(
+                        adk_core::AdkError::memory(format!(
                             "{}",
                             MigrationError {
                                 version,
@@ -200,7 +201,7 @@ macro_rules! impl_sql_migration_runner {
                     })?;
 
                     tx.commit().await.map_err(|e| {
-                        adk_core::AdkError::Memory(format!(
+                        adk_core::AdkError::memory(format!(
                             "{}",
                             MigrationError {
                                 version,
@@ -235,7 +236,7 @@ macro_rules! impl_sql_migration_runner {
 }
 
 #[cfg(feature = "sqlite-memory")]
-impl_sql_migration_runner!(sqlite_runner, sqlx::SqlitePool);
+impl_sql_migration_runner!(sqlite_runner, sqlx::SqlitePool, "INTEGER");
 
 #[cfg(feature = "database-memory")]
-impl_sql_migration_runner!(pg_runner, sqlx::PgPool);
+impl_sql_migration_runner!(pg_runner, sqlx::PgPool, "BIGINT");

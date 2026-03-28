@@ -43,13 +43,13 @@ pub trait MemoryService: Send + Sync {
     /// memories (including embeddings) for the given app and user.
     async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<()> {
         let _ = (app_name, user_id);
-        Err(adk_core::AdkError::Memory("delete_user not implemented".into()))
+        Err(adk_core::AdkError::memory("delete_user not implemented"))
     }
 
     /// Delete all memory entries for a specific session.
     async fn delete_session(&self, app_name: &str, user_id: &str, session_id: &str) -> Result<()> {
         let _ = (app_name, user_id, session_id);
-        Err(adk_core::AdkError::Memory("delete_session not implemented".into()))
+        Err(adk_core::AdkError::memory("delete_session not implemented"))
     }
 
     /// Verify backend connectivity.

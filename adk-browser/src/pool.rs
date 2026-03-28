@@ -74,7 +74,7 @@ impl BrowserSessionPool {
 
         // Check capacity
         if sessions.len() >= self.max_sessions {
-            return Err(AdkError::Tool(format!(
+            return Err(AdkError::tool(format!(
                 "Browser session pool full ({} sessions). Release unused sessions or increase max_sessions.",
                 self.max_sessions
             )));

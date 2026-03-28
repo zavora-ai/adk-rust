@@ -1,0 +1,41 @@
+[
+  {
+    "type": "RUN_STARTED",
+    "threadId": "thread-partial",
+    "runId": "run-partial",
+    "forwardedSource": "partial-suite"
+  },
+  {
+    "type": "MESSAGES_SNAPSHOT",
+    "messageCount": 1,
+    "firstRole": "user",
+    "firstText": "stream partial output"
+  },
+  {
+    "type": "REASONING_MESSAGE_CHUNK",
+    "messageId": "stream-001-reasoning-0",
+    "delta": "Thinking step 1"
+  },
+  {
+    "type": "REASONING_MESSAGE_CHUNK",
+    "messageId": "stream-001-reasoning-0",
+    "delta": "Thinking step 2"
+  },
+  {
+    "type": "TEXT_MESSAGE_CHUNK",
+    "messageId": "stream-001-text-0",
+    "role": "assistant",
+    "delta": "Hello "
+  },
+  {
+    "type": "TEXT_MESSAGE_CHUNK",
+    "messageId": "stream-001-text-0",
+    "role": "assistant",
+    "delta": "world"
+  },
+  {
+    "type": "RUN_FINISHED",
+    "threadId": "thread-partial",
+    "runId": "run-partial"
+  }
+]

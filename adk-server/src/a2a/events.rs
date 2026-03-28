@@ -9,7 +9,7 @@ pub fn event_to_message(event: &Event) -> Result<Message> {
         .llm_response
         .content
         .as_ref()
-        .ok_or_else(|| adk_core::AdkError::Agent("Event has no content".to_string()))?;
+        .ok_or_else(|| adk_core::AdkError::agent("Event has no content"))?;
 
     let a2a_parts = parts::adk_parts_to_a2a(&content.parts, &[])?;
 

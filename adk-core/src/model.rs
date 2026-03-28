@@ -27,7 +27,17 @@ pub struct GenerateContentConfig {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub top_k: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub frequency_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub presence_penalty: Option<f32>,
     pub max_output_tokens: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub seed: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub top_logprobs: Option<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stop_sequences: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<serde_json::Value>,
 
@@ -35,6 +45,10 @@ pub struct GenerateContentConfig {
     /// When set, the Gemini provider attaches this to the generation request.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cached_content: Option<String>,
+
+    /// Provider-specific request options keyed by provider namespace.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extensions: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -49,6 +63,8 @@ pub struct LlmResponse {
     pub interrupted: bool,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub provider_metadata: Option<serde_json::Value>,
 }
 
 /// Trait for LLM providers that support prompt caching.
@@ -148,6 +164,15 @@ pub struct UsageMetadata {
 
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub audio_output_token_count: Option<i32>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cost: Option<f64>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub is_byok: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub provider_usage: Option<serde_json::Value>,
 }
 
 /// Citation metadata emitted by model providers for source attribution.
@@ -210,6 +235,7 @@ impl LlmResponse {
             interrupted: false,
             error_code: None,
             error_message: None,
+            provider_metadata: None,
         }
     }
 }
@@ -247,7 +273,12 @@ mod tests {
             temperature: Some(0.7),
             top_p: Some(0.9),
             top_k: Some(40),
+            frequency_penalty: Some(0.2),
+            presence_penalty: Some(-0.3),
             max_output_tokens: Some(1024),
+            seed: Some(42),
+            top_logprobs: Some(5),
+            stop_sequences: vec!["END".to_string()],
             ..Default::default()
         };
         let req = LlmRequest::new("test-model", vec![]).with_config(config);
@@ -256,6 +287,11 @@ mod tests {
         let config = req.config.unwrap();
         assert_eq!(config.temperature, Some(0.7));
         assert_eq!(config.max_output_tokens, Some(1024));
+        assert_eq!(config.frequency_penalty, Some(0.2));
+        assert_eq!(config.presence_penalty, Some(-0.3));
+        assert_eq!(config.seed, Some(42));
+        assert_eq!(config.top_logprobs, Some(5));
+        assert_eq!(config.stop_sequences, vec!["END"]);
     }
 
     #[test]
@@ -267,6 +303,7 @@ mod tests {
         assert!(!resp.partial);
         assert_eq!(resp.finish_reason, Some(FinishReason::Stop));
         assert!(resp.citation_metadata.is_none());
+        assert!(resp.provider_metadata.is_none());
     }
 
     #[test]
@@ -306,11 +343,121 @@ mod tests {
             interrupted: false,
             error_code: None,
             error_message: None,
+            provider_metadata: None,
         };
 
         let encoded = serde_json::to_string(&response).expect("serialize");
         let decoded: LlmResponse = serde_json::from_str(&encoded).expect("deserialize");
         assert_eq!(decoded.citation_metadata, response.citation_metadata);
+    }
+
+    #[test]
+    fn test_generate_content_config_roundtrip_with_extensions() {
+        let mut extensions = serde_json::Map::new();
+        extensions.insert(
+            "openrouter".to_string(),
+            serde_json::json!({
+                "provider": {
+                    "zdr": true,
+                    "order": ["openai", "anthropic"]
+                },
+                "plugins": [
+                    { "id": "web", "enabled": true }
+                ]
+            }),
+        );
+
+        let config = GenerateContentConfig {
+            temperature: Some(0.4),
+            top_p: Some(0.8),
+            top_k: Some(12),
+            frequency_penalty: Some(0.1),
+            presence_penalty: Some(0.2),
+            max_output_tokens: Some(512),
+            seed: Some(7),
+            top_logprobs: Some(3),
+            stop_sequences: vec!["STOP".to_string(), "DONE".to_string()],
+            response_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": { "answer": { "type": "string" } },
+                "required": ["answer"]
+            })),
+            cached_content: Some("cachedContents/abc123".to_string()),
+            extensions,
+        };
+
+        let encoded = serde_json::to_string(&config).expect("serialize");
+        let decoded: GenerateContentConfig = serde_json::from_str(&encoded).expect("deserialize");
+
+        assert_eq!(decoded.temperature, config.temperature);
+        assert_eq!(decoded.top_p, config.top_p);
+        assert_eq!(decoded.top_k, config.top_k);
+        assert_eq!(decoded.frequency_penalty, config.frequency_penalty);
+        assert_eq!(decoded.presence_penalty, config.presence_penalty);
+        assert_eq!(decoded.max_output_tokens, config.max_output_tokens);
+        assert_eq!(decoded.seed, config.seed);
+        assert_eq!(decoded.top_logprobs, config.top_logprobs);
+        assert_eq!(decoded.stop_sequences, config.stop_sequences);
+        assert_eq!(decoded.response_schema, config.response_schema);
+        assert_eq!(decoded.cached_content, config.cached_content);
+        assert_eq!(decoded.extensions, config.extensions);
+    }
+
+    #[test]
+    fn test_llm_response_and_usage_roundtrip_with_provider_metadata() {
+        let response = LlmResponse {
+            content: Some(Content::new("model").with_text("hello")),
+            usage_metadata: Some(UsageMetadata {
+                prompt_token_count: 10,
+                candidates_token_count: 20,
+                total_token_count: 30,
+                cache_read_input_token_count: Some(5),
+                cache_creation_input_token_count: Some(2),
+                thinking_token_count: Some(3),
+                audio_input_token_count: Some(4),
+                audio_output_token_count: Some(6),
+                cost: Some(0.0125),
+                is_byok: Some(true),
+                provider_usage: Some(serde_json::json!({
+                    "server_tool_use": {
+                        "web_search_requests": 1
+                    },
+                    "prompt_tokens_details": {
+                        "video_tokens": 8
+                    }
+                })),
+            }),
+            finish_reason: Some(FinishReason::Stop),
+            citation_metadata: None,
+            partial: false,
+            turn_complete: true,
+            interrupted: false,
+            error_code: None,
+            error_message: None,
+            provider_metadata: Some(serde_json::json!({
+                "openrouter": {
+                    "responseId": "resp_123",
+                    "outputItems": 2
+                }
+            })),
+        };
+
+        let encoded = serde_json::to_string(&response).expect("serialize");
+        let decoded: LlmResponse = serde_json::from_str(&encoded).expect("deserialize");
+
+        assert_eq!(decoded.provider_metadata, response.provider_metadata);
+        assert_eq!(
+            decoded.usage_metadata.as_ref().and_then(|u| u.cost),
+            response.usage_metadata.as_ref().and_then(|u| u.cost),
+        );
+        assert_eq!(
+            decoded.usage_metadata.as_ref().and_then(|u| u.is_byok),
+            response.usage_metadata.as_ref().and_then(|u| u.is_byok),
+        );
+        assert_eq!(
+            decoded.usage_metadata.as_ref().and_then(|u| u.provider_usage.clone()),
+            response.usage_metadata.as_ref().and_then(|u| u.provider_usage.clone()),
+        );
     }
 
     #[test]

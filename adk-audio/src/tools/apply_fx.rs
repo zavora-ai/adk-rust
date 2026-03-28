@@ -52,7 +52,7 @@ impl adk_core::Tool for ApplyFxTool {
     ) -> adk_core::Result<Value> {
         let chain_name = args["chain"].as_str().unwrap_or_default();
         let chain = self.chains.get(chain_name).ok_or_else(|| {
-            adk_core::AdkError::Tool(format!("apply_fx: unknown chain '{chain_name}'"))
+            adk_core::AdkError::tool(format!("apply_fx: unknown chain '{chain_name}'"))
         })?;
 
         let audio_b64 = args["audio_data"].as_str().unwrap_or_default();
@@ -60,13 +60,13 @@ impl adk_core::Tool for ApplyFxTool {
 
         // Decode base64
         let data = base64_decode(audio_b64)
-            .map_err(|e| adk_core::AdkError::Tool(format!("apply_fx: invalid base64: {e}")))?;
+            .map_err(|e| adk_core::AdkError::tool(format!("apply_fx: invalid base64: {e}")))?;
         let frame = crate::frame::AudioFrame::new(bytes::Bytes::from(data), sample_rate, 1);
 
         let processed = chain
             .process(&frame)
             .await
-            .map_err(|e| adk_core::AdkError::Tool(format!("apply_fx: {e}")))?;
+            .map_err(|e| adk_core::AdkError::tool(format!("apply_fx: {e}")))?;
 
         Ok(serde_json::json!({
             "duration_ms": processed.duration_ms,

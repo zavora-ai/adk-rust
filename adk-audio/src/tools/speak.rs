@@ -56,7 +56,7 @@ impl adk_core::Tool for SpeakTool {
             .tts
             .synthesize(&request)
             .await
-            .map_err(|e| adk_core::AdkError::Tool(format!("speak: {e}")))?;
+            .map_err(|e| adk_core::AdkError::tool(format!("speak: {e}")))?;
         Ok(serde_json::json!({
             "duration_ms": frame.duration_ms,
             "sample_rate": frame.sample_rate

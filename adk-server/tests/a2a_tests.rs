@@ -69,7 +69,7 @@ impl adk_core::AgentLoader for TestAgentLoader {
         if name == self.agent.name() {
             Ok(self.agent.clone())
         } else {
-            Err(adk_core::AdkError::Agent(format!("Agent not found: {}", name)))
+            Err(adk_core::AdkError::agent(format!("Agent not found: {}", name)))
         }
     }
 
@@ -267,5 +267,5 @@ async fn test_a2a_tasks_cancel() {
 
     // Should return a canceled status
     assert!(json["result"].is_object());
-    assert_eq!(json["result"]["status"]["state"], "Canceled");
+    assert_eq!(json["result"]["status"]["state"], "canceled");
 }

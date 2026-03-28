@@ -1,0 +1,20 @@
+{
+  "messageId": "intent-msg-1",
+  "contextId": "payments-context",
+  "taskId": "payments-task",
+  "role": "user",
+  "parts": [
+    {
+      "kind": "data",
+      "data": {
+        "ap2.mandates.IntentMandate": {
+          "user_cart_confirmation_required": false,
+          "natural_language_description": "Buy one refundable pair of red running shoes from Merchant Example",
+          "merchants": ["Merchant Example"],
+          "requires_refundability": true,
+          "intent_expiry": "2026-04-01T12:00:00Z"
+        }
+      }
+    }
+  ]
+}

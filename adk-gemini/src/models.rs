@@ -50,8 +50,8 @@ pub enum Part {
         #[serde(skip_serializing_if = "Option::is_none")]
         thought: Option<bool>,
         /// The thought signature (Gemini 2.5+ thinking models only).
-        /// Deserialized from responses but never sent back — the API rejects it in requests.
-        #[serde(rename = "thoughtSignature", default, skip_serializing)]
+        /// Preserved from responses and echoed back in conversation history for Gemini 3.x thought signature support.
+        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
         thought_signature: Option<String>,
     },
     InlineData {
@@ -65,8 +65,8 @@ pub enum Part {
         #[serde(rename = "functionCall")]
         function_call: super::tools::FunctionCall,
         /// The thought signature (Gemini 2.5+ thinking models only).
-        /// Deserialized from responses but never sent back — the API rejects it in requests.
-        #[serde(rename = "thoughtSignature", default, skip_serializing)]
+        /// Preserved from responses and echoed back in conversation history for Gemini 3.x thought signature support.
+        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
         thought_signature: Option<String>,
     },
     /// Function response (results from executing a function call)
@@ -74,6 +74,46 @@ pub enum Part {
         /// The function response details
         #[serde(rename = "functionResponse")]
         function_response: super::tools::FunctionResponse,
+        /// The thought signature (Gemini 3.x thinking models).
+        /// Must be echoed back on function response parts when thinking is active.
+        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
+    },
+    /// Server-side tool call from Gemini 3 (built-in tool invocation)
+    ToolCall {
+        #[serde(rename = "toolCall")]
+        tool_call: serde_json::Value,
+        /// The thought signature (Gemini 3.x thinking models).
+        /// Must be preserved and echoed back in conversation history.
+        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
+    },
+    /// Server-side tool response from Gemini 3 (built-in tool result)
+    ToolResponse {
+        #[serde(rename = "toolResponse")]
+        tool_response: serde_json::Value,
+        /// The thought signature (Gemini 3.x thinking models).
+        /// Must be preserved and echoed back in conversation history.
+        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
+    },
+    /// Generated code emitted by Gemini code execution.
+    ExecutableCode {
+        #[serde(rename = "executableCode")]
+        executable_code: serde_json::Value,
+        /// The thought signature (Gemini 3.x thinking models).
+        /// Must be preserved and echoed back in conversation history.
+        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
+    },
+    /// Result emitted by Gemini code execution.
+    CodeExecutionResult {
+        #[serde(rename = "codeExecutionResult")]
+        code_execution_result: serde_json::Value,
+        /// The thought signature (Gemini 3.x thinking models).
+        /// Must be preserved and echoed back in conversation history.
+        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
+        thought_signature: Option<String>,
     },
 }
 
@@ -173,7 +213,13 @@ impl Content {
 
     /// Create a new content with a function response
     pub fn function_response(function_response: super::tools::FunctionResponse) -> Self {
-        Self { parts: Some(vec![Part::FunctionResponse { function_response }]), role: None }
+        Self {
+            parts: Some(vec![Part::FunctionResponse {
+                function_response,
+                thought_signature: None,
+            }]),
+            role: None,
+        }
     }
 
     /// Create a new content with a function response from name and JSON value
@@ -181,6 +227,7 @@ impl Content {
         Self {
             parts: Some(vec![Part::FunctionResponse {
                 function_response: super::tools::FunctionResponse::new(name, response),
+                thought_signature: None,
             }]),
             role: None,
         }
@@ -307,6 +354,79 @@ impl<'de> Deserialize<'de> for Modality {
                 .map(Self::from_wire_number)
                 .ok_or_else(|| de::Error::custom("modality must be an integer-compatible number")),
             _ => Err(de::Error::custom("modality must be a string or integer")),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tool_call_deserialize_and_roundtrip() {
+        let json = r#"{"toolCall": {"name": "google_search", "args": {"query": "rust lang"}}}"#;
+        let part: Part = serde_json::from_str(json).expect("should deserialize toolCall");
+        match &part {
+            Part::ToolCall { tool_call, .. } => {
+                assert_eq!(tool_call["name"], "google_search");
+                assert_eq!(tool_call["args"]["query"], "rust lang");
+            }
+            other => panic!("expected Part::ToolCall, got {other:?}"),
+        }
+        // Round-trip
+        let serialized = serde_json::to_string(&part).expect("should serialize");
+        let deserialized: Part =
+            serde_json::from_str(&serialized).expect("should deserialize again");
+        assert_eq!(part, deserialized);
+    }
+
+    #[test]
+    fn test_tool_response_deserialize_and_roundtrip() {
+        let json = r#"{"toolResponse": {"name": "google_search", "output": {"results": []}}, "thoughtSignature": "sig_123"}"#;
+        let part: Part = serde_json::from_str(json).expect("should deserialize toolResponse");
+        match &part {
+            Part::ToolResponse { tool_response, thought_signature } => {
+                assert_eq!(tool_response["name"], "google_search");
+                assert_eq!(tool_response["output"]["results"], serde_json::json!([]));
+                assert_eq!(thought_signature.as_deref(), Some("sig_123"));
+            }
+            other => panic!("expected Part::ToolResponse, got {other:?}"),
+        }
+        // Round-trip
+        let serialized = serde_json::to_string(&part).expect("should serialize");
+        let deserialized: Part =
+            serde_json::from_str(&serialized).expect("should deserialize again");
+        assert_eq!(part, deserialized);
+    }
+
+    #[test]
+    fn test_code_execution_parts_preserve_thought_signature() {
+        let executable = serde_json::json!({
+            "executableCode": { "language": "python", "code": "print(1)" },
+            "thoughtSignature": "sig_exec"
+        });
+        let result = serde_json::json!({
+            "codeExecutionResult": { "outcome": "OUTCOME_OK", "output": "1" },
+            "thoughtSignature": "sig_result"
+        });
+
+        let executable_part: Part =
+            serde_json::from_value(executable).expect("should deserialize executable code");
+        let result_part: Part =
+            serde_json::from_value(result).expect("should deserialize code execution result");
+
+        match executable_part {
+            Part::ExecutableCode { thought_signature, .. } => {
+                assert_eq!(thought_signature.as_deref(), Some("sig_exec"));
+            }
+            other => panic!("expected Part::ExecutableCode, got {other:?}"),
+        }
+
+        match result_part {
+            Part::CodeExecutionResult { thought_signature, .. } => {
+                assert_eq!(thought_signature.as_deref(), Some("sig_result"));
+            }
+            other => panic!("expected Part::CodeExecutionResult, got {other:?}"),
         }
     }
 }

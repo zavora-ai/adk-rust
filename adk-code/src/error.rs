@@ -93,3 +93,47 @@ pub enum CodeError {
     #[error("invalid code: {0}")]
     InvalidCode(String),
 }
+
+impl From<ExecutionError> for adk_core::AdkError {
+    fn from(err: ExecutionError) -> Self {
+        use adk_core::{ErrorCategory, ErrorComponent};
+        let (category, code) = match &err {
+            ExecutionError::UnsupportedPolicy(_) => {
+                (ErrorCategory::Unsupported, "code.unsupported_policy")
+            }
+            ExecutionError::UnsupportedLanguage(_) => {
+                (ErrorCategory::Unsupported, "code.unsupported_language")
+            }
+            ExecutionError::CompileFailed(_) => {
+                (ErrorCategory::InvalidInput, "code.compile_failed")
+            }
+            ExecutionError::Timeout(_) => (ErrorCategory::Timeout, "code.timeout"),
+            ExecutionError::ExecutionFailed(_) => {
+                (ErrorCategory::Internal, "code.execution_failed")
+            }
+            ExecutionError::Rejected(_) => (ErrorCategory::Forbidden, "code.rejected"),
+            ExecutionError::InvalidRequest(_) => {
+                (ErrorCategory::InvalidInput, "code.invalid_request")
+            }
+            ExecutionError::InternalError(_) => (ErrorCategory::Internal, "code.internal"),
+        };
+        adk_core::AdkError::new(ErrorComponent::Code, category, code, err.to_string())
+            .with_source(err)
+    }
+}
+
+impl From<CodeError> for adk_core::AdkError {
+    fn from(err: CodeError) -> Self {
+        use adk_core::{ErrorCategory, ErrorComponent};
+        let (category, code) = match &err {
+            CodeError::CompileError { .. } => (ErrorCategory::InvalidInput, "code.compile_error"),
+            CodeError::DependencyNotFound { .. } => {
+                (ErrorCategory::NotFound, "code.dependency_not_found")
+            }
+            CodeError::Sandbox(_) => (ErrorCategory::Internal, "code.sandbox"),
+            CodeError::InvalidCode(_) => (ErrorCategory::InvalidInput, "code.invalid_code"),
+        };
+        adk_core::AdkError::new(ErrorComponent::Code, category, code, err.to_string())
+            .with_source(err)
+    }
+}

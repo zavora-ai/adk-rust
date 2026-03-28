@@ -122,3 +122,102 @@ impl AzureConfig {
         }
     }
 }
+
+/// Reasoning summary mode for the Responses API.
+///
+/// Controls whether and how the model generates a summary of its internal
+/// reasoning process. Only applicable to o-series reasoning models.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningSummary {
+    /// Let the model decide whether to include a summary.
+    Auto,
+    /// Include a brief summary of the reasoning.
+    Concise,
+    /// Include a thorough summary of the reasoning.
+    Detailed,
+}
+
+/// Configuration for the OpenAI Responses API client.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use adk_model::openai::{OpenAIResponsesConfig, ReasoningEffort, ReasoningSummary};
+///
+/// let config = OpenAIResponsesConfig::new("sk-...", "o3")
+///     .with_reasoning_effort(ReasoningEffort::High)
+///     .with_reasoning_summary(ReasoningSummary::Concise);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIResponsesConfig {
+    /// OpenAI API key.
+    pub api_key: String,
+    /// Model name (e.g., "o3", "o4-mini", "gpt-4.1").
+    pub model: String,
+    /// Optional organization ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
+    /// Optional project ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// Optional custom base URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// Reasoning effort for o-series models.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// Reasoning summary mode for o-series models.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_summary: Option<ReasoningSummary>,
+}
+
+impl OpenAIResponsesConfig {
+    /// Create a new Responses API config with the given API key and model.
+    pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self {
+            api_key: api_key.into(),
+            model: model.into(),
+            organization_id: None,
+            project_id: None,
+            base_url: None,
+            reasoning_effort: None,
+            reasoning_summary: None,
+        }
+    }
+
+    /// Set the organization ID.
+    #[must_use]
+    pub fn with_organization(mut self, org_id: impl Into<String>) -> Self {
+        self.organization_id = Some(org_id.into());
+        self
+    }
+
+    /// Set the project ID.
+    #[must_use]
+    pub fn with_project(mut self, project_id: impl Into<String>) -> Self {
+        self.project_id = Some(project_id.into());
+        self
+    }
+
+    /// Set the base URL.
+    #[must_use]
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
+        self
+    }
+
+    /// Set the reasoning effort for o-series models.
+    #[must_use]
+    pub fn with_reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(effort);
+        self
+    }
+
+    /// Set the reasoning summary mode for o-series models.
+    #[must_use]
+    pub fn with_reasoning_summary(mut self, summary: ReasoningSummary) -> Self {
+        self.reasoning_summary = Some(summary);
+        self
+    }
+}

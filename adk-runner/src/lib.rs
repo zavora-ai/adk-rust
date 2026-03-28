@@ -1,4 +1,5 @@
 //! # adk-runner
+#![allow(clippy::result_large_err)]
 //!
 //! Agent execution runtime for ADK.
 //!

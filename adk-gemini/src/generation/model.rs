@@ -608,9 +608,19 @@ pub struct ThinkingConfig {
 }
 
 impl ThinkingConfig {
-    // TODO: Add failable constructor with validation
-    // pub fn new() -> Result<Self, ValidationError> { ... }
-    // Should validate temperature (0.0-1.0), max_tokens (>0), etc.
+    /// Validate the thinking configuration.
+    ///
+    /// Returns an error if both `thinking_budget` and `thinking_level` are set,
+    /// since they are mutually exclusive controls (budget for Gemini 2.5, level for Gemini 3).
+    pub fn validate(&self) -> Result<(), String> {
+        if self.thinking_budget.is_some() && self.thinking_level.is_some() {
+            return Err(
+                "thinking_budget and thinking_level are mutually exclusive; use one or the other"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
 
     /// Create a new thinking config with default settings
     pub fn new() -> Self {
@@ -724,6 +734,45 @@ pub struct GenerationConfig {
     /// Configuration for the model's thinking process (Gemini 2.5 series only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_config: Option<ThinkingConfig>,
+}
+
+impl GenerationConfig {
+    /// Validate the generation configuration.
+    ///
+    /// Returns an error if any parameter is outside its valid range:
+    /// - `temperature`: must be between 0.0 and 2.0
+    /// - `top_p`: must be between 0.0 and 1.0
+    /// - `top_k`: must be positive
+    /// - `max_output_tokens`: must be positive
+    ///
+    /// If `thinking_config` is present, delegates to [`ThinkingConfig::validate`] as well.
+    /// All `None` fields are accepted without error.
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(t) = self.temperature
+            && !(0.0..=2.0).contains(&t)
+        {
+            return Err("temperature must be between 0.0 and 2.0".to_string());
+        }
+        if let Some(p) = self.top_p
+            && !(0.0..=1.0).contains(&p)
+        {
+            return Err("top_p must be between 0.0 and 1.0".to_string());
+        }
+        if let Some(k) = self.top_k
+            && k <= 0
+        {
+            return Err("top_k must be positive".to_string());
+        }
+        if let Some(m) = self.max_output_tokens
+            && m <= 0
+        {
+            return Err("max_output_tokens must be positive".to_string());
+        }
+        if let Some(ref tc) = self.thinking_config {
+            tc.validate()?;
+        }
+        Ok(())
+    }
 }
 
 /// Configuration for speech generation (text-to-speech)

@@ -197,6 +197,8 @@ pub fn content_to_message(content: &Content) -> Message {
             Part::FileData { mime_type, file_uri } => {
                 text_parts.push(attachment::file_attachment_to_text(mime_type, file_uri));
             }
+            // Server-side tool parts are Gemini-specific; skip for Groq
+            Part::ServerToolCall { .. } | Part::ServerToolResponse { .. } => {}
         }
     }
 
@@ -311,6 +313,7 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
         interrupted: false,
         error_code: None,
         error_message: None,
+        provider_metadata: None,
     }
 }
 
@@ -339,6 +342,7 @@ pub fn create_tool_call_response(
         interrupted: false,
         error_code: None,
         error_message: None,
+        provider_metadata: None,
     }
 }
 

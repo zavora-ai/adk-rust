@@ -64,7 +64,7 @@ impl Tool for ExtractTextTool {
         let selector = args
             .get("selector")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing 'selector' parameter".to_string()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("Missing 'selector' parameter"))?;
 
         let all = args.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -136,12 +136,12 @@ impl Tool for ExtractAttributeTool {
         let selector = args
             .get("selector")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing 'selector' parameter".to_string()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("Missing 'selector' parameter"))?;
 
         let attribute = args
             .get("attribute")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing 'attribute' parameter".to_string()))?;
+            .ok_or_else(|| adk_core::AdkError::tool("Missing 'attribute' parameter"))?;
 
         let value = self.browser.get_attribute(selector, attribute).await?;
 

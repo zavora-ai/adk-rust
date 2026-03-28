@@ -1,0 +1,55 @@
+{
+  "initialize": {
+    "initialized": true,
+    "protocolVersion": "2025-11-25",
+    "resourceListRevision": 0,
+    "toolListRevision": 0,
+    "serverResourcesListChanged": true,
+    "serverToolsListChanged": true
+  },
+  "resourceChange": {
+    "method": "ui/notifications/resources/list_changed",
+    "revision": 1,
+    "resourceListRevision": 1,
+    "pendingNotificationCount": 1
+  },
+  "toolChange": {
+    "method": "ui/notifications/tools/list_changed",
+    "revision": 1,
+    "toolListRevision": 1,
+    "pendingNotificationCount": 2
+  },
+  "pollKeep": {
+    "resourceListRevision": 1,
+    "toolListRevision": 1,
+    "notifications": [
+      {
+        "id": 1,
+        "method": "ui/notifications/resources/list_changed",
+        "revision": 1
+      },
+      {
+        "id": 2,
+        "method": "ui/notifications/tools/list_changed",
+        "revision": 1
+      }
+    ]
+  },
+  "pollDrain": {
+    "notifications": [
+      {
+        "id": 1,
+        "method": "ui/notifications/resources/list_changed",
+        "revision": 1
+      },
+      {
+        "id": 2,
+        "method": "ui/notifications/tools/list_changed",
+        "revision": 1
+      }
+    ]
+  },
+  "pollAfterDrain": {
+    "notifications": []
+  }
+}

@@ -101,6 +101,7 @@ impl Llm for BedrockClient {
         request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
+        let usage_span = adk_telemetry::llm_generate_span("bedrock", &self.model_id, stream);
         let bedrock_input = adk_request_to_bedrock(
             &request.contents,
             &request.tools,
@@ -108,16 +109,18 @@ impl Llm for BedrockClient {
             self.prompt_caching.as_ref(),
         )
         .map_err(|e| {
-            AdkError::Model(format!(
+            AdkError::model(format!(
                 "Bedrock request conversion failed for region={}, model={}: {e}",
                 self.region, self.model_id
             ))
         })?;
 
         if stream {
-            self.generate_streaming(bedrock_input).await
+            let result = self.generate_streaming(bedrock_input).await?;
+            Ok(crate::usage_tracking::with_usage_tracking(result, usage_span))
         } else {
-            self.generate_non_streaming(bedrock_input).await
+            let result = self.generate_non_streaming(bedrock_input).await?;
+            Ok(crate::usage_tracking::with_usage_tracking(result, usage_span))
         }
     }
 }
@@ -141,14 +144,14 @@ impl BedrockClient {
             .send()
             .await
             .map_err(|e| {
-                AdkError::Model(format!(
+                AdkError::model(format!(
                     "Bedrock API error for region={}, model={}: {e}",
                     self.region, self.model_id
                 ))
             })?;
 
         let output = response.output.ok_or_else(|| {
-            AdkError::Model(format!("Bedrock response missing output for model={}", self.model_id))
+            AdkError::model(format!("Bedrock response missing output for model={}", self.model_id))
         })?;
 
         let adk_response =
@@ -179,7 +182,7 @@ impl BedrockClient {
             .send()
             .await
             .map_err(|e| {
-                AdkError::Model(format!(
+                AdkError::model(format!(
                     "Bedrock API error for region={}, model={}: {e}",
                     self.region, self.model_id
                 ))
@@ -202,7 +205,7 @@ impl BedrockClient {
             let mut pending_usage: Option<adk_core::UsageMetadata> = None;
 
             while let Some(event) = stream_output.stream.recv().await.map_err(|e| {
-                AdkError::Model(format!(
+                AdkError::model(format!(
                     "Bedrock stream error for region={region}, model={model_id}: {e}"
                 ))
             })? {
@@ -274,6 +277,7 @@ impl BedrockClient {
                                 interrupted: false,
                                 error_code: None,
                                 error_message: None,
+                                provider_metadata: None,
                             };
                         }
 
@@ -297,6 +301,7 @@ impl BedrockClient {
                                 interrupted: false,
                                 error_code: None,
                                 error_message: None,
+                                provider_metadata: None,
                             };
                         }
                     }

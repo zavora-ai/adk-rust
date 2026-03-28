@@ -8,25 +8,25 @@ OpenTelemetry integration for Rust Agent Development Kit (ADK-Rust) agent observ
 
 ## Overview
 
-`adk-telemetry` provides observability infrastructure for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)), including:
+`adk-telemetry` provides observability infrastructure for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)), built on OpenTelemetry 0.28 and tracing-opentelemetry 0.29:
 
-- **Tracing** - Distributed tracing with OpenTelemetry
+- **Tracing** - Distributed tracing with OpenTelemetry 0.28
 - **Logging** - Structured logging with tracing-subscriber
-- **Metrics** - Performance metrics export
+- **Metrics** - Performance metrics export via OTLP (tonic 0.12 / gRPC)
 - **Span Context** - Propagation across agent boundaries
 
 ## Installation
 
 ```toml
 [dependencies]
-adk-telemetry = "0.4"
+adk-telemetry = "0.5.0"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.4", features = ["telemetry"] }
+adk-rust = { version = "0.5.0", features = ["telemetry"] }
 ```
 
 ## Quick Start
@@ -79,6 +79,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `init_with_adk_exporter(service_name)` | ADK-style span exporter |
 | `shutdown_telemetry()` | Flush and shutdown |
 
+## Span Helpers
+
+Pre-configured spans for instrumenting ADK operations:
+
+| Function | Description |
+|----------|-------------|
+| `agent_run_span(name, invocation_id)` | Agent execution span |
+| `model_call_span(model_name)` | Model API call span |
+| `llm_generate_span(provider, model, stream)` | LLM generation span with `gen_ai.usage.*` fields |
+| `tool_execute_span(tool_name)` | Tool execution span |
+| `callback_span(callback_type)` | Callback execution span |
+| `record_llm_usage(&usage)` | Record token counts on the current span |
+
+### Token Usage Tracking
+
+`llm_generate_span` pre-declares OpenTelemetry GenAI semantic convention fields. After receiving a response, call `record_llm_usage` to populate them:
+
+```rust
+use adk_telemetry::{llm_generate_span, record_llm_usage, LlmUsage};
+
+let span = llm_generate_span("openai", "gpt-5-mini", true);
+let _enter = span.enter();
+
+// After receiving the LLM response:
+record_llm_usage(&LlmUsage {
+    input_tokens: 100,
+    output_tokens: 50,
+    total_tokens: 150,
+    cache_read_tokens: Some(80),
+    ..Default::default()
+});
+```
+
+Recorded fields: `gen_ai.usage.input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `thinking_tokens`, `audio_input_tokens`, `audio_output_tokens`.
+
 ## Re-exports
 
 Convenience re-exports from `tracing`:
@@ -90,9 +125,19 @@ use adk_telemetry::{info, debug, warn, error, trace, instrument, Span};
 ## Features
 
 - Zero-config defaults with sensible logging
-- OpenTelemetry-compatible span export
+- OpenTelemetry 0.28 compatible span export
+- OTLP export via `tonic 0.12` (gRPC), aligned with `adk-server`'s `hyper 1.x` / `http 1.x` stack
 - Automatic context propagation
 - JSON or pretty-print log formats
+
+### OpenTelemetry Dependency Versions
+
+| Crate | Version |
+|-------|---------|
+| `opentelemetry` | 0.28 |
+| `opentelemetry_sdk` | 0.28 |
+| `opentelemetry-otlp` | 0.28 |
+| `tracing-opentelemetry` | 0.29 |
 
 ## Related Crates
 

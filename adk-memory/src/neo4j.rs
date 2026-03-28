@@ -28,7 +28,7 @@
 
 use crate::embedding::EmbeddingProvider;
 use crate::service::*;
-use adk_core::{Part, Result};
+use adk_core::Result;
 use async_trait::async_trait;
 use chrono::DateTime;
 use neo4rs::Graph;
@@ -133,7 +133,7 @@ impl Neo4jMemoryService {
             )))
             .await
             .map_err(|e| {
-                adk_core::AdkError::Memory(format!("migration registry creation failed: {e}"))
+                adk_core::AdkError::memory(format!("migration registry creation failed: {e}"))
             })?;
 
         // Step 2: Read current max applied version
@@ -156,7 +156,7 @@ impl Neo4jMemoryService {
 
         // Step 5: Version mismatch check
         if max_applied > max_compiled {
-            return Err(adk_core::AdkError::Memory(format!(
+            return Err(adk_core::AdkError::memory(format!(
                 "schema version mismatch: database is at v{max_applied} \
                  but code only knows up to v{max_compiled}. \
                  Upgrade your ADK version."
@@ -171,7 +171,7 @@ impl Neo4jMemoryService {
 
             for cypher in cypher_statements {
                 self.graph.run(neo4rs::query(cypher)).await.map_err(|e| {
-                    adk_core::AdkError::Memory(format!(
+                    adk_core::AdkError::memory(format!(
                         "{}",
                         crate::migration::MigrationError {
                             version,
@@ -197,7 +197,7 @@ impl Neo4jMemoryService {
                  `vector.similarity_function`: 'cosine'}}}}"
             );
             self.graph.run(neo4rs::query(&vector_index_query)).await.map_err(|e| {
-                adk_core::AdkError::Memory(format!(
+                adk_core::AdkError::memory(format!(
                     "migration failed: vector index creation failed: {e}"
                 ))
             })?;
@@ -217,11 +217,11 @@ impl Neo4jMemoryService {
         let query_str =
             format!("OPTIONAL MATCH (m:{}) RETURN max(m.version) AS max_v", Self::REGISTRY_LABEL);
         let mut row_stream = self.graph.execute(neo4rs::query(&query_str)).await.map_err(|e| {
-            adk_core::AdkError::Memory(format!("migration registry read failed: {e}"))
+            adk_core::AdkError::memory(format!("migration registry read failed: {e}"))
         })?;
 
         if let Some(row) = row_stream.next().await.map_err(|e| {
-            adk_core::AdkError::Memory(format!("migration registry read failed: {e}"))
+            adk_core::AdkError::memory(format!("migration registry read failed: {e}"))
         })? {
             // max() returns null when no nodes exist; treat as 0
             Ok(row.get::<i64>("max_v").unwrap_or(0))
@@ -238,12 +238,12 @@ impl Neo4jMemoryService {
                 "SHOW CONSTRAINTS YIELD name WHERE name = 'memory_entry_unique' RETURN name",
             ))
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("baseline detection failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("baseline detection failed: {e}")))?;
 
         let found = row_stream
             .next()
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("baseline detection failed: {e}")))?
+            .map_err(|e| adk_core::AdkError::memory(format!("baseline detection failed: {e}")))?
             .is_some();
 
         Ok(found)
@@ -263,7 +263,7 @@ impl Neo4jMemoryService {
             )
             .await
             .map_err(|e| {
-                adk_core::AdkError::Memory(format!(
+                adk_core::AdkError::memory(format!(
                     "{}",
                     crate::migration::MigrationError {
                         version,
@@ -300,7 +300,7 @@ impl MemoryService for Neo4jMemoryService {
                 .map(|t| if t.is_empty() { " ".to_string() } else { t.clone() })
                 .collect();
             Some(provider.embed(&non_empty_texts).await.map_err(|e| {
-                adk_core::AdkError::Memory(format!("embedding generation failed: {e}"))
+                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
             })?)
         } else {
             None
@@ -310,7 +310,7 @@ impl MemoryService for Neo4jMemoryService {
             .graph
             .start_txn()
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("transaction failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("transaction failed: {e}")))?;
 
         // MERGE the MemorySession node
         txn.run(
@@ -323,7 +323,7 @@ impl MemoryService for Neo4jMemoryService {
             .param("user_id", user_id.to_string()),
         )
         .await
-        .map_err(|e| adk_core::AdkError::Memory(format!("add_session failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::memory(format!("add_session failed: {e}")))?;
 
         // Create MemoryEntry nodes and FROM_SESSION relationships
         let mut entry_ids: Vec<String> = Vec::with_capacity(entries.len());
@@ -333,7 +333,7 @@ impl MemoryService for Neo4jMemoryService {
             entry_ids.push(entry_id.clone());
 
             let content_json = serde_json::to_string(&entry.content)
-                .map_err(|e| adk_core::AdkError::Memory(format!("serialization failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
             let content_text = &texts[i];
             let timestamp_str = entry.timestamp.to_rfc3339();
 
@@ -363,7 +363,7 @@ impl MemoryService for Neo4jMemoryService {
                     .param("embedding", embedding_f64),
                 )
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("add_session failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("add_session failed: {e}")))?;
             } else {
                 txn.run(
                     neo4rs::query(
@@ -386,7 +386,7 @@ impl MemoryService for Neo4jMemoryService {
                     .param("timestamp", timestamp_str),
                 )
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("add_session failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("add_session failed: {e}")))?;
             }
         }
 
@@ -403,13 +403,13 @@ impl MemoryService for Neo4jMemoryService {
             )
             .await
             .map_err(|e| {
-                adk_core::AdkError::Memory(format!("add_session failed: FOLLOWS creation: {e}"))
+                adk_core::AdkError::memory(format!("add_session failed: FOLLOWS creation: {e}"))
             })?;
         }
 
         txn.commit()
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("commit failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("commit failed: {e}")))?;
 
         Ok(())
     }
@@ -423,7 +423,7 @@ impl MemoryService for Neo4jMemoryService {
             let query_embedding = provider
                 .embed(std::slice::from_ref(&req.query))
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("query embedding failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("query embedding failed: {e}")))?;
             let query_vec: Vec<f64> = query_embedding[0].iter().map(|&v| v as f64).collect();
 
             let mut row_stream = self
@@ -450,7 +450,7 @@ impl MemoryService for Neo4jMemoryService {
                     .param("user_id", req.user_id.clone()),
                 )
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("search failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?;
 
             let mut entries = Vec::new();
             let mut seen_ids: HashSet<String> = HashSet::new();
@@ -458,7 +458,7 @@ impl MemoryService for Neo4jMemoryService {
             while let Some(row) = row_stream
                 .next()
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("search failed: {e}")))?
+                .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?
             {
                 // Add the primary match
                 if let Some(entry) = row_to_memory_entry(&row) {
@@ -499,7 +499,7 @@ impl MemoryService for Neo4jMemoryService {
                     .param("limit", limit),
                 )
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("search failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?;
 
             let mut entries = Vec::new();
             let mut seen_ids: HashSet<String> = HashSet::new();
@@ -507,7 +507,7 @@ impl MemoryService for Neo4jMemoryService {
             while let Some(row) = row_stream
                 .next()
                 .await
-                .map_err(|e| adk_core::AdkError::Memory(format!("search failed: {e}")))?
+                .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?
             {
                 // Add the primary match
                 if let Some(entry) = row_to_memory_entry(&row) {
@@ -539,7 +539,7 @@ impl MemoryService for Neo4jMemoryService {
                 .param("user_id", user_id.to_string()),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("delete_user failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("delete_user failed: {e}")))?;
 
         // Clean up orphaned session nodes
         self.graph
@@ -553,7 +553,7 @@ impl MemoryService for Neo4jMemoryService {
                 .param("user_id", user_id.to_string()),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("delete_user cleanup failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("delete_user cleanup failed: {e}")))?;
 
         Ok(())
     }
@@ -571,7 +571,7 @@ impl MemoryService for Neo4jMemoryService {
                 .param("session_id", session_id.to_string()),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("delete_session failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("delete_session failed: {e}")))?;
 
         // Clean up orphaned session node
         self.graph
@@ -586,7 +586,7 @@ impl MemoryService for Neo4jMemoryService {
                 .param("session_id", session_id.to_string()),
             )
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("delete_session cleanup failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("delete_session cleanup failed: {e}")))?;
 
         Ok(())
     }
@@ -597,7 +597,7 @@ impl MemoryService for Neo4jMemoryService {
             .graph
             .execute(neo4rs::query("RETURN 1"))
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("health check failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("health check failed: {e}")))?;
         Ok(())
     }
 }

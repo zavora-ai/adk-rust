@@ -2,8 +2,8 @@ use crate::InvocationContext;
 use crate::cache::CacheManager;
 use adk_artifact::ArtifactService;
 use adk_core::{
-    Agent, CacheCapable, Content, ContextCacheConfig, EventStream, Memory, ReadonlyContext, Result,
-    RunConfig,
+    Agent, AppName, CacheCapable, Content, ContextCacheConfig, EventStream, Memory,
+    ReadonlyContext, Result, RunConfig, SessionId, UserId,
 };
 use adk_plugin::PluginManager;
 use adk_session::SessionService;
@@ -105,11 +105,12 @@ impl Runner {
 
     pub async fn run(
         &self,
-        user_id: String,
-        session_id: String,
+        user_id: UserId,
+        session_id: SessionId,
         user_content: Content,
     ) -> Result<EventStream> {
         let app_name = self.app_name.clone();
+        let typed_app_name = AppName::try_from(app_name.clone())?;
         let session_service = self.session_service.clone();
         let root_agent = self.root_agent.clone();
         let artifact_service = self.artifact_service.clone();
@@ -129,8 +130,8 @@ impl Runner {
             let session = match session_service
                 .get(adk_session::GetRequest {
                     app_name: app_name.clone(),
-                    user_id: user_id.clone(),
-                    session_id: session_id.clone(),
+                    user_id: user_id.to_string(),
+                    session_id: session_id.to_string(),
                     num_recent_events: None,
                     after: None,
                 })
@@ -168,15 +169,21 @@ impl Runner {
                 }
             }
 
-            let mut invocation_ctx = InvocationContext::new(
+            let mut invocation_ctx = match InvocationContext::new_typed(
                 invocation_id.clone(),
                 agent_to_run.clone(),
                 user_id.clone(),
-                app_name.clone(),
+                typed_app_name.clone(),
                 session_id.clone(),
                 effective_user_content.clone(),
                 Arc::from(session),
-            );
+            ) {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    yield Err(e);
+                    return;
+                }
+            };
 
             // Add optional services
             if let Some(service) = artifact_service {
@@ -184,8 +191,8 @@ impl Runner {
                 let scoped = adk_artifact::ScopedArtifacts::new(
                     service,
                     app_name.clone(),
-                    user_id.clone(),
-                    session_id.clone(),
+                    user_id.to_string(),
+                    session_id.to_string(),
                 );
                 invocation_ctx = invocation_ctx.with_artifacts(Arc::new(scoped));
             }
@@ -241,7 +248,7 @@ impl Runner {
                     Ok(Some(modified)) => {
                         effective_user_content = modified;
 
-                        let mut refreshed_ctx = InvocationContext::with_mutable_session(
+                        let mut refreshed_ctx = match InvocationContext::with_mutable_session(
                             ctx.invocation_id().to_string(),
                             agent_to_run.clone(),
                             ctx.user_id().to_string(),
@@ -249,7 +256,13 @@ impl Runner {
                             ctx.session_id().to_string(),
                             effective_user_content.clone(),
                             ctx.mutable_session().clone(),
-                        );
+                        ) {
+                            Ok(ctx) => ctx,
+                            Err(e) => {
+                                yield Err(e);
+                                return;
+                            }
+                        };
 
                         if let Some(service) = artifact_service_clone.clone() {
                             let scoped = adk_artifact::ScopedArtifacts::new(
@@ -339,7 +352,7 @@ impl Runner {
                     if let Some(cache_name) = cm.record_invocation() {
                         run_config.cached_content = Some(cache_name.to_string());
                         // Rebuild the invocation context with the updated run config
-                        let mut refreshed_ctx = InvocationContext::with_mutable_session(
+                        let mut refreshed_ctx = match InvocationContext::with_mutable_session(
                             ctx.invocation_id().to_string(),
                             agent_to_run.clone(),
                             ctx.user_id().to_string(),
@@ -347,7 +360,13 @@ impl Runner {
                             ctx.session_id().to_string(),
                             effective_user_content.clone(),
                             ctx.mutable_session().clone(),
-                        );
+                        ) {
+                            Ok(ctx) => ctx,
+                            Err(e) => {
+                                yield Err(e);
+                                return;
+                            }
+                        };
                         if let Some(service) = artifact_service_clone.clone() {
                             let scoped = adk_artifact::ScopedArtifacts::new(
                                 service,
@@ -523,7 +542,7 @@ impl Runner {
 
                 // For transfers, we reuse the same mutable session to preserve state
                 let transfer_invocation_id = format!("inv-{}", uuid::Uuid::new_v4());
-                let mut transfer_ctx = InvocationContext::with_mutable_session(
+                let mut transfer_ctx = match InvocationContext::with_mutable_session(
                     transfer_invocation_id.clone(),
                     target_agent.clone(),
                     ctx.user_id().to_string(),
@@ -531,7 +550,13 @@ impl Runner {
                     ctx.session_id().to_string(),
                     effective_user_content.clone(),
                     ctx.mutable_session().clone(),
-                );
+                ) {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                };
 
                 if let Some(ref service) = artifact_service_clone {
                     let scoped = adk_artifact::ScopedArtifacts::new(
@@ -638,60 +663,64 @@ impl Runner {
             // After all events have been processed, check if compaction should trigger.
             // This runs in the background after the invocation completes.
             if let Some(ref compaction_cfg) = compaction_config {
-                // Count invocations by counting user events in the session
-                let all_events = ctx.mutable_session().as_ref().events_snapshot();
-                let invocation_count = all_events.iter()
-                    .filter(|e| e.author == "user")
-                    .count() as u32;
+                let event_count = ctx.mutable_session().as_ref().events_len();
 
-                if invocation_count > 0 && invocation_count % compaction_cfg.compaction_interval == 0 {
-                    // Determine the window of events to compact
-                    // We compact all events except the most recent overlap_size invocations
-                    let overlap = compaction_cfg.overlap_size as usize;
+                if event_count > 0 {
+                    let all_events = ctx.mutable_session().as_ref().events_snapshot();
+                    let invocation_count = all_events.iter().filter(|e| e.author == "user").count()
+                        as u32;
 
-                    // Find the boundary: keep the last `overlap` user messages and everything after
-                    let user_msg_indices: Vec<usize> = all_events.iter()
-                        .enumerate()
-                        .filter(|(_, e)| e.author == "user")
-                        .map(|(i, _)| i)
-                        .collect();
+                    if invocation_count > 0
+                        && invocation_count % compaction_cfg.compaction_interval == 0
+                    {
+                        // Determine the window of events to compact
+                        // We compact all events except the most recent overlap_size invocations
+                        let overlap = compaction_cfg.overlap_size as usize;
 
-                    // Keep the last `overlap` user messages intact.
-                    // When overlap is 0, compact everything.
-                    let compact_up_to = if overlap == 0 {
-                        all_events.len()
-                    } else if user_msg_indices.len() > overlap {
-                        // Compact up to (but not including) the overlap-th-from-last user message
-                        user_msg_indices[user_msg_indices.len() - overlap]
-                    } else {
-                        // Not enough user messages to satisfy overlap — skip compaction
-                        0
-                    };
+                        // Find the boundary: keep the last `overlap` user messages and everything after
+                        let user_msg_indices: Vec<usize> = all_events.iter()
+                            .enumerate()
+                            .filter(|(_, e)| e.author == "user")
+                            .map(|(i, _)| i)
+                            .collect();
 
-                    if compact_up_to > 0 {
-                        let events_to_compact = &all_events[..compact_up_to];
+                        // Keep the last `overlap` user messages intact.
+                        // When overlap is 0, compact everything.
+                        let compact_up_to = if overlap == 0 {
+                            all_events.len()
+                        } else if user_msg_indices.len() > overlap {
+                            // Compact up to (but not including) the overlap-th-from-last user message
+                            user_msg_indices[user_msg_indices.len() - overlap]
+                        } else {
+                            // Not enough user messages to satisfy overlap — skip compaction
+                            0
+                        };
 
-                        match compaction_cfg.summarizer.summarize_events(events_to_compact).await {
-                            Ok(Some(compaction_event)) => {
-                                // Persist the compaction event
-                                if let Err(e) = session_service.append_event(
-                                    ctx.session_id(),
-                                    compaction_event.clone(),
-                                ).await {
-                                    tracing::warn!(error = %e, "Failed to persist compaction event");
-                                } else {
-                                    tracing::info!(
-                                        compacted_events = compact_up_to,
-                                        "Context compaction completed"
-                                    );
+                        if compact_up_to > 0 {
+                            let events_to_compact = &all_events[..compact_up_to];
+
+                            match compaction_cfg.summarizer.summarize_events(events_to_compact).await {
+                                Ok(Some(compaction_event)) => {
+                                    // Persist the compaction event
+                                    if let Err(e) = session_service.append_event(
+                                        ctx.session_id(),
+                                        compaction_event.clone(),
+                                    ).await {
+                                        tracing::warn!(error = %e, "Failed to persist compaction event");
+                                    } else {
+                                        tracing::info!(
+                                            compacted_events = compact_up_to,
+                                            "Context compaction completed"
+                                        );
+                                    }
                                 }
-                            }
-                            Ok(None) => {
-                                tracing::debug!("Compaction summarizer returned no result");
-                            }
-                            Err(e) => {
-                                // Compaction failure is non-fatal — log and continue
-                                tracing::warn!(error = %e, "Context compaction failed");
+                                Ok(None) => {
+                                    tracing::debug!("Compaction summarizer returned no result");
+                                }
+                                Err(e) => {
+                                    // Compaction failure is non-fatal — log and continue
+                                    tracing::warn!(error = %e, "Context compaction failed");
+                                }
                             }
                         }
                     }
@@ -740,11 +769,16 @@ impl Runner {
         root_agent.clone()
     }
 
-    /// Check if agent and its parent chain allow transfer up the tree
-    fn is_transferable(root_agent: &Arc<dyn Agent>, agent: &Arc<dyn Agent>) -> bool {
-        // For now, always allow transfer
-        // TODO: Check DisallowTransferToParent flag when LlmAgent supports it
-        let _ = (root_agent, agent);
+    /// Check if an agent found in session history can be resumed for the next
+    /// user message.
+    ///
+    /// This always returns `true` because the transfer-policy enforcement
+    /// (`disallow_transfer_to_parent` / `disallow_transfer_to_peers`) is
+    /// handled inside `LlmAgent::run()` when it builds the `transfer_to_agent`
+    /// tool's valid-target list. The runner does not need to duplicate that
+    /// check here — it only needs to know whether the agent is a valid
+    /// resumption target, which it always is if it exists in the tree.
+    fn is_transferable(_root_agent: &Arc<dyn Agent>, _agent: &Arc<dyn Agent>) -> bool {
         true
     }
 

@@ -25,9 +25,8 @@ pub async fn aggregate_stream(
         last_response = Some(response);
     }
 
-    let mut final_response = last_response.ok_or_else(|| {
-        adk_core::AdkError::Model("No responses received from stream".to_string())
-    })?;
+    let mut final_response = last_response
+        .ok_or_else(|| adk_core::AdkError::model("No responses received from stream"))?;
 
     final_response.content = Some(Content {
         role: "model".to_string(),

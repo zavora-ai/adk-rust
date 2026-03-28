@@ -81,7 +81,7 @@ impl Tool for ScreenshotTool {
                 use base64::Engine;
                 let image_data =
                     base64::engine::general_purpose::STANDARD.decode(&base64_image).map_err(
-                        |e| adk_core::AdkError::Tool(format!("Failed to decode base64: {}", e)),
+                        |e| adk_core::AdkError::tool(format!("Failed to decode base64: {}", e)),
                     )?;
 
                 let part = adk_core::Part::InlineData {

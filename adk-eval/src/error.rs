@@ -50,3 +50,22 @@ impl From<adk_core::AdkError> for EvalError {
         EvalError::AgentError(err.to_string())
     }
 }
+
+impl From<EvalError> for adk_core::AdkError {
+    fn from(err: EvalError) -> Self {
+        use adk_core::{ErrorCategory, ErrorComponent};
+        let (category, code) = match &err {
+            EvalError::LoadError(_) => (ErrorCategory::NotFound, "eval.load"),
+            EvalError::ParseError(_) => (ErrorCategory::InvalidInput, "eval.parse"),
+            EvalError::ExecutionError(_) => (ErrorCategory::Internal, "eval.execution"),
+            EvalError::AgentError(_) => (ErrorCategory::Internal, "eval.agent"),
+            EvalError::ConfigError(_) => (ErrorCategory::InvalidInput, "eval.config"),
+            EvalError::IoError(_) => (ErrorCategory::Internal, "eval.io"),
+            EvalError::JsonError(_) => (ErrorCategory::Internal, "eval.json"),
+            EvalError::ScoringError(_) => (ErrorCategory::Internal, "eval.scoring"),
+            EvalError::JudgeError(_) => (ErrorCategory::Internal, "eval.judge"),
+        };
+        adk_core::AdkError::new(ErrorComponent::Eval, category, code, err.to_string())
+            .with_source(err)
+    }
+}

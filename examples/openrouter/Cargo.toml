@@ -1,0 +1,19 @@
+[package]
+name = "openrouter-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-core = { path = "../../adk-core" }
+adk-rust = { path = "../../adk-rust", features = ["openrouter"] }
+adk-model = { path = "../../adk-model", features = ["openrouter"] }
+tokio = { version = "1.40", features = ["full"] }
+futures = "0.3"
+serde_json = "1.0"
+dotenvy = "0.15"
+anyhow = "1.0"
+schemars = "0.8"
+serde = { version = "1.0", features = ["derive"] }

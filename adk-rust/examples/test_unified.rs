@@ -1,3 +1,4 @@
+#![allow(clippy::result_large_err)]
 // Simple test to verify adk-rust facade crate works
 use adk_rust::prelude::*;
 use std::sync::Arc;

@@ -189,6 +189,8 @@ fn adk_parts_to_bedrock(parts: &[Part]) -> Vec<ContentBlock> {
                     None
                 }
             }
+            // Server-side tool parts are Gemini-specific; skip for Bedrock
+            Part::ServerToolCall { .. } | Part::ServerToolResponse { .. } => None,
         })
         .collect()
 }
@@ -322,6 +324,7 @@ pub(crate) fn bedrock_response_to_adk(
         interrupted: false,
         error_code: None,
         error_message: None,
+        provider_metadata: None,
     }
 }
 
@@ -431,6 +434,7 @@ pub(crate) fn bedrock_stream_content_start_to_adk(
                 interrupted: false,
                 error_code: None,
                 error_message: None,
+                provider_metadata: None,
             })
         }
         _ => None,
@@ -459,6 +463,7 @@ pub(crate) fn bedrock_stream_delta_to_adk(delta: &ContentBlockDelta) -> Option<L
                     interrupted: false,
                     error_code: None,
                     error_message: None,
+                    provider_metadata: None,
                 })
             }
         }
@@ -481,6 +486,7 @@ pub(crate) fn bedrock_stream_delta_to_adk(delta: &ContentBlockDelta) -> Option<L
                     interrupted: false,
                     error_code: None,
                     error_message: None,
+                    provider_metadata: None,
                 })
             }
         }
@@ -502,6 +508,7 @@ pub(crate) fn bedrock_stream_delta_to_adk(delta: &ContentBlockDelta) -> Option<L
                         interrupted: false,
                         error_code: None,
                         error_message: None,
+                        provider_metadata: None,
                     })
                 }
             } else {
@@ -525,6 +532,7 @@ pub(crate) fn bedrock_stream_stop_to_adk(stop_reason: &StopReason) -> LlmRespons
         interrupted: false,
         error_code: None,
         error_message: None,
+        provider_metadata: None,
     }
 }
 

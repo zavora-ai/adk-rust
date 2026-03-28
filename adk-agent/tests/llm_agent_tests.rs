@@ -44,6 +44,7 @@ impl adk_core::Llm for MockLlm {
                 interrupted: false,
                 error_code: None,
                 error_message: None,
+                provider_metadata: None,
             });
         };
         Ok(Box::pin(s))
@@ -89,6 +90,7 @@ impl adk_core::Llm for SpyLlm {
                 interrupted: false,
                 error_code: None,
                 error_message: None,
+                provider_metadata: None,
             });
         };
         Ok(Box::pin(s))

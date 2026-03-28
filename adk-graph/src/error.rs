@@ -49,10 +49,6 @@ pub enum GraphError {
     #[error("Router returned unknown target: {0}")]
     UnknownRouteTarget(String),
 
-    /// ADK core error
-    #[error("ADK error: {0}")]
-    AdkError(#[from] adk_core::AdkError),
-
     /// IO error
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
@@ -92,5 +88,37 @@ impl InterruptedExecution {
         step: usize,
     ) -> Self {
         Self { thread_id, checkpoint_id, interrupt, state, step }
+    }
+}
+
+impl From<GraphError> for adk_core::AdkError {
+    fn from(err: GraphError) -> Self {
+        use adk_core::{ErrorCategory, ErrorComponent};
+        let (category, code) = match &err {
+            GraphError::InvalidGraph(_) => (ErrorCategory::InvalidInput, "graph.invalid"),
+            GraphError::NodeNotFound(_) => (ErrorCategory::NotFound, "graph.node_not_found"),
+            GraphError::EdgeTargetNotFound(_) => {
+                (ErrorCategory::NotFound, "graph.edge_target_not_found")
+            }
+            GraphError::NoEntryPoint => (ErrorCategory::InvalidInput, "graph.no_entry_point"),
+            GraphError::RecursionLimitExceeded(_) => {
+                (ErrorCategory::Internal, "graph.recursion_limit")
+            }
+            GraphError::Interrupted(_) => (ErrorCategory::Cancelled, "graph.interrupted"),
+            GraphError::NodeExecutionFailed { .. } => {
+                (ErrorCategory::Internal, "graph.node_execution_failed")
+            }
+            GraphError::SerializationError(_) => (ErrorCategory::Internal, "graph.serialization"),
+            GraphError::CheckpointError(_) => (ErrorCategory::Internal, "graph.checkpoint"),
+            GraphError::UnknownRouteTarget(_) => {
+                (ErrorCategory::NotFound, "graph.unknown_route_target")
+            }
+            GraphError::IoError(_) => (ErrorCategory::Internal, "graph.io"),
+            GraphError::JsonError(_) => (ErrorCategory::Internal, "graph.json"),
+            #[cfg(feature = "sqlite")]
+            GraphError::DatabaseError(_) => (ErrorCategory::Internal, "graph.database"),
+        };
+        adk_core::AdkError::new(ErrorComponent::Graph, category, code, err.to_string())
+            .with_source(err)
     }
 }

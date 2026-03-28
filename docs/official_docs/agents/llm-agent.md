@@ -15,7 +15,7 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.4"
+adk-rust = "0.5.0"
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 serde_json = "1.0"
@@ -31,6 +31,7 @@ Replace `src/main.rs`:
 
 ```rust
 use adk_rust::prelude::*;
+use adk_rust::{SessionId, UserId};
 use adk_rust::Launcher;
 use std::sync::Arc;
 
@@ -168,6 +169,7 @@ Here's a complete working example:
 
 ```rust
 use adk_rust::prelude::*;
+use adk_rust::{SessionId, UserId};
 use adk_rust::runner::{Runner, RunnerConfig};
 use adk_rust::session::{CreateRequest, InMemorySessionService, SessionService};
 use adk_rust::futures::StreamExt;
@@ -214,8 +216,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // 4. Run the agent - instruction becomes:
     // "You are helping Alice. Their role is Senior Developer..."
     let mut response_stream = runner.run(
-        "user123".to_string(),
-        session.id().to_string(),
+        UserId::new("user123")?,
+        SessionId::new(session.id())?,
         Content::new("user").with_text("Explain async/await in Rust"),
     ).await?;
 
@@ -280,8 +282,7 @@ let weather_tool = FunctionTool::new(
     },
 );
 ```
-> **⚠️ Note: Current Limitation**: Built-in tools like `GoogleSearchTool` are currently incompatible with `FunctionTool` in the same agent. Use either built-in tools OR custom `FunctionTool`s, but not both together. 
-**💡 Workaround**: Create separate subagents, each with their own tool type, and coordinate them using a master LLMAgent, workflow agents or multi-agent patterns.
+Built-in provider-native tools can now be mixed with `FunctionTool` instances in the same agent. ADK forwards the native tool declarations to the provider while still executing ordinary function tools locally.
 
 ### Build a Multi-Tool Agent
 
@@ -296,7 +297,7 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.4", features = ["tools"] }
+adk-rust = { version = "0.5.0", features = ["tools"] }
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 serde_json = "1.0"
@@ -691,7 +692,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .model(Arc::new(model))
         .tool(Arc::new(weather))
         .tool(Arc::new(calc))
-        // .tool(Arc::new(GoogleSearchTool::new()))  // Currently unsupported with FunctionTool
+        // .tool(Arc::new(GoogleSearchTool::new()))  // Provider-native tools can be mixed with FunctionTool
         .output_key("last_response")
         .build()?;
 

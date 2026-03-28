@@ -166,15 +166,15 @@ impl CustomAgentBuilder {
     }
 
     pub fn build(self) -> Result<CustomAgent> {
-        let handler = self.handler.ok_or_else(|| {
-            adk_core::AdkError::Agent("CustomAgent requires a handler".to_string())
-        })?;
+        let handler = self
+            .handler
+            .ok_or_else(|| adk_core::AdkError::agent("CustomAgent requires a handler"))?;
 
         // Validate sub-agents have unique names
         let mut seen_names = std::collections::HashSet::new();
         for agent in &self.sub_agents {
             if !seen_names.insert(agent.name()) {
-                return Err(adk_core::AdkError::Agent(format!(
+                return Err(adk_core::AdkError::agent(format!(
                     "Duplicate sub-agent name: {}",
                     agent.name()
                 )));

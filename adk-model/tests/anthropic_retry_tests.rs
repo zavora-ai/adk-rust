@@ -97,7 +97,7 @@ proptest! {
                     let now = Instant::now();
                     if attempt == 0 {
                         *t1.lock().unwrap() = Some(now);
-                        Err(AdkError::Model("HTTP 429 rate limit".to_string()))
+                        Err(AdkError::model("HTTP 429 rate limit"))
                     } else {
                         *t2.lock().unwrap() = Some(now);
                         Ok("success")

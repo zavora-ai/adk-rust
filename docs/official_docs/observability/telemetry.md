@@ -227,6 +227,43 @@ use adk_telemetry::add_context_attributes;
 add_context_attributes("user-456", "sess-789");
 ```
 
+### LLM Token Usage Tracking
+
+Track token consumption across all LLM providers with OpenTelemetry GenAI semantic conventions. The `llm_generate_span` creates a span with pre-declared `gen_ai.usage.*` fields, and `record_llm_usage` populates them after the response arrives:
+
+```rust
+use adk_telemetry::{llm_generate_span, record_llm_usage, LlmUsage};
+
+let span = llm_generate_span("openai", "gpt-5-mini", true);
+let _enter = span.enter();
+
+// After receiving the LLM response with usage metadata:
+record_llm_usage(&LlmUsage {
+    input_tokens: 100,
+    output_tokens: 50,
+    total_tokens: 150,
+    cache_read_tokens: Some(80),
+    ..Default::default()
+});
+```
+
+All ADK model providers (Gemini, OpenAI, Anthropic, Ollama, Bedrock, DeepSeek, Groq, Azure AI, and all OpenAI-compatible providers) automatically record token usage on every `generate_content` call. No manual instrumentation is needed — the tracking is built into the provider layer.
+
+Recorded span fields follow [OpenTelemetry GenAI conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/):
+
+| Field | Description |
+|-------|-------------|
+| `gen_ai.usage.input_tokens` | Prompt / input token count |
+| `gen_ai.usage.output_tokens` | Completion / output token count |
+| `gen_ai.usage.total_tokens` | Total token count |
+| `gen_ai.usage.cache_read_tokens` | Tokens read from prompt cache |
+| `gen_ai.usage.cache_creation_tokens` | Tokens used to create cache |
+| `gen_ai.usage.thinking_tokens` | Chain-of-thought reasoning tokens |
+| `gen_ai.usage.audio_input_tokens` | Audio input token count |
+| `gen_ai.usage.audio_output_tokens` | Audio output token count |
+
+Optional fields are only recorded when the provider reports them (non-None).
+
 ## Manual Span Creation
 
 For custom instrumentation, create spans manually:
@@ -326,6 +363,17 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 ```
 
 The agent, model, and tool operations will automatically emit structured logs and traces.
+
+### Telemetry Demo Example
+
+For a comprehensive working example that demonstrates all telemetry features with real Gemini API calls (non-streaming, streaming, nested spans, exporter, metrics), run:
+
+```bash
+export GOOGLE_API_KEY=your-key
+cargo run -p telemetry-demo
+```
+
+See the [adk-playground](https://github.com/zavora-ai/adk-playground) repo for the full telemetry demo source.
 
 ## Custom Telemetry in Tools
 

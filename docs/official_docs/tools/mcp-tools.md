@@ -278,7 +278,7 @@ Find more servers at the [MCP Server Registry](https://github.com/modelcontextpr
 
 ## Error Handling
 
-Handle MCP connection and execution errors:
+Handle MCP connection and execution errors using structured checks:
 
 ```rust
 use adk_core::AdkError;
@@ -287,11 +287,11 @@ match toolset.tools(ctx).await {
     Ok(tools) => {
         println!("Discovered {} tools", tools.len());
     }
-    Err(AdkError::Tool(msg)) => {
-        eprintln!("MCP error: {}", msg);
+    Err(err) if err.is_tool() => {
+        eprintln!("MCP error: {}", err.message);
     }
-    Err(e) => {
-        eprintln!("Other error: {}", e);
+    Err(err) => {
+        eprintln!("Other error: {}", err);
     }
 }
 ```

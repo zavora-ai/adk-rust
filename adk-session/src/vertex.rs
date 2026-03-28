@@ -83,7 +83,7 @@ impl VertexAiSessionService {
             .with_scopes([CLOUD_PLATFORM_SCOPE])
             .build()
             .map_err(|e| {
-                AdkError::Session(format!("failed to build vertex session ADC credentials: {e}"))
+                AdkError::session(format!("failed to build vertex session ADC credentials: {e}"))
             })?;
 
         Ok(Self::with_credentials(config, credentials))
@@ -103,7 +103,7 @@ impl VertexAiSessionService {
     }
 
     fn session_error(message: impl Into<String>) -> AdkError {
-        AdkError::Session(message.into())
+        AdkError::session(message.into())
     }
 
     fn endpoint_base(&self) -> &str {
@@ -632,6 +632,10 @@ impl State for VertexSession {
     }
 
     fn set(&mut self, key: String, value: Value) {
+        if let Err(msg) = adk_core::validate_state_key(&key) {
+            tracing::warn!(key = %key, "rejecting invalid state key: {msg}");
+            return;
+        }
         self.state.insert(key, value);
     }
 

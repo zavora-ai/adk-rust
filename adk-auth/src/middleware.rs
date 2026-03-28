@@ -154,7 +154,7 @@ async fn authorize_tool_access(
         let _ = sink.log(event).await;
     }
 
-    check_result.map_err(|err| adk_core::AdkError::Tool(err.to_string()))
+    check_result.map_err(|err| adk_core::AdkError::tool(err.to_string()))
 }
 
 async fn execute_protected_tool(

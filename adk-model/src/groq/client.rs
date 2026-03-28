@@ -2,10 +2,11 @@
 
 use super::config::{GROQ_API_BASE, GroqConfig};
 use super::convert::{self, ChatCompletionRequest, ChatCompletionResponse};
-use crate::retry::{
-    RetryConfig, execute_with_retry, is_retryable_model_error, is_retryable_status_code,
+use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
+use adk_core::{
+    AdkError, ErrorCategory, ErrorComponent, FinishReason, Llm, LlmRequest, LlmResponse,
+    LlmResponseStream, Part,
 };
-use adk_core::{AdkError, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part};
 use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -34,7 +35,7 @@ impl GroqClient {
     pub fn new(config: GroqConfig) -> Result<Self, AdkError> {
         let client = Client::builder()
             .build()
-            .map_err(|e| AdkError::Model(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| AdkError::model(format!("Failed to create HTTP client: {e}")))?;
 
         Ok(Self { client, config, retry_config: RetryConfig::default() })
     }
@@ -119,6 +120,7 @@ impl Llm for GroqClient {
         request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
+        let usage_span = adk_telemetry::llm_generate_span("groq", &self.config.model, stream);
         let api_url = self.api_url();
         let api_key = self.config.api_key.clone();
         let chat_request = self.build_request(&request, stream);
@@ -141,20 +143,33 @@ impl Llm for GroqClient {
                         .json(&chat_request)
                         .send()
                         .await
-                        .map_err(|e| AdkError::Model(format!("Groq API request failed: {}", e)))?;
+                        .map_err(|e| AdkError::new(
+                            ErrorComponent::Model,
+                            ErrorCategory::Unavailable,
+                            "model.groq.request",
+                            format!("Groq API request failed: {e}"),
+                        ).with_provider("groq"))?;
 
                     if !response.status().is_success() {
                         let status = response.status();
+                        let status_code = status.as_u16();
                         let error_text = response.text().await.unwrap_or_default();
-                        let retryability = if is_retryable_status_code(status.as_u16()) {
-                            "retryable"
-                        } else {
-                            "non-retryable"
+                        let category = match status_code {
+                            401 => ErrorCategory::Unauthorized,
+                            403 => ErrorCategory::Forbidden,
+                            404 => ErrorCategory::NotFound,
+                            408 => ErrorCategory::Timeout,
+                            429 => ErrorCategory::RateLimited,
+                            503 | 529 => ErrorCategory::Unavailable,
+                            _ if status_code >= 500 => ErrorCategory::Internal,
+                            _ => ErrorCategory::InvalidInput,
                         };
-                        return Err(AdkError::Model(format!(
-                            "Groq API error ({}, {}): {}",
-                            status, retryability, error_text
-                        )));
+                        return Err(AdkError::new(
+                            ErrorComponent::Model,
+                            category,
+                            "model.groq.api_error",
+                            format!("Groq API error (HTTP {status}): {error_text}"),
+                        ).with_upstream_status(status_code).with_provider("groq"));
                     }
 
                     Ok(response)
@@ -173,7 +188,7 @@ impl Llm for GroqClient {
 
                 while let Some(chunk_result) = byte_stream.next().await {
                     let chunk = chunk_result
-                        .map_err(|e| AdkError::Model(format!("Stream read error: {}", e)))?;
+                        .map_err(|e| AdkError::model(format!("Stream read error: {e}")))?;
 
                     buffer.push_str(&String::from_utf8_lossy(&chunk));
 
@@ -297,6 +312,7 @@ impl Llm for GroqClient {
                                                 interrupted: false,
                                                 error_code: None,
                                                 error_message: None,
+                                                provider_metadata: None,
                                             };
                                         } else {
                                             // Emit partial text content
@@ -318,6 +334,7 @@ impl Llm for GroqClient {
                                                             interrupted: false,
                                                             error_code: None,
                                                             error_message: None,
+                                                            provider_metadata: None,
                                                         };
                                                     }
                                                 }
@@ -335,18 +352,17 @@ impl Llm for GroqClient {
             } else {
                 // Non-streaming mode
                 let response_text = response.text().await
-                    .map_err(|e| AdkError::Model(format!("Failed to read response: {}", e)))?;
+                    .map_err(|e| AdkError::model(format!("Failed to read response: {e}")))?;
 
                 let chat_response: ChatCompletionResponse = serde_json::from_str(&response_text)
-                    .map_err(|e| AdkError::Model(format!(
-                        "Failed to parse response: {} - {}",
-                        e, response_text
+                    .map_err(|e| AdkError::model(format!(
+                        "Failed to parse response: {e} - {response_text}"
                     )))?;
 
                 yield convert::from_response(&chat_response);
             }
         };
 
-        Ok(Box::pin(response_stream))
+        Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
     }
 }

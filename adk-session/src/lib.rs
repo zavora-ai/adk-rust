@@ -1,4 +1,5 @@
 //! # adk-session
+#![allow(clippy::result_large_err)]
 //!
 //! Session management and state persistence for ADK agents.
 //!

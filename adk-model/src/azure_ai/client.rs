@@ -3,7 +3,9 @@
 use super::config::AzureAIConfig;
 use super::convert;
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
-use adk_core::{AdkError, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part};
+use adk_core::{
+    AdkError, ErrorCategory, ErrorComponent, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part,
+};
 use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -41,7 +43,7 @@ impl AzureAIClient {
     pub fn new(config: AzureAIConfig) -> Result<Self, AdkError> {
         let client = Client::builder()
             .build()
-            .map_err(|e| AdkError::Model(format!("Failed to create HTTP client: {e}")))?;
+            .map_err(|e| AdkError::model(format!("Failed to create HTTP client: {e}")))?;
 
         Ok(Self {
             client,
@@ -89,6 +91,7 @@ impl Llm for AzureAIClient {
         request: LlmRequest,
         stream: bool,
     ) -> Result<LlmResponseStream, AdkError> {
+        let usage_span = adk_telemetry::llm_generate_span("azure-ai", &self.model, stream);
         let api_url = self.api_url();
         let api_key = self.api_key.clone();
         let model = self.model.clone();
@@ -119,16 +122,33 @@ impl Llm for AzureAIClient {
                         .json(&body)
                         .send()
                         .await
-                        .map_err(|e| AdkError::Model(format!(
-                            "Azure AI error for endpoint={endpoint}: {e}"
-                        )))?;
+                        .map_err(|e| AdkError::new(
+                            ErrorComponent::Model,
+                            ErrorCategory::Unavailable,
+                            "model.azure_ai.request",
+                            format!("Azure AI error for endpoint={endpoint}: {e}"),
+                        ).with_provider("azure-ai"))?;
 
                     if !resp.status().is_success() {
                         let status = resp.status();
+                        let status_code = status.as_u16();
                         let error_text = resp.text().await.unwrap_or_default();
-                        return Err(AdkError::Model(format!(
-                            "Azure AI error for endpoint={endpoint}, status={status}: {error_text}"
-                        )));
+                        let category = match status_code {
+                            401 => ErrorCategory::Unauthorized,
+                            403 => ErrorCategory::Forbidden,
+                            404 => ErrorCategory::NotFound,
+                            408 => ErrorCategory::Timeout,
+                            429 => ErrorCategory::RateLimited,
+                            503 | 529 => ErrorCategory::Unavailable,
+                            _ if status_code >= 500 => ErrorCategory::Internal,
+                            _ => ErrorCategory::InvalidInput,
+                        };
+                        return Err(AdkError::new(
+                            ErrorComponent::Model,
+                            category,
+                            "model.azure_ai.api_error",
+                            format!("Azure AI error for endpoint={endpoint}, status={status}: {error_text}"),
+                        ).with_upstream_status(status_code).with_provider("azure-ai"));
                     }
 
                     Ok(resp)
@@ -146,7 +166,7 @@ impl Llm for AzureAIClient {
 
                 while let Some(chunk_result) = byte_stream.next().await {
                     let chunk = chunk_result
-                        .map_err(|e| AdkError::Model(format!("Azure AI stream error: {e}")))?;
+                        .map_err(|e| AdkError::model(format!("Azure AI stream error: {e}")))?;
 
                     buffer.push_str(&String::from_utf8_lossy(&chunk));
 
@@ -215,12 +235,12 @@ impl Llm for AzureAIClient {
                 }
             } else {
                 let response_text = response.text().await
-                    .map_err(|e| AdkError::Model(format!(
+                    .map_err(|e| AdkError::model(format!(
                         "Azure AI response parse failed: {e}"
                     )))?;
 
                 let response_json: Value = serde_json::from_str(&response_text)
-                    .map_err(|e| AdkError::Model(format!(
+                    .map_err(|e| AdkError::model(format!(
                         "Azure AI response parse failed: {e}"
                     )))?;
 
@@ -228,7 +248,7 @@ impl Llm for AzureAIClient {
             }
         };
 
-        Ok(Box::pin(response_stream))
+        Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
     }
 }
 

@@ -11,8 +11,9 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 `adk-tool` provides the tool infrastructure for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)):
 
 - **FunctionTool** - Create tools from async Rust functions
-- **AgentTool** - Use agents as callable tools for composition
+- **AgentTool** - Use agents as callable tools for composition (runs sub-agents in non-streaming mode for reliable response capture)
 - **GoogleSearchTool** - Web search via Gemini's grounding
+- **Provider-native wrappers** - Typed declarations for Gemini, Anthropic, and OpenAI built-in tools
 - **McpToolset** - Model Context Protocol integration (local & remote servers)
 - **BasicToolset** - Group multiple tools together
 - **FilteredToolset** - Filter tools from any toolset by predicate
@@ -25,17 +26,17 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 
 ```toml
 [dependencies]
-adk-tool = "0.4"
+adk-tool = "0.5.0"
 
 # For remote MCP servers via HTTP:
-adk-tool = { version = "0.4", features = ["http-transport"] }
+adk-tool = { version = "0.5.0", features = ["http-transport"] }
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.4", features = ["tools"] }
+adk-rust = { version = "0.5.0", features = ["tools"] }
 ```
 
 ## Quick Start

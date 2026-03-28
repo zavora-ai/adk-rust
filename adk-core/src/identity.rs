@@ -132,6 +132,16 @@ macro_rules! define_id {
                 &self.0
             }
 
+            /// Creates a typed identifier with validation.
+            ///
+            /// Prefer this constructor at trust boundaries where the input may
+            /// come from users, HTTP payloads, or external systems.
+            pub fn new(value: impl Into<String>) -> Result<Self, IdentityError> {
+                let value = value.into();
+                validate(&value, $kind)?;
+                Ok(Self(value))
+            }
+
             /// Creates a typed identifier from a trusted string without
             /// validation.
             ///
@@ -410,7 +420,7 @@ pub struct ExecutionIdentity {
 
 impl From<IdentityError> for crate::AdkError {
     fn from(err: IdentityError) -> Self {
-        crate::AdkError::Config(err.to_string())
+        crate::AdkError::config(err.to_string())
     }
 }
 
@@ -635,7 +645,7 @@ mod tests {
     fn test_identity_error_to_adk_error() {
         let err = IdentityError::Empty { kind: "AppName" };
         let adk_err: crate::AdkError = err.into();
-        assert!(matches!(adk_err, crate::AdkError::Config(_)));
+        assert!(adk_err.is_config());
         assert!(adk_err.to_string().contains("AppName must not be empty"));
     }
 }

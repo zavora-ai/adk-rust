@@ -77,6 +77,7 @@ pub fn build_agent_card(agent: &dyn Agent, base_url: &str) -> AgentCard {
         })
         .skills(build_agent_skills(agent))
         .build()
+        .expect("build_agent_card: agent name, description, and url must be non-empty")
 }
 
 #[cfg(test)]

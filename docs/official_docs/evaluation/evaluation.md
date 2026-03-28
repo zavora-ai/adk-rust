@@ -271,6 +271,8 @@ async fn test_weather_agent() {
 
 ## Examples
 
+Examples are in the [adk-playground](https://github.com/zavora-ai/adk-playground) repo:
+
 ```bash
 # Basic evaluation
 cargo run --example eval_basic

@@ -60,6 +60,16 @@ pub fn adk_parts_to_a2a(
 
                 Ok(crate::a2a::Part::Data { data, metadata: None })
             }
+            Part::ServerToolCall { server_tool_call } => {
+                let mut data = Map::new();
+                data.insert("server_tool_call".to_string(), server_tool_call.clone());
+                Ok(crate::a2a::Part::Data { data, metadata: None })
+            }
+            Part::ServerToolResponse { server_tool_response } => {
+                let mut data = Map::new();
+                data.insert("server_tool_response".to_string(), server_tool_response.clone());
+                Ok(crate::a2a::Part::Data { data, metadata: None })
+            }
         })
         .collect()
 }
@@ -72,14 +82,14 @@ pub fn a2a_parts_to_adk(parts: &[crate::a2a::Part]) -> Result<Vec<Part>> {
             crate::a2a::Part::File { file, .. } => {
                 if let Some(bytes) = &file.bytes {
                     let data = general_purpose::STANDARD.decode(bytes).map_err(|e| {
-                        adk_core::AdkError::Agent(format!("Base64 decode error: {}", e))
+                        adk_core::AdkError::agent(format!("Base64 decode error: {}", e))
                     })?;
                     Ok(Part::InlineData {
                         mime_type: file.mime_type.clone().unwrap_or_default(),
                         data,
                     })
                 } else {
-                    Err(adk_core::AdkError::Agent("File part with URI not supported".to_string()))
+                    Err(adk_core::AdkError::agent("File part with URI not supported"))
                 }
             }
             crate::a2a::Part::Data { data, .. } => {
@@ -87,9 +97,7 @@ pub fn a2a_parts_to_adk(parts: &[crate::a2a::Part]) -> Result<Vec<Part>> {
                     let name = call
                         .get("name")
                         .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            adk_core::AdkError::Agent("Missing function name".to_string())
-                        })?
+                        .ok_or_else(|| adk_core::AdkError::agent("Missing function name"))?
                         .to_string();
                     let args = call.get("args").cloned().unwrap_or(Value::Object(Map::new()));
                     let id = call.get("id").and_then(|v| v.as_str()).map(String::from);
@@ -98,9 +106,7 @@ pub fn a2a_parts_to_adk(parts: &[crate::a2a::Part]) -> Result<Vec<Part>> {
                     let name = resp
                         .get("name")
                         .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            adk_core::AdkError::Agent("Missing function name".to_string())
-                        })?
+                        .ok_or_else(|| adk_core::AdkError::agent("Missing function name"))?
                         .to_string();
                     let response =
                         resp.get("response").cloned().unwrap_or(Value::Object(Map::new()));
@@ -110,7 +116,7 @@ pub fn a2a_parts_to_adk(parts: &[crate::a2a::Part]) -> Result<Vec<Part>> {
                         id,
                     })
                 } else {
-                    Err(adk_core::AdkError::Agent("Unknown data part format".to_string()))
+                    Err(adk_core::AdkError::agent("Unknown data part format"))
                 }
             }
         })

@@ -166,7 +166,7 @@ pub fn tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
             },
             quote! {
                 let typed_args: #args_ty = serde_json::from_value(args)
-                    .map_err(|e| adk_tool::AdkError::Tool(
+                    .map_err(|e| adk_tool::AdkError::tool(
                         format!("invalid arguments for '{}': {e}", #tool_name_str)
                     ))?;
                 #fn_name(typed_args).await
@@ -188,7 +188,7 @@ pub fn tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
         if let Some(args_ty) = &args_type {
             quote! {
                 let typed_args: #args_ty = serde_json::from_value(args)
-                    .map_err(|e| adk_tool::AdkError::Tool(
+                    .map_err(|e| adk_tool::AdkError::tool(
                         format!("invalid arguments for '{}': {e}", #tool_name_str)
                     ))?;
                 #fn_name(ctx, typed_args).await
@@ -210,7 +210,7 @@ pub fn tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
         /// Auto-generated tool struct for [`#fn_name`].
         #fn_vis struct #struct_name;
 
-        #[async_trait::async_trait]
+        #[adk_tool::async_trait]
         impl adk_tool::Tool for #struct_name {
             fn name(&self) -> &str {
                 #tool_name_str
@@ -243,7 +243,8 @@ fn extract_args_type(func: &ItemFn) -> Option<Type> {
     for arg in &func.sig.inputs {
         if let FnArg::Typed(pat_type) = arg {
             // Skip context parameters (Arc<dyn ToolContext>)
-            let ty_str = quote!(#pat_type.ty).to_string();
+            let ty = &pat_type.ty;
+            let ty_str = quote!(#ty).to_string();
             if ty_str.contains("ToolContext") || ty_str.contains("Arc") {
                 continue;
             }

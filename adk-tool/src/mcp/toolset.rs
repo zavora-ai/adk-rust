@@ -242,7 +242,7 @@ where
         let new_client = factory
             .create_connection()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to refresh MCP connection: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Failed to refresh MCP connection: {e}")))?;
 
         let mut client = self.client.lock().await;
         let old_token = client.cancellation_token();
@@ -279,7 +279,7 @@ where
                         &self.refresh_config,
                         has_connection_factory,
                     ) {
-                        return Err(AdkError::Tool(format!("Failed to list MCP tools: {}", error)));
+                        return Err(AdkError::tool(format!("Failed to list MCP tools: {error}")));
                     }
 
                     let retry_attempt = attempt + 1;
@@ -300,7 +300,7 @@ where
                     }
 
                     if !self.try_refresh_connection().await? {
-                        return Err(AdkError::Tool(format!("Failed to list MCP tools: {}", error)));
+                        return Err(AdkError::tool(format!("Failed to list MCP tools: {error}")));
                     }
                     attempt += 1;
                 }
@@ -336,7 +336,14 @@ where
                 client: self.client.clone(),
                 connection_factory: self.connection_factory.clone(),
                 refresh_config: self.refresh_config.clone(),
-                is_long_running: false, // TODO: detect from MCP tool annotations
+                // MCP ToolAnnotations (read_only_hint, destructive_hint, etc.)
+                // do not include a "long_running" hint. When task support is
+                // enabled on this toolset, treat non-read-only open-world tools
+                // as potentially long-running so the task lifecycle activates.
+                is_long_running: self.task_config.enable_tasks
+                    && mcp_tool.annotations.as_ref().is_some_and(|a| {
+                        a.read_only_hint != Some(true) && a.open_world_hint != Some(false)
+                    }),
                 task_config: self.task_config.clone(),
             };
 
@@ -379,7 +386,7 @@ where
         let new_client = factory
             .create_connection()
             .await
-            .map_err(|e| AdkError::Tool(format!("Failed to refresh MCP connection: {}", e)))?;
+            .map_err(|e| AdkError::tool(format!("Failed to refresh MCP connection: {e}")))?;
 
         let mut client = self.client.lock().await;
         let old_token = client.cancellation_token();
@@ -410,9 +417,9 @@ where
                         &self.refresh_config,
                         has_connection_factory,
                     ) {
-                        return Err(AdkError::Tool(format!(
-                            "Failed to call MCP tool '{}': {}",
-                            self.name, error
+                        return Err(AdkError::tool(format!(
+                            "Failed to call MCP tool '{}': {error}",
+                            self.name
                         )));
                     }
 
@@ -435,9 +442,9 @@ where
                     }
 
                     if !self.try_refresh_connection().await? {
-                        return Err(AdkError::Tool(format!(
-                            "Failed to call MCP tool '{}': {}",
-                            self.name, error
+                        return Err(AdkError::tool(format!(
+                            "Failed to call MCP tool '{}': {error}",
+                            self.name
                         )));
                     }
                     attempt += 1;
@@ -482,15 +489,12 @@ where
             // Poll task status using tasks/get
             // Note: This requires the MCP server to support SEP-1686 task lifecycle
             let poll_result = self
-                .call_tool_with_retry(CallToolRequestParams {
-                    name: "tasks/get".into(),
-                    arguments: Some(serde_json::Map::from_iter([(
+                .call_tool_with_retry(CallToolRequestParams::new("tasks/get").with_arguments(
+                    serde_json::Map::from_iter([(
                         "task_id".to_string(),
                         Value::String(task_id.to_string()),
-                    )])),
-                    task: None,
-                    meta: None,
-                })
+                    )]),
+                ))
                 .await
                 .map_err(|e| TaskError::PollFailed(e.to_string()))?;
 
@@ -681,29 +685,29 @@ where
             let task_map = task_params.as_object().cloned();
 
             let create_result = self
-                .call_tool_with_retry(CallToolRequestParams {
-                    name: self.name.clone().into(),
-                    arguments: if args.is_null() || args == json!({}) {
-                        None
-                    } else {
+                .call_tool_with_retry({
+                    let mut params = CallToolRequestParams::new(self.name.clone());
+                    if !(args.is_null() || args == json!({})) {
                         match args {
-                            Value::Object(map) => Some(map),
+                            Value::Object(map) => {
+                                params = params.with_arguments(map);
+                            }
                             _ => {
-                                return Err(AdkError::Tool(
-                                    "Tool arguments must be an object".to_string(),
-                                ));
+                                return Err(AdkError::tool("Tool arguments must be an object"));
                             }
                         }
-                    },
-                    task: task_map,
-                    meta: None,
+                    }
+                    if let Some(task_map) = task_map {
+                        params = params.with_task(task_map);
+                    }
+                    params
                 })
                 .await?;
 
             // Extract task ID
             let task_id = self
                 .extract_task_id(&create_result)
-                .map_err(|e| AdkError::Tool(format!("Failed to get task ID: {}", e)))?;
+                .map_err(|e| AdkError::tool(format!("Failed to get task ID: {e}")))?;
 
             debug!(tool = self.name, task_id = task_id, "Task created, polling for completion");
 
@@ -711,30 +715,26 @@ where
             let result = self
                 .poll_task(&task_id)
                 .await
-                .map_err(|e| AdkError::Tool(format!("Task execution failed: {}", e)))?;
+                .map_err(|e| AdkError::tool(format!("Task execution failed: {e}")))?;
 
             return Ok(result);
         }
 
         // Standard synchronous execution
         let result = self
-            .call_tool_with_retry(CallToolRequestParams {
-                name: self.name.clone().into(),
-                arguments: if args.is_null() || args == json!({}) {
-                    None
-                } else {
-                    // Convert Value to the expected type
+            .call_tool_with_retry({
+                let mut params = CallToolRequestParams::new(self.name.clone());
+                if !(args.is_null() || args == json!({})) {
                     match args {
-                        Value::Object(map) => Some(map),
+                        Value::Object(map) => {
+                            params = params.with_arguments(map);
+                        }
                         _ => {
-                            return Err(AdkError::Tool(
-                                "Tool arguments must be an object".to_string(),
-                            ));
+                            return Err(AdkError::tool("Tool arguments must be an object"));
                         }
                     }
-                },
-                task: None,
-                meta: None,
+                }
+                params
             })
             .await?;
 
@@ -752,7 +752,7 @@ where
                 }
             }
 
-            return Err(AdkError::Tool(error_msg));
+            return Err(AdkError::tool(error_msg));
         }
 
         // Return structured content if available
@@ -795,26 +795,42 @@ where
         }
 
         if text_parts.is_empty() {
-            return Err(AdkError::Tool(format!("MCP tool '{}' returned no content", self.name)));
+            return Err(AdkError::tool(format!("MCP tool '{}' returned no content", self.name)));
         }
 
         Ok(json!({ "output": text_parts.join("\n") }))
     }
 }
 
-// Ensure McpTool is Send + Sync
-unsafe impl<S> Send for McpTool<S> where
-    S: rmcp::service::Service<RoleClient> + Send + Sync + 'static
-{
-}
-unsafe impl<S> Sync for McpTool<S> where
-    S: rmcp::service::Service<RoleClient> + Send + Sync + 'static
-{
-}
+// McpTool<S> is Send + Sync when S: Send + Sync because all fields are
+// composed of Send + Sync primitives (String, Arc<Mutex<_>>, Arc<dyn Send + Sync>, etc.).
+// The compiler enforces this through the Tool trait bound (Tool: Send + Sync).
+// No unsafe impl needed — the previous unsafe impl was removed as unnecessary.
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Proves that `McpTool<S>` is `Send + Sync` for any service `S: Send + Sync`
+    /// without requiring `unsafe impl`. The compiler rejects this test at build
+    /// time if any field breaks the auto-trait derivation.
+    ///
+    /// This replaced a previous `unsafe impl Send/Sync for McpTool<S>` that was
+    /// unnecessary — all fields (String, Arc<Mutex<_>>, Arc<dyn Send+Sync>, bool)
+    /// are naturally Send + Sync.
+    #[test]
+    fn mcp_tool_is_send_and_sync() {
+        fn require_send_sync<T: Send + Sync>() {}
+
+        // The compiler proves Send + Sync for McpTool<S> and McpToolset<S> by
+        // type-checking these function bodies. If any field were !Send or !Sync,
+        // this would be a compile error — no unsafe needed.
+        //
+        // () satisfies Service<RoleClient> via the ClientHandler blanket impl
+        // in rmcp, so this is a valid concrete instantiation.
+        require_send_sync::<McpTool<()>>();
+        require_send_sync::<McpToolset<()>>();
+    }
 
     #[test]
     fn test_should_retry_mcp_operation_reconnectable_errors() {

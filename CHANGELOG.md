@@ -5,6 +5,145 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-03-26
+
+### Added
+
+#### Action Node Graph Standardization (adk-action, adk-graph, adk-rust)
+- **`adk-action` crate**: New shared crate containing all 14 action node type definitions, `StandardProperties`, `ActionError` enum, and variable interpolation utilities. Zero runtime dependencies beyond `serde`, `serde_json`, `thiserror`, and `regex`.
+- **`ActionNodeExecutor`** in `adk-graph`: Implements the `Node` trait for any `ActionNodeConfig`, applying error handling (stop/continue/retry/fallback), timeout enforcement, and skip conditions uniformly across all node types.
+- **14 action node executors**: Set, Transform, Switch, Loop, Merge, Wait, File, Code (Rust), Manual Trigger, HTTP, Code (JS/TS), Database (SQL/MongoDB/Redis), Email (IMAP/SMTP), Notification (Slack/Discord/Teams/webhook), RSS/Feed.
+- **`TriggerRuntime`**: Background infrastructure for webhook routes (Axum), cron scheduling (`tokio-cron-scheduler`), and event subscriptions (`tokio::sync::mpsc`).
+- **`WorkflowSchema`**: Serializable interchange format for graph workflows with `from_json()` and `build_graph()` methods, enabling adk-studio projects to be loaded and executed by adk-graph.
+- **`GraphAgentBuilder` extensions**: `action_node()` and `from_workflow_schema()` methods for convenient action node integration.
+- **Feature flags**: `action` (core nodes, no extra deps), `action-trigger`, `action-http`, `action-db`, `action-db-mongo`, `action-db-redis`, `action-code`, `action-email`, `action-rss`, `action-full`. Forwarded through `adk-rust` umbrella crate.
+- **10 correctness properties**: Property-based tests across both crates covering round-trip serialization, error mode retry counts, switch condition determinism, interpolation idempotence, backward compatibility, and notification payload formats.
+
+### Fixed
+
+#### adk-model
+- Fixed `test_server_tool_response_round_trip_as_openai_items` test — JSON fixture had `outcome` fields flattened instead of nested, causing deserialization mismatch with `async-openai` 0.33 structs.
+- Removed unused `OutputStatus` import in `responses_convert.rs`.
+- Replaced `drain(..).collect()` with `std::mem::take()` in Anthropic streaming client per clippy `drain_collect` lint.
+
+### Changed
+
+#### Provider-native built-in tool support (adk-tool, adk-model, adk-gemini, examples)
+- Added typed built-in tool wrappers for Gemini (`GoogleMapsTool`, `GeminiCodeExecutionTool`, `GeminiFileSearchTool`, `GeminiComputerUseTool`), OpenAI Responses (`OpenAIWebSearchTool`, `OpenAIFileSearchTool`, `OpenAICodeInterpreterTool`, `OpenAIImageGenerationTool`, `OpenAIComputerUseTool`, `OpenAIMcpTool`, `OpenAILocalShellTool`, `OpenAIShellTool`, `OpenAIApplyPatchTool`), and Anthropic (`WebSearchTool`, native bash, native text editor variants).
+- Added a provider-native declaration path to the shared `Tool` API so agents can mix built-in tools with ordinary `FunctionTool`s without relying on opaque `GenerateContentConfig.extensions` blobs.
+- Expanded Gemini wire models to understand additional native tool declarations and code-execution parts, and updated the OpenAI/Anthropic examples to use the new typed wrappers directly.
+
+### Changed
+
+#### Built-in tool adapters
+- **adk-model (OpenAI Responses)**: Native OpenAI tool declarations now deserialize from tool metadata instead of only `extensions["openai"]["built_in_tools"]`. Server-side tool outputs are preserved as typed Responses `Item` payloads so they survive streaming finalization and stateless round-trips.
+- **adk-model (Anthropic)**: Native Anthropic tool declarations now deserialize from tool metadata, streamed `server_tool_use` / `web_search_tool_result` blocks are preserved in final streamed responses, and string tool results are no longer double-JSON-encoded.
+- **adk-model (Gemini)**: Gemini native tools are now metadata-driven instead of name-driven, mixed built-in/function tool detection works for the broader Gemini tool surface, and native tool config such as `retrievalConfig` is forwarded correctly.
+
+#### AP2 alpha adapter (adk-payments)
+- Added typed AP2 alpha mandate, payment request, payment response, and payment receipt models plus an `Ap2Adapter` that routes human-present and human-not-present flows through the shared checkout, payment, intervention, journal, and evidence services.
+- Added `ap2-a2a` AgentCard and A2A container helpers, `ap2-mcp` safe MCP-facing mandate and receipt views, AP2 fixture coverage, and end-to-end AP2 integration tests.
+
+#### Agentic commerce validation and docs (adk-payments)
+- Added a shared multi-actor integration harness for shopper, merchant, credentials-provider, payment-processor, and webhook actors, and rewired ACP/AP2 end-to-end tests to use the shared journal, memory, and evidence plumbing.
+- Added payments documentation updates in `adk-payments/README.md`, `docs/official_docs/security/payments.md`, and `examples/payments/README.md`, plus a local `examples/payments` scenario index for the supported commerce journeys.
+
+#### OpenAI Responses API client (adk-model)
+- **`OpenAIResponsesClient`**: Dedicated client for OpenAI's `/v1/responses` endpoint — the successor to Chat Completions. Implements `adk_core::Llm` with full streaming, tool calling, and multi-turn support.
+- **`OpenAIResponsesConfig`**: Configuration type with `with_reasoning_effort()`, `with_reasoning_summary()`, `with_organization()`, `with_project()`, `with_base_url()`.
+- **`ReasoningSummary`** enum (`Auto`, `Concise`, `Detailed`): Controls reasoning summary generation for o-series models. Summaries appear as `Part::Thinking` in the response stream.
+- **Streaming deduplication**: `ResponseCompleted` events extract only function calls and usage metadata — text/thinking content already streamed via delta events is not re-emitted.
+- **Provider metadata**: Every response includes `provider_metadata.openai.response_id` for server-side state and debugging.
+- **Documentation**: Full docs page at `docs/official_docs/models/openai-responses.md`, updated `providers.md`, `adk-model/README.md`, and root `README.md`.
+- **Example**: `examples/openai_responses/` — standalone crate with 7 scenarios (basic, streaming, reasoning, tools, multi-turn, system instructions, generation config).
+
+#### OpenRouter deep integration (adk-model, adk-rust, examples)
+- **`openrouter` feature on `adk-rust`**: The umbrella crate now re-exports `OpenRouterClient`, `OpenRouterConfig`, `OpenRouterApiMode`, `OpenRouterRequestOptions`, and related types behind a dedicated `openrouter` feature.
+- **Native OpenRouter examples**: Added `adk-model/examples/openrouter_chat.rs`, `openrouter_responses.rs`, `openrouter_adapter.rs`, and `openrouter_discovery.rs` plus shared support modules for live provider validation.
+- **Agentic OpenRouter validation crate**: Added `examples/openrouter` as a standalone example crate mirroring the `examples/openai_responses` style and covering chat, streaming, tools, responses mode, multimodal input, routing, discovery, and sessioned runner flows.
+- **Ignored live contracts**: Added `adk-model/tests/openrouter_contract_tests.rs` and wired OpenRouter into the shared provider contract harness for ignored live validation.
+
+#### Config validation (adk-gemini)
+- **`ThinkingConfig::validate()`**: Pre-send validation that rejects mutually exclusive `thinking_budget` + `thinking_level` combinations before the request reaches the Gemini API.
+- **`GenerationConfig::validate()`**: Pre-send validation for `temperature` (0.0–2.0), `top_p` (0.0–1.0), `top_k` (> 0), `max_output_tokens` (> 0), and delegates to `ThinkingConfig::validate()` when present. Validation is wired at the request boundary — invalid configs return `AdkError` instead of sending malformed requests.
+
+#### Audio codec capability queries (adk-audio)
+- **`AudioFormat::supports_encode()`**: Returns `true` for formats with working `encode()` implementations (`Pcm16`, `Wav`), `false` for all others. Uses exhaustive `match` so new variants force a decision.
+- **`AudioFormat::supports_decode()`**: Returns `true` for formats with working `decode()` implementations (`Pcm16`, `Wav`), `false` for all others.
+
+#### Feature presets (adk-rust)
+- **`labs` feature preset**: New preset for experimental crates (`code`, `sandbox`, `audio`). Use `features = ["labs"]` to opt in to experimental functionality.
+
+### Changed
+
+#### OpenRouter production hardening
+- **Streaming finalization**: The OpenRouter chat adapter now emits exactly one final `LlmResponse` chunk even when OpenRouter streams `finish_reason` and usage metadata in separate SSE frames.
+- **Tool-call mapping**: Chat-mode tool responses now round-trip as `role="tool"` messages with `tool_call_id`, and streamed tool-call deltas tolerate missing `role`, `type`, and function `name` fields that appear in real OpenRouter streams.
+- **Documentation**: Updated `adk-model` crate docs and README to document native OpenRouter APIs, the generic `Llm` adapter boundary, and the local example entry points.
+
+#### Feature presets (adk-rust)
+- **`full` feature preset no longer includes experimental crates**: `full` now compiles only stable specialist crates (`graph`, `realtime`, `browser`, `eval`, `rag`). Experimental crates (`code`, `sandbox`, `audio`) moved to the new `labs` preset. Use `features = ["full", "labs"]` to get everything.
+
+#### Debug endpoint honesty (adk-server)
+- **`get_graph` returns 501 Not Implemented**: Previously returned HTTP 200 with a hardcoded fake DOT graph string. Now returns HTTP 501 with `{ "error": "graph generation is not yet implemented" }`.
+- **`get_eval_sets` returns 501 Not Implemented**: Previously returned HTTP 200 with an empty array stub. Now returns HTTP 501 with `{ "error": "eval sets are not yet implemented" }`.
+- **`get_event` returns 404 when event not found**: Previously returned HTTP 200 with a stub JSON body containing an empty `invocationId`. Now returns HTTP 404 Not Found. Existing successful path (event found in span exporter) is unchanged.
+
+#### Production hardening
+- **adk-core**: Added validated `new()` constructors for `AppName`, `UserId`, `SessionId`, and `InvocationId` so trust-boundary code can use an explicit safe constructor instead of relying on `TryFrom`.
+- **adk-runner**: `Runner::run()` now accepts typed `UserId` and `SessionId` parameters. Migration: `runner.run("user".to_string(), "session".to_string(), content)` becomes `runner.run(UserId::new("user")?, SessionId::new("session")?, content)`.
+- **adk-runner**: Added `MutableSession::events_len()` and updated compaction checks to avoid cloning the full event list for count-only access.
+- **adk-audio**: AssemblyAI, Deepgram, and MLX `transcribe_stream()` stubs now return explicit `AudioError::Stt` errors instead of silently succeeding with empty streams.
+- **adk-audio**: MLX STT placeholder errors now clearly state that local Whisper inference is not yet implemented and recommend using a cloud STT provider.
+
+#### Structured Error Envelope (Breaking)
+- **adk-core**: Replaced flat `AdkError` enum with a multi-axis struct separating component (where), category (what kind), code (machine key), message (human text), retry hint, and error details. This is a deliberate breaking change targeting pre-1.0.
+- **adk-core**: Added `ErrorComponent` (14 variants) and `ErrorCategory` (10 variants) enums for structured error classification.
+- **adk-core**: Added `RetryHint` with `should_retry`, `retry_after_ms`, and `max_attempts` fields for structured retry guidance.
+- **adk-core**: Added `http_status_code()` and `to_problem_json()` methods on `AdkError` for HTTP error response generation.
+- **adk-core**: Backward-compatible constructors (`agent()`, `model()`, `tool()`, `session()`, etc.) preserved with `.legacy` code suffix.
+- **adk-model**: All providers (Gemini, OpenAI, Anthropic, DeepSeek, Groq, Azure AI, Ollama) now emit structured errors with proper `ErrorCategory` based on HTTP status codes (429→RateLimited, 503→Unavailable, etc.).
+- **adk-model**: `is_retryable_model_error()` now checks `error.retry.should_retry` as single source of truth, with fallback to message parsing for legacy errors.
+- **adk-model**: `execute_with_retry_hint()` extracts `retry_after` from structured `AdkError` fields.
+- **adk-server**: Runtime controller uses `AdkError::http_status_code()` and `to_problem_json()` for error responses instead of hardcoded 500s.
+- **All crates**: Migrated from `AdkError::Variant("msg".into())` to `AdkError::variant("msg")` method syntax.
+- **Boundary crates**: Added `From<CrateLocalError> for AdkError` impls in adk-realtime, adk-graph, adk-guardrail, adk-auth, adk-code, adk-skill, adk-sandbox, adk-eval, adk-rag.
+
+### Changed (from 0.4.1)
+
+#### Examples
+- **Moved to adk-playground**: All examples removed from this workspace and consolidated in the [adk-playground](https://github.com/zavora-ai/adk-playground) repo (120+ examples). The `examples/` directory now contains only a README pointing there.
+
+#### Error Handling Hardening
+- **adk-runner**: Replaced all `RwLock::unwrap()` calls in `MutableSession` with graceful error handling. Poisoned locks now log via `tracing::error` and return safe defaults (empty `Vec`, empty `HashMap`, `None`) instead of panicking. Affects `apply_state_delta`, `append_event`, `events_snapshot`, `conversation_history`, and `State` trait methods.
+- **adk-telemetry**: Replaced `expect()` calls in `init_with_otlp()` with proper error propagation — OTLP exporter build failures now return `TelemetryError::Init` instead of panicking. Replaced `expect()` with `unwrap_or_else` fallback for `EnvFilter` in all init functions. Replaced `expect()` with `let-else` early return in span `Layer` callbacks. Replaced `unwrap()` with `unwrap_or_else(into_inner)` for `RwLock` in `AdkSpanExporter`.
+- **adk-code**: `DockerExecutor::new()` now returns `Result<Self, ExecutionError>` instead of panicking when the Docker daemon is unreachable.
+- **adk-agent**: Replaced `Arc::get_mut().expect()` with `if let Some` in builder methods for `LoopAgent`, `ConditionalAgent`, and `ParallelAgent`.
+
+#### Dependency Cleanup
+- **adk-agent**: Removed unused `adk-model` direct dependency and `gemini` feature forwarding. `adk-agent` source code had zero imports from `adk_model`; the dependency only existed to forward the `gemini` feature flag. No crate in the workspace referenced `adk-agent/gemini`. `adk-model` remains as a dev-dependency for tests.
+- **adk-guardrail**: Set `jsonschema = { version = "0.43", optional = true, default-features = false }` to eliminate `reqwest 0.13` from the dependency tree. ADK does not use remote JSON Schema `$ref` resolution, so the network features are unnecessary.
+- **adk-model (anthropic)**: Upgraded `claudius` from 0.16 to 0.19, eliminating `reqwest 0.11` from the dependency tree. The claudius 0.19 API takes `&params` instead of `params` in `.stream()`. Note: claudius 0.19 uses `reqwest 0.13` internally, so there is still a reqwest version duplicate with the workspace's `reqwest 0.12`, but the older `reqwest 0.11` is gone.
+- **adk-telemetry**: Upgraded OpenTelemetry stack from 0.21 to 0.28 (`opentelemetry 0.28`, `opentelemetry_sdk 0.28`, `opentelemetry-otlp 0.28`, `tracing-opentelemetry 0.29`). This eliminates duplicate `axum`, `hyper`, `http`, `h2`, and `tower` crates — the old OTel stack pulled `tonic 0.9` → `axum 0.6` → `hyper 0.14` → `http 0.2`, while `adk-server` uses `axum 0.8` → `hyper 1.x` → `http 1.x`. Updated `init_with_otlp()` to use new 0.28 builder APIs (`SdkTracerProvider`, `SpanExporter::builder`, `MetricExporter::builder`, `SdkMeterProvider`). Updated `shutdown_telemetry()` to replace the global provider with a no-op (the `shutdown_tracer_provider()` global function was removed in OTel 0.28).
+
+#### Examples
+- **telemetry_demo**: Updated to use OTel 0.28 APIs — `.build()` instead of `.init()` for metrics instruments. Replaced mock/simulated LLM calls with real Gemini API calls. The demo now requires `GOOGLE_API_KEY` and demonstrates actual token usage recording via `with_usage_tracking` for both non-streaming and streaming responses.
+
+### Fixed
+
+#### adk-gemini
+- **Gemini 3.x thought_signature serialization**: Changed `#[serde(skip_serializing)]` to `#[serde(skip_serializing_if = "Option::is_none")]` on `thought_signature` fields in `Part::Text`, `Part::FunctionCall`, and the tools `FunctionCall` struct. Gemini 3.x models require `thought_signature` to be echoed back in multi-turn function calling; the previous behavior silently dropped it, causing 400 errors on the second LLM call after tool execution. Backward compatible — field is omitted when `None`.
+
+#### adk-tool
+- **AgentTool infinite loop on empty sub-agent responses**: `AgentToolInvocationContext::run_config()` now returns `StreamingMode::None` instead of `StreamingMode::SSE`. In SSE mode, the sub-agent's final event often contained empty text (actual content was spread across earlier partial chunks), causing the coordinator to re-call the same tool indefinitely. Non-streaming mode accumulates the full response before yielding a single complete event. Additionally, `extract_response` now skips empty text parts and falls back to collecting text from all events.
+
+#### adk-session
+- **MongoDB standalone deployment support**: `MongoSessionService` now auto-detects whether the connected MongoDB instance supports multi-document transactions (replica set / sharded cluster) or is running standalone. On standalone deployments, all write operations execute sequentially without transactions instead of failing with `IllegalOperation: Transaction numbers are only allowed on a replica set member or mongos`. Detection uses the `hello` command at connection time to check for `setName` in the response. New `supports_transactions()` method exposes the detected mode. The `retryWrites=false` connection string workaround is no longer required.
+- **PostgreSQL migration INT4/INT8 type mismatch**: Fixed `COALESCE(MAX(version), 0)` in the migration registry query to use `CAST(... AS BIGINT)`. PostgreSQL creates the `version` column as `INTEGER` (INT4) but the Rust code reads it as `i64` (INT8), causing a type mismatch error on migration. The cast ensures the return type matches the expected Rust type.
+- **PostgreSQL migration registry DDL**: Parameterized the migration runner macro to use `BIGINT PRIMARY KEY` for PostgreSQL and `INTEGER PRIMARY KEY` for SQLite, matching the Rust `i64` type natively. Removed the `CAST(... AS BIGINT)` workaround from SELECT queries since the column type is now correct. Applied to both `adk-session` and `adk-memory` migration runners.
+- **examples**: Added `required-features = ["rag-gemini"]` to the `rag_gemini` example entry, fixing `cargo test --workspace` compilation failure when the optional `adk-rag` dependency is not enabled.
+
+
 ## [0.4.0] - 2026-03-16
 
 ### Added
@@ -45,7 +184,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Consolidated OpenAI-compatible providers**: Replaced 7 near-identical provider modules (fireworks, together, mistral, perplexity, cerebras, sambanova, xai) with `OpenAICompatibleConfig` presets. Each was ~150 lines wrapping the same `OpenAICompatible` client — now 7 preset constructors totaling 63 lines. Usage: `OpenAICompatible::new(OpenAICompatibleConfig::fireworks(key, model))`. Feature flags preserved as backward-compatible aliases (`fireworks = ["openai"]`). `all-providers` simplified from 15 to 8 flags.
 
 #### adk-telemetry
+- **Standardized LLM token usage telemetry**: New `llm_generate_span(provider, model, stream)` creates spans with pre-declared `gen_ai.usage.*` fields following OpenTelemetry GenAI semantic conventions. New `LlmUsage` struct and `record_llm_usage(&usage)` record token counts (input, output, total, cache read/creation, thinking, audio input/output) on the current span. All 8 fields are optional-aware — only non-None values are recorded.
 - **Proper error type**: Replaced `Box<dyn std::error::Error>` with `TelemetryError` (thiserror) in all init functions. Convention-compliant typed errors.
+
+#### adk-model
+- **Unified token usage tracking across all providers**: New `usage_tracking::with_usage_tracking(stream, span)` wraps any `LlmResponseStream` to automatically record `gen_ai.usage.*` fields on the tracing span. Applied to all 10 providers: Gemini, OpenAI, OpenAI-compatible (Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI), Anthropic, Ollama, Bedrock, DeepSeek, Groq, Azure AI, Azure OpenAI. Previously only Anthropic recorded token counts; now all providers emit standardized telemetry including cache, thinking, and audio token counts.
 
 #### adk-plugin
 - **Removed unused dependencies**: `async-trait` and `serde` removed from Cargo.toml (never imported).

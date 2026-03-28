@@ -10,6 +10,7 @@ repository.workspace = true
 description = "Deployment manifest, bundling, and control-plane client for ADK-Rust"
 keywords = ["adk", "deploy", "agents", "platform"]
 categories = ["development-tools", "config"]
+readme = "README.md"
 
 [dependencies]
 serde.workspace = true

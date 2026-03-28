@@ -69,6 +69,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [Access Control](security/access-control.md) - Role-based permissions and audit logging
 - [Guardrails](security/guardrails.md) - PII redaction, content filtering, schema validation
 - [Memory](security/memory.md) - Long-term semantic memory for agents
+- [Payments and Commerce](security/payments.md) - Agentic commerce journeys, protocol support, and validation paths
 
 ## Studio
 

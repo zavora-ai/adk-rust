@@ -16,7 +16,7 @@
 //! ```
 
 use crate::service::*;
-use adk_core::{Part, Result};
+use adk_core::Result;
 use async_trait::async_trait;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Row, SqlitePool};
@@ -48,11 +48,11 @@ impl SqliteMemoryService {
     /// created automatically if they don't exist.
     pub async fn new(database_url: &str) -> Result<Self> {
         let options = SqliteConnectOptions::from_str(database_url)
-            .map_err(|e| adk_core::AdkError::Memory(format!("invalid sqlite url: {e}")))?
+            .map_err(|e| adk_core::AdkError::memory(format!("invalid sqlite url: {e}")))?
             .create_if_missing(true);
         let pool = SqlitePool::connect_with(options)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("sqlite connection failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("sqlite connection failed: {e}")))?;
         Ok(Self { pool })
     }
 
@@ -114,7 +114,7 @@ END;",
                 .fetch_one(pool)
                 .await
                 .map_err(|e| {
-                    adk_core::AdkError::Memory(format!("baseline detection failed: {e}"))
+                    adk_core::AdkError::memory(format!("baseline detection failed: {e}"))
                 })?;
                 let count: i64 = row.try_get("cnt").unwrap_or(0);
                 Ok(count > 0)
@@ -146,7 +146,7 @@ impl MemoryService for SqliteMemoryService {
 
         for entry in &entries {
             let content_json = serde_json::to_string(&entry.content)
-                .map_err(|e| adk_core::AdkError::Memory(format!("serialization failed: {e}")))?;
+                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
             let content_text = crate::text::extract_text(&entry.content);
             let timestamp_str = entry.timestamp.to_rfc3339();
 
@@ -164,7 +164,7 @@ impl MemoryService for SqliteMemoryService {
             .bind(&timestamp_str)
             .execute(&self.pool)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("insert failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
         }
 
         Ok(())
@@ -191,7 +191,7 @@ impl MemoryService for SqliteMemoryService {
         .bind(limit)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| adk_core::AdkError::Memory(format!("search failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?;
 
         let memories = rows
             .iter()
@@ -221,7 +221,7 @@ impl MemoryService for SqliteMemoryService {
             .bind(user_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("delete_user failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("delete_user failed: {e}")))?;
         Ok(())
     }
 
@@ -235,7 +235,7 @@ impl MemoryService for SqliteMemoryService {
         .bind(session_id)
         .execute(&self.pool)
         .await
-        .map_err(|e| adk_core::AdkError::Memory(format!("delete_session failed: {e}")))?;
+        .map_err(|e| adk_core::AdkError::memory(format!("delete_session failed: {e}")))?;
         Ok(())
     }
 
@@ -244,7 +244,7 @@ impl MemoryService for SqliteMemoryService {
         sqlx::query("SELECT 1")
             .execute(&self.pool)
             .await
-            .map_err(|e| adk_core::AdkError::Memory(format!("health check failed: {e}")))?;
+            .map_err(|e| adk_core::AdkError::memory(format!("health check failed: {e}")))?;
         Ok(())
     }
 }
