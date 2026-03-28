@@ -140,6 +140,24 @@ where
         }
     }
 
+    /// Create a McpToolset from a RunningService with a custom ClientHandler.
+    ///
+    /// This is functionally identical to `new()` but makes the intent explicit
+    /// when using a custom `ClientHandler` type.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use rmcp::ServiceExt;
+    /// use adk_tool::McpToolset;
+    ///
+    /// let client = my_custom_handler.serve(transport).await?;
+    /// let toolset = McpToolset::with_client_handler(client);
+    /// ```
+    pub fn with_client_handler(client: RunningService<RoleClient, S>) -> Self {
+        Self::new(client)
+    }
+
     /// Set a custom name for this toolset.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
@@ -351,6 +369,65 @@ where
         }
 
         Ok(tools)
+    }
+}
+
+impl McpToolset<super::elicitation::AdkClientHandler> {
+    /// Create a McpToolset with elicitation support from a transport.
+    ///
+    /// This creates the MCP client using `AdkClientHandler`, which advertises
+    /// elicitation capabilities and delegates requests to the provided handler.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_tool::{McpToolset, ElicitationHandler, AutoDeclineElicitationHandler};
+    /// use rmcp::transport::TokioChildProcess;
+    /// use tokio::process::Command;
+    /// use std::sync::Arc;
+    ///
+    /// let transport = TokioChildProcess::new(Command::new("my-mcp-server"))?;
+    /// let handler = Arc::new(AutoDeclineElicitationHandler);
+    /// let toolset = McpToolset::with_elicitation_handler(transport, handler).await?;
+    /// ```
+    ///
+    /// # ConnectionFactory with Elicitation
+    ///
+    /// To preserve elicitation across reconnections, clone the `Arc<dyn ElicitationHandler>`
+    /// into your `ConnectionFactory` implementation:
+    ///
+    /// ```rust,ignore
+    /// use adk_tool::{McpToolset, ElicitationHandler};
+    /// use adk_tool::mcp::ConnectionFactory;
+    /// use rmcp::{ServiceExt, service::{RoleClient, RunningService}};
+    /// use rmcp::transport::TokioChildProcess;
+    /// use tokio::process::Command;
+    /// use std::sync::Arc;
+    ///
+    /// struct MyReconnectFactory {
+    ///     handler: Arc<dyn ElicitationHandler>,
+    ///     server_command: String,
+    /// }
+    ///
+    /// // The factory creates a fresh AdkClientHandler on each reconnection,
+    /// // so the new connection advertises elicitation capabilities.
+    /// // The ConnectionFactory trait itself is unchanged.
+    /// ```
+    pub async fn with_elicitation_handler<T, E, A>(
+        transport: T,
+        handler: std::sync::Arc<dyn super::elicitation::ElicitationHandler>,
+    ) -> Result<Self>
+    where
+        T: rmcp::transport::IntoTransport<rmcp::RoleClient, E, A> + Send + 'static,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        use rmcp::ServiceExt;
+        let adk_handler = super::elicitation::AdkClientHandler::new(handler);
+        let client = adk_handler
+            .serve(transport)
+            .await
+            .map_err(|e| AdkError::tool(format!("failed to connect MCP server: {e}")))?;
+        Ok(Self::new(client))
     }
 }
 

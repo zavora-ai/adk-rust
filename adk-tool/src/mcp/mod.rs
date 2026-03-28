@@ -1,10 +1,12 @@
 mod auth;
+mod elicitation;
 mod http;
 mod reconnect;
 mod task;
 mod toolset;
 
 pub use auth::{AuthError, McpAuth, OAuth2Config};
+pub use elicitation::{AdkClientHandler, AutoDeclineElicitationHandler, ElicitationHandler};
 pub use http::McpHttpClientBuilder;
 pub use reconnect::{
     ConnectionFactory, ConnectionRefresher, RefreshConfig, RetryResult, SimpleClient,

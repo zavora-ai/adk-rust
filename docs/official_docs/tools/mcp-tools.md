@@ -434,6 +434,139 @@ impl MyServer {
 
 See the [rmcp documentation](https://github.com/modelcontextprotocol/rust-sdk) for complete server implementation details.
 
+## Elicitation
+
+MCP Elicitation allows MCP servers to request additional information from users during tool execution — for example, asking for a name and email before creating an account, or requesting confirmation before a destructive action.
+
+ADK-Rust provides full elicitation support through the `ElicitationHandler` trait.
+
+### How It Works
+
+```
+User ──→ Agent ──→ MCP Tool Call ──→ Server
+                                       │
+                                       │ peer.elicit::<UserProfile>(message)
+                                       │
+                              ←── ElicitationHandler called
+                              (your code handles the request)
+                              ──→ Accept { name, email }
+                                       │
+                              ←── Tool Result: "User created!"
+```
+
+When an MCP server calls `peer.elicit::<T>(message)` during tool execution, ADK's `AdkClientHandler` intercepts the request and delegates to your `ElicitationHandler`. The agent doesn't know about elicitation — it just calls the tool normally.
+
+### Connecting with Elicitation
+
+The key difference from a standard MCP connection:
+
+```rust
+use adk_tool::{McpToolset, ElicitationHandler};
+use rmcp::model::{CreateElicitationResult, ElicitationAction, ElicitationSchema};
+use std::sync::Arc;
+
+// Without elicitation (standard — server can't request user input)
+let client = ().serve(TokioChildProcess::new(cmd)?).await?;
+let toolset = McpToolset::new(client);
+
+// With elicitation (server can request user input at runtime)
+let handler = Arc::new(MyElicitationHandler);
+let toolset = McpToolset::with_elicitation_handler(transport, handler).await?;
+```
+
+### Implementing ElicitationHandler
+
+```rust
+use adk_tool::ElicitationHandler;
+use rmcp::model::{CreateElicitationResult, ElicitationAction, ElicitationSchema};
+use serde_json::Value;
+
+struct StdinElicitationHandler;
+
+#[async_trait::async_trait]
+impl ElicitationHandler for StdinElicitationHandler {
+    async fn handle_form_elicitation(
+        &self,
+        message: &str,
+        schema: &ElicitationSchema,
+        _metadata: Option<&Value>,
+    ) -> Result<CreateElicitationResult, Box<dyn std::error::Error + Send + Sync>> {
+        println!("Server asks: {message}");
+
+        // Collect user input for each field in the schema
+        let mut response = serde_json::Map::new();
+        for (field_name, _) in &schema.properties {
+            print!("  {field_name}: ");
+            std::io::Write::flush(&mut std::io::stdout())?;
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+            response.insert(field_name.clone(), Value::String(input.trim().to_string()));
+        }
+
+        Ok(CreateElicitationResult::new(ElicitationAction::Accept)
+            .with_content(Value::Object(response)))
+    }
+
+    async fn handle_url_elicitation(
+        &self,
+        message: &str,
+        url: &str,
+        _elicitation_id: &str,
+        _metadata: Option<&Value>,
+    ) -> Result<CreateElicitationResult, Box<dyn std::error::Error + Send + Sync>> {
+        println!("Server asks you to visit: {url}");
+        println!("{message}");
+        Ok(CreateElicitationResult::new(ElicitationAction::Accept))
+    }
+}
+```
+
+### Built-in Handlers
+
+ADK provides `AutoDeclineElicitationHandler` which declines all elicitation requests. This is the default behavior when using `McpToolset::new()` with `()`:
+
+```rust
+use adk_tool::AutoDeclineElicitationHandler;
+
+// Explicitly decline all elicitation (same as using () handler)
+let handler = Arc::new(AutoDeclineElicitationHandler);
+let toolset = McpToolset::with_elicitation_handler(transport, handler).await?;
+```
+
+### Elicitation Actions
+
+Your handler can return three actions:
+
+| Action | Meaning |
+|--------|---------|
+| `ElicitationAction::Accept` | User provided the requested data (include `content`) |
+| `ElicitationAction::Decline` | User explicitly refused to provide data |
+| `ElicitationAction::Cancel` | User dismissed the request without choosing |
+
+### Error Handling
+
+If your `ElicitationHandler` returns an error or panics, `AdkClientHandler` catches it gracefully and returns `Decline` to the server. The MCP connection is never disrupted.
+
+### HTTP Connections with Elicitation
+
+For remote MCP servers over HTTP:
+
+```rust
+use adk_tool::McpHttpClientBuilder;
+
+let toolset = McpHttpClientBuilder::new("https://my-mcp-server.example.com")
+    .with_elicitation_handler(Arc::new(MyHandler))
+    .connect_with_elicitation()
+    .await?;
+```
+
+### Complete Example
+
+See `examples/mcp_elicitation/` for a full working example with:
+- A real MCP server that uses `peer.elicit::<T>()` to collect user input
+- An LLM-powered agent client with interactive stdin-based elicitation
+- Run: `cargo run --manifest-path examples/mcp_elicitation/Cargo.toml --bin elicitation-client`
+
 ## Related
 
 - [Function Tools](function-tools.md) - Creating custom tools in Rust

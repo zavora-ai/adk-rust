@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### MCP Elicitation Support (adk-tool)
+- **`ElicitationHandler` trait**: User-implementable trait for handling MCP elicitation requests from servers. Supports form-based elicitation (structured schemas) and URL-based elicitation. Requires `Send + Sync` for async safety.
+- **`AutoDeclineElicitationHandler`**: Built-in zero-size handler that declines all elicitation requests, preserving backward-compatible behavior identical to rmcp's `()` ClientHandler default.
+- **`AdkClientHandler`**: Bridge struct implementing rmcp's `ClientHandler` trait, advertising elicitation capabilities and delegating requests to the user's `ElicitationHandler`. Catches panics and errors gracefully, falling back to Decline.
+- **`McpToolset::with_elicitation_handler()`**: Async factory method that creates an MCP client connection with elicitation support from any transport and an `Arc<dyn ElicitationHandler>`.
+- **`McpToolset::with_client_handler()`**: Factory method for using a custom `ClientHandler` type with `McpToolset`.
+- **`McpHttpClientBuilder::with_elicitation_handler()` / `connect_with_elicitation()`**: Builder methods for HTTP-based MCP connections with elicitation support.
+- **Capability advertisement**: `AdkClientHandler` advertises form and URL elicitation capabilities to MCP servers during initialization.
+- **Elicitation example**: `examples/mcp_elicitation/` — standalone crate with a real MCP server using `peer.elicit::<T>()` and an LLM-powered agent client with interactive stdin-based `ElicitationHandler`.
+- Full backward compatibility: `McpToolset::new()` with `()` handler continues to work unchanged.
+
 #### Gemini built-in tool tracing example (examples)
 - **`gemini_search_bug`**: Standalone example reproducing GitHub Issue #224 — demonstrates Google Search + URL Context + function tool coexistence through the ADK runner with full `ServerToolCall`/`ServerToolResponse` tracing, thought signature propagation, and grounding metadata display. Uses `gemini-3-pro-preview` with `include_server_side_tool_invocations` to surface the complete tool call chain.
 

@@ -120,7 +120,7 @@ Built-in tools:
 - Artifact loading
 - Loop termination
 
-**MCP Integration**: Connect to Model Context Protocol servers for extended capabilities.
+**MCP Integration**: Connect to Model Context Protocol servers for extended capabilities. Supports [MCP Elicitation](docs/official_docs/tools/mcp-tools.md#elicitation) — servers can request additional user input at runtime via structured forms or URLs.
 
 ### Production Features
 
@@ -141,7 +141,7 @@ Built-in tools:
 | `adk-model` | LLM integrations | Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama, Bedrock, Azure AI + OpenAI-compatible presets (Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI) |
 | `adk-gemini` | Gemini client | Google Gemini API client with streaming and multimodal support |
 | `adk-mistralrs` | Native local inference | mistral.rs integration, ISQ quantization, LoRA adapters (git-only) |
-| `adk-tool` | Tool system and extensibility | `FunctionTool`, Google Search, MCP protocol, schema validation |
+| `adk-tool` | Tool system and extensibility | `FunctionTool`, Google Search, MCP protocol with elicitation, schema validation |
 | `adk-session` | Session and state management | SQLite/in-memory backends, conversation history, state persistence |
 | `adk-artifact` | Artifact storage system | File-based storage, MIME type handling, image/PDF/video support |
 | `adk-memory` | Long-term memory | Vector embeddings, semantic search, Qdrant integration |

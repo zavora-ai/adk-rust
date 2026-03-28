@@ -83,7 +83,10 @@ pub use builtin::{
     OpenAIWebSearchTool, UrlContextTool, WebSearchTool, WebSearchUserLocation,
 };
 pub use function_tool::FunctionTool;
-pub use mcp::{McpAuth, McpHttpClientBuilder, McpTaskConfig, McpToolset, OAuth2Config};
+pub use mcp::{
+    AutoDeclineElicitationHandler, ElicitationHandler, McpAuth, McpHttpClientBuilder,
+    McpTaskConfig, McpToolset, OAuth2Config,
+};
 pub use toolset::{
     BasicToolset, FilteredToolset, MergedToolset, PrefixedToolset, string_predicate,
 };

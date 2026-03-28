@@ -4,8 +4,10 @@
 // Uses the streamable HTTP transport from rmcp when the http-transport feature is enabled.
 
 use super::auth::McpAuth;
+use super::elicitation::ElicitationHandler;
 use adk_core::{AdkError, Result};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Builder for HTTP-based MCP connections.
@@ -44,6 +46,8 @@ pub struct McpHttpClientBuilder {
     timeout: Duration,
     /// Custom headers
     headers: HashMap<String, String>,
+    /// Optional elicitation handler
+    elicitation_handler: Option<Arc<dyn ElicitationHandler>>,
 }
 
 impl McpHttpClientBuilder {
@@ -58,6 +62,7 @@ impl McpHttpClientBuilder {
             auth: McpAuth::None,
             timeout: Duration::from_secs(30),
             headers: HashMap::new(),
+            elicitation_handler: None,
         }
     }
 
@@ -85,6 +90,15 @@ impl McpHttpClientBuilder {
     /// Add a custom header to all requests.
     pub fn header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.insert(key.into(), value.into());
+        self
+    }
+
+    /// Configure an elicitation handler for the HTTP connection.
+    ///
+    /// When set, use [`connect_with_elicitation`](Self::connect_with_elicitation)
+    /// to create a toolset that advertises elicitation capabilities.
+    pub fn with_elicitation_handler(mut self, handler: Arc<dyn ElicitationHandler>) -> Self {
+        self.elicitation_handler = Some(handler);
         self
     }
 
@@ -171,6 +185,84 @@ impl McpHttpClientBuilder {
     /// Connect to the MCP server (stub when http-transport feature is disabled).
     #[cfg(not(feature = "http-transport"))]
     pub async fn connect(self) -> Result<()> {
+        Err(AdkError::tool(
+            "HTTP transport requires the 'http-transport' feature. \
+             Add `adk-tool = { features = [\"http-transport\"] }` to your Cargo.toml",
+        ))
+    }
+
+    /// Connect with elicitation support.
+    ///
+    /// Requires [`with_elicitation_handler`](Self::with_elicitation_handler) to have been called.
+    /// Returns a `McpToolset<AdkClientHandler>` that advertises elicitation capabilities.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no elicitation handler was configured or if the connection fails.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_tool::{McpHttpClientBuilder, AutoDeclineElicitationHandler};
+    /// use std::sync::Arc;
+    ///
+    /// let toolset = McpHttpClientBuilder::new("https://mcp.example.com/v1")
+    ///     .with_elicitation_handler(Arc::new(AutoDeclineElicitationHandler))
+    ///     .connect_with_elicitation()
+    ///     .await?;
+    /// ```
+    #[cfg(feature = "http-transport")]
+    pub async fn connect_with_elicitation(
+        self,
+    ) -> Result<super::McpToolset<impl rmcp::service::Service<rmcp::RoleClient>>> {
+        use adk_core::{ErrorCategory, ErrorComponent};
+        use rmcp::ServiceExt;
+        use rmcp::transport::streamable_http_client::{
+            StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
+        };
+
+        let handler = self.elicitation_handler.ok_or_else(|| {
+            AdkError::tool(
+                "connect_with_elicitation requires with_elicitation_handler to be called first",
+            )
+        })?;
+
+        // Extract the raw token from auth config
+        let token = match &self.auth {
+            McpAuth::Bearer(token) => Some(token.clone()),
+            McpAuth::OAuth2(config) => {
+                let token = config.get_or_refresh_token().await.map_err(|e| {
+                    AdkError::new(
+                        ErrorComponent::Tool,
+                        ErrorCategory::Unauthorized,
+                        "mcp.oauth.token_fetch",
+                        format!("OAuth2 authentication failed: {e}"),
+                    )
+                })?;
+                Some(token)
+            }
+            McpAuth::ApiKey { .. } => None,
+            McpAuth::None => None,
+        };
+
+        let mut config = StreamableHttpClientTransportConfig::with_uri(self.endpoint.as_str());
+        if let Some(token) = token {
+            config = config.auth_header(token);
+        }
+
+        let transport = StreamableHttpClientTransport::from_config(config);
+        let adk_handler = super::elicitation::AdkClientHandler::new(handler);
+        let client = adk_handler
+            .serve(transport)
+            .await
+            .map_err(|e| AdkError::tool(format!("failed to connect to MCP server: {e}")))?;
+
+        Ok(super::McpToolset::new(client))
+    }
+
+    /// Connect with elicitation support (stub when http-transport feature is disabled).
+    #[cfg(not(feature = "http-transport"))]
+    pub async fn connect_with_elicitation(self) -> Result<()> {
         Err(AdkError::tool(
             "HTTP transport requires the 'http-transport' feature. \
              Add `adk-tool = { features = [\"http-transport\"] }` to your Cargo.toml",
