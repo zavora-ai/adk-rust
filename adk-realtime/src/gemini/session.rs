@@ -774,6 +774,12 @@ pub(crate) fn translate_client_message(
             adk_core::types::Part::FunctionResponse { .. } => {
                 tracing::warn!("Dropping unsupported FunctionResponse part in Gemini session");
             }
+            adk_core::types::Part::ServerToolCall { .. } => {
+                tracing::warn!("Dropping unsupported ServerToolCall part in Gemini session");
+            }
+            adk_core::types::Part::ServerToolResponse { .. } => {
+                tracing::warn!("Dropping unsupported ServerToolResponse part in Gemini session");
+            }
         }
     }
 

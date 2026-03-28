@@ -444,6 +444,7 @@ version = "0.5.0"
 dependencies = [
  "adk-core",
  "adk-gemini",
+ "anyhow",
  "async-openai",
  "async-stream",
  "async-trait",
@@ -466,6 +467,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.28.0",
  "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
 ]

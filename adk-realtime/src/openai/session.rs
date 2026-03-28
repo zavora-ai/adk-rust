@@ -428,6 +428,12 @@ pub(crate) fn translate_client_message(role: &str, parts: Vec<adk_core::types::P
             adk_core::types::Part::FunctionResponse { .. } => {
                 tracing::warn!("Dropping unsupported FunctionResponse part in OpenAI session");
             }
+            adk_core::types::Part::ServerToolCall { .. } => {
+                tracing::warn!("Dropping unsupported ServerToolCall part in OpenAI session");
+            }
+            adk_core::types::Part::ServerToolResponse { .. } => {
+                tracing::warn!("Dropping unsupported ServerToolResponse part in OpenAI session");
+            }
         }
     }
 
