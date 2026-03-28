@@ -69,7 +69,7 @@ ADK supports multiple LLM providers with a unified API:
 | Gemini | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-pro-preview`, `gemini-3-flash-preview` | (default) |
 | OpenAI | `gpt-5`, `gpt-5-mini`, `gpt-5-nano` | `openai` |
 | OpenAI Responses API | `gpt-4.1`, `o3`, `o4-mini` | `openai` |
-| Anthropic | `claude-sonnet-4-5-20250929`, `claude-opus-4-5-20251101`, `claude-haiku-4-5-20251001` | `anthropic` |
+| Anthropic | `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` | `anthropic` |
 | DeepSeek | `deepseek-chat`, `deepseek-reasoner` | `deepseek` |
 | Groq | `meta-llama/llama-4-scout-17b-16e-instruct`, `llama-3.3-70b-versatile` | `groq` |
 | Ollama | `llama3.2:3b`, `qwen2.5:7b`, `mistral:7b` | `ollama` |
@@ -140,6 +140,7 @@ Built-in tools:
 | `adk-skill` | AgentSkills parsing and selection | Skill markdown parser, `.skills` discovery/indexing, lexical matching, prompt injection helpers |
 | `adk-model` | LLM integrations | Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama, Bedrock, Azure AI + OpenAI-compatible presets (Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI) |
 | `adk-gemini` | Gemini client | Google Gemini API client with streaming and multimodal support |
+| `adk-anthropic` | Anthropic client | Dedicated Anthropic API client with streaming, thinking, caching, citations, vision, PDF, pricing |
 | `adk-mistralrs` | Native local inference | mistral.rs integration, ISQ quantization, LoRA adapters (git-only) |
 | `adk-tool` | Tool system and extensibility | `FunctionTool`, Google Search, MCP protocol with elicitation, schema validation |
 | `adk-session` | Session and state management | SQLite/in-memory backends, conversation history, state persistence |
@@ -316,7 +317,7 @@ use adk_rust::Launcher;
 async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-5-20250929"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-6"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .instruction("You are a helpful assistant.")

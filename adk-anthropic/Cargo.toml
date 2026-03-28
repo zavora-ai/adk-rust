@@ -1,0 +1,86 @@
+[package]
+name = "adk-anthropic"
+description = "Dedicated Anthropic API client for ADK-Rust"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["time", "macros"] }
+futures = { workspace = true }
+bytes = "1.11"
+base64 = "0.22"
+url = "2.5"
+time = { version = "0.3", features = ["serde", "macros", "formatting", "parsing"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util", "macros"] }
+dotenvy = "0.15"
+futures = { workspace = true }
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+[[example]]
+name = "streaming"
+path = "examples/streaming.rs"
+
+[[example]]
+name = "thinking"
+path = "examples/thinking.rs"
+
+[[example]]
+name = "tools"
+path = "examples/tools.rs"
+
+[[example]]
+name = "structured_output"
+path = "examples/structured_output.rs"
+
+[[example]]
+name = "caching"
+path = "examples/caching.rs"
+
+[[example]]
+name = "context_editing"
+path = "examples/context_editing.rs"
+
+[[example]]
+name = "compaction"
+path = "examples/compaction.rs"
+
+[[example]]
+name = "token_counting"
+path = "examples/token_counting.rs"
+
+[[example]]
+name = "stop_reasons"
+path = "examples/stop_reasons.rs"
+
+[[example]]
+name = "fast_mode"
+path = "examples/fast_mode.rs"
+
+[[example]]
+name = "citations"
+path = "examples/citations.rs"
+
+[[example]]
+name = "pdf_processing"
+path = "examples/pdf_processing.rs"
+
+[[example]]
+name = "vision"
+path = "examples/vision.rs"
+
+[[example]]
+name = "custom_base_url"
+path = "examples/custom_base_url.rs"

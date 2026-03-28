@@ -3,9 +3,9 @@
 //! Provides [`TokenCount`] and the `count_tokens` method on [`AnthropicClient`],
 //! wrapping the `POST /v1/messages/count_tokens` endpoint.
 
-use super::client::{AnthropicClient, convert_claudius_error};
+use super::client::{AnthropicClient, convert_anthropic_error};
+use adk_anthropic::{MessageCountTokensParams, Model};
 use adk_core::{AdkError, LlmRequest};
-use claudius::{MessageCountTokensParams, Model};
 
 /// Result of a token counting request.
 ///
@@ -66,7 +66,7 @@ impl AnthropicClient {
         }
 
         let result =
-            self.client.count_tokens(count_params).await.map_err(convert_claudius_error)?;
+            self.client.count_tokens(count_params).await.map_err(convert_anthropic_error)?;
 
         Ok(TokenCount { input_tokens: result.input_tokens })
     }

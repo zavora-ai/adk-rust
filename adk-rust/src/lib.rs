@@ -828,6 +828,23 @@ pub mod rag {
 #[cfg_attr(docsrs, doc(cfg(feature = "action")))]
 pub use adk_action;
 
+/// Anthropic API client types and HTTP client.
+///
+/// Direct access to the `adk-anthropic` crate for low-level Anthropic API usage:
+/// - [`Anthropic`](anthropic_client::Anthropic) - HTTP client struct
+/// - Wire types: `MessageCreateParams`, `Message`, `ContentBlock`, etc.
+/// - Streaming: `MessageStreamEvent`, `ContentBlockDelta`
+/// - Error handling: `Error` enum with typed variants
+///
+/// For high-level agent usage, prefer `adk-model`'s `AnthropicClient` instead.
+///
+/// Available with feature: `anthropic-client`
+#[cfg(feature = "anthropic-client")]
+#[cfg_attr(docsrs, doc(cfg(feature = "anthropic-client")))]
+pub mod anthropic_client {
+    pub use adk_anthropic::*;
+}
+
 // ============================================================================
 // Prelude
 // ============================================================================
