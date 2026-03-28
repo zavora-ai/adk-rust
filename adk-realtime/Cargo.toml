@@ -17,7 +17,7 @@ readme = "README.md"
 adk-core.workspace = true
 
 # Async runtime
-tokio = { workspace = true, features = ["sync", "net"] }
+tokio = { workspace = true, features = ["sync", "net", "time", "rt"] }
 async-trait.workspace = true
 futures.workspace = true
 async-stream.workspace = true
