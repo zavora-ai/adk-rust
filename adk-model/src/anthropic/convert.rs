@@ -4,10 +4,11 @@ use super::error::ConversionError;
 use crate::attachment;
 use adk_anthropic::ImageMediaType;
 use adk_anthropic::{
-    Base64ImageSource, Base64PdfSource, CacheControlEphemeral, ContentBlock, DocumentBlock,
-    ImageBlock, Message, MessageCreateParams, MessageParam, MessageRole, Model, PlainTextSource,
-    StopReason, SystemPrompt, TextBlock, ToolParam, ToolResultBlock, ToolResultBlockContent,
-    ToolUnionParam, ToolUseBlock, UrlImageSource, UrlPdfSource,
+    Base64ImageSource, Base64PdfSource, CacheControlEphemeral, CitationsConfig, ContentBlock,
+    ContextManagement, DocumentBlock, ImageBlock, Message, MessageCreateParams, MessageParam,
+    MessageRole, Model, PlainTextSource, StopReason, SystemPrompt, TextBlock, ToolParam,
+    ToolResultBlock, ToolResultBlockContent, ToolUnionParam, ToolUseBlock, UrlImageSource,
+    UrlPdfSource,
 };
 use adk_core::{Content, FinishReason, LlmResponse, Part, UsageMetadata};
 use serde_json::Value;
@@ -353,8 +354,10 @@ pub fn build_message_params(
     thinking: Option<&super::config::ThinkingMode>,
     effort: Option<super::config::Effort>,
     fast_mode: bool,
+    citations: bool,
     inference_geo: Option<&str>,
     service_tier: Option<&str>,
+    context_management: Option<&ContextManagement>,
 ) -> MessageCreateParams {
     let mut params =
         MessageCreateParams::new(max_tokens, messages, Model::Custom(model.to_string()));
@@ -424,6 +427,11 @@ pub fn build_message_params(
     // Automatic prompt caching (top-level cache_control)
     if prompt_caching {
         params.cache_control = Some(CacheControlEphemeral::new());
+    }
+
+    // Context management (beta)
+    if let Some(cm) = context_management {
+        params.context_management = Some(cm.clone());
     }
 
     params

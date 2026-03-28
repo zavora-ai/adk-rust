@@ -48,7 +48,26 @@ impl AnthropicClient {
 
     /// Create a client with just an API key (uses default model).
     pub fn from_api_key(api_key: impl Into<String>) -> Result<Self, AdkError> {
-        Self::new(AnthropicConfig::new(api_key, "claude-sonnet-4-5-20250929"))
+        Self::new(AnthropicConfig::new(api_key, "claude-sonnet-4-6"))
+    }
+
+    /// Access the underlying `adk_anthropic::Anthropic` HTTP client.
+    ///
+    /// Use this for direct API access to endpoints not covered by the `Llm` trait:
+    /// batches, files, skills, models, token counting, and pricing.
+    ///
+    /// ```rust,ignore
+    /// let inner = anthropic_client.inner();
+    /// let models = inner.list_models(None).await?;
+    /// let batch = inner.create_batch(requests).await?;
+    /// ```
+    pub fn inner(&self) -> &adk_anthropic::Anthropic {
+        &self.client
+    }
+
+    /// Access the current Anthropic configuration.
+    pub fn anthropic_config(&self) -> &AnthropicConfig {
+        &self.config
     }
 
     #[must_use]
@@ -200,8 +219,10 @@ impl AnthropicClient {
             anthropic_config.thinking.as_ref(),
             anthropic_config.effort,
             anthropic_config.fast_mode,
+            anthropic_config.citations,
             anthropic_config.inference_geo.as_deref(),
             anthropic_config.service_tier.as_deref(),
+            anthropic_config.context_management.as_ref(),
         ))
     }
 }

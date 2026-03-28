@@ -89,6 +89,11 @@ pub struct AnthropicConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inference_geo: Option<String>,
 
+    /// Server-side context management (tool result clearing, thinking block clearing).
+    /// Requires beta header (auto-injected by adk-anthropic).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_management: Option<adk_anthropic::ContextManagement>,
+
     /// Service tier (`"auto"` or `"standard_only"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
@@ -119,6 +124,7 @@ impl Default for AnthropicConfig {
             fast_mode: false,
             citations: false,
             inference_geo: None,
+            context_management: None,
             service_tier: None,
             beta_features: Vec::new(),
             api_version: None,
@@ -189,6 +195,12 @@ impl AnthropicConfig {
     /// Set the service tier.
     pub fn with_service_tier(mut self, tier: impl Into<String>) -> Self {
         self.service_tier = Some(tier.into());
+        self
+    }
+
+    /// Set context management (tool result clearing, thinking block clearing).
+    pub fn with_context_management(mut self, cm: adk_anthropic::ContextManagement) -> Self {
+        self.context_management = Some(cm);
         self
     }
 

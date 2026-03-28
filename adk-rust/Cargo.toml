@@ -21,6 +21,8 @@ standard = [
     "agents",
     "models",
     "gemini",
+    "anthropic",
+    "anthropic-client",
     "tools",
     "skills",
     "sessions",

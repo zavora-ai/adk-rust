@@ -897,7 +897,7 @@ pub mod prelude {
     };
 
     #[cfg(feature = "anthropic")]
-    pub use crate::model::anthropic::{AnthropicClient, AnthropicConfig};
+    pub use crate::model::anthropic::{AnthropicClient, AnthropicConfig, Effort, ThinkingMode};
 
     #[cfg(feature = "deepseek")]
     pub use crate::model::deepseek::{DeepSeekClient, DeepSeekConfig};
