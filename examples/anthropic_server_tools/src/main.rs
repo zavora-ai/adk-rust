@@ -1,7 +1,7 @@
 //! Anthropic native tools — live agentic example matrix.
 //!
 //! Demonstrates every Anthropic native tool wrapper currently exposed by
-//! ADK-Rust through the pinned `claudius` surface. The examples are agentic:
+//! ADK-Rust through the `adk-anthropic` client. The examples are agentic:
 //! web search runs alongside a function tool, bash is exercised through the
 //! tool loop, and text-editor scenarios are multi-turn file editing workflows.
 //!

@@ -18,7 +18,7 @@ use adk_core::{AdkError, LlmRequest};
 /// use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
 /// use adk_core::LlmRequest;
 ///
-/// let client = AnthropicClient::new(AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-4-5-20250929"))?;
+/// let client = AnthropicClient::new(AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-4-6"))?;
 /// let request = LlmRequest::default();
 /// let count = client.count_tokens(&request).await?;
 /// println!("Input tokens: {}", count.input_tokens);
@@ -41,13 +41,8 @@ impl AnthropicClient {
     /// Returns `AdkError::Model` with structured error context if the
     /// API returns an error, consistent with the messages API.
     pub async fn count_tokens(&self, request: &LlmRequest) -> Result<TokenCount, AdkError> {
-        let params = Self::build_message_params(
-            &self.model,
-            self.max_tokens,
-            request,
-            self.config.prompt_caching,
-            self.config.thinking.as_ref(),
-        )?;
+        let params =
+            Self::build_message_params(&self.model, self.max_tokens, request, &self.config)?;
 
         // Build MessageCountTokensParams from the already-constructed message params.
         let mut count_params =

@@ -78,8 +78,7 @@ impl AnthropicClient {
         model: &str,
         max_tokens: u32,
         request: &LlmRequest,
-        prompt_caching: bool,
-        thinking: Option<&super::config::ThinkingConfig>,
+        anthropic_config: &super::config::AnthropicConfig,
     ) -> Result<adk_anthropic::MessageCreateParams, AdkError> {
         let mut system_parts: Vec<String> = Vec::new();
         let mut messages = Vec::new();
@@ -100,7 +99,8 @@ impl AnthropicClient {
                     system_parts.push(text);
                 }
             } else {
-                messages.push(convert::content_to_message(content, prompt_caching)?);
+                messages
+                    .push(convert::content_to_message(content, anthropic_config.prompt_caching)?);
             }
         }
 
@@ -173,7 +173,7 @@ impl AnthropicClient {
         }
 
         // Requirement 7.3: Force temperature to 1.0 when thinking is enabled
-        let temperature = if thinking.is_some() {
+        let temperature = if anthropic_config.thinking.is_some() {
             Some(1.0)
         } else {
             request.config.as_ref().and_then(|c| c.temperature)
@@ -196,8 +196,12 @@ impl AnthropicClient {
             temperature,
             top_p,
             top_k,
-            prompt_caching,
-            thinking,
+            anthropic_config.prompt_caching,
+            anthropic_config.thinking.as_ref(),
+            anthropic_config.effort,
+            anthropic_config.fast_mode,
+            anthropic_config.inference_geo.as_deref(),
+            anthropic_config.service_tier.as_deref(),
         ))
     }
 }
@@ -379,13 +383,7 @@ impl Llm for AnthropicClient {
         let client = self.client.clone();
         let retry_config = self.retry_config.clone();
         let request_for_retry = request.clone();
-        let prompt_caching = self.config.prompt_caching;
-        let thinking_config = self.config.thinking.clone();
-        // Rate-limit state is stored on the client for caller access via
-        // `latest_rate_limit_info()`. Currently updated when adk-anthropic returns
-        // rate-limit or overload errors; will be extended to parse response
-        // headers when direct HTTP calls are added.
-        let _rate_limit_state = Arc::clone(&self.latest_rate_limit);
+        let anthropic_config = self.config.clone();
 
         let response_stream = try_stream! {
             if stream {
@@ -394,9 +392,9 @@ impl Llm for AnthropicClient {
                 let model_ref = model.as_str();
                 let event_stream = execute_with_retry(&retry_config, is_retryable_model_error, || {
                     let request = request_for_retry.clone();
-                    let thinking_ref = thinking_config.as_ref();
+                    let cfg = &anthropic_config;
                     async move {
-                        let mut params = Self::build_message_params(model_ref, max_tokens, &request, prompt_caching, thinking_ref)?;
+                        let mut params = Self::build_message_params(model_ref, max_tokens, &request, cfg)?;
                         params.stream = true;
                         client_ref
                             .stream(&params)
@@ -519,7 +517,10 @@ impl Llm for AnthropicClient {
                                     StopReason::MaxTokens => Some(FinishReason::MaxTokens),
                                     StopReason::StopSequence => Some(FinishReason::Stop),
                                     StopReason::ToolUse => Some(FinishReason::Stop),
-                                    _ => Some(FinishReason::Stop),
+                                    StopReason::PauseTurn => Some(FinishReason::Stop),
+                                    StopReason::Refusal => Some(FinishReason::Safety),
+                                    StopReason::PauseRun => Some(FinishReason::Stop),
+                                    StopReason::ModelContextWindowExceeded => Some(FinishReason::MaxTokens),
                                 };
 
                                 // If we have accumulated tool calls, emit them
@@ -628,9 +629,9 @@ impl Llm for AnthropicClient {
                 let model_ref = model.as_str();
                 let message = execute_with_retry(&retry_config, is_retryable_model_error, || {
                     let request = request_for_retry.clone();
-                    let thinking_ref = thinking_config.as_ref();
+                    let cfg = &anthropic_config;
                     async move {
-                        let params = Self::build_message_params(model_ref, max_tokens, &request, prompt_caching, thinking_ref)?;
+                        let params = Self::build_message_params(model_ref, max_tokens, &request, cfg)?;
                         client_ref
                             .send(params)
                             .await
@@ -691,8 +692,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .unwrap();
 
@@ -736,8 +736,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .unwrap();
 
@@ -777,8 +776,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .unwrap();
 
@@ -804,8 +802,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .unwrap();
 
@@ -835,8 +832,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .unwrap();
 
@@ -874,8 +870,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .unwrap();
 
@@ -892,8 +887,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .unwrap();
 
@@ -921,8 +915,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .expect_err("invalid built-in tool should fail");
 
@@ -1271,8 +1264,7 @@ mod tests {
                 "claude-sonnet-4-5-20250929",
                 4096,
                 &request,
-                false,
-                None,
+            &AnthropicConfig::default(),
             ).unwrap();
 
             if expected_parts.is_empty() {
@@ -1342,8 +1334,7 @@ mod tests {
                 "claude-sonnet-4-5-20250929",
                 4096,
                 &request,
-                false,
-                None,
+            &AnthropicConfig::default(),
             ).unwrap();
 
             // The leading user messages should be re-routed to system

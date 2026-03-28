@@ -350,7 +350,11 @@ pub fn build_message_params(
     top_p: Option<f32>,
     top_k: Option<i32>,
     prompt_caching: bool,
-    thinking: Option<&super::config::ThinkingConfig>,
+    thinking: Option<&super::config::ThinkingMode>,
+    effort: Option<super::config::Effort>,
+    fast_mode: bool,
+    inference_geo: Option<&str>,
+    service_tier: Option<&str>,
 ) -> MessageCreateParams {
     let mut params =
         MessageCreateParams::new(max_tokens, messages, Model::Custom(model.to_string()));
@@ -380,8 +384,46 @@ pub fn build_message_params(
         params.top_k = Some(k as u32);
     }
 
-    if let Some(tc) = thinking {
-        params.thinking = Some(adk_anthropic::ThinkingConfig::enabled(tc.budget_tokens));
+    // Thinking mode
+    match thinking {
+        Some(super::config::ThinkingMode::Enabled { budget_tokens }) => {
+            params.thinking = Some(adk_anthropic::ThinkingConfig::enabled(*budget_tokens));
+        }
+        Some(super::config::ThinkingMode::Adaptive) => {
+            params.thinking = Some(adk_anthropic::ThinkingConfig::adaptive());
+        }
+        None => {}
+    }
+
+    // Effort → output_config.effort
+    if let Some(effort) = effort {
+        let level = match effort {
+            super::config::Effort::Low => adk_anthropic::EffortLevel::Low,
+            super::config::Effort::Medium => adk_anthropic::EffortLevel::Medium,
+            super::config::Effort::High => adk_anthropic::EffortLevel::High,
+            super::config::Effort::Max => adk_anthropic::EffortLevel::Max,
+        };
+        params.output_config = Some(adk_anthropic::OutputConfig::with_effort(level));
+    }
+
+    // Fast mode
+    if fast_mode {
+        params.speed = Some(adk_anthropic::SpeedMode::Fast);
+    }
+
+    // Inference geo
+    if let Some(geo) = inference_geo {
+        params.inference_geo = Some(geo.to_string());
+    }
+
+    // Service tier
+    if let Some(tier) = service_tier {
+        params.service_tier = Some(tier.to_string());
+    }
+
+    // Automatic prompt caching (top-level cache_control)
+    if prompt_caching {
+        params.cache_control = Some(CacheControlEphemeral::new());
     }
 
     params

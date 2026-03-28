@@ -2,24 +2,32 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration for extended thinking mode.
-///
-/// When enabled, Claude produces `thinking` content blocks with internal
-/// reasoning before the final response. The API requires `temperature = 1.0`
-/// when thinking is active.
-///
-/// # Example
-///
-/// ```rust
-/// use adk_model::anthropic::ThinkingConfig;
-///
-/// let thinking = ThinkingConfig { budget_tokens: 8192 };
-/// assert_eq!(thinking.budget_tokens, 8192);
-/// ```
+/// Thinking mode configuration for Anthropic models.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ThinkingConfig {
-    /// Token budget for thinking (must be > 0).
-    pub budget_tokens: u32,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ThinkingMode {
+    /// Budget-based thinking (legacy, deprecated on 4.6 models).
+    /// Requires `budget_tokens` < `max_tokens`.
+    Enabled {
+        /// Token budget for thinking (must be ≥ 1024).
+        budget_tokens: u32,
+    },
+    /// Adaptive thinking for Opus 4.6 / Sonnet 4.6.
+    /// Claude decides when and how much to think.
+    /// Control depth via `effort` on `AnthropicConfig`.
+    Adaptive,
+}
+
+/// Effort level controlling response thoroughness.
+/// Passed via `output_config.effort` in the API.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort {
+    Low,
+    Medium,
+    High,
+    /// Opus 4.6 only.
+    Max,
 }
 
 /// Configuration for Anthropic API.
@@ -27,24 +35,31 @@ pub struct ThinkingConfig {
 /// # Example
 ///
 /// ```rust
-/// use adk_model::anthropic::AnthropicConfig;
+/// use adk_model::anthropic::{AnthropicConfig, ThinkingMode, Effort};
 ///
-/// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-4-5-20250929")
-///     .with_prompt_caching(true)
-///     .with_thinking(8192)
-///     .with_beta_feature("prompt-caching-2024-07-31")
-///     .with_api_version("2024-01-01");
+/// // Adaptive thinking with medium effort (recommended for Sonnet 4.6)
+/// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-4-6")
+///     .with_thinking_mode(ThinkingMode::Adaptive)
+///     .with_effort(Effort::Medium);
+///
+/// // Budget-based thinking (legacy)
+/// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-4-5")
+///     .with_thinking_mode(ThinkingMode::Enabled { budget_tokens: 8192 });
+///
+/// // Prompt caching
+/// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-4-6")
+///     .with_prompt_caching(true);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnthropicConfig {
     /// Anthropic API key.
     pub api_key: String,
-    /// Model name (e.g., "claude-sonnet-4-5-20250929", "claude-3-5-sonnet-20241022").
+    /// Model name (e.g., `"claude-sonnet-4-6"`, `"claude-opus-4-6"`).
     pub model: String,
     /// Maximum tokens to generate.
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
-    /// Optional custom base URL.
+    /// Optional custom base URL (for proxies, Ollama, Vercel Gateway, etc.).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
 
@@ -52,11 +67,33 @@ pub struct AnthropicConfig {
     #[serde(default)]
     pub prompt_caching: bool,
 
-    /// Extended thinking configuration.
+    /// Thinking mode configuration.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<ThinkingConfig>,
+    pub thinking: Option<ThinkingMode>,
 
-    /// Beta feature headers (e.g., "prompt-caching-2024-07-31").
+    /// Effort level (goes into `output_config.effort`).
+    /// Works with or without thinking enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
+
+    /// Enable fast mode (Opus 4.6 only, beta).
+    /// Delivers up to 2.5× higher output tokens/sec at 6× pricing.
+    #[serde(default)]
+    pub fast_mode: bool,
+
+    /// Enable citations on documents in requests.
+    #[serde(default)]
+    pub citations: bool,
+
+    /// Geographic routing for data residency (e.g., `"US"`, `"EU"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inference_geo: Option<String>,
+
+    /// Service tier (`"auto"` or `"standard_only"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+
+    /// Beta feature headers (e.g., `"prompt-caching-2024-07-31"`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub beta_features: Vec<String>,
 
@@ -73,11 +110,16 @@ impl Default for AnthropicConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            model: "claude-sonnet-4-5-20250929".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             max_tokens: default_max_tokens(),
             base_url: None,
             prompt_caching: false,
             thinking: None,
+            effort: None,
+            fast_mode: false,
+            citations: false,
+            inference_geo: None,
+            service_tier: None,
             beta_features: Vec::new(),
             api_version: None,
         }
@@ -103,36 +145,60 @@ impl AnthropicConfig {
     }
 
     /// Enable or disable prompt caching.
-    ///
-    /// When enabled, eligible content blocks will include
-    /// `cache_control: {"type": "ephemeral"}` in API requests.
     pub fn with_prompt_caching(mut self, enabled: bool) -> Self {
         self.prompt_caching = enabled;
         self
     }
 
-    /// Enable extended thinking with the given token budget.
-    ///
-    /// When thinking is enabled, the API request will include
-    /// `thinking: {type: "enabled", budget_tokens: N}` and
-    /// temperature will be forced to 1.0.
+    /// Set the thinking mode.
+    pub fn with_thinking_mode(mut self, mode: ThinkingMode) -> Self {
+        self.thinking = Some(mode);
+        self
+    }
+
+    /// Convenience: enable budget-based thinking with the given token budget.
     pub fn with_thinking(mut self, budget_tokens: u32) -> Self {
-        self.thinking = Some(ThinkingConfig { budget_tokens });
+        self.thinking = Some(ThinkingMode::Enabled { budget_tokens });
+        self
+    }
+
+    /// Set the effort level (goes into `output_config.effort`).
+    pub fn with_effort(mut self, effort: Effort) -> Self {
+        self.effort = Some(effort);
+        self
+    }
+
+    /// Enable fast mode (Opus 4.6 only, beta).
+    pub fn with_fast_mode(mut self, enabled: bool) -> Self {
+        self.fast_mode = enabled;
+        self
+    }
+
+    /// Enable citations on documents.
+    pub fn with_citations(mut self, enabled: bool) -> Self {
+        self.citations = enabled;
+        self
+    }
+
+    /// Set geographic routing for data residency.
+    pub fn with_inference_geo(mut self, geo: impl Into<String>) -> Self {
+        self.inference_geo = Some(geo.into());
+        self
+    }
+
+    /// Set the service tier.
+    pub fn with_service_tier(mut self, tier: impl Into<String>) -> Self {
+        self.service_tier = Some(tier.into());
         self
     }
 
     /// Add a beta feature header value.
-    ///
-    /// Multiple beta features can be added by calling this method
-    /// repeatedly. Each value is sent as an `anthropic-beta` header.
     pub fn with_beta_feature(mut self, feature: impl Into<String>) -> Self {
         self.beta_features.push(feature.into());
         self
     }
 
     /// Set a custom API version header.
-    ///
-    /// Overrides the default `anthropic-version` header value.
     pub fn with_api_version(mut self, version: impl Into<String>) -> Self {
         self.api_version = Some(version.into());
         self

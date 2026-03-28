@@ -92,7 +92,7 @@ mod rate_limit;
 mod token_count;
 
 pub use client::AnthropicClient;
-pub use config::{AnthropicConfig, ThinkingConfig};
+pub use config::{AnthropicConfig, Effort, ThinkingMode};
 pub use error::{AnthropicApiError, ConversionError};
 pub use models::ModelInfo;
 pub use rate_limit::RateLimitInfo;
