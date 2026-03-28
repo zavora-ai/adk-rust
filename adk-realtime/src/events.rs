@@ -85,6 +85,31 @@ pub enum ClientEvent {
     /// Cancel/interrupt the current response.
     #[serde(rename = "response.cancel")]
     ResponseCancel,
+
+    /// A standard message using `adk_core`'s native Role and Part types.
+    #[serde(rename = "message")]
+    Message {
+        /// Role of the message.
+        role: String,
+        /// Content parts of the message.
+        parts: Vec<adk_core::types::Part>,
+    },
+
+    /// Universal intent to update session configuration mid-flight.
+    ///
+    /// This is treated as a runner/control-plane internal intent and should not
+    /// be sent directly to providers without interception. By construction, it
+    /// is explicitly untagged from serialization to guarantee it cannot
+    /// leak onto the WebSocket wire.
+    #[serde(skip_serializing)]
+    UpdateSession {
+        /// New system instructions.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        instructions: Option<String>,
+        /// New tools definition.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tools: Option<Vec<crate::config::ToolDefinition>>,
+    },
 }
 
 /// A conversation item for text or tool responses.

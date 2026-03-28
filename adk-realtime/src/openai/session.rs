@@ -4,7 +4,7 @@ use crate::audio::AudioChunk;
 use crate::config::RealtimeConfig;
 use crate::error::{RealtimeError, Result};
 use crate::events::{ClientEvent, ServerEvent, ToolResponse};
-use crate::session::RealtimeSession;
+use crate::session::{ContextMutationOutcome, RealtimeSession};
 use async_trait::async_trait;
 use futures::stream::Stream;
 use futures::{SinkExt, StreamExt};
@@ -313,9 +313,26 @@ impl RealtimeSession for OpenAIRealtimeSession {
     }
 
     async fn send_event(&self, event: ClientEvent) -> Result<()> {
-        let value = serde_json::to_value(&event)
-            .map_err(|e| RealtimeError::protocol(format!("Serialize error: {}", e)))?;
-        self.send_raw(&value).await
+        match event {
+            ClientEvent::Message { role, parts } => {
+                let payload = translate_client_message(&role, parts);
+                tracing::info!(role = ?role, "Injecting mid-flight context via native adk-rust types");
+                self.send_raw(&payload).await
+            }
+            ClientEvent::UpdateSession { .. } => {
+                tracing::error!(
+                    "Internal UpdateSession intent leaked to the OpenAI transport socket. This should have been intercepted by the RealtimeRunner."
+                );
+                Err(RealtimeError::ProviderError("Internal intent leaked to transport".to_string()))
+            }
+            other => {
+                // OpenAI Realtime API is heavily integrated with the generic `ClientEvent` payload structure.
+                // We serialize the remaining variants dynamically.
+                let value = serde_json::to_value(&other)
+                    .map_err(|e| RealtimeError::protocol(format!("Serialize error: {}", e)))?;
+                self.send_raw(&value).await
+            }
+        }
     }
 
     async fn next_event(&self) -> Option<Result<ServerEvent>> {
@@ -340,6 +357,89 @@ impl RealtimeSession for OpenAIRealtimeSession {
 
         Ok(())
     }
+
+    async fn mutate_context(
+        &self,
+        config: crate::config::RealtimeConfig,
+    ) -> Result<ContextMutationOutcome> {
+        tracing::info!("Updating OpenAI Realtime session context natively");
+        self.configure_session(config).await?;
+        Ok(ContextMutationOutcome::Applied)
+    }
+}
+
+/// Pure translation function for converting a standard `adk_core` message into
+/// OpenAI Realtime API's native `conversation.item.create` payload.
+pub(crate) fn translate_client_message(role: &str, parts: Vec<adk_core::types::Part>) -> Value {
+    // 1. Coerce the internal `adk_core` roles into the strict literal strings
+    // supported by OpenAI Realtime's `conversation.item.create` schema.
+    let openai_role = match role {
+        "system" | "developer" => "system",
+        "user" => "user",
+        "model" | "assistant" => "assistant",
+        _ => "user", // Default fallback for custom roles
+    };
+
+    // 2. Map the polymorphic `adk_core::types::Part` elements into JSON objects.
+    let mut content: Vec<Value> = Vec::new();
+    for p in parts {
+        match p {
+            adk_core::types::Part::Text { text } => {
+                content.push(json!({
+                    "type": "input_text",
+                    "text": text
+                }));
+            }
+            adk_core::types::Part::InlineData { mime_type, data } => {
+                // OpenAI Realtime API accepts "input_audio" natively for base64 audio.
+                // It does not support native inline image data via this specific websocket frame.
+                if mime_type.starts_with("audio/") {
+                    use base64::Engine;
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+                    content.push(json!({
+                        "type": "input_audio",
+                        "audio": encoded
+                    }));
+                } else {
+                    tracing::warn!(
+                        "Dropping unsupported InlineData (non-audio) part in OpenAI session: {}",
+                        mime_type
+                    );
+                }
+            }
+
+            // 3. Gracefully skip unsupported semantic features using explicit warnings
+            // rather than silently emitting empty `input_text` elements, which pollutes context.
+            adk_core::types::Part::FileData { file_uri, .. } => {
+                tracing::warn!(
+                    "Dropping unsupported FileData part in OpenAI session: {}",
+                    file_uri
+                );
+            }
+            adk_core::types::Part::Thinking { .. } => {
+                tracing::warn!("Dropping unsupported Thinking part in OpenAI session");
+            }
+            adk_core::types::Part::FunctionCall { name, .. } => {
+                tracing::warn!(
+                    "Dropping unsupported FunctionCall part in OpenAI session: {}",
+                    name
+                );
+            }
+            adk_core::types::Part::FunctionResponse { .. } => {
+                tracing::warn!("Dropping unsupported FunctionResponse part in OpenAI session");
+            }
+        }
+    }
+
+    // 4. Wrap the translated payload in the exact JSON envelope required by the provider.
+    json!({
+        "type": "conversation.item.create",
+        "item": {
+            "type": "message",
+            "role": openai_role,
+            "content": content
+        }
+    })
 }
 
 /// Generate a random WebSocket key.
@@ -348,6 +448,61 @@ fn generate_ws_key() -> String {
     let mut key = [0u8; 16];
     getrandom::fill(&mut key).unwrap_or_default();
     base64::engine::general_purpose::STANDARD.encode(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use adk_core::types::Part;
+
+    #[test]
+    fn test_openai_translate_text_only() {
+        let parts = vec![Part::Text { text: "Hello".to_string() }];
+        let value = translate_client_message("user", parts);
+
+        let item = &value["item"];
+        assert_eq!(item["role"], "user");
+
+        let content = item["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "input_text");
+        assert_eq!(content[0]["text"], "Hello");
+    }
+
+    #[test]
+    fn test_openai_translate_text_and_audio() {
+        let parts = vec![
+            Part::Text { text: "Listen:".to_string() },
+            Part::InlineData { mime_type: "audio/wav".to_string(), data: vec![0x1, 0x2, 0x3] },
+        ];
+        let value = translate_client_message("user", parts);
+
+        let content = value["item"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+
+        assert_eq!(content[0]["type"], "input_text");
+        assert_eq!(content[0]["text"], "Listen:");
+
+        assert_eq!(content[1]["type"], "input_audio");
+        assert_eq!(content[1]["audio"], "AQID"); // base64 encoded [1,2,3]
+    }
+
+    #[test]
+    fn test_openai_skips_unsupported_parts() {
+        let parts = vec![
+            Part::Text { text: "First".to_string() },
+            Part::InlineData { mime_type: "image/png".to_string(), data: vec![0x1] }, // Should be skipped because it's not audio
+            Part::Thinking { thinking: "Hmm".to_string(), signature: None }, // Should be skipped
+            Part::Text { text: "Last".to_string() },
+        ];
+        let value = translate_client_message("user", parts);
+
+        let content = value["item"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+
+        assert_eq!(content[0]["text"], "First");
+        assert_eq!(content[1]["text"], "Last");
+    }
 }
 
 impl std::fmt::Debug for OpenAIRealtimeSession {

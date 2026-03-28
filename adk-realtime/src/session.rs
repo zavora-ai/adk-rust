@@ -7,6 +7,15 @@ use async_trait::async_trait;
 use futures::Stream;
 use std::pin::Pin;
 
+/// The outcome of an attempt to mutate the session context mid-flight.
+#[derive(Debug, Clone)]
+pub enum ContextMutationOutcome {
+    /// Provider successfully updated the active session via sideband.
+    Applied,
+    /// Provider requires the transport to be rebound with a new configuration.
+    RequiresResumption(crate::config::RealtimeConfig),
+}
+
 /// A real-time bidirectional streaming session.
 ///
 /// This trait provides a unified interface for real-time voice/audio sessions
@@ -83,6 +92,18 @@ pub trait RealtimeSession: Send + Sync {
 
     /// Close the session gracefully.
     async fn close(&self) -> Result<()>;
+
+    /// Attempt to mutate the session parameters mid-flight.
+    ///
+    /// For providers that support native hot-swapping (e.g., OpenAI), this
+    /// mutates the parameters without tearing down the connection and returns `Ok(ContextMutationOutcome::Applied)`.
+    /// For providers that require a static configuration (e.g., Gemini), this
+    /// returns `Ok(ContextMutationOutcome::RequiresResumption(config))` to signal
+    /// the runner to queue a session reconnect or resumption safely.
+    async fn mutate_context(
+        &self,
+        config: crate::config::RealtimeConfig,
+    ) -> Result<ContextMutationOutcome>;
 }
 
 /// Extension trait for RealtimeSession with convenience methods.

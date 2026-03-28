@@ -124,35 +124,3 @@ impl RealtimeError {
         Self::LiveKitError(msg.into())
     }
 }
-
-impl From<RealtimeError> for adk_core::AdkError {
-    fn from(err: RealtimeError) -> Self {
-        use adk_core::{ErrorCategory, ErrorComponent};
-        let (category, code) = match &err {
-            RealtimeError::AuthError(_) => (ErrorCategory::Unauthorized, "realtime.auth"),
-            RealtimeError::Timeout(_) => (ErrorCategory::Timeout, "realtime.timeout"),
-            RealtimeError::ConfigError(_) => (ErrorCategory::InvalidInput, "realtime.config"),
-            RealtimeError::ConnectionError(_) => {
-                (ErrorCategory::Unavailable, "realtime.connection")
-            }
-            RealtimeError::NotConnected => (ErrorCategory::Unavailable, "realtime.not_connected"),
-            RealtimeError::SessionClosed => (ErrorCategory::Unavailable, "realtime.session_closed"),
-            RealtimeError::AudioFormatError(_) => {
-                (ErrorCategory::InvalidInput, "realtime.audio_format")
-            }
-            RealtimeError::ToolError(_) => (ErrorCategory::Internal, "realtime.tool"),
-            RealtimeError::ServerError { .. } => (ErrorCategory::Internal, "realtime.server"),
-            RealtimeError::MessageError(_) => (ErrorCategory::Internal, "realtime.message"),
-            RealtimeError::SerializationError(_) => {
-                (ErrorCategory::Internal, "realtime.serialization")
-            }
-            RealtimeError::ProviderError(_) => (ErrorCategory::Internal, "realtime.provider"),
-            RealtimeError::IoError(_) => (ErrorCategory::Internal, "realtime.io"),
-            RealtimeError::OpusCodecError(_) => (ErrorCategory::Internal, "realtime.opus"),
-            RealtimeError::WebRTCError(_) => (ErrorCategory::Internal, "realtime.webrtc"),
-            RealtimeError::LiveKitError(_) => (ErrorCategory::Internal, "realtime.livekit"),
-        };
-        adk_core::AdkError::new(ErrorComponent::Realtime, category, code, err.to_string())
-            .with_source(err)
-    }
-}

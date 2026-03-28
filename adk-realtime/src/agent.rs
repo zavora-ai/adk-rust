@@ -332,7 +332,8 @@ impl RealtimeAgentBuilder {
 
     /// Build the RealtimeAgent.
     pub fn build(self) -> Result<RealtimeAgent> {
-        let model = self.model.ok_or_else(|| AdkError::agent("RealtimeModel is required"))?;
+        let model =
+            self.model.ok_or_else(|| AdkError::agent("RealtimeModel is required".to_string()))?;
 
         Ok(RealtimeAgent {
             name: self.name,

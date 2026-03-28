@@ -3,6 +3,7 @@
 use crate::audio::AudioEncoding;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::ops::{Deref, DerefMut};
 
 /// Voice Activity Detection mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -18,7 +19,7 @@ pub enum VadMode {
 }
 
 /// VAD configuration options.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VadConfig {
     /// VAD mode to use.
     #[serde(rename = "type")]
@@ -83,7 +84,7 @@ impl VadConfig {
 }
 
 /// Tool/function definition for realtime sessions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolDefinition {
     /// Tool name.
     pub name: String,
@@ -115,7 +116,7 @@ impl ToolDefinition {
 }
 
 /// Configuration for a realtime session.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct RealtimeConfig {
     /// Model to use (provider-specific).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -174,8 +175,56 @@ pub struct RealtimeConfig {
     pub extra: Option<Value>,
 }
 
+/// A delta payload for safely updating an active realtime session.
+///
+/// Wraps `RealtimeConfig` to prevent struct duplication. Since all fields are
+/// `Option<T>` and skip serialization if `None`, omitting fields preserves
+/// the server's active state.
+///
+/// **⚠️ WARNING:** You must construct a *fresh* configuration containing **only**
+/// the fields to modify. Wrapping your original startup config will resend
+/// immutable fields (like `model`), causing the provider to reject the update.
+///
+/// This is the idiomatic mechanism for dynamic Finite State Machine (FSM) state
+/// transitions, allowing seamless "persona shifts" or tool swaps without
+/// dropping the audio connection.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_realtime::config::{SessionUpdateConfig, RealtimeConfig};
+///
+/// // Update *only* the instruction mid-session.
+/// let delta = SessionUpdateConfig(
+///     RealtimeConfig::default().with_instruction("You are now a travel agent.")
+/// );
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SessionUpdateConfig(pub RealtimeConfig);
+
+impl Deref for SessionUpdateConfig {
+    type Target = RealtimeConfig;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for SessionUpdateConfig {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<RealtimeConfig> for SessionUpdateConfig {
+    fn from(config: RealtimeConfig) -> Self {
+        Self(config)
+    }
+}
+
 /// Transcription configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptionConfig {
     /// Transcription model to use.
     pub model: String,

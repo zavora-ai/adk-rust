@@ -7,7 +7,7 @@ use crate::audio::AudioChunk;
 use crate::config::{RealtimeConfig, ToolDefinition};
 use crate::error::{RealtimeError, Result};
 use crate::events::{ClientEvent, ServerEvent, ToolResponse};
-use crate::session::RealtimeSession;
+use crate::session::{ContextMutationOutcome, RealtimeSession};
 use async_trait::async_trait;
 use base64::Engine;
 use futures::stream::Stream;
@@ -81,7 +81,7 @@ impl GeminiLiveBackend {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct GeminiClientMessage {
+pub(crate) struct GeminiClientMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     setup: Option<GeminiSetup>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,6 +90,16 @@ struct GeminiClientMessage {
     tool_response: Option<GeminiToolResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     client_content: Option<GeminiClientContent>,
+}
+
+/// Configuration for Gemini 2.5 Live session resumption.
+///
+/// See the official documentation for details:
+/// https://ai.google.dev/gemini-api/docs/live-api/session-management
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionResumptionConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -104,6 +114,8 @@ struct GeminiSetup {
     tools: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cached_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_resumption: Option<SessionResumptionConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -318,6 +330,18 @@ impl GeminiRealtimeSession {
 
         let tools = convert_tools(config.tools);
 
+        // Functionally extract the token if it exists in the prior state map
+        let handle = config
+            .extra
+            .as_ref()
+            .and_then(|ext| ext.get("resumeToken"))
+            .and_then(|val| val.as_str())
+            .map(|s| s.to_string());
+
+        // Always attach the config object to explicitly enable the session resumption feature,
+        // even if the handle is currently None.
+        let session_resumption = Some(SessionResumptionConfig { handle });
+
         let setup = GeminiClientMessage {
             setup: Some(GeminiSetup {
                 model: model.to_string(),
@@ -325,6 +349,7 @@ impl GeminiRealtimeSession {
                 generation_config: Some(generation_config),
                 tools,
                 cached_content: config.cached_content,
+                session_resumption,
             }),
             realtime_input: None,
             tool_response: None,
@@ -391,10 +416,10 @@ impl GeminiRealtimeSession {
             .map_err(|e| RealtimeError::protocol(format!("Parse error: {}, raw: {}", e, raw)))?;
 
         // Check for setup completion
-        if value.get("setupComplete").is_some() {
+        if let Some(_setup_complete) = value.get("setupComplete") {
             return Ok(ServerEvent::SessionCreated {
                 event_id: uuid::Uuid::new_v4().to_string(),
-                session: value,
+                session: value.clone(),
             });
         }
 
@@ -404,7 +429,7 @@ impl GeminiRealtimeSession {
                 if turn_complete.as_bool().unwrap_or(false) {
                     return Ok(ServerEvent::ResponseDone {
                         event_id: uuid::Uuid::new_v4().to_string(),
-                        response: value,
+                        response: value.clone(),
                     });
                 }
             }
@@ -441,6 +466,20 @@ impl GeminiRealtimeSession {
                         }
                     }
                 }
+            }
+        }
+
+        // Catch the Server Update for sessionResumptionUpdate
+        // Note the intentional protocol asymmetry here: the client sends the parameter as handle,
+        // but the server transmits the parameter back as resumptionToken.
+        // Reference: https://ai.google.dev/gemini-api/docs/live-api/session-management
+        if let Some(resumption_update) = value.get("sessionResumptionUpdate") {
+            if let Some(token) = resumption_update.get("resumptionToken").and_then(|t| t.as_str()) {
+                tracing::debug!("Received new Gemini 2.5 Native resumption token");
+                return Ok(ServerEvent::SessionUpdated {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    session: json!({ "resumeToken": token }),
+                });
             }
         }
 
@@ -569,8 +608,67 @@ impl RealtimeSession for GeminiRealtimeSession {
         Ok(()) // Gemini handles interruption via VAD
     }
 
-    async fn send_event(&self, _event: ClientEvent) -> Result<()> {
-        Ok(()) // Raw events not directly supported
+    async fn send_event(&self, event: ClientEvent) -> Result<()> {
+        match event {
+            // Intercept standard messages from the orchestrator
+            ClientEvent::Message { role, parts } => {
+                let msg = translate_client_message(&role, parts);
+                tracing::info!(role = ?role, "Injecting mid-flight context via native adk-rust types");
+                self.send_raw(&msg).await
+            }
+
+            // Explicitly handle all other unified ClientEvent variants.
+            // Returning Ok(()) silently for unsupported features is an anti-pattern.
+            // We log a clear warning that Gemini does not natively support this specific control event.
+            ClientEvent::AudioDelta { .. } => {
+                tracing::warn!(
+                    "AudioDelta is explicitly handled via `send_audio`, not `send_event`. Dropping event."
+                );
+                Ok(())
+            }
+            ClientEvent::InputAudioBufferCommit => {
+                tracing::warn!(
+                    "Gemini Live API does not support manual audio buffer commits. Dropping event."
+                );
+                Ok(())
+            }
+            ClientEvent::InputAudioBufferClear => {
+                tracing::warn!(
+                    "Gemini Live API does not support manual audio buffer clears via wire events. Dropping event."
+                );
+                Ok(())
+            }
+            ClientEvent::ConversationItemCreate { .. } => {
+                tracing::warn!(
+                    "Raw ConversationItemCreate is an OpenAI construct. Use ClientEvent::Message instead for Gemini. Dropping event."
+                );
+                Ok(())
+            }
+            ClientEvent::ResponseCreate { .. } => {
+                tracing::warn!(
+                    "Gemini Live API automatically generates responses based on VAD/turns. Manual ResponseCreate is unsupported. Dropping event."
+                );
+                Ok(())
+            }
+            ClientEvent::ResponseCancel => {
+                tracing::warn!(
+                    "Gemini Live API natively handles interruption via VAD. Manual ResponseCancel is unsupported. Dropping event."
+                );
+                Ok(())
+            }
+            ClientEvent::SessionUpdate { .. } => {
+                tracing::warn!(
+                    "Raw SessionUpdate is an OpenAI construct. Use RealtimeRunner's `update_session` for provider-agnostic Context Mutation. Dropping event."
+                );
+                Ok(())
+            }
+            ClientEvent::UpdateSession { .. } => {
+                tracing::error!(
+                    "Internal UpdateSession intent leaked to the Gemini transport socket. This should have been intercepted by the RealtimeRunner."
+                );
+                Err(RealtimeError::ProviderError("Internal intent leaked to transport".to_string()))
+            }
+        }
     }
 
     async fn next_event(&self) -> Option<Result<ServerEvent>> {
@@ -594,6 +692,16 @@ impl RealtimeSession for GeminiRealtimeSession {
         let mut sender = self.sender.lock().await;
         let _ = sender.send(Message::Close(None)).await;
         Ok(())
+    }
+
+    async fn mutate_context(
+        &self,
+        config: crate::config::RealtimeConfig,
+    ) -> Result<ContextMutationOutcome> {
+        tracing::info!(
+            "Gemini API does not support native mid-flight context swaps; signalling resumption needed."
+        );
+        Ok(ContextMutationOutcome::RequiresResumption(config))
     }
 }
 
@@ -624,6 +732,101 @@ pub fn build_vertex_live_url(region: &str, project_id: &str) -> Result<String> {
     ))
 }
 
+/// Pure translation function for converting a standard `adk_core` message into
+/// Gemini Live API's native `clientContent` payload.
+pub(crate) fn translate_client_message(
+    role: &str,
+    parts: Vec<adk_core::types::Part>,
+) -> GeminiClientMessage {
+    // 1. Translate the polymorphic `adk_core::types::Part` elements into strictly-typed `GeminiPart` structures.
+    let mut gemini_parts: Vec<GeminiPart> = Vec::new();
+    for p in parts {
+        match p {
+            adk_core::types::Part::Text { text } => {
+                gemini_parts.push(GeminiPart { text: Some(text), inline_data: None });
+            }
+            adk_core::types::Part::InlineData { mime_type, data } => {
+                // Gemini natively encodes binary artifacts (images/audio) via a base64 payload envelope.
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+                gemini_parts.push(GeminiPart {
+                    text: None,
+                    inline_data: Some(GeminiInlineData { mime_type, data: encoded }),
+                });
+            }
+
+            // 2. Gracefully skip semantic elements that Google's Live API `clientContent` turn does not support
+            // using `tracing::warn!`, avoiding "silent data loss" or injecting empty string placeholders.
+            adk_core::types::Part::FileData { file_uri, .. } => {
+                tracing::warn!(
+                    "Dropping unsupported FileData part in Gemini session: {}",
+                    file_uri
+                );
+            }
+            adk_core::types::Part::Thinking { .. } => {
+                tracing::warn!("Dropping unsupported Thinking part in Gemini session");
+            }
+            adk_core::types::Part::FunctionCall { name, .. } => {
+                tracing::warn!(
+                    "Dropping unsupported FunctionCall part in Gemini session: {}",
+                    name
+                );
+            }
+            adk_core::types::Part::FunctionResponse { .. } => {
+                tracing::warn!("Dropping unsupported FunctionResponse part in Gemini session");
+            }
+        }
+    }
+
+    // 3. Coerce the `Role`.
+    // Gemini Live's bidirectional socket strongly rejects `system` or `developer` roles
+    // inside mid-flight `clientContent` turns. To support Cognitive Handoffs, we intercept
+    // the system instruction and safely masquerade it as a high-priority "user" turn.
+    let (gemini_role, final_parts) = match role {
+        "system" | "developer" => {
+            let mut modified_parts = gemini_parts;
+            let mut text_injected = false;
+
+            // Iterate to find the first actual text element in the user's prompt (avoiding images/audio arrays)
+            // to safely inject the system prefix.
+            for part in modified_parts.iter_mut() {
+                if let Some(ref mut text) = part.text {
+                    *text = format!("[CRITICAL SYSTEM DIRECTIVE OVERRIDE]\n{}", text);
+                    text_injected = true;
+                    break;
+                }
+            }
+
+            // If the orchestrator sent a `system` role containing exclusively non-text data (e.g., just an image),
+            // construct a synthetic text part to carry the directive.
+            if !text_injected {
+                modified_parts.insert(
+                    0,
+                    GeminiPart {
+                        text: Some("[CRITICAL SYSTEM DIRECTIVE OVERRIDE]".to_string()),
+                        inline_data: None,
+                    },
+                );
+            }
+
+            ("user".to_string(), modified_parts)
+        }
+        "user" => ("user".to_string(), gemini_parts),
+        "model" | "assistant" => ("model".to_string(), gemini_parts),
+        _ => ("user".to_string(), gemini_parts), // Default fallback for custom orchestrator roles
+    };
+
+    // 4. Construct the native `GeminiClientContent` wire envelope.
+    GeminiClientMessage {
+        setup: None,
+        realtime_input: None,
+        tool_response: None,
+        client_content: Some(GeminiClientContent {
+            turns: vec![GeminiTurn { role: gemini_role, parts: final_parts }],
+            turn_complete: true,
+        }),
+    }
+}
+
 /// Convert ADK tool definitions to Gemini format.
 fn convert_tools(tools: Option<Vec<ToolDefinition>>) -> Option<Vec<Value>> {
     tools.map(|tools| {
@@ -640,4 +843,115 @@ fn convert_tools(tools: Option<Vec<ToolDefinition>>) -> Option<Vec<Value>> {
             }).collect::<Vec<_>>()
         })]
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use adk_core::types::Part;
+
+    #[test]
+    fn test_gemini_translate_text_only() {
+        let parts = vec![Part::Text { text: "Hello".to_string() }];
+        let msg = translate_client_message("user", parts);
+
+        let content = msg.client_content.unwrap();
+        assert_eq!(content.turns.len(), 1);
+        assert_eq!(content.turns[0].role, "user");
+
+        let gemini_parts = &content.turns[0].parts;
+        assert_eq!(gemini_parts.len(), 1);
+        assert_eq!(gemini_parts[0].text.as_deref(), Some("Hello"));
+        assert!(gemini_parts[0].inline_data.is_none());
+    }
+
+    #[test]
+    fn test_gemini_translate_text_and_inline_data() {
+        let parts = vec![
+            Part::Text { text: "Look:".to_string() },
+            Part::InlineData { mime_type: "image/png".to_string(), data: vec![0x1, 0x2] },
+        ];
+        let msg = translate_client_message("user", parts);
+
+        let content = msg.client_content.unwrap();
+        let gemini_parts = &content.turns[0].parts;
+        assert_eq!(gemini_parts.len(), 2);
+
+        assert_eq!(gemini_parts[0].text.as_deref(), Some("Look:"));
+
+        let inline = gemini_parts[1].inline_data.as_ref().unwrap();
+        assert_eq!(inline.mime_type, "image/png");
+        assert_eq!(inline.data, "AQI="); // base64 encoded [1,2]
+    }
+
+    #[test]
+    fn test_gemini_system_override_text_first() {
+        let parts = vec![Part::Text { text: "Be helpful".to_string() }];
+        let msg = translate_client_message("system", parts);
+
+        let content = msg.client_content.unwrap();
+        assert_eq!(content.turns[0].role, "user"); // coerced
+
+        let gemini_parts = &content.turns[0].parts;
+        assert_eq!(gemini_parts.len(), 1);
+        assert_eq!(
+            gemini_parts[0].text.as_deref(),
+            Some("[CRITICAL SYSTEM DIRECTIVE OVERRIDE]\nBe helpful")
+        );
+    }
+
+    #[test]
+    fn test_gemini_system_override_non_text_first() {
+        let parts = vec![
+            Part::InlineData { mime_type: "image/png".to_string(), data: vec![0x1] },
+            Part::Text { text: "Analyze this".to_string() },
+        ];
+        let msg = translate_client_message("system", parts);
+
+        let content = msg.client_content.unwrap();
+        let gemini_parts = &content.turns[0].parts;
+        assert_eq!(gemini_parts.len(), 2);
+
+        // Ensure the directive was applied to the FIRST text part, despite being index 1
+        assert!(gemini_parts[0].inline_data.is_some());
+        assert_eq!(
+            gemini_parts[1].text.as_deref(),
+            Some("[CRITICAL SYSTEM DIRECTIVE OVERRIDE]\nAnalyze this")
+        );
+    }
+
+    #[test]
+    fn test_gemini_system_override_no_text() {
+        let parts = vec![Part::InlineData { mime_type: "image/png".to_string(), data: vec![0x1] }];
+        let msg = translate_client_message("system", parts);
+
+        let content = msg.client_content.unwrap();
+        let gemini_parts = &content.turns[0].parts;
+        assert_eq!(gemini_parts.len(), 2);
+
+        // Ensure a new text part was inserted at the beginning
+        assert_eq!(gemini_parts[0].text.as_deref(), Some("[CRITICAL SYSTEM DIRECTIVE OVERRIDE]"));
+        assert!(gemini_parts[1].inline_data.is_some());
+    }
+
+    #[test]
+    fn test_gemini_skips_unsupported_parts() {
+        let parts = vec![
+            Part::Text { text: "First".to_string() },
+            Part::FileData {
+                mime_type: "image/jpeg".to_string(),
+                file_uri: "http://example.com/img".to_string(),
+            }, // Should be skipped
+            Part::Thinking { thinking: "Hmm".to_string(), signature: None }, // Should be skipped
+            Part::Text { text: "Last".to_string() },
+        ];
+        let msg = translate_client_message("user", parts);
+
+        let content = msg.client_content.unwrap();
+        let gemini_parts = &content.turns[0].parts;
+        assert_eq!(gemini_parts.len(), 2);
+
+        assert_eq!(gemini_parts[0].text.as_deref(), Some("First"));
+        assert_eq!(gemini_parts[1].text.as_deref(), Some("Last"));
+    }
 }

@@ -1,5 +1,4 @@
 //! # adk-realtime
-#![allow(clippy::result_large_err)]
 //!
 //! Real-time bidirectional audio/video streaming for ADK agents.
 //!
