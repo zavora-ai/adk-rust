@@ -38,9 +38,8 @@ impl std::fmt::Debug for EncryptionKey {
 impl EncryptionKey {
     /// Generate a cryptographically random 256-bit key.
     pub fn generate() -> Self {
-        use rand::RngCore;
-        let mut bytes = [0u8; 32];
-        rand::rng().fill_bytes(&mut bytes);
+        use rand::Rng;
+        let bytes: [u8; 32] = rand::rng().random();
         Self { bytes }
     }
 
