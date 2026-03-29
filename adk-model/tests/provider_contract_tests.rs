@@ -512,7 +512,9 @@ fn fireworks_cheapest_spec() -> ProviderSpec {
         supports_tools: true,
         build_model: |model_name| {
             let api_key = required_env("FIREWORKS_API_KEY")?;
-            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::fireworks(api_key, model_name))?))
+            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::fireworks(
+                api_key, model_name,
+            ))?))
         },
     }
 }
@@ -527,7 +529,9 @@ fn together_cheapest_spec() -> ProviderSpec {
         supports_tools: true,
         build_model: |model_name| {
             let api_key = required_env("TOGETHER_API_KEY")?;
-            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::together(api_key, model_name))?))
+            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::together(
+                api_key, model_name,
+            ))?))
         },
     }
 }
@@ -542,7 +546,9 @@ fn mistral_cheapest_spec() -> ProviderSpec {
         supports_tools: true,
         build_model: |model_name| {
             let api_key = required_env("MISTRAL_API_KEY")?;
-            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::mistral(api_key, model_name))?))
+            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::mistral(
+                api_key, model_name,
+            ))?))
         },
     }
 }
@@ -557,7 +563,9 @@ fn perplexity_cheapest_spec() -> ProviderSpec {
         supports_tools: false,
         build_model: |model_name| {
             let api_key = required_env("PERPLEXITY_API_KEY")?;
-            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::perplexity(api_key, model_name))?))
+            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::perplexity(
+                api_key, model_name,
+            ))?))
         },
     }
 }
@@ -572,7 +580,9 @@ fn cerebras_cheapest_spec() -> ProviderSpec {
         supports_tools: true,
         build_model: |model_name| {
             let api_key = required_env("CEREBRAS_API_KEY")?;
-            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::cerebras(api_key, model_name))?))
+            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::cerebras(
+                api_key, model_name,
+            ))?))
         },
     }
 }
@@ -587,7 +597,9 @@ fn sambanova_cheapest_spec() -> ProviderSpec {
         supports_tools: true,
         build_model: |model_name| {
             let api_key = required_env("SAMBANOVA_API_KEY")?;
-            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::sambanova(api_key, model_name))?))
+            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::sambanova(
+                api_key, model_name,
+            ))?))
         },
     }
 }

@@ -776,7 +776,8 @@ impl RealtimeRunner {
             drop(state);
 
             // 5. Attempt the actual transport teardown/rebuild.
-            if let Err(e) = self.execute_resumption((*config).clone(), bridge_message.clone()).await {
+            if let Err(e) = self.execute_resumption((*config).clone(), bridge_message.clone()).await
+            {
                 tracing::error!("Resumption failed: {}.", e);
 
                 // 6. If the reconnect fails (e.g., transient network error), re-acquire the lock
