@@ -72,7 +72,7 @@ reqwest = { workspace = true, optional = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "test-util"] }
 dotenvy = "0.15"
-proptest = "1.5"
+proptest = "1.11"
 url = "2.5"
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

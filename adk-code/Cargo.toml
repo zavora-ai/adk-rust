@@ -33,5 +33,5 @@ embedded-js = ["dep:boa_engine"]
 docker = ["dep:bollard", "dep:rand", "dep:futures"]
 
 [dev-dependencies]
-proptest = "1.5"
+proptest = "1.11"
 tokio = { workspace = true, features = ["rt", "macros", "test-util"] }

@@ -37,4 +37,4 @@ base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-proptest = "1.5"
+proptest = "1.11"

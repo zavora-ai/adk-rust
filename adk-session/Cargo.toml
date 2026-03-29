@@ -31,7 +31,7 @@ neo4rs = { version = "0.8", optional = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
 axum = "0.8"
-proptest = "1.5"
+proptest = "1.11"
 
 [features]
 default = []

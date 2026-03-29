@@ -57,7 +57,7 @@ azure-ai = ["dep:reqwest"]
 all-providers = ["gemini", "openai", "anthropic", "deepseek", "ollama", "groq", "openrouter", "bedrock", "azure-ai"]
 
 [dev-dependencies]
-proptest = "1.5"
+proptest = "1.11"
 tokio = { workspace = true, features = ["rt", "macros"] }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
 futures = "0.3"

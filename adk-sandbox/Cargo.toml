@@ -29,5 +29,5 @@ wasm = ["dep:wasmtime", "dep:wasmtime-wasi"]
 process = []  # no extra deps, uses tokio
 
 [dev-dependencies]
-proptest = "1.4"
+proptest = "1.11"
 tokio = { workspace = true, features = ["rt", "macros", "test-util"] }

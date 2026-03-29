@@ -27,7 +27,7 @@ fred = { version = "10", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
-proptest = "1.5"
+proptest = "1.11"
 serde_json.workspace = true
 chrono.workspace = true
 

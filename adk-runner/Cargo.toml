@@ -30,6 +30,6 @@ tokio-util = { version = "0.7", features = ["rt"] }
 
 [dev-dependencies]
 chrono = "0.4"
-proptest = "1.5"
+proptest = "1.11"
 tempfile = "3"
 tokio = { workspace = true, features = ["rt", "macros"] }

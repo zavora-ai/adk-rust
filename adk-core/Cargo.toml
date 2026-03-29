@@ -23,6 +23,6 @@ chrono = { workspace = true }
 
 [dev-dependencies]
 async-stream = { workspace = true }
-proptest = "1.5"
+proptest = "1.11"
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "test-util"] }

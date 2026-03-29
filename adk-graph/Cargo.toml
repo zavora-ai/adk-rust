@@ -55,5 +55,5 @@ full = ["sqlite", "action-full"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
-proptest = "1.5"
+proptest = "1.11"
 adk-action = { workspace = true }
