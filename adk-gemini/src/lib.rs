@@ -32,6 +32,7 @@ pub mod backend;
 pub mod client;
 pub mod model_info;
 mod models;
+pub mod pricing;
 
 /// Convenient re-exports of commonly used types
 pub mod prelude;
@@ -144,3 +145,8 @@ pub use cache::{
     builder::CacheBuilder, handle::CachedContentHandle, model::CacheExpirationRequest,
     model::CacheExpirationResponse, model::CachedContent, model::CreateCachedContentRequest,
 };
+
+// ========== Pricing ==========
+// Token cost estimation for Gemini models
+
+pub use pricing::{CostBreakdown, GeminiPricing, estimate_cost, estimate_cost_long};

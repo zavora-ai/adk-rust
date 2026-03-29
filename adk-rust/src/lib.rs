@@ -935,7 +935,48 @@ pub async fn run(instructions: &str, input: &str) -> Result<String> {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    let model = provider_from_env()?;
+    let (model, cache_capable): (Arc<dyn Llm>, Option<Arc<dyn CacheCapable>>) = {
+        #[allow(unused_assignments)]
+        let mut result: Option<(Arc<dyn Llm>, Option<Arc<dyn CacheCapable>>)> = None;
+
+        #[cfg(feature = "anthropic")]
+        {
+            if result.is_none() {
+                if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+                    let m = model::anthropic::AnthropicClient::from_api_key(key)?;
+                    result = Some((Arc::new(m), None));
+                }
+            }
+        }
+
+        #[cfg(feature = "openai")]
+        {
+            if result.is_none() {
+                if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+                    let config = model::openai::OpenAIConfig::new(key, "gpt-4o-mini");
+                    let m = model::openai::OpenAIClient::new(config)?;
+                    result = Some((Arc::new(m), None));
+                }
+            }
+        }
+
+        #[cfg(feature = "gemini")]
+        {
+            if result.is_none() {
+                if let Ok(key) = std::env::var("GOOGLE_API_KEY") {
+                    let m = Arc::new(model::GeminiModel::new(key, "gemini-2.5-flash")?);
+                    let cc: Arc<dyn CacheCapable> = m.clone();
+                    result = Some((m, Some(cc)));
+                }
+            }
+        }
+
+        result.ok_or_else(|| {
+            AdkError::config(
+                "No LLM provider detected. Set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY",
+            )
+        })?
+    };
 
     let agent =
         agent::LlmAgentBuilder::new("adk_run").instruction(instructions).model(model).build()?;
@@ -964,7 +1005,7 @@ pub async fn run(instructions: &str, input: &str) -> Result<String> {
         run_config: None,
         compaction_config: None,
         context_cache_config: None,
-        cache_capable: None,
+        cache_capable,
         request_context: None,
         cancellation_token: None,
     })?;
