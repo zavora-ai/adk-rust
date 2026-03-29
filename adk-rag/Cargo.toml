@@ -25,9 +25,9 @@ tokio = { workspace = true, features = ["sync"] }
 adk-gemini = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 qdrant-client = { version = "1.13", optional = true }
-lancedb = { version = "0.26", optional = true }
-arrow-array = { version = "57", optional = true }
-arrow-schema = { version = "57", optional = true }
+lancedb = { version = "0.27", optional = true }
+arrow-array = { version = "58", optional = true }
+arrow-schema = { version = "58", optional = true }
 futures = { version = "0.3", optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"], optional = true }
 surrealdb = { version = "3.0.1", features = ["kv-mem", "kv-rocksdb"], optional = true }

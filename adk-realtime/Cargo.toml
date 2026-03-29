@@ -65,7 +65,7 @@ livekit-api = { version = "0.4", optional = true }
 # NOTE: `audiopus` builds the Opus C library from source and requires `cmake`.
 # With cmake >= 4.0, set CMAKE_POLICY_VERSION_MINIMUM=3.5 in your environment
 # to work around the bundled Opus CMakeLists.txt using an older cmake_minimum_required.
-str0m = { version = "0.16", optional = true }
+str0m = { version = "0.17", optional = true }
 audiopus = { version = "0.3.0-rc.0", optional = true }
 reqwest = { workspace = true, optional = true }
 
