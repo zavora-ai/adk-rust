@@ -55,7 +55,7 @@ impl McpHttpClientBuilder {
     ///
     /// # Arguments
     ///
-    /// * `endpoint` - The MCP server URL (e.g., "https://mcp.example.com/v1")
+    /// * `endpoint` - The MCP server URL (e.g., `https://mcp.example.com/v1`)
     pub fn new(endpoint: impl Into<String>) -> Self {
         Self {
             endpoint: endpoint.into(),
