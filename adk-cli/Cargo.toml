@@ -33,7 +33,7 @@ adk-telemetry.workspace = true
 adk-skill.workspace = true
 adk-deploy.workspace = true
 clap = { version = "4.6", features = ["derive"] }
-rustyline = "15.0"
+rustyline = "18.0"
 tokio = { workspace = true, features = ["full"] }
 anyhow.workspace = true
 futures.workspace = true
