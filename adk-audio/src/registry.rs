@@ -1,6 +1,6 @@
 //! Local model registry for downloading and caching model weights.
 //!
-//! Uses the [`hf_hub`] crate (when available) to download models from
+//! Uses the `hf_hub` crate (when available) to download models from
 //! HuggingFace Hub on first use, caching them locally for subsequent runs.
 
 use std::path::PathBuf;

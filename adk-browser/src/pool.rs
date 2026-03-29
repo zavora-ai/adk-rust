@@ -14,8 +14,8 @@ use tokio::sync::RwLock;
 /// A pool of browser sessions keyed by user ID.
 ///
 /// Use this in multi-user agent platforms where each user needs an isolated
-/// browser instance. Sessions are created lazily via [`get_or_create`] and
-/// cleaned up via [`release`] or [`cleanup_all`].
+/// browser instance. Sessions are created lazily via `get_or_create` and
+/// cleaned up via `release` or `cleanup_all`.
 ///
 /// # Example
 ///
