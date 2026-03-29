@@ -31,6 +31,10 @@ pub struct RunnerConfig {
     /// Optional context cache configuration for automatic prompt caching lifecycle.
     /// When set alongside `cache_capable`, the runner will automatically create and
     /// manage cached content resources for supported providers.
+    ///
+    /// When `cache_capable` is set but this field is `None`, the runner
+    /// automatically uses [`ContextCacheConfig::default()`] (4096 min tokens,
+    /// 600s TTL, refresh every 3 invocations).
     pub context_cache_config: Option<ContextCacheConfig>,
     /// Optional cache-capable model reference for automatic cache management.
     /// Set this to the same model used by the agent if it supports caching.
@@ -62,8 +66,13 @@ pub struct Runner {
 
 impl Runner {
     pub fn new(config: RunnerConfig) -> Result<Self> {
-        let cache_manager = config
+        // When a cache-capable model is provided but no explicit cache config,
+        // use the default ContextCacheConfig to enable caching automatically.
+        let effective_cache_config = config
             .context_cache_config
+            .or_else(|| config.cache_capable.as_ref().map(|_| ContextCacheConfig::default()));
+
+        let cache_manager = effective_cache_config
             .as_ref()
             .map(|c| Arc::new(tokio::sync::Mutex::new(CacheManager::new(c.clone()))));
         Ok(Self {
@@ -76,7 +85,7 @@ impl Runner {
             skill_injector: None,
             run_config: config.run_config.unwrap_or_default(),
             compaction_config: config.compaction_config,
-            context_cache_config: config.context_cache_config,
+            context_cache_config: effective_cache_config,
             cache_capable: config.cache_capable,
             cache_manager,
             request_context: config.request_context,
