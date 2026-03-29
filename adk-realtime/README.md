@@ -19,6 +19,9 @@ Real-time bidirectional audio streaming for Rust Agent Development Kit (ADK-Rust
 - **Voice Activity Detection** — Server-side VAD for natural conversation flow
 - **Tool Calling** — Real-time function/tool execution during voice conversations
 - **Agent Handoff** — Transfer between agents using `sub_agents`
+- **Context Mutation** — Swap instructions and tools mid-session without dropping the call (OpenAI: in-place update, Gemini: session resumption)
+- **Zero-Allocation LiveKit Audio** — `bytemuck` zero-copy PCM path for LiveKit output
+- **Interruption Detection** — `Manual` or `Automatic` VAD-based interruption handling
 - **Feature Flags** — Pay only for what you use; all transports are opt-in
 
 ## Architecture
@@ -203,6 +206,43 @@ tokio::spawn(bridge_input(remote_track, runner));
 
 For Gemini's 16 kHz format, use `bridge_gemini_input` instead.
 
+## Mid-Session Context Mutation
+
+Swap instructions and tools during a live voice session without dropping the call:
+
+```rust
+use adk_realtime::config::{SessionUpdateConfig, RealtimeConfig};
+
+// Create a delta config with only the fields you want to change
+let update = SessionUpdateConfig(
+    RealtimeConfig::default()
+        .with_instruction("You are now a billing specialist.")
+);
+
+// Apply mid-session — provider handles the rest
+runner.update_session(update).await?;
+```
+
+The runner handles provider differences automatically:
+- **OpenAI**: Updates the session in place via `session.update` → `ContextMutationOutcome::Applied`
+- **Gemini**: Queues a session resumption with `SessionResumptionConfig` → `ContextMutationOutcome::RequiresResumption`
+
+See `SESSION_MANAGEMENT.md` for the full architecture and `examples/openai_session_update.rs` / `examples/gemini_context_mutation.rs` for working examples.
+
+## Interruption Detection
+
+Control how VAD handles user interruptions:
+
+```rust
+use adk_realtime::InterruptionDetection;
+
+let config = RealtimeConfig::default()
+    .with_interruption_detection(InterruptionDetection::Automatic);
+```
+
+- `Manual` (default): Application calls cancellation explicitly
+- `Automatic`: VAD detects user speech onset and cancels agent audio output
+
 ## Feature Flags
 
 | Flag | Dependencies | Description |
@@ -319,6 +359,12 @@ cargo run --example livekit_bridge --features "livekit,openai"
 
 # OpenAI WebRTC low-latency session (requires cmake + API key)
 CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo run --example openai_webrtc --features openai-webrtc
+
+# Mid-session context mutation — OpenAI (swap persona + tools)
+cargo run --example openai_session_update --features openai
+
+# Mid-session context mutation — Gemini (session resumption)
+cargo run --example gemini_context_mutation --features gemini
 ```
 
 ## Testing

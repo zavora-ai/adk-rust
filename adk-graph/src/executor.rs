@@ -37,11 +37,56 @@ impl<'a> PregelExecutor<'a> {
         Self { graph, config, state: State::new(), step: 0, pending_nodes: vec![] }
     }
 
+    /// Attempt to resume from an existing checkpoint.
+    ///
+    /// If a checkpoint is found (either by explicit `resume_from` ID or by latest
+    /// checkpoint for the thread), restores state, pending_nodes, and step from it,
+    /// then merges the provided input on top. Returns `true` if resumed.
+    ///
+    /// If no checkpoint is found, returns `false` so the caller can proceed with
+    /// fresh-start logic.
+    async fn try_resume_from_checkpoint(&mut self, input: &State) -> Result<bool> {
+        let checkpoint = if let Some(checkpoint_id) = &self.config.resume_from {
+            // Resume from a specific checkpoint by ID
+            if let Some(cp) = self.graph.checkpointer.as_ref() {
+                cp.load_by_id(checkpoint_id).await?
+            } else {
+                None
+            }
+        } else if let Some(cp) = self.graph.checkpointer.as_ref() {
+            // Try to load the latest checkpoint for this thread
+            cp.load(&self.config.thread_id).await?
+        } else {
+            None
+        };
+
+        if let Some(checkpoint) = checkpoint {
+            // Restore state from checkpoint
+            self.state = checkpoint.state;
+            self.pending_nodes = checkpoint.pending_nodes;
+            self.step = checkpoint.step;
+
+            // Merge input on top of restored state
+            for (key, value) in input {
+                self.graph.schema.apply_update(&mut self.state, key, value.clone());
+            }
+
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// Run the graph to completion
     pub async fn run(&mut self, input: State) -> Result<State> {
-        // Initialize state
-        self.state = self.initialize_state(input).await?;
-        self.pending_nodes = self.graph.get_entry_nodes();
+        // Check for existing checkpoint to resume from
+        let resumed = self.try_resume_from_checkpoint(&input).await?;
+
+        if !resumed {
+            // No checkpoint found — fresh start
+            self.state = self.initialize_state(input).await?;
+            self.pending_nodes = self.graph.get_entry_nodes();
+        }
 
         // Main execution loop
         while !self.pending_nodes.is_empty() {
@@ -91,15 +136,29 @@ impl<'a> PregelExecutor<'a> {
         mode: StreamMode,
     ) -> impl futures::Stream<Item = Result<StreamEvent>> + 'a {
         async_stream::stream! {
-            // Initialize state
-            match self.initialize_state(input).await {
-                Ok(state) => self.state = state,
+            // Check for existing checkpoint to resume from
+            let resumed = match self.try_resume_from_checkpoint(&input).await {
+                Ok(r) => r,
                 Err(e) => {
                     yield Err(e);
                     return;
                 }
+            };
+
+            if resumed {
+                // Emit a resumed event indicating execution was restored from checkpoint
+                yield Ok(StreamEvent::resumed(self.step, self.pending_nodes.clone()));
+            } else {
+                // No checkpoint found — fresh start
+                match self.initialize_state(input).await {
+                    Ok(state) => self.state = state,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                }
+                self.pending_nodes = self.graph.get_entry_nodes();
             }
-            self.pending_nodes = self.graph.get_entry_nodes();
 
             // Stream initial state if requested
             if matches!(mode, StreamMode::Values) {

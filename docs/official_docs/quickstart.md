@@ -72,6 +72,27 @@ explaining concepts, and having a friendly conversation.
 
 ---
 
+## Zero-Config Alternative — `adk::run()`
+
+If you just want to run a quick agent without scaffolding, use the one-liner:
+
+```rust
+use adk_rust::run;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+    // Detects ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY automatically
+    let response = run("You are a helpful assistant.", "Explain Rust in one sentence.").await?;
+    println!("{response}");
+    Ok(())
+}
+```
+
+This handles provider detection, session creation, agent building, and execution in a single call. Great for scripts, prototypes, and quick experiments.
+
+---
+
 ## Understanding the Generated Code
 
 The scaffolded `src/main.rs`:

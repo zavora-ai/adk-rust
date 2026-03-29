@@ -17,6 +17,7 @@ mod json_schema;
 mod observability;
 pub mod pricing;
 mod sse;
+mod tool_search;
 mod types;
 
 pub use accumulating_stream::AccumulatingStream;
@@ -29,6 +30,7 @@ pub use client::{Anthropic, LoggingStream};
 pub use client_logger::ClientLogger;
 pub use error::{Error, Result};
 pub use json_schema::JsonSchema;
+pub use tool_search::ToolSearchConfig;
 pub use types::*;
 
 /// Pushes a message to the messages vector, or merges it with the last message if they have the same role.

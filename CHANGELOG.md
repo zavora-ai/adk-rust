@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Competitive Improvements — Stability, Ergonomics, Encryption, Graph Resume, Tool Search
+
+- **STABILITY.md**: New stability roadmap at the repository root defining three tiers (Stable, Beta, Experimental) with contracts, a crate-tier mapping table for every public `adk-*` crate, deprecation lifecycle policy (N+2 minor releases with `#[deprecated(since, note)]`), and 1.0 milestone criteria with GitHub milestone link.
+- **Semver CI enforcement**: New `.github/workflows/semver.yml` runs `cargo semver-checks check-release` on every PR — fails for Stable-tier crates, warns for Beta/Experimental.
+- **`provider_from_env()`** (`adk-rust`): Auto-detect LLM provider from environment variables. Checks `ANTHROPIC_API_KEY` → `OPENAI_API_KEY` → `GOOGLE_API_KEY` in precedence order, returns `Arc<dyn Llm>`. Feature-gated per provider.
+- **`adk::run()`** (`adk-rust`): Single-function agent invocation — `run("instructions", "input").await` handles provider detection, session creation, agent building, and execution. Returns `Result<String>`.
+- **MCP Resource API** (`adk-tool`): `McpToolset::list_resources()`, `list_resource_templates()`, and `read_resource(uri)` methods delegating to rmcp's `resources/list`, `resourceTemplates/list`, and `resources/read` protocol methods. Returns empty vec when server doesn't support resources. Re-exports `Resource`, `ResourceTemplate`, `ResourceContents` from `rmcp::model`.
+- **Graph durable resume** (`adk-graph`): `PregelExecutor` now checks for existing checkpoints before starting execution. If a checkpoint exists for the thread ID, state, pending nodes, and step are restored from it — skipping already-completed nodes. Both `run()` and `run_stream()` support resume. New `StreamEvent::Resumed` variant emitted when execution resumes from a checkpoint.
+- **Deepgram streaming STT** (`adk-audio`): Full WebSocket streaming implementation for `DeepgramStt::transcribe_stream()` — connects to `wss://api.deepgram.com/v1/listen`, forwards audio frames as binary messages, yields interim and final `Transcript` values. Supports diarization, language detection, and model selection.
+- **Structured tool output fix** (`adk-model`): Shared `serialize_tool_result()` helper prevents double-encoding of JSON objects in tool results across all 7 provider convert modules (OpenAI, Anthropic, Groq, DeepSeek, Azure AI, Bedrock, Ollama).
+- **`InterruptionDetection` enum** (`adk-realtime`): `Manual` (default) and `Automatic` variants controlling how voice activity detection handles user interruptions. Added to `RealtimeConfig` with `with_interruption_detection()` builder method.
+- **`EncryptionKey`** (`adk-session`): AES-256-GCM key management behind `encrypted-session` feature flag. `generate()`, `from_env(var_name)`, `from_bytes(&[u8])` constructors. Debug impl redacts key bytes.
+- **`EncryptedSession<S>`** (`adk-session`): Transparent encryption wrapper for any `SessionService`. Encrypts state with AES-256-GCM (random 96-bit nonce, stored as `[nonce || ciphertext]`). Supports key rotation — tries current key first, falls back to previous keys, re-encrypts with current key on successful fallback.
+- **`ToolSearchConfig`** (`adk-anthropic`): Regex-based tool name filtering. `matches(tool_name)` method compiles pattern and checks match.
+- **`AnthropicConfig::with_tool_search()`** (`adk-model`): Optional `ToolSearchConfig` on the Anthropic provider — when set, only tools matching the regex pattern are sent to the API.
+- **Validation examples**: Three standalone example crates (`competitive_ergonomics`, `competitive_graph_resume`, `competitive_tool_search`) exercising all new APIs with 37 runtime assertions.
+
+#### Realtime Context Mutation & LiveKit Performance ([@mikefaille](https://github.com/mikefaille))
+
+- **Provider-agnostic context mutation** (`adk-realtime`, #232): Mid-session instruction and tool swapping without dropping the call. `SessionUpdateConfig` newtype for safe partial session updates. `ContextMutationOutcome` enum — `Applied` (OpenAI: in-place `session.update`) or `RequiresResumption` (Gemini: session resumption with `SessionResumptionConfig`). `RealtimeRunner::update_session()` and `update_session_with_bridge()` orchestrate the provider-appropriate path. Includes `SESSION_MANAGEMENT.md` architecture documentation.
+- **`RealtimeRunner` session management** (`adk-realtime`, #105/#232): `update_session()`, `next_event()`, and `send_tool_response()` methods for dynamic FSM IVR state transitions. `SessionUpdateConfig` uses the Newtype pattern wrapping `RealtimeConfig` with `Deref`/`DerefMut` for ergonomic field access.
+- **Gemini session resumption** (`adk-realtime`, #232): `SessionResumptionConfig` with handle-based reconnection. `GeminiLiveSession` enables session resumption in setup, receives `SessionResumptionUpdate` messages, and reconnects with the handle for context changes.
+- **Two realtime examples** (`adk-realtime`, #232): `openai_session_update` (mid-session persona switch with tool swap) and `gemini_context_mutation` (session resumption for context changes).
+- **Zero-allocation LiveKit audio output** (`adk-realtime`, #236): Replaced manual `Vec::push` loops with `bytemuck::try_cast_slice` for O(0) copy. `Cow::Borrowed` passes aligned slices directly to WebRTC FFI. Vectorized iterator fallback for unaligned WebSocket chunks. Safety guards skip invalid audio frames. Includes `livekit_pcm_bench` benchmark.
+
+#### devenv & CI ([@mikefaille](https://github.com/mikefaille))
+
+- **devenv v2.0.6 upgrade** (#230): Updated `setup.sh` with v2 experimental features. Added `dbus` and `pkgs.dbus.dev` dependencies for `keyring` crate (adk-cli secure credential storage). Conditional `~/.bashrc` modification (CI-only) to avoid duplicate entries for local devs. Fixed `adk-rag` missing `gemini` feature in examples config.
+
 #### adk-anthropic — Dedicated Anthropic API Client (NEW CRATE)
 - **Standalone crate** replacing the `claudius` dependency in `adk-model`. Follows the same pattern as `adk-gemini` — a dedicated, publishable client crate.
 - **Full Anthropic API parity** (March 2026): Messages, Batches, Files, Skills, Models, Token Counting APIs.

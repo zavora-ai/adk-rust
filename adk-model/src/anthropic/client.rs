@@ -162,7 +162,23 @@ impl AnthropicClient {
         let mut tools = if request.tools.is_empty() {
             Vec::new()
         } else {
-            convert::convert_tools(&request.tools)?
+            // Requirement 19.3: When ToolSearchConfig is set, filter tools by regex pattern.
+            // Requirement 19.4: When no ToolSearchConfig is set, load all tools.
+            let filtered_tools = if let Some(ref tool_search) = anthropic_config.tool_search {
+                request
+                    .tools
+                    .iter()
+                    .filter(|(name, _)| tool_search.matches(name).unwrap_or(false))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<std::collections::HashMap<_, _>>()
+            } else {
+                request.tools.clone()
+            };
+            if filtered_tools.is_empty() {
+                Vec::new()
+            } else {
+                convert::convert_tools(&filtered_tools)?
+            }
         };
 
         // Read extensions["anthropic"]["built_in_tools"] → append to tools array

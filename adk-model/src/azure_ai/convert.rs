@@ -114,7 +114,7 @@ fn content_to_message(content: &Content) -> Value {
                 serde_json::json!({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
-                    "content": serde_json::to_string(&function_response.response).unwrap_or_default(),
+                    "content": crate::tool_result::serialize_tool_result(&function_response.response),
                 })
             } else {
                 serde_json::json!({

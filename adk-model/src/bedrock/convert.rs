@@ -135,7 +135,7 @@ fn adk_parts_to_bedrock(parts: &[Part]) -> Vec<ContentBlock> {
                 let tool_result = ToolResultBlock::builder()
                     .tool_use_id(id.clone().unwrap_or_else(|| "unknown".to_string()))
                     .content(ToolResultContentBlock::Text(
-                        serde_json::to_string(&function_response.response).unwrap_or_default(),
+                        crate::tool_result::serialize_tool_result(&function_response.response),
                     ))
                     .build()
                     .ok()?;

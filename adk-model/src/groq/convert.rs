@@ -189,7 +189,7 @@ pub fn content_to_message(content: &Content) -> Message {
             Part::FunctionResponse { function_response, id } => {
                 tool_call_id = id.clone();
                 text_parts
-                    .push(serde_json::to_string(&function_response.response).unwrap_or_default());
+                    .push(crate::tool_result::serialize_tool_result(&function_response.response));
             }
             Part::InlineData { mime_type, data } => {
                 text_parts.push(attachment::inline_attachment_to_text(mime_type, data));

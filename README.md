@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 
-> **🚀 v0.5.0 Released!** Structured error envelope (`AdkError` redesign), OpenAI Responses API client, OpenRouter deep integration, config validation, typed `Runner::run()` parameters, `labs` feature preset. Breaking: `AdkError` is now a multi-axis struct, `Runner::run()` takes `UserId`/`SessionId` types. See [CHANGELOG](CHANGELOG.md) for full details and migration guide.
+> **🚀 v0.5.0 Released!** Structured error envelope (`AdkError` redesign), OpenAI Responses API client, OpenRouter deep integration, config validation, typed `Runner::run()` parameters, `labs` feature preset, `provider_from_env()` auto-detection, `adk::run()` one-liner, encrypted sessions with key rotation, graph durable resume, MCP resource API, Deepgram streaming STT, `ToolSearchConfig` for Anthropic. Breaking: `AdkError` is now a multi-axis struct, `Runner::run()` takes `UserId`/`SessionId` types. See [CHANGELOG](CHANGELOG.md) for full details and migration guide.
 >
 > **Contributors:** Many thanks to [@mikefaille](https://github.com/mikefaille) — AdkIdentity design, realtime audio, LiveKit bridge, skill system. [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI-compatible providers, xAI, multimodal content. [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [@danielsan](https://github.com/danielsan) — Google deps issue & PR (#181, #203), RAG crash report (#205). [@CodingFlow](https://github.com/CodingFlow) — Gemini 3 thinking level, global endpoint, citationSources (#177, #178, #179). [@ctylx](https://github.com/ctylx) — skill discovery fix (#204). [@poborin](https://github.com/poborin) — project config proposal (#176). [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 
@@ -124,7 +124,7 @@ Built-in tools:
 
 ### Production Features
 
-- **Session Management**: In-memory and SQLite-backed sessions with state persistence
+- **Session Management**: In-memory and SQLite-backed sessions with state persistence, encrypted sessions with AES-256-GCM and key rotation
 - **Memory System**: Long-term memory with semantic search and vector embeddings
 - **Servers**: REST API with SSE streaming, A2A protocol for agent-to-agent communication
 - **Guardrails**: PII redaction, content filtering, JSON schema validation
@@ -235,6 +235,25 @@ export AZURE_AI_API_KEY="your-api-key"
 
 # For Ollama (no key, just run: ollama serve)
 ```
+
+### Fastest Start — `adk::run()`
+
+The simplest way to run an agent — one function call, auto-detects your provider from environment variables:
+
+```rust
+use adk_rust::run;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+    // Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY
+    let response = run("You are a helpful assistant.", "What is 2 + 2?").await?;
+    println!("{response}");
+    Ok(())
+}
+```
+
+`provider_from_env()` checks env vars in order: `ANTHROPIC_API_KEY` → `OPENAI_API_KEY` → `GOOGLE_API_KEY`. First match wins.
 
 ### Basic Example (Gemini)
 
@@ -462,8 +481,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - OpenAI WebRTC transport with Opus codec and data channels
 - Bidirectional audio streaming (PCM16, G711, Opus)
 - Server-side Voice Activity Detection (VAD)
+- Mid-session context mutation — swap instructions and tools without dropping the call
 - Real-time tool calling during voice conversations
 - Multi-agent handoffs for complex workflows
+- Zero-allocation LiveKit audio output path
 
 **Run realtime examples** (from [adk-playground](https://github.com/zavora-ai/adk-playground)):
 ```bash
@@ -481,6 +502,10 @@ cargo run -p adk-realtime --example livekit_bridge --features livekit,openai
 
 # OpenAI WebRTC (requires cmake)
 cargo run -p adk-realtime --example openai_webrtc --features openai-webrtc
+
+# Mid-session context mutation
+cargo run -p adk-realtime --example openai_session_update --features openai
+cargo run -p adk-realtime --example gemini_context_mutation --features gemini
 ```
 
 ### Graph-Based Workflows
@@ -547,7 +572,7 @@ let result = agent.invoke(input, ExecutionConfig::new("thread-1")).await?;
 - **Parallel & Sequential**: Execute agents concurrently or in sequence
 - **Cyclic Graphs**: ReAct pattern with tool loops and iteration limiting
 - **Conditional Routing**: Dynamic routing via `Router::by_field` or custom functions
-- **Checkpointing**: Memory and SQLite backends for fault tolerance
+- **Checkpointing**: Memory and SQLite backends for fault tolerance, durable resume from checkpoint after crash
 - **Human-in-the-Loop**: Dynamic interrupts based on state, resume from checkpoint
 - **Streaming**: Multiple modes (values, updates, messages, debug)
 

@@ -114,6 +114,28 @@ The following components originate from claudius and form the foundation of `adk
 
 We stripped claudius's agent framework, CLI tools, chat session management, and observability modules (all handled by other ADK crates), then extended the retained code with full March 2026 API parity: adaptive thinking, effort parameter, structured outputs, context management, fast mode, citations, Files API, Skills API, Models API with capabilities, token pricing, and updated model definitions.
 
+## Tool Search
+
+`ToolSearchConfig` enables regex-based tool filtering at the provider level:
+
+```rust
+use adk_anthropic::ToolSearchConfig;
+
+let config = ToolSearchConfig::new("^(search|fetch)_.*");
+assert!(config.matches("search_web").unwrap());
+assert!(!config.matches("delete_all").unwrap());
+```
+
+When integrated with `AnthropicConfig` in `adk-model`, only tools matching the pattern are sent to the API:
+
+```rust
+use adk_model::anthropic::AnthropicConfig;
+use adk_anthropic::ToolSearchConfig;
+
+let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-4-6")
+    .with_tool_search(ToolSearchConfig::new("^safe_.*"));
+```
+
 ## License
 
 Apache-2.0

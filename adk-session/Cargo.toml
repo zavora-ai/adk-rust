@@ -27,6 +27,9 @@ fred = { version = "10", optional = true }
 mongodb = { version = "3", optional = true }
 firestore = { version = "0.48", optional = true }
 neo4rs = { version = "0.8", optional = true }
+aes-gcm = { version = "0.10", optional = true }
+rand = { version = "0.9", optional = true }
+base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
@@ -43,3 +46,4 @@ mongodb = ["dep:mongodb"]
 firestore = ["dep:firestore"]
 neo4j = ["dep:neo4rs"]
 vertex-session = ["google-cloud-auth", "reqwest"]
+encrypted-session = ["aes-gcm", "rand", "base64"]

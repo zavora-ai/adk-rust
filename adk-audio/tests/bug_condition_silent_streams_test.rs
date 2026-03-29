@@ -43,7 +43,9 @@ async fn bug_condition_assemblyai_transcribe_stream_returns_error() {
 }
 
 // ---------------------------------------------------------------------------
-// Deepgram
+// Deepgram — streaming is now implemented, so it attempts a real WebSocket
+// connection. With a fake API key it returns a connection/auth error, which
+// is correct behavior (not the silent-stream bug).
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -57,16 +59,18 @@ async fn bug_condition_deepgram_transcribe_stream_returns_error() {
     match result {
         Err(AudioError::Stt { provider, message }) => {
             assert_eq!(provider, "deepgram");
+            // With a fake key, Deepgram returns a WebSocket connection error (401).
             assert!(
-                message.contains("not yet implemented"),
-                "expected 'not yet implemented' in message, got: {message}"
+                message.contains("WebSocket connection failed"),
+                "expected WebSocket connection error, got: {message}"
             );
         }
         Err(other) => panic!("expected AudioError::Stt, got: {other}"),
-        Ok(_) => panic!(
-            "BUG CONFIRMED: transcribe_stream() returned Ok(empty_stream) instead of Err. \
-             This is the silent stream bug."
-        ),
+        Ok(_) => {
+            // Streaming is implemented — getting Ok means the connection succeeded,
+            // which shouldn't happen with a fake key.
+            panic!("unexpected Ok with fake API key");
+        }
     }
 }
 

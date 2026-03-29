@@ -846,6 +846,148 @@ pub mod anthropic_client {
 }
 
 // ============================================================================
+// Convenience Functions
+// ============================================================================
+
+/// Detect LLM provider from environment variables.
+///
+/// Checks environment variables in precedence order and returns the first
+/// matching provider:
+///
+/// 1. `ANTHROPIC_API_KEY` → Anthropic (Claude)
+/// 2. `OPENAI_API_KEY` → OpenAI
+/// 3. `GOOGLE_API_KEY` → Gemini
+///
+/// # Errors
+///
+/// Returns [`AdkError`] when no supported environment variable is set.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use adk_rust::provider_from_env;
+/// use std::sync::Arc;
+///
+/// let model: Arc<dyn adk_rust::Llm> = provider_from_env()?;
+/// ```
+pub fn provider_from_env() -> Result<std::sync::Arc<dyn Llm>> {
+    #[cfg(feature = "anthropic")]
+    {
+        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+            return Ok(std::sync::Arc::new(model::anthropic::AnthropicClient::from_api_key(key)?));
+        }
+    }
+
+    #[cfg(feature = "openai")]
+    {
+        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            let config = model::openai::OpenAIConfig::new(key, "gpt-4o-mini");
+            return Ok(std::sync::Arc::new(model::openai::OpenAIClient::new(config)?));
+        }
+    }
+
+    #[cfg(feature = "gemini")]
+    {
+        if let Ok(key) = std::env::var("GOOGLE_API_KEY") {
+            return Ok(std::sync::Arc::new(model::GeminiModel::new(key, "gemini-2.5-flash")?));
+        }
+    }
+
+    Err(AdkError::config(
+        "No LLM provider detected. Set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY",
+    ))
+}
+
+/// High-level single-turn agent invocation.
+///
+/// Creates an agent with the given instructions, sends the input, and returns
+/// the text response. Uses [`provider_from_env`] to auto-detect the LLM provider.
+///
+/// This is the fastest way to get started with ADK — a single function call
+/// that handles provider selection, session creation, agent building, and
+/// execution.
+///
+/// # Arguments
+///
+/// * `instructions` - System instructions for the agent
+/// * `input` - User input to send to the agent
+///
+/// # Returns
+///
+/// The agent's text response as a `String`.
+///
+/// # Errors
+///
+/// Returns [`AdkError`] when no supported environment variable is set, or
+/// when agent execution fails.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use adk_rust::run;
+///
+/// let response = run("You are a helpful assistant.", "What is 2 + 2?").await?;
+/// println!("{response}");
+/// ```
+#[cfg(all(feature = "agents", feature = "sessions", feature = "runner"))]
+pub async fn run(instructions: &str, input: &str) -> Result<String> {
+    use futures::StreamExt;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let model = provider_from_env()?;
+
+    let agent =
+        agent::LlmAgentBuilder::new("adk_run").instruction(instructions).model(model).build()?;
+
+    let session_service: Arc<dyn adk_session::SessionService> =
+        Arc::new(session::InMemorySessionService::new());
+
+    let session_id = SessionId::generate();
+
+    session_service
+        .create(session::CreateRequest {
+            app_name: "adk_run".into(),
+            user_id: "user".into(),
+            session_id: Some(session_id.to_string()),
+            state: HashMap::new(),
+        })
+        .await?;
+
+    let runner = runner::Runner::new(runner::RunnerConfig {
+        app_name: "adk_run".into(),
+        agent: Arc::new(agent),
+        session_service,
+        artifact_service: None,
+        memory_service: None,
+        plugin_manager: None,
+        run_config: None,
+        compaction_config: None,
+        context_cache_config: None,
+        cache_capable: None,
+        request_context: None,
+        cancellation_token: None,
+    })?;
+
+    let content = Content::new("user").with_text(input);
+    let mut stream = runner.run(UserId::new("user")?, session_id, content).await?;
+
+    let mut result = String::new();
+    while let Some(event) = stream.next().await {
+        let event = event?;
+        if let Some(content) = &event.llm_response.content {
+            for part in &content.parts {
+                if let Some(text) = part.text() {
+                    result.push_str(text);
+                }
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+// ============================================================================
 // Prelude
 // ============================================================================
 
@@ -961,4 +1103,9 @@ pub mod prelude {
     pub use crate::anyhow::Result as AnyhowResult;
     pub use crate::async_trait;
     pub use std::sync::Arc;
+
+    // Convenience functions
+    pub use crate::provider_from_env;
+    #[cfg(all(feature = "agents", feature = "sessions", feature = "runner"))]
+    pub use crate::run;
 }

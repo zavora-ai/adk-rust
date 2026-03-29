@@ -14,3 +14,6 @@ pub use reconnect::{
 };
 pub use task::{CreateTaskResult, McpTaskConfig, TaskError, TaskInfo, TaskStatus};
 pub use toolset::{McpToolset, ToolFilter};
+
+// Re-export MCP resource types from rmcp for public API consumers.
+pub use rmcp::model::{Resource, ResourceContents, ResourceTemplate};

@@ -5,6 +5,37 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::ops::{Deref, DerefMut};
 
+/// Controls how the realtime session handles user interruptions during agent
+/// audio output.
+///
+/// When set to [`Automatic`](InterruptionDetection::Automatic), the session
+/// uses voice activity detection to detect user speech onset and immediately
+/// cancels the current agent audio output, enabling natural conversational
+/// turn-taking.
+///
+/// When set to [`Manual`](InterruptionDetection::Manual) (the default), the
+/// session relies on explicit API calls (e.g. `response.cancel`) to signal
+/// that the user is interrupting. This gives the application full control
+/// over interruption behavior.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterruptionDetection {
+    /// Rely on explicit API calls to signal interruptions.
+    ///
+    /// The application is responsible for detecting user speech and calling
+    /// the appropriate cancellation method on the session. No automatic
+    /// voice activity detection is performed for interruption purposes.
+    #[default]
+    Manual,
+    /// Detect user speech onset and cancel the current agent audio output.
+    ///
+    /// The session monitors incoming audio for voice activity. When user
+    /// speech is detected while the agent is producing audio, the agent's
+    /// audio output is automatically cancelled, allowing the user to
+    /// take the conversational turn.
+    Automatic,
+}
+
 /// Voice Activity Detection mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -170,6 +201,14 @@ pub struct RealtimeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_content: Option<String>,
 
+    /// Interruption detection mode for voice sessions.
+    ///
+    /// Controls whether the session automatically detects user speech to
+    /// cancel agent audio output, or relies on explicit API calls.
+    /// Defaults to [`Manual`](InterruptionDetection::Manual) when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interruption_detection: Option<InterruptionDetection>,
+
     /// Provider-specific options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra: Option<Value>,
@@ -330,6 +369,22 @@ impl RealtimeConfig {
         self.cached_content = Some(content.into());
         self
     }
+
+    /// Set the interruption detection mode.
+    ///
+    /// See [`InterruptionDetection`] for details on each variant.
+    pub fn with_interruption_detection(mut self, mode: InterruptionDetection) -> Self {
+        self.interruption_detection = Some(mode);
+        self
+    }
+
+    /// Enable automatic interruption detection.
+    ///
+    /// The session will detect user speech onset and cancel the current
+    /// agent audio output automatically.
+    pub fn with_automatic_interruption(self) -> Self {
+        self.with_interruption_detection(InterruptionDetection::Automatic)
+    }
 }
 
 /// Builder for RealtimeConfig.
@@ -393,6 +448,12 @@ impl RealtimeConfigBuilder {
     /// Set cached content resource.
     pub fn cached_content(mut self, content: impl Into<String>) -> Self {
         self.config.cached_content = Some(content.into());
+        self
+    }
+
+    /// Set the interruption detection mode.
+    pub fn interruption_detection(mut self, mode: InterruptionDetection) -> Self {
+        self.config.interruption_detection = Some(mode);
         self
     }
 

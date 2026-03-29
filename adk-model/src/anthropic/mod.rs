@@ -97,3 +97,6 @@ pub use error::{AnthropicApiError, ConversionError};
 pub use models::ModelInfo;
 pub use rate_limit::RateLimitInfo;
 pub use token_count::TokenCount;
+
+// Re-export ToolSearchConfig from adk-anthropic for convenience.
+pub use adk_anthropic::ToolSearchConfig;

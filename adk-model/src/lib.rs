@@ -276,6 +276,15 @@ pub mod openai_compatible;
 pub mod openrouter;
 pub mod provider;
 pub mod retry;
+#[cfg(any(
+    feature = "openai",
+    feature = "ollama",
+    feature = "deepseek",
+    feature = "groq",
+    feature = "bedrock",
+    feature = "azure-ai"
+))]
+pub(crate) mod tool_result;
 pub mod usage_tracking;
 
 #[cfg(feature = "anthropic")]

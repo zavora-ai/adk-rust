@@ -18,6 +18,7 @@ Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) age
 - **Conditional Routing**: Dynamic edge routing based on state
 - **State Management**: Typed state with reducers (overwrite, append, sum, custom)
 - **Checkpointing**: Persistent state after each step (memory, SQLite)
+- **Durable Resume**: Automatically resume from the last checkpoint after a crash — skips already-completed nodes
 - **Human-in-the-Loop**: Interrupt before/after nodes, dynamic interrupts
 - **Streaming**: Multiple stream modes (values, updates, messages, debug)
 - **ADK Integration**: Full callback support, works with existing runners
@@ -411,6 +412,37 @@ for cp in checkpoints {
     println!("Step {}: {:?}", cp.step, cp.state);
 }
 ```
+
+### Durable Resume
+
+When a checkpointer is configured, the executor automatically checks for existing checkpoints before starting. If a checkpoint exists for the thread ID, execution resumes from where it left off — skipping already-completed nodes:
+
+```rust
+use adk_graph::prelude::*;
+use std::sync::Arc;
+
+let checkpointer = Arc::new(MemoryCheckpointer::default());
+
+let graph = GraphAgent::builder("resilient_workflow")
+    .description("Workflow that survives crashes")
+    .node_fn("step_a", |_ctx| async move {
+        Ok(NodeOutput::new().with_update("a_done", json!(true)))
+    })
+    .node_fn("step_b", |_ctx| async move {
+        Ok(NodeOutput::new().with_update("b_done", json!(true)))
+    })
+    .edge(START, "step_a")
+    .edge("step_a", "step_b")
+    .edge("step_b", END)
+    .checkpointer_arc(checkpointer)
+    .build()?;
+
+// First run — completes step_a, saves checkpoint, then crashes before step_b
+// Second run — resumes from checkpoint, skips step_a, runs only step_b
+let result = graph.invoke(State::new(), ExecutionConfig::new("my-thread")).await?;
+```
+
+When streaming, a `StreamEvent::Resumed` event is emitted to indicate execution was restored from a checkpoint.
 
 ## Examples
 

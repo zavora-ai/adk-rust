@@ -19,6 +19,7 @@ bytes = "1.11"
 base64 = "0.22"
 url = "2.5"
 time = { version = "0.3", features = ["serde", "macros", "formatting", "parsing"] }
+regex = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util", "macros"] }

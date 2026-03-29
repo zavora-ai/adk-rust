@@ -85,7 +85,7 @@ pub use builtin::{
 pub use function_tool::FunctionTool;
 pub use mcp::{
     AutoDeclineElicitationHandler, ElicitationHandler, McpAuth, McpHttpClientBuilder,
-    McpTaskConfig, McpToolset, OAuth2Config,
+    McpTaskConfig, McpToolset, OAuth2Config, Resource, ResourceContents, ResourceTemplate,
 };
 pub use toolset::{
     BasicToolset, FilteredToolset, MergedToolset, PrefixedToolset, string_predicate,

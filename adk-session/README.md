@@ -76,6 +76,7 @@ let name = session.state().get("user:name");
 | `neo4j` | Neo4j | Graph database persistence |
 | `firestore` | Firestore | Google Cloud Firestore persistence |
 | `vertex-session` | Vertex AI | Vertex AI Session API backend |
+| `encrypted-session` | AES-256-GCM | Transparent encryption at rest with key rotation |
 
 ```toml
 # SQLite
@@ -86,6 +87,31 @@ adk-session = { version = "0.5.0", features = ["postgres"] }
 
 # Redis
 adk-session = { version = "0.5.0", features = ["redis"] }
+
+# Encrypted sessions
+adk-session = { version = "0.5.0", features = ["encrypted-session"] }
+```
+
+## Encrypted Sessions
+
+Wrap any `SessionService` with `EncryptedSession` to encrypt session state at rest using AES-256-GCM:
+
+```rust
+use adk_session::{EncryptedSession, EncryptionKey, InMemorySessionService};
+
+let key = EncryptionKey::generate();
+let inner = InMemorySessionService::new();
+let service = EncryptedSession::new(inner, key, vec![]);
+
+// Use like any SessionService — encryption is transparent
+```
+
+Key rotation is supported by passing previous keys:
+
+```rust
+let new_key = EncryptionKey::generate();
+let old_key = EncryptionKey::from_env("OLD_KEY")?;
+let service = EncryptedSession::new(inner, new_key, vec![old_key]);
 ```
 
 ## Schema Migrations

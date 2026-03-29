@@ -12,7 +12,10 @@ use adk_core::{AdkError, ReadonlyContext, Result, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
 use rmcp::{
     RoleClient,
-    model::{CallToolRequestParams, RawContent, ResourceContents},
+    model::{
+        CallToolRequestParams, ErrorCode, RawContent, ReadResourceRequestParams, Resource,
+        ResourceContents, ResourceTemplate,
+    },
     service::RunningService,
 };
 use serde_json::{Value, json};
@@ -57,6 +60,15 @@ fn should_retry_mcp_operation(
     has_connection_factory
         && attempt < refresh_config.max_attempts
         && should_refresh_connection(error)
+}
+
+/// Returns `true` when the `ServiceError` wraps an MCP `MethodNotFound` (-32601)
+/// JSON-RPC error, indicating the server does not implement the requested method.
+fn is_method_not_found(err: &rmcp::ServiceError) -> bool {
+    matches!(
+        err,
+        rmcp::ServiceError::McpError(e) if e.code == ErrorCode::METHOD_NOT_FOUND
+    )
 }
 
 /// MCP Toolset - connects to an MCP server and exposes its tools as ADK tools.
@@ -267,6 +279,79 @@ where
         old_token.cancel();
         *client = new_client;
         Ok(true)
+    }
+
+    /// List static resources from the connected MCP server.
+    ///
+    /// Returns the list of resources advertised by the server via the
+    /// `resources/list` protocol method. Returns an empty `Vec` when the
+    /// server does not support resources (i.e. responds with
+    /// `MethodNotFound`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` on transport or unexpected server errors.
+    pub async fn list_resources(&self) -> Result<Vec<Resource>> {
+        let client = self.client.lock().await;
+        match client.list_all_resources().await {
+            Ok(resources) => Ok(resources),
+            Err(e) => {
+                if is_method_not_found(&e) {
+                    Ok(vec![])
+                } else {
+                    Err(AdkError::tool(format!("Failed to list MCP resources: {e}")))
+                }
+            }
+        }
+    }
+
+    /// List URI template resources from the connected MCP server.
+    ///
+    /// Returns the list of resource templates advertised by the server via
+    /// the `resourceTemplates/list` protocol method. Returns an empty `Vec`
+    /// when the server does not support resource templates (i.e. responds
+    /// with `MethodNotFound`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool` on transport or unexpected server errors.
+    pub async fn list_resource_templates(&self) -> Result<Vec<ResourceTemplate>> {
+        let client = self.client.lock().await;
+        match client.list_all_resource_templates().await {
+            Ok(templates) => Ok(templates),
+            Err(e) => {
+                if is_method_not_found(&e) {
+                    Ok(vec![])
+                } else {
+                    Err(AdkError::tool(format!("Failed to list MCP resource templates: {e}")))
+                }
+            }
+        }
+    }
+
+    /// Read a resource by URI from the connected MCP server.
+    ///
+    /// Delegates to the `resources/read` protocol method. Returns the
+    /// resource contents on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdkError::Tool("resource not found: {uri}")` when the URI
+    /// does not match any resource on the server. Returns a generic
+    /// `AdkError::Tool` on transport or other server errors.
+    pub async fn read_resource(&self, uri: &str) -> Result<Vec<ResourceContents>> {
+        let client = self.client.lock().await;
+        let params = ReadResourceRequestParams::new(uri.to_string());
+        match client.read_resource(params).await {
+            Ok(result) => Ok(result.contents),
+            Err(e) => {
+                if is_method_not_found(&e) {
+                    Err(AdkError::tool(format!("resource not found: {uri}")))
+                } else {
+                    Err(AdkError::tool(format!("Failed to read MCP resource '{uri}': {e}")))
+                }
+            }
+        }
     }
 }
 

@@ -353,6 +353,64 @@ let session_service = RedisSessionService::new(config).await?;
 
 All database-backed session services (SQLite, PostgreSQL, MongoDB, Neo4j) include a versioned, forward-only migration system. Migrations are tracked in a `_schema_migrations` registry table.
 
+### Encrypted Sessions
+
+Wrap any `SessionService` with `EncryptedSession` to encrypt session state at rest using AES-256-GCM. Requires the `encrypted-session` feature flag.
+
+```toml
+adk-session = { version = "0.5.0", features = ["encrypted-session"] }
+```
+
+#### Basic Usage
+
+```rust
+use adk_session::{EncryptedSession, EncryptionKey, InMemorySessionService};
+
+// Generate a random 256-bit key
+let key = EncryptionKey::generate();
+
+// Or load from environment variable (base64-encoded)
+// let key = EncryptionKey::from_env("SESSION_ENCRYPTION_KEY")?;
+
+// Wrap any session service
+let inner = InMemorySessionService::new();
+let service = EncryptedSession::new(inner, key, vec![]);
+
+// Use exactly like any other SessionService — encryption is transparent
+let session = service.create(CreateRequest { /* ... */ }).await?;
+```
+
+State is serialized to JSON, encrypted with a random 96-bit nonce, and stored as `[nonce || ciphertext]` in the inner service. Decryption happens transparently on read.
+
+#### Key Rotation
+
+Pass previous keys to support reading data encrypted with older keys:
+
+```rust
+let new_key = EncryptionKey::generate();
+let old_key = EncryptionKey::from_env("OLD_SESSION_KEY")?;
+
+let service = EncryptedSession::new(inner, new_key, vec![old_key]);
+```
+
+On read, the current key is tried first. If decryption fails, each previous key is tried in order. On success with a previous key, the data is automatically re-encrypted with the current key.
+
+#### Key Management
+
+```rust
+// Generate random key
+let key = EncryptionKey::generate();
+
+// Load from base64-encoded environment variable
+let key = EncryptionKey::from_env("MY_KEY")?;
+
+// Create from raw 32 bytes
+let key = EncryptionKey::from_bytes(&[0u8; 32])?;
+
+// Access raw bytes (e.g., for storing securely)
+let bytes: &[u8; 32] = key.as_bytes();
+```
+
 ### Running Migrations
 
 Call `migrate()` after constructing any database-backed service. It is idempotent — safe to call on every startup:

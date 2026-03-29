@@ -105,7 +105,7 @@ fn content_to_input_items(content: &Content) -> Vec<InputItem> {
             Part::FunctionResponse { function_response, id } => {
                 let call_id = id.clone().unwrap_or_else(|| "unknown".to_string());
                 let output_text =
-                    serde_json::to_string(&function_response.response).unwrap_or_default();
+                    crate::tool_result::serialize_tool_result(&function_response.response);
                 items.push(InputItem::Item(Item::FunctionCallOutput(
                     FunctionCallOutputItemParam {
                         call_id,

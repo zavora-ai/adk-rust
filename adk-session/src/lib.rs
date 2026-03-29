@@ -42,6 +42,10 @@ pub mod session;
 pub mod state;
 pub mod state_utils;
 
+#[cfg(feature = "encrypted-session")]
+pub mod encrypted;
+#[cfg(feature = "encrypted-session")]
+pub mod encryption_key;
 #[cfg(feature = "firestore")]
 pub mod firestore;
 #[cfg(feature = "mongodb")]
@@ -73,6 +77,10 @@ pub use sqlite::SqliteSessionService;
 #[cfg(feature = "sqlite")]
 #[deprecated(since = "0.4.0", note = "renamed to SqliteSessionService")]
 pub type DatabaseSessionService = SqliteSessionService;
+#[cfg(feature = "encrypted-session")]
+pub use encrypted::EncryptedSession;
+#[cfg(feature = "encrypted-session")]
+pub use encryption_key::EncryptionKey;
 #[cfg(feature = "firestore")]
 pub use firestore::{
     FirestoreSessionConfig, FirestoreSessionService, app_state_path as firestore_app_state_path,

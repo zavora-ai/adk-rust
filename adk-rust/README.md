@@ -79,6 +79,25 @@ async fn main() -> AnyhowResult<()> {
 cargo run
 ```
 
+### Even Faster — `adk::run()`
+
+Auto-detect your provider and run an agent in one call:
+
+```rust
+use adk_rust::run;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+    // Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY
+    let response = run("You are a helpful assistant.", "What is Rust?").await?;
+    println!("{response}");
+    Ok(())
+}
+```
+
+`provider_from_env()` checks `ANTHROPIC_API_KEY` → `OPENAI_API_KEY` → `GOOGLE_API_KEY` in order.
+
 ## Adding Tools
 
 ```rust
@@ -139,6 +158,7 @@ Features:
 - LiveKit WebRTC bridge for production audio routing
 - Bidirectional audio (PCM16, G711, Opus)
 - Server-side VAD
+- Mid-session context mutation (swap instructions/tools without dropping the call)
 - Real-time tool calling
 - Multi-agent handoffs
 

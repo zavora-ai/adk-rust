@@ -49,7 +49,7 @@ candle-core = { version = "0.9", optional = true }
 qwen_tts = { version = "0.1", optional = true }
 
 # Streaming (optional)
-tokio-tungstenite = { version = "0.24", optional = true }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"], optional = true }
 
 # Bridge (optional)
 adk-realtime = { workspace = true, optional = true }

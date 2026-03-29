@@ -52,6 +52,9 @@ pub enum StreamEvent {
     /// Execution was interrupted
     Interrupted { node: String, message: String },
 
+    /// Execution resumed from a checkpoint
+    Resumed { step: usize, pending_nodes: Vec<String> },
+
     /// Graph execution completed
     Done { state: State, total_steps: usize },
 
@@ -103,6 +106,11 @@ impl StreamEvent {
     /// Create an interrupted event
     pub fn interrupted(node: &str, message: &str) -> Self {
         Self::Interrupted { node: node.to_string(), message: message.to_string() }
+    }
+
+    /// Create a resumed event
+    pub fn resumed(step: usize, pending_nodes: Vec<String>) -> Self {
+        Self::Resumed { step, pending_nodes }
     }
 
     /// Create a done event

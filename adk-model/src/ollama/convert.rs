@@ -35,7 +35,8 @@ pub fn content_to_chat_message(content: &Content) -> Option<ChatMessage> {
                 if let Part::FunctionResponse { function_response, .. } = part {
                     response_texts.push(format!(
                         "{}: {}",
-                        function_response.name, function_response.response
+                        function_response.name,
+                        crate::tool_result::serialize_tool_result(&function_response.response)
                     ));
                 }
             }

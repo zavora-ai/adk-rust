@@ -1,5 +1,6 @@
 //! Configuration types for Anthropic provider.
 
+use adk_anthropic::ToolSearchConfig;
 use serde::{Deserialize, Serialize};
 
 /// Thinking mode configuration for Anthropic models.
@@ -105,6 +106,12 @@ pub struct AnthropicConfig {
     /// Custom API version header override.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_version: Option<String>,
+
+    /// Tool search configuration for regex-based dynamic tool discovery.
+    /// When set, only tools whose names match the regex pattern are loaded.
+    /// When `None`, all available tools are loaded.
+    #[serde(skip)]
+    pub tool_search: Option<ToolSearchConfig>,
 }
 
 fn default_max_tokens() -> u32 {
@@ -128,6 +135,7 @@ impl Default for AnthropicConfig {
             service_tier: None,
             beta_features: Vec::new(),
             api_version: None,
+            tool_search: None,
         }
     }
 }
@@ -213,6 +221,25 @@ impl AnthropicConfig {
     /// Set a custom API version header.
     pub fn with_api_version(mut self, version: impl Into<String>) -> Self {
         self.api_version = Some(version.into());
+        self
+    }
+
+    /// Set tool search configuration for dynamic tool discovery.
+    ///
+    /// When set, only tools whose names match the regex pattern are loaded per request.
+    /// When not set, all available tools are loaded.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_model::anthropic::AnthropicConfig;
+    /// use adk_anthropic::ToolSearchConfig;
+    ///
+    /// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-4-6")
+    ///     .with_tool_search(ToolSearchConfig::new("^(search|fetch)_.*"));
+    /// ```
+    pub fn with_tool_search(mut self, config: ToolSearchConfig) -> Self {
+        self.tool_search = Some(config);
         self
     }
 }

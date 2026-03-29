@@ -16,7 +16,10 @@ use std::collections::HashMap;
 fn tool_result_content(value: &Value) -> ToolResultBlockContent {
     match value {
         Value::String(text) => ToolResultBlockContent::String(text.clone()),
-        other => ToolResultBlockContent::String(serde_json::to_string(other).unwrap_or_default()),
+        Value::Object(_) | Value::Array(_) => {
+            ToolResultBlockContent::String(serde_json::to_string(value).unwrap_or_default())
+        }
+        other => ToolResultBlockContent::String(other.to_string()),
     }
 }
 

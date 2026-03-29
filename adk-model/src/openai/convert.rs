@@ -120,7 +120,7 @@ pub fn content_to_message(content: &Content) -> ChatCompletionRequestMessage {
                 let tool_call_id = id.clone().unwrap_or_else(|| "unknown".to_string());
                 ChatCompletionRequestToolMessageArgs::default()
                     .tool_call_id(tool_call_id)
-                    .content(serde_json::to_string(&function_response.response).unwrap_or_default())
+                    .content(crate::tool_result::serialize_tool_result(&function_response.response))
                     .build()
                     .unwrap()
                     .into()

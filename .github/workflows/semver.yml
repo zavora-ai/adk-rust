@@ -1,0 +1,81 @@
+name: Semver Checks
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+# Cancel in-progress runs for the same PR
+concurrency:
+  group: semver-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semver:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install stable Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install cargo-semver-checks
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-semver-checks
+
+    - name: Cache cargo artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: semver-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: semver-${{ runner.os }}-
+
+    # Stable-tier crates: fail on breakage (Requirement 2.1, 2.2)
+    - name: Semver checks — Stable crates (strict)
+      run: |
+        echo "### Checking Stable-tier crates (fail on breakage)" >> "$GITHUB_STEP_SUMMARY"
+        FAILED=0
+        for crate in adk-core adk-agent adk-model adk-gemini adk-tool adk-runner adk-session adk-rust; do
+          echo "Checking $crate..."
+          if cargo semver-checks check-release -p "$crate"; then
+            echo "✅ $crate — no breaking changes" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ $crate — BREAKING CHANGE DETECTED" >> "$GITHUB_STEP_SUMMARY"
+            FAILED=1
+          fi
+        done
+        if [ "$FAILED" -ne 0 ]; then
+          echo "::error::Semver breakage detected in one or more Stable-tier crates"
+          exit 1
+        fi
+
+    # Beta/Experimental crates: warn only (Requirement 2.3)
+    - name: Semver checks — Beta/Experimental crates (warn only)
+      run: |
+        echo "### Checking Beta/Experimental crates (warn only)" >> "$GITHUB_STEP_SUMMARY"
+        for crate in \
+          adk-server adk-graph adk-memory adk-artifact adk-auth \
+          adk-telemetry adk-guardrail adk-plugin adk-skill adk-anthropic \
+          adk-cli adk-rag adk-action adk-deploy adk-payments \
+          adk-rust-macros cargo-adk \
+          adk-realtime adk-browser adk-eval \
+          adk-code adk-sandbox adk-audio; do
+          echo "Checking $crate..."
+          if cargo semver-checks check-release -p "$crate"; then
+            echo "✅ $crate — no breaking changes" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ $crate — breaking change (warning only)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+        done
