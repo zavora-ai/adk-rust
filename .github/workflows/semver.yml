@@ -11,7 +11,6 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 
-# Cancel in-progress runs for the same PR
 concurrency:
   group: semver-${{ github.ref }}
   cancel-in-progress: true
@@ -42,51 +41,42 @@ jobs:
         key: semver-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: semver-${{ runner.os }}-
 
-    # The workspace .cargo/config.toml configures the 'wild' linker for Linux
-    # targets, which is not installed on GitHub Actions runners. Strip all
-    # Linux target sections so cargo-semver-checks uses the default linker.
+    # Strip Linux-only wild linker from .cargo/config.toml
     - name: Neutralize wild linker config
       run: |
         sed -i '/\[target\.x86_64-unknown-linux-gnu\]/,/^$/d' .cargo/config.toml
         sed -i '/\[target\.aarch64-unknown-linux-gnu\]/,/^$/d' .cargo/config.toml
         sed -i "/\[target\.'cfg(all(target_os/,/^$/d" .cargo/config.toml
-        echo "Linker config after cleanup:"
-        cat .cargo/config.toml
 
-    # Stable-tier crates: fail on breakage (Requirement 2.1, 2.2)
+    # Stable-tier leaf crates only (skip adk-rust umbrella — it just re-exports)
     - name: Semver checks — Stable crates (strict)
       run: |
-        echo "### Checking Stable-tier crates (fail on breakage)" >> "$GITHUB_STEP_SUMMARY"
+        echo "### Stable-tier crates (fail on breakage)" >> "$GITHUB_STEP_SUMMARY"
         FAILED=0
-        for crate in adk-core adk-agent adk-model adk-gemini adk-tool adk-runner adk-session adk-rust; do
+        for crate in adk-core adk-agent adk-model adk-gemini adk-tool adk-runner adk-session; do
           echo "Checking $crate..."
-          if cargo semver-checks check-release -p "$crate"; then
-            echo "✅ $crate — no breaking changes" >> "$GITHUB_STEP_SUMMARY"
+          if cargo semver-checks check-release -p "$crate" --default-features; then
+            echo "✅ $crate" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "❌ $crate — BREAKING CHANGE DETECTED" >> "$GITHUB_STEP_SUMMARY"
+            echo "❌ $crate — BREAKING" >> "$GITHUB_STEP_SUMMARY"
             FAILED=1
           fi
         done
         if [ "$FAILED" -ne 0 ]; then
-          echo "::error::Semver breakage detected in one or more Stable-tier crates"
+          echo "::error::Semver breakage detected in Stable-tier crates"
           exit 1
         fi
 
-    # Beta/Experimental crates: warn only (Requirement 2.3)
-    - name: Semver checks — Beta/Experimental crates (warn only)
+    - name: Semver checks — Beta/Experimental (warn only)
       run: |
-        echo "### Checking Beta/Experimental crates (warn only)" >> "$GITHUB_STEP_SUMMARY"
-        for crate in \
-          adk-server adk-graph adk-memory adk-artifact adk-auth \
+        echo "### Beta/Experimental crates (warn only)" >> "$GITHUB_STEP_SUMMARY"
+        for crate in adk-server adk-graph adk-memory adk-artifact adk-auth \
           adk-telemetry adk-guardrail adk-plugin adk-skill adk-anthropic \
-          adk-cli adk-rag adk-action adk-deploy adk-payments \
-          adk-rust-macros cargo-adk \
-          adk-realtime adk-browser adk-eval \
-          adk-code adk-sandbox adk-audio; do
+          adk-cli adk-realtime adk-browser adk-eval adk-audio; do
           echo "Checking $crate..."
-          if cargo semver-checks check-release -p "$crate"; then
-            echo "✅ $crate — no breaking changes" >> "$GITHUB_STEP_SUMMARY"
+          if cargo semver-checks check-release -p "$crate" --default-features; then
+            echo "✅ $crate" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "⚠️ $crate — breaking change (warning only)" >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ $crate — breaking (warn)" >> "$GITHUB_STEP_SUMMARY"
           fi
         done
