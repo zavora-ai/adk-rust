@@ -4,7 +4,7 @@ AgentSkills parser, index, matcher, and runtime injection helpers for ADK-Rust.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-skill.svg)](https://crates.io/crates/adk-skill)
 [![Documentation](https://docs.rs/adk-skill/badge.svg)](https://docs.rs/adk-skill)
-[![License](https://img.shields.io/crates/l/adk-skill.svg)](LICENSE)
+[![License](https://img.shields.io/crates/l/adk-skill.svg)](https://github.com/zavora-ai/adk-rust/blob/main/LICENSE)
 
 ## Overview
 

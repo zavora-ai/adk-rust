@@ -402,7 +402,7 @@ impl RealtimeRunner {
 
     /// Update the session configuration.
     ///
-    /// Delegates to [`update_session_with_bridge`] with no bridge message.
+    /// Delegates to [`Self::update_session_with_bridge`] with no bridge message.
     ///
     /// # Example
     ///
