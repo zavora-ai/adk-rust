@@ -5,7 +5,7 @@
 //! enum for extraction failures.
 //!
 //! The extracted [`RequestContext`] (re-exported from `adk-core`) carries user_id,
-//! scopes, and metadata into the [`InvocationContext`], making scopes available
+//! scopes, and metadata into the `InvocationContext`, making scopes available
 //! to tools via `ToolContext::user_scopes()`.
 //!
 //! # Example
