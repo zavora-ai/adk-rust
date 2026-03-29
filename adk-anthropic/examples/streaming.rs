@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream = client.stream(&params).await?;
     let mut stream = pin!(stream);
 
-    print!("\n");
+    println!();
     while let Some(event) = stream.next().await {
         match event? {
             MessageStreamEvent::ContentBlockDelta(delta) => {

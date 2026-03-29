@@ -41,6 +41,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn number_value_is_stringified() {
         assert_eq!(serialize_tool_result(&json!(42)), "42");
         assert_eq!(serialize_tool_result(&json!(3.14)), "3.14");
