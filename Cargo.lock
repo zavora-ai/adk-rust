@@ -9714,49 +9714,47 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry-http"
-version = "0.28.0"
+version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8863faf2910030d139fb48715ad5ff2f35029fc5f244f6d5f689ddcf4d26253"
+checksum = "d7a6d09a73194e6b66df7c8f1b680f156d916a1a942abf2de06823dd02b7855d"
 dependencies = [
  "async-trait",
  "bytes",
  "http 1.4.0",
- "opentelemetry 0.28.0",
+ "opentelemetry 0.31.0",
  "reqwest 0.12.28",
- "tracing",
 ]
 
 [[package]]
 name = "opentelemetry-otlp"
-version = "0.28.0"
+version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5bef114c6d41bea83d6dc60eb41720eedd0261a67af57b66dd2b84ac46c01d91"
+checksum = "1f69cd6acbb9af919df949cd1ec9e5e7fdc2ef15d234b6b795aaa525cc02f71f"
 dependencies = [
- "async-trait",
- "futures-core",
  "http 1.4.0",
- "opentelemetry 0.28.0",
+ "opentelemetry 0.31.0",
  "opentelemetry-http",
  "opentelemetry-proto",
- "opentelemetry_sdk 0.28.0",
- "prost 0.13.5",
+ "opentelemetry_sdk 0.31.0",
+ "prost 0.14.3",
  "reqwest 0.12.28",
  "thiserror 2.0.18",
  "tokio",
- "tonic 0.12.3",
+ "tonic 0.14.5",
  "tracing",
 ]
 
 [[package]]
 name = "opentelemetry-proto"
-version = "0.28.0"
+version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56f8870d3024727e99212eb3bb1762ec16e255e3e6f58eeb3dc8db1aa226746d"
+checksum = "a7175df06de5eaee9909d4805a3d07e28bb752c34cab57fa9cff549da596b30f"
 dependencies = [
- "opentelemetry 0.28.0",
- "opentelemetry_sdk 0.28.0",
- "prost 0.13.5",
- "tonic 0.12.3",
+ "opentelemetry 0.31.0",
+ "opentelemetry_sdk 0.31.0",
+ "prost 0.14.3",
+ "tonic 0.14.5",
+ "tonic-prost",
 ]
 
 [[package]]
