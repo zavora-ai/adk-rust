@@ -8,6 +8,8 @@ MCP follows a client-server architecture:
 - **MCP Servers** expose tools, resources, and prompts
 - **MCP Clients** (like ADK agents) connect to servers and use their capabilities
 
+ADK-Rust supports the full MCP specification including the **Resource API** — servers can expose structured data (files, database records, API responses) as named resources that agents can read alongside tool calls.
+
 Benefits of MCP integration:
 - **Universal connectivity** - Connect to any MCP-compliant server
 - **Automatic discovery** - Tools are discovered dynamically from the server
@@ -433,6 +435,28 @@ impl MyServer {
 ```
 
 See the [rmcp documentation](https://github.com/modelcontextprotocol/rust-sdk) for complete server implementation details.
+
+## Resource API
+
+MCP servers can expose structured data as named resources. `McpToolset` provides access to the resource API alongside tools:
+
+```rust
+use adk_tool::McpToolset;
+
+let toolset = McpToolset::new(client);
+
+// List available resources
+let resources = toolset.list_resources().await?;
+for resource in &resources {
+    println!("Resource: {} ({})", resource.name, resource.uri);
+}
+
+// Read a specific resource
+let content = toolset.read_resource("file:///config.json").await?;
+println!("Content: {}", content);
+```
+
+Resources are useful for exposing configuration, documentation, or data that agents can reference without making a tool call. The resource API supports URI-based addressing and MIME type metadata.
 
 ## Elicitation
 

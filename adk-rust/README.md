@@ -14,7 +14,7 @@ A flexible framework for developing AI agents with simplicity and power. Model-a
 |----------|-------------|---------------|
 | Gemini | `gemini` (default) | `gemini-2.5-flash` |
 | OpenAI | `openai` | `gpt-5-mini` |
-| Anthropic | `anthropic` | `claude-sonnet-4-5-20250929` |
+| Anthropic | `anthropic` | `claude-sonnet-4-6` |
 | DeepSeek | `deepseek` | `deepseek-chat` |
 | Groq | `groq` | `llama-3.3-70b-versatile` |
 | Ollama | `ollama` | `llama3.2` |
@@ -24,7 +24,7 @@ A flexible framework for developing AI agents with simplicity and power. Model-a
 | Perplexity | `perplexity` | `sonar` |
 | Cerebras | `cerebras` | `llama-3.3-70b` |
 | SambaNova | `sambanova` | `Meta-Llama-3.3-70B-Instruct` |
-| Amazon Bedrock | `bedrock` | `anthropic.claude-sonnet-4-20250514-v1:0` |
+| Amazon Bedrock | `bedrock` | `us.anthropic.claude-sonnet-4-6` |
 | Azure AI Inference | `azure-ai` | (endpoint-specific) |
 
 ## Quick Start

@@ -233,7 +233,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-5-20250929"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-6"))?;
 
     let agent = LlmAgentBuilder::new("assistant")
         .model(Arc::new(model))
@@ -249,7 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
 
 // Extended thinking with token budget
-let config = AnthropicConfig::new(api_key, "claude-sonnet-4-5-20250929")
+let config = AnthropicConfig::new(api_key, "claude-sonnet-4-6")
     .with_thinking(8192)
     .with_prompt_caching(true)
     .with_beta_feature("prompt-caching-2024-07-31");
@@ -260,7 +260,7 @@ let count = client.count_tokens(&request).await?;
 
 // Model discovery
 let models = client.list_models().await?;
-let info = client.get_model("claude-sonnet-4-5-20250929").await?;
+let info = client.get_model("claude-sonnet-4-6").await?;
 
 // Rate limit inspection
 let rate_info = client.latest_rate_limit_info().await;
@@ -465,7 +465,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Uses AWS IAM credentials from the environment (no API key needed)
-    let config = BedrockConfig::new("us-east-1", "anthropic.claude-sonnet-4-20250514-v1:0");
+    let config = BedrockConfig::new("us-east-1", "us.anthropic.claude-sonnet-4-6");
     let model = BedrockClient::new(config).await?;
 
     let agent = LlmAgentBuilder::new("assistant")
@@ -533,11 +533,11 @@ See [OpenAI models documentation](https://platform.openai.com/docs/models) for t
 
 | Model | Description |
 |-------|-------------|
-| `claude-opus-4-5-20251101` | Most capable model for complex autonomous tasks (200K context) |
-| `claude-sonnet-4-5-20250929` | Balanced intelligence and cost for production (1M context) |
+| `claude-opus-4-6` | Most capable model for complex autonomous tasks (200K context) |
+| `claude-sonnet-4-6` | Balanced intelligence and cost for production (1M context) |
 | `claude-haiku-4-5-20251001` | Ultra-efficient for high-volume workloads |
-| `claude-opus-4-20250514` | Hybrid model with extended thinking |
-| `claude-sonnet-4-20250514` | Balanced model with extended thinking |
+| `claude-opus-4-5-20251101` | Previous generation hybrid model with extended thinking |
+| `claude-sonnet-4-5-20250929` | Previous generation balanced model |
 
 See [Anthropic models documentation](https://docs.anthropic.com/claude/docs/models-overview) for the full list.
 
@@ -611,7 +611,7 @@ See [Ollama library](https://ollama.com/library) for all available models.
 | Perplexity | `perplexity` | `sonar` | `PERPLEXITY_API_KEY` |
 | Cerebras | `cerebras` | `llama-3.3-70b` | `CEREBRAS_API_KEY` |
 | SambaNova | `sambanova` | `Meta-Llama-3.3-70B-Instruct` | `SAMBANOVA_API_KEY` |
-| Amazon Bedrock | `bedrock` | `anthropic.claude-sonnet-4-20250514-v1:0` | AWS IAM credentials |
+| Amazon Bedrock | `bedrock` | `us.anthropic.claude-sonnet-4-6` | AWS IAM credentials |
 | Azure AI Inference | `azure-ai` | (endpoint-specific) | `AZURE_AI_API_KEY` |
 
 ## Features
