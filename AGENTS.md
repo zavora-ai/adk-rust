@@ -125,7 +125,7 @@ All opt-in, no defaults:
 
 Four presets control which crates are compiled:
 
-- `standard` **(default)** — agents, models, gemini, tools, skills, sessions, artifacts, memory, runner, telemetry, guardrail, auth, plugin. Everything needed to build and run agents.
+- `standard` **(default)** — agents, models, gemini, anthropic, tools, skills, sessions, artifacts, memory, runner, telemetry, guardrail, auth, plugin. Everything needed to build and run agents.
 - `full` — standard + graph, realtime, browser, eval, rag. All stable specialist crates. Does **not** include experimental crates.
 - `labs` — standard + code, sandbox, audio. Experimental crates that may have unstable APIs.
 - `minimal` — agents, gemini, runner. Fastest possible build.

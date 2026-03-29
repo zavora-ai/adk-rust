@@ -23,7 +23,7 @@ async-stream.workspace = true
 serde_json.workspace = true
 serde = { workspace = true }
 async-openai = { version = "0.33", optional = true, features = ["full"] }
-claudius = { version = "0.19", optional = true, default-features = false }
+adk-anthropic = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 anyhow.workspace = true
 tracing.workspace = true
@@ -41,7 +41,7 @@ gemini = ["dep:adk-gemini"]
 gemini-vertex = ["gemini", "adk-gemini/vertex"]
 openai = ["dep:async-openai", "dep:reqwest"]
 xai = ["openai"]
-anthropic = ["dep:claudius"]
+anthropic = ["dep:adk-anthropic"]
 deepseek = ["dep:reqwest"]
 ollama = ["dep:ollama-rs", "dep:schemars"]
 groq = ["dep:reqwest"]

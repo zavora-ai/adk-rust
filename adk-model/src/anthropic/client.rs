@@ -5,13 +5,13 @@ use super::convert;
 use super::error::AnthropicApiError;
 use super::rate_limit::RateLimitInfo;
 use crate::retry::{RetryConfig, ServerRetryHint, execute_with_retry, is_retryable_model_error};
-use adk_core::{AdkError, ErrorCategory, ErrorComponent, FinishReason, Llm, LlmRequest, Part};
-use async_stream::try_stream;
-use async_trait::async_trait;
-use claudius::{
+use adk_anthropic::{
     Anthropic, ContentBlock, ContentBlockDelta, ContentBlockDeltaEvent, MessageStreamEvent,
     StopReason, TextDelta,
 };
+use adk_core::{AdkError, ErrorCategory, ErrorComponent, FinishReason, Llm, LlmRequest, Part};
+use async_stream::try_stream;
+use async_trait::async_trait;
 use futures::StreamExt;
 use std::pin::pin;
 use std::sync::Arc;
@@ -48,7 +48,26 @@ impl AnthropicClient {
 
     /// Create a client with just an API key (uses default model).
     pub fn from_api_key(api_key: impl Into<String>) -> Result<Self, AdkError> {
-        Self::new(AnthropicConfig::new(api_key, "claude-sonnet-4-5-20250929"))
+        Self::new(AnthropicConfig::new(api_key, "claude-sonnet-4-6"))
+    }
+
+    /// Access the underlying `adk_anthropic::Anthropic` HTTP client.
+    ///
+    /// Use this for direct API access to endpoints not covered by the `Llm` trait:
+    /// batches, files, skills, models, token counting, and pricing.
+    ///
+    /// ```rust,ignore
+    /// let inner = anthropic_client.inner();
+    /// let models = inner.list_models(None).await?;
+    /// let batch = inner.create_batch(requests).await?;
+    /// ```
+    pub fn inner(&self) -> &adk_anthropic::Anthropic {
+        &self.client
+    }
+
+    /// Access the current Anthropic configuration.
+    pub fn anthropic_config(&self) -> &AnthropicConfig {
+        &self.config
     }
 
     #[must_use]
@@ -68,7 +87,7 @@ impl AnthropicClient {
     /// Returns the latest rate-limit information from the most recent API response.
     ///
     /// Updated after each API call when the server provides rate-limit headers
-    /// via `claudius::Error::RateLimit` or `claudius::Error::ServiceUnavailable`.
+    /// via `adk_anthropic::Error::RateLimit` or `adk_anthropic::Error::ServiceUnavailable`.
     /// Returns the default (all `None`) if no rate-limit info has been received.
     pub async fn latest_rate_limit_info(&self) -> RateLimitInfo {
         self.latest_rate_limit.read().await.clone()
@@ -78,9 +97,8 @@ impl AnthropicClient {
         model: &str,
         max_tokens: u32,
         request: &LlmRequest,
-        prompt_caching: bool,
-        thinking: Option<&super::config::ThinkingConfig>,
-    ) -> Result<claudius::MessageCreateParams, AdkError> {
+        anthropic_config: &super::config::AnthropicConfig,
+    ) -> Result<adk_anthropic::MessageCreateParams, AdkError> {
         let mut system_parts: Vec<String> = Vec::new();
         let mut messages = Vec::new();
 
@@ -100,7 +118,8 @@ impl AnthropicClient {
                     system_parts.push(text);
                 }
             } else {
-                messages.push(convert::content_to_message(content, prompt_caching)?);
+                messages
+                    .push(convert::content_to_message(content, anthropic_config.prompt_caching)?);
             }
         }
 
@@ -112,14 +131,14 @@ impl AnthropicClient {
         if system_parts.is_empty() {
             let instruction_boundary = messages
                 .iter()
-                .position(|m| m.role == claudius::MessageRole::Assistant)
+                .position(|m| m.role == adk_anthropic::MessageRole::Assistant)
                 .unwrap_or(0);
 
             if instruction_boundary > 0 {
                 // Verify all leading messages are text-only user messages
                 let all_text_only = messages[..instruction_boundary]
                     .iter()
-                    .all(|m| m.role == claudius::MessageRole::User && is_text_only_message(m));
+                    .all(|m| m.role == adk_anthropic::MessageRole::User && is_text_only_message(m));
 
                 if all_text_only {
                     let instruction_messages: Vec<_> =
@@ -153,7 +172,7 @@ impl AnthropicClient {
         if let Some(built_in_tools) = anthropic_ext.and_then(|o| o.get("built_in_tools")) {
             if let Some(arr) = built_in_tools.as_array() {
                 for (index, tool_value) in arr.iter().enumerate() {
-                    let tool = serde_json::from_value::<claudius::ToolUnionParam>(
+                    let tool = serde_json::from_value::<adk_anthropic::ToolUnionParam>(
                         tool_value.clone(),
                     )
                     .map_err(|error| {
@@ -173,7 +192,7 @@ impl AnthropicClient {
         }
 
         // Requirement 7.3: Force temperature to 1.0 when thinking is enabled
-        let temperature = if thinking.is_some() {
+        let temperature = if anthropic_config.thinking.is_some() {
             Some(1.0)
         } else {
             request.config.as_ref().and_then(|c| c.temperature)
@@ -196,33 +215,38 @@ impl AnthropicClient {
             temperature,
             top_p,
             top_k,
-            prompt_caching,
-            thinking,
+            anthropic_config.prompt_caching,
+            anthropic_config.thinking.as_ref(),
+            anthropic_config.effort,
+            anthropic_config.fast_mode,
+            anthropic_config.inference_geo.as_deref(),
+            anthropic_config.service_tier.as_deref(),
+            anthropic_config.context_management.as_ref(),
         ))
     }
 }
 
 /// Check if a `MessageParam` contains only text content (no tool use, tool results, images, etc.).
-fn is_text_only_message(msg: &claudius::MessageParam) -> bool {
+fn is_text_only_message(msg: &adk_anthropic::MessageParam) -> bool {
     match &msg.content {
-        claudius::MessageParamContent::String(_) => true,
-        claudius::MessageParamContent::Array(blocks) => {
+        adk_anthropic::MessageParamContent::String(_) => true,
+        adk_anthropic::MessageParamContent::Array(blocks) => {
             !blocks.is_empty() && blocks.iter().all(|block| matches!(block, ContentBlock::Text(_)))
         }
     }
 }
 
 /// Extract concatenated text from a `MessageParam`, returning `None` if empty.
-fn extract_text_from_message(msg: &claudius::MessageParam) -> Option<String> {
+fn extract_text_from_message(msg: &adk_anthropic::MessageParam) -> Option<String> {
     match &msg.content {
-        claudius::MessageParamContent::String(s) => {
+        adk_anthropic::MessageParamContent::String(s) => {
             if s.is_empty() {
                 None
             } else {
                 Some(s.clone())
             }
         }
-        claudius::MessageParamContent::Array(blocks) => {
+        adk_anthropic::MessageParamContent::Array(blocks) => {
             let parts: Vec<&str> = blocks
                 .iter()
                 .filter_map(|block| match block {
@@ -235,13 +259,13 @@ fn extract_text_from_message(msg: &claudius::MessageParam) -> Option<String> {
     }
 }
 
-/// Convert a `claudius::Error` into an [`AnthropicApiError`], preserving
+/// Convert an `adk_anthropic::Error` into an [`AnthropicApiError`], preserving
 /// structured context (error type, message, status code, request ID).
 ///
 /// The resulting `AnthropicApiError` is then converted to `AdkError` via its
 /// `From` impl. The request ID, when present, is also recorded on the current
 /// tracing span as `anthropic.request_id` (Requirement 4.2).
-pub(super) fn convert_claudius_error(e: claudius::Error) -> AdkError {
+pub(super) fn convert_anthropic_error(e: adk_anthropic::Error) -> AdkError {
     let api_error = to_anthropic_api_error(&e);
 
     // Requirement 4.2: record request-id on the active tracing span when present
@@ -260,15 +284,15 @@ pub(super) fn convert_claudius_error(e: claudius::Error) -> AdkError {
     api_error.into()
 }
 
-/// Build an [`AnthropicApiError`] from a `claudius::Error`, extracting the
+/// Build an [`AnthropicApiError`] from an `adk_anthropic::Error`, extracting the
 /// error type, message, HTTP status code, and request ID from whichever
 /// variant is present.
 ///
 /// Requirements 4.1, 4.2, 4.4: Parse structured error body fields and
 /// capture the request-id header value.
-fn to_anthropic_api_error(e: &claudius::Error) -> AnthropicApiError {
+fn to_anthropic_api_error(e: &adk_anthropic::Error) -> AnthropicApiError {
     match e {
-        claudius::Error::Api { status_code, error_type, message, request_id } => {
+        adk_anthropic::Error::Api { status_code, error_type, message, request_id } => {
             AnthropicApiError {
                 error_type: error_type.clone().unwrap_or_else(|| "api_error".to_string()),
                 message: message.clone(),
@@ -276,7 +300,7 @@ fn to_anthropic_api_error(e: &claudius::Error) -> AnthropicApiError {
                 request_id: request_id.clone(),
             }
         }
-        claudius::Error::RateLimit { message, retry_after } => {
+        adk_anthropic::Error::RateLimit { message, retry_after } => {
             let msg = match retry_after {
                 Some(secs) => format!("{message} (retry-after: {secs}s)"),
                 None => message.clone(),
@@ -288,7 +312,7 @@ fn to_anthropic_api_error(e: &claudius::Error) -> AnthropicApiError {
                 request_id: None,
             }
         }
-        claudius::Error::ServiceUnavailable { message, retry_after } => {
+        adk_anthropic::Error::ServiceUnavailable { message, retry_after } => {
             let msg = match retry_after {
                 Some(secs) => format!("{message} (retry-after: {secs}s)"),
                 None => message.clone(),
@@ -300,37 +324,37 @@ fn to_anthropic_api_error(e: &claudius::Error) -> AnthropicApiError {
                 request_id: None,
             }
         }
-        claudius::Error::Authentication { message } => AnthropicApiError {
+        adk_anthropic::Error::Authentication { message } => AnthropicApiError {
             error_type: "authentication_error".to_string(),
             message: message.clone(),
             status_code: 401,
             request_id: None,
         },
-        claudius::Error::Permission { message } => AnthropicApiError {
+        adk_anthropic::Error::Permission { message } => AnthropicApiError {
             error_type: "permission_error".to_string(),
             message: message.clone(),
             status_code: 403,
             request_id: None,
         },
-        claudius::Error::NotFound { message, .. } => AnthropicApiError {
+        adk_anthropic::Error::NotFound { message, .. } => AnthropicApiError {
             error_type: "not_found_error".to_string(),
             message: message.clone(),
             status_code: 404,
             request_id: None,
         },
-        claudius::Error::BadRequest { message, .. } => AnthropicApiError {
+        adk_anthropic::Error::BadRequest { message, .. } => AnthropicApiError {
             error_type: "invalid_request_error".to_string(),
             message: message.clone(),
             status_code: 400,
             request_id: None,
         },
-        claudius::Error::InternalServer { message, request_id } => AnthropicApiError {
+        adk_anthropic::Error::InternalServer { message, request_id } => AnthropicApiError {
             error_type: "api_error".to_string(),
             message: message.clone(),
             status_code: 500,
             request_id: request_id.clone(),
         },
-        // All other claudius error variants (Connection, Timeout, Serialization, etc.)
+        // All other adk_anthropic error variants (Connection, Timeout, Serialization, etc.)
         // are client-side errors without structured API error bodies.
         other => AnthropicApiError {
             error_type: "client_error".to_string(),
@@ -341,13 +365,13 @@ fn to_anthropic_api_error(e: &claudius::Error) -> AnthropicApiError {
     }
 }
 
-/// Extract a [`ServerRetryHint`] from a `claudius::Error`, if the error
+/// Extract a [`ServerRetryHint`] from an `adk_anthropic::Error`, if the error
 /// contains a server-provided `retry_after` value.
 #[allow(dead_code)]
-fn extract_retry_hint(e: &claudius::Error) -> Option<ServerRetryHint> {
+fn extract_retry_hint(e: &adk_anthropic::Error) -> Option<ServerRetryHint> {
     match e {
-        claudius::Error::RateLimit { retry_after: Some(secs), .. }
-        | claudius::Error::ServiceUnavailable { retry_after: Some(secs), .. } => {
+        adk_anthropic::Error::RateLimit { retry_after: Some(secs), .. }
+        | adk_anthropic::Error::ServiceUnavailable { retry_after: Some(secs), .. } => {
             Some(ServerRetryHint { retry_after: Some(std::time::Duration::from_secs(*secs)) })
         }
         _ => None,
@@ -379,13 +403,7 @@ impl Llm for AnthropicClient {
         let client = self.client.clone();
         let retry_config = self.retry_config.clone();
         let request_for_retry = request.clone();
-        let prompt_caching = self.config.prompt_caching;
-        let thinking_config = self.config.thinking.clone();
-        // Rate-limit state is stored on the client for caller access via
-        // `latest_rate_limit_info()`. Currently updated when claudius returns
-        // rate-limit or overload errors; will be extended to parse response
-        // headers when direct HTTP calls are added.
-        let _rate_limit_state = Arc::clone(&self.latest_rate_limit);
+        let anthropic_config = self.config.clone();
 
         let response_stream = try_stream! {
             if stream {
@@ -394,14 +412,14 @@ impl Llm for AnthropicClient {
                 let model_ref = model.as_str();
                 let event_stream = execute_with_retry(&retry_config, is_retryable_model_error, || {
                     let request = request_for_retry.clone();
-                    let thinking_ref = thinking_config.as_ref();
+                    let cfg = &anthropic_config;
                     async move {
-                        let mut params = Self::build_message_params(model_ref, max_tokens, &request, prompt_caching, thinking_ref)?;
+                        let mut params = Self::build_message_params(model_ref, max_tokens, &request, cfg)?;
                         params.stream = true;
                         client_ref
                             .stream(&params)
                             .await
-                            .map_err(convert_claudius_error)
+                            .map_err(convert_anthropic_error)
                     }
                 })
                 .await?;
@@ -421,7 +439,7 @@ impl Llm for AnthropicClient {
 
                 while let Some(event_result) = pinned_stream.next().await {
                     // Requirement 3.4: Handle error events from the stream.
-                    // The claudius SSE parser converts `event: error` into stream Err values
+                    // The adk-anthropic SSE parser converts `event: error` into stream Err values
                     // with structured error info. We emit these as LlmResponse with error fields
                     // rather than propagating as AdkError.
                     let event = match event_result {
@@ -519,7 +537,10 @@ impl Llm for AnthropicClient {
                                     StopReason::MaxTokens => Some(FinishReason::MaxTokens),
                                     StopReason::StopSequence => Some(FinishReason::Stop),
                                     StopReason::ToolUse => Some(FinishReason::Stop),
-                                    _ => Some(FinishReason::Stop),
+                                    StopReason::PauseTurn => Some(FinishReason::Stop),
+                                    StopReason::Refusal => Some(FinishReason::Safety),
+                                    StopReason::PauseRun => Some(FinishReason::Stop),
+                                    StopReason::ModelContextWindowExceeded => Some(FinishReason::MaxTokens),
                                 };
 
                                 // If we have accumulated tool calls, emit them
@@ -613,6 +634,13 @@ impl Llm for AnthropicClient {
                                 );
                             }
                         }
+                        // New adk-anthropic event variants — log at debug level for now
+                        MessageStreamEvent::ToolInputStart { .. }
+                        | MessageStreamEvent::ToolInputDelta { .. }
+                        | MessageStreamEvent::CompactionEvent(_)
+                        | MessageStreamEvent::StreamError { .. } => {
+                            debug!("unhandled stream event variant received");
+                        }
                     }
                 }
             } else {
@@ -621,22 +649,22 @@ impl Llm for AnthropicClient {
                 let model_ref = model.as_str();
                 let message = execute_with_retry(&retry_config, is_retryable_model_error, || {
                     let request = request_for_retry.clone();
-                    let thinking_ref = thinking_config.as_ref();
+                    let cfg = &anthropic_config;
                     async move {
-                        let params = Self::build_message_params(model_ref, max_tokens, &request, prompt_caching, thinking_ref)?;
+                        let params = Self::build_message_params(model_ref, max_tokens, &request, cfg)?;
                         client_ref
                             .send(params)
                             .await
-                            .map_err(convert_claudius_error)
+                            .map_err(convert_anthropic_error)
                     }
                 })
                 .await?;
 
                 // Requirement 4.3: On success, propagate request-id to tracing span.
-                // The claudius crate does not expose the raw `request-id` response
+                // The adk-anthropic crate does not expose the raw `request-id` response
                 // header on successful responses, but the message `id` field
                 // (e.g. "msg_...") serves as the primary correlation identifier.
-                // When claudius adds header access, this will be updated to use
+                // When adk-anthropic adds header access, this will be updated to use
                 // the actual `request-id` header value.
                 Span::current().record("anthropic.request_id", message.id.as_str());
 
@@ -654,8 +682,8 @@ impl Llm for AnthropicClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adk_anthropic::SystemPrompt;
     use adk_core::{Content, GenerateContentConfig, LlmRequest, Part};
-    use claudius::SystemPrompt;
 
     fn make_request(contents: Vec<Content>) -> LlmRequest {
         LlmRequest {
@@ -684,8 +712,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .unwrap();
 
@@ -729,8 +756,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .unwrap();
 
@@ -745,7 +771,7 @@ mod tests {
         }
         // Messages should start with the assistant message
         assert_eq!(params.messages.len(), 2);
-        assert_eq!(params.messages[0].role, claudius::MessageRole::Assistant);
+        assert_eq!(params.messages[0].role, adk_anthropic::MessageRole::Assistant);
     }
 
     /// Requirement 1.3: Multiple system entries concatenated with newline.
@@ -770,8 +796,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .unwrap();
 
@@ -797,8 +822,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .unwrap();
 
@@ -828,8 +852,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .unwrap();
 
@@ -840,7 +863,7 @@ mod tests {
         }
         // The user message should remain in messages (not re-routed)
         assert_eq!(params.messages.len(), 2);
-        assert_eq!(params.messages[0].role, claudius::MessageRole::User);
+        assert_eq!(params.messages[0].role, adk_anthropic::MessageRole::User);
     }
 
     /// Heuristic should NOT re-route user messages containing non-text parts.
@@ -867,8 +890,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .unwrap();
 
@@ -885,8 +907,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .unwrap();
 
@@ -914,8 +935,7 @@ mod tests {
             "claude-sonnet-4-5-20250929",
             4096,
             &request,
-            false,
-            None,
+            &AnthropicConfig::default(),
         )
         .expect_err("invalid built-in tool should fail");
 
@@ -942,7 +962,7 @@ mod tests {
     /// ContentBlockDelta event doesn't produce any LlmResponse.
     #[test]
     fn test_signature_delta_produces_no_visible_content() {
-        use claudius::SignatureDelta;
+        use adk_anthropic::SignatureDelta;
 
         // Construct a signature delta event — the same type the streaming match arm receives
         let delta = ContentBlockDelta::SignatureDelta(SignatureDelta::new(
@@ -965,7 +985,7 @@ mod tests {
     /// Verifies that signature data of varying lengths is handled without output.
     #[test]
     fn test_multiple_signature_deltas_all_silent() {
-        use claudius::SignatureDelta;
+        use adk_anthropic::SignatureDelta;
 
         let signatures = vec![
             "".to_string(),
@@ -1035,7 +1055,7 @@ mod tests {
     /// deltas should not affect output — only text deltas produce LlmResponse.
     #[test]
     fn test_signature_and_ping_among_text_deltas() {
-        use claudius::SignatureDelta;
+        use adk_anthropic::SignatureDelta;
 
         let events: Vec<MessageStreamEvent> = vec![
             MessageStreamEvent::Ping,
@@ -1090,7 +1110,7 @@ mod tests {
     /// Requirement 4.1, 4.4: Api variant preserves error_type, message, status_code, and request_id.
     #[test]
     fn test_to_anthropic_api_error_api_variant() {
-        let err = claudius::Error::Api {
+        let err = adk_anthropic::Error::Api {
             status_code: 400,
             error_type: Some("invalid_request_error".to_string()),
             message: "Invalid model specified".to_string(),
@@ -1106,7 +1126,7 @@ mod tests {
     /// Requirement 4.1: Api variant with missing error_type defaults to "api_error".
     #[test]
     fn test_to_anthropic_api_error_api_variant_no_error_type() {
-        let err = claudius::Error::Api {
+        let err = adk_anthropic::Error::Api {
             status_code: 500,
             error_type: None,
             message: "Internal error".to_string(),
@@ -1121,7 +1141,7 @@ mod tests {
     /// Requirement 4.4: RateLimit variant maps to status 429 with retry-after in message.
     #[test]
     fn test_to_anthropic_api_error_rate_limit() {
-        let err = claudius::Error::RateLimit {
+        let err = adk_anthropic::Error::RateLimit {
             message: "Too many requests".to_string(),
             retry_after: Some(30),
         };
@@ -1134,7 +1154,7 @@ mod tests {
     /// Requirement 4.4: ServiceUnavailable variant maps to status 529.
     #[test]
     fn test_to_anthropic_api_error_service_unavailable() {
-        let err = claudius::Error::ServiceUnavailable {
+        let err = adk_anthropic::Error::ServiceUnavailable {
             message: "Overloaded".to_string(),
             retry_after: None,
         };
@@ -1147,7 +1167,7 @@ mod tests {
     /// Requirement 4.4: InternalServer variant preserves request_id.
     #[test]
     fn test_to_anthropic_api_error_internal_server() {
-        let err = claudius::Error::InternalServer {
+        let err = adk_anthropic::Error::InternalServer {
             message: "Server error".to_string(),
             request_id: Some("req_xyz789".to_string()),
         };
@@ -1160,22 +1180,22 @@ mod tests {
     /// Requirement 4.4: Authentication variant maps to status 401.
     #[test]
     fn test_to_anthropic_api_error_authentication() {
-        let err = claudius::Error::Authentication { message: "Invalid API key".to_string() };
+        let err = adk_anthropic::Error::Authentication { message: "Invalid API key".to_string() };
         let api_err = to_anthropic_api_error(&err);
         assert_eq!(api_err.error_type, "authentication_error");
         assert_eq!(api_err.status_code, 401);
     }
 
-    /// Requirement 4.1: convert_claudius_error produces AdkError::Model with structured info.
+    /// Requirement 4.1: convert_anthropic_error produces AdkError::Model with structured info.
     #[test]
-    fn test_convert_claudius_error_preserves_structure() {
-        let err = claudius::Error::Api {
+    fn test_convert_anthropic_error_preserves_structure() {
+        let err = adk_anthropic::Error::Api {
             status_code: 429,
             error_type: Some("rate_limit_error".to_string()),
             message: "Rate limited".to_string(),
             request_id: Some("req_test".to_string()),
         };
-        let adk_err = convert_claudius_error(err);
+        let adk_err = convert_anthropic_error(err);
         let msg = adk_err.to_string();
         assert!(msg.contains("429"), "Should contain status code");
         assert!(msg.contains("rate_limit_error"), "Should contain error type");
@@ -1264,8 +1284,7 @@ mod tests {
                 "claude-sonnet-4-5-20250929",
                 4096,
                 &request,
-                false,
-                None,
+            &AnthropicConfig::default(),
             ).unwrap();
 
             if expected_parts.is_empty() {
@@ -1335,8 +1354,7 @@ mod tests {
                 "claude-sonnet-4-5-20250929",
                 4096,
                 &request,
-                false,
-                None,
+            &AnthropicConfig::default(),
             ).unwrap();
 
             // The leading user messages should be re-routed to system
@@ -1362,7 +1380,7 @@ mod tests {
             );
             prop_assert_eq!(
                 params.messages[0].role,
-                claudius::MessageRole::Assistant,
+                adk_anthropic::MessageRole::Assistant,
                 "First message should be assistant after re-routing"
             );
         }

@@ -1,15 +1,15 @@
-//! Type conversions between ADK and Claudius types.
+//! Type conversions between ADK and adk-anthropic types.
 
 use super::error::ConversionError;
 use crate::attachment;
-use adk_core::{Content, FinishReason, LlmResponse, Part, UsageMetadata};
-use claudius::ImageMediaType;
-use claudius::{
-    Base64ImageSource, Base64PdfSource, CacheControlEphemeral, ContentBlock, DocumentBlock,
-    ImageBlock, Message, MessageCreateParams, MessageParam, MessageRole, Model, PlainTextSource,
-    StopReason, SystemPrompt, TextBlock, ToolParam, ToolResultBlock, ToolResultBlockContent,
-    ToolUnionParam, ToolUseBlock, UrlImageSource, UrlPdfSource,
+use adk_anthropic::ImageMediaType;
+use adk_anthropic::{
+    Base64ImageSource, Base64PdfSource, CacheControlEphemeral, ContentBlock, ContextManagement,
+    DocumentBlock, ImageBlock, Message, MessageCreateParams, MessageParam, MessageRole, Model,
+    PlainTextSource, StopReason, SystemPrompt, TextBlock, ToolParam, ToolResultBlock,
+    ToolResultBlockContent, ToolUnionParam, ToolUseBlock, UrlImageSource, UrlPdfSource,
 };
+use adk_core::{Content, FinishReason, LlmResponse, Part, UsageMetadata};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -20,7 +20,7 @@ fn tool_result_content(value: &Value) -> ToolResultBlockContent {
     }
 }
 
-/// Convert ADK Content to Claudius MessageParam.
+/// Convert ADK Content to adk-anthropic MessageParam.
 ///
 /// When `prompt_caching` is true, eligible content blocks will have
 /// `cache_control: {"type": "ephemeral"}` set on them.
@@ -133,13 +133,13 @@ pub fn content_to_message(
                 }
             }
             // Server-side tool parts: convert back to Anthropic types when possible
-            Part::ServerToolCall { server_tool_call } => {
-                serde_json::from_value::<claudius::ServerToolUseBlock>(server_tool_call.clone())
-                    .ok()
-                    .map(ContentBlock::ServerToolUse)
-            }
+            Part::ServerToolCall { server_tool_call } => serde_json::from_value::<
+                adk_anthropic::ServerToolUseBlock,
+            >(server_tool_call.clone())
+            .ok()
+            .map(ContentBlock::ServerToolUse),
             Part::ServerToolResponse { server_tool_response } => {
-                serde_json::from_value::<claudius::WebSearchToolResultBlock>(
+                serde_json::from_value::<adk_anthropic::WebSearchToolResultBlock>(
                     server_tool_response.clone(),
                 )
                 .ok()
@@ -160,7 +160,7 @@ pub fn content_to_message(
     Ok(MessageParam::new_with_blocks(blocks, role))
 }
 
-/// Convert ADK tools to Claudius ToolUnionParam format.
+/// Convert ADK tools to adk-anthropic ToolUnionParam format.
 pub fn convert_tools(
     tools: &HashMap<String, Value>,
 ) -> Result<Vec<ToolUnionParam>, ConversionError> {
@@ -194,7 +194,7 @@ pub fn convert_tools(
         .collect()
 }
 
-/// Convert Claudius Message to ADK LlmResponse.
+/// Convert adk-anthropic Message to ADK LlmResponse.
 pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String, String>) {
     let mut parts = Vec::new();
 
@@ -326,8 +326,8 @@ pub fn from_stream_error(error_type: &str, message: &str) -> LlmResponse {
     }
 }
 
-/// Extract cache usage tokens from a claudius `Usage` into provider metadata.
-pub fn extract_cache_usage(usage: &claudius::Usage) -> HashMap<String, String> {
+/// Extract cache usage tokens from an adk-anthropic `Usage` into provider metadata.
+pub fn extract_cache_usage(usage: &adk_anthropic::Usage) -> HashMap<String, String> {
     let mut metadata = HashMap::new();
     if let Some(tokens) = usage.cache_creation_input_tokens {
         metadata.insert("anthropic.cache_creation_input_tokens".to_string(), tokens.to_string());
@@ -350,7 +350,12 @@ pub fn build_message_params(
     top_p: Option<f32>,
     top_k: Option<i32>,
     prompt_caching: bool,
-    thinking: Option<&super::config::ThinkingConfig>,
+    thinking: Option<&super::config::ThinkingMode>,
+    effort: Option<super::config::Effort>,
+    fast_mode: bool,
+    inference_geo: Option<&str>,
+    service_tier: Option<&str>,
+    context_management: Option<&ContextManagement>,
 ) -> MessageCreateParams {
     let mut params =
         MessageCreateParams::new(max_tokens, messages, Model::Custom(model.to_string()));
@@ -380,8 +385,51 @@ pub fn build_message_params(
         params.top_k = Some(k as u32);
     }
 
-    if let Some(tc) = thinking {
-        params.thinking = Some(claudius::ThinkingConfig::enabled(tc.budget_tokens));
+    // Thinking mode
+    match thinking {
+        Some(super::config::ThinkingMode::Enabled { budget_tokens }) => {
+            params.thinking = Some(adk_anthropic::ThinkingConfig::enabled(*budget_tokens));
+        }
+        Some(super::config::ThinkingMode::Adaptive) => {
+            params.thinking = Some(adk_anthropic::ThinkingConfig::adaptive());
+        }
+        None => {}
+    }
+
+    // Effort → output_config.effort
+    if let Some(effort) = effort {
+        let level = match effort {
+            super::config::Effort::Low => adk_anthropic::EffortLevel::Low,
+            super::config::Effort::Medium => adk_anthropic::EffortLevel::Medium,
+            super::config::Effort::High => adk_anthropic::EffortLevel::High,
+            super::config::Effort::Max => adk_anthropic::EffortLevel::Max,
+        };
+        params.output_config = Some(adk_anthropic::OutputConfig::with_effort(level));
+    }
+
+    // Fast mode
+    if fast_mode {
+        params.speed = Some(adk_anthropic::SpeedMode::Fast);
+    }
+
+    // Inference geo
+    if let Some(geo) = inference_geo {
+        params.inference_geo = Some(geo.to_string());
+    }
+
+    // Service tier
+    if let Some(tier) = service_tier {
+        params.service_tier = Some(tier.to_string());
+    }
+
+    // Automatic prompt caching (top-level cache_control)
+    if prompt_caching {
+        params.cache_control = Some(CacheControlEphemeral::new());
+    }
+
+    // Context management (beta)
+    if let Some(cm) = context_management {
+        params.context_management = Some(cm.clone());
     }
 
     params
@@ -640,12 +688,13 @@ mod tests {
 
     #[test]
     fn test_from_anthropic_message_with_thinking_block() {
-        use claudius::{ThinkingBlock, Usage};
+        use adk_anthropic::{ThinkingBlock, Usage};
 
         let message = Message {
             id: "msg_123".to_string(),
             model: Model::Custom("claude-3-5-sonnet-20241022".to_string()),
             role: MessageRole::Assistant,
+            container: None,
             content: vec![
                 ContentBlock::Thinking(ThinkingBlock::new(
                     "Let me reason through this step by step...",
@@ -661,6 +710,7 @@ mod tests {
                 output_tokens: 20,
                 cache_creation_input_tokens: None,
                 cache_read_input_tokens: None,
+                cache_creation_input_tokens_1h: None,
                 server_tool_use: None,
             },
         };
@@ -683,12 +733,13 @@ mod tests {
 
     #[test]
     fn test_from_anthropic_message_empty_thinking_block_skipped() {
-        use claudius::{ThinkingBlock, Usage};
+        use adk_anthropic::{ThinkingBlock, Usage};
 
         let message = Message {
             id: "msg_456".to_string(),
             model: Model::Custom("claude-3-5-sonnet-20241022".to_string()),
             role: MessageRole::Assistant,
+            container: None,
             content: vec![
                 ContentBlock::Thinking(ThinkingBlock::new("", "sig_empty")),
                 ContentBlock::Text(TextBlock::new("Just text.")),
@@ -701,6 +752,7 @@ mod tests {
                 output_tokens: 10,
                 cache_creation_input_tokens: None,
                 cache_read_input_tokens: None,
+                cache_creation_input_tokens_1h: None,
                 server_tool_use: None,
             },
         };

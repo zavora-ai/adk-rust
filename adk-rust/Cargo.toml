@@ -21,6 +21,8 @@ standard = [
     "agents",
     "models",
     "gemini",
+    "anthropic",
+    "anthropic-client",
     "tools",
     "skills",
     "sessions",
@@ -128,6 +130,9 @@ audio-mlx = ["audio", "adk-audio/mlx"]
 audio-onnx = ["audio", "adk-audio/onnx"]
 audio-all = ["audio", "adk-audio/all"]
 
+# Anthropic client crate (direct access to adk-anthropic types)
+anthropic-client = ["dep:adk-anthropic"]
+
 # Action node features (forwarded to adk-graph)
 action = ["graph", "dep:adk-action", "adk-graph/action"]
 action-http = ["action", "adk-graph/action-http"]
@@ -176,6 +181,7 @@ adk-rag = { workspace = true, optional = true }
 adk-payments = { workspace = true, optional = true }
 adk-audio = { workspace = true, optional = true }
 adk-action = { workspace = true, optional = true }
+adk-anthropic = { workspace = true, optional = true }
 
 # Re-export common dependencies
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "signal", "fs", "process", "io-util"] }

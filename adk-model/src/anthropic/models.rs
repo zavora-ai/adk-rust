@@ -4,7 +4,7 @@
 //! [`AnthropicClient`], wrapping the `GET /v1/models` and
 //! `GET /v1/models/{model_id}` endpoints.
 
-use super::client::{AnthropicClient, convert_claudius_error};
+use super::client::{AnthropicClient, convert_anthropic_error};
 use adk_core::AdkError;
 use serde::{Deserialize, Serialize};
 
@@ -34,9 +34,9 @@ pub struct ModelInfo {
     pub created_at: String,
 }
 
-impl From<claudius::ModelInfo> for ModelInfo {
-    fn from(m: claudius::ModelInfo) -> Self {
-        // claudius::ModelInfo.created_at is a time::OffsetDateTime serialized
+impl From<adk_anthropic::ModelInfo> for ModelInfo {
+    fn from(m: adk_anthropic::ModelInfo) -> Self {
+        // adk_anthropic::ModelInfo.created_at is a time::OffsetDateTime serialized
         // with RFC 3339 via serde. We round-trip through serde_json to get the
         // RFC 3339 string without importing the `time` crate directly.
         let created_at = serde_json::to_value(&m)
@@ -59,7 +59,7 @@ impl AnthropicClient {
     /// Returns `AdkError::Model` with structured error context if the
     /// API returns an error.
     pub async fn list_models(&self) -> Result<Vec<ModelInfo>, AdkError> {
-        let response = self.client.list_models(None).await.map_err(convert_claudius_error)?;
+        let response = self.client.list_models(None).await.map_err(convert_anthropic_error)?;
 
         Ok(response.data.into_iter().map(ModelInfo::from).collect())
     }
@@ -73,7 +73,7 @@ impl AnthropicClient {
     /// Returns `AdkError::Model` with structured error context if the
     /// API returns an error (e.g., model not found).
     pub async fn get_model(&self, model_id: &str) -> Result<ModelInfo, AdkError> {
-        let info = self.client.get_model(model_id).await.map_err(convert_claudius_error)?;
+        let info = self.client.get_model(model_id).await.map_err(convert_anthropic_error)?;
 
         Ok(ModelInfo::from(info))
     }
@@ -84,8 +84,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_model_info_from_claudius() {
-        // Build a claudius::ModelInfo via serde round-trip to avoid
+    fn test_model_info_from_adk_anthropic() {
+        // Build an adk_anthropic::ModelInfo via serde round-trip to avoid
         // importing the `time` crate directly.
         let json = serde_json::json!({
             "id": "claude-sonnet-4-5-20250929",
@@ -93,9 +93,9 @@ mod tests {
             "display_name": "Claude Sonnet 4.5",
             "type": "model"
         });
-        let claudius_model: claudius::ModelInfo = serde_json::from_value(json).unwrap();
+        let model: adk_anthropic::ModelInfo = serde_json::from_value(json).unwrap();
 
-        let info = ModelInfo::from(claudius_model);
+        let info = ModelInfo::from(model);
         assert_eq!(info.id, "claude-sonnet-4-5-20250929");
         assert_eq!(info.display_name, "Claude Sonnet 4.5");
         assert_eq!(info.created_at, "2025-09-29T00:00:00Z");

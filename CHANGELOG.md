@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### adk-anthropic — Dedicated Anthropic API Client (NEW CRATE)
+- **Standalone crate** replacing the `claudius` dependency in `adk-model`. Follows the same pattern as `adk-gemini` — a dedicated, publishable client crate.
+- **Full Anthropic API parity** (March 2026): Messages, Batches, Files, Skills, Models, Token Counting APIs.
+- **Current model support**: Claude Opus 4.6, Sonnet 4.6, Haiku 4.5, plus legacy 4.5/4.0/4.1 models. `KnownModel` enum with `Model::Custom(String)` fallback.
+- **Adaptive thinking**: `ThinkingConfig::adaptive()` for 4.6 models. Effort controlled via `OutputConfig::with_effort()` (supports `Low`, `Medium`, `High`, `Max`).
+- **Budget-based thinking**: `ThinkingConfig::enabled(budget_tokens)` for older models (deprecated on 4.6).
+- **Structured outputs**: `OutputConfig` with `OutputFormat::Json` and `OutputFormat::JsonSchema`.
+- **Prompt caching**: Top-level `cache_control: CacheControlEphemeral` for automatic caching, plus block-level `cache_control` on system prompts, tools, and content blocks.
+- **Context management** (beta): `ContextManagement` with `ClearToolUses` and `ClearThinking` strategies. Auto-injects `context-management-2025-06-27` beta header.
+- **Fast mode** (beta): `SpeedMode::Fast` for Opus 4.6. Auto-injects `fast-mode-2026-02-01` beta header.
+- **Citations**: `CitationsConfig` on documents with `TextCitation` variants (char location, page location, content block location, web search result).
+- **Vision**: URL and base64 image analysis via `ImageBlock`.
+- **PDF processing**: URL, base64, and Files API PDF analysis via `DocumentBlock`.
+- **SSE streaming**: Full event set including `ToolInputStart`, `ToolInputDelta`, `CompactionEvent`, `StreamError`.
+- **Token counting**: `count_tokens()` method for pre-send estimation.
+- **Token pricing**: `pricing` module with `ModelPricing` constants for all current models and `estimate_cost()` / `estimate_cost_1h()` calculators.
+- **Stop reasons**: `StopReason` enum with `EndTurn`, `MaxTokens`, `StopSequence`, `ToolUse`, `PauseTurn`, `Refusal`, `PauseRun`, `ModelContextWindowExceeded`.
+- **Container support**: `container` field on `MessageCreateParams` and `ContainerInfo` on `Message` response.
+- **Service tier**: `service_tier` field for priority capacity.
+- **14 examples**: `basic`, `streaming`, `thinking`, `tools`, `structured_output`, `caching`, `context_editing`, `compaction`, `token_counting`, `stop_reasons`, `fast_mode`, `citations`, `pdf_processing`, `vision`.
+- **373 unit tests** covering all types, serialization round-trips, client logic, and SSE parsing.
+
+#### adk-model — Anthropic Migration
+- Replaced `claudius` dependency with `adk-anthropic` in `adk-model`. Import paths changed from `use claudius::` to `use adk_anthropic::`.
+- Renamed `convert_claudius_error` to `convert_anthropic_error` across all Anthropic adapter modules.
+- All 72 adk-model lib tests pass with the new dependency.
+
 #### MCP Elicitation Support (adk-tool)
 - **`ElicitationHandler` trait**: User-implementable trait for handling MCP elicitation requests from servers. Supports form-based elicitation (structured schemas) and URL-based elicitation. Requires `Send + Sync` for async safety.
 - **`AutoDeclineElicitationHandler`**: Built-in zero-size handler that declines all elicitation requests, preserving backward-compatible behavior identical to rmcp's `()` ClientHandler default.
