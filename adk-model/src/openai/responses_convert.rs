@@ -568,6 +568,7 @@ fn convert_usage(usage: &ResponseUsage) -> UsageMetadata {
         prompt_token_count: usage.input_tokens as i32,
         candidates_token_count: usage.output_tokens as i32,
         total_token_count: (usage.input_tokens + usage.output_tokens) as i32,
+        cache_read_input_token_count: Some(usage.input_tokens_details.cached_tokens as i32),
         thinking_token_count: Some(usage.output_tokens_details.reasoning_tokens as i32),
         ..Default::default()
     }

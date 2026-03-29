@@ -435,6 +435,14 @@ pub struct RunConfig {
     /// The name of the parent agent, if this agent was invoked via transfer.
     /// Used by the agent to apply `disallow_transfer_to_parent` filtering.
     pub parent_agent: Option<String>,
+    /// Enable automatic prompt caching for all providers that support it.
+    ///
+    /// When `true` (the default), the runner enables provider-level caching:
+    /// - Anthropic: sets `prompt_caching = true` on the config
+    /// - Bedrock: sets `prompt_caching = Some(BedrockCacheConfig::default())`
+    /// - OpenAI / DeepSeek: no action needed (caching is automatic)
+    /// - Gemini: handled separately via `ContextCacheConfig`
+    pub auto_cache: bool,
 }
 
 impl Default for RunConfig {
@@ -445,6 +453,7 @@ impl Default for RunConfig {
             cached_content: None,
             transfer_targets: Vec::new(),
             parent_agent: None,
+            auto_cache: true,
         }
     }
 }

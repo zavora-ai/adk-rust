@@ -52,6 +52,9 @@ pub struct BedrockCacheConfig {
 /// Credentials are loaded from the environment via the AWS SDK
 /// (environment variables, shared config, IMDS, etc.).
 ///
+/// Prompt caching is enabled by default with a 5-minute TTL.
+/// Use [`without_prompt_caching`](BedrockConfig::without_prompt_caching) to disable.
+///
 /// # Inference Profiles
 ///
 /// Newer Bedrock models require cross-region inference profile IDs
@@ -62,7 +65,7 @@ pub struct BedrockCacheConfig {
 /// ```rust,ignore
 /// use adk_model::bedrock::BedrockConfig;
 ///
-/// // Default: us-east-1, Claude Sonnet 4.6
+/// // Default: us-east-1, Claude Sonnet 4.6, prompt caching enabled
 /// let config = BedrockConfig::default();
 ///
 /// // Custom region and model
@@ -71,6 +74,9 @@ pub struct BedrockCacheConfig {
 /// // With a custom endpoint (e.g., VPC endpoint)
 /// let config = BedrockConfig::new("us-west-2", "us.anthropic.claude-sonnet-4-6")
 ///     .with_endpoint_url("https://vpce-xxx.bedrock-runtime.us-west-2.vpce.amazonaws.com");
+///
+/// // Disable prompt caching
+/// let config = BedrockConfig::default().without_prompt_caching();
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BedrockConfig {
@@ -83,8 +89,10 @@ pub struct BedrockConfig {
     pub endpoint_url: Option<String>,
     /// Optional prompt caching configuration.
     ///
+    /// Defaults to `Some(BedrockCacheConfig::default())` (5-minute TTL).
     /// When set, the Bedrock request builder injects `CachePoint` blocks
     /// after system prompts and tool definitions in the Converse API request.
+    /// Use [`without_prompt_caching`](BedrockConfig::without_prompt_caching) to disable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_caching: Option<BedrockCacheConfig>,
 }
@@ -95,7 +103,7 @@ impl Default for BedrockConfig {
             region: "us-east-1".to_string(),
             model_id: "us.anthropic.claude-sonnet-4-6".to_string(),
             endpoint_url: None,
-            prompt_caching: None,
+            prompt_caching: Some(BedrockCacheConfig::default()),
         }
     }
 }
@@ -103,7 +111,12 @@ impl Default for BedrockConfig {
 impl BedrockConfig {
     /// Create a new Bedrock config with the given region and model ID.
     pub fn new(region: impl Into<String>, model_id: impl Into<String>) -> Self {
-        Self { region: region.into(), model_id: model_id.into(), ..Default::default() }
+        Self {
+            region: region.into(),
+            model_id: model_id.into(),
+            endpoint_url: None,
+            prompt_caching: Some(BedrockCacheConfig::default()),
+        }
     }
 
     /// Set a custom endpoint URL (e.g., a VPC endpoint).
@@ -127,6 +140,24 @@ impl BedrockConfig {
     /// ```
     pub fn with_prompt_caching(mut self, config: BedrockCacheConfig) -> Self {
         self.prompt_caching = Some(config);
+        self
+    }
+
+    /// Disable prompt caching.
+    ///
+    /// By default, prompt caching is enabled with a 5-minute TTL.
+    /// Call this method to opt out of automatic caching.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_model::bedrock::BedrockConfig;
+    ///
+    /// let config = BedrockConfig::default().without_prompt_caching();
+    /// assert!(config.prompt_caching.is_none());
+    /// ```
+    pub fn without_prompt_caching(mut self) -> Self {
+        self.prompt_caching = None;
         self
     }
 }

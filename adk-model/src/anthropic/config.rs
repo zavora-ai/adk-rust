@@ -47,9 +47,9 @@ pub enum Effort {
 /// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-4-5")
 ///     .with_thinking_mode(ThinkingMode::Enabled { budget_tokens: 8192 });
 ///
-/// // Prompt caching
+/// // Prompt caching (enabled by default, can be disabled)
 /// let config = AnthropicConfig::new("sk-ant-xxx", "claude-sonnet-4-6")
-///     .with_prompt_caching(true);
+///     .with_prompt_caching(false); // opt out
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnthropicConfig {
@@ -65,7 +65,11 @@ pub struct AnthropicConfig {
     pub base_url: Option<String>,
 
     /// Enable prompt caching with `cache_control` blocks.
-    #[serde(default)]
+    ///
+    /// Defaults to `true`. Anthropic prompt caching reduces costs and latency
+    /// by reusing previously processed context. Disable with
+    /// [`with_prompt_caching(false)`](AnthropicConfig::with_prompt_caching).
+    #[serde(default = "default_prompt_caching")]
     pub prompt_caching: bool,
 
     /// Thinking mode configuration.
@@ -118,6 +122,10 @@ fn default_max_tokens() -> u32 {
     4096
 }
 
+fn default_prompt_caching() -> bool {
+    true
+}
+
 impl Default for AnthropicConfig {
     fn default() -> Self {
         Self {
@@ -125,7 +133,7 @@ impl Default for AnthropicConfig {
             model: "claude-sonnet-4-6".to_string(),
             max_tokens: default_max_tokens(),
             base_url: None,
-            prompt_caching: false,
+            prompt_caching: true,
             thinking: None,
             effort: None,
             fast_mode: false,
