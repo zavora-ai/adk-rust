@@ -14,9 +14,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Internal state machine tracking the resumability status of the RealtimeRunner.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum RunnerState {
     /// Runner is ready to accept transport resumption immediately.
+    #[default]
     Idle,
     /// Model is currently generating a response; tearing down the connection would corrupt context.
     Generating,
@@ -35,18 +36,12 @@ pub enum RunnerState {
     /// command queue. The policy is last write wins.
     PendingResumption {
         /// The new configuration to apply on reconnection.
-        config: crate::config::RealtimeConfig,
+        config: Box<crate::config::RealtimeConfig>,
         /// An optional message to inject immediately after resumption.
         bridge_message: Option<String>,
         /// Number of failed reconnection attempts for this mutation.
         attempts: u8,
     },
-}
-
-impl Default for RunnerState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 /// Handler for tool/function calls from the realtime model.
@@ -483,14 +478,14 @@ impl RealtimeRunner {
                     tracing::info!("Runner is idle. Executing resumption immediately.");
 
                     if let Err(e) =
-                        self.execute_resumption(new_config.clone(), bridge_message.clone()).await
+                        self.execute_resumption((*new_config).clone(), bridge_message.clone()).await
                     {
                         tracing::error!("Immediate resumption failed: {}. Queueing for retry.", e);
                         // If the reconnect fails (e.g., transient network issue), we must not lose the mutation intent.
                         // We push it back into the queue for the background loop to retry.
                         let mut fallback_state = self.state.write().await;
                         *fallback_state = RunnerState::PendingResumption {
-                            config: new_config,
+                            config: Box::new(*new_config),
                             bridge_message,
                             attempts: 1,
                         };
@@ -781,7 +776,7 @@ impl RealtimeRunner {
             drop(state);
 
             // 5. Attempt the actual transport teardown/rebuild.
-            if let Err(e) = self.execute_resumption(config.clone(), bridge_message.clone()).await {
+            if let Err(e) = self.execute_resumption((*config).clone(), bridge_message.clone()).await {
                 tracing::error!("Resumption failed: {}.", e);
 
                 // 6. If the reconnect fails (e.g., transient network error), re-acquire the lock

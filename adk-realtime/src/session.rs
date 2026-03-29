@@ -13,7 +13,7 @@ pub enum ContextMutationOutcome {
     /// Provider successfully updated the active session via sideband.
     Applied,
     /// Provider requires the transport to be rebound with a new configuration.
-    RequiresResumption(crate::config::RealtimeConfig),
+    RequiresResumption(Box<crate::config::RealtimeConfig>),
 }
 
 /// A real-time bidirectional streaming session.

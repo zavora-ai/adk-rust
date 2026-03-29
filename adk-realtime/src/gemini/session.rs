@@ -701,7 +701,7 @@ impl RealtimeSession for GeminiRealtimeSession {
         tracing::info!(
             "Gemini API does not support native mid-flight context swaps; signalling resumption needed."
         );
-        Ok(ContextMutationOutcome::RequiresResumption(config))
+        Ok(ContextMutationOutcome::RequiresResumption(Box::new(config)))
     }
 }
 
