@@ -17,6 +17,7 @@
 mod client;
 mod config;
 pub(crate) mod convert;
+pub mod pricing;
 mod responses_client;
 mod responses_convert;
 
