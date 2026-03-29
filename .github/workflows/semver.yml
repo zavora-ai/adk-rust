@@ -10,6 +10,11 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # Override .cargo/config.toml linker settings — the workspace uses the 'wild'
+  # linker on Linux for dev builds, but it's not installed in CI runners.
+  # These env vars take precedence over config.toml target settings.
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: cc
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ""
 
 # Cancel in-progress runs for the same PR
 concurrency:
