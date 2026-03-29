@@ -186,7 +186,7 @@ pub struct AdkError {
     pub code: &'static str,
     pub message: String,
     pub retry: RetryHint,
-    pub details: ErrorDetails,
+    pub details: Box<ErrorDetails>,
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
@@ -240,7 +240,7 @@ impl AdkError {
             code,
             message: message.into(),
             retry: RetryHint::for_category(category),
-            details: ErrorDetails::default(),
+            details: Box::new(ErrorDetails::default()),
             source: None,
         }
     }
@@ -256,7 +256,7 @@ impl AdkError {
     }
 
     pub fn with_details(mut self, details: ErrorDetails) -> Self {
-        self.details = details;
+        self.details = Box::new(details);
         self
     }
 

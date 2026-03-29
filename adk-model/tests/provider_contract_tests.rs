@@ -22,25 +22,13 @@ use adk_model::ollama::{OllamaConfig, OllamaModel};
 use adk_model::openai::{AzureConfig, AzureOpenAIClient, OpenAIClient, OpenAIConfig};
 #[cfg(feature = "openrouter")]
 use adk_model::openrouter::{OpenRouterApiMode, OpenRouterClient, OpenRouterConfig};
-#[cfg(feature = "xai")]
-use adk_model::xai::{XAIClient, XAIConfig};
 
 #[cfg(feature = "azure-ai")]
 use adk_model::azure_ai::{AzureAIClient, AzureAIConfig};
 #[cfg(feature = "bedrock")]
 use adk_model::bedrock::{BedrockClient, BedrockConfig};
-#[cfg(feature = "cerebras")]
-use adk_model::cerebras::{CerebrasClient, CerebrasConfig};
-#[cfg(feature = "fireworks")]
-use adk_model::fireworks::{FireworksClient, FireworksConfig};
-#[cfg(feature = "mistral")]
-use adk_model::mistral::{MistralClient, MistralConfig};
-#[cfg(feature = "perplexity")]
-use adk_model::perplexity::{PerplexityClient, PerplexityConfig};
-#[cfg(feature = "sambanova")]
-use adk_model::sambanova::{SambaNovaClient, SambaNovaConfig};
-#[cfg(feature = "together")]
-use adk_model::together::{TogetherClient, TogetherConfig};
+#[cfg(feature = "openai")]
+use adk_model::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig};
 
 type BuildModelFn = fn(&str) -> Result<Box<dyn Llm>>;
 
@@ -376,7 +364,7 @@ fn openai_cheapest_spec() -> ProviderSpec {
     }
 }
 
-#[cfg(feature = "xai")]
+#[cfg(feature = "openai")]
 fn xai_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "xai-cheapest",
@@ -386,7 +374,7 @@ fn xai_cheapest_spec() -> ProviderSpec {
         supports_tools: true,
         build_model: |model_name| {
             let api_key = required_env("XAI_API_KEY")?;
-            Ok(Box::new(XAIClient::new(XAIConfig::new(api_key, model_name))?))
+            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::xai(api_key, model_name))?))
         },
     }
 }
@@ -501,7 +489,7 @@ fn azure_openai_spec() -> ProviderSpec {
 
 #[cfg(feature = "openai")]
 provider_contract_tests!(azure_openai_provider, azure_openai_spec);
-#[cfg(feature = "xai")]
+#[cfg(feature = "openai")]
 provider_contract_tests!(xai_cheapest_provider, xai_cheapest_spec);
 #[cfg(feature = "anthropic")]
 provider_contract_tests!(anthropic_cheapest_provider, anthropic_cheapest_spec);
@@ -514,7 +502,7 @@ provider_contract_tests!(ollama_cheapest_provider, ollama_cheapest_spec);
 #[cfg(feature = "openrouter")]
 provider_contract_tests!(openrouter_cheapest_provider, openrouter_cheapest_spec);
 
-#[cfg(feature = "fireworks")]
+#[cfg(feature = "openai")]
 fn fireworks_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "fireworks-cheapest",
@@ -524,12 +512,12 @@ fn fireworks_cheapest_spec() -> ProviderSpec {
         supports_tools: true,
         build_model: |model_name| {
             let api_key = required_env("FIREWORKS_API_KEY")?;
-            Ok(Box::new(FireworksClient::new(FireworksConfig::new(api_key, model_name))?))
+            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::fireworks(api_key, model_name))?))
         },
     }
 }
 
-#[cfg(feature = "together")]
+#[cfg(feature = "openai")]
 fn together_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "together-cheapest",
@@ -539,12 +527,12 @@ fn together_cheapest_spec() -> ProviderSpec {
         supports_tools: true,
         build_model: |model_name| {
             let api_key = required_env("TOGETHER_API_KEY")?;
-            Ok(Box::new(TogetherClient::new(TogetherConfig::new(api_key, model_name))?))
+            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::together(api_key, model_name))?))
         },
     }
 }
 
-#[cfg(feature = "mistral")]
+#[cfg(feature = "openai")]
 fn mistral_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "mistral-cheapest",
@@ -554,12 +542,12 @@ fn mistral_cheapest_spec() -> ProviderSpec {
         supports_tools: true,
         build_model: |model_name| {
             let api_key = required_env("MISTRAL_API_KEY")?;
-            Ok(Box::new(MistralClient::new(MistralConfig::new(api_key, model_name))?))
+            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::mistral(api_key, model_name))?))
         },
     }
 }
 
-#[cfg(feature = "perplexity")]
+#[cfg(feature = "openai")]
 fn perplexity_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "perplexity-cheapest",
@@ -569,12 +557,12 @@ fn perplexity_cheapest_spec() -> ProviderSpec {
         supports_tools: false,
         build_model: |model_name| {
             let api_key = required_env("PERPLEXITY_API_KEY")?;
-            Ok(Box::new(PerplexityClient::new(PerplexityConfig::new(api_key, model_name))?))
+            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::perplexity(api_key, model_name))?))
         },
     }
 }
 
-#[cfg(feature = "cerebras")]
+#[cfg(feature = "openai")]
 fn cerebras_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "cerebras-cheapest",
@@ -584,12 +572,12 @@ fn cerebras_cheapest_spec() -> ProviderSpec {
         supports_tools: true,
         build_model: |model_name| {
             let api_key = required_env("CEREBRAS_API_KEY")?;
-            Ok(Box::new(CerebrasClient::new(CerebrasConfig::new(api_key, model_name))?))
+            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::cerebras(api_key, model_name))?))
         },
     }
 }
 
-#[cfg(feature = "sambanova")]
+#[cfg(feature = "openai")]
 fn sambanova_cheapest_spec() -> ProviderSpec {
     ProviderSpec {
         name: "sambanova-cheapest",
@@ -599,22 +587,22 @@ fn sambanova_cheapest_spec() -> ProviderSpec {
         supports_tools: true,
         build_model: |model_name| {
             let api_key = required_env("SAMBANOVA_API_KEY")?;
-            Ok(Box::new(SambaNovaClient::new(SambaNovaConfig::new(api_key, model_name))?))
+            Ok(Box::new(OpenAICompatible::new(OpenAICompatibleConfig::sambanova(api_key, model_name))?))
         },
     }
 }
 
-#[cfg(feature = "fireworks")]
+#[cfg(feature = "openai")]
 provider_contract_tests!(fireworks_cheapest_provider, fireworks_cheapest_spec);
-#[cfg(feature = "together")]
+#[cfg(feature = "openai")]
 provider_contract_tests!(together_cheapest_provider, together_cheapest_spec);
-#[cfg(feature = "mistral")]
+#[cfg(feature = "openai")]
 provider_contract_tests!(mistral_cheapest_provider, mistral_cheapest_spec);
-#[cfg(feature = "perplexity")]
+#[cfg(feature = "openai")]
 provider_contract_tests!(perplexity_cheapest_provider, perplexity_cheapest_spec);
-#[cfg(feature = "cerebras")]
+#[cfg(feature = "openai")]
 provider_contract_tests!(cerebras_cheapest_provider, cerebras_cheapest_spec);
-#[cfg(feature = "sambanova")]
+#[cfg(feature = "openai")]
 provider_contract_tests!(sambanova_cheapest_provider, sambanova_cheapest_spec);
 
 #[cfg(feature = "bedrock")]

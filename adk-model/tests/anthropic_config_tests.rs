@@ -5,7 +5,7 @@
 //! **Validates: Requirements 13.1, 13.3**
 #![cfg(feature = "anthropic")]
 
-use adk_model::anthropic::AnthropicConfig;
+use adk_model::anthropic::{AnthropicConfig, ThinkingMode};
 use proptest::prelude::*;
 
 /// Generator for optional thinking budget (0 means disabled).
@@ -58,8 +58,12 @@ proptest! {
 
         match budget {
             Some(b) => {
-                let thinking = config.thinking.as_ref().unwrap();
-                prop_assert_eq!(thinking.budget_tokens, b);
+                match config.thinking.as_ref() {
+                    Some(ThinkingMode::Enabled { budget_tokens }) => {
+                        prop_assert_eq!(*budget_tokens, b);
+                    }
+                    other => prop_assert!(false, "expected Enabled thinking mode, got {other:?}"),
+                }
             }
             None => prop_assert!(config.thinking.is_none()),
         }

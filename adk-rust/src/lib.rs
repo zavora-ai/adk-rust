@@ -935,9 +935,11 @@ pub async fn run(instructions: &str, input: &str) -> Result<String> {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    let (model, cache_capable): (Arc<dyn Llm>, Option<Arc<dyn CacheCapable>>) = {
+    type ProviderPair = (Arc<dyn Llm>, Option<Arc<dyn CacheCapable>>);
+
+    let (model, cache_capable): ProviderPair = {
         #[allow(unused_assignments)]
-        let mut result: Option<(Arc<dyn Llm>, Option<Arc<dyn CacheCapable>>)> = None;
+        let mut result: Option<ProviderPair> = None;
 
         #[cfg(feature = "anthropic")]
         {
