@@ -35,7 +35,7 @@ webrtc-vad = { version = "0.4", optional = true }
 # Local inference (optional)
 ort = { version = "2.0.0-rc.11", optional = true }
 tokenizers = { version = "0.21", optional = true }
-hf-hub = { version = "0.4", optional = true }
+hf-hub = { version = "0.5", optional = true }
 
 # Kokoro phonemizer (optional — requires espeak-ng system library)
 espeak-rs = { version = "0.1", optional = true }
