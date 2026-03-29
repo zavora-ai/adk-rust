@@ -267,7 +267,7 @@ impl ArtifactService for FileArtifactService {
         let verified_dir = canonical_dir.canonicalize().map_err(|e| {
             adk_core::AdkError::artifact(format!("canonicalize artifact dir failed: {e}"))
         })?;
-        if !verified_dir.starts_with(&canonical_base) {
+        if !verified_dir.starts_with(canonical_base) {
             return Err(adk_core::AdkError::artifact(
                 "artifact path escapes configured base directory",
             ));
