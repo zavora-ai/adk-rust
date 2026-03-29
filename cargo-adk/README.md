@@ -38,7 +38,7 @@ cargo adk templates
 | `tools` | Agent with `#[tool]` macro custom tools |
 | `rag` | RAG pipeline with Gemini embeddings + in-memory vector store |
 | `api` | REST server with health check, ready for deployment |
-| `openai` | OpenAI GPT-4o-mini agent with console |
+| `openai` | OpenAI GPT-5-mini agent with console |
 
 Each template generates:
 - `Cargo.toml` with the right dependencies and feature flags

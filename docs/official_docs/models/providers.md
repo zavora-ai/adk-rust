@@ -320,7 +320,7 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
-    let model = AnthropicClient::new(AnthropicConfig::new(&api_key, "claude-sonnet-4-5-20250929"))?;
+    let model = AnthropicClient::new(AnthropicConfig::new(&api_key, "claude-sonnet-4-6"))?;
 
     let agent = LlmAgentBuilder::new("anthropic_assistant")
         .description("Anthropic-powered assistant")
@@ -337,8 +337,8 @@ async fn main() -> anyhow::Result<()> {
 
 | Model | Description | Context |
 |-------|-------------|---------|
-| `claude-opus-4-5-20251101` | Most capable for complex autonomous tasks | 200K tokens |
-| `claude-sonnet-4-5-20250929` | Balanced intelligence and cost (recommended) | 1M tokens |
+| `claude-opus-4-6` | Most capable for complex autonomous tasks | 200K tokens |
+| `claude-sonnet-4-6` | Balanced intelligence and cost (recommended) | 1M tokens |
 | `claude-haiku-4-5-20251001` | Ultra-efficient for high-volume workloads | 200K tokens |
 | `claude-opus-4-20250514` | Hybrid model with extended thinking | 200K tokens |
 | `claude-sonnet-4-20250514` | Balanced model with extended thinking | 1M tokens |
@@ -499,7 +499,7 @@ let model: Arc<dyn adk_core::Llm> = Arc::new(
     // Pick one:
     // GeminiModel::new(&api_key, "gemini-2.5-flash")?
     // OpenAIClient::new(OpenAIConfig::new(&api_key, "gpt-5-mini"))?
-    // AnthropicClient::new(AnthropicConfig::new(&api_key, "claude-sonnet-4-5-20250929"))?
+    // AnthropicClient::new(AnthropicConfig::new(&api_key, "claude-sonnet-4-6"))?
     // DeepSeekClient::chat(&api_key)?
     // GroqClient::llama70b(&api_key)?
 );

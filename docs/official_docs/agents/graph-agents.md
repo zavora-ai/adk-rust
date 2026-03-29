@@ -1052,6 +1052,8 @@ let graph = StateGraph::with_channels(&["task", "result"])
 
 ### Checkpoint History (Time Travel)
 
+Checkpoints also enable **durable resume** — if a graph execution crashes or the process restarts, execution resumes from the last persisted checkpoint rather than starting over. Use `SqliteCheckpointer` or `PostgresCheckpointer` for crash-safe persistence.
+
 ```rust
 // List all checkpoints for a thread
 let checkpoints = checkpointer.list("thread-id").await?;

@@ -8,9 +8,9 @@ OpenTelemetry integration for Rust Agent Development Kit (ADK-Rust) agent observ
 
 ## Overview
 
-`adk-telemetry` provides observability infrastructure for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)), built on OpenTelemetry 0.28 and tracing-opentelemetry 0.29:
+`adk-telemetry` provides observability infrastructure for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)), built on OpenTelemetry 0.31 and tracing-opentelemetry 0.32:
 
-- **Tracing** - Distributed tracing with OpenTelemetry 0.28
+- **Tracing** - Distributed tracing with OpenTelemetry 0.31
 - **Logging** - Structured logging with tracing-subscriber
 - **Metrics** - Performance metrics export via OTLP (tonic 0.12 / gRPC)
 - **Span Context** - Propagation across agent boundaries
@@ -125,7 +125,7 @@ use adk_telemetry::{info, debug, warn, error, trace, instrument, Span};
 ## Features
 
 - Zero-config defaults with sensible logging
-- OpenTelemetry 0.28 compatible span export
+- OpenTelemetry 0.31 compatible span export
 - OTLP export via `tonic 0.12` (gRPC), aligned with `adk-server`'s `hyper 1.x` / `http 1.x` stack
 - Automatic context propagation
 - JSON or pretty-print log formats
@@ -134,10 +134,10 @@ use adk_telemetry::{info, debug, warn, error, trace, instrument, Span};
 
 | Crate | Version |
 |-------|---------|
-| `opentelemetry` | 0.28 |
-| `opentelemetry_sdk` | 0.28 |
-| `opentelemetry-otlp` | 0.28 |
-| `tracing-opentelemetry` | 0.29 |
+| `opentelemetry` | 0.31 |
+| `opentelemetry_sdk` | 0.31 |
+| `opentelemetry-otlp` | 0.31 |
+| `tracing-opentelemetry` | 0.32 |
 
 ## Related Crates
 
