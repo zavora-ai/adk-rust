@@ -5,7 +5,6 @@
 
 use adk_action::*;
 use proptest::prelude::*;
-use serde_json;
 use std::collections::HashMap;
 
 // ── Helper: build a StandardProperties instance ───────────────────────
