@@ -113,7 +113,7 @@ chrono = { version = "0.4.44", features = ["serde"] }
 regex = "1.10"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-opentelemetry = "0.28"
+opentelemetry = "0.31"
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls","multipart"] }
 toml = "0.8"
 sha2 = "0.10"
