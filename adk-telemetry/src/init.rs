@@ -97,7 +97,7 @@ pub fn init_with_otlp(service_name: &str, endpoint: &str) -> Result<(), Telemetr
             .build();
 
         let tracer = tracer_provider.tracer("adk-telemetry");
-        let _ = opentelemetry::global::set_tracer_provider(tracer_provider);
+        opentelemetry::global::set_tracer_provider(tracer_provider);
 
         // Initialize metrics
         let metric_exporter = match opentelemetry_otlp::MetricExporter::builder()
@@ -160,7 +160,7 @@ pub fn shutdown_telemetry() {
     // In OTel 0.28, shutdown_tracer_provider() was removed.
     // The SdkTracerProvider shuts down automatically when the last reference is dropped.
     // We trigger this by replacing the global provider with a no-op, which drops the old one.
-    let _ = opentelemetry::global::set_tracer_provider(
+    opentelemetry::global::set_tracer_provider(
         opentelemetry::trace::noop::NoopTracerProvider::new(),
     );
 }
