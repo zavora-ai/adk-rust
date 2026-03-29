@@ -75,7 +75,7 @@
 //! ```
 //!
 //! Native OpenRouter APIs such as model discovery, credits, routing configuration, plugins, and
-//! exact Responses payload access remain available on [`OpenRouterClient`] itself.
+//! exact Responses payload access remain available on `OpenRouterClient` itself.
 //!
 //! ### Anthropic
 //!
@@ -232,7 +232,7 @@
 //!
 //! ## OpenRouter Scope Boundary
 //!
-//! [`OpenRouterClient`] exposes the provider's native surfaces:
+//! `OpenRouterClient` exposes the provider's native surfaces:
 //!
 //! - chat completions
 //! - responses
@@ -241,12 +241,12 @@
 //! - OpenRouter plugins and built-in tools
 //! - exact provider metadata and annotations
 //!
-//! The generic [`Llm`] adapter exists for agent compatibility and covers text generation,
+//! The generic `Llm` adapter exists for agent compatibility and covers text generation,
 //! streaming, reasoning parts, tool/function calling, and OpenRouter request options through
-//! [`openrouter::OpenRouterRequestOptions`].
+//! `openrouter::OpenRouterRequestOptions`.
 //!
 //! Use the native OpenRouter APIs whenever you need exact request or response parity, discovery,
-//! or provider-specific features that do not fit the generic [`LlmRequest`] / [`LlmResponse`]
+//! or provider-specific features that do not fit the generic `LlmRequest` / `LlmResponse`
 //! shape without information loss.
 //!
 //! For end-to-end agentic validation, see the local `examples/openrouter` crate and the
