@@ -24,7 +24,7 @@ pub trait ReadonlyContext: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`AdkError::Config`](crate::AdkError::Config) when the
+    /// Returns an error when the
     /// underlying string is not a valid identifier.
     fn try_app_name(&self) -> Result<AppName> {
         Ok(AppName::try_from(self.app_name())?)
@@ -37,7 +37,7 @@ pub trait ReadonlyContext: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`AdkError::Config`](crate::AdkError::Config) when the
+    /// Returns an error when the
     /// underlying string is not a valid identifier.
     fn try_user_id(&self) -> Result<UserId> {
         Ok(UserId::try_from(self.user_id())?)
@@ -50,7 +50,7 @@ pub trait ReadonlyContext: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`AdkError::Config`](crate::AdkError::Config) when the
+    /// Returns an error when the
     /// underlying string is not a valid identifier.
     fn try_session_id(&self) -> Result<SessionId> {
         Ok(SessionId::try_from(self.session_id())?)
@@ -63,7 +63,7 @@ pub trait ReadonlyContext: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`AdkError::Config`](crate::AdkError::Config) when the
+    /// Returns an error when the
     /// underlying string is not a valid identifier.
     fn try_invocation_id(&self) -> Result<InvocationId> {
         Ok(InvocationId::try_from(self.invocation_id())?)
@@ -180,7 +180,7 @@ pub trait Session: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`AdkError::Config`](crate::AdkError::Config) when the
+    /// Returns an error when the
     /// underlying string is not a valid identifier.
     fn try_app_name(&self) -> Result<AppName> {
         Ok(AppName::try_from(self.app_name())?)
@@ -193,7 +193,7 @@ pub trait Session: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`AdkError::Config`](crate::AdkError::Config) when the
+    /// Returns an error when the
     /// underlying string is not a valid identifier.
     fn try_user_id(&self) -> Result<UserId> {
         Ok(UserId::try_from(self.user_id())?)
@@ -206,7 +206,7 @@ pub trait Session: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`AdkError::Config`](crate::AdkError::Config) when the
+    /// Returns an error when the
     /// underlying string is not a valid identifier.
     fn try_session_id(&self) -> Result<SessionId> {
         Ok(SessionId::try_from(self.id())?)
