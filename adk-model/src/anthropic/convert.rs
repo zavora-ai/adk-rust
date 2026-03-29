@@ -32,7 +32,7 @@ fn tool_result_content(value: &Value) -> ToolResultBlockContent {
 /// an unsupported MIME type for `InlineData` or `FileData`.
 pub fn content_to_message(
     content: &Content,
-    prompt_caching: bool,
+    _prompt_caching: bool,
 ) -> Result<MessageParam, ConversionError> {
     let role = match content.role.as_str() {
         "user" | "function" | "tool" => MessageRole::User,
@@ -40,7 +40,9 @@ pub fn content_to_message(
         _ => MessageRole::User,
     };
 
-    let cache = if prompt_caching { Some(CacheControlEphemeral::new()) } else { None };
+    // Note: cache_control is applied at the system prompt and top-level request
+    // level only (max 4 blocks). Individual message blocks do not get cache_control
+    // to avoid exceeding Anthropic's 4-block limit.
 
     let blocks: Vec<ContentBlock> = content
         .parts
@@ -50,23 +52,16 @@ pub fn content_to_message(
                 if text.is_empty() {
                     None
                 } else {
-                    let mut block = TextBlock::new(text.clone());
-                    if let Some(ref cc) = cache {
-                        block = block.with_cache_control(cc.clone());
-                    }
-                    Some(ContentBlock::Text(block))
+                    Some(ContentBlock::Text(TextBlock::new(text.clone())))
                 }
             }
             Part::FunctionCall { name, args, id, .. } => {
-                let mut block = ToolUseBlock {
+                let block = ToolUseBlock {
                     id: id.clone().unwrap_or_else(|| format!("call_{name}")),
                     name: name.clone(),
                     input: args.clone(),
                     cache_control: None,
                 };
-                if let Some(ref cc) = cache {
-                    block = block.with_cache_control(cc.clone());
-                }
                 Some(ContentBlock::ToolUse(block))
             }
             Part::FunctionResponse { function_response, id } => {
