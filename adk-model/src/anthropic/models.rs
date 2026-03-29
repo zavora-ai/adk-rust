@@ -52,7 +52,7 @@ impl AnthropicClient {
     /// List available Claude models.
     ///
     /// Calls `GET /v1/models` and returns all model descriptors from the
-    /// first page. For paginated access, use [`list_models_paginated`].
+    /// first page. For paginated access, use `list_models_paginated`.
     ///
     /// # Errors
     ///
