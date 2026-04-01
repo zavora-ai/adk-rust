@@ -143,44 +143,44 @@ cp .env.example .env
 
 ## Project Structure
 
-ADK-Rust is a Cargo workspace with 25+ crates organized by responsibility.
+ADK-Rust is a Cargo workspace with 32 publishable crates organized by responsibility.
 
 ### Core Crates (publishable to crates.io)
 
 ```
-adk-core/          Core traits: Agent, Tool, Llm, Session, Event, Content
+adk-core/          Core traits: Agent, Tool, Llm, Session, Event, Content, State
+adk-rust-macros/   Procedural macros (#[tool] attribute)
 adk-agent/         Agent implementations: LlmAgent, SequentialAgent, ParallelAgent,
                    LoopAgent, ConditionalAgent, LlmConditionalAgent
-adk-model/         LLM provider facade: Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama
+adk-model/         LLM provider facade: Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama,
+                   OpenRouter, Bedrock, Azure AI, and OpenAI-compatible presets
 adk-gemini/        Dedicated Gemini client with GeminiBackend trait (Studio + Vertex AI)
-adk-tool/          Tool utilities, built-in tools, MCP integration (rmcp 0.14)
+adk-anthropic/     Dedicated Anthropic client with thinking, caching, citations, vision
+adk-tool/          Tool utilities, built-in tools, MCP integration (rmcp 1.3)
 adk-runner/        Agent execution runtime with event streaming
 adk-server/        REST API server and A2A (Agent-to-Agent) protocol
-adk-session/       Session management and state persistence
+adk-session/       Session management and state persistence, encrypted sessions
 adk-artifact/      Artifact storage (files, images, structured data)
 adk-memory/        Long-term memory and RAG integration
-adk-graph/         Graph-based workflow orchestration with checkpoints and HITL
-adk-realtime/      Real-time bidirectional audio/voice agents (OpenAI, Gemini Live)
-adk-browser/       Browser automation tools (Playwright-based)
+adk-graph/         Graph-based workflow orchestration with checkpoints, durable resume, HITL
+adk-realtime/      Real-time bidirectional audio/voice agents (OpenAI, Gemini Live, LiveKit)
+adk-browser/       Browser automation tools via WebDriver
 adk-eval/          Agent evaluation framework (trajectory, semantic, rubric, LLM-judge)
-adk-ui/            UI protocol for rich agent responses (tables, charts, cards, modals)
-adk-telemetry/     OpenTelemetry integration for agent observability
+adk-telemetry/     OpenTelemetry 0.31 integration for agent observability
 adk-guardrail/     Input/output guardrails for agent safety
 adk-auth/          Authentication: API keys, JWT, OAuth2, OIDC, SSO
 adk-plugin/        Plugin system for agent lifecycle hooks
 adk-skill/         Skill discovery and convention-based agent capabilities
 adk-cli/           Command-line launcher for agents
+adk-code/          Code generation and execution (experimental)
+adk-sandbox/       Sandboxed execution environments (experimental)
+adk-audio/         Audio processing, STT/TTS providers (experimental)
+adk-rag/           Retrieval-augmented generation pipelines
+adk-action/        Action node execution for deterministic workflow operations
+adk-deploy/        Deployment utilities
+adk-payments/      Payment integration for agent services
+cargo-adk/         Cargo subcommand for project scaffolding
 adk-rust/          Umbrella crate re-exporting all of the above
-```
-
-### Application Crates
-
-```
-adk-studio/        Visual agent builder with Rust code generation
-                   ├── src/         Axum backend (SSE, codegen, project management)
-                   ├── ui/          React + ReactFlow frontend
-                   └── templates/   Starter project templates
-adk-doc-audit/     Documentation quality auditor (rustdoc coverage, link checking)
 ```
 
 ### Excluded from Workspace
@@ -189,15 +189,21 @@ adk-doc-audit/     Documentation quality auditor (rustdoc coverage, link checkin
 adk-mistralrs/     Local LLM inference via mistral.rs (GPU deps — build explicitly)
                    Excluded so `--all-features` works without CUDA toolkit.
                    Has its own CI workflow.
+adk-studio/        Visual agent builder — extracted to standalone repo.
+                   Repo: https://github.com/zavora-ai/adk-studio
+adk-ui/            Dynamic UI generation — extracted to standalone repo.
+                   Repo: https://github.com/zavora-ai/adk-ui
 ```
 
 ### Examples
 
 ```
-examples/          README pointing to adk-playground repo (120+ examples)
+examples/          Standalone example crates for integration validation.
+                   120+ additional examples in the adk-playground repo:
+                   https://github.com/zavora-ai/adk-playground
 ```
 
-Examples are workspace members. Simple examples live under `examples/<name>/main.rs` with entries in `examples/Cargo.toml`. Complex examples like Ralph are standalone crates added to the root `[workspace.members]`.
+Complex examples are standalone crates added to the root `[workspace.members]`.
 
 ### Documentation
 
@@ -263,16 +269,24 @@ The `Makefile` provides common shortcuts:
 
 ### Feature Flags
 
-Key feature flags on `adk-model` and `examples`:
+Key feature flags on `adk-model`:
 
+- `gemini` (default) — Gemini provider
 - `openai` — OpenAI provider
 - `anthropic` — Anthropic provider
 - `deepseek` — DeepSeek provider
 - `ollama` — Ollama local models
 - `groq` — Groq provider
-- `browser` — Browser automation
-- `guardrails` — Guardrail support
-- `sso` — SSO authentication
+- `openrouter` — OpenRouter provider
+- `bedrock` — Amazon Bedrock
+- `azure-ai` — Azure AI Inference
+
+Key feature presets on `adk-rust` (umbrella crate):
+
+- `standard` (default) — agents, models, tools, sessions, runner, server, CLI, telemetry, auth
+- `full` — standard + graph, realtime, browser, eval, rag
+- `labs` — standard + experimental crates (code, sandbox, audio)
+- `minimal` — agents + Gemini + runner (fastest build)
 
 `adk-realtime` has its own feature flags:
 
@@ -425,8 +439,8 @@ Every PR has a template with this checklist. Fill it out when you open your PR.
 1. Implement `adk_core::Llm` trait in `adk-model/src/<provider>/`
 2. Add feature flag to `adk-model/Cargo.toml`
 3. Re-export from `adk-model/src/lib.rs` behind the feature
-4. Add an example under `examples/<provider>_basic/`
-5. Update `adk-studio` codegen if the provider should be available in Studio
+4. Add an example in [adk-playground](https://github.com/zavora-ai/adk-playground)
+5. Update `adk-studio` codegen if the provider should be available in Studio (separate repo: `../adk-studio/`)
 
 ### Adding a New Tool
 
@@ -437,13 +451,8 @@ Every PR has a template with this checklist. Fill it out when you open your PR.
 
 ### Adding a New Example
 
-Simple (single file):
-```
-examples/<name>/main.rs
-# Add [[example]] entry to examples/Cargo.toml
-```
+Add examples to the [adk-playground](https://github.com/zavora-ai/adk-playground) repo. For integration validation examples that need to live in this workspace, create a standalone crate:
 
-Complex (standalone crate):
 ```
 examples/<name>/
 ├── Cargo.toml
