@@ -58,56 +58,10 @@
 use std::sync::Arc;
 
 use adk_realtime::RealtimeConfig;
-use adk_realtime::livekit::{LiveKitEventHandler, bridge_input};
+use adk_realtime::livekit::{LiveKitConfig, LiveKitEventHandler, LiveKitRoomBuilder, bridge_input};
 use adk_realtime::openai::OpenAIRealtimeModel;
 use adk_realtime::runner::{EventHandler, RealtimeRunner};
-
-use livekit::options::TrackPublishOptions;
 use livekit::prelude::*;
-use livekit::webrtc::audio_source::native::NativeAudioSource;
-use livekit::webrtc::audio_source::{AudioSourceOptions, RtcAudioSource};
-
-/// Connect to a LiveKit room and return the room handle, a native audio source
-/// for publishing model audio, and the first remote audio track from a participant.
-///
-/// In a production app you'd handle track subscriptions more robustly.
-async fn connect_to_livekit()
--> Result<(Room, NativeAudioSource, livekit::track::RemoteAudioTrack), Box<dyn std::error::Error>> {
-    let url = std::env::var("LIVEKIT_URL").expect("LIVEKIT_URL env var is required");
-    let token = std::env::var("LIVEKIT_TOKEN").expect("LIVEKIT_TOKEN env var is required");
-
-    // --- Connect to the room ---
-    let (room, mut room_events) = Room::connect(&url, &token, RoomOptions::default()).await?;
-    println!("Connected to LiveKit room: {}", room.name());
-
-    // --- Create a native audio source for publishing model audio ---
-    let audio_source = NativeAudioSource::new(
-        AudioSourceOptions::default(),
-        24000, // 24kHz for OpenAI
-        1,     // mono
-        100,   // queue_size_ms
-    );
-
-    // Publish the audio source as a local track
-    let rtc_source = RtcAudioSource::Native(audio_source.clone());
-    let local_track = LocalAudioTrack::create_audio_track("ai-agent-audio", rtc_source);
-    let publish_options = TrackPublishOptions::default();
-    room.local_participant().publish_track(LocalTrack::Audio(local_track), publish_options).await?;
-    println!("Published AI agent audio track to room.");
-
-    // --- Wait for a remote participant's audio track ---
-    println!("Waiting for a remote participant's audio track...");
-    let remote_track = loop {
-        if let Some(RoomEvent::TrackSubscribed { track: RemoteTrack::Audio(audio_track), .. }) =
-            room_events.recv().await
-        {
-            println!("Subscribed to remote audio track.");
-            break audio_track;
-        }
-    };
-
-    Ok((room, audio_source, remote_track))
-}
 
 /// A simple event handler that prints text and transcript events.
 struct PrintingEventHandler;
@@ -132,12 +86,32 @@ impl EventHandler for PrintingEventHandler {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt::init();
+
     // --- 1. Create the OpenAI realtime model ---
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY env var is required");
     let model = OpenAIRealtimeModel::new(api_key, "gpt-4o-realtime-preview-2024-12-17");
 
-    // --- 2. Connect to LiveKit room ---
-    let (_room, audio_source, remote_track) = connect_to_livekit().await?;
+    // --- 2. Build the LiveKit Config ---
+    let lk_url = std::env::var("LIVEKIT_URL").expect("LIVEKIT_URL is required");
+    let lk_api_key = std::env::var("LIVEKIT_API_KEY").expect("LIVEKIT_API_KEY is required");
+    let lk_api_secret =
+        std::env::var("LIVEKIT_API_SECRET").expect("LIVEKIT_API_SECRET is required");
+
+    let lk_config = LiveKitConfig::new(lk_url, lk_api_key, lk_api_secret)?;
+
+    let bundle = LiveKitRoomBuilder::new(lk_config)
+        .identity("openai-agent-01")
+        .name("OpenAI Agent")
+        .room_name("my-room")
+        .auto_subscribe(true)
+        .with_audio(24000, 1)
+        .connect()
+        .await?;
+
+    let _room = bundle.room;
+    let mut room_events = bundle.events;
+    let audio_source = bundle.audio_source.expect("Audio source was not created by builder");
 
     // --- 3. Wrap event handler with LiveKit audio output ---
     // The LiveKitEventHandler intercepts on_audio to push model audio to the
@@ -162,13 +136,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     runner.connect().await?;
     println!("Connected to OpenAI Realtime API.");
 
-    // --- 6. Bridge participant audio to the model ---
-    // Spawn a task that reads audio from the remote participant's track
-    // and feeds it to the AI model via the runner.
+    // --- 6. Bridge incoming participant audio to the model (in background) ---
     let bridge_runner = Arc::clone(&runner);
     let bridge_handle = tokio::spawn(async move {
-        if let Err(e) = bridge_input(remote_track, &bridge_runner).await {
-            eprintln!("Bridge input error: {e}");
+        while let Some(event) = room_events.recv().await {
+            match event {
+                RoomEvent::TrackSubscribed { track, publication: _, participant: _ } => {
+                    if let RemoteTrack::Audio(audio_track) = track {
+                        tracing::info!("Subscribed to remote audio track. Bridging input...");
+                        let r = bridge_runner.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = bridge_input(audio_track, &r).await {
+                                tracing::error!("Bridge error: {e}");
+                            }
+                        });
+                    }
+                }
+                _ => {}
+            }
         }
     });
 

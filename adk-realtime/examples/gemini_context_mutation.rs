@@ -25,7 +25,8 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     let api_key = std::env::var("GOOGLE_API_KEY").expect("GOOGLE_API_KEY must be set");
-    let model_id = std::env::var("GEMINI_LIVE_MODEL").unwrap_or("gemini-2.0-flash-live-001".into());
+    let model_id =
+        std::env::var("GEMINI_LIVE_MODEL").unwrap_or("gemini-3.1-flash-live-preview".into());
 
     info!("connecting to Gemini Live with model {model_id}");
 

@@ -63,7 +63,7 @@ impl GeminiLiveBackend {
     ///
     /// ```rust,ignore
     /// let backend = GeminiLiveBackend::vertex_adc("my-project", "us-central1")?;
-    /// let model = GeminiRealtimeModel::new(backend, "models/gemini-live-2.5-flash-native-audio");
+    /// let model = GeminiRealtimeModel::new(backend, "models/gemini-3.1-flash-live-preview");
     /// ```
     #[cfg(feature = "vertex-live")]
     pub fn vertex_adc(project_id: impl Into<String>, region: impl Into<String>) -> Result<Self> {
@@ -204,8 +204,8 @@ impl GeminiRealtimeSession {
         let ws_stream = match &backend {
             GeminiLiveBackend::Studio { api_key } => {
                 let url = format!(
-                    "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={}",
-                    api_key
+                    "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={}&model={}",
+                    api_key, model
                 );
                 let request = url.into_client_request().map_err(|e| {
                     RealtimeError::connection(format!("Failed to create request: {}", e))
@@ -217,7 +217,7 @@ impl GeminiRealtimeSession {
             }
             #[cfg(feature = "vertex-live")]
             GeminiLiveBackend::Vertex { credentials, region, project_id } => {
-                let url = build_vertex_live_url(region, project_id)?;
+                let url = build_vertex_live_url(region, project_id, model)?;
 
                 // Obtain OAuth2 bearer token from ADC credentials
                 let header_map =
@@ -286,7 +286,7 @@ impl GeminiRealtimeSession {
             audio_buffer: Arc::new(Mutex::new(Vec::new())),
         };
 
-        session.send_setup(model, config).await?;
+        session.send_setup(&model, config).await?;
         Ok(session)
     }
 
@@ -322,6 +322,17 @@ impl GeminiRealtimeSession {
 
         if let Some(temp) = config.temperature {
             generation_config["temperature"] = json!(temp);
+        }
+
+        if let Some(extra) = &config.extra {
+            if let Some(thinking_level) = extra.get("thinking_level") {
+                if let Some(obj) = generation_config.as_object_mut() {
+                    obj.insert(
+                        "thinkingConfig".to_string(),
+                        json!({ "thinkingLevel": thinking_level }),
+                    );
+                }
+            }
         }
 
         let system_instruction = config.instruction.map(|text| GeminiContent {
@@ -718,17 +729,20 @@ impl std::fmt::Debug for GeminiRealtimeSession {
 ///
 /// Returns `RealtimeError::ConfigError` if region or project_id is empty.
 #[cfg(feature = "vertex-live")]
-pub fn build_vertex_live_url(region: &str, project_id: &str) -> Result<String> {
+pub fn build_vertex_live_url(region: &str, project_id: &str, model: &str) -> Result<String> {
     if region.is_empty() {
         return Err(RealtimeError::config("Vertex AI Live requires a non-empty region"));
     }
     if project_id.is_empty() {
         return Err(RealtimeError::config("Vertex AI Live requires a non-empty project_id"));
     }
+    if model.is_empty() {
+        return Err(RealtimeError::config("Vertex AI Live requires a non-empty model"));
+    }
     Ok(format!(
         "wss://{region}-aiplatform.googleapis.com/ws/\
          google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent\
-         ?project_id={project_id}",
+         ?project_id={project_id}&model={model}",
     ))
 }
 

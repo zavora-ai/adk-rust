@@ -18,7 +18,7 @@ use super::{DEFAULT_MODEL, GEMINI_VOICES};
 /// use adk_realtime::gemini::{GeminiRealtimeModel, GeminiLiveBackend};
 /// use adk_realtime::RealtimeModel;
 ///
-/// let backend = GeminiLiveBackend::Studio { api_key: "your-key".into() };
+/// let backend = GeminiLiveBackend::studio("your-key");
 /// let model = GeminiRealtimeModel::new(backend, "models/gemini-live-2.5-flash-native-audio");
 /// let session = model.connect(config).await?;
 /// ```

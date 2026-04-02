@@ -73,9 +73,14 @@ pub enum RealtimeError {
     #[error("WebRTC error: {0}")]
     WebRTCError(String),
 
-    /// LiveKit bridge error.
+    /// LiveKit bridge error (legacy string format).
     #[error("LiveKit error: {0}")]
     LiveKitError(String),
+
+    /// Native LiveKit component error.
+    #[cfg(feature = "livekit")]
+    #[error(transparent)]
+    LiveKitNativeError(#[from] crate::livekit::LiveKitError),
 }
 
 impl RealtimeError {

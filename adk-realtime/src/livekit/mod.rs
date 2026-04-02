@@ -50,11 +50,17 @@
 //! ```
 
 mod bridge;
+mod builder;
+mod config;
+mod error;
 mod handler;
 
 // ── Our bridge utilities ────────────────────────────────────────────────
 
 pub use bridge::{bridge_gemini_input, bridge_input};
+pub use builder::LiveKitRoomBuilder;
+pub use config::LiveKitConfig;
+pub use error::LiveKitError;
 pub use handler::LiveKitEventHandler;
 
 // ── Room and connection ─────────────────────────────────────────────────
