@@ -385,11 +385,8 @@ mod tests {
     #[tokio::test]
     async fn test_timeout_enforcement() {
         let backend = ProcessBackend::default();
-        let code = if cfg!(windows) {
-            "ping -n 11 127.0.0.1".to_string()
-        } else {
-            "sleep 10".to_string()
-        };
+        let code =
+            if cfg!(windows) { "ping -n 11 127.0.0.1".to_string() } else { "sleep 10".to_string() };
         let request = ExecRequest {
             language: Language::Command,
             code,
@@ -446,11 +443,7 @@ mod tests {
             env,
         };
         let result = backend.execute(request).await.unwrap();
-        assert!(
-            result.stdout.contains("MY_TEST_VAR=test_value"),
-            "stdout: {}",
-            result.stdout
-        );
+        assert!(result.stdout.contains("MY_TEST_VAR=test_value"), "stdout: {}", result.stdout);
     }
 
     #[tokio::test]
