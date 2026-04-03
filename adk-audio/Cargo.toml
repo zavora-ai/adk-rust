@@ -49,11 +49,11 @@ candle-core = { version = "0.9", optional = true }
 qwen_tts = { version = "0.1", optional = true }
 
 # Streaming (optional)
-tokio-tungstenite = { version = "0.24", features = ["native-tls"], optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
 
 # Bridge (optional)
 adk-realtime = { workspace = true, optional = true }
-livekit-api = { version = "0.4", optional = true }
+livekit-api = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = "1"

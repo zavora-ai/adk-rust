@@ -74,9 +74,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- 1. Create the Gemini realtime model ---
     let api_key = std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY env var is required");
 
-    // Explicitly use the 3.1-flash-live-preview model which is tuned for real-time streaming.
-    // The backend now accepts the model name to construct the correct BIDI endpoint URL.
-    let model_name = "models/gemini-3.1-flash-live-preview";
+    // Explicitly use the 2.5 flash native audio model as requested by user.
+    let model_name = std::env::var("GEMINI_MODEL")
+        .unwrap_or_else(|_| "models/gemini-2.5-flash-native-audio-latest".to_string());
     let backend = GeminiLiveBackend::studio(api_key);
     let model = GeminiRealtimeModel::new(backend, model_name);
 
@@ -131,6 +131,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- 7. Bridge incoming participant audio to the model (in background) ---
     let bridge_runner = Arc::clone(&runner);
     let bridge_handle = tokio::spawn(async move {
+        // IMPORTANT: Gemini closes the WebSocket if it receives audio (RealtimeInput)
+        // before the SetupComplete message. Give the runner loop a second to
+        // complete the handshake before we start bridging LiveKit audio.
+        tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
         while let Some(event) = room_events.recv().await {
             match event {
                 RoomEvent::TrackSubscribed { track, publication: _, participant: _ } => {

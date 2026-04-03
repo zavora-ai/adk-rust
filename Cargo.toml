@@ -114,12 +114,15 @@ regex = "1.10"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 opentelemetry = "0.31"
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls","multipart"] }
 toml = "0.8"
 sha2 = "0.10"
 hex = "0.4"
 flate2 = "1.0"
 tar = "0.4"
+livekit = { version = "0.7.36", default-features = false, features = ["tokio", "native-tls"] }
+livekit-api = { version = "0.4.18", default-features = false, features = ["signal-client-tokio", "services-tokio", "access-token"] }
 
 # ADK internal crates (use { workspace = true } in member crates)
 adk-core = { path = "adk-core", version = "0.5.0" }

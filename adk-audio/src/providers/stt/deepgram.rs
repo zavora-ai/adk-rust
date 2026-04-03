@@ -191,14 +191,14 @@ impl SttProvider for DeepgramStt {
             while let Some(frame) = audio.next().await {
                 // Send raw PCM-16 LE bytes directly — Deepgram expects raw audio
                 // matching the encoding/sample_rate/channels query params.
-                if let Err(e) = ws_sink.send(Message::Binary(frame.data.to_vec())).await {
+                if let Err(e) = ws_sink.send(Message::Binary(frame.data)).await {
                     warn!("deepgram ws send error: {e}");
                     break;
                 }
             }
             // Signal end of audio by sending a close-stream message.
             let close_msg = serde_json::json!({"type": "CloseStream"});
-            let _ = ws_sink.send(Message::Text(close_msg.to_string())).await;
+            let _ = ws_sink.send(Message::Text(close_msg.to_string().into())).await;
         });
 
         // Return a stream that reads WebSocket messages and yields Transcript values.

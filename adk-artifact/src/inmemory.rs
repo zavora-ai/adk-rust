@@ -80,7 +80,7 @@ impl InMemoryArtifactService {
             })
             .collect();
 
-        versions.sort_by(|a, b| b.0.version.cmp(&a.0.version));
+        versions.sort_by_key(|b| std::cmp::Reverse(b.0.version));
         versions.first().map(|(k, v)| (k.version, (*v).clone()))
     }
 }

@@ -182,7 +182,7 @@ impl SessionService for InMemorySessionService {
         }
 
         // Sort by updated_at descending for consistency with other backends
-        result.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        result.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
 
         let result: Vec<Box<dyn Session>> = result
             .into_iter()

@@ -204,20 +204,21 @@ impl GeminiRealtimeSession {
         let ws_stream = match &backend {
             GeminiLiveBackend::Studio { api_key } => {
                 let url = format!(
-                    "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={}&model={}",
-                    api_key, model
+                    "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={}",
+                    api_key
                 );
                 let request = url.into_client_request().map_err(|e| {
                     RealtimeError::connection(format!("Failed to create request: {}", e))
                 })?;
-                let (ws, _) = connect_async(request).await.map_err(|e| {
+                let (ws, response) = connect_async(request).await.map_err(|e| {
                     RealtimeError::connection(format!("WebSocket connect error: {}", e))
                 })?;
+                tracing::info!(status = ?response.status(), "Gemini WebSocket handshake successful");
                 ws
             }
             #[cfg(feature = "vertex-live")]
             GeminiLiveBackend::Vertex { credentials, region, project_id } => {
-                let url = build_vertex_live_url(region, project_id, model)?;
+                let url = build_vertex_live_url(region, project_id)?;
 
                 // Obtain OAuth2 bearer token from ADC credentials
                 let header_map =
@@ -349,8 +350,6 @@ impl GeminiRealtimeSession {
             .and_then(|val| val.as_str())
             .map(|s| s.to_string());
 
-        // Always attach the config object to explicitly enable the session resumption feature,
-        // even if the handle is currently None.
         let session_resumption = Some(SessionResumptionConfig { handle });
 
         let setup = GeminiClientMessage {
@@ -404,11 +403,15 @@ impl GeminiRealtimeSession {
                     e
                 )))),
             },
-            Some(Ok(Message::Close(_))) => {
+            Some(Ok(Message::Close(close_frame))) => {
+                tracing::error!("WebSocket closed by server: {:?}", close_frame);
                 self.connected.store(false, Ordering::SeqCst);
                 None
             }
-            Some(Ok(_)) => Some(Ok(ServerEvent::Unknown)),
+            Some(Ok(msg)) => {
+                tracing::warn!("Received unhandled tungstenite message: {:?}", msg);
+                Some(Ok(ServerEvent::Unknown))
+            }
             Some(Err(e)) => {
                 self.connected.store(false, Ordering::SeqCst);
                 Some(Err(RealtimeError::connection(format!("Receive error: {}", e))))
@@ -729,20 +732,17 @@ impl std::fmt::Debug for GeminiRealtimeSession {
 ///
 /// Returns `RealtimeError::ConfigError` if region or project_id is empty.
 #[cfg(feature = "vertex-live")]
-pub fn build_vertex_live_url(region: &str, project_id: &str, model: &str) -> Result<String> {
+pub fn build_vertex_live_url(region: &str, project_id: &str) -> Result<String> {
     if region.is_empty() {
         return Err(RealtimeError::config("Vertex AI Live requires a non-empty region"));
     }
     if project_id.is_empty() {
         return Err(RealtimeError::config("Vertex AI Live requires a non-empty project_id"));
     }
-    if model.is_empty() {
-        return Err(RealtimeError::config("Vertex AI Live requires a non-empty model"));
-    }
     Ok(format!(
         "wss://{region}-aiplatform.googleapis.com/ws/\
          google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent\
-         ?project_id={project_id}&model={model}",
+         ?project_id={project_id}",
     ))
 }
 
@@ -973,5 +973,28 @@ mod tests {
 
         assert_eq!(gemini_parts[0].text.as_deref(), Some("First"));
         assert_eq!(gemini_parts[1].text.as_deref(), Some("Last"));
+    }
+    #[test]
+    fn test_gemini_setup_serialization_includes_model() {
+        let setup = GeminiSetup {
+            model: "models/gemini-2.5-flash-native-audio-latest".to_string(),
+            system_instruction: None,
+            generation_config: None,
+            tools: None,
+            cached_content: None,
+            session_resumption: None,
+        };
+        let wrapper = GeminiClientMessage {
+            setup: Some(setup),
+            realtime_input: None,
+            tool_response: None,
+            client_content: None,
+        };
+        let js = serde_json::to_value(&wrapper).unwrap();
+        let setup_json = js.get("setup").expect("setup missing").as_object().unwrap();
+        assert_eq!(
+            setup_json.get("model").expect("model missing from setup payload").as_str().unwrap(),
+            "models/gemini-2.5-flash-native-audio-latest"
+        );
     }
 }

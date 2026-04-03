@@ -39,7 +39,7 @@ proptest! {
         region in arb_region(),
         project_id in arb_project_id(),
     ) {
-        let url = build_vertex_live_url(&region, &project_id, "gemini-3.1-flash-live-preview")
+        let url = build_vertex_live_url(&region, &project_id)
             .expect("should produce a valid URL for non-empty inputs");
         prop_assert!(
             url.starts_with("wss://"),
@@ -57,7 +57,7 @@ proptest! {
         region in arb_region(),
         project_id in arb_project_id(),
     ) {
-        let url = build_vertex_live_url(&region, &project_id, "gemini-3.1-flash-live-preview")
+        let url = build_vertex_live_url(&region, &project_id)
             .expect("should produce a valid URL for non-empty inputs");
         let expected_host = format!("{}-aiplatform.googleapis.com", region);
         prop_assert!(
@@ -76,7 +76,7 @@ proptest! {
         region in arb_region(),
         project_id in arb_project_id(),
     ) {
-        let url = build_vertex_live_url(&region, &project_id, "gemini-3.1-flash-live-preview")
+        let url = build_vertex_live_url(&region, &project_id)
             .expect("should produce a valid URL for non-empty inputs");
         let expected_path = "/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent";
         prop_assert!(
@@ -96,7 +96,7 @@ proptest! {
         region in arb_region(),
         project_id in arb_project_id(),
     ) {
-        let url = build_vertex_live_url(&region, &project_id, "gemini-3.1-flash-live-preview")
+        let url = build_vertex_live_url(&region, &project_id)
             .expect("should produce a valid URL for non-empty inputs");
         let expected_param = format!("project_id={}", project_id);
         prop_assert!(
@@ -115,7 +115,7 @@ proptest! {
         region in arb_region(),
         project_id in arb_project_id(),
     ) {
-        let url = build_vertex_live_url(&region, &project_id, "gemini-3.1-flash-live-preview")
+        let url = build_vertex_live_url(&region, &project_id)
             .expect("should produce a valid URL for non-empty inputs");
         let parsed = url::Url::parse(&url);
         prop_assert!(
@@ -133,7 +133,7 @@ proptest! {
     fn prop_empty_region_returns_config_error(
         project_id in arb_project_id(),
     ) {
-        let result = build_vertex_live_url("", &project_id, "gemini-3.1-flash-live-preview");
+        let result = build_vertex_live_url("", &project_id);
         prop_assert!(
             result.is_err(),
             "Expected ConfigError for empty region, got Ok({})",
@@ -155,7 +155,7 @@ proptest! {
     fn prop_empty_project_id_returns_config_error(
         region in arb_region(),
     ) {
-        let result = build_vertex_live_url(&region, "", "gemini-3.1-flash-live-preview");
+        let result = build_vertex_live_url(&region, "");
         prop_assert!(
             result.is_err(),
             "Expected ConfigError for empty project_id, got Ok({})",

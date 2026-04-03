@@ -114,7 +114,8 @@ impl RealtimeModel for OpenAIRealtimeModel {
                 let session =
                     OpenAIRealtimeSession::connect(&self.websocket_url(), &self.api_key, config)
                         .await?;
-                Ok(Box::new(session))
+                let handler = crate::openai::protocol::OpenAIProtocolHandler::new(session);
+                Ok(Box::new(handler))
             }
             #[cfg(feature = "openai-webrtc")]
             OpenAITransport::WebRTC => {
@@ -124,7 +125,8 @@ impl RealtimeModel for OpenAIRealtimeModel {
                     config,
                 )
                 .await?;
-                Ok(Box::new(session))
+                let handler = crate::openai::protocol::OpenAIProtocolHandler::new(session);
+                Ok(Box::new(handler))
             }
         }
     }

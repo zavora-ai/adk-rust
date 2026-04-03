@@ -86,6 +86,9 @@ impl EventHandler for PrintingEventHandler {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("Failed to install rustls default crypto provider");
     tracing_subscriber::fmt::init();
 
     // --- 1. Create the OpenAI realtime model ---

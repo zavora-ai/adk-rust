@@ -25,8 +25,7 @@ use std::sync::atomic::AtomicU64;
 use crate::audio::AudioChunk;
 use crate::config::RealtimeConfig;
 use crate::error::{RealtimeError, Result};
-use crate::events::{ClientEvent, ConversationItem, ServerEvent, ToolResponse};
-use crate::session::RealtimeSession;
+use crate::events::ServerEvent;
 
 /// Maximum size of an encoded Opus frame in bytes.
 ///
@@ -518,9 +517,7 @@ impl std::fmt::Debug for OpenAIWebRTCSession {
 
 use async_trait::async_trait;
 use base64::Engine;
-use futures::Stream;
 use serde_json::Value;
-use std::pin::Pin;
 
 impl OpenAIWebRTCSession {
     /// Send a JSON-serializable value over the "oai-events" data channel.
@@ -628,8 +625,10 @@ impl OpenAIWebRTCSession {
     }
 }
 
+use crate::openai::protocol::OpenAITransportLink;
+
 #[async_trait]
-impl RealtimeSession for OpenAIWebRTCSession {
+impl OpenAITransportLink for OpenAIWebRTCSession {
     fn session_id(&self) -> &str {
         &self.session_id
     }
@@ -638,12 +637,12 @@ impl RealtimeSession for OpenAIWebRTCSession {
         self.connected.load(Ordering::Relaxed)
     }
 
+    async fn send_raw(&self, payload: &Value) -> Result<()> {
+        self.send_data_channel_message(payload).await
+    }
+
     /// Send raw PCM16 audio over the WebRTC audio track.
-    ///
-    /// Converts the `AudioChunk` data (little-endian PCM16 bytes) to i16
-    /// samples, Opus-encodes them, and writes the Opus frame to the media
-    /// track for transmission.
-    async fn send_audio(&self, audio: &AudioChunk) -> Result<()> {
+    async fn send_audio(&self, audio: &crate::audio::AudioChunk) -> Result<()> {
         if !self.is_connected() {
             return Err(RealtimeError::NotConnected);
         }
@@ -656,10 +655,6 @@ impl RealtimeSession for OpenAIWebRTCSession {
     }
 
     /// Send base64-encoded PCM16 audio over the WebRTC audio track.
-    ///
-    /// Decodes the base64 string to raw bytes, interprets them as
-    /// little-endian i16 PCM samples, Opus-encodes, and writes to the
-    /// media track.
     async fn send_audio_base64(&self, audio_base64: &str) -> Result<()> {
         if !self.is_connected() {
             return Err(RealtimeError::NotConnected);
@@ -682,132 +677,11 @@ impl RealtimeSession for OpenAIWebRTCSession {
         self.write_audio_to_track(&pcm_samples).await
     }
 
-    /// Send a text message via the "oai-events" data channel.
-    ///
-    /// Creates a `conversation.item.create` event with a user text message
-    /// and sends it as JSON over the data channel.
-    async fn send_text(&self, text: &str) -> Result<()> {
-        if !self.is_connected() {
-            return Err(RealtimeError::NotConnected);
-        }
-
-        let item = ConversationItem::user_text(text);
-        let event = ClientEvent::ConversationItemCreate {
-            item: serde_json::to_value(&item)
-                .map_err(|e| RealtimeError::protocol(format!("Serialize text item: {e}")))?,
-        };
-        self.send_event(event).await
-    }
-
-    /// Send a tool/function response via the "oai-events" data channel.
-    ///
-    /// Creates a `conversation.item.create` event with a function_call_output
-    /// item and sends it over the data channel, then triggers a response.
-    async fn send_tool_response(&self, response: ToolResponse) -> Result<()> {
-        if !self.is_connected() {
-            return Err(RealtimeError::NotConnected);
-        }
-
-        let output = match &response.output {
-            Value::String(s) => s.clone(),
-            other => serde_json::to_string(other).unwrap_or_default(),
-        };
-
-        let item = ConversationItem::tool_response(response.call_id, output);
-        let event = ClientEvent::ConversationItemCreate {
-            item: serde_json::to_value(&item)
-                .map_err(|e| RealtimeError::protocol(format!("Serialize tool response: {e}")))?,
-        };
-        self.send_event(event).await?;
-
-        // Trigger response after tool output (same pattern as WebSocket session)
-        self.create_response().await
-    }
-
-    /// Commit the audio input buffer via the data channel.
-    ///
-    /// Sends an `input_audio_buffer.commit` event for manual VAD mode.
-    async fn commit_audio(&self) -> Result<()> {
-        if !self.is_connected() {
-            return Err(RealtimeError::NotConnected);
-        }
-
-        self.send_event(ClientEvent::InputAudioBufferCommit).await
-    }
-
-    /// Clear the audio input buffer via the data channel.
-    ///
-    /// Sends an `input_audio_buffer.clear` event.
-    async fn clear_audio(&self) -> Result<()> {
-        if !self.is_connected() {
-            return Err(RealtimeError::NotConnected);
-        }
-
-        self.send_event(ClientEvent::InputAudioBufferClear).await
-    }
-
-    /// Trigger a response from the model via the data channel.
-    ///
-    /// Sends a `response.create` event.
-    async fn create_response(&self) -> Result<()> {
-        if !self.is_connected() {
-            return Err(RealtimeError::NotConnected);
-        }
-
-        self.send_event(ClientEvent::ResponseCreate { config: None }).await
-    }
-
-    /// Interrupt/cancel the current response via the data channel.
-    ///
-    /// Sends a `response.cancel` event.
-    async fn interrupt(&self) -> Result<()> {
-        if !self.is_connected() {
-            return Err(RealtimeError::NotConnected);
-        }
-
-        self.send_event(ClientEvent::ResponseCancel).await
-    }
-
-    /// Send a raw `ClientEvent` over the "oai-events" data channel.
-    ///
-    /// Serializes the event to JSON and writes it to the data channel.
-    async fn send_event(&self, event: ClientEvent) -> Result<()> {
-        if !self.is_connected() {
-            return Err(RealtimeError::NotConnected);
-        }
-
-        let value = serde_json::to_value(&event)
-            .map_err(|e| RealtimeError::protocol(format!("Serialize event: {e}")))?;
-        self.send_data_channel_message(&value).await
-    }
-
-    /// Receive the next server event.
-    ///
-    /// Reads from the internal mpsc channel that is fed by the background
-    /// I/O driving loop. Returns `None` when the session is closed and
-    /// the channel is drained.
-    async fn next_event(&self) -> Option<Result<ServerEvent>> {
+    async fn receive_raw(&self) -> Option<Result<ServerEvent>> {
         let mut rx = self.event_rx.lock().await;
         rx.recv().await
     }
 
-    /// Get a stream of server events.
-    ///
-    /// Wraps the mpsc receiver as an async stream for convenient iteration.
-    fn events(&self) -> Pin<Box<dyn Stream<Item = Result<ServerEvent>> + Send + '_>> {
-        let rx = self.event_rx.clone();
-        Box::pin(async_stream::stream! {
-            let mut rx = rx.lock().await;
-            while let Some(event) = rx.recv().await {
-                yield event;
-            }
-        })
-    }
-
-    /// Close the WebRTC session gracefully.
-    ///
-    /// Marks the session as disconnected and calls `rtc.disconnect()` to
-    /// signal the str0m instance to tear down the peer connection.
     async fn close(&self) -> Result<()> {
         self.connected.store(false, Ordering::Relaxed);
         let mut rtc = self.rtc.lock().await;

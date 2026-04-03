@@ -27,7 +27,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 # WebSocket
-tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"], optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
 
 # Zero-copy bytes
 bytes = "1"
@@ -58,8 +58,8 @@ adk-gemini = { workspace = true, optional = true }
 google-cloud-auth = { version = "1.4", optional = true, default-features = false, features = ["default-rustls-provider"] }
 
 # LiveKit bridge (optional)
-livekit = { version = "0.7", optional = true }
-livekit-api = { version = "0.4", optional = true }
+livekit = { workspace = true, optional = true }
+livekit-api = { workspace = true, optional = true }
 
 # OpenAI WebRTC (optional)
 # NOTE: `audiopus` builds the Opus C library from source and requires `cmake`.
@@ -95,6 +95,14 @@ required-features = ["vertex-live"]
 [[example]]
 name = "vertex_live_tools"
 required-features = ["vertex-live"]
+
+[[example]]
+name = "debug_livekit_auth"
+path = "examples/debug_livekit_auth.rs"
+
+[[example]]
+name = "debug_gemini"
+path = "examples/debug_gemini.rs"
 
 [[example]]
 name = "livekit_bridge"
