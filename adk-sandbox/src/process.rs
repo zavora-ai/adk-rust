@@ -244,10 +244,17 @@ impl ProcessBackend {
         self.run_command(cmd, request).await
     }
 
-    /// Executes a raw shell command via `sh -c`.
+    /// Executes a raw shell command via the platform shell.
     async fn execute_command(&self, request: &ExecRequest) -> Result<ExecResult, SandboxError> {
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(&request.code);
+        let cmd = if cfg!(windows) {
+            let mut c = Command::new("cmd");
+            c.arg("/C").arg(&request.code);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.arg("-c").arg(&request.code);
+            c
+        };
         self.run_command(cmd, request).await
     }
 
@@ -333,6 +340,10 @@ mod tests {
         if let Ok(path) = std::env::var("PATH") {
             env.insert("PATH".to_string(), path);
         }
+        // Windows processes need SYSTEMROOT for DLL loading and basic operation.
+        if let Ok(sr) = std::env::var("SYSTEMROOT") {
+            env.insert("SYSTEMROOT".to_string(), sr);
+        }
         ExecRequest {
             language,
             code: code.to_string(),
@@ -354,6 +365,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_javascript_execution() {
+        // Skip if node is not available (e.g. minimal CI images)
+        if std::process::Command::new("node").arg("--version").output().is_err() {
+            eprintln!("skipping test_javascript_execution: node not found");
+            return;
+        }
         let backend = ProcessBackend::default();
         let request = make_request(Language::JavaScript, "console.log('hello')");
         let result = backend.execute(request).await.unwrap();
@@ -373,14 +389,10 @@ mod tests {
     #[tokio::test]
     async fn test_timeout_enforcement() {
         let backend = ProcessBackend::default();
-        let request = ExecRequest {
-            language: Language::Command,
-            code: "sleep 10".to_string(),
-            stdin: None,
-            timeout: Duration::from_secs(1),
-            memory_limit_mb: None,
-            env: HashMap::new(),
-        };
+        let code =
+            if cfg!(windows) { "ping -n 11 127.0.0.1".to_string() } else { "sleep 10".to_string() };
+        let mut request = make_request(Language::Command, &code);
+        request.timeout = Duration::from_secs(1);
         let result = backend.execute(request).await;
         assert!(
             matches!(result, Err(SandboxError::Timeout { .. })),
@@ -389,6 +401,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
     async fn test_environment_isolation() {
         let backend = ProcessBackend::default();
         let mut env = HashMap::new();
@@ -414,9 +427,28 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(windows)]
+    async fn test_environment_isolation() {
+        let backend = ProcessBackend::default();
+        let mut env = HashMap::new();
+        env.insert("MY_TEST_VAR".to_string(), "test_value".to_string());
+        let request = ExecRequest {
+            language: Language::Command,
+            code: "set MY_TEST_VAR".to_string(),
+            stdin: None,
+            timeout: Duration::from_secs(10),
+            memory_limit_mb: None,
+            env,
+        };
+        let result = backend.execute(request).await.unwrap();
+        assert!(result.stdout.contains("MY_TEST_VAR=test_value"), "stdout: {}", result.stdout);
+    }
+
+    #[tokio::test]
     async fn test_nonzero_exit_code() {
         let backend = ProcessBackend::default();
-        let request = make_request(Language::Command, "exit 42");
+        let code = if cfg!(windows) { "exit /b 42" } else { "exit 42" };
+        let request = make_request(Language::Command, code);
         let result = backend.execute(request).await.unwrap();
         assert_eq!(result.exit_code, 42);
     }

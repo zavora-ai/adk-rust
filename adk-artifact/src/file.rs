@@ -8,6 +8,19 @@ use tokio::fs;
 
 const USER_SCOPED_DIR: &str = "_user_scoped_";
 
+/// Sanitize a file name for use as a filesystem path component.
+///
+/// Colons are valid in ADK artifact names (e.g. `user:shared.txt`) but illegal
+/// in Windows file/directory names. Replace them with a double-underscore.
+fn fs_safe_name(name: &str) -> String {
+    name.replace(':', "__")
+}
+
+/// Reverse the filesystem sanitization to recover the original artifact name.
+fn fs_unsafe_name(name: &str) -> String {
+    name.replace("__", ":")
+}
+
 /// Persist artifacts on the local filesystem.
 ///
 /// The base directory is created and canonicalized at construction time.
@@ -122,10 +135,11 @@ impl FileArtifactService {
         Self::validate_path_component(session_id, "session id")?;
         Self::validate_file_name(file_name)?;
 
+        let safe_name = fs_safe_name(file_name);
         let dir = if Self::is_user_scoped(file_name) {
-            self.base_dir.join(app_name).join(user_id).join(USER_SCOPED_DIR).join(file_name)
+            self.base_dir.join(app_name).join(user_id).join(USER_SCOPED_DIR).join(&safe_name)
         } else {
-            self.base_dir.join(app_name).join(user_id).join(session_id).join(file_name)
+            self.base_dir.join(app_name).join(user_id).join(session_id).join(&safe_name)
         };
 
         // Verify the constructed path hasn't escaped base_dir
@@ -214,7 +228,7 @@ impl FileArtifactService {
                 .is_dir()
             {
                 if let Some(name) = entry.file_name().to_str() {
-                    names.insert(name.to_string());
+                    names.insert(fs_unsafe_name(name));
                 }
             }
         }
@@ -245,18 +259,19 @@ impl ArtifactService for FileArtifactService {
         let canonical_base = &self.base_dir;
 
         // Build path from canonical base + validated segments (no user data in base)
+        let safe_name = fs_safe_name(&req.file_name);
         let canonical_dir = if Self::is_user_scoped(&req.file_name) {
             canonical_base
                 .join(&req.app_name)
                 .join(&req.user_id)
                 .join(USER_SCOPED_DIR)
-                .join(&req.file_name)
+                .join(&safe_name)
         } else {
             canonical_base
                 .join(&req.app_name)
                 .join(&req.user_id)
                 .join(&req.session_id)
-                .join(&req.file_name)
+                .join(&safe_name)
         };
 
         fs::create_dir_all(&canonical_dir)

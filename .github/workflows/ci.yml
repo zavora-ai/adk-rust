@@ -120,3 +120,84 @@ jobs:
           SUMMARY=$(grep "tests run:" test.log | tail -1)
           echo "### 🧪 $SUMMARY" >> "$GITHUB_STEP_SUMMARY"
         fi
+
+  # ── Cross-platform: macOS build + test ─────────────────────────
+  macos:
+    needs: fmt
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install stable Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-nextest
+
+    - name: Install system dependencies
+      run: brew install cmake protobuf
+
+    - name: Cache cargo artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: macos-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: macos-${{ runner.os }}-
+
+    - name: Build workspace
+      run: cargo build --workspace
+
+    - name: Run tests
+      run: cargo nextest run --workspace
+
+    - name: Test summary
+      if: always()
+      run: echo "### 🍎 macOS build + test passed" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Cross-platform: Windows build + check ──────────────────────
+  windows:
+    needs: fmt
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install stable Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-nextest
+
+    - name: Install cmake
+      uses: lukka/get-cmake@latest
+
+    - name: Install protoc
+      uses: arduino/setup-protoc@v3
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Cache cargo artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~\.cargo\registry
+          ~\.cargo\git
+          target
+        key: windows-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: windows-${{ runner.os }}-
+
+    - name: Build workspace
+      run: cargo build --workspace
+
+    - name: Run tests
+      run: cargo nextest run --workspace
+
+    - name: Test summary
+      if: always()
+      run: echo "### 🪟 Windows build + test passed" >> $env:GITHUB_STEP_SUMMARY

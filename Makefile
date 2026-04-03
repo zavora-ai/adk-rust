@@ -21,8 +21,8 @@ help:
 	@echo "  make clean        - Clean build artifacts"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make examples     - Build all examples (CPU-only, no GPU required)"
-	@echo "  make examples-gpu - Build examples with Metal GPU support (macOS)"
+	@echo "  make examples     - Build all example crates"
+	@echo "  make examples-gpu - Build mistralrs with Metal GPU support (macOS)"
 	@echo ""
 	@echo "mistral.rs (Local LLM - excluded from workspace by default):"
 	@echo "  make build-mistralrs       - Build adk-mistralrs (CPU-only)"
@@ -99,27 +99,33 @@ fmt:
 clean:
 	cargo clean
 
-# Build examples (CPU-only, works on all systems)
+# Build examples (standalone crates in examples/)
 examples:
-	cargo build --examples --features "openai,anthropic,deepseek,ollama,groq,browser,guardrails,sso"
+	cargo build -p competitive-ergonomics-example
+	cargo build -p competitive-graph-resume-example
+	cargo build -p competitive-tool-search-example
+	cargo build -p openai-responses-example
+	cargo build -p openrouter-example
+	cargo build -p mcp-elicitation-example
+	cargo build -p action-nodes-example
 
 # Build examples with mistralrs (CPU-only)
 examples-mistralrs:
-	cargo build --examples --features "openai,anthropic,deepseek,ollama,groq,mistralrs,browser,guardrails,sso"
+	cargo build --manifest-path adk-mistralrs/Cargo.toml
 
 # Build examples with Metal GPU support (macOS only)
 examples-gpu:
-	cargo build --examples --features "openai,anthropic,deepseek,ollama,groq,mistralrs,browser,guardrails,sso,metal"
+	cargo build --manifest-path adk-mistralrs/Cargo.toml --features "metal"
 
 # Feature-specific builds
 build-openai:
-	cargo build --workspace --features "openai"
+	cargo build -p adk-model --features "openai"
 
 build-anthropic:
-	cargo build --workspace --features "anthropic"
+	cargo build -p adk-model --features "anthropic"
 
 build-ollama:
-	cargo build --workspace --features "ollama"
+	cargo build -p adk-model --features "ollama"
 
 # mistral.rs builds (excluded from workspace, must build explicitly)
 build-mistralrs:
@@ -138,7 +144,7 @@ docs:
 
 # Run a specific mistralrs example
 run-mistralrs-basic:
-	cargo run --example mistralrs_basic --features mistralrs
+	cargo run --manifest-path adk-mistralrs/Cargo.toml --example mistralrs_basic
 
 run-mistralrs-basic-metal:
-	cargo run --example mistralrs_basic --features mistralrs,metal
+	cargo run --manifest-path adk-mistralrs/Cargo.toml --features metal --example mistralrs_basic
