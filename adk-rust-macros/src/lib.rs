@@ -35,7 +35,7 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{FnArg, ItemFn, Type, parse_macro_input};
+use syn::{FnArg, ItemFn, Meta, Type, parse_macro_input};
 
 /// Attribute macro that generates a `Tool` implementation from an async function.
 ///
@@ -47,7 +47,15 @@ use syn::{FnArg, ItemFn, Type, parse_macro_input};
 /// - It must return `Result<serde_json::Value, adk_tool::AdkError>`
 /// - Doc comments become the tool description
 ///
-/// # Example
+/// # Attributes
+///
+/// Optional attributes can be passed to configure tool metadata:
+///
+/// - `read_only` — marks the tool as having no side effects (`is_read_only() → true`)
+/// - `concurrency_safe` — marks the tool as safe for concurrent execution (`is_concurrency_safe() → true`)
+/// - `long_running` — marks the tool as long-running (`is_long_running() → true`)
+///
+/// # Examples
 ///
 /// ```rust,ignore
 /// /// Search the knowledge base for documents matching a query.
@@ -56,12 +64,30 @@ use syn::{FnArg, ItemFn, Type, parse_macro_input};
 ///     // ...
 /// }
 ///
+/// /// Look up cached data (read-only, safe for parallel dispatch).
+/// #[tool(read_only, concurrency_safe)]
+/// async fn cache_lookup(args: LookupArgs) -> Result<serde_json::Value, adk_tool::AdkError> {
+///     // ...
+/// }
+///
 /// // Generated: pub struct SearchDocs; implements Tool
 /// // Use: agent_builder.tool(Arc::new(SearchDocs))
 /// ```
 #[proc_macro_attribute]
-pub fn tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(item as ItemFn);
+
+    // Parse optional attributes: #[tool(read_only, concurrency_safe, long_running)]
+    let mut is_read_only = false;
+    let mut is_concurrency_safe = false;
+    let mut is_long_running = false;
+
+    if !attr.is_empty() {
+        let meta = parse_macro_input!(attr as ToolAttrs);
+        is_read_only = meta.read_only;
+        is_concurrency_safe = meta.concurrency_safe;
+        is_long_running = meta.long_running;
+    }
 
     let fn_name = &input_fn.sig.ident;
     let fn_vis = &input_fn.vis;
@@ -203,6 +229,31 @@ pub fn tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
         deserialize_call
     };
 
+    // Generate optional trait method overrides
+    let read_only_override = if is_read_only {
+        quote! {
+            fn is_read_only(&self) -> bool { true }
+        }
+    } else {
+        quote! {}
+    };
+
+    let concurrency_safe_override = if is_concurrency_safe {
+        quote! {
+            fn is_concurrency_safe(&self) -> bool { true }
+        }
+    } else {
+        quote! {}
+    };
+
+    let long_running_override = if is_long_running {
+        quote! {
+            fn is_long_running(&self) -> bool { true }
+        }
+    } else {
+        quote! {}
+    };
+
     let output = quote! {
         // Keep the original function
         #input_fn
@@ -223,6 +274,10 @@ pub fn tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
             fn parameters_schema(&self) -> Option<serde_json::Value> {
                 #schema_gen
             }
+
+            #read_only_override
+            #concurrency_safe_override
+            #long_running_override
 
             async fn execute(
                 &self,
@@ -265,4 +320,45 @@ fn has_tool_context_param(func: &ItemFn) -> bool {
             false
         }
     })
+}
+
+/// Parsed attributes from `#[tool(read_only, concurrency_safe, long_running)]`.
+struct ToolAttrs {
+    read_only: bool,
+    concurrency_safe: bool,
+    long_running: bool,
+}
+
+impl syn::parse::Parse for ToolAttrs {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut attrs =
+            ToolAttrs { read_only: false, concurrency_safe: false, long_running: false };
+
+        let punctuated =
+            syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated(input)?;
+
+        for meta in punctuated {
+            if let Meta::Path(path) = &meta {
+                if path.is_ident("read_only") {
+                    attrs.read_only = true;
+                } else if path.is_ident("concurrency_safe") {
+                    attrs.concurrency_safe = true;
+                } else if path.is_ident("long_running") {
+                    attrs.long_running = true;
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        path,
+                        "unknown tool attribute; expected `read_only`, `concurrency_safe`, or `long_running`",
+                    ));
+                }
+            } else {
+                return Err(syn::Error::new_spanned(
+                    meta,
+                    "expected identifier (e.g., `read_only`), not key-value",
+                ));
+            }
+        }
+
+        Ok(attrs)
+    }
 }

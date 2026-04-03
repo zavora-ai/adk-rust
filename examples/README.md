@@ -18,6 +18,7 @@ playground versions are being finalized:
 - `examples/openrouter` — end-to-end OpenRouter validation through the ADK agent stack
 - `examples/bedrock_test` — Bedrock smoke testing
 - `examples/payments` — agentic commerce scenario index for ACP/AP2 validation paths
+- `examples/developer_ergonomics` — developer ergonomics validation (RunnerConfigBuilder, ToolExecutionStrategy, SimpleToolContext, StatefulTool, run_str, #[tool] attributes)
 
 ## Quick Start
 

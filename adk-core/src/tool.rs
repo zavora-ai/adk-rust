@@ -93,6 +93,18 @@ pub trait Tool: Send + Sync {
         &[]
     }
 
+    /// Indicates whether this tool performs no side effects.
+    /// Read-only tools may be executed concurrently in Auto mode.
+    fn is_read_only(&self) -> bool {
+        false
+    }
+
+    /// Indicates whether this tool is safe for concurrent execution.
+    /// Used by the Parallel strategy to validate dispatch safety.
+    fn is_concurrency_safe(&self) -> bool {
+        false
+    }
+
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
 }
 
@@ -157,6 +169,18 @@ impl RetryBudget {
 pub trait Toolset: Send + Sync {
     fn name(&self) -> &str;
     async fn tools(&self, ctx: Arc<dyn crate::ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>>;
+}
+
+/// Controls how multiple tool calls from a single LLM response are dispatched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ToolExecutionStrategy {
+    /// Execute tools one at a time in LLM-returned order. Default.
+    #[default]
+    Sequential,
+    /// Execute all tools concurrently via `join_all`.
+    Parallel,
+    /// Execute read-only tools concurrently, then mutable tools sequentially.
+    Auto,
 }
 
 /// Controls how the framework handles skills/agents that request unavailable tools.

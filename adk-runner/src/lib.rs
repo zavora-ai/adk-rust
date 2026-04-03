@@ -36,11 +36,13 @@
 //! - Artifact handling
 //! - Callback hooks at every stage
 
+pub mod builder;
 mod cache;
 mod callbacks;
 mod context;
 mod runner;
 
+pub use builder::RunnerConfigBuilder;
 pub use callbacks::{
     AfterModelCallback, AfterToolCallback, BeforeModelCallback, BeforeToolCallback, Callbacks,
 };

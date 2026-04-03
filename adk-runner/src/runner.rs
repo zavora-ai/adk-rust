@@ -65,7 +65,32 @@ pub struct Runner {
 }
 
 impl Runner {
+    /// Create a typestate builder for constructing a `Runner`.
+    ///
+    /// The builder enforces at compile time that the three required fields
+    /// (`app_name`, `agent`, `session_service`) are set before `build()` is
+    /// callable.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let runner = Runner::builder()
+    ///     .app_name("my-app")
+    ///     .agent(agent)
+    ///     .session_service(session_service)
+    ///     .build()?;
+    /// ```
+    pub fn builder() -> crate::builder::RunnerConfigBuilder<
+        crate::builder::NoAppName,
+        crate::builder::NoAgent,
+        crate::builder::NoSessionService,
+    > {
+        crate::builder::RunnerConfigBuilder::new()
+    }
+
     pub fn new(config: RunnerConfig) -> Result<Self> {
+        let run_config = config.run_config.unwrap_or_default();
+
         // When a cache-capable model is provided but no explicit cache config,
         // use the default ContextCacheConfig to enable caching automatically.
         let effective_cache_config = config
@@ -83,7 +108,7 @@ impl Runner {
             memory_service: config.memory_service,
             plugin_manager: config.plugin_manager,
             skill_injector: None,
-            run_config: config.run_config.unwrap_or_default(),
+            run_config,
             compaction_config: config.compaction_config,
             context_cache_config: effective_cache_config,
             cache_capable: config.cache_capable,
@@ -742,6 +767,26 @@ impl Runner {
         };
 
         Ok(Box::pin(s))
+    }
+
+    /// Convenience method that accepts string arguments.
+    ///
+    /// Converts `user_id` and `session_id` to their typed equivalents
+    /// and delegates to [`run()`](Self::run).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either string fails identity validation
+    /// (empty, contains null bytes, or exceeds length limit).
+    pub async fn run_str(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        user_content: Content,
+    ) -> Result<EventStream> {
+        let user_id = UserId::try_from(user_id)?;
+        let session_id = SessionId::try_from(session_id)?;
+        self.run(user_id, session_id, user_content).await
     }
 
     /// Find which agent should handle the request based on session history

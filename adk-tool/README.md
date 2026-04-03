@@ -11,6 +11,8 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 `adk-tool` provides the tool infrastructure for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)):
 
 - **FunctionTool** - Create tools from async Rust functions
+- **StatefulTool\<S\>** - Wrap shared state (`Arc<S>`) with a tool handler
+- **SimpleToolContext** - Lightweight `ToolContext` for non-agent callers (testing, MCP servers)
 - **AgentTool** - Use agents as callable tools for composition (runs sub-agents in non-streaming mode for reliable response capture)
 - **GoogleSearchTool** - Web search via Gemini's grounding
 - **Provider-native wrappers** - Typed declarations for Gemini, Anthropic, and OpenAI built-in tools
@@ -82,6 +84,48 @@ struct WeatherParams {
 let tool = FunctionTool::new("get_weather", "Get weather", get_weather)
     .with_parameters_schema::<WeatherParams>();
 ```
+
+### Tool Metadata
+
+Mark tools as read-only or concurrency-safe for smarter dispatch:
+
+```rust
+let lookup = FunctionTool::new("lookup", "Look up data", handler)
+    .with_read_only(true)        // safe for concurrent dispatch in Auto mode
+    .with_concurrency_safe(true);
+```
+
+### StatefulTool
+
+Wrap shared state with a tool handler — the `Arc<S>` is cloned per invocation:
+
+```rust
+use adk_tool::StatefulTool;
+use tokio::sync::RwLock;
+
+struct Counter { count: RwLock<u64> }
+
+let state = Arc::new(Counter { count: RwLock::new(0) });
+
+let tool = StatefulTool::new("increment", "Increment counter", state, |s, _ctx, _args| async move {
+    let mut count = s.count.write().await;
+    *count += 1;
+    Ok(json!({"count": *count}))
+});
+```
+
+### SimpleToolContext
+
+Call tools outside the agent loop (testing, MCP servers, sub-agent delegation):
+
+```rust
+use adk_tool::SimpleToolContext;
+
+let ctx = SimpleToolContext::new("my-test-harness");
+let result = my_tool.execute(Arc::new(ctx), json!({"key": "value"})).await?;
+```
+
+Defaults: `user_id()` → `"anonymous"`, `session_id()` → `""`, unique UUIDs for invocation and function call IDs.
 
 ### MCP Tools (Local Server via stdio)
 

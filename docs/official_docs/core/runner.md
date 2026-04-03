@@ -38,10 +38,32 @@ let config = RunnerConfig {
     plugin_manager: None,
     run_config: None,
     compaction_config: None,
+    context_cache_config: None,
+    cache_capable: None,
+    request_context: None,
+    cancellation_token: None,
 };
 
 let runner = Runner::new(config)?;
 ```
+
+### RunnerConfigBuilder (Recommended)
+
+Use the typestate builder to construct a Runner. The builder enforces required fields at compile time and defaults all optional fields, so adding new fields in future releases won't break your code:
+
+```rust
+use adk_runner::Runner;
+
+let runner = Runner::builder()
+    .app_name("my_app")
+    .agent(Arc::new(my_agent))
+    .session_service(Arc::new(InMemorySessionService::new()))
+    // Optional fields — only set what you need
+    .artifact_service(Arc::new(InMemoryArtifactService::new()))
+    .build()?;
+```
+
+The builder requires three fields: `app_name`, `agent`, and `session_service`. Everything else is optional and has sensible defaults. The `build()` method is only available once all three required fields are set — missing one is a compile-time error, not a runtime one.
 
 ### Configuration Fields
 
@@ -55,6 +77,10 @@ let runner = Runner::new(config)?;
 | `plugin_manager` | `Option<Arc<PluginManager>>` | No | Plugin lifecycle hooks |
 | `compaction_config` | `Option<EventsCompactionConfig>` | No | Context compaction settings |
 | `run_config` | `Option<RunConfig>` | No | Execution options |
+| `context_cache_config` | `Option<ContextCacheConfig>` | No | Prompt caching lifecycle |
+| `cache_capable` | `Option<Arc<dyn CacheCapable>>` | No | Cache-capable model reference |
+| `request_context` | `Option<RequestContext>` | No | Auth middleware context |
+| `cancellation_token` | `Option<CancellationToken>` | No | Cooperative cancellation |
 
 ## Running Agents
 
@@ -87,6 +113,20 @@ while let Some(event) = stream.next().await {
     }
 }
 ```
+
+### String Convenience Method
+
+For simple call sites, `run_str()` accepts plain `&str` arguments and handles the newtype conversion internally:
+
+```rust
+let mut stream = runner.run_str(
+    "user-123",
+    "session-456",
+    Content::new("user").with_text("Hello!"),
+).await?;
+```
+
+If the string fails validation (empty, contains null bytes, or exceeds the length limit), `run_str()` returns an error before starting the agent loop. The existing `run()` method with typed `UserId`/`SessionId` remains unchanged.
 
 ## Execution Flow
 
@@ -181,8 +221,36 @@ Execution options:
 pub struct RunConfig {
     /// Streaming mode for responses
     pub streaming_mode: StreamingMode,
+    // ... other fields (tool_confirmation_decisions, cached_content, etc.)
 }
+```
 
+### ToolExecutionStrategy
+
+Controls how multiple tool calls from a single LLM response are dispatched:
+
+| Strategy | Behavior |
+|----------|----------|
+| `Sequential` (default) | Execute tools one at a time in LLM-returned order |
+| `Parallel` | Execute all tools concurrently via `join_all` |
+| `Auto` | Execute read-only tools concurrently, then mutable tools sequentially |
+
+Set per-agent via `LlmAgentBuilder`:
+
+```rust
+use adk_core::ToolExecutionStrategy;
+
+let agent = LlmAgentBuilder::new("fast_agent")
+    .model(model)
+    .tool_execution_strategy(ToolExecutionStrategy::Auto)
+    .tool(Arc::new(search_tool.with_read_only(true)))
+    .tool(Arc::new(save_tool))  // mutable — runs after read-only batch
+    .build()?;
+```
+
+In `Auto` mode, the dispatch loop queries each tool's `is_read_only()` method. Tools that return `true` run concurrently first, then the remaining tools run sequentially. Results are always reassembled in the original LLM-returned order regardless of strategy. Failed tools produce a JSON error response without aborting the batch.
+
+```rust
 pub enum StreamingMode {
     /// No streaming, return complete response
     None,
@@ -192,8 +260,6 @@ pub enum StreamingMode {
     Bidi,
 }
 ```
-
-> **Note**: Additional fields like `max_turns` and `include_history` are planned for future releases.
 
 ## Agent Transfers
 
@@ -253,17 +319,12 @@ Launcher::new(agent)
     .run()
     .await?;
 
-// Equivalent to:
-let runner = Runner::new(RunnerConfig {
-    app_name: "my_app".to_string(),
-    agent,
-    session_service: Arc::new(InMemorySessionService::new()),
-    artifact_service: Some(Arc::new(FileArtifactService::new("./artifacts")?)),
-    memory_service: None,
-    plugin_manager: None,
-    run_config: None,
-    compaction_config: None,
-})?;
+// Equivalent to using the builder:
+let runner = Runner::builder()
+    .app_name("my_app")
+    .agent(agent)
+    .session_service(Arc::new(InMemorySessionService::new()))
+    .build()?;
 ```
 
 ## Custom Runner Usage
@@ -271,33 +332,22 @@ let runner = Runner::new(RunnerConfig {
 For advanced scenarios, use Runner directly:
 
 ```rust
-use adk_runner::{Runner, RunnerConfig};
-use adk_core::{SessionId, UserId};
-use adk_session::SqliteSessionService;
-use adk_artifact::S3ArtifactService;
-use adk_memory::QdrantMemoryService;
+use adk_runner::Runner;
 
-// Production configuration
-let config = RunnerConfig {
-    app_name: "production_app".to_string(),
-    agent: my_agent,
-    session_service: Arc::new(SqliteSessionService::new(db_pool)),
-    artifact_service: Some(Arc::new(S3ArtifactService::new(s3_client))),
-    memory_service: Some(Arc::new(QdrantMemoryService::new(qdrant_client))),
-    plugin_manager: None,
-    run_config: None,
-    compaction_config: None,  // Enable with EventsCompactionConfig for long sessions
-};
+// Production configuration using the builder
+let runner = Runner::builder()
+    .app_name("production_app")
+    .agent(my_agent)
+    .session_service(Arc::new(SqliteSessionService::new(db_pool)))
+    .artifact_service(Arc::new(S3ArtifactService::new(s3_client)))
+    .memory_service(Arc::new(QdrantMemoryService::new(qdrant_client)))
+    .build()?;
 
-let runner = Runner::new(config)?;
-
-// Use in HTTP handler
+// Use in HTTP handler with run_str() for convenience
 async fn chat_handler(runner: &Runner, request: ChatRequest) -> Response {
-    let user_id = UserId::new(request.user_id)?;
-    let session_id = SessionId::new(request.session_id)?;
-    let stream = runner.run(
-        user_id,
-        session_id,
+    let stream = runner.run_str(
+        &request.user_id,
+        &request.session_id,
         request.content,
     ).await?;
     

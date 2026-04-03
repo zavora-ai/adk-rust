@@ -63,6 +63,34 @@ async fn search_docs(
 }
 ```
 
+### Tool Metadata Attributes
+
+Mark tools as read-only, concurrency-safe, or long-running directly in the macro:
+
+```rust
+/// Look up cached data — no side effects, safe for parallel dispatch.
+#[tool(read_only, concurrency_safe)]
+async fn cache_lookup(args: LookupArgs) -> Result<Value, AdkError> {
+    Ok(json!({"result": "cached"}))
+}
+
+/// Start a long-running background report.
+#[tool(long_running)]
+async fn generate_report(args: ReportArgs) -> Result<Value, AdkError> {
+    Ok(json!({"task_id": "abc123", "status": "processing"}))
+}
+```
+
+Available attributes (all optional, combine freely):
+
+| Attribute | Effect |
+|-----------|--------|
+| `read_only` | `is_read_only() → true` — included in concurrent batch under `Auto` strategy |
+| `concurrency_safe` | `is_concurrency_safe() → true` — explicitly safe for parallel dispatch |
+| `long_running` | `is_long_running() → true` — prevents LLM from re-calling a pending tool |
+
+Plain `#[tool]` without attributes keeps the defaults (all `false`), so existing code is unaffected.
+
 ---
 
 ## Alternative: `FunctionTool::new()`
@@ -443,6 +471,91 @@ cargo run --bin long_running
 3. **Return structured JSON** - Use clear field names
 4. **Keep tools focused** - Each tool should do one thing well
 5. **Use schemas** - For complex tools, define parameter schemas
+6. **Mark read-only tools** - Use `.with_read_only(true)` for tools with no side effects so `Auto` dispatch can run them concurrently
+
+---
+
+## Tool Metadata: Read-Only and Concurrency
+
+Mark tools as read-only or concurrency-safe to enable smarter dispatch:
+
+```rust
+// A lookup tool that performs no side effects
+let lookup = FunctionTool::new("lookup", "Look up data", |_ctx, args| async move {
+    Ok(json!({"result": "cached data"}))
+})
+.with_read_only(true)        // Safe for concurrent execution in Auto mode
+.with_concurrency_safe(true); // Explicitly safe for parallel dispatch
+
+// A mutation tool (defaults: read_only=false, concurrency_safe=false)
+let update = FunctionTool::new("update", "Update record", |_ctx, args| async move {
+    Ok(json!({"updated": true}))
+});
+```
+
+When `ToolExecutionStrategy::Auto` is active, the dispatch loop runs all `is_read_only() == true` tools concurrently first, then executes the remaining tools sequentially. This reduces latency when an LLM returns multiple tool calls in a single response.
+
+---
+
+## SimpleToolContext: Using Tools Outside the Agent Loop
+
+When you need to call a tool outside the agent loop (testing, MCP server mode, sub-agent delegation), use `SimpleToolContext` instead of implementing the full `ToolContext` trait hierarchy:
+
+```rust
+use adk_tool::SimpleToolContext;
+use adk_core::ToolContext;
+use std::sync::Arc;
+
+// Construct with just a caller name — all other fields get sensible defaults
+let ctx = SimpleToolContext::new("my-test-harness");
+
+// Optionally override the function call ID
+let ctx = SimpleToolContext::new("my-mcp-server")
+    .with_function_call_id("custom-call-id");
+
+// Use it to execute any tool
+let tool_ctx: Arc<dyn ToolContext> = Arc::new(ctx);
+let result = my_tool.execute(tool_ctx, json!({"key": "value"})).await?;
+```
+
+Defaults: `user_id()` → `"anonymous"`, `session_id()` / `branch()` → `""`, `artifacts()` → `None`, `search_memory()` → empty vec. Both `invocation_id` and `function_call_id` are auto-generated UUIDs.
+
+---
+
+## StatefulTool: Shared State Across Invocations
+
+For tools that need to maintain state between calls (counters, caches, connection pools), use `StatefulTool<S>`:
+
+```rust
+use adk_tool::StatefulTool;
+use adk_core::ToolContext;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+struct AppCache {
+    entries: RwLock<HashMap<String, String>>,
+}
+
+let cache = Arc::new(AppCache {
+    entries: RwLock::new(HashMap::new()),
+});
+
+let cache_tool = StatefulTool::new(
+    "cache_lookup",
+    "Look up a value in the application cache",
+    cache.clone(),
+    |state, _ctx, args| async move {
+        let key = args["key"].as_str().unwrap_or("");
+        let entries = state.entries.read().await;
+        let value = entries.get(key).cloned().unwrap_or_default();
+        Ok(json!({"key": key, "value": value}))
+    },
+)
+.with_read_only(true)
+.with_concurrency_safe(true);
+```
+
+`StatefulTool` clones the `Arc<S>` on each invocation (cheap reference count bump), so all executions share the same underlying state. It supports the same builder methods as `FunctionTool`: `with_long_running`, `with_parameters_schema`, `with_response_schema`, `with_scopes`, `with_read_only`, and `with_concurrency_safe`.
 
 ---
 

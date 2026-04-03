@@ -7,16 +7,52 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-type AsyncHandler = Box<
-    dyn Fn(Arc<dyn ToolContext>, Value) -> Pin<Box<dyn Future<Output = Result<Value>> + Send>>
+type AsyncStatefulHandler<S> = Box<
+    dyn Fn(
+            Arc<S>,
+            Arc<dyn ToolContext>,
+            Value,
+        ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send>>
         + Send
         + Sync,
 >;
 
-pub struct FunctionTool {
+/// A generic tool wrapper that manages shared state for stateful closures.
+///
+/// `StatefulTool<S>` accepts an `Arc<S>` and a handler closure that receives
+/// the state alongside the tool context and arguments. The `Arc<S>` is cloned
+/// (cheap reference count bump) on each invocation, so all executions share
+/// the same underlying state.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use adk_tool::StatefulTool;
+/// use adk_core::{ToolContext, Result};
+/// use serde_json::{json, Value};
+/// use std::sync::Arc;
+/// use tokio::sync::RwLock;
+///
+/// struct Counter { count: RwLock<u64> }
+///
+/// let state = Arc::new(Counter { count: RwLock::new(0) });
+///
+/// let tool = StatefulTool::new(
+///     "increment",
+///     "Increment a counter",
+///     state,
+///     |s, _ctx, _args| async move {
+///         let mut count = s.count.write().await;
+///         *count += 1;
+///         Ok(json!({ "count": *count }))
+///     },
+/// );
+/// ```
+pub struct StatefulTool<S: Send + Sync + 'static> {
     name: String,
     description: String,
-    handler: AsyncHandler,
+    state: Arc<S>,
+    handler: AsyncStatefulHandler<S>,
     long_running: bool,
     read_only: bool,
     concurrency_safe: bool,
@@ -25,16 +61,30 @@ pub struct FunctionTool {
     scopes: Vec<&'static str>,
 }
 
-impl FunctionTool {
-    pub fn new<F, Fut>(name: impl Into<String>, description: impl Into<String>, handler: F) -> Self
+impl<S: Send + Sync + 'static> StatefulTool<S> {
+    /// Create a new stateful tool.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Tool name exposed to the LLM
+    /// * `description` - Human-readable description of what the tool does
+    /// * `state` - Shared state wrapped in `Arc<S>`
+    /// * `handler` - Async closure receiving `(Arc<S>, Arc<dyn ToolContext>, Value)`
+    pub fn new<F, Fut>(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        state: Arc<S>,
+        handler: F,
+    ) -> Self
     where
-        F: Fn(Arc<dyn ToolContext>, Value) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<S>, Arc<dyn ToolContext>, Value) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Value>> + Send + 'static,
     {
         Self {
             name: name.into(),
             description: description.into(),
-            handler: Box::new(move |ctx, args| Box::pin(handler(ctx, args))),
+            state,
+            handler: Box::new(move |s, ctx, args| Box::pin(handler(s, ctx, args))),
             long_running: false,
             read_only: false,
             concurrency_safe: false,
@@ -79,13 +129,6 @@ impl FunctionTool {
     ///
     /// When set, the framework will enforce that the calling user possesses
     /// **all** listed scopes before dispatching `execute()`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let tool = FunctionTool::new("transfer", "Transfer funds", handler)
-    ///     .with_scopes(&["finance:write", "verified"]);
-    /// ```
     pub fn with_scopes(mut self, scopes: &[&'static str]) -> Self {
         self.scopes = scopes.to_vec();
         self
@@ -104,7 +147,7 @@ impl FunctionTool {
 const LONG_RUNNING_NOTE: &str = "NOTE: This is a long-running operation. Do not call this tool again if it has already returned some intermediate or pending status.";
 
 #[async_trait]
-impl Tool for FunctionTool {
+impl<S: Send + Sync + 'static> Tool for StatefulTool<S> {
     fn name(&self) -> &str {
         &self.name
     }
@@ -113,8 +156,6 @@ impl Tool for FunctionTool {
         &self.description
     }
 
-    /// Returns an enhanced description for long-running tools that includes
-    /// a note warning the model not to call the tool again if it's already pending.
     fn enhanced_description(&self) -> String {
         if self.long_running {
             if self.description.is_empty() {
@@ -161,8 +202,9 @@ impl Tool for FunctionTool {
         )
     )]
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        adk_telemetry::debug!("Executing tool");
-        (self.handler)(ctx, args).await
+        adk_telemetry::debug!("Executing stateful tool");
+        let state = Arc::clone(&self.state);
+        (self.handler)(state, ctx, args).await
     }
 }
 

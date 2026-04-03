@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Developer Ergonomics — Parallel Dispatch, Builder, Tool Metadata, Macro Attributes
+
+- **`ToolExecutionStrategy`** (`adk-core`): New enum with `Sequential` (default), `Parallel`, and `Auto` variants controlling how multiple tool calls from a single LLM response are dispatched.
+- **Tool metadata** (`adk-core`): `is_read_only()` and `is_concurrency_safe()` default methods on the `Tool` trait. Both return `false` by default. Used by `Auto` strategy to partition tools for concurrent execution.
+- **`FunctionTool` extensions** (`adk-tool`): `with_read_only(bool)` and `with_concurrency_safe(bool)` builder methods.
+- **`SimpleToolContext`** (`adk-tool`): Lightweight `ToolContext` implementation for non-agent callers (testing, MCP servers, sub-agent delegation). Construct with `SimpleToolContext::new("caller-name")`.
+- **`StatefulTool<S>`** (`adk-tool`): Generic wrapper managing `Arc<S>` lifetime for stateful tool closures. Clones the `Arc` per invocation. Mirrors all `FunctionTool` builder methods.
+- **`RunnerConfigBuilder`** (`adk-runner`): Typestate builder for `Runner` construction. Enforces required fields (`app_name`, `agent`, `session_service`) at compile time. Access via `Runner::builder()`.
+- **`Runner::run_str()`** (`adk-runner`): Convenience method accepting `&str` for `user_id` and `session_id`. Validates and converts internally; returns error before agent loop on invalid input.
+- **`LlmAgentBuilder::tool_execution_strategy()`** (`adk-agent`): Per-agent strategy override. Defaults to `Sequential` when not set.
+- **Parallel tool dispatch** (`adk-agent`): Refactored `LlmAgent` dispatch loop supporting `Sequential`, `Parallel`, and `Auto` modes. Error isolation — failed tools produce JSON error responses without aborting the batch.
+- **`#[tool]` macro attributes** (`adk-rust-macros`): `#[tool(read_only)]`, `#[tool(concurrency_safe)]`, `#[tool(long_running)]` — set tool metadata directly in the macro. Plain `#[tool]` unchanged.
+- **Non-breaking field addition policy** (`STABILITY.md`): Documented policy requiring `Option<T>` with defaults for new fields on public structs in Stable-tier crates.
+
 #### Competitive Improvements — Stability, Ergonomics, Encryption, Graph Resume, Tool Search
 
 - **STABILITY.md**: New stability roadmap at the repository root defining three tiers (Stable, Beta, Experimental) with contracts, a crate-tier mapping table for every public `adk-*` crate, deprecation lifecycle policy (N+2 minor releases with `#[deprecated(since, note)]`), and 1.0 milestone criteria with GitHub milestone link.

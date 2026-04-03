@@ -82,6 +82,21 @@ pub fn create_session(/* ... */) -> Result<Session> {
 }
 ```
 
+## Non-Breaking Field Addition Policy
+
+Public structs in Stable-tier crates that are constructed by downstream consumers (e.g., `RunnerConfig`, `RunConfig`, session service request structs) follow strict rules to prevent compilation failures when new fields are introduced.
+
+1. **Optional fields only.** New fields added to public structs in Stable-tier crates MUST be `Option<T>` with a default value, or the struct MUST use a builder pattern that assigns defaults for all new fields. Existing call sites — whether struct literals using `..Default::default()` or builder chains — MUST continue to compile without modification.
+
+2. **Required fields are breaking.** Adding a required field (one that has no default and must be explicitly provided) to a Stable-tier public struct is a **breaking change**. It follows the same deprecation lifecycle defined above: announce in version N, remove the old API no earlier than version N+2.
+
+3. **Applies to.** This policy applies to all public structs in Stable-tier crates that downstream consumers construct directly, including but not limited to:
+   - `RunnerConfig` and `RunConfig` in `adk-runner` / `adk-core`
+   - Session service request structs in `adk-session`
+   - Any future configuration or request structs added to Stable-tier crates
+
+4. **`#[non_exhaustive]` roadmap.** Key configuration structs (starting with `RunnerConfig`) are planned to adopt `#[non_exhaustive]` in a future release (target: **0.7.0**), following the N+2 deprecation lifecycle. Once applied, `#[non_exhaustive]` will prevent struct literal construction entirely, making the builder pattern the only supported construction path. Consumers SHOULD migrate to builder patterns proactively to prepare for this transition.
+
 ## 1.0 Milestone
 
 The ADK-Rust 1.0 release represents a commitment to long-term API stability for all Stable-tier crates. Progress is tracked in the [GitHub 1.0 Milestone](https://github.com/zavora-ai/adk-rust/milestone/1).
