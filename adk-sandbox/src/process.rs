@@ -340,6 +340,10 @@ mod tests {
         if let Ok(path) = std::env::var("PATH") {
             env.insert("PATH".to_string(), path);
         }
+        // Windows processes need SYSTEMROOT for DLL loading and basic operation.
+        if let Ok(sr) = std::env::var("SYSTEMROOT") {
+            env.insert("SYSTEMROOT".to_string(), sr);
+        }
         ExecRequest {
             language,
             code: code.to_string(),
@@ -387,14 +391,8 @@ mod tests {
         let backend = ProcessBackend::default();
         let code =
             if cfg!(windows) { "ping -n 11 127.0.0.1".to_string() } else { "sleep 10".to_string() };
-        let request = ExecRequest {
-            language: Language::Command,
-            code,
-            stdin: None,
-            timeout: Duration::from_secs(1),
-            memory_limit_mb: None,
-            env: HashMap::new(),
-        };
+        let mut request = make_request(Language::Command, &code);
+        request.timeout = Duration::from_secs(1);
         let result = backend.execute(request).await;
         assert!(
             matches!(result, Err(SandboxError::Timeout { .. })),
