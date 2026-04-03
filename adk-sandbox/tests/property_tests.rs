@@ -34,6 +34,10 @@ fn arb_env_map() -> impl Strategy<Value = HashMap<String, String>> {
 // Property 1: Timeout enforcement
 // ---------------------------------------------------------------------------
 
+// This property test uses `sleep 60` which is a Unix command. On Windows,
+// the equivalent would be `ping -n 61 127.0.0.1` but that adds network
+// dependencies. The unit test `test_timeout_enforcement` covers Windows.
+#[cfg(not(windows))]
 proptest! {
     // Each case spawns a real process and waits for timeout, so we use fewer
     // cases with short timeouts to keep the test suite fast.
@@ -92,6 +96,12 @@ proptest! {
 // Property 2: Environment isolation
 // ---------------------------------------------------------------------------
 
+// This property test uses /usr/bin/env and checks for Unix-specific leaked
+// variables (HOME, USER, SHELL, etc.). On Windows, cmd.exe injects its own
+// environment variables that cannot be suppressed, making the strict isolation
+// assertion invalid. The unit test `test_environment_isolation` has a
+// platform-specific Windows variant that validates env_clear() behavior.
+#[cfg(not(windows))]
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(100))]
 
