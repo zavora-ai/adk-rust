@@ -99,14 +99,20 @@ required-features = ["vertex-live"]
 [[example]]
 name = "debug_livekit_auth"
 path = "examples/debug_livekit_auth.rs"
+required-features = ["livekit"]
 
 [[example]]
 name = "debug_gemini"
 path = "examples/debug_gemini.rs"
+required-features = ["gemini"]
 
 [[example]]
 name = "livekit_bridge"
 required-features = ["livekit", "openai"]
+
+[[example]]
+name = "livekit_gemini_bridge"
+required-features = ["livekit", "gemini"]
 
 [[example]]
 name = "openai_webrtc"

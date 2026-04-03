@@ -109,3 +109,21 @@ pub use types::{Content, FunctionResponseData, MAX_INLINE_DATA_SIZE, Part};
 // Re-export async_trait so the #[tool] macro's generated code can reference it
 // via adk_tool::async_trait (adk_tool re-exports from adk_core).
 pub use async_trait::async_trait;
+
+/// Enforces the explicit cryptographic provider process-wide.
+/// This bypasses any inert 'ring' code lingering in deep dependencies.
+///
+/// Because we lack a monolithic main() function, we use lazy evaluation
+/// to guarantee that aws-lc-rs is installed globally the millisecond
+/// an adk-rust consumer attempts to use the network.
+pub fn ensure_crypto_provider() {
+    #[cfg(feature = "rustls")]
+    {
+        static CRYPTO_INIT: std::sync::Once = std::sync::Once::new();
+        CRYPTO_INIT.call_once(|| {
+            // We ignore the Result. If the parent application has already
+            // deliberately installed a provider, we respect their sovereign choice.
+            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        });
+    }
+}

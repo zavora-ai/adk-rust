@@ -20,6 +20,11 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+rustls = { workspace = true, optional = true }
+
+[features]
+default = []
+rustls = ["dep:rustls"]
 
 [dev-dependencies]
 async-stream = { workspace = true }

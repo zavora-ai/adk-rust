@@ -114,8 +114,10 @@ regex = "1.10"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 opentelemetry = "0.31"
-tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
-reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls","multipart"] }
+# Unify rustls crypto provider to 'aws-lc-rs' across the workspace.
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots", "connect"] }
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls-native-roots", "multipart"] }
 toml = "0.8"
 sha2 = "0.10"
 hex = "0.4"

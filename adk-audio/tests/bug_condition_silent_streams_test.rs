@@ -14,12 +14,17 @@
 use adk_audio::error::AudioError;
 use adk_audio::traits::{SttOptions, SttProvider};
 
+fn init_crypto() {
+    adk_core::ensure_crypto_provider();
+}
+
 // ---------------------------------------------------------------------------
 // AssemblyAI
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn bug_condition_assemblyai_transcribe_stream_returns_error() {
+    init_crypto();
     let provider = adk_audio::AssemblyAiStt::with_api_key("test-key".to_string());
 
     let result = provider
@@ -50,6 +55,7 @@ async fn bug_condition_assemblyai_transcribe_stream_returns_error() {
 
 #[tokio::test]
 async fn bug_condition_deepgram_transcribe_stream_returns_error() {
+    init_crypto();
     let provider = adk_audio::DeepgramStt::with_api_key("test-key".to_string());
 
     let result = provider
