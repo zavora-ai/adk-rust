@@ -516,6 +516,7 @@ Intercept agent behavior:
 | `output_key(key)` | Saves response to state |
 | `include_contents(mode)` | History visibility |
 | `max_iterations(n)` | Maximum LLM round-trips (default: 100) |
+| `tool_execution_strategy(strategy)` | Tool dispatch mode: `Sequential`, `Parallel`, or `Auto` |
 | `default_retry_budget(RetryBudget)` | Retry failed tools up to N times with delay |
 | `tool_retry_budget(name, RetryBudget)` | Per-tool retry override |
 | `circuit_breaker_threshold(u32)` | Disable tool after N consecutive failures |
@@ -592,6 +593,34 @@ let agent = LlmAgentBuilder::new("agent")
 ```
 
 All composition utilities work with any `Toolset` implementation including `McpToolset` and `BrowserToolset`.
+
+## Parallel Tool Execution
+
+When an LLM returns multiple tool calls in a single response, you can control how they're dispatched:
+
+```rust
+use adk_core::ToolExecutionStrategy;
+
+let agent = LlmAgentBuilder::new("fast_agent")
+    .model(Arc::new(model))
+    .instruction("You are a research assistant. Use multiple tools in parallel.")
+    // Read-only tools run concurrently, mutable tools run sequentially
+    .tool_execution_strategy(ToolExecutionStrategy::Auto)
+    .tool(Arc::new(search_tool.with_read_only(true)))
+    .tool(Arc::new(lookup_tool.with_read_only(true)))
+    .tool(Arc::new(save_tool))  // mutable — runs after read-only batch
+    .build()?;
+```
+
+Three strategies are available:
+
+- `Sequential` (default) — tools execute one at a time in LLM order
+- `Parallel` — all tools execute concurrently via `join_all`
+- `Auto` — read-only tools (`is_read_only() == true`) run concurrently first, then mutable tools run sequentially
+
+Results are always returned in the original LLM order regardless of strategy. Failed tools produce a JSON error response without aborting the batch.
+
+The strategy is set per-agent via `LlmAgentBuilder::tool_execution_strategy()`. If not set, the default is `Sequential`.
 
 ## Tool Resilience
 

@@ -348,15 +348,22 @@ async fn test_before_tool_callback_error_aborts_tool_execution() {
         .unwrap();
 
     let mut stream = agent.run(Arc::new(MockContext::new())).await.unwrap();
-    let mut saw_error = false;
+    let mut saw_error_response = false;
 
     while let Some(result) = stream.next().await {
-        if result.is_err() {
-            saw_error = true;
-            break;
+        if let Ok(event) = result {
+            if let Some(ref content) = event.llm_response.content {
+                for part in &content.parts {
+                    if let Part::FunctionResponse { function_response, .. } = part {
+                        if function_response.response.get("error").is_some() {
+                            saw_error_response = true;
+                        }
+                    }
+                }
+            }
         }
     }
 
-    assert!(saw_error, "callback error should be propagated to stream");
+    assert!(saw_error_response, "callback error should be captured as error response");
     assert_eq!(tool_calls.load(Ordering::SeqCst), 0, "tool should not execute on callback error");
 }

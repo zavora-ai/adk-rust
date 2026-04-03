@@ -11,6 +11,8 @@ Agent execution runtime for ADK-Rust.
 `adk-runner` provides the execution runtime for [ADK-Rust](https://github.com/zavora-ai/adk-rust):
 
 - **Runner** - Manages agent execution with full context
+- **RunnerConfigBuilder** - Typestate builder for Runner construction (compile-time required field enforcement)
+- **run_str()** - String convenience method for user_id/session_id
 - **Session Integration** - Automatic session creation and state management
 - **Memory Injection** - Retrieves and injects relevant memories
 - **Artifact Handling** - Manages binary artifacts during execution
@@ -35,34 +37,22 @@ adk-rust = { version = "0.5.0", features = ["runner"] }
 ## Quick Start
 
 ```rust
-use adk_runner::{Runner, RunnerConfig};
+use adk_runner::Runner;
 use adk_session::InMemorySessionService;
-use adk_artifact::InMemoryArtifactService;
-use adk_core::{Content, SessionId, UserId};
+use adk_core::Content;
 use std::sync::Arc;
 
-// Create services
-let sessions = Arc::new(InMemorySessionService::new());
-let artifacts = Arc::new(InMemoryArtifactService::new());
+// Build runner with the typestate builder (recommended)
+let runner = Runner::builder()
+    .app_name("my_app")
+    .agent(my_agent)
+    .session_service(Arc::new(InMemorySessionService::new()))
+    .build()?;
 
-// Configure runner with agent
-let config = RunnerConfig {
-    app_name: "my_app".to_string(),
-    agent: my_agent,  // Arc<dyn Agent>
-    session_service: sessions,
-    artifact_service: Some(artifacts),
-    memory_service: None,
-    plugin_manager: None,
-    run_config: None,  // Uses default SSE streaming
-};
-
-// Create runner
-let runner = Runner::new(config)?;
-
-// Run agent for a user/session
-let mut stream = runner.run(
-    UserId::new("user_123")?,
-    SessionId::new("session_456")?,
+// Run with string convenience method
+let mut stream = runner.run_str(
+    "user_123",
+    "session_456",
     Content::new("user").with_text("Hello!"),
 ).await?;
 
@@ -70,11 +60,13 @@ let mut stream = runner.run(
 use futures::StreamExt;
 while let Some(event) = stream.next().await {
     match event {
-        Ok(e) => println!("Event: {:?}", e.content()),
+        Ok(e) => println!("Event: {:?}", e.llm_response.content),
         Err(e) => eprintln!("Error: {}", e),
     }
 }
 ```
+
+The builder enforces required fields (`app_name`, `agent`, `session_service`) at compile time. Optional fields default to sensible values. The old `Runner::new(RunnerConfig { ... })` constructor remains available for backward compatibility.
 
 ## RunnerConfig
 
@@ -88,7 +80,10 @@ while let Some(event) = stream.next().await {
 | `plugin_manager` | `Option<Arc<PluginManager>>` | Optional plugin lifecycle hooks |
 | `run_config` | `Option<RunConfig>` | Streaming mode config |
 | `compaction_config` | `Option<EventsCompactionConfig>` | Context compaction settings |
-| `compaction_config` | `Option<EventsCompactionConfig>` | Context compaction settings |
+| `context_cache_config` | `Option<ContextCacheConfig>` | Prompt caching lifecycle |
+| `cache_capable` | `Option<Arc<dyn CacheCapable>>` | Cache-capable model reference |
+| `request_context` | `Option<RequestContext>` | Auth middleware context |
+| `cancellation_token` | `Option<CancellationToken>` | Cooperative cancellation |
 
 ## Runner vs Direct Agent Execution
 

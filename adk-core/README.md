@@ -58,9 +58,13 @@ pub trait Tool: Send + Sync {
     fn description(&self) -> &str;
     fn parameters_schema(&self) -> Option<Value>;
     fn is_long_running(&self) -> bool;
+    fn is_read_only(&self) -> bool;           // default: false
+    fn is_concurrency_safe(&self) -> bool;    // default: false
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
 }
 ```
+
+`is_read_only()` and `is_concurrency_safe()` are used by the `ToolExecutionStrategy::Auto` dispatch mode to run read-only tools concurrently. Both default to `false` so existing implementations are unaffected.
 
 ### Toolset
 
@@ -263,6 +267,20 @@ pub enum StreamingMode {
     Bidi,  // Bidirectional (realtime)
 }
 ```
+
+## ToolExecutionStrategy
+
+Controls how multiple tool calls from a single LLM response are dispatched:
+
+```rust
+pub enum ToolExecutionStrategy {
+    Sequential,  // One at a time, in order (default)
+    Parallel,    // All concurrently via join_all
+    Auto,        // Read-only tools concurrently, then mutable sequentially
+}
+```
+
+Set per-agent via `LlmAgentBuilder::tool_execution_strategy()`.
 
 ## Related Crates
 

@@ -5,7 +5,7 @@ use adk_core::{
     InstructionProvider, InvocationContext, Llm, LlmRequest, LlmResponse, MemoryEntry,
     OnToolErrorCallback, Part, ReadonlyContext, Result, RetryBudget, Tool,
     ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest, ToolContext,
-    ToolOutcome, Toolset,
+    ToolExecutionStrategy, ToolOutcome, Toolset,
 };
 use adk_skill::{SelectionPolicy, SkillIndex, load_skill_index, select_skill_prompt_block};
 use async_stream::stream;
@@ -70,6 +70,9 @@ pub struct LlmAgent {
     /// after this many consecutive failures within a single invocation.
     circuit_breaker_threshold: Option<u32>,
     tool_confirmation_policy: ToolConfirmationPolicy,
+    /// Per-agent tool execution strategy override. When `Some`, overrides the
+    /// `RunConfig` strategy for this agent's dispatch loop.
+    tool_execution_strategy: Option<ToolExecutionStrategy>,
     input_guardrails: Arc<GuardrailSet>,
     output_guardrails: Arc<GuardrailSet>,
 }
@@ -176,6 +179,7 @@ pub struct LlmAgentBuilder {
     tool_retry_budgets: std::collections::HashMap<String, RetryBudget>,
     circuit_breaker_threshold: Option<u32>,
     tool_confirmation_policy: ToolConfirmationPolicy,
+    tool_execution_strategy: Option<ToolExecutionStrategy>,
     input_guardrails: GuardrailSet,
     output_guardrails: GuardrailSet,
 }
@@ -217,6 +221,7 @@ impl LlmAgentBuilder {
             tool_retry_budgets: std::collections::HashMap::new(),
             circuit_breaker_threshold: None,
             tool_confirmation_policy: ToolConfirmationPolicy::Never,
+            tool_execution_strategy: None,
             input_guardrails: GuardrailSet::new(),
             output_guardrails: GuardrailSet::new(),
         }
@@ -514,6 +519,16 @@ impl LlmAgentBuilder {
         self
     }
 
+    /// Set the tool execution strategy for this agent.
+    ///
+    /// When set, this overrides the `RunConfig`'s `tool_execution_strategy`
+    /// for this agent's dispatch loop. When `None` (the default), the
+    /// `RunConfig` value is used.
+    pub fn tool_execution_strategy(mut self, strategy: ToolExecutionStrategy) -> Self {
+        self.tool_execution_strategy = Some(strategy);
+        self
+    }
+
     /// Set input guardrails to validate user input before processing.
     ///
     /// Input guardrails run before the agent processes the request and can:
@@ -588,6 +603,7 @@ impl LlmAgentBuilder {
             tool_retry_budgets: self.tool_retry_budgets,
             circuit_breaker_threshold: self.circuit_breaker_threshold,
             tool_confirmation_policy: self.tool_confirmation_policy,
+            tool_execution_strategy: self.tool_execution_strategy,
             input_guardrails: Arc::new(self.input_guardrails),
             output_guardrails: Arc::new(self.output_guardrails),
         })
@@ -832,6 +848,7 @@ impl Agent for LlmAgent {
         let disallow_transfer_to_parent = self.disallow_transfer_to_parent;
         let disallow_transfer_to_peers = self.disallow_transfer_to_peers;
         let output_guardrails = self.output_guardrails.clone();
+        let agent_tool_execution_strategy = self.tool_execution_strategy;
 
         let s = stream! {
             // ===== BEFORE AGENT CALLBACKS =====
@@ -1460,76 +1477,155 @@ impl Agent for LlmAgent {
 
                 // Execute function calls and add responses to history
                 if let Some(content) = &accumulated_content {
-                    let mut tool_call_index = 0usize;
-                    for part in &content.parts {
-                        if let Part::FunctionCall { name, args, id, .. } = part {
-                            let fallback_call_id =
-                                format!("{}_{}_{}", invocation_id, name, tool_call_index);
-                            tool_call_index += 1;
-                            let function_call_id = id.clone().unwrap_or(fallback_call_id);
+                    // ===== RESOLVE TOOL EXECUTION STRATEGY =====
+                    // Per-agent override; defaults to Sequential if not set.
+                    let strategy = agent_tool_execution_strategy
+                        .unwrap_or(ToolExecutionStrategy::Sequential);
 
-                            // Handle transfer_to_agent specially
-                            if name == "transfer_to_agent" {
-                                let target_agent = args.get("agent_name")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or_default()
-                                    .to_string();
+                    // Collect function call parts with original indices for
+                    // order-preserving reassembly in parallel/auto modes.
+                    // Tuple: (index, name, args, id, function_call_id)
+                    let mut fc_parts: Vec<(usize, String, serde_json::Value, Option<String>, String)> = Vec::new();
+                    {
+                        let mut tci = 0usize;
+                        for part in &content.parts {
+                            if let Part::FunctionCall { name, args, id, .. } = part {
+                                let fallback = format!("{}_{}_{}", invocation_id, name, tci);
+                                let fcid = id.clone().unwrap_or(fallback);
+                                fc_parts.push((tci, name.clone(), args.clone(), id.clone(), fcid));
+                                tci += 1;
+                            }
+                        }
+                    }
 
-                                // Validate against the full set of valid transfer targets
-                                // (sub-agents + parent/peers from RunConfig)
-                                let valid_target = valid_transfer_targets.iter().any(|n| n == &target_agent);
-                                if !valid_target {
-                                    // Return error to LLM so it can try again
-                                    let error_content = Content {
-                                        role: "function".to_string(),
-                                        parts: vec![Part::FunctionResponse {
-                                            function_response: FunctionResponseData {
-                                                name: name.clone(),
-                                                response: serde_json::json!({
-                                                    "error": format!(
-                                                        "Agent '{}' not found. Available agents: {:?}",
-                                                        target_agent,
-                                                        valid_transfer_targets
-                                                    )
-                                                }),
-                                            },
-                                            id: id.clone(),
-                                        }],
-                                    };
-                                    conversation_history.push(error_content.clone());
+                    // ===== HANDLE transfer_to_agent BEFORE DISPATCH =====
+                    // Transfer calls cause an immediate return from the stream,
+                    // so they must be handled inline regardless of strategy.
+                    let mut transfer_handled = false;
+                    for (_, fc_name, fc_args, fc_id, _) in &fc_parts {
+                        if fc_name == "transfer_to_agent" {
+                            let target_agent = fc_args.get("agent_name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .to_string();
 
-                                    let mut error_event = Event::new(&invocation_id);
-                                    error_event.author = agent_name.clone();
-                                    error_event.llm_response.content = Some(error_content);
-                                    yield Ok(error_event);
-                                    continue;
-                                }
-
-                                let mut transfer_event = Event::new(&invocation_id);
-                                transfer_event.author = agent_name.clone();
-                                transfer_event.actions.transfer_to_agent = Some(target_agent);
-
-                                yield Ok(transfer_event);
-                                return;
+                            let valid_target = valid_transfer_targets.iter().any(|n| n == &target_agent);
+                            if !valid_target {
+                                let error_content = Content {
+                                    role: "function".to_string(),
+                                    parts: vec![Part::FunctionResponse {
+                                        function_response: FunctionResponseData {
+                                            name: fc_name.clone(),
+                                            response: serde_json::json!({
+                                                "error": format!(
+                                                    "Agent '{}' not found. Available agents: {:?}",
+                                                    target_agent, valid_transfer_targets
+                                                )
+                                            }),
+                                        },
+                                        id: fc_id.clone(),
+                                    }],
+                                };
+                                conversation_history.push(error_content.clone());
+                                let mut error_event = Event::new(&invocation_id);
+                                error_event.author = agent_name.clone();
+                                error_event.llm_response.content = Some(error_content);
+                                yield Ok(error_event);
+                                continue;
                             }
 
-                            // ===== BEFORE TOOL CALLBACKS =====
-                            // Allows policy checks or callback-provided short-circuit responses.
+                            let mut transfer_event = Event::new(&invocation_id);
+                            transfer_event.author = agent_name.clone();
+                            transfer_event.actions.transfer_to_agent = Some(target_agent);
+                            yield Ok(transfer_event);
+                            transfer_handled = true;
+                            break;
+                        }
+                    }
+                    if transfer_handled {
+                        return;
+                    }
+
+                    // Filter out transfer_to_agent and built-in tools
+                    let fc_parts: Vec<_> = fc_parts.into_iter().filter(|(_, fc_name, _, _, _)| {
+                        if fc_name == "transfer_to_agent" {
+                            return false;
+                        }
+                        if let Some(tool) = tool_map.get(fc_name) {
+                            if tool.is_builtin() {
+                                adk_telemetry::debug!(tool.name = %fc_name, "skipping built-in tool execution");
+                                return false;
+                            }
+                        }
+                        true
+                    }).collect();
+
+                    // ===== TOOL CONFIRMATION PRE-CHECK =====
+                    // Tool confirmation interrupts cause an immediate return,
+                    // so check before parallel dispatch.
+                    let mut confirmation_interrupted = false;
+                    for (_, fc_name, fc_args, _, fc_call_id) in &fc_parts {
+                        if tool_confirmation_policy.requires_confirmation(fc_name) {
+                            if ctx.run_config().tool_confirmation_decisions.get(fc_name).copied().is_none() {
+                                let mut ce = Event::new(&invocation_id);
+                                ce.author = agent_name.clone();
+                                ce.llm_response.interrupted = true;
+                                ce.llm_response.turn_complete = true;
+                                ce.llm_response.content = Some(Content {
+                                    role: "model".to_string(),
+                                    parts: vec![Part::Text {
+                                        text: format!(
+                                            "Tool confirmation required for '{}'. Provide approve/deny decision to continue.",
+                                            fc_name
+                                        ),
+                                    }],
+                                });
+                                ce.actions.tool_confirmation = Some(ToolConfirmationRequest {
+                                    tool_name: fc_name.clone(),
+                                    function_call_id: Some(fc_call_id.clone()),
+                                    args: fc_args.clone(),
+                                });
+                                yield Ok(ce);
+                                confirmation_interrupted = true;
+                                break;
+                            }
+                        }
+                    }
+                    if confirmation_interrupted {
+                        return;
+                    }
+
+                    // Wrap circuit breaker in Mutex for shared access across parallel futures.
+                    let cb_mutex = std::sync::Mutex::new(circuit_breaker_state.take());
+
+                    // Per-tool execution async block. Returns (index, Content, EventActions, escalate_or_skip).
+                    // Each tool retains its own retry budget, circuit breaker, tracing span,
+                    // before/after callbacks, and error handling. Errors are captured as
+                    // { "error": "..." } JSON — failed tools do not abort the batch.
+                    let execute_one_tool = |idx: usize, name: String, args: serde_json::Value,
+                                            id: Option<String>, function_call_id: String| {
+                        let ctx = ctx.clone();
+                        let tool_map = &tool_map;
+                        let tool_retry_budgets = &tool_retry_budgets;
+                        let default_retry_budget = &default_retry_budget;
+                        let before_tool_callbacks = &before_tool_callbacks;
+                        let after_tool_callbacks = &after_tool_callbacks;
+                        let after_tool_callbacks_full = &after_tool_callbacks_full;
+                        let on_tool_error_callbacks = &on_tool_error_callbacks;
+                        let tool_confirmation_policy = &tool_confirmation_policy;
+                        let cb_mutex = &cb_mutex;
+                        let invocation_id = &invocation_id;
+                        async move {
                             let mut tool_actions = EventActions::default();
                             let mut response_content: Option<Content> = None;
                             let mut run_after_tool_callbacks = true;
                             let mut tool_outcome_for_callback: Option<ToolOutcome> = None;
-                            // Track tool ref, args, and response for AfterToolCallbackFull
                             let mut executed_tool: Option<Arc<dyn Tool>> = None;
                             let mut executed_tool_response: Option<serde_json::Value> = None;
 
-                            // ===== TOOL CONFIRMATION POLICY =====
-                            // If configured and no decision is provided, emit an interrupt event
-                            // before execution. Callers can resume by re-running with a decision
-                            // in RunConfig.tool_confirmation_decisions.
-                            if tool_confirmation_policy.requires_confirmation(name) {
-                                match ctx.run_config().tool_confirmation_decisions.get(name).copied()
-                                {
+                            // Tool confirmation (deny case; None handled by pre-check)
+                            if tool_confirmation_policy.requires_confirmation(&name) {
+                                match ctx.run_config().tool_confirmation_decisions.get(&name).copied() {
                                     Some(ToolConfirmationDecision::Approve) => {
                                         tool_actions.tool_confirmation_decision =
                                             Some(ToolConfirmationDecision::Approve);
@@ -1543,10 +1639,7 @@ impl Agent for LlmAgent {
                                                 function_response: FunctionResponseData {
                                                     name: name.clone(),
                                                     response: serde_json::json!({
-                                                        "error": format!(
-                                                            "Tool '{}' execution denied by confirmation policy",
-                                                            name
-                                                        ),
+                                                        "error": format!("Tool '{}' execution denied by confirmation policy", name)
                                                     }),
                                                 },
                                                 id: id.clone(),
@@ -1555,55 +1648,53 @@ impl Agent for LlmAgent {
                                         run_after_tool_callbacks = false;
                                     }
                                     None => {
-                                        let mut confirmation_event = Event::new(&invocation_id);
-                                        confirmation_event.author = agent_name.clone();
-                                        confirmation_event.llm_response.interrupted = true;
-                                        confirmation_event.llm_response.turn_complete = true;
-                                        confirmation_event.llm_response.content = Some(Content {
-                                            role: "model".to_string(),
-                                            parts: vec![Part::Text {
-                                                text: format!(
-                                                    "Tool confirmation required for '{}'. Provide approve/deny decision to continue.",
-                                                    name
-                                                ),
+                                        response_content = Some(Content {
+                                            role: "function".to_string(),
+                                            parts: vec![Part::FunctionResponse {
+                                                function_response: FunctionResponseData {
+                                                    name: name.clone(),
+                                                    response: serde_json::json!({
+                                                        "error": format!("Tool '{}' requires confirmation", name)
+                                                    }),
+                                                },
+                                                id: id.clone(),
                                             }],
                                         });
-                                        confirmation_event.actions.tool_confirmation =
-                                            Some(ToolConfirmationRequest {
-                                                tool_name: name.clone(),
-                                                function_call_id: Some(function_call_id),
-                                                args: args.clone(),
-                                            });
-                                        yield Ok(confirmation_event);
-                                        return;
+                                        run_after_tool_callbacks = false;
                                     }
                                 }
                             }
 
+                            // Before-tool callbacks
                             if response_content.is_none() {
                                 for callback in before_tool_callbacks.as_ref() {
                                     match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
-                                        Ok(Some(content)) => {
-                                            response_content = Some(content);
-                                            break;
-                                        }
+                                        Ok(Some(c)) => { response_content = Some(c); break; }
                                         Ok(None) => continue,
                                         Err(e) => {
-                                            yield Err(e);
-                                            return;
+                                            response_content = Some(Content {
+                                                role: "function".to_string(),
+                                                parts: vec![Part::FunctionResponse {
+                                                    function_response: FunctionResponseData {
+                                                        name: name.clone(),
+                                                        response: serde_json::json!({ "error": e.to_string() }),
+                                                    },
+                                                    id: id.clone(),
+                                                }],
+                                            });
+                                            run_after_tool_callbacks = false;
+                                            break;
                                         }
                                     }
                                 }
                             }
 
-                            // Find and execute tool unless callbacks already short-circuited.
+                            // Circuit breaker check
                             if response_content.is_none() {
-                                // ===== CIRCUIT BREAKER CHECK =====
-                                // If the circuit breaker is open for this tool, skip execution
-                                // and return an immediate error response to the LLM.
-                                if let Some(ref cb_state) = circuit_breaker_state {
-                                    if cb_state.is_open(name) {
-                                        let error_msg = format!(
+                                let guard = cb_mutex.lock().unwrap_or_else(|e| e.into_inner());
+                                if let Some(ref cb_state) = *guard {
+                                    if cb_state.is_open(&name) {
+                                        let msg = format!(
                                             "Tool '{}' is temporarily disabled after {} consecutive failures",
                                             name, cb_state.threshold
                                         );
@@ -1613,7 +1704,7 @@ impl Agent for LlmAgent {
                                             parts: vec![Part::FunctionResponse {
                                                 function_response: FunctionResponseData {
                                                     name: name.clone(),
-                                                    response: serde_json::json!({ "error": error_msg }),
+                                                    response: serde_json::json!({ "error": msg }),
                                                 },
                                                 id: id.clone(),
                                             }],
@@ -1621,24 +1712,16 @@ impl Agent for LlmAgent {
                                         run_after_tool_callbacks = false;
                                     }
                                 }
+                                drop(guard);
                             }
 
+                            // Execute tool with retry budget and tracing
                             if response_content.is_none() {
-                                if let Some(tool) = tool_map.get(name) {
-                                    // Skip execution of built-in tools (e.g., google_search, url_context)
-                                    // These are handled server-side by the model provider
-                                    if tool.is_builtin() {
-                                        adk_telemetry::debug!(tool.name = %name, "skipping built-in tool execution");
-                                        continue;
-                                    }
-                                    // ✅ Use AgentToolContext that preserves parent context
-                                    let tool_ctx: Arc<dyn ToolContext> = Arc::new(AgentToolContext::new(
-                                        ctx.clone(),
-                                        function_call_id.clone(),
-                                    ));
-
-                                    // Create span name following adk-go pattern: "execute_tool {name}"
-                                    let span_name = format!("execute_tool {}", name);
+                                if let Some(tool) = tool_map.get(&name) {
+                                    let tool_ctx: Arc<dyn ToolContext> = Arc::new(
+                                        AgentToolContext::new(ctx.clone(), function_call_id.clone()),
+                                    );
+                                    let span_name = format!("execute_tool {name}");
                                     let tool_span = tracing::info_span!(
                                         "",
                                         otel.name = %span_name,
@@ -1649,30 +1732,22 @@ impl Agent for LlmAgent {
                                         "gen_ai.conversation.id" = %ctx.session_id()
                                     );
 
-                                    // ===== RETRY BUDGET RESOLUTION =====
-                                    // Look up per-tool budget first, fall back to default budget.
-                                    // When no budget is configured, max_attempts is 1 (single attempt, no retry).
-                                    let budget = tool_retry_budgets.get(name)
+                                    let budget = tool_retry_budgets.get(&name)
                                         .or(default_retry_budget.as_ref());
                                     let max_attempts = budget.map(|b| b.max_retries + 1).unwrap_or(1);
                                     let retry_delay = budget.map(|b| b.delay).unwrap_or_default();
 
-                                    // Time tool execution with retry loop.
-                                    // Derive success from Ok/Err/timeout path — never from JSON inspection.
                                     let tool_clone = tool.clone();
                                     let tool_start = std::time::Instant::now();
-
                                     let mut last_error = String::new();
                                     let mut final_attempt: u32 = 0;
                                     let mut retry_result: Option<serde_json::Value> = None;
 
                                     for attempt in 0..max_attempts {
                                         final_attempt = attempt;
-
                                         if attempt > 0 {
                                             tokio::time::sleep(retry_delay).await;
                                         }
-
                                         match async {
                                             tracing::info!(tool.name = %name, tool.args = %args, attempt = attempt, "tool_call");
                                             let exec_future = tool_clone.execute(tool_ctx.clone(), args.clone());
@@ -1706,15 +1781,11 @@ impl Agent for LlmAgent {
                                     }
 
                                     let tool_duration = tool_start.elapsed();
-
-                                    // Derive final success/error/response from retry loop outcome
                                     let (tool_success, tool_error_message, function_response) = match retry_result {
                                         Some(value) => (true, None, value),
                                         None => (false, Some(last_error.clone()), serde_json::json!({ "error": last_error })),
                                     };
 
-                                    // Build ToolOutcome from execution state — never from JSON inspection.
-                                    // Emitted for the final attempt only, with correct attempt number (0-based).
                                     let outcome = ToolOutcome {
                                         tool_name: name.clone(),
                                         tool_args: args.clone(),
@@ -1725,15 +1796,15 @@ impl Agent for LlmAgent {
                                     };
                                     tool_outcome_for_callback = Some(outcome);
 
-                                    // ===== CIRCUIT BREAKER RECORDING =====
-                                    if let Some(ref mut cb_state) = circuit_breaker_state {
-                                        cb_state.record(tool_outcome_for_callback.as_ref().unwrap());
+                                    // Circuit breaker recording
+                                    {
+                                        let mut guard = cb_mutex.lock().unwrap_or_else(|e| e.into_inner());
+                                        if let Some(ref mut cb_state) = *guard {
+                                            cb_state.record(tool_outcome_for_callback.as_ref().unwrap());
+                                        }
                                     }
 
-                                    // ===== ON TOOL ERROR CALLBACKS =====
-                                    // When tool failed (after all retries exhausted), try on_tool_error
-                                    // callbacks for a fallback result. Only invoked after ALL retries
-                                    // are exhausted, not on each individual retry attempt.
+                                    // On-tool-error callbacks
                                     let final_function_response = if !tool_success {
                                         let mut fallback_result = None;
                                         let error_msg = tool_error_message.clone().unwrap_or_default();
@@ -1744,34 +1815,21 @@ impl Agent for LlmAgent {
                                                 args.clone(),
                                                 error_msg.clone(),
                                             ).await {
-                                                Ok(Some(result)) => {
-                                                    fallback_result = Some(result);
-                                                    break;
-                                                }
+                                                Ok(Some(result)) => { fallback_result = Some(result); break; }
                                                 Ok(None) => continue,
-                                                Err(e) => {
-                                                    tracing::warn!(error = %e, "on_tool_error callback failed");
-                                                    break;
-                                                }
+                                                Err(e) => { tracing::warn!(error = %e, "on_tool_error callback failed"); break; }
                                             }
                                         }
-                                        if let Some(fallback) = fallback_result {
-                                            fallback
-                                        } else {
-                                            function_response
-                                        }
+                                        fallback_result.unwrap_or(function_response)
                                     } else {
                                         function_response
                                     };
 
-                                    let confirmation_decision =
-                                        tool_actions.tool_confirmation_decision;
+                                    let confirmation_decision = tool_actions.tool_confirmation_decision;
                                     tool_actions = tool_ctx.actions();
                                     if tool_actions.tool_confirmation_decision.is_none() {
-                                        tool_actions.tool_confirmation_decision =
-                                            confirmation_decision;
+                                        tool_actions.tool_confirmation_decision = confirmation_decision;
                                     }
-                                    // Capture tool and response for AfterToolCallbackFull
                                     executed_tool = Some(tool.clone());
                                     executed_tool_response = Some(final_function_response.clone());
                                     response_content = Some(Content {
@@ -1800,11 +1858,9 @@ impl Agent for LlmAgent {
                                 }
                             }
 
-                            // ===== AFTER TOOL CALLBACKS =====
-                            // Allows post-processing of tool outputs or audit side effects.
+                            // After-tool callbacks
                             let mut response_content = response_content.expect("tool response content is set");
                             if run_after_tool_callbacks {
-                                // Build callback context with ToolOutcome if available
                                 let cb_ctx: Arc<dyn CallbackContext> = match tool_outcome_for_callback {
                                     Some(outcome) => Arc::new(ToolCallbackContext {
                                         inner: ctx.clone() as Arc<dyn CallbackContext>,
@@ -1814,32 +1870,29 @@ impl Agent for LlmAgent {
                                 };
                                 for callback in after_tool_callbacks.as_ref() {
                                     match callback(cb_ctx.clone()).await {
-                                        Ok(Some(modified_content)) => {
-                                            response_content = modified_content;
-                                            break;
-                                        }
+                                        Ok(Some(modified)) => { response_content = modified; break; }
                                         Ok(None) => continue,
                                         Err(e) => {
-                                            yield Err(e);
-                                            return;
+                                            response_content = Content {
+                                                role: "function".to_string(),
+                                                parts: vec![Part::FunctionResponse {
+                                                    function_response: FunctionResponseData {
+                                                        name: name.clone(),
+                                                        response: serde_json::json!({ "error": e.to_string() }),
+                                                    },
+                                                    id: id.clone(),
+                                                }],
+                                            };
+                                            break;
                                         }
                                     }
                                 }
-
-                                // ===== AFTER TOOL CALLBACKS (FULL / V2) =====
-                                // Rich callbacks that receive tool, args, and response value.
-                                // Aligned with Python/Go ADK after_tool_callback signature.
-                                // Run after legacy AfterToolCallback chain.
                                 if let (Some(tool_ref), Some(tool_resp)) = (&executed_tool, executed_tool_response) {
                                     for callback in after_tool_callbacks_full.as_ref() {
                                         match callback(
-                                            cb_ctx.clone(),
-                                            tool_ref.clone(),
-                                            args.clone(),
-                                            tool_resp.clone(),
+                                            cb_ctx.clone(), tool_ref.clone(), args.clone(), tool_resp.clone(),
                                         ).await {
                                             Ok(Some(modified_value)) => {
-                                                // Replace the function response in the content
                                                 response_content = Content {
                                                     role: "function".to_string(),
                                                     parts: vec![Part::FunctionResponse {
@@ -1854,30 +1907,87 @@ impl Agent for LlmAgent {
                                             }
                                             Ok(None) => continue,
                                             Err(e) => {
-                                                yield Err(e);
-                                                return;
+                                                response_content = Content {
+                                                    role: "function".to_string(),
+                                                    parts: vec![Part::FunctionResponse {
+                                                        function_response: FunctionResponseData {
+                                                            name: name.clone(),
+                                                            response: serde_json::json!({ "error": e.to_string() }),
+                                                        },
+                                                        id: id.clone(),
+                                                    }],
+                                                };
+                                                break;
                                             }
                                         }
                                     }
                                 }
                             }
 
-                            // Yield tool execution event
-                            let mut tool_event = Event::new(&invocation_id);
-                            tool_event.author = agent_name.clone();
-                            tool_event.actions = tool_actions.clone();
-                            tool_event.llm_response.content = Some(response_content.clone());
-                            yield Ok(tool_event);
-
-                            // Check if tool requested escalation or skip_summarization
-                            if tool_actions.escalate || tool_actions.skip_summarization {
-                                // Tool wants to terminate agent loop
-                                return;
-                            }
-
-                            // Add function response to history
-                            conversation_history.push(response_content);
+                            let escalate_or_skip = tool_actions.escalate || tool_actions.skip_summarization;
+                            (idx, response_content, tool_actions, escalate_or_skip)
                         }
+                    };
+
+                    // ===== DISPATCH BASED ON STRATEGY =====
+                    let results: Vec<(usize, Content, EventActions, bool)> = match strategy {
+                        ToolExecutionStrategy::Sequential => {
+                            let mut results = Vec::with_capacity(fc_parts.len());
+                            for (idx, name, args, id, fcid) in fc_parts {
+                                results.push(execute_one_tool(idx, name, args, id, fcid).await);
+                            }
+                            results
+                        }
+                        ToolExecutionStrategy::Parallel => {
+                            let futs: Vec<_> = fc_parts.into_iter()
+                                .map(|(idx, name, args, id, fcid)| execute_one_tool(idx, name, args, id, fcid))
+                                .collect();
+                            futures::future::join_all(futs).await
+                        }
+                        ToolExecutionStrategy::Auto => {
+                            // Partition by is_read_only()
+                            let mut read_only_fcs = Vec::new();
+                            let mut mutable_fcs = Vec::new();
+                            for fc in fc_parts {
+                                let is_ro = tool_map.get(&fc.1)
+                                    .map(|t| t.is_read_only())
+                                    .unwrap_or(false);
+                                if is_ro { read_only_fcs.push(fc); } else { mutable_fcs.push(fc); }
+                            }
+                            let mut all_results = Vec::new();
+                            // Execute read-only tools concurrently first
+                            if !read_only_fcs.is_empty() {
+                                let ro_futs: Vec<_> = read_only_fcs.into_iter()
+                                    .map(|(idx, name, args, id, fcid)| execute_one_tool(idx, name, args, id, fcid))
+                                    .collect();
+                                all_results.extend(futures::future::join_all(ro_futs).await);
+                            }
+                            // Then execute mutable tools sequentially
+                            for (idx, name, args, id, fcid) in mutable_fcs {
+                                all_results.push(execute_one_tool(idx, name, args, id, fcid).await);
+                            }
+                            // Sort by original index to preserve LLM-returned order
+                            all_results.sort_by_key(|r| r.0);
+                            all_results
+                        }
+                    };
+
+                    // Restore circuit breaker state from the mutex
+                    circuit_breaker_state = cb_mutex.into_inner().unwrap_or_else(|e| e.into_inner());
+
+                    // Yield results in original order
+                    for (_, response_content, tool_actions, escalate_or_skip) in results {
+                        let mut tool_event = Event::new(&invocation_id);
+                        tool_event.author = agent_name.clone();
+                        tool_event.actions = tool_actions;
+                        tool_event.llm_response.content = Some(response_content.clone());
+                        yield Ok(tool_event);
+
+                        if escalate_or_skip {
+                            return;
+                        }
+
+                        conversation_history.push(response_content);
                     }
                 }
 

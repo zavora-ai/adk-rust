@@ -101,7 +101,8 @@ pub use model::{
 };
 pub use request_context::RequestContext;
 pub use tool::{
-    RetryBudget, Tool, ToolContext, ToolPredicate, ToolRegistry, Toolset, ValidationMode,
+    RetryBudget, Tool, ToolContext, ToolExecutionStrategy, ToolPredicate, ToolRegistry, Toolset,
+    ValidationMode,
 };
 pub use types::{Content, FunctionResponseData, MAX_INLINE_DATA_SIZE, Part};
 

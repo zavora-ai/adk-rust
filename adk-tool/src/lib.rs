@@ -60,6 +60,8 @@ mod agent_tool;
 pub mod builtin;
 mod function_tool;
 pub mod mcp;
+mod simple_context;
+mod stateful_tool;
 pub mod toolset;
 
 #[cfg(feature = "code")]
@@ -87,6 +89,8 @@ pub use mcp::{
     AutoDeclineElicitationHandler, ElicitationHandler, McpAuth, McpHttpClientBuilder,
     McpTaskConfig, McpToolset, OAuth2Config, Resource, ResourceContents, ResourceTemplate,
 };
+pub use simple_context::SimpleToolContext;
+pub use stateful_tool::StatefulTool;
 pub use toolset::{
     BasicToolset, FilteredToolset, MergedToolset, PrefixedToolset, string_predicate,
 };
