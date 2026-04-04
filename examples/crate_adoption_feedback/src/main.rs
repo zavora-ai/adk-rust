@@ -118,7 +118,7 @@ fn demo_composable_telemetry() {
 
     // Verify the function exists and returns an error for unreachable endpoint
     // (we can't actually connect without a collector running)
-    match adk_telemetry::build_otlp_layer("demo-service", "http://localhost:4317") {
+    match adk_telemetry::build_otlp_layer::<tracing_subscriber::Registry>("demo-service", "http://localhost:4317") {
         Ok(_layer) => {
             println!("  ✓ build_otlp_layer returned a composable layer");
             println!("  ✓ Layer can be used with tracing_subscriber::registry().with(layer)");

@@ -47,8 +47,8 @@ impl MemoryServiceAdapter {
 #[async_trait]
 impl adk_core::Memory for MemoryServiceAdapter {
     async fn search(&self, query: &str) -> adk_core::Result<Vec<adk_core::MemoryEntry>> {
-        let resp = self
-            .inner
+        let inner = self.inner.clone();
+        let resp = inner
             .search(SearchRequest {
                 query: query.to_string(),
                 app_name: self.app_name.clone(),
@@ -66,19 +66,22 @@ impl adk_core::Memory for MemoryServiceAdapter {
     }
 
     async fn add(&self, entry: adk_core::MemoryEntry) -> adk_core::Result<()> {
+        let inner = self.inner.clone();
         let mem_entry = crate::MemoryEntry {
             content: entry.content,
             author: entry.author,
             timestamp: Utc::now(),
         };
-        self.inner.add_entry(&self.app_name, &self.user_id, mem_entry).await
+        inner.add_entry(&self.app_name, &self.user_id, mem_entry).await
     }
 
     async fn delete(&self, query: &str) -> adk_core::Result<u64> {
-        self.inner.delete_entries(&self.app_name, &self.user_id, query).await
+        let inner = self.inner.clone();
+        inner.delete_entries(&self.app_name, &self.user_id, query).await
     }
 
     async fn health_check(&self) -> adk_core::Result<()> {
-        self.inner.health_check().await
+        let inner = self.inner.clone();
+        inner.health_check().await
     }
 }

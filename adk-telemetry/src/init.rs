@@ -153,9 +153,13 @@ pub fn init_with_otlp(service_name: &str, endpoint: &str) -> Result<(), Telemetr
 
 /// Build an OTLP tracing layer without initializing a global subscriber.
 ///
-/// Returns a [`tracing_subscriber::Layer`] that can be composed with any
-/// [`tracing_subscriber::Registry`] via `.with()`. Also configures the global
-/// OpenTelemetry tracer and meter providers.
+/// Returns a boxed [`tracing_subscriber::Layer`] that can be composed with any
+/// subscriber via `.with()`. Also configures the global OpenTelemetry tracer
+/// and meter providers.
+///
+/// The layer is returned as `Box<dyn Layer<S>>` rather than `impl Layer` so it
+/// can be stored, composed across crate boundaries, and used in `Layered<...>`
+/// chains without running into opaque-type limitations.
 ///
 /// Unlike [`init_with_otlp`], this function does **not** call `.init()` on a
 /// subscriber and does **not** use the `INIT` [`Once`] guard. The caller is
@@ -181,13 +185,16 @@ pub fn init_with_otlp(service_name: &str, endpoint: &str) -> Result<(), Telemetr
 ///     .with(tracing_subscriber::fmt::layer())
 ///     .init();
 /// ```
-pub fn build_otlp_layer(
+pub fn build_otlp_layer<S>(
     service_name: &str,
     endpoint: &str,
-) -> Result<
-    impl tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync,
-    TelemetryError,
-> {
+) -> Result<Box<dyn tracing_subscriber::Layer<S> + Send + Sync>, TelemetryError>
+where
+    S: tracing::Subscriber
+        + for<'span> tracing_subscriber::registry::LookupSpan<'span>
+        + Send
+        + Sync,
+{
     use opentelemetry::trace::TracerProvider;
     use opentelemetry_otlp::WithExportConfig;
     use tracing_opentelemetry::OpenTelemetryLayer;
@@ -226,7 +233,7 @@ pub fn build_otlp_layer(
 
     opentelemetry::global::set_meter_provider(meter_provider);
 
-    Ok(OpenTelemetryLayer::new(tracer))
+    Ok(Box::new(OpenTelemetryLayer::new(tracer)))
 }
 
 /// Shutdown telemetry and flush any pending spans.
