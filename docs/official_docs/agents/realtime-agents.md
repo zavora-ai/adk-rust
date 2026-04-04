@@ -449,6 +449,61 @@ while let Some(event) = session.next_event().await {
 | `full` | `openai` + `gemini` + `vertex-live` + `livekit` | All transports except WebRTC |
 | `full-webrtc` | `full` + `openai-webrtc` | Everything (requires cmake) |
 
+## LiveKit WebRTC Bridge
+
+For production voice applications, the LiveKit bridge routes audio through a LiveKit server for scalable, multi-participant scenarios.
+
+### LiveKitConfig
+
+Securely configure LiveKit credentials. API keys and secrets are stored using `secrecy::SecretString` and redacted in Debug output:
+
+```rust
+use adk_realtime::livekit::{LiveKitConfig, LiveKitRoomBuilder};
+
+let config = LiveKitConfig::new(
+    "wss://your-server.livekit.cloud",
+    std::env::var("LIVEKIT_API_KEY")?,
+    std::env::var("LIVEKIT_API_SECRET")?,
+)?;
+```
+
+`LiveKitConfig::new()` validates the URL format and rejects empty credentials at construction time.
+
+### LiveKitRoomBuilder
+
+A typestate builder for connecting to LiveKit rooms. The `identity` field is required at compile time — `connect()` is only available after it's set:
+
+```rust
+let bundle = LiveKitRoomBuilder::new(config)
+    .identity("my-agent")           // required — enables connect()
+    .name("Voice Agent")            // optional display name
+    .room_name("session-room-123")  // optional — auto-generated if omitted
+    .auto_subscribe(true)           // subscribe to remote tracks
+    .with_audio(24_000, 1)          // publish a local audio track (sample rate, channels)
+    .connect()
+    .await?;
+
+// The bundle contains everything you need
+let room = bundle.room;
+let mut events = bundle.events;
+let audio_source = bundle.audio_source;  // for publishing audio
+let audio_track = bundle.audio_track;
+```
+
+### Bridging Audio
+
+Use the bridge utilities to connect LiveKit audio to a `RealtimeRunner`:
+
+```rust
+use adk_realtime::livekit::{LiveKitEventHandler, bridge_input};
+
+// Wrap your event handler to publish model audio to LiveKit
+let lk_handler = LiveKitEventHandler::new(inner_handler, audio_source, 24000, 1);
+
+// Bridge participant audio from LiveKit into the RealtimeRunner
+tokio::spawn(bridge_input(remote_track, runner));
+```
+
 ## Examples
 
 Run the included examples:
@@ -466,6 +521,11 @@ cargo run -p adk-realtime --example vertex_live_tools --features vertex-live
 
 # LiveKit Bridge (requires LiveKit server)
 cargo run -p adk-realtime --example livekit_bridge --features livekit,openai
+cargo run -p adk-realtime --example livekit_gemini_bridge --features livekit,gemini
+
+# Debug utilities
+cargo run -p adk-realtime --example debug_gemini --features gemini
+cargo run -p adk-realtime --example debug_livekit_auth --features livekit
 
 # OpenAI WebRTC (requires cmake)
 cargo run -p adk-realtime --example openai_webrtc --features openai-webrtc

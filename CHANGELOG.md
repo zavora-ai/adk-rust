@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Realtime — LiveKit Typestate Builder, OpenAI Protocol Centralization ([@mikefaille](https://github.com/mikefaille))
+
+- **`LiveKitConfig`** (`adk-realtime`): Secure LiveKit configuration with `secrecy::SecretString` for API keys. URL validation and empty-credential rejection at construction time.
+- **`LiveKitRoomBuilder`** (`adk-realtime`): Typestate builder for LiveKit room connections. `identity` is required at compile time. Supports optional audio track setup, room name, and custom video grants.
+- **`LiveKitError`** (`adk-realtime`): Dedicated error type for LiveKit operations (config, token generation, connection).
+- **`OpenAIProtocolHandler<T>`** (`adk-realtime`): Generic protocol handler wrapping any `OpenAITransportLink` transport. Implements `RealtimeSession` for both WebSocket and WebRTC.
+- **`OpenAITransportLink` trait** (`adk-realtime`): Transport abstraction for OpenAI Realtime API. Default implementations for audio encoding and session configuration. WebRTC overrides for direct media track access.
+- **Centralized OpenAI protocol** (`adk-realtime`): Shared `convert_config_to_openai()` and `translate_client_message()` functions used by both WebSocket and WebRTC transports.
+- **New examples**: `debug_gemini`, `debug_livekit_auth`, `livekit_gemini_bridge`.
+
 #### Developer Ergonomics — Parallel Dispatch, Builder, Tool Metadata, Macro Attributes
 
 - **`ToolExecutionStrategy`** (`adk-core`): New enum with `Sequential` (default), `Parallel`, and `Auto` variants controlling how multiple tool calls from a single LLM response are dispatched.

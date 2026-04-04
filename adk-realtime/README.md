@@ -194,6 +194,30 @@ Bridge any `EventHandler` to a LiveKit room for production voice apps:
 adk-realtime = { version = "0.5.0", features = ["livekit", "openai"] }
 ```
 
+#### LiveKitConfig and LiveKitRoomBuilder
+
+Use the typestate builder for secure room connections. Credentials are stored with `secrecy::SecretString` and redacted in Debug output:
+
+```rust
+use adk_realtime::livekit::{LiveKitConfig, LiveKitRoomBuilder};
+
+let config = LiveKitConfig::new(
+    "wss://your-server.livekit.cloud",
+    std::env::var("LIVEKIT_API_KEY")?,
+    std::env::var("LIVEKIT_API_SECRET")?,
+)?;
+
+let bundle = LiveKitRoomBuilder::new(config)
+    .identity("my-agent")           // required — enables connect()
+    .name("Voice Agent")            // optional display name
+    .room_name("session-room-123")  // optional — auto-generated if omitted
+    .with_audio(24_000, 1)          // publish a local audio track
+    .connect()
+    .await?;
+```
+
+#### Bridging Audio
+
 ```rust
 use adk_realtime::livekit::{LiveKitEventHandler, bridge_input};
 
