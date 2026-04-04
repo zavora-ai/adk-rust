@@ -1565,8 +1565,9 @@ impl Agent for LlmAgent {
                     // so check before parallel dispatch.
                     let mut confirmation_interrupted = false;
                     for (_, fc_name, fc_args, _, fc_call_id) in &fc_parts {
-                        if tool_confirmation_policy.requires_confirmation(fc_name) {
-                            if ctx.run_config().tool_confirmation_decisions.get(fc_name).copied().is_none() {
+                        if tool_confirmation_policy.requires_confirmation(fc_name)
+                            && ctx.run_config().tool_confirmation_decisions.get(fc_name).copied().is_none()
+                        {
                                 let mut ce = Event::new(&invocation_id);
                                 ce.author = agent_name.clone();
                                 ce.llm_response.interrupted = true;
@@ -1588,7 +1589,6 @@ impl Agent for LlmAgent {
                                 yield Ok(ce);
                                 confirmation_interrupted = true;
                                 break;
-                            }
                         }
                     }
                     if confirmation_interrupted {

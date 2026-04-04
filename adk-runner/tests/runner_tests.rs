@@ -504,6 +504,7 @@ async fn test_skill_injector_plugin_mutates_user_prompt() {
         SkillInjectorConfig {
             policy: SelectionPolicy { top_k: 1, min_score: 0.1, ..SelectionPolicy::default() },
             max_injected_chars: 500,
+            ..SkillInjectorConfig::default()
         },
     )
     .unwrap();
@@ -560,7 +561,7 @@ async fn test_runner_with_auto_skills_mutates_user_prompt() {
     )
     .unwrap();
 
-    let runner = Runner::new(RunnerConfig {
+    let mut runner = Runner::new(RunnerConfig {
         app_name: "test_app".to_string(),
         agent: Arc::new(EchoUserContentAgent),
         session_service: Arc::new(MockSessionService),
@@ -574,15 +575,17 @@ async fn test_runner_with_auto_skills_mutates_user_prompt() {
         request_context: None,
         cancellation_token: None,
     })
-    .unwrap()
-    .with_auto_skills(
-        root,
-        SkillInjectorConfig {
-            policy: SelectionPolicy { top_k: 1, min_score: 0.1, ..SelectionPolicy::default() },
-            max_injected_chars: 500,
-        },
-    )
     .unwrap();
+    runner
+        .with_auto_skills_mut(
+            root,
+            SkillInjectorConfig {
+                policy: SelectionPolicy { top_k: 1, min_score: 0.1, ..SelectionPolicy::default() },
+                max_injected_chars: 500,
+                ..SkillInjectorConfig::default()
+            },
+        )
+        .unwrap();
 
     let mut stream = runner
         .run(

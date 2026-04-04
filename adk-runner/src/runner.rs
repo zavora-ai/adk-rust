@@ -127,14 +127,29 @@ impl Runner {
     }
 
     /// Enable skill injection by auto-loading `.skills/` from the given root path.
+    #[deprecated(note = "Use with_auto_skills_mut instead")]
     pub fn with_auto_skills(
         mut self,
         root: impl AsRef<std::path::Path>,
         config: SkillInjectorConfig,
     ) -> adk_skill::SkillResult<Self> {
+        self.with_auto_skills_mut(root, config)?;
+        Ok(self)
+    }
+
+    /// Enable skill injection by auto-loading `.skills/` from the given root path.
+    ///
+    /// Unlike [`with_auto_skills`](Self::with_auto_skills), this method borrows
+    /// the Runner mutably instead of consuming it. On error, the Runner remains
+    /// valid with no skill injector configured.
+    pub fn with_auto_skills_mut(
+        &mut self,
+        root: impl AsRef<std::path::Path>,
+        config: SkillInjectorConfig,
+    ) -> adk_skill::SkillResult<()> {
         let injector = SkillInjector::from_root(root, config)?;
         self.skill_injector = Some(Arc::new(injector));
-        Ok(self)
+        Ok(())
     }
 
     pub async fn run(

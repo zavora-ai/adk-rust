@@ -72,6 +72,42 @@ impl MemoryService for InMemoryMemoryService {
         Ok(())
     }
 
+    async fn add_entry(&self, app_name: &str, user_id: &str, entry: MemoryEntry) -> Result<()> {
+        let key = MemoryKey { app_name: app_name.to_string(), user_id: user_id.to_string() };
+        let words = crate::text::extract_words_from_content(&entry.content);
+        let stored = StoredEntry { entry, words };
+
+        let mut store = self.store.write().unwrap();
+        let sessions = store.entry(key).or_default();
+        sessions.entry("__direct__".to_string()).or_default().push(stored);
+
+        Ok(())
+    }
+
+    async fn delete_entries(&self, app_name: &str, user_id: &str, query: &str) -> Result<u64> {
+        let query_words = crate::text::extract_words(query);
+        if query_words.is_empty() {
+            return Ok(0);
+        }
+
+        let key = MemoryKey { app_name: app_name.to_string(), user_id: user_id.to_string() };
+
+        let mut store = self.store.write().unwrap();
+        let sessions = match store.get_mut(&key) {
+            Some(s) => s,
+            None => return Ok(0),
+        };
+
+        let mut removed: u64 = 0;
+        for entries in sessions.values_mut() {
+            let before = entries.len();
+            entries.retain(|stored| !Self::has_intersection(&stored.words, &query_words));
+            removed += (before - entries.len()) as u64;
+        }
+
+        Ok(removed)
+    }
+
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {
         let query_words = crate::text::extract_words(&req.query);
         let limit = req.limit.unwrap_or(10);

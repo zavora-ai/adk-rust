@@ -87,6 +87,7 @@ pub fn parse_skill_markdown(path: &Path, content: &str) -> SkillResult<ParsedSki
         trigger: fm.trigger.unwrap_or(false),
         hint: fm.hint,
         metadata: fm.metadata,
+        triggers: fm.triggers,
         body,
     })
 }
@@ -168,6 +169,7 @@ fn parse_convention_markdown(path: &Path, content: &str) -> SkillResult<ParsedSk
         trigger: false,
         hint: None,
         metadata: std::collections::HashMap::new(),
+        triggers: Vec::new(),
         body,
     })
 }

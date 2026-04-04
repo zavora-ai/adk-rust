@@ -52,6 +52,18 @@ pub trait MemoryService: Send + Sync {
         Err(adk_core::AdkError::memory("delete_session not implemented"))
     }
 
+    /// Add a single memory entry directly (not tied to a session).
+    async fn add_entry(&self, app_name: &str, user_id: &str, entry: MemoryEntry) -> Result<()> {
+        let _ = (app_name, user_id, entry);
+        Err(adk_core::AdkError::memory("add_entry not implemented"))
+    }
+
+    /// Delete entries matching a query. Returns count of deleted entries.
+    async fn delete_entries(&self, app_name: &str, user_id: &str, query: &str) -> Result<u64> {
+        let _ = (app_name, user_id, query);
+        Err(adk_core::AdkError::memory("delete_entries not implemented"))
+    }
+
     /// Verify backend connectivity.
     ///
     /// Returns `Ok(())` if the backend is reachable and responsive.

@@ -1,21 +1,32 @@
 use crate::error::SkillResult;
-use crate::index::load_skill_index;
+use crate::index::{load_skill_index, load_skill_index_with_extras};
 use crate::model::{SelectionPolicy, SkillIndex, SkillMatch};
 use crate::select::select_skills;
 use adk_core::{Content, Part};
 use adk_plugin::{Plugin, PluginConfig, PluginManager};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct SkillInjectorConfig {
     pub policy: SelectionPolicy,
     pub max_injected_chars: usize,
+    /// Optional global skills directory (e.g. `~/.config/adk/skills/`).
+    /// Skills here are included in the index but project-local skills
+    /// take precedence when names collide.
+    pub global_skills_dir: Option<PathBuf>,
+    /// Additional directories to scan for skills.
+    pub extra_paths: Vec<PathBuf>,
 }
 
 impl Default for SkillInjectorConfig {
     fn default() -> Self {
-        Self { policy: SelectionPolicy::default(), max_injected_chars: 2000 }
+        Self {
+            policy: SelectionPolicy::default(),
+            max_injected_chars: 2000,
+            global_skills_dir: None,
+            extra_paths: Vec::new(),
+        }
     }
 }
 
@@ -27,7 +38,15 @@ pub struct SkillInjector {
 
 impl SkillInjector {
     pub fn from_root(root: impl AsRef<Path>, config: SkillInjectorConfig) -> SkillResult<Self> {
-        let index = load_skill_index(root)?;
+        let mut extra_dirs: Vec<PathBuf> = config.extra_paths.clone();
+        if let Some(ref global) = config.global_skills_dir {
+            extra_dirs.push(global.clone());
+        }
+        let index = if extra_dirs.is_empty() {
+            load_skill_index(root)?
+        } else {
+            load_skill_index_with_extras(root, &extra_dirs)?
+        };
         Ok(Self { index: Arc::new(index), config })
     }
 

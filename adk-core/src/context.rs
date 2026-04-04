@@ -1,5 +1,5 @@
 use crate::identity::{AdkIdentity, AppName, ExecutionIdentity, InvocationId, SessionId, UserId};
-use crate::{Agent, Result, types::Content};
+use crate::{AdkError, Agent, Result, types::Content};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -322,6 +322,24 @@ pub trait Memory: Send + Sync {
     /// implementations and adapters without an external dependency.
     async fn health_check(&self) -> Result<()> {
         Ok(())
+    }
+
+    /// Add a single memory entry.
+    ///
+    /// The default implementation returns an "not implemented" error, which is
+    /// suitable for read-only memory backends.
+    async fn add(&self, entry: MemoryEntry) -> Result<()> {
+        let _ = entry;
+        Err(AdkError::memory("add not implemented"))
+    }
+
+    /// Delete entries matching a query. Returns count of deleted entries.
+    ///
+    /// The default implementation returns an "not implemented" error, which is
+    /// suitable for read-only memory backends.
+    async fn delete(&self, query: &str) -> Result<u64> {
+        let _ = query;
+        Err(AdkError::memory("delete not implemented"))
     }
 }
 

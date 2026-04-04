@@ -18,10 +18,49 @@
 use crate::service::*;
 use adk_core::Result;
 use async_trait::async_trait;
+use chrono::Utc;
+use serde::Deserialize;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Row, SqlitePool};
+use std::path::Path;
 use std::str::FromStr;
 use tracing::instrument;
+
+/// Private struct for deserializing JSON memory entries during import.
+#[derive(Deserialize)]
+struct JsonMemoryEntry {
+    content: serde_json::Value,
+    author: String,
+    #[serde(default)]
+    timestamp: Option<chrono::DateTime<Utc>>,
+    #[serde(default)]
+    app_name: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+}
+
+/// Extract searchable text from a JSON content value.
+///
+/// - If the value is a string, returns it directly.
+/// - If the value is an object with a `parts` array, extracts `text` fields from each part.
+/// - Otherwise, returns the JSON serialized form as a fallback.
+fn extract_content_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Object(obj) => {
+            if let Some(serde_json::Value::Array(parts)) = obj.get("parts") {
+                parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(|t| t.as_str()).map(String::from))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            } else {
+                value.to_string()
+            }
+        }
+        _ => value.to_string(),
+    }
+}
 
 /// SQLite-backed memory service with FTS5 full-text search.
 ///
@@ -127,6 +166,64 @@ END;",
     /// exists or the registry is empty.
     pub async fn schema_version(&self) -> Result<i64> {
         crate::migration::sqlite_runner::sql_schema_version(&self.pool, Self::REGISTRY_TABLE).await
+    }
+
+    /// Import memory entries from a JSON file into the database.
+    ///
+    /// The file must contain a JSON array of objects, each with at least
+    /// `content` (any JSON value) and `author` (string) fields. Optional
+    /// fields: `timestamp`, `app_name`, `user_id`.
+    ///
+    /// Imported entries are appended — existing data is never modified.
+    /// Returns the count of successfully imported entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns a descriptive error if the file does not exist or contains
+    /// invalid JSON.
+    pub async fn import_json(&self, path: impl AsRef<Path>) -> Result<u64> {
+        let path = path.as_ref();
+
+        let file_content = std::fs::read_to_string(path).map_err(|e| {
+            adk_core::AdkError::memory(format!("file not found: {}", path.display())).with_source(e)
+        })?;
+
+        let entries: Vec<JsonMemoryEntry> = serde_json::from_str(&file_content)
+            .map_err(|e| adk_core::AdkError::memory(format!("JSON parse error: {e}")))?;
+
+        let mut count: u64 = 0;
+        for entry in &entries {
+            let content_json = serde_json::to_string(&entry.content)
+                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+
+            let content_text = extract_content_text(&entry.content);
+
+            let timestamp_str = entry.timestamp.unwrap_or_else(Utc::now).to_rfc3339();
+
+            let app_name = entry.app_name.as_deref().unwrap_or("__import__");
+
+            let user_id = entry.user_id.as_deref().unwrap_or("__import__");
+
+            sqlx::query(
+                "INSERT INTO memory_entries \
+                 (app_name, user_id, session_id, content, content_text, author, timestamp) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(app_name)
+            .bind(user_id)
+            .bind("__import__")
+            .bind(&content_json)
+            .bind(&content_text)
+            .bind(&entry.author)
+            .bind(&timestamp_str)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
+
+            count += 1;
+        }
+
+        Ok(count)
     }
 }
 
@@ -237,6 +334,52 @@ impl MemoryService for SqliteMemoryService {
         .await
         .map_err(|e| adk_core::AdkError::memory(format!("delete_session failed: {e}")))?;
         Ok(())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
+    async fn add_entry(&self, app_name: &str, user_id: &str, entry: MemoryEntry) -> Result<()> {
+        let content_json = serde_json::to_string(&entry.content)
+            .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+        let content_text = crate::text::extract_text(&entry.content);
+        let timestamp_str = entry.timestamp.to_rfc3339();
+
+        sqlx::query(
+            "INSERT INTO memory_entries \
+             (app_name, user_id, session_id, content, content_text, author, timestamp) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(app_name)
+        .bind(user_id)
+        .bind("__direct__")
+        .bind(&content_json)
+        .bind(&content_text)
+        .bind(&entry.author)
+        .bind(&timestamp_str)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
+    async fn delete_entries(&self, app_name: &str, user_id: &str, query: &str) -> Result<u64> {
+        let result = sqlx::query(
+            "DELETE FROM memory_entries WHERE id IN (\
+                SELECT m.id FROM memory_entries_fts f \
+                JOIN memory_entries m ON m.id = f.rowid \
+                WHERE memory_entries_fts MATCH ? \
+                AND m.app_name = ? AND m.user_id = ?\
+            )",
+        )
+        .bind(query)
+        .bind(app_name)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("delete failed: {e}")))?;
+
+        Ok(result.rows_affected())
     }
 
     #[instrument(skip_all)]

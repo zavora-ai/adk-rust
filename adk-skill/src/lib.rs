@@ -37,9 +37,12 @@ pub use coordinator::{
     ContextCoordinator, CoordinatorConfig, ResolutionStrategy, SkillContext, ToolRegistry,
     ValidationMode,
 };
-pub use discovery::{discover_instruction_files, discover_skill_files};
+pub use discovery::{
+    discover_instruction_files, discover_instruction_files_with_extras, discover_skill_files,
+    discover_skill_files_with_extras,
+};
 pub use error::{SkillError, SkillResult};
-pub use index::load_skill_index;
+pub use index::{load_skill_index, load_skill_index_with_extras};
 pub use injector::{
     SkillInjector, SkillInjectorConfig, apply_skill_injection, select_skill_prompt_block,
 };

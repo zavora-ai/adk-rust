@@ -33,6 +33,9 @@ pub struct SkillFrontmatter {
     /// Arbitrary key-value mapping for custom extension metadata.
     #[serde(default)]
     pub metadata: std::collections::HashMap<String, serde_json::Value>,
+    /// File glob patterns that determine when this skill activates (e.g., `["*.rs", "Cargo.toml"]`).
+    #[serde(default)]
+    pub triggers: Vec<String>,
 }
 
 /// A parsed skill before it is assigned an ID and indexed.
@@ -60,6 +63,8 @@ pub struct ParsedSkill {
     pub hint: Option<String>,
     /// Extension metadata.
     pub metadata: std::collections::HashMap<String, serde_json::Value>,
+    /// File glob patterns for activation triggers.
+    pub triggers: Vec<String>,
     /// The raw Markdown body content (instructions).
     pub body: String,
 }
@@ -99,6 +104,8 @@ pub struct SkillDocument {
     pub hash: String,
     /// Optional Unix timestamp of last file modification.
     pub last_modified: Option<i64>,
+    /// File glob patterns for activation triggers.
+    pub triggers: Vec<String>,
 }
 
 impl SkillDocument {
@@ -170,6 +177,8 @@ pub struct SkillSummary {
     pub hash: String,
     /// Last modified timestamp.
     pub last_modified: Option<i64>,
+    /// File glob patterns for activation triggers.
+    pub triggers: Vec<String>,
 }
 
 impl From<&SkillDocument> for SkillSummary {
@@ -190,6 +199,7 @@ impl From<&SkillDocument> for SkillSummary {
             path: value.path.clone(),
             hash: value.hash.clone(),
             last_modified: value.last_modified,
+            triggers: value.triggers.clone(),
         }
     }
 }

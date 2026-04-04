@@ -1,10 +1,10 @@
-use crate::discovery::discover_instruction_files;
+use crate::discovery::{discover_instruction_files, discover_instruction_files_with_extras};
 use crate::error::SkillResult;
 use crate::model::{SkillDocument, SkillIndex};
 use crate::parser::parse_instruction_markdown;
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 /// Loads a [`SkillIndex`] by discovering and parsing all instruction files under `root`.
@@ -59,11 +59,106 @@ pub fn load_skill_index(root: impl AsRef<Path>) -> SkillResult<SkillIndex> {
             path,
             hash,
             last_modified,
+            triggers: parsed.triggers,
         });
     }
 
     skills.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
     Ok(SkillIndex::new(skills))
+}
+
+/// Loads a [`SkillIndex`] by discovering and parsing all instruction files under `root`,
+/// plus any additional directories in `extra_dirs`.
+///
+/// Merges project-local instruction files with files from the provided extra directories.
+/// Non-existent or non-directory extra paths are silently skipped.
+/// Each file is read, parsed, and assigned a content-hash-based identifier.
+/// The resulting index is sorted by skill name and path, then deduplicated by name.
+/// Project-local skills (`.skills/`, `.claude/skills/`) take precedence over global/extra
+/// paths because discovery lists project-local directories first, and deduplication
+/// keeps the first occurrence.
+pub fn load_skill_index_with_extras(
+    root: impl AsRef<Path>,
+    extra_dirs: &[PathBuf],
+) -> SkillResult<SkillIndex> {
+    let root = root.as_ref();
+    let mut skills = Vec::new();
+    for path in discover_instruction_files_with_extras(root, extra_dirs)? {
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let parsed = match parse_instruction_markdown(&path, &content) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        let hash = format!("{:x}", hasher.finalize());
+
+        let last_modified = fs::metadata(&path)
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|ts| ts.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64);
+
+        let id = format!(
+            "{}-{}",
+            normalize_id(&parsed.name),
+            &hash.chars().take(12).collect::<String>()
+        );
+
+        skills.push(SkillDocument {
+            id,
+            name: parsed.name,
+            description: parsed.description,
+            version: parsed.version,
+            license: parsed.license,
+            compatibility: parsed.compatibility,
+            tags: parsed.tags,
+            allowed_tools: parsed.allowed_tools,
+            references: parsed.references,
+            trigger: parsed.trigger,
+            hint: parsed.hint,
+            metadata: parsed.metadata,
+            body: parsed.body,
+            path,
+            hash,
+            last_modified,
+            triggers: parsed.triggers,
+        });
+    }
+
+    // Deduplicate by name, preferring project-local skills (.skills/, .claude/skills/)
+    // over global/extra paths. We build a map keyed by name; project-local entries
+    // always win over non-local entries, and among entries of the same locality the
+    // first one encountered (lowest path order) wins.
+    let local_prefixes = [root.join(".skills"), root.join(".claude").join("skills")];
+    let is_project_local =
+        |path: &Path| local_prefixes.iter().any(|prefix| path.starts_with(prefix));
+
+    let mut by_name: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut deduped: Vec<SkillDocument> = Vec::with_capacity(skills.len());
+
+    for skill in skills {
+        match by_name.get(&skill.name) {
+            Some(&idx) => {
+                // Replace only if the new skill is project-local and the existing one is not
+                if is_project_local(&skill.path) && !is_project_local(&deduped[idx].path) {
+                    deduped[idx] = skill;
+                }
+                // Otherwise keep the existing entry (first wins within same locality)
+            }
+            None => {
+                by_name.insert(skill.name.clone(), deduped.len());
+                deduped.push(skill);
+            }
+        }
+    }
+
+    deduped.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
+    Ok(SkillIndex::new(deduped))
 }
 
 fn normalize_id(value: &str) -> String {
@@ -152,6 +247,63 @@ mod tests {
         // Only the valid skill.md should be indexed
         assert_eq!(index.len(), 1);
         assert_eq!(index.skills()[0].name, "my-skill");
+    }
+
+    #[test]
+    fn load_with_extras_deduplicates_by_name_preferring_project_local() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let extra = tempfile::tempdir().unwrap();
+
+        // Project-local skill in .skills/
+        fs::create_dir_all(root.join(".skills")).unwrap();
+        fs::write(
+            root.join(".skills/search.md"),
+            "---\nname: search\ndescription: Local search\n---\nLocal body.",
+        )
+        .unwrap();
+
+        // Same-named skill in extra dir (global)
+        fs::write(
+            extra.path().join("search.md"),
+            "---\nname: search\ndescription: Global search\n---\nGlobal body.",
+        )
+        .unwrap();
+
+        let index = load_skill_index_with_extras(root, &[extra.path().to_path_buf()]).unwrap();
+
+        // Only one "search" skill should remain
+        let search_skills: Vec<_> = index.skills().iter().filter(|s| s.name == "search").collect();
+        assert_eq!(search_skills.len(), 1);
+        // The project-local version wins
+        assert_eq!(search_skills[0].description, "Local search");
+        assert!(search_skills[0].path.starts_with(root));
+    }
+
+    #[test]
+    fn load_with_extras_keeps_distinct_names() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let extra = tempfile::tempdir().unwrap();
+
+        fs::create_dir_all(root.join(".skills")).unwrap();
+        fs::write(
+            root.join(".skills/alpha.md"),
+            "---\nname: alpha\ndescription: Alpha\n---\nAlpha body.",
+        )
+        .unwrap();
+
+        fs::write(
+            extra.path().join("beta.md"),
+            "---\nname: beta\ndescription: Beta\n---\nBeta body.",
+        )
+        .unwrap();
+
+        let index = load_skill_index_with_extras(root, &[extra.path().to_path_buf()]).unwrap();
+
+        assert_eq!(index.len(), 2);
+        assert!(index.find_by_name("alpha").is_some());
+        assert!(index.find_by_name("beta").is_some());
     }
 
     #[test]
