@@ -58,7 +58,7 @@ use adk_core::{
     AdkError, AfterAgentCallback, AfterToolCallback, Agent, BeforeAgentCallback,
     BeforeToolCallback, CallbackContext, Content, Event, EventActions, EventStream,
     GlobalInstructionProvider, InstructionProvider, InvocationContext, MemoryEntry, Part,
-    ReadonlyContext, Result, Tool, ToolContext, Toolset,
+    ReadonlyContext, Result, Tool, ToolCallbackContext, ToolContext, Toolset,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -490,8 +490,10 @@ impl RealtimeAgent {
                 Arc::new(RealtimeToolContext::new(ctx.clone(), call_id.to_string()));
 
             // Execute before_tool callbacks
+            let tool_cb_ctx =
+                Arc::new(ToolCallbackContext::new(ctx.clone(), name.to_string(), args.clone()));
             for callback in self.before_tool_callbacks.as_ref() {
-                if let Err(e) = callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                if let Err(e) = callback(tool_cb_ctx.clone() as Arc<dyn CallbackContext>).await {
                     return (
                         serde_json::json!({ "error": e.to_string() }),
                         EventActions::default(),
@@ -500,7 +502,7 @@ impl RealtimeAgent {
             }
 
             // Execute the tool
-            let result = match tool.execute(tool_ctx.clone(), args).await {
+            let result = match tool.execute(tool_ctx.clone(), args.clone()).await {
                 Ok(result) => result,
                 Err(e) => serde_json::json!({ "error": e.to_string() }),
             };
@@ -508,8 +510,10 @@ impl RealtimeAgent {
             let actions = tool_ctx.actions();
 
             // Execute after_tool callbacks
+            let tool_cb_ctx =
+                Arc::new(ToolCallbackContext::new(ctx.clone(), name.to_string(), args.clone()));
             for callback in self.after_tool_callbacks.as_ref() {
-                if let Err(e) = callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                if let Err(e) = callback(tool_cb_ctx.clone() as Arc<dyn CallbackContext>).await {
                     return (serde_json::json!({ "error": e.to_string() }), actions);
                 }
             }
@@ -738,8 +742,13 @@ impl Agent for RealtimeAgent {
                                     );
 
                                     // Execute before_tool callbacks
+                                    let tool_cb_ctx = Arc::new(ToolCallbackContext::new(
+                                        ctx.clone(),
+                                        name.clone(),
+                                        args.clone(),
+                                    ));
                                     for callback in before_tool_callbacks.as_ref() {
-                                        if let Err(e) = callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                                        if let Err(e) = callback(tool_cb_ctx.clone() as Arc<dyn CallbackContext>).await {
                                             let error_result = serde_json::json!({ "error": e.to_string() });
                                             (error_result, EventActions::default())
                                         } else {
@@ -747,7 +756,7 @@ impl Agent for RealtimeAgent {
                                         };
                                     }
 
-                                    let result = match tool.execute(tool_ctx.clone(), args).await {
+                                    let result = match tool.execute(tool_ctx.clone(), args.clone()).await {
                                         Ok(r) => r,
                                         Err(e) => serde_json::json!({ "error": e.to_string() }),
                                     };
@@ -755,8 +764,13 @@ impl Agent for RealtimeAgent {
                                     let actions = tool_ctx.actions();
 
                                     // Execute after_tool callbacks
+                                    let tool_cb_ctx = Arc::new(ToolCallbackContext::new(
+                                        ctx.clone(),
+                                        name.clone(),
+                                        args.clone(),
+                                    ));
                                     for callback in after_tool_callbacks.as_ref() {
-                                        let _ = callback(ctx.clone() as Arc<dyn CallbackContext>).await;
+                                        let _ = callback(tool_cb_ctx.clone() as Arc<dyn CallbackContext>).await;
                                     }
 
                                     (result, actions)

@@ -194,6 +194,14 @@ pub trait CallbackContext: ReadonlyContext {
     /// Structured metadata about the most recent tool execution.
     /// Available in after-tool callbacks. Returns `None` outside tool context.
     fn tool_outcome(&self) -> Option<ToolOutcome> { None }
+
+    /// Name of the tool being executed.
+    /// Available in before-tool and after-tool callbacks via `ToolCallbackContext`.
+    fn tool_name(&self) -> Option<&str> { None }
+
+    /// Input arguments for the tool being executed.
+    /// Available in before-tool and after-tool callbacks via `ToolCallbackContext`.
+    fn tool_input(&self) -> Option<&serde_json::Value> { None }
 }
 
 // CallbackContext extends ReadonlyContext
@@ -419,6 +427,14 @@ let agent = LlmAgentBuilder::new("permission_agent")
     .tool(Arc::new(GoogleSearchTool::new()))
     .before_tool_callback(Box::new(|ctx| {
         Box::pin(async move {
+            // Access tool name and input via ToolCallbackContext
+            if let Some(name) = ctx.tool_name() {
+                println!("About to execute tool: {}", name);
+            }
+            if let Some(input) = ctx.tool_input() {
+                println!("Tool input: {}", input);
+            }
+
             // Check if user has permission for tools
             let user_id = ctx.user_id();
             

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Crate Adoption Feedback (GitHub issue #262)
+
+Five adoption fixes reported by a real-world integrator (zavora-cli):
+
+- **SQLx lifetime fix** (`adk-memory`): `SqliteMemoryService` now clones the pool into a local variable before passing to `sqlx::query()`, resolving lifetime conflicts when called from `#[async_trait]` tool implementations.
+- **Tool context in callbacks** (`adk-core`, `adk-agent`, `adk-realtime`): `CallbackContext` gains `tool_name()` and `tool_input()` default methods. New `ToolCallbackContext` wrapper injects tool metadata at all before-tool and after-tool callback sites.
+- **Composable telemetry layer** (`adk-telemetry`): New `build_otlp_layer(service_name, endpoint)` returns a `tracing_subscriber::Layer` for composition into custom subscriber stacks without calling `.init()`.
+- **Developer-friendly content filter** (`adk-guardrail`): `ContentFilter::harmful_content()` no longer blocks "hack" and "exploit". New `harmful_content_strict()` variant retains the full original keyword list.
+- **PluginBuilder documentation** (`adk-plugin`): Expanded rustdoc on `PluginBuilder` with end-to-end examples. Added Quick Start section showing both `PluginConfig` and `PluginBuilder` usage side by side.
+- **Showcase example** (`examples/crate_adoption_feedback`): Standalone example demonstrating all five fixes with a live LLM agent.
+
 #### Realtime — LiveKit Typestate Builder, OpenAI Protocol Centralization ([@mikefaille](https://github.com/mikefaille))
 
 - **`LiveKitConfig`** (`adk-realtime`): Secure LiveKit configuration with `secrecy::SecretString` for API keys. URL validation and empty-credential rejection at construction time.

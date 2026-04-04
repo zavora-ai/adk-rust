@@ -140,9 +140,9 @@ END;",
     /// incrementally. Safe to call multiple times — already-applied
     /// steps are skipped.
     pub async fn migrate(&self) -> Result<()> {
-        let pool = &self.pool;
+        let pool = self.pool.clone();
         crate::migration::sqlite_runner::run_sql_migrations(
-            pool,
+            &pool,
             Self::REGISTRY_TABLE,
             Self::SQLITE_MEMORY_MIGRATIONS,
             || async {
@@ -150,7 +150,7 @@ END;",
                     "SELECT COUNT(*) AS cnt FROM sqlite_master \
                      WHERE type='table' AND name='memory_entries'",
                 )
-                .fetch_one(pool)
+                .fetch_one(&pool)
                 .await
                 .map_err(|e| {
                     adk_core::AdkError::memory(format!("baseline detection failed: {e}"))
@@ -182,6 +182,7 @@ END;",
     /// Returns a descriptive error if the file does not exist or contains
     /// invalid JSON.
     pub async fn import_json(&self, path: impl AsRef<Path>) -> Result<u64> {
+        let pool = self.pool.clone();
         let path = path.as_ref();
 
         let file_content = std::fs::read_to_string(path).map_err(|e| {
@@ -216,7 +217,7 @@ END;",
             .bind(&content_text)
             .bind(&entry.author)
             .bind(&timestamp_str)
-            .execute(&self.pool)
+            .execute(&pool)
             .await
             .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
 
@@ -237,6 +238,7 @@ impl MemoryService for SqliteMemoryService {
         session_id: &str,
         entries: Vec<MemoryEntry>,
     ) -> Result<()> {
+        let pool = self.pool.clone();
         if entries.is_empty() {
             return Ok(());
         }
@@ -259,7 +261,7 @@ impl MemoryService for SqliteMemoryService {
             .bind(&content_text)
             .bind(&entry.author)
             .bind(&timestamp_str)
-            .execute(&self.pool)
+            .execute(&pool)
             .await
             .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
         }
@@ -269,6 +271,7 @@ impl MemoryService for SqliteMemoryService {
 
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {
+        let pool = self.pool.clone();
         let limit = req.limit.unwrap_or(10) as i64;
 
         let rows = sqlx::query(
@@ -286,7 +289,7 @@ impl MemoryService for SqliteMemoryService {
         .bind(&req.app_name)
         .bind(&req.user_id)
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(&pool)
         .await
         .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?;
 
@@ -313,10 +316,11 @@ impl MemoryService for SqliteMemoryService {
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<()> {
+        let pool = self.pool.clone();
         sqlx::query("DELETE FROM memory_entries WHERE app_name = ? AND user_id = ?")
             .bind(app_name)
             .bind(user_id)
-            .execute(&self.pool)
+            .execute(&pool)
             .await
             .map_err(|e| adk_core::AdkError::memory(format!("delete_user failed: {e}")))?;
         Ok(())
@@ -324,13 +328,14 @@ impl MemoryService for SqliteMemoryService {
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, session_id = %session_id))]
     async fn delete_session(&self, app_name: &str, user_id: &str, session_id: &str) -> Result<()> {
+        let pool = self.pool.clone();
         sqlx::query(
             "DELETE FROM memory_entries WHERE app_name = ? AND user_id = ? AND session_id = ?",
         )
         .bind(app_name)
         .bind(user_id)
         .bind(session_id)
-        .execute(&self.pool)
+        .execute(&pool)
         .await
         .map_err(|e| adk_core::AdkError::memory(format!("delete_session failed: {e}")))?;
         Ok(())
@@ -338,6 +343,7 @@ impl MemoryService for SqliteMemoryService {
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn add_entry(&self, app_name: &str, user_id: &str, entry: MemoryEntry) -> Result<()> {
+        let pool = self.pool.clone();
         let content_json = serde_json::to_string(&entry.content)
             .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
         let content_text = crate::text::extract_text(&entry.content);
@@ -355,7 +361,7 @@ impl MemoryService for SqliteMemoryService {
         .bind(&content_text)
         .bind(&entry.author)
         .bind(&timestamp_str)
-        .execute(&self.pool)
+        .execute(&pool)
         .await
         .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
 
@@ -364,6 +370,7 @@ impl MemoryService for SqliteMemoryService {
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn delete_entries(&self, app_name: &str, user_id: &str, query: &str) -> Result<u64> {
+        let pool = self.pool.clone();
         let result = sqlx::query(
             "DELETE FROM memory_entries WHERE id IN (\
                 SELECT m.id FROM memory_entries_fts f \
@@ -375,7 +382,7 @@ impl MemoryService for SqliteMemoryService {
         .bind(query)
         .bind(app_name)
         .bind(user_id)
-        .execute(&self.pool)
+        .execute(&pool)
         .await
         .map_err(|e| adk_core::AdkError::memory(format!("delete failed: {e}")))?;
 
@@ -384,8 +391,9 @@ impl MemoryService for SqliteMemoryService {
 
     #[instrument(skip_all)]
     async fn health_check(&self) -> Result<()> {
+        let pool = self.pool.clone();
         sqlx::query("SELECT 1")
-            .execute(&self.pool)
+            .execute(&pool)
             .await
             .map_err(|e| adk_core::AdkError::memory(format!("health check failed: {e}")))?;
         Ok(())

@@ -17,10 +17,12 @@
 //!
 //! ## Quick Start
 //!
+//! ### Using `PluginConfig` directly
+//!
 //! ```rust,ignore
 //! use adk_plugin::{Plugin, PluginConfig, PluginManager};
 //!
-//! // Create a logging plugin
+//! // Create a logging plugin via PluginConfig
 //! let logging_plugin = Plugin::new(PluginConfig {
 //!     name: "logging".to_string(),
 //!     on_user_message: Some(Box::new(|ctx, content| {
@@ -37,15 +39,31 @@
 //!     })),
 //!     ..Default::default()
 //! });
+//! ```
 //!
-//! // Create plugin manager
-//! let manager = PluginManager::new(vec![logging_plugin]);
+//! ### Using `PluginBuilder`
+//!
+//! ```rust,ignore
+//! use adk_plugin::{PluginBuilder, PluginManager};
+//!
+//! // Create the same plugin via the builder API
+//! let logging_plugin = PluginBuilder::new("logging")
+//!     .on_user_message(Box::new(|ctx, content| {
+//!         Box::pin(async move {
+//!             println!("User said: {:?}", content);
+//!             Ok(None)
+//!         })
+//!     }))
+//!     .on_event(Box::new(|ctx, event| {
+//!         Box::pin(async move {
+//!             println!("Event: {:?}", event);
+//!             Ok(None)
+//!         })
+//!     }))
+//!     .build();
 //!
 //! // Use with Runner
-//! let runner = Runner::new(RunnerConfig {
-//!     plugin_manager: Some(manager),
-//!     ..config
-//! });
+//! let manager = PluginManager::new(vec![logging_plugin]);
 //! ```
 
 mod callbacks;

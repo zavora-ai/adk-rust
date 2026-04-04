@@ -275,6 +275,104 @@ pub trait CallbackContext: ReadonlyContext {
     fn tool_outcome(&self) -> Option<ToolOutcome> {
         None // default for backward compatibility
     }
+
+    /// Returns the name of the tool about to be executed.
+    /// Available in before-tool and after-tool callback contexts.
+    fn tool_name(&self) -> Option<&str> {
+        None
+    }
+
+    /// Returns the input arguments for the tool about to be executed.
+    /// Available in before-tool and after-tool callback contexts.
+    fn tool_input(&self) -> Option<&serde_json::Value> {
+        None
+    }
+}
+
+/// Wraps a [`CallbackContext`] to inject tool name and input for before-tool
+/// and after-tool callbacks.
+///
+/// Used by the agent runtime to provide tool context to `BeforeToolCallback`
+/// and `AfterToolCallback` invocations.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let tool_ctx = Arc::new(ToolCallbackContext::new(
+///     ctx.clone(),
+///     "search".to_string(),
+///     serde_json::json!({"query": "hello"}),
+/// ));
+/// callback(tool_ctx as Arc<dyn CallbackContext>).await;
+/// ```
+pub struct ToolCallbackContext {
+    /// The inner callback context to delegate to.
+    pub inner: Arc<dyn CallbackContext>,
+    /// The name of the tool being executed.
+    pub tool_name: String,
+    /// The input arguments for the tool being executed.
+    pub tool_input: serde_json::Value,
+}
+
+impl ToolCallbackContext {
+    /// Creates a new `ToolCallbackContext` wrapping the given inner context.
+    pub fn new(
+        inner: Arc<dyn CallbackContext>,
+        tool_name: String,
+        tool_input: serde_json::Value,
+    ) -> Self {
+        Self { inner, tool_name, tool_input }
+    }
+}
+
+#[async_trait]
+impl ReadonlyContext for ToolCallbackContext {
+    fn invocation_id(&self) -> &str {
+        self.inner.invocation_id()
+    }
+
+    fn agent_name(&self) -> &str {
+        self.inner.agent_name()
+    }
+
+    fn user_id(&self) -> &str {
+        self.inner.user_id()
+    }
+
+    fn app_name(&self) -> &str {
+        self.inner.app_name()
+    }
+
+    fn session_id(&self) -> &str {
+        self.inner.session_id()
+    }
+
+    fn branch(&self) -> &str {
+        self.inner.branch()
+    }
+
+    fn user_content(&self) -> &Content {
+        self.inner.user_content()
+    }
+}
+
+#[async_trait]
+impl CallbackContext for ToolCallbackContext {
+    fn artifacts(&self) -> Option<Arc<dyn Artifacts>> {
+        self.inner.artifacts()
+    }
+
+    fn tool_outcome(&self) -> Option<ToolOutcome> {
+        self.inner.tool_outcome()
+    }
+
+    fn tool_name(&self) -> Option<&str> {
+        Some(&self.tool_name)
+    }
+
+    fn tool_input(&self) -> Option<&serde_json::Value> {
+        Some(&self.tool_input)
+    }
 }
 
 #[async_trait]

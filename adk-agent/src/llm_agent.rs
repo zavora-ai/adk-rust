@@ -3,7 +3,7 @@ use adk_core::{
     BeforeAgentCallback, BeforeModelCallback, BeforeModelResult, BeforeToolCallback,
     CallbackContext, Content, Event, EventActions, FunctionResponseData, GlobalInstructionProvider,
     InstructionProvider, InvocationContext, Llm, LlmRequest, LlmResponse, MemoryEntry,
-    OnToolErrorCallback, Part, ReadonlyContext, Result, RetryBudget, Tool,
+    OnToolErrorCallback, Part, ReadonlyContext, Result, RetryBudget, Tool, ToolCallbackContext,
     ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest, ToolContext,
     ToolExecutionStrategy, ToolOutcome, Toolset,
 };
@@ -701,13 +701,13 @@ impl ToolContext for AgentToolContext {
 /// Wrapper that adds ToolOutcome to an existing CallbackContext.
 /// Used only during after-tool callback invocation so callbacks
 /// can inspect structured metadata about the completed tool execution.
-struct ToolCallbackContext {
+struct ToolOutcomeCallbackContext {
     inner: Arc<dyn CallbackContext>,
     outcome: ToolOutcome,
 }
 
 #[async_trait]
-impl ReadonlyContext for ToolCallbackContext {
+impl ReadonlyContext for ToolOutcomeCallbackContext {
     fn invocation_id(&self) -> &str {
         self.inner.invocation_id()
     }
@@ -738,7 +738,7 @@ impl ReadonlyContext for ToolCallbackContext {
 }
 
 #[async_trait]
-impl CallbackContext for ToolCallbackContext {
+impl CallbackContext for ToolOutcomeCallbackContext {
     fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
         self.inner.artifacts()
     }
@@ -1667,8 +1667,13 @@ impl Agent for LlmAgent {
 
                             // Before-tool callbacks
                             if response_content.is_none() {
+                                let tool_ctx = Arc::new(ToolCallbackContext::new(
+                                    ctx.clone(),
+                                    name.clone(),
+                                    args.clone(),
+                                ));
                                 for callback in before_tool_callbacks.as_ref() {
-                                    match callback(ctx.clone() as Arc<dyn CallbackContext>).await {
+                                    match callback(tool_ctx.clone() as Arc<dyn CallbackContext>).await {
                                         Ok(Some(c)) => { response_content = Some(c); break; }
                                         Ok(None) => continue,
                                         Err(e) => {
@@ -1861,13 +1866,18 @@ impl Agent for LlmAgent {
                             // After-tool callbacks
                             let mut response_content = response_content.expect("tool response content is set");
                             if run_after_tool_callbacks {
-                                let cb_ctx: Arc<dyn CallbackContext> = match tool_outcome_for_callback {
-                                    Some(outcome) => Arc::new(ToolCallbackContext {
+                                let outcome_ctx: Arc<dyn CallbackContext> = match tool_outcome_for_callback {
+                                    Some(outcome) => Arc::new(ToolOutcomeCallbackContext {
                                         inner: ctx.clone() as Arc<dyn CallbackContext>,
                                         outcome,
                                     }),
                                     None => ctx.clone() as Arc<dyn CallbackContext>,
                                 };
+                                let cb_ctx: Arc<dyn CallbackContext> = Arc::new(ToolCallbackContext::new(
+                                    outcome_ctx,
+                                    name.clone(),
+                                    args.clone(),
+                                ));
                                 for callback in after_tool_callbacks.as_ref() {
                                     match callback(cb_ctx.clone()).await {
                                         Ok(Some(modified)) => { response_content = modified; break; }

@@ -56,6 +56,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 This exports traces and metrics to an OpenTelemetry collector endpoint.
 
+### Composable Layer (Advanced)
+
+If you already have a `tracing` subscriber configured, use `build_otlp_layer` to get a composable layer instead of initializing a global subscriber:
+
+```rust
+use adk_telemetry::build_otlp_layer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+let otlp_layer = build_otlp_layer("my-agent", "http://localhost:4317")?;
+
+tracing_subscriber::registry()
+    .with(otlp_layer)
+    .with(tracing_subscriber::fmt::layer())
+    .init();
+```
+
 ## Log Levels
 
 Control logging verbosity using the `RUST_LOG` environment variable:

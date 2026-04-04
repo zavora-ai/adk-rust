@@ -85,8 +85,11 @@ Block harmful content or enforce topic constraints:
 ```rust
 use adk_guardrail::ContentFilter;
 
-// Block harmful content patterns
+// Block harmful content patterns (developer-friendly: excludes "hack"/"exploit")
 let filter = ContentFilter::harmful_content();
+
+// Strict variant that also blocks "hack" and "exploit"
+let filter = ContentFilter::harmful_content_strict();
 
 // Block specific keywords
 let filter = ContentFilter::blocked_keywords(vec![

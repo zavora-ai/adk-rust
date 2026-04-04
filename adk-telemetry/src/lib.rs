@@ -41,7 +41,8 @@ pub use span_exporter::*;
 
 // Re-export init functions and error type
 pub use init::{
-    TelemetryError, init_telemetry, init_with_adk_exporter, init_with_otlp, shutdown_telemetry,
+    TelemetryError, build_otlp_layer, init_telemetry, init_with_adk_exporter, init_with_otlp,
+    shutdown_telemetry,
 };
 
 // Re-export metrics

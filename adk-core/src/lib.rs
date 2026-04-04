@@ -84,8 +84,8 @@ pub use callbacks::{
 pub use context::{
     Artifacts, CallbackContext, IncludeContents, InvocationContext, MAX_STATE_KEY_LEN, Memory,
     MemoryEntry, ReadonlyContext, ReadonlyState, RunConfig, Session, State, StreamingMode,
-    ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest, ToolOutcome,
-    validate_state_key,
+    ToolCallbackContext, ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest,
+    ToolOutcome, validate_state_key,
 };
 pub use error::{AdkError, ErrorCategory, ErrorComponent, ErrorDetails, Result, RetryHint};
 pub use event::{

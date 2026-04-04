@@ -287,7 +287,7 @@ impl GeminiRealtimeSession {
             audio_buffer: Arc::new(Mutex::new(Vec::new())),
         };
 
-        session.send_setup(&model, config).await?;
+        session.send_setup(model, config).await?;
         Ok(session)
     }
 

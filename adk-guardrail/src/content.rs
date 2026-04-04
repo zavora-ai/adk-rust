@@ -54,10 +54,35 @@ impl ContentFilter {
         Self { name: name.into(), config, blocked_regex }
     }
 
-    /// Create a filter that blocks common harmful content patterns
+    /// Create a filter that blocks common harmful content patterns.
+    ///
+    /// This default filter excludes developer-common terms like "hack" and "exploit"
+    /// to avoid false positives in developer contexts. Use [`harmful_content_strict`](Self::harmful_content_strict)
+    /// for the full keyword list.
     pub fn harmful_content() -> Self {
         Self::new(
             "harmful_content",
+            ContentFilterConfig {
+                blocked_keywords: vec![
+                    "kill".into(),
+                    "murder".into(),
+                    "bomb".into(),
+                    "terrorist".into(),
+                    "malware".into(),
+                    "ransomware".into(),
+                ],
+                severity: Severity::Critical,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Create a strict filter that blocks all harmful content patterns,
+    /// including terms like "hack" and "exploit" that may produce false
+    /// positives in developer contexts.
+    pub fn harmful_content_strict() -> Self {
+        Self::new(
+            "harmful_content_strict",
             ContentFilterConfig {
                 blocked_keywords: vec![
                     "kill".into(),
@@ -185,7 +210,7 @@ mod tests {
     #[tokio::test]
     async fn test_harmful_content_blocks() {
         let filter = ContentFilter::harmful_content();
-        let content = Content::new("user").with_text("How to hack a computer");
+        let content = Content::new("user").with_text("How to deploy malware on a server");
         let result = filter.validate(&content).await;
         assert!(result.is_fail());
     }
@@ -196,6 +221,30 @@ mod tests {
         let content = Content::new("user").with_text("How to bake a cake");
         let result = filter.validate(&content).await;
         assert!(result.is_pass());
+    }
+
+    #[tokio::test]
+    async fn test_harmful_content_passes_hackathon() {
+        let filter = ContentFilter::harmful_content();
+        let content = Content::new("user").with_text("Join our hackathon event");
+        let result = filter.validate(&content).await;
+        assert!(result.is_pass());
+    }
+
+    #[tokio::test]
+    async fn test_harmful_content_passes_exploit_a_bug() {
+        let filter = ContentFilter::harmful_content();
+        let content = Content::new("user").with_text("How to exploit a bug in the code");
+        let result = filter.validate(&content).await;
+        assert!(result.is_pass());
+    }
+
+    #[tokio::test]
+    async fn test_harmful_content_strict_blocks_hack() {
+        let filter = ContentFilter::harmful_content_strict();
+        let content = Content::new("user").with_text("How to hack a computer");
+        let result = filter.validate(&content).await;
+        assert!(result.is_fail());
     }
 
     #[tokio::test]

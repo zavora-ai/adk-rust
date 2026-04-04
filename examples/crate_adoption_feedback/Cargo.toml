@@ -1,0 +1,28 @@
+[package]
+name = "crate-adoption-feedback-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-rust = { path = "../../adk-rust", features = ["standard"] }
+adk-core = { path = "../../adk-core" }
+adk-agent = { path = "../../adk-agent", features = ["guardrails"] }
+adk-runner = { path = "../../adk-runner" }
+adk-tool = { path = "../../adk-tool" }
+adk-session = { path = "../../adk-session" }
+adk-plugin = { path = "../../adk-plugin" }
+adk-guardrail = { path = "../../adk-guardrail" }
+adk-telemetry = { path = "../../adk-telemetry" }
+adk-memory = { path = "../../adk-memory", features = ["sqlite-memory"] }
+async-trait = "0.1"
+anyhow = "1.0"
+chrono = "0.4"
+dotenvy = "0.15"
+futures = "0.3"
+serde_json = "1.0"
+tokio = { version = "1.40", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
