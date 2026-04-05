@@ -80,7 +80,15 @@ pub enum RealtimeError {
     /// Native LiveKit component error.
     #[cfg(feature = "livekit")]
     #[error(transparent)]
-    LiveKitNativeError(#[from] crate::livekit::LiveKitError),
+    LiveKitNativeError(Box<crate::livekit::LiveKitError>),
+}
+
+#[cfg(feature = "livekit")]
+/// Manually implemented to box the inner error, keeping `Result` small on the happy path.
+impl From<crate::livekit::LiveKitError> for RealtimeError {
+    fn from(err: crate::livekit::LiveKitError) -> Self {
+        RealtimeError::LiveKitNativeError(Box::new(err))
+    }
 }
 
 impl RealtimeError {
@@ -127,5 +135,31 @@ impl RealtimeError {
     /// Create a new LiveKit error.
     pub fn livekit(msg: impl Into<String>) -> Self {
         Self::LiveKitError(msg.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[cfg(feature = "livekit")]
+    #[test]
+    fn test_livekit_native_error_conversion() {
+        // Construct a simple LiveKitError variant
+        let inner = crate::livekit::LiveKitError::ConfigError("test config error".to_string());
+
+        // Convert into RealtimeError
+        let realtime_err: RealtimeError = inner.into();
+
+        // Verify it matches the Boxed variant and formats correctly
+        match realtime_err {
+            RealtimeError::LiveKitNativeError(boxed_err) => {
+                assert!(matches!(*boxed_err, crate::livekit::LiveKitError::ConfigError(_)));
+                assert_eq!(
+                    format!("{}", boxed_err),
+                    "LiveKit configuration error: test config error"
+                );
+            }
+            _ => panic!("Expected LiveKitNativeError variant"),
+        }
     }
 }
