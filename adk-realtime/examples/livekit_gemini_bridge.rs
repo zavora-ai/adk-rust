@@ -137,19 +137,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
 
         while let Some(event) = room_events.recv().await {
-            match event {
-                RoomEvent::TrackSubscribed { track, publication: _, participant: _ } => {
-                    if let RemoteTrack::Audio(audio_track) = track {
-                        tracing::info!("Subscribed to remote audio track. Bridging input...");
-                        let r = bridge_runner.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = bridge_gemini_input(audio_track, &r).await {
-                                tracing::error!("Bridge error: {e}");
-                            }
-                        });
+            if let RoomEvent::TrackSubscribed { track: RemoteTrack::Audio(audio_track), .. } = event
+            {
+                tracing::info!("Subscribed to remote audio track. Bridging input...");
+                let r = bridge_runner.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = bridge_gemini_input(audio_track, &r).await {
+                        tracing::error!("Bridge error: {e}");
                     }
-                }
-                _ => {}
+                });
             }
         }
     });

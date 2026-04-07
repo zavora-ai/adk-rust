@@ -24,11 +24,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     token_builder = token_builder.with_identity("debug-agent-01");
     token_builder = token_builder.with_name("Debug Agent");
 
-    let mut grants = VideoGrants::default();
-    grants.room_join = true;
-    grants.room_create = true;
-    grants.room_list = true;
-    grants.room = "my-room".to_string(); // Matching the example
+    let grants = VideoGrants {
+        room_join: true,
+        room_create: true,
+        room_list: true,
+        room: "my-room".to_string(), // Matching the example
+        ..Default::default()
+    };
     token_builder = token_builder.with_grants(grants);
 
     let token = token_builder.to_jwt()?;

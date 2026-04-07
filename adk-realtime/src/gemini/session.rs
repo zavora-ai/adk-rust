@@ -192,6 +192,7 @@ pub struct GeminiRealtimeSession {
     sender: Arc<Mutex<WsSink>>,
     receiver: Arc<Mutex<WsSource>>,
     audio_buffer: Arc<Mutex<Vec<u8>>>,
+    event_queue: Arc<Mutex<std::collections::VecDeque<ServerEvent>>>,
 }
 
 impl GeminiRealtimeSession {
@@ -285,6 +286,7 @@ impl GeminiRealtimeSession {
             sender: Arc::new(Mutex::new(sink)),
             receiver: Arc::new(Mutex::new(source)),
             audio_buffer: Arc::new(Mutex::new(Vec::new())),
+            event_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
         };
 
         session.send_setup(model, config).await?;
@@ -386,16 +388,40 @@ impl GeminiRealtimeSession {
 
     /// Receive and parse the next message.
     async fn receive_raw(&self) -> Option<Result<ServerEvent>> {
+        // First check if there's anything in the queue
+        {
+            let mut queue = self.event_queue.lock().await;
+            if let Some(event) = queue.pop_front() {
+                return Some(Ok(event));
+            }
+        }
+
         let mut receiver = self.receiver.lock().await;
 
         match receiver.next().await {
             Some(Ok(Message::Text(text))) => match self.translate_gemini_event(&text) {
-                Ok(event) => Some(Ok(event)),
+                Ok(events) => {
+                    let mut queue = self.event_queue.lock().await;
+                    let mut iter = events.into_iter();
+                    let first = iter.next();
+                    for event in iter {
+                        queue.push_back(event);
+                    }
+                    first.map(Ok)
+                }
                 Err(e) => Some(Err(e)),
             },
             Some(Ok(Message::Binary(bytes))) => match String::from_utf8(bytes.to_vec()) {
                 Ok(text) => match self.translate_gemini_event(&text) {
-                    Ok(event) => Some(Ok(event)),
+                    Ok(events) => {
+                        let mut queue = self.event_queue.lock().await;
+                        let mut iter = events.into_iter();
+                        let first = iter.next();
+                        for event in iter {
+                            queue.push_back(event);
+                        }
+                        first.map(Ok)
+                    }
                     Err(e) => Some(Err(e)),
                 },
                 Err(e) => Some(Err(RealtimeError::protocol(format!(
@@ -424,29 +450,22 @@ impl GeminiRealtimeSession {
     }
 
     /// Translate Gemini-specific events to unified format.
-    fn translate_gemini_event(&self, raw: &str) -> Result<ServerEvent> {
+    fn translate_gemini_event(&self, raw: &str) -> Result<Vec<ServerEvent>> {
         tracing::debug!(%raw, "Translating Gemini event");
         let value: Value = serde_json::from_str(raw)
             .map_err(|e| RealtimeError::protocol(format!("Parse error: {}, raw: {}", e, raw)))?;
 
         // Check for setup completion
         if let Some(_setup_complete) = value.get("setupComplete") {
-            return Ok(ServerEvent::SessionCreated {
+            return Ok(vec![ServerEvent::SessionCreated {
                 event_id: uuid::Uuid::new_v4().to_string(),
                 session: value.clone(),
-            });
+            }]);
         }
 
         // Check for server content (audio/text)
         if let Some(content) = value.get("serverContent") {
-            if let Some(turn_complete) = content.get("turnComplete") {
-                if turn_complete.as_bool().unwrap_or(false) {
-                    return Ok(ServerEvent::ResponseDone {
-                        event_id: uuid::Uuid::new_v4().to_string(),
-                        response: value.clone(),
-                    });
-                }
-            }
+            let mut events = Vec::new();
 
             if let Some(parts) = content.get("modelTurn").and_then(|t| t.get("parts")) {
                 if let Some(parts_arr) = parts.as_array() {
@@ -457,7 +476,7 @@ impl GeminiRealtimeSession {
                                 let decoded = base64::engine::general_purpose::STANDARD
                                     .decode(data)
                                     .unwrap_or_default();
-                                return Ok(ServerEvent::AudioDelta {
+                                events.push(ServerEvent::AudioDelta {
                                     event_id: uuid::Uuid::new_v4().to_string(),
                                     response_id: String::new(),
                                     item_id: String::new(),
@@ -469,7 +488,7 @@ impl GeminiRealtimeSession {
                         }
                         // Text output
                         if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                            return Ok(ServerEvent::TextDelta {
+                            events.push(ServerEvent::TextDelta {
                                 event_id: uuid::Uuid::new_v4().to_string(),
                                 response_id: String::new(),
                                 item_id: String::new(),
@@ -481,6 +500,19 @@ impl GeminiRealtimeSession {
                     }
                 }
             }
+
+            if let Some(turn_complete) = content.get("turnComplete") {
+                if turn_complete.as_bool().unwrap_or(false) {
+                    events.push(ServerEvent::ResponseDone {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        response: value.clone(),
+                    });
+                }
+            }
+
+            if !events.is_empty() {
+                return Ok(events);
+            }
         }
 
         // Catch the Server Update for sessionResumptionUpdate
@@ -490,10 +522,10 @@ impl GeminiRealtimeSession {
         if let Some(resumption_update) = value.get("sessionResumptionUpdate") {
             if let Some(token) = resumption_update.get("resumptionToken").and_then(|t| t.as_str()) {
                 tracing::debug!("Received new Gemini 2.5 Native resumption token");
-                return Ok(ServerEvent::SessionUpdated {
+                return Ok(vec![ServerEvent::SessionUpdated {
                     event_id: uuid::Uuid::new_v4().to_string(),
                     session: json!({ "resumeToken": token }),
-                });
+                }]);
             }
         }
 
@@ -505,7 +537,7 @@ impl GeminiRealtimeSession {
                     let id = call.get("id").and_then(|i| i.as_str()).unwrap_or("");
                     let args = call.get("args").cloned().unwrap_or(json!({}));
 
-                    return Ok(ServerEvent::FunctionCallDone {
+                    return Ok(vec![ServerEvent::FunctionCallDone {
                         event_id: uuid::Uuid::new_v4().to_string(),
                         response_id: String::new(),
                         item_id: String::new(),
@@ -513,12 +545,12 @@ impl GeminiRealtimeSession {
                         call_id: id.to_string(),
                         name: name.to_string(),
                         arguments: serde_json::to_string(&args).unwrap_or_default(),
-                    });
+                    }]);
                 }
             }
         }
 
-        Ok(ServerEvent::Unknown)
+        Ok(vec![ServerEvent::Unknown])
     }
 }
 

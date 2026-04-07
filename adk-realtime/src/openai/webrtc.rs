@@ -22,7 +22,6 @@ use tokio::sync::{Mutex, mpsc};
 
 use std::sync::atomic::AtomicU64;
 
-use crate::audio::AudioChunk;
 use crate::config::RealtimeConfig;
 use crate::error::{RealtimeError, Result};
 use crate::events::ServerEvent;

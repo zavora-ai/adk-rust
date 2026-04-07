@@ -140,7 +140,7 @@ impl LiveKitRoomBuilder<Present> {
 
         let (room, events) = Room::connect(&self.config.url, &token, self.options)
             .await
-            .map_err(LiveKitError::ConnectionError)?;
+            .map_err(|e| LiveKitError::ConnectionError(Box::new(e)))?;
 
         tracing::info!(
             participant = %room.local_participant().identity(),
@@ -176,7 +176,7 @@ impl LiveKitRoomBuilder<Present> {
                     },
                 )
                 .await
-                .map_err(LiveKitError::ConnectionError)?;
+                .map_err(|e| LiveKitError::ConnectionError(Box::new(e)))?;
 
             audio_source = Some(source);
             audio_track = Some(track);
@@ -213,7 +213,7 @@ mod tests {
         assert_eq!(builder.identity.as_deref(), Some("agent1"));
         assert_eq!(builder.name.as_deref(), Some("Agent"));
         assert_eq!(builder.room_name.as_deref(), Some("test-room"));
-        assert_eq!(builder.options.auto_subscribe, false);
+        assert!(!builder.options.auto_subscribe);
         assert_eq!(builder.grants.unwrap().room, "test-room");
     }
 
