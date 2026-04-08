@@ -63,7 +63,7 @@ use adk_core::{
 use async_stream::stream;
 use async_trait::async_trait;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Shared realtime model type (thread-safe for async usage).
 pub type BoxedRealtimeModel = Arc<dyn crate::model::RealtimeModel>;
@@ -1057,12 +1057,16 @@ impl Agent for RealtimeAgent {
 struct RealtimeToolContext {
     parent_ctx: Arc<dyn InvocationContext>,
     function_call_id: String,
-    actions: Mutex<EventActions>,
+    actions: std::sync::RwLock<EventActions>,
 }
 
 impl RealtimeToolContext {
     fn new(parent_ctx: Arc<dyn InvocationContext>, function_call_id: String) -> Self {
-        Self { parent_ctx, function_call_id, actions: Mutex::new(EventActions::default()) }
+        Self {
+            parent_ctx,
+            function_call_id,
+            actions: std::sync::RwLock::new(EventActions::default()),
+        }
     }
 }
 
@@ -1111,11 +1115,11 @@ impl ToolContext for RealtimeToolContext {
     }
 
     fn actions(&self) -> EventActions {
-        self.actions.lock().unwrap().clone()
+        self.actions.read().unwrap().clone()
     }
 
     fn set_actions(&self, actions: EventActions) {
-        *self.actions.lock().unwrap() = actions;
+        *self.actions.write().unwrap() = actions;
     }
 
     async fn search_memory(&self, query: &str) -> Result<Vec<MemoryEntry>> {

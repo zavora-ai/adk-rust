@@ -114,24 +114,24 @@ impl AudioFormat {
 #[derive(Debug, Clone)]
 pub struct AudioChunk {
     /// Raw audio data.
-    pub data: Vec<u8>,
+    pub data: bytes::Bytes,
     /// Audio format of this chunk.
     pub format: AudioFormat,
 }
 
 impl AudioChunk {
     /// Create a new audio chunk.
-    pub fn new(data: Vec<u8>, format: AudioFormat) -> Self {
-        Self { data, format }
+    pub fn new(data: impl Into<bytes::Bytes>, format: AudioFormat) -> Self {
+        Self { data: data.into(), format }
     }
 
     /// Create a PCM16 24kHz audio chunk (OpenAI format).
-    pub fn pcm16_24khz(data: Vec<u8>) -> Self {
+    pub fn pcm16_24khz(data: impl Into<bytes::Bytes>) -> Self {
         Self::new(data, AudioFormat::pcm16_24khz())
     }
 
     /// Create a PCM16 16kHz audio chunk (Gemini input format).
-    pub fn pcm16_16khz(data: Vec<u8>) -> Self {
+    pub fn pcm16_16khz(data: impl Into<bytes::Bytes>) -> Self {
         Self::new(data, AudioFormat::pcm16_16khz())
     }
 
