@@ -157,15 +157,23 @@ impl LiveKitRoomBuilder<Present> {
                 auto_gain_control: true,
             };
 
-            let source = NativeAudioSource::new(
-                options,
-                self.audio_sample_rate,
-                self.audio_num_channels,
-                self.audio_sample_rate / 100,
-            );
-            let rtc_source = RtcAudioSource::Native(source.clone());
+            let audio_sample_rate = self.audio_sample_rate;
+            let audio_num_channels = self.audio_num_channels;
             let track_name = format!("{identity}-audio");
-            let track = LocalAudioTrack::create_audio_track(&track_name, rtc_source);
+
+            let (source, track) = tokio::task::spawn_blocking(move || {
+                let source = NativeAudioSource::new(
+                    options,
+                    audio_sample_rate,
+                    audio_num_channels,
+                    audio_sample_rate / 100,
+                );
+                let rtc_source = RtcAudioSource::Native(source.clone());
+                let track = LocalAudioTrack::create_audio_track(&track_name, rtc_source);
+                (source, track)
+            })
+            .await
+            .map_err(|e| LiveKitError::ConfigError(format!("Task panic: {e}")))?;
 
             room.local_participant()
                 .publish_track(
