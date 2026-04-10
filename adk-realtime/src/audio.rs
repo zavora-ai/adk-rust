@@ -185,7 +185,7 @@ impl AudioChunk {
 
 /// Buffers audio samples until a target duration is reached.
 ///
-/// Smart buffering (e.g., 200ms) is essential for AI voice services to:
+/// Smart buffering (e.g., 40-80ms) is essential for AI voice services to:
 /// 1. **Reduce Network Overhead**: Aggregating small frames into larger chunks
 ///    drastically reduces packet rate, lowering CPU usage and bandwidth overhead.
 /// 2. **Improve Model Performance**: Provides sufficient context for Voice Activity

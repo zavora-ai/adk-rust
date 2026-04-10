@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use audiopus::coder::{Decoder, Encoder};
 use audiopus::{Application, Channels, MutSignals, SampleRate};
+use parking_lot::Mutex as ParkingMutex;
 use str0m::Rtc;
 use str0m::change::SdpAnswer;
 use str0m::channel::ChannelId;
@@ -227,7 +228,12 @@ pub struct OpenAIWebRTCSession {
     /// ID of the "oai-events" data channel for JSON event exchange.
     data_channel_id: ChannelId,
     /// Opus encoder for PCM16 → Opus conversion.
-    opus_encoder: Arc<Mutex<OpusCodec>>,
+    ///
+    /// We use a synchronous `parking_lot::Mutex` here instead of an async `tokio::sync::Mutex`
+    /// because Opus encoding is a fast, CPU-bound operation. The lock is only held briefly
+    /// for `encode()` and is strictly released *before* any `.await` points to prevent
+    /// stalling the async executor.
+    opus_encoder: Arc<ParkingMutex<OpusCodec>>,
     /// Cached Opus payload type negotiated during SDP exchange.
     opus_pt: Pt,
     /// Clock rate (frequency) for the negotiated audio codec (typically 48 kHz for Opus).
@@ -376,7 +382,7 @@ impl OpenAIWebRTCSession {
             rtc: Arc::new(Mutex::new(rtc)),
             audio_track_id,
             data_channel_id,
-            opus_encoder: Arc::new(Mutex::new(opus_codec)),
+            opus_encoder: Arc::new(ParkingMutex::new(opus_codec)),
             opus_pt,
             clock_rate,
             rtp_sample_offset: AtomicU64::new(0),
@@ -594,7 +600,7 @@ impl OpenAIWebRTCSession {
     async fn write_audio_to_track(&self, pcm_samples: &[i16]) -> Result<()> {
         // Opus encode
         let opus_data = {
-            let mut encoder = self.opus_encoder.lock().await;
+            let mut encoder = self.opus_encoder.lock();
             encoder.encode(pcm_samples)?
         };
 

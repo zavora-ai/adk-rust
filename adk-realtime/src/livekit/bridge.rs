@@ -14,8 +14,8 @@ const DEFAULT_SAMPLE_RATE: i32 = 24000;
 const GEMINI_SAMPLE_RATE: i32 = 16000;
 /// Default number of audio channels (mono).
 const DEFAULT_NUM_CHANNELS: i32 = 1;
-/// Target duration for smart audio buffering (200ms).
-const BUFFER_DURATION_MS: u32 = 200;
+/// Target duration for smart audio buffering (40ms).
+const BUFFER_DURATION_MS: u32 = 40;
 
 /// Reads audio frames from a LiveKit [`RemoteAudioTrack`] and sends them as
 /// base64-encoded PCM16 audio (24kHz) to the given [`RealtimeRunner`].
