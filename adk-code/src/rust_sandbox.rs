@@ -508,6 +508,9 @@ impl RustSandboxExecutor {
 }
 
 /// Find an rlib file matching the given crate name in a directory.
+///
+/// Picks the most recently modified matching file to avoid issues with stale
+/// artifacts in the cargo deps directory.
 async fn find_rlib_in_dir(dir: &std::path::Path, crate_name: &str) -> Option<PathBuf> {
     let prefix = format!("lib{crate_name}-");
     let mut entries = match tokio::fs::read_dir(dir).await {
@@ -515,14 +518,23 @@ async fn find_rlib_in_dir(dir: &std::path::Path, crate_name: &str) -> Option<Pat
         Err(_) => return None,
     };
 
+    let mut rlibs = Vec::new();
     while let Ok(Some(entry)) = entries.next_entry().await {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
         if name_str.starts_with(&prefix) && name_str.ends_with(".rlib") {
-            return Some(entry.path());
+            if let Ok(metadata) = entry.metadata().await {
+                if let Ok(modified) = metadata.modified() {
+                    rlibs.push((entry.path(), modified));
+                }
+            }
         }
     }
-    None
+
+    // Sort by modification time descending (latest first).
+    rlibs.sort_by_key(|&(_, modified)| std::cmp::Reverse(modified));
+
+    rlibs.into_iter().next().map(|(path, _)| path)
 }
 
 #[cfg(test)]

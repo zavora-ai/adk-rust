@@ -477,6 +477,7 @@ dependencies = [
  "google-cloud-auth",
  "livekit",
  "livekit-api",
+ "parking_lot",
  "proptest",
  "reqwest 0.12.28",
  "rustls",

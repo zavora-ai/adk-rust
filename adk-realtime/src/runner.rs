@@ -7,7 +7,7 @@ use crate::config::{RealtimeConfig, SessionUpdateConfig, ToolDefinition};
 use crate::error::{RealtimeError, Result};
 use crate::events::{ServerEvent, ToolCall, ToolResponse};
 use crate::model::BoxedModel;
-use crate::session::{BoxedSession, ContextMutationOutcome};
+use crate::session::ContextMutationOutcome;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -308,11 +308,17 @@ pub struct RealtimeRunner {
     runner_config: RunnerConfig,
     tools: HashMap<String, (ToolDefinition, Arc<dyn ToolHandler>)>,
     event_handler: Arc<dyn EventHandler>,
-    session: Arc<RwLock<Option<BoxedSession>>>,
+    session: Arc<RwLock<Option<Arc<dyn crate::session::RealtimeSession>>>>,
     state: Arc<RwLock<RunnerState>>,
 }
 
 impl RealtimeRunner {
+    /// Helper to safely acquire a cloned Arc of the current session, dropping the lock.
+    async fn session_handle(&self) -> Result<Arc<dyn crate::session::RealtimeSession>> {
+        let guard = self.session.read().await;
+        guard.as_ref().cloned().ok_or_else(|| RealtimeError::connection("Not connected"))
+    }
+
     /// Create a new builder.
     pub fn builder() -> RealtimeRunnerBuilder {
         RealtimeRunnerBuilder::new()
@@ -323,7 +329,7 @@ impl RealtimeRunner {
         let config = self.config.read().await.clone();
         let session = self.model.connect(config).await?;
         let mut guard = self.session.write().await;
-        *guard = Some(session);
+        *guard = Some(session.into());
         Ok(())
     }
 
@@ -357,9 +363,7 @@ impl RealtimeRunner {
                 self.update_session(update_config).await
             }
             other => {
-                let guard = self.session.read().await;
-                let session =
-                    guard.as_ref().ok_or_else(|| RealtimeError::connection("Not connected"))?;
+                let session = self.session_handle().await?;
                 session.send_event(other).await
             }
         }
@@ -441,9 +445,8 @@ impl RealtimeRunner {
         let cloned_config = full_config.clone();
         drop(full_config); // Free the write lock early to avoid deadlocks.
 
-        // 2. Obtain a read lock on the active session transport to attempt the mutation.
-        let guard = self.session.read().await;
-        let session = guard.as_ref().ok_or_else(|| RealtimeError::connection("Not connected"))?;
+        // 2. Safely obtain a cloned handle of the active session.
+        let session = self.session_handle().await?;
 
         // 3. Delegate the mutation attempt to the provider-specific adapter.
         match session.mutate_context(cloned_config).await? {
@@ -467,7 +470,7 @@ impl RealtimeRunner {
             // PATH B: Rigid Initialization (e.g., Gemini)
             // The provider requires us to tear down the WebSocket and establish a new one (Phantom Reconnect).
             ContextMutationOutcome::RequiresResumption(new_config) => {
-                drop(guard); // CRITICAL: Release the read lock on the session before we attempt to mutate it or acquire state locks.
+                drop(session); // CRITICAL: Drop the cloned handle before attempting state mutation.
 
                 // 4. Check the Runner's internal state machine to ensure it is safe to tear down the socket.
                 let mut state_guard = self.state.write().await;
@@ -522,12 +525,16 @@ impl RealtimeRunner {
     ) -> Result<()> {
         tracing::warn!("Executing transport resumption with new configuration.");
 
-        // 1. Acquire exclusive write access to the session pointer.
-        let mut write_guard = self.session.write().await;
+        // 1. Extract the old session safely under the write lock.
+        let old_session = {
+            let mut write_guard = self.session.write().await;
+            write_guard.take()
+        };
 
         // 2. Explicitly tear down the old WebSocket connection to release upstream resources.
-        if let Some(old_session) = write_guard.as_ref() {
-            if let Err(e) = old_session.close().await {
+        // Do this WITHOUT holding the lock across `.await`.
+        if let Some(session) = old_session {
+            if let Err(e) = session.close().await {
                 tracing::warn!("Failed to cleanly close old session during resumption: {}", e);
             }
         }
@@ -538,12 +545,12 @@ impl RealtimeRunner {
         let new_session = self.model.connect(new_config).await?;
 
         // 4. Overwrite the active session pointer with the newly connected transport.
-        *write_guard = Some(new_session);
+        {
+            let mut write_guard = self.session.write().await;
+            *write_guard = Some(new_session.into());
+        }
 
-        // 5. Release the write lock immediately before attempting to inject any new messages.
-        drop(write_guard);
-
-        // 6. If the orchestrator provided a bridge message (e.g. to explain the domain shift),
+        // 5. If the orchestrator provided a bridge message (e.g. to explain the domain shift),
         // safely inject it into the new connection's context window.
         if let Some(msg) = bridge_message {
             self.inject_bridge_message(msg).await?;
@@ -564,43 +571,37 @@ impl RealtimeRunner {
             role: "user".to_string(),
             parts: vec![adk_core::types::Part::Text { text: msg }],
         };
-        let guard = self.session.read().await;
-        let session = guard.as_ref().ok_or_else(|| RealtimeError::connection("Not connected"))?;
+        let session = self.session_handle().await?;
         session.send_event(event).await
     }
 
     /// Send audio to the session.
     pub async fn send_audio(&self, audio_base64: &str) -> Result<()> {
-        let guard = self.session.read().await;
-        let session = guard.as_ref().ok_or_else(|| RealtimeError::connection("Not connected"))?;
+        let session = self.session_handle().await?;
         session.send_audio_base64(audio_base64).await
     }
 
     /// Send text to the session.
     pub async fn send_text(&self, text: &str) -> Result<()> {
-        let guard = self.session.read().await;
-        let session = guard.as_ref().ok_or_else(|| RealtimeError::connection("Not connected"))?;
+        let session = self.session_handle().await?;
         session.send_text(text).await
     }
 
     /// Commit the audio buffer (for manual VAD mode).
     pub async fn commit_audio(&self) -> Result<()> {
-        let guard = self.session.read().await;
-        let session = guard.as_ref().ok_or_else(|| RealtimeError::connection("Not connected"))?;
+        let session = self.session_handle().await?;
         session.commit_audio().await
     }
 
     /// Trigger a response from the model.
     pub async fn create_response(&self) -> Result<()> {
-        let guard = self.session.read().await;
-        let session = guard.as_ref().ok_or_else(|| RealtimeError::connection("Not connected"))?;
+        let session = self.session_handle().await?;
         session.create_response().await
     }
 
     /// Interrupt the current response.
     pub async fn interrupt(&self) -> Result<()> {
-        let guard = self.session.read().await;
-        let session = guard.as_ref().ok_or_else(|| RealtimeError::connection("Not connected"))?;
+        let session = self.session_handle().await?;
         session.interrupt().await
     }
 
@@ -623,15 +624,17 @@ impl RealtimeRunner {
     /// }
     /// ```
     pub async fn next_event(&self) -> Option<Result<ServerEvent>> {
-        let guard = self.session.read().await;
-        if let Some(session) = guard.as_ref() {
-            // Some sessions might yield inside next_event, but just in case, yield here too
-            tokio::task::yield_now().await;
-            session.next_event().await
-        } else {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            None
-        }
+        let session = match self.session_handle().await {
+            Ok(session) => session,
+            Err(_) => {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                return None;
+            }
+        };
+
+        // Some sessions might yield inside next_event, but just in case, yield here too
+        tokio::task::yield_now().await;
+        session.next_event().await
     }
 
     /// Send a tool response to the session.
@@ -651,20 +654,16 @@ impl RealtimeRunner {
     /// }
     /// ```
     pub async fn send_tool_response(&self, response: ToolResponse) -> Result<()> {
-        let guard = self.session.read().await;
-        let session = guard.as_ref().ok_or_else(|| RealtimeError::connection("Not connected"))?;
+        let session = self.session_handle().await?;
         session.send_tool_response(response).await
     }
 
     /// Run the event loop, processing events until disconnected.
     pub async fn run(&self) -> Result<()> {
         loop {
-            let event = {
-                let guard = self.session.read().await;
-                let session =
-                    guard.as_ref().ok_or_else(|| RealtimeError::connection("Not connected"))?;
-                session.next_event().await
-            };
+            let session = self.session_handle().await?;
+            let old_session_id = session.session_id().to_string();
+            let event = session.next_event().await;
 
             match event {
                 Some(Ok(event)) => {
@@ -675,7 +674,15 @@ impl RealtimeRunner {
                     return Err(e);
                 }
                 None => {
-                    // Session closed
+                    // Session closed or swapped out. Check if a new session was installed (e.g., during reconnect).
+                    let current_session_id = self.session_id().await;
+                    if let Some(id) = current_session_id {
+                        if id != old_session_id {
+                            // A new session handle was installed concurrently. Continue polling.
+                            continue;
+                        }
+                    }
+                    // It was a real disconnect.
                     break;
                 }
             }
@@ -836,8 +843,7 @@ impl RealtimeRunner {
         if self.runner_config.auto_respond_tools {
             let response = ToolResponse { call_id: call_id.to_string(), output: result };
 
-            let guard = self.session.read().await;
-            if let Some(session) = guard.as_ref() {
+            if let Ok(session) = self.session_handle().await {
                 session.send_tool_response(response).await?;
             }
         }
@@ -847,8 +853,7 @@ impl RealtimeRunner {
 
     /// Close the session.
     pub async fn close(&self) -> Result<()> {
-        let guard = self.session.read().await;
-        if let Some(session) = guard.as_ref() {
+        if let Ok(session) = self.session_handle().await {
             session.close().await?;
         }
         Ok(())
