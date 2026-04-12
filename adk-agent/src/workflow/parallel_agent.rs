@@ -1,11 +1,13 @@
 use adk_core::{
     AfterAgentCallback, Agent, BeforeAgentCallback, CallbackContext, Event, EventStream,
-    InvocationContext, Result,
+    InvocationContext, Result, SharedState,
 };
 use adk_skill::{SelectionPolicy, SkillIndex, load_skill_index};
 use async_stream::stream;
 use async_trait::async_trait;
 use std::sync::Arc;
+
+use super::shared_state_context::SharedStateContext;
 
 /// Parallel agent executes sub-agents concurrently
 pub struct ParallelAgent {
@@ -17,6 +19,7 @@ pub struct ParallelAgent {
     max_skill_chars: usize,
     before_callbacks: Arc<Vec<BeforeAgentCallback>>,
     after_callbacks: Arc<Vec<AfterAgentCallback>>,
+    shared_state_enabled: bool,
 }
 
 impl ParallelAgent {
@@ -30,6 +33,7 @@ impl ParallelAgent {
             max_skill_chars: 2000,
             before_callbacks: Arc::new(Vec::new()),
             after_callbacks: Arc::new(Vec::new()),
+            shared_state_enabled: false,
         }
     }
 
@@ -76,6 +80,16 @@ impl ParallelAgent {
         self.max_skill_chars = max_chars;
         self
     }
+
+    /// Enables shared state coordination for sub-agents.
+    ///
+    /// When enabled, a fresh `SharedState` instance is created for each
+    /// `run()` invocation and injected into each sub-agent's context.
+    /// Sub-agents can then use `ctx.shared_state()` to access the store.
+    pub fn with_shared_state(mut self) -> Self {
+        self.shared_state_enabled = true;
+        self
+    }
 }
 
 #[async_trait]
@@ -104,6 +118,7 @@ impl Agent for ParallelAgent {
         let after_callbacks = self.after_callbacks.clone();
         let agent_name = self.name.clone();
         let invocation_id = run_ctx.invocation_id().to_string();
+        let shared_state_enabled = self.shared_state_enabled;
 
         let s = stream! {
             use futures::stream::{FuturesUnordered, StreamExt};
@@ -144,8 +159,19 @@ impl Agent for ParallelAgent {
 
             let mut futures = FuturesUnordered::new();
 
+            // Create shared state if enabled (fresh per run)
+            let shared = if shared_state_enabled {
+                Some(Arc::new(SharedState::new()))
+            } else {
+                None
+            };
+
             for agent in sub_agents {
-                let ctx = run_ctx.clone();
+                let ctx: Arc<dyn InvocationContext> = if let Some(ref shared) = shared {
+                    Arc::new(SharedStateContext::new(run_ctx.clone(), shared.clone()))
+                } else {
+                    run_ctx.clone()
+                };
                 futures.push(async move {
                     agent.run(ctx).await
                 });

@@ -56,7 +56,7 @@ ADK-Rust follows a clean layered architecture from application interface down to
 
 **Workflow Agents**: Deterministic orchestration patterns.
 - `SequentialAgent`: Execute agents in sequence
-- `ParallelAgent`: Execute agents concurrently
+- `ParallelAgent`: Execute agents concurrently, with optional `SharedState` for cross-agent coordination
 - `LoopAgent`: Iterative execution with exit conditions
 
 **Custom Agents**: Implement the `Agent` trait for specialized behavior.

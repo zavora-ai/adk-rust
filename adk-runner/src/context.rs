@@ -231,6 +231,8 @@ pub struct InvocationContext {
     /// When present, `user_id()` returns `request_context.user_id` and
     /// `user_scopes()` returns `request_context.scopes`.
     request_context: Option<RequestContext>,
+    /// Optional shared state for parallel agent coordination.
+    shared_state: Option<Arc<adk_core::SharedState>>,
 }
 
 impl InvocationContext {
@@ -260,6 +262,7 @@ impl InvocationContext {
             ended: Arc::new(AtomicBool::new(false)),
             session: Arc::new(MutableSession::new(session)),
             request_context: None,
+            shared_state: None,
         })
     }
 
@@ -310,6 +313,7 @@ impl InvocationContext {
             ended: Arc::new(AtomicBool::new(false)),
             session,
             request_context: None,
+            shared_state: None,
         })
     }
 
@@ -368,6 +372,12 @@ impl InvocationContext {
         self
     }
 
+    /// Set the shared state for parallel agent coordination.
+    pub fn with_shared_state(mut self, shared: Arc<adk_core::SharedState>) -> Self {
+        self.shared_state = Some(shared);
+        self
+    }
+
     /// Get a reference to the mutable session.
     /// This allows the Runner to apply state deltas when events are processed.
     pub fn mutable_session(&self) -> &Arc<MutableSession> {
@@ -415,6 +425,10 @@ impl ReadonlyContext for InvocationContext {
 impl CallbackContext for InvocationContext {
     fn artifacts(&self) -> Option<Arc<dyn Artifacts>> {
         self.artifacts.clone()
+    }
+
+    fn shared_state(&self) -> Option<Arc<adk_core::SharedState>> {
+        self.shared_state.clone()
     }
 }
 

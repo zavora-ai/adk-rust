@@ -668,6 +668,10 @@ impl CallbackContext for AgentToolContext {
         // ✅ Delegate to parent - tools can now access artifacts!
         self.parent_ctx.artifacts()
     }
+
+    fn shared_state(&self) -> Option<Arc<adk_core::SharedState>> {
+        self.parent_ctx.shared_state()
+    }
 }
 
 #[async_trait]

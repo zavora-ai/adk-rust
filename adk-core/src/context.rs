@@ -287,6 +287,12 @@ pub trait CallbackContext: ReadonlyContext {
     fn tool_input(&self) -> Option<&serde_json::Value> {
         None
     }
+
+    /// Returns the shared state for parallel agent coordination.
+    /// Returns `None` when not running inside a `ParallelAgent` with shared state enabled.
+    fn shared_state(&self) -> Option<Arc<crate::SharedState>> {
+        None
+    }
 }
 
 /// Wraps a [`CallbackContext`] to inject tool name and input for before-tool
@@ -372,6 +378,10 @@ impl CallbackContext for ToolCallbackContext {
 
     fn tool_input(&self) -> Option<&serde_json::Value> {
         Some(&self.tool_input)
+    }
+
+    fn shared_state(&self) -> Option<Arc<crate::SharedState>> {
+        self.inner.shared_state()
     }
 }
 

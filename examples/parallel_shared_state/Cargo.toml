@@ -1,0 +1,33 @@
+[package]
+name = "parallel-shared-state-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "basic"
+path = "src/main.rs"
+
+[[bin]]
+name = "llm"
+path = "src/llm_example.rs"
+
+[dependencies]
+adk-core = { path = "../../adk-core" }
+adk-agent = { path = "../../adk-agent" }
+adk-model = { path = "../../adk-model", features = ["gemini", "openai"] }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+adk-tool = { path = "../../adk-tool" }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+async-trait = "0.1"
+async-stream = "0.3"
+futures = "0.3"
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -70,6 +70,7 @@ pub mod identity;
 pub mod instruction_template;
 pub mod model;
 pub mod request_context;
+pub mod shared_state;
 pub mod tool;
 pub mod types;
 
@@ -100,6 +101,7 @@ pub use model::{
     GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream, UsageMetadata,
 };
 pub use request_context::RequestContext;
+pub use shared_state::{SharedState, SharedStateError};
 pub use tool::{
     RetryBudget, Tool, ToolContext, ToolExecutionStrategy, ToolPredicate, ToolRegistry, Toolset,
     ValidationMode,
