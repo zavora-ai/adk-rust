@@ -1,6 +1,6 @@
 # Agent-to-Agent (A2A) Protocol
 
-ADK-Rust implements the [A2A Protocol v1.0.0](https://google.github.io/A2A/) for cross-network agent communication. The implementation lives in `adk-server` behind the `a2a-v1` feature flag and covers all 11 JSON-RPC operations, REST bindings, agent card discovery, and version negotiation.
+ADK-Rust implements the [A2A Protocol v1.0.0](https://google.github.io/A2A/) for cross-network agent communication. The implementation lives in `adk-server` behind the `a2a-v1` feature flag and covers all 11 JSON-RPC operations, REST bindings, agent card discovery, and version negotiation. Wire types are provided by [`a2a-protocol-types`](https://crates.io/crates/a2a-protocol-types) — the Foundation-verified Rust A2A SDK by [@tomtom215](https://github.com/tomtom215) ([a2a-rust](https://github.com/tomtom215/a2a-rust)).
 
 ## Overview
 
