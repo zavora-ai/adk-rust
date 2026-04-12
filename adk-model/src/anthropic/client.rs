@@ -222,6 +222,12 @@ impl AnthropicClient {
             .map(|t| t as u32)
             .unwrap_or(max_tokens);
 
+        // Merge consecutive messages with the same role.
+        // This is critical for Anthropic parallel tool use — per the docs,
+        // all tool results must be in a single user message. Without this,
+        // Claude "learns to avoid parallel calls" from the conversation history.
+        merge_consecutive_messages(&mut messages);
+
         Ok(convert::build_message_params(
             model,
             effective_max_tokens,
@@ -273,6 +279,66 @@ fn extract_text_from_message(msg: &adk_anthropic::MessageParam) -> Option<String
             if parts.is_empty() { None } else { Some(parts.join("\n")) }
         }
     }
+}
+
+/// Merge consecutive `MessageParam`s that share the same role into a single message.
+///
+/// This is required for Anthropic parallel tool use. Per the
+/// [Anthropic docs](https://docs.anthropic.com/en/docs/build-with-claude/tool-use/parallel-tool-use),
+/// all tool results must be in a single user message. Without merging, each tool
+/// result becomes a separate user message, which "teaches Claude to avoid parallel calls."
+///
+/// Zero-cost when messages already alternate roles correctly.
+fn merge_consecutive_messages(messages: &mut Vec<adk_anthropic::MessageParam>) {
+    if messages.len() < 2 {
+        return;
+    }
+
+    let mut merged = Vec::with_capacity(messages.len());
+    let mut drain = messages.drain(..);
+
+    if let Some(first) = drain.next() {
+        merged.push(first);
+    }
+
+    for msg in drain {
+        let last = merged.last_mut().unwrap();
+        if last.role == msg.role {
+            // Same role — merge content blocks into the existing message
+            let blocks = match std::mem::replace(
+                &mut last.content,
+                adk_anthropic::MessageParamContent::Array(Vec::new()),
+            ) {
+                adk_anthropic::MessageParamContent::String(s) => {
+                    if s.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![ContentBlock::Text(adk_anthropic::TextBlock::new(s))]
+                    }
+                }
+                adk_anthropic::MessageParamContent::Array(blocks) => blocks,
+            };
+
+            let new_blocks = match msg.content {
+                adk_anthropic::MessageParamContent::String(s) => {
+                    if s.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![ContentBlock::Text(adk_anthropic::TextBlock::new(s))]
+                    }
+                }
+                adk_anthropic::MessageParamContent::Array(blocks) => blocks,
+            };
+
+            let mut combined = blocks;
+            combined.extend(new_blocks);
+            last.content = adk_anthropic::MessageParamContent::Array(combined);
+        } else {
+            merged.push(msg);
+        }
+    }
+
+    *messages = merged;
 }
 
 /// Convert an `adk_anthropic::Error` into an [`AnthropicApiError`], preserving

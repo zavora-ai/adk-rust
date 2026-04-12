@@ -208,6 +208,10 @@ pub(crate) fn build_request_json(
     if !request.tools.is_empty() {
         let tools = convert::convert_tools(&request.tools);
         request_builder.tools(tools);
+        // OpenAI defaults parallel_tool_calls to true. Users can override
+        // via config.extensions["openai"]["parallel_tool_calls"] = false
+        // to force sequential tool calls from the model.
+        request_builder.parallel_tool_calls(true);
     }
 
     if let Some(effort) = reasoning_effort {
