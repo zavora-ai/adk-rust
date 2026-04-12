@@ -133,6 +133,7 @@ Built-in tools:
 - **Memory System**: Long-term memory with semantic search and vector embeddings
 - **Servers**: REST API with SSE streaming, A2A v1.0.0 protocol for agent-to-agent communication
 - **Guardrails**: PII redaction, content filtering, JSON schema validation
+- **Tool Authorization**: Human-in-the-loop confirmation, before-tool callbacks, RBAC, graph interrupts
 - **Payments**: ACP and AP2 commerce support through `adk-payments`
 - **Observability**: OpenTelemetry tracing, structured logging
 

@@ -388,4 +388,4 @@ match provider.validate(token).await {
 
 ---
 
-**Previous**: [← Evaluation](../evaluation/evaluation.md) | **Next**: [Development Guidelines →](../development/development-guidelines.md)
+**Previous**: [← Evaluation](../evaluation/evaluation.md) | **Next**: [Tool Authorization →](tool-authorization.md)

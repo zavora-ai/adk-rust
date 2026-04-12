@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.0] - 2026-03-26
+## [0.6.0] - Unreleased
+
+### Breaking Changes (A2A v1)
+
+- **`build_v1_agent_card()`** now requires an `AgentCapabilities` parameter (was hardcoded to default). Update call sites to pass `AgentCapabilities::none()` for previous behavior, or declare actual capabilities.
+- **`TaskStore` trait** gains `find_task_by_context()` method. Custom implementors must add this method.
+- **`PushNotificationSender` trait** methods gain `config: &TaskPushNotificationConfig` parameter. Custom implementors must update signatures.
+- **`message_stream()` return type** changed from `BoxStream<Result<TaskStatusUpdateEvent>>` to `BoxStream<Result<StreamResponse>>` to support Task-as-first-event.
+- **`tasks_subscribe()` return type** changed similarly.
 
 ### Added
 
@@ -22,6 +30,12 @@ Nine compliance fixes bringing the A2A implementation to full conformance with t
 - **Push notification authentication** (`push.rs`): `PushNotificationSender` trait methods accept `TaskPushNotificationConfig` and set `Authorization: Bearer` and `a2a-notification-token` headers when configured.
 - **INPUT_REQUIRED multi-turn flow** (`request_handler.rs`): Follow-up messages with a `contextId` matching an existing `INPUT_REQUIRED` task resume that task instead of creating a new one.
 - **Streaming first event** (`stream.rs`, `request_handler.rs`): `message_stream` and `tasks_subscribe` emit a complete `Task` object as the first SSE event before status update events, per spec §3.1.2.
+- **A2A examples**: Two standalone example agents (`a2a-research-agent`, `a2a-writing-agent`) with a client exercising all 11 v1 operations end-to-end.
+- **Wire types**: Powered by Foundation-verified [`a2a-protocol-types`](https://crates.io/crates/a2a-protocol-types) v0.5 by [@tomtom215](https://github.com/tomtom215).
+
+#### Tool Authorization Documentation
+
+- **Tool authorization guide** (`docs/official_docs/security/tool-authorization.md`): Comprehensive documentation covering `ToolConfirmationPolicy` (built-in HITL), `BeforeToolCallback` (programmatic gate), RBAC (`adk-auth`), and graph interrupts. Includes CLI and web server examples.
 
 #### Crate Adoption Feedback (GitHub issue #262)
 
@@ -33,6 +47,24 @@ Five adoption fixes reported by a real-world integrator (zavora-cli):
 - **Developer-friendly content filter** (`adk-guardrail`): `ContentFilter::harmful_content()` no longer blocks "hack" and "exploit". New `harmful_content_strict()` variant retains the full original keyword list.
 - **PluginBuilder documentation** (`adk-plugin`): Expanded rustdoc on `PluginBuilder` with end-to-end examples. Added Quick Start section showing both `PluginConfig` and `PluginBuilder` usage side by side.
 - **Showcase example** (`examples/crate_adoption_feedback`): Standalone example demonstrating all five fixes with a live LLM agent.
+
+#### Realtime Improvements ([@mikefaille](https://github.com/mikefaille))
+
+- **Gemini 3.1 Live API**: Support for multiple parts in Gemini Live sessions (#122).
+- **Realtime optimizations** (#272): Concurrency improvements, audio hot path documentation, AGENTS.md guide for realtime development.
+- **clippy fix**: Resolved `result_large_err` in adk-realtime (#121).
+
+### Fixed
+
+- **Sandbox dependency discovery** (`adk-code`): Robust rlib discovery for stale build artifacts.
+
+### Changed
+
+- **Dependencies**: `wasmtime` 43.0.0 → 43.0.1, `rubato` 1.0.1 → 2.0.0.
+
+## [0.5.0] - 2026-03-26
+
+### Added
 
 #### Realtime — LiveKit Typestate Builder, OpenAI Protocol Centralization ([@mikefaille](https://github.com/mikefaille))
 

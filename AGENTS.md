@@ -247,6 +247,44 @@ pub enum MyError {
 
 Use `adk_core::AdkError` (not `adk_core::Error`) when returning errors from agent/tool implementations.
 
+## Tool authorization
+
+Four mechanisms for controlling tool execution, composable in any combination:
+
+1. **`ToolConfirmationPolicy`** — built-in HITL. Pauses execution, emits a `ToolConfirmationRequest` event, waits for `Approve`/`Deny` on the next run. Works in CLI and web server via SSE events.
+
+```rust
+let agent = LlmAgentBuilder::new("assistant")
+    .model(model)
+    .tool(Arc::new(delete_tool))
+    .require_tool_confirmation("delete_file")  // per-tool
+    // .require_tool_confirmation_for_all()     // or all tools
+    .build()?;
+```
+
+The agent emits `event.actions.tool_confirmation = Some(ToolConfirmationRequest { tool_name, args, function_call_id })`. Pass the decision back via `RunConfig::tool_confirmation_decisions`.
+
+2. **`BeforeToolCallback`** — programmatic gate. Return `Ok(Some(content))` to skip, `Ok(None)` to allow.
+
+```rust
+.before_tool_callback(Box::new(|ctx| {
+    Box::pin(async move {
+        if ctx.tool_name().unwrap_or("") == "admin_action" {
+            return Ok(Some(Content::new("tool").with_text("denied")));
+        }
+        Ok(None)
+    })
+}))
+```
+
+3. **`adk-auth` RBAC** — role-based access control with `ProtectedTool` wrapper and audit logging.
+
+4. **Graph interrupts** (`adk-graph`) — checkpoint-based pauses with durable state for complex approval workflows.
+
+Evaluation order: RBAC → BeforeToolCallback → ToolConfirmationPolicy → execute → AfterToolCallback.
+
+See `docs/official_docs/security/tool-authorization.md` for full documentation with CLI and web server examples.
+
 ## Logging
 
 See `adk-gemini/AGENTS.md` for the full tracing conventions. The key rules:
