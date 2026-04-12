@@ -107,6 +107,10 @@ name = "files_lifecycle"
 path = "examples/files_lifecycle.rs"
 
 [[example]]
+name = "gemini3_function_calling"
+path = "examples/gemini3_function_calling.rs"
+
+[[example]]
 name = "gemini_pro_example"
 path = "examples/gemini_pro_example.rs"
 

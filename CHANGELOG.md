@@ -50,6 +50,15 @@ Thread-safe key-value store for parallel agent coordination:
 
 - **Tool authorization guide** (`docs/official_docs/security/tool-authorization.md`): `ToolConfirmationPolicy` (HITL), `BeforeToolCallback`, RBAC, graph interrupts with CLI and web server examples.
 
+#### Gemini 3 Function Calling Compliance (`adk-gemini`, `adk-model`)
+
+Four additions bringing `adk-gemini` to full compliance with the Gemini function calling specification:
+
+- **`VALIDATED` function calling mode** (`adk-gemini`): New `FunctionCallingMode::Validated` variant for schema validation without forced calling (Gemini 3 series).
+- **`allowed_function_names`** (`adk-gemini`): `FunctionCallingConfig` now supports restricting which functions the model may call when mode is `Any`.
+- **Function call `id` field** (`adk-gemini`): `FunctionCall` struct now includes an optional `id` field for Gemini 3 series models that return unique identifiers per call.
+- **`id` propagation** (`adk-model`): Gemini conversion layer propagates function call `id` between `adk-core` and `adk-gemini` types in both directions.
+
 #### Crate Adoption Feedback (GitHub issue #262)
 
 Five adoption fixes reported by a real-world integrator (zavora-cli):
