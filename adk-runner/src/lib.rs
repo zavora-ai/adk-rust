@@ -12,6 +12,11 @@
 //! - [`InvocationContext`] - Execution context implementation
 //! - [`Callbacks`] - Hook points during execution
 //!
+//! ## What's New in 0.6.0
+//!
+//! - **`InvocationContext::shared_state()`**: Propagates [`SharedState`](adk_core::SharedState)
+//!   from `ParallelAgent` through the runner context chain, making it accessible to tools.
+//!
 //! ## Quick Start
 //!
 //! ```rust,no_run

@@ -12,6 +12,17 @@
 //! - [`Session`] / [`State`] - For managing conversation context
 //! - [`Event`] - For streaming agent responses
 //! - [`AdkError`] / [`Result`] - Unified error handling
+//! - [`SharedState`] / [`SharedStateError`] - Thread-safe key-value store for parallel agent coordination
+//! - [`ToolConfirmationPolicy`] / [`ToolConfirmationRequest`] - Human-in-the-loop tool authorization
+//!
+//! ## What's New in 0.6.0
+//!
+//! - **`SharedState`**: Concurrent key-value store with `set_shared`, `get_shared`, and
+//!   `wait_for_key` (timeout-based blocking) for cross-agent coordination in `ParallelAgent`.
+//! - **`shared_state()` on `CallbackContext`**: Default method returning `None` — tools and
+//!   callbacks can access `SharedState` when running inside a `ParallelAgent` with shared state enabled.
+//! - **`ToolConfirmationPolicy`**: Built-in HITL mechanism — `Never`, `Always`, or `PerTool`
+//!   policies that pause execution and emit `ToolConfirmationRequest` events for user approval.
 //!
 //! ## Quick Start
 //!

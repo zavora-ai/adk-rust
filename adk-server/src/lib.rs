@@ -1,7 +1,7 @@
 //! # adk-server
 #![allow(clippy::result_large_err)]
 //!
-//! HTTP server and A2A protocol for ADK agents.
+//! HTTP server and A2A v1.0.0 protocol for ADK agents.
 //!
 //! ## Overview
 //!
@@ -11,6 +11,33 @@
 //! - [`create_app_with_a2a`] - Add A2A protocol support
 //! - [`RemoteA2aAgent`] - Connect to remote A2A agents
 //! - [`ServerConfig`] - Server configuration
+//!
+//! ## What's New in 0.6.0
+//!
+//! ### A2A v1.0.0 Protocol Compliance
+//!
+//! The `a2a::v1` module (behind the `a2a-v1` feature flag) implements the full A2A Protocol
+//! v1.0.0 specification with all 11 JSON-RPC operations:
+//!
+//! - RFC 3339 timestamps on all task status changes
+//! - Agent capabilities declaration via `build_v1_agent_card()`
+//! - Message ID idempotency for `SendMessage`/`SendStreamingMessage`
+//! - Push notification authentication (Bearer + `a2a-notification-token`)
+//! - INPUT_REQUIRED multi-turn resume flow
+//! - Input validation (parts, IDs, metadata size)
+//! - `Content-Type: application/a2a+json` on JSON-RPC responses
+//! - Task object as first SSE streaming event
+//! - Context-scoped task lookup for multi-turn conversations
+//! - Version negotiation via `A2A-Version` header
+//!
+//! Wire types powered by [`a2a-protocol-types`](https://crates.io/crates/a2a-protocol-types).
+//!
+//! ### Breaking Changes
+//!
+//! - `build_v1_agent_card()` now requires an `AgentCapabilities` parameter
+//! - `TaskStore` trait gains `find_task_by_context()` method
+//! - `PushNotificationSender` trait methods gain `config` parameter
+//! - `message_stream()` and `tasks_subscribe()` return `StreamResponse` instead of `TaskStatusUpdateEvent`
 //!
 //! ## Quick Start
 //!
@@ -28,9 +55,9 @@
 //!
 //! Expose agents via Agent-to-Agent protocol:
 //!
-//! - `GET /.well-known/agent.json` - Agent card
-//! - `POST /a2a` - JSON-RPC endpoint
-//! - `POST /a2a/stream` - SSE streaming
+//! - `GET /.well-known/agent-card.json` - Agent card with capabilities
+//! - `POST /jsonrpc` - JSON-RPC endpoint (all 11 v1 operations)
+//! - REST routes for all operations
 
 pub mod a2a;
 pub mod auth_bridge;

@@ -10,9 +10,19 @@
 //! - [`LlmAgent`] - Core agent powered by LLM reasoning
 //! - [`CustomAgent`] - Define custom logic without LLM
 //! - [`SequentialAgent`] - Execute agents in sequence
-//! - [`ParallelAgent`] - Execute agents concurrently
+//! - [`ParallelAgent`] - Execute agents concurrently, with optional [`SharedState`](adk_core::SharedState) coordination
 //! - [`LoopAgent`] - Iterate until exit condition
 //! - [`ConditionalAgent`] - Branch based on conditions
+//!
+//! ## What's New in 0.6.0
+//!
+//! - **`ParallelAgent::with_shared_state()`**: Opt-in builder method that creates a fresh
+//!   [`SharedState`](adk_core::SharedState) per `run()` invocation, enabling sub-agents to
+//!   exchange data via `set_shared`/`get_shared`/`wait_for_key` through the context chain.
+//! - **`AgentToolContext` delegation**: Tools executed by `LlmAgent` now have access to
+//!   `shared_state()` via the context chain, enabling tool-level coordination in parallel workflows.
+//! - **Tool confirmation**: `LlmAgentBuilder::require_tool_confirmation()` and
+//!   `require_tool_confirmation_for_all()` for human-in-the-loop tool authorization.
 //!
 //! ## Quick Start
 //!
