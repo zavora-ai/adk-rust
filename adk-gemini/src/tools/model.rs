@@ -201,6 +201,12 @@ pub struct FunctionCall {
     pub name: String,
     /// The arguments for the function
     pub args: serde_json::Value,
+    /// Unique identifier for this function call (Gemini 3 series).
+    ///
+    /// Gemini 3 models return an `id` on each function call to correlate with
+    /// the corresponding `FunctionResponse`. Earlier models may omit this field.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub id: Option<String>,
     /// The thought signature for the function call (Gemini 2.5 series only).
     ///
     /// Gemini expects this at the enclosing `Part::FunctionCall` level, not inside the
@@ -230,7 +236,7 @@ pub enum FunctionCallError {
 impl FunctionCall {
     /// Create a new function call
     pub fn new(name: impl Into<String>, args: serde_json::Value) -> Self {
-        Self { name: name.into(), args, thought_signature: None }
+        Self { name: name.into(), args, id: None, thought_signature: None }
     }
 
     /// Create a new function call with thought signature
@@ -239,7 +245,12 @@ impl FunctionCall {
         args: serde_json::Value,
         thought_signature: impl Into<String>,
     ) -> Self {
-        Self { name: name.into(), args, thought_signature: Some(thought_signature.into()) }
+        Self {
+            name: name.into(),
+            args,
+            id: None,
+            thought_signature: Some(thought_signature.into()),
+        }
     }
 
     /// Get a parameter from the arguments
@@ -322,18 +333,26 @@ pub struct ToolConfig {
 pub struct FunctionCallingConfig {
     /// The mode for function calling
     pub mode: FunctionCallingMode,
+    /// Restricts which functions the model may call.
+    /// Only applicable when mode is `Any`. The model will only call functions
+    /// whose names are in this list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_function_names: Option<Vec<String>>,
 }
 
 /// Mode for function calling
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FunctionCallingMode {
-    /// The model may use function calling
+    /// The model decides whether to call functions (default behavior)
     Auto,
-    /// The model must use function calling
+    /// The model must call one of the provided functions
     Any,
-    /// The model must not use function calling
+    /// The model must not call any functions
     None,
+    /// The model validates function calls against the schema but does not force calling.
+    /// Available in Gemini 3 series models.
+    Validated,
 }
 
 #[cfg(test)]
@@ -365,5 +384,72 @@ mod tests {
 
         let json = serde_json::to_value(&config).unwrap();
         assert!(json.get("includeServerSideToolInvocations").is_none());
+    }
+
+    #[test]
+    fn function_calling_mode_validated_serde_round_trip() {
+        let config = FunctionCallingConfig {
+            mode: FunctionCallingMode::Validated,
+            allowed_function_names: None,
+        };
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["mode"], "VALIDATED");
+        let deserialized: FunctionCallingConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized.mode, FunctionCallingMode::Validated);
+    }
+
+    #[test]
+    fn function_calling_config_with_allowed_names() {
+        let config = FunctionCallingConfig {
+            mode: FunctionCallingMode::Any,
+            allowed_function_names: Some(vec!["get_weather".to_string(), "search".to_string()]),
+        };
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["mode"], "ANY");
+        assert_eq!(json["allowed_function_names"], serde_json::json!(["get_weather", "search"]));
+
+        let deserialized: FunctionCallingConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, config);
+    }
+
+    #[test]
+    fn function_calling_config_omits_none_allowed_names() {
+        let config =
+            FunctionCallingConfig { mode: FunctionCallingMode::Auto, allowed_function_names: None };
+        let json = serde_json::to_value(&config).unwrap();
+        assert!(json.get("allowed_function_names").is_none());
+    }
+
+    #[test]
+    fn function_call_with_id_serde_round_trip() {
+        let call = FunctionCall {
+            name: "get_weather".to_string(),
+            args: serde_json::json!({"city": "Tokyo"}),
+            id: Some("fc_001".to_string()),
+            thought_signature: None,
+        };
+        let json = serde_json::to_value(&call).unwrap();
+        assert_eq!(json["id"], "fc_001");
+
+        let deserialized: FunctionCall = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized.id, Some("fc_001".to_string()));
+    }
+
+    #[test]
+    fn function_call_without_id_omits_field() {
+        let call = FunctionCall::new("get_weather", serde_json::json!({"city": "Tokyo"}));
+        let json = serde_json::to_value(&call).unwrap();
+        assert!(json.get("id").is_none());
+    }
+
+    #[test]
+    fn function_call_deserializes_without_id() {
+        let json = serde_json::json!({
+            "name": "get_weather",
+            "args": {"city": "Tokyo"}
+        });
+        let call: FunctionCall = serde_json::from_value(json).unwrap();
+        assert_eq!(call.id, None);
+        assert_eq!(call.name, "get_weather");
     }
 }

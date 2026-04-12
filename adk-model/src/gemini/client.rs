@@ -212,7 +212,7 @@ impl GeminiModel {
                         converted_parts.push(Part::FunctionCall {
                             name: function_call.name.clone(),
                             args: function_call.args.clone(),
-                            id: None,
+                            id: function_call.id.clone(),
                             thought_signature: thought_signature.clone(),
                         });
                     }
@@ -544,11 +544,12 @@ impl GeminiModel {
                                     thought_signature: signature.clone(),
                                 });
                             }
-                            Part::FunctionCall { name, args, thought_signature, .. } => {
+                            Part::FunctionCall { name, args, thought_signature, id } => {
                                 gemini_parts.push(adk_gemini::Part::FunctionCall {
                                     function_call: adk_gemini::FunctionCall {
                                         name: name.clone(),
                                         args: args.clone(),
+                                        id: id.clone(),
                                         thought_signature: None,
                                     },
                                     thought_signature: thought_signature.clone(),
