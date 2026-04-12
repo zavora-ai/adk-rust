@@ -53,7 +53,7 @@ adk-model/       LLM provider facade: Gemini, OpenAI, Anthropic, DeepSeek, Groq,
 adk-gemini/      Dedicated Gemini client with GeminiBackend trait (Studio + Vertex AI)
 adk-tool/        Tool system: FunctionTool, MCP integration (rmcp 1.2), Google Search, MCP Resource API
 adk-runner/      Agent execution runtime with event streaming
-adk-server/      HTTP server (Axum) and A2A (Agent-to-Agent) protocol
+adk-server/      HTTP server (Axum) and A2A v1.0.0 (Agent-to-Agent) protocol
 adk-session/     Session management and state persistence, encrypted sessions (AES-256-GCM)
 adk-artifact/    Binary artifact storage for agents
 adk-memory/      Semantic memory and RAG search

@@ -1,77 +1,247 @@
 # Agent-to-Agent (A2A) Protocol
 
-The Agent-to-Agent (A2A) Protocol enables agents to communicate and collaborate across network boundaries. ADK-Rust provides full support for both exposing agents via A2A and consuming remote A2A agents.
+ADK-Rust implements the [A2A Protocol v1.0.0](https://google.github.io/A2A/) for cross-network agent communication. The implementation lives in `adk-server` behind the `a2a-v1` feature flag and covers all 11 JSON-RPC operations, REST bindings, agent card discovery, and version negotiation.
 
 ## Overview
 
 A2A is useful when:
 - Integrating with third-party agent services
 - Building microservices architectures with specialized agents
-- Enabling cross-language agent communication
+- Enabling cross-language agent communication (any language with an A2A client)
 - Enforcing formal contracts between agent systems
 
 For simple internal organization, use local sub-agents instead of A2A for better performance.
 
+## v1.0.0 Compliance
+
+The implementation is fully compliant with the A2A Protocol v1.0.0 specification:
+
+| Feature | Spec Section | Status |
+|---------|-------------|--------|
+| Agent card with capabilities declaration | §8 | ✅ |
+| RFC 3339 timestamps on all task status changes | §5.6.1 | ✅ |
+| Message ID idempotency for `SendMessage` | §3.3.1 | ✅ |
+| Push notification authentication (Bearer + token) | §13.2 | ✅ |
+| INPUT_REQUIRED multi-turn resume flow | §3.4.3 | ✅ |
+| Input validation (parts, IDs, metadata size) | §3.3 | ✅ |
+| `Content-Type: application/a2a+json` on responses | §9 | ✅ |
+| Task object as first SSE streaming event | §3.1.2 | ✅ |
+| Context-scoped task lookup for multi-turn | §3.4.1 | ✅ |
+| Version negotiation (`A2A-Version` header) | §9.1 | ✅ |
+| State machine validation (terminal states) | §4.1.3 | ✅ |
+
 ## Agent Cards
 
-Every A2A agent exposes an agent card that describes its capabilities. The card is automatically generated and served at `/.well-known/agent.json`.
+Every A2A agent exposes an agent card at `/.well-known/agent-card.json` describing its capabilities, skills, and supported interfaces.
 
 ```rust
-use adk_server::a2a::build_agent_card;
+use adk_server::a2a::v1::card::build_v1_agent_card;
+use a2a_protocol_types::{AgentCapabilities, AgentSkill};
 
-let agent_card = build_agent_card(&agent, "http://localhost:8080");
-
-println!("Agent: {}", agent_card.name);
-println!("Skills: {}", agent_card.skills.len());
-println!("Streaming: {}", agent_card.capabilities.streaming);
+let card = build_v1_agent_card(
+    "my-agent",
+    "A helpful research agent",
+    "http://localhost:3001/jsonrpc",
+    "1.0.0",
+    vec![AgentSkill {
+        id: "research".to_string(),
+        name: "Research & Summarize".to_string(),
+        description: "Researches topics and produces structured summaries".to_string(),
+        tags: vec!["research".to_string()],
+        examples: None,
+        input_modes: None,
+        output_modes: None,
+        security_requirements: None,
+    }],
+    AgentCapabilities::none()
+        .with_streaming(true)
+        .with_push_notifications(true),
+);
 ```
 
 The agent card includes:
-- Agent name and description
-- Base URL for communication
-- Capabilities (streaming, state history, etc.)
-- Skills derived from the agent and its sub-agents
+- Agent name, description, and version
+- Supported interfaces with protocol binding and version
+- Capabilities: `streaming`, `pushNotifications`, `extendedAgentCard`
+- Skills derived from the agent configuration
+- Default input/output modes
 
-## Exposing an Agent via A2A
+Capabilities are now explicitly declared via the `AgentCapabilities` parameter — no more hardcoded defaults.
 
-To expose an agent so other agents can use it, create an HTTP server with A2A endpoints:
+## Exposing an Agent via A2A v1
+
+Build a full A2A v1.0.0 server with LLM integration:
 
 ```rust
-use adk_server::{create_app_with_a2a, ServerConfig};
-use adk_agent::LlmAgentBuilder;
-use adk_model::gemini::GeminiModel;
 use std::sync::Arc;
+use a2a_protocol_types::{AgentCapabilities, AgentSkill};
+use adk_agent::LlmAgentBuilder;
+use adk_server::a2a::v1::card::{CachedAgentCard, build_v1_agent_card};
+use adk_server::a2a::v1::executor::V1Executor;
+use adk_server::a2a::v1::jsonrpc_handler::jsonrpc_handler;
+use adk_server::a2a::v1::push::NoOpPushNotificationSender;
+use adk_server::a2a::v1::request_handler::RequestHandler;
+use adk_server::a2a::v1::rest_handler::rest_router;
+use adk_server::a2a::v1::task_store::InMemoryTaskStore;
+use adk_server::a2a::v1::version::version_negotiation;
+use adk_runner::RunnerConfig;
+use adk_session::InMemorySessionService;
+use axum::Router;
+use axum::routing::post;
+use tokio::sync::RwLock;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create your agent
-    let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
-    let agent = LlmAgentBuilder::new("weather_agent")
-        .description("Answers weather questions")
-        .model(Arc::new(model))
-        .build()?;
+// 1. Create your agent
+let model = adk_model::GeminiModel::new(&api_key, "gemini-2.5-flash")?;
+let agent = LlmAgentBuilder::new("my-agent")
+    .description("A helpful agent")
+    .model(Arc::new(model))
+    .instruction("You are a helpful assistant.")
+    .build()?;
 
-    // Create server config
-    let config = ServerConfig::new(
-        Arc::new(SingleAgentLoader::new(Arc::new(agent))),
-        Arc::new(InMemorySessionService::new()),
-    );
+// 2. Set up A2A infrastructure
+let task_store = Arc::new(InMemoryTaskStore::new());
+let executor = Arc::new(V1Executor::new(task_store.clone()));
+let push_sender = Arc::new(NoOpPushNotificationSender);
 
-    // Create app with A2A support
-    let app = create_app_with_a2a(config, Some("http://localhost:8080"));
+// 3. Build agent card with capabilities
+let card = build_v1_agent_card(
+    "my-agent", "A helpful agent",
+    "http://localhost:3001/jsonrpc", "1.0.0",
+    vec![/* skills */],
+    AgentCapabilities::none().with_streaming(true),
+);
+let cached_card = Arc::new(RwLock::new(CachedAgentCard::new(card)));
 
-    // Serve
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-    axum::serve(listener, app).await?;
+// 4. Create runner config for LLM invocation
+let session_service = Arc::new(InMemorySessionService::new());
+let runner_config = Arc::new(RunnerConfig {
+    app_name: "my-agent".to_string(),
+    agent: Arc::new(agent),
+    session_service,
+    artifact_service: None,
+    memory_service: None,
+    plugin_manager: None,
+    run_config: None,
+    compaction_config: None,
+    context_cache_config: None,
+    cache_capable: None,
+    request_context: None,
+    cancellation_token: None,
+});
 
-    Ok(())
-}
+// 5. Wire up the handler and routes
+let handler = Arc::new(RequestHandler::with_runner(
+    executor, task_store, push_sender, cached_card, runner_config,
+));
+
+let app = Router::new()
+    .route("/jsonrpc", post(jsonrpc_handler))
+    .with_state(handler.clone())
+    .merge(rest_router(handler))
+    .layer(axum::middleware::from_fn(version_negotiation));
+
+// 6. Serve
+let listener = tokio::net::TcpListener::bind("0.0.0.0:3001").await?;
+axum::serve(listener, app).await?;
 ```
 
 This exposes:
-- `GET /.well-known/agent.json` - Agent card
-- `POST /a2a` - JSON-RPC endpoint for A2A protocol
-- `POST /a2a/stream` - SSE streaming endpoint
+- `GET /.well-known/agent-card.json` — Agent card with ETag caching
+- `POST /jsonrpc` — JSON-RPC endpoint (all 11 v1 operations)
+- REST routes for all operations
+- `A2A-Version` header negotiation on all routes
+
+## JSON-RPC Operations
+
+All 11 A2A v1.0.0 operations are supported:
+
+| Method | Description |
+|--------|-------------|
+| `SendMessage` | Send a message, create/resume a task |
+| `SendStreamingMessage` | Same as SendMessage but returns SSE stream |
+| `GetTask` | Retrieve a task by ID |
+| `CancelTask` | Cancel a running task |
+| `ListTasks` | List tasks with filtering and pagination |
+| `SubscribeToTask` | Subscribe to task updates via SSE |
+| `CreateTaskPushNotificationConfig` | Register a webhook for push notifications |
+| `GetTaskPushNotificationConfig` | Retrieve a push notification config |
+| `ListTaskPushNotificationConfigs` | List push configs for a task |
+| `DeleteTaskPushNotificationConfig` | Remove a push notification config |
+| `GetExtendedAgentCard` | Retrieve the extended agent card |
+
+### SendMessage
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "SendMessage",
+  "params": {
+    "message": {
+      "messageId": "msg-123",
+      "role": "ROLE_USER",
+      "parts": [{"text": "Research quantum computing"}]
+    }
+  }
+}
+```
+
+Response includes a Task object with status, history, and artifacts. The response uses `Content-Type: application/a2a+json`.
+
+### SendStreamingMessage
+
+Same request format as SendMessage. Returns an SSE stream where:
+1. First event is a complete `Task` object (per spec §3.1.2)
+2. Subsequent events are `TaskStatusUpdateEvent` (Working, Completed, etc.)
+3. Artifact events are `TaskArtifactUpdateEvent`
+
+### Multi-Turn Conversations
+
+When a task reaches `INPUT_REQUIRED` state, send a follow-up message with the same `contextId` to resume it:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "SendMessage",
+  "params": {
+    "message": {
+      "messageId": "msg-456",
+      "role": "ROLE_USER",
+      "contextId": "ctx-original",
+      "parts": [{"text": "Yes, include more details on error correction"}]
+    }
+  }
+}
+```
+
+The handler automatically finds the existing task by `contextId`, transitions it from `INPUT_REQUIRED` to `Working`, appends the new message to history, and continues processing.
+
+### Idempotency
+
+Duplicate `SendMessage` requests with the same `messageId` return the previously created task without re-processing. This applies to both `SendMessage` and `SendStreamingMessage`.
+
+## Push Notification Authentication
+
+When a client registers a webhook via `CreateTaskPushNotificationConfig`, the server includes authentication headers on webhook deliveries:
+
+- `Authorization: Bearer <credentials>` — when `authentication` field has bearer credentials
+- `a2a-notification-token: <token>` — when `token` field is present
+
+Both headers can be set simultaneously. SSRF protection validates webhook URLs against private IP ranges and localhost.
+
+## Input Validation
+
+All incoming requests are validated before processing:
+
+| Validation | Error |
+|-----------|-------|
+| Message with zero parts | `InvalidParams` (-32602) |
+| Empty or whitespace-only messageId | `InvalidParams` (-32602) |
+| messageId exceeding 256 characters | `InvalidParams` (-32602) |
+| Empty or whitespace-only taskId | `InvalidParams` (-32602) |
+| taskId exceeding 256 characters | `InvalidParams` (-32602) |
+| Metadata exceeding 64 KB | `InvalidParams` (-32602) |
 
 ## Consuming a Remote Agent
 
@@ -85,193 +255,97 @@ let remote_agent = RemoteA2aAgent::builder("prime_checker")
     .agent_url("http://localhost:8001")
     .build()?;
 
-// Use as a sub-agent
+// Use as a sub-agent in a local agent hierarchy
 let root_agent = LlmAgentBuilder::new("root")
     .model(Arc::new(model))
     .sub_agent(Arc::new(remote_agent))
     .build()?;
 ```
 
-The `RemoteA2aAgent`:
-- Automatically fetches the agent card from the remote URL
-- Converts ADK events to/from A2A protocol messages
-- Handles streaming responses
-- Works seamlessly as a sub-agent
-
 ## A2A Client
 
-For direct communication with remote agents, use the `A2aClient`:
+For direct protocol-level communication:
 
 ```rust
-use adk_server::a2a::{A2aClient, Message, Part, Role};
+use adk_server::a2a::client::v1_client::A2aV1Client;
 
-// Create client from URL (fetches agent card)
-let client = A2aClient::from_url("http://localhost:8080").await?;
+// Discover agent card
+let card = A2aV1Client::resolve_agent_card("http://localhost:3001").await?;
+let client = A2aV1Client::new(card);
 
-// Build a message
-let message = Message::builder()
-    .role(Role::User)
-    .parts(vec![Part::text("What's the weather?".to_string())])
-    .message_id(uuid::Uuid::new_v4().to_string())
-    .build();
+// Send message
+let task = client.send_message(message).await?;
 
-// Send message (blocking)
-let response = client.send_message(message.clone()).await?;
+// Get task
+let task = client.get_task(&task_id, Some(10)).await?;
 
-// Or send with streaming
-let mut stream = client.send_streaming_message(message).await?;
-while let Some(event) = stream.next().await {
-    match event? {
-        UpdateEvent::TaskArtifactUpdate(artifact) => {
-            println!("Artifact: {:?}", artifact);
-        }
-        UpdateEvent::TaskStatusUpdate(status) => {
-            println!("Status: {:?}", status.status.state);
-        }
-    }
-}
-```
+// List tasks
+let tasks = client.list_tasks(None, None, None, None).await?;
 
-## JSON-RPC Protocol
+// Cancel task
+client.cancel_task(&task_id).await?;
 
-ADK-Rust implements the A2A protocol using JSON-RPC 2.0. Supported methods:
+// Streaming
+let response = client.send_streaming_message(message).await?;
 
-### message/send
-
-Send a message to the agent:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "message/send",
-  "params": {
-    "message": {
-      "role": "user",
-      "messageId": "msg-123",
-      "parts": [{"text": "Hello!"}]
-    }
-  },
-  "id": 1
-}
-```
-
-Response includes a task object with status and artifacts.
-
-### message/stream
-
-Same as `message/send` but returns Server-Sent Events (SSE) for streaming responses.
-
-### tasks/cancel
-
-Cancel a running task:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "tasks/cancel",
-  "params": {
-    "taskId": "task-123"
-  },
-  "id": 1
-}
-```
-
-## Multi-Agent Example
-
-Combine local and remote agents:
-
-```rust
-// Local agent
-let roll_agent = LlmAgentBuilder::new("roll_agent")
-    .description("Rolls dice")
-    .model(Arc::new(model.clone()))
-    .tool(Arc::new(roll_die_tool))
-    .build()?;
-
-// Remote agent
-let prime_agent = RemoteA2aAgent::builder("prime_agent")
-    .description("Checks if numbers are prime")
-    .agent_url("http://localhost:8001")
-    .build()?;
-
-// Root agent orchestrates both
-let root_agent = LlmAgentBuilder::new("root_agent")
-    .instruction("Delegate dice rolling to roll_agent and prime checking to prime_agent")
-    .model(Arc::new(model))
-    .sub_agent(Arc::new(roll_agent))
-    .sub_agent(Arc::new(prime_agent))
-    .build()?;
+// Push notification CRUD
+let config = client.create_push_notification_config(config).await?;
+client.delete_push_notification_config(&task_id, &config_id).await?;
 ```
 
 ## Error Handling
 
-A2A operations return standard ADK errors:
+A2A errors map to both JSON-RPC codes and HTTP status codes:
 
-```rust
-match client.send_message(message).await {
-    Ok(response) => {
-        if let Some(error) = response.error {
-            eprintln!("RPC error: {} (code: {})", error.message, error.code);
-        }
-    }
-    Err(e) => {
-        eprintln!("Request failed: {}", e);
-    }
-}
+| Error | JSON-RPC Code | HTTP Status |
+|-------|--------------|-------------|
+| TaskNotFound | -32001 | 404 |
+| TaskNotCancelable | -32002 | 409 |
+| PushNotificationNotSupported | -32003 | 400 |
+| UnsupportedOperation | -32004 | 400 |
+| ContentTypeNotSupported | -32005 | 415 |
+| InvalidAgentResponse | -32006 | 502 |
+| VersionNotSupported | -32009 | 400 |
+| InvalidParams | -32602 | 400 |
+| MethodNotFound | -32601 | 404 |
+| Internal | -32603 | 500 |
+
+## Running the Examples
+
+Two complete A2A v1.0.0 example agents are included:
+
+```bash
+# Terminal 1: Start the research agent (port 3001)
+cd examples/a2a-research-agent
+cp .env.example .env  # add GOOGLE_API_KEY or OPENAI_API_KEY
+cargo run
+
+# Terminal 2: Start the writing agent (port 3002)
+cd examples/a2a-writing-agent
+cp .env.example .env
+cargo run --bin a2a-writing-agent
+
+# Terminal 3: Run the client that exercises all 11 operations
+cd examples/a2a-writing-agent
+cargo run --bin client
 ```
 
-Common error codes:
-- `-32600`: Invalid request
-- `-32601`: Method not found
-- `-32602`: Invalid params
-- `-32603`: Internal error
+The client validates: agent card discovery, SendMessage (both agents with real LLM), GetTask, ListTasks, CancelTask error path, SendStreamingMessage, push notification CRUD, GetExtendedAgentCard, version negotiation, and error paths.
 
 ## Best Practices
 
-1. **Use agent cards**: Always fetch and validate agent cards before communication
-2. **Handle streaming**: Use streaming for long-running operations
-3. **Error recovery**: Implement retry logic for network failures
-4. **Timeouts**: Set appropriate timeouts for remote calls
-5. **Security**: Use HTTPS in production and implement authentication
-
-## Security Configuration
-
-Configure CORS, timeouts, and security headers for production deployments:
-
-```rust
-use adk_server::{ServerConfig, SecurityConfig};
-use std::time::Duration;
-
-// Production configuration
-let config = ServerConfig::new(agent_loader, session_service)
-    .with_allowed_origins(vec![
-        "https://myapp.com".to_string(),
-        "https://admin.myapp.com".to_string(),
-    ])
-    .with_request_timeout(Duration::from_secs(30))
-    .with_max_body_size(10 * 1024 * 1024);  // 10MB
-
-// Or use presets
-let dev_config = ServerConfig::new(agent_loader, session_service)
-    .with_security(SecurityConfig::development());  // Permissive for dev
-
-let prod_config = ServerConfig::new(agent_loader, session_service)
-    .with_security(SecurityConfig::production(allowed_origins));
-```
-
-Security features include:
-- **CORS**: Configurable allowed origins (default: permissive for development)
-- **Request timeout**: Configurable timeout (default: 30 seconds)
-- **Body size limit**: Maximum request body size (default: 10MB)
-- **Security headers**: X-Content-Type-Options, X-Frame-Options, X-XSS-Protection
-- **Error sanitization**: Internal errors are logged but not exposed to clients in production
+1. **Declare capabilities accurately** — set `streaming`, `pushNotifications` based on what your agent actually supports
+2. **Use streaming for long operations** — `SendStreamingMessage` gives clients real-time progress
+3. **Handle multi-turn flows** — use `contextId` to maintain conversation state across messages
+4. **Validate webhook URLs** — SSRF protection is built-in, but use HTTPS in production
+5. **Set appropriate timeouts** — configure request timeouts for remote agent calls
+6. **Use idempotency** — clients can safely retry `SendMessage` with the same `messageId`
 
 ## Related
 
-- [LlmAgent](../agents/llm-agent.md) - Creating agents
-- [Multi-Agent Systems](../agents/multi-agent.md) - Sub-agents and hierarchies
-- [Server Deployment](server.md) - Running agents as HTTP servers
-
+- [LlmAgent](../agents/llm-agent.md) — Creating agents
+- [Multi-Agent Systems](../agents/multi-agent.md) — Sub-agents and hierarchies
+- [Server Deployment](server.md) — Running agents as HTTP servers
 
 ---
 

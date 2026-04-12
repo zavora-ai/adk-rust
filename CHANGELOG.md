@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### A2A v1.0.0 Protocol Compliance (`adk-server`)
+
+Nine compliance fixes bringing the A2A implementation to full conformance with the A2A Protocol v1.0.0 specification:
+
+- **RFC 3339 timestamps** (`executor.rs`): All `TaskStatus` objects now include ISO 8601 timestamps via `TaskStatus::with_timestamp()`. Every state transition carries a `timestamp` field.
+- **Agent capabilities declaration** (`card.rs`): `build_v1_agent_card()` accepts an `AgentCapabilities` parameter — callers declare `streaming`, `pushNotifications`, and `extendedAgentCard` explicitly instead of hardcoded defaults.
+- **Input validation** (`request_handler.rs`): `validate_message()` rejects zero-part messages, empty/whitespace messageIds, IDs over 256 chars, and metadata over 64 KB. `validate_id()` applied to `GetTask` and `CancelTask` taskId parameters.
+- **Content-Type header** (`jsonrpc_handler.rs`): All non-streaming JSON-RPC responses use `Content-Type: application/a2a+json` per spec §9. SSE streams remain `text/event-stream`.
+- **Context-scoped task lookup** (`task_store.rs`): New `find_task_by_context()` method on `TaskStore` trait returns the most recently updated non-terminal task for a given `contextId`.
+- **Message ID idempotency** (`request_handler.rs`): Duplicate `SendMessage`/`SendStreamingMessage` requests with the same `messageId` return the previously created task without re-processing. Stale entries are cleaned up automatically.
+- **Push notification authentication** (`push.rs`): `PushNotificationSender` trait methods accept `TaskPushNotificationConfig` and set `Authorization: Bearer` and `a2a-notification-token` headers when configured.
+- **INPUT_REQUIRED multi-turn flow** (`request_handler.rs`): Follow-up messages with a `contextId` matching an existing `INPUT_REQUIRED` task resume that task instead of creating a new one.
+- **Streaming first event** (`stream.rs`, `request_handler.rs`): `message_stream` and `tasks_subscribe` emit a complete `Task` object as the first SSE event before status update events, per spec §3.1.2.
+
 #### Crate Adoption Feedback (GitHub issue #262)
 
 Five adoption fixes reported by a real-world integrator (zavora-cli):

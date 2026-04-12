@@ -131,7 +131,7 @@ Built-in tools:
 
 - **Session Management**: In-memory and SQLite-backed sessions with state persistence, encrypted sessions with AES-256-GCM and key rotation
 - **Memory System**: Long-term memory with semantic search and vector embeddings
-- **Servers**: REST API with SSE streaming, A2A protocol for agent-to-agent communication
+- **Servers**: REST API with SSE streaming, A2A v1.0.0 protocol for agent-to-agent communication
 - **Guardrails**: PII redaction, content filtering, JSON schema validation
 - **Payments**: ACP and AP2 commerce support through `adk-payments`
 - **Observability**: OpenTelemetry tracing, structured logging
@@ -154,7 +154,7 @@ Built-in tools:
 | `adk-payments` | Agentic commerce orchestration | ACP/AP2 adapters, canonical transaction kernel, durable journals, evidence-backed payment flows |
 | `adk-rag` | RAG pipeline | Document chunking, embeddings, vector search, reranking, 6 backends |
 | `adk-runner` | Agent execution runtime | Context management, event streaming, session lifecycle, callbacks |
-| `adk-server` | Production API servers | REST API, A2A protocol, middleware, health checks |
+| `adk-server` | Production API servers | REST API, A2A v1.0.0 protocol (all 11 operations), middleware, health checks |
 | `adk-cli` | Command-line interface | Interactive REPL, session management, MCP server integration |
 | `adk-realtime` | Real-time voice agents | OpenAI Realtime API, Gemini Live API, bidirectional audio, VAD |
 | `adk-graph` | Graph-based workflows | LangGraph-style orchestration, state management, checkpointing, human-in-the-loop |
@@ -890,7 +890,7 @@ See [examples/](examples/) directory for complete, runnable examples:
 - `load_artifacts/` - Working with images and PDFs
 - `mcp/` - Model Context Protocol integration
 - `server/` - REST API deployment
-- `a2a/` - Agent-to-Agent communication
+- `a2a/` - Agent-to-Agent v1.0.0 communication (research + writing pipeline with full client)
 - `web/` - Web UI with streaming
 - `research_paper/` - Complex multi-agent workflow
 - `multi_turn_tool/` - Multi-turn tool conversations

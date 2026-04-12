@@ -1,0 +1,31 @@
+[package]
+name = "a2a-writing-agent"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "client"
+path = "src/bin/client.rs"
+
+[dependencies]
+adk-server = { path = "../../adk-server", features = ["a2a-v1"] }
+adk-agent = { path = "../../adk-agent" }
+adk-model = { path = "../../adk-model", features = ["gemini", "openai"] }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+adk-core = { path = "../../adk-core" }
+a2a-protocol-types = "0.5"
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+dotenvy = "0.15"
+futures = "0.3"
+reqwest = { version = "0.12", features = ["json"] }
+clap = { version = "4", features = ["derive", "env"] }

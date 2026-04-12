@@ -40,9 +40,11 @@ rust-embed = "8.9.0"
 mime_guess = "2.0.5"
 reqwest.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
+a2a-protocol-types = { version = "0.5", optional = true }
 
 [features]
 default = []
+a2a-v1 = ["dep:a2a-protocol-types"]
 
 [dev-dependencies]
 async-stream.workspace = true

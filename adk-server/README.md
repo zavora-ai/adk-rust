@@ -1,6 +1,6 @@
 # adk-server
 
-HTTP server and A2A protocol for Rust Agent Development Kit (ADK-Rust) agents.
+HTTP server and A2A v1.0.0 protocol for Rust Agent Development Kit (ADK-Rust) agents.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-server.svg)](https://crates.io/crates/adk-server)
 [![Documentation](https://docs.rs/adk-server/badge.svg)](https://docs.rs/adk-server)
@@ -11,7 +11,7 @@ HTTP server and A2A protocol for Rust Agent Development Kit (ADK-Rust) agents.
 `adk-server` provides HTTP infrastructure for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)):
 
 - **REST API** - Standard HTTP endpoints for agent interaction
-- **A2A Protocol** - Agent-to-Agent communication (JSON-RPC 2.0)
+- **A2A Protocol** - Agent-to-Agent v1.0.0 communication (JSON-RPC 2.0, all 11 operations)
 - **SSE Streaming** - Server-Sent Events for real-time responses
 - **Web UI** - Built-in chat interface for testing
 - **RemoteA2aAgent** - Connect to remote agents as sub-agents
@@ -99,7 +99,7 @@ let config = ServerConfig::new(agent_loader, session_service)
 This applies to both the standard SSE runtime endpoints and the A2A runtime
 controller.
 
-### A2A Server
+### A2A v1.0.0 Server
 
 ```rust
 use adk_server::create_app_with_a2a;
@@ -107,10 +107,13 @@ use adk_server::create_app_with_a2a;
 let app = create_app_with_a2a(config, Some("http://localhost:8080"));
 
 // Exposes:
-// GET  /.well-known/agent.json  - Agent card
-// POST /a2a                      - JSON-RPC endpoint
-// POST /a2a/stream               - SSE streaming
+// GET  /.well-known/agent-card.json  - Agent card with capabilities
+// POST /jsonrpc                       - JSON-RPC endpoint (all 11 v1 operations)
+// REST routes for all operations
+// A2A-Version header negotiation
 ```
+
+The A2A v1.0.0 implementation includes: RFC 3339 timestamps, capabilities declaration, message ID idempotency, push notification authentication, INPUT_REQUIRED multi-turn flow, input validation, `application/a2a+json` Content-Type, and Task-as-first-SSE-event. See [A2A docs](../docs/official_docs/deployment/a2a.md) for details.
 
 ### Remote Agent Client
 
@@ -298,7 +301,7 @@ The server applies the following security layers automatically:
 - OpenTelemetry trace integration
 - Auth middleware bridge for identity propagation
 - Artifact storage and retrieval
-- A2A protocol with JSON-RPC 2.0
+- A2A v1.0.0 protocol with JSON-RPC 2.0 (all 11 operations, idempotency, multi-turn, push auth)
 
 ## Related Crates
 
