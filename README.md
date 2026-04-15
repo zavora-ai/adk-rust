@@ -20,9 +20,9 @@
 
 **Listen to ADK-Rust explain itself.** This podcast episode was generated entirely by ADK-Rust using Gemini 3.1 Flash TTS — two AI hosts, natural voices, zero manual editing.
 
-<audio controls src="https://github.com/zavora-ai/adk-rust/raw/main/docs/podcast/adk-rust-episode-1.wav">
-  Your browser does not support the audio element. <a href="docs/podcast/adk-rust-episode-1.wav">Download Episode 1 (WAV)</a>
-</audio>
+<video controls src="https://github.com/user-attachments/assets/8b217958-e6b9-4ad6-9e82-e6d6c559efe8">
+Your browser does not support the audio element. <a href="docs/podcast/adk-rust-episode-1.wav">Download Episode 1 (WAV)</a>
+</video>
 
 *2 min 21 sec · Hosts: James (Fenrir) & Ada (Kore)*
 
