@@ -40,7 +40,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! adk-rust = "0.5.0"
+//! adk-rust = "0.6.0"
 //! tokio = { version = "1.40", features = ["full"] }
 //! dotenvy = "0.15"  # For loading .env files
 //! ```
@@ -49,23 +49,23 @@
 //!
 //! ```toml
 //! # Standard (default) — agents, models, tools, sessions, runner, guardrails, auth
-//! adk-rust = "0.5.0"
+//! adk-rust = "0.6.0"
 //!
 //! # Full — standard + all stable specialist crates (graph, realtime, browser, eval, rag)
 //! # Does NOT include experimental crates (code, sandbox, audio) — use `labs` for those
-//! adk-rust = { version = "0.5.0", features = ["full"] }
+//! adk-rust = { version = "0.6.0", features = ["full"] }
 //!
 //! # Labs — standard + experimental crates (code, sandbox, audio)
-//! adk-rust = { version = "0.5.0", features = ["labs"] }
+//! adk-rust = { version = "0.6.0", features = ["labs"] }
 //!
 //! # Full + Labs — everything including experimental crates
-//! adk-rust = { version = "0.5.0", features = ["full", "labs"] }
+//! adk-rust = { version = "0.6.0", features = ["full", "labs"] }
 //!
 //! # Minimal — just agents + Gemini + runner (fastest build)
-//! adk-rust = { version = "0.5.0", default-features = false, features = ["minimal"] }
+//! adk-rust = { version = "0.6.0", default-features = false, features = ["minimal"] }
 //!
 //! # Custom — pick exactly what you need
-//! adk-rust = { version = "0.5.0", default-features = false, features = [
+//! adk-rust = { version = "0.6.0", default-features = false, features = [
 //!     "agents", "gemini", "tools", "sessions", "openai", "openrouter"
 //! ] }
 //! ```

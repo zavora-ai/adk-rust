@@ -41,7 +41,7 @@ Action nodes are programmatic graph nodes that perform specific operations — H
 
 ```toml
 [dependencies]
-adk-action = "0.5.0"
+adk-action = "0.6.0"
 ```
 
 ## Usage

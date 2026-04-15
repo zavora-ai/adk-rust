@@ -24,14 +24,14 @@ Session management and state persistence for Rust Agent Development Kit (ADK-Rus
 
 ```toml
 [dependencies]
-adk-session = "0.5.0"
+adk-session = "0.6.0"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.5.0", features = ["sessions"] }
+adk-rust = { version = "0.6.0", features = ["sessions"] }
 ```
 
 ## Quick Start
@@ -80,16 +80,16 @@ let name = session.state().get("user:name");
 
 ```toml
 # SQLite
-adk-session = { version = "0.5.0", features = ["sqlite"] }
+adk-session = { version = "0.6.0", features = ["sqlite"] }
 
 # PostgreSQL
-adk-session = { version = "0.5.0", features = ["postgres"] }
+adk-session = { version = "0.6.0", features = ["postgres"] }
 
 # Redis
-adk-session = { version = "0.5.0", features = ["redis"] }
+adk-session = { version = "0.6.0", features = ["redis"] }
 
 # Encrypted sessions
-adk-session = { version = "0.5.0", features = ["encrypted-session"] }
+adk-session = { version = "0.6.0", features = ["encrypted-session"] }
 ```
 
 ## Encrypted Sessions

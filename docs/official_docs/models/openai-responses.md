@@ -53,14 +53,14 @@ Use `OpenAIResponsesClient` when you need reasoning models with summaries, built
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.5.0", features = ["openai"] }
+adk-rust = { version = "0.6.0", features = ["openai"] }
 ```
 
 Or with `adk-model` directly:
 
 ```toml
 [dependencies]
-adk-model = { version = "0.5.0", features = ["openai"] }
+adk-model = { version = "0.6.0", features = ["openai"] }
 ```
 
 Set your API key:

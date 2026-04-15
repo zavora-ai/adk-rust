@@ -2,7 +2,7 @@
 
 Agent Development Kit (ADK) is a flexible and modular framework for developing and deploying AI agents. While optimized for Gemini and the Google ecosystem, ADK is model-agnostic, deployment-agnostic, and built for compatibility with other frameworks. ADK was designed to make agent development feel more like software development, making it easier for developers to create, deploy, and orchestrate agentic architectures that range from simple tasks to complex workflows.
 
-> **Note:** ADK-Rust v0.5.0 requires Rust 1.85.0 or higher
+> **Note:** ADK-Rust v0.6.0 requires Rust 1.85.0 or higher
 
 ## Installation
 
@@ -16,7 +16,7 @@ Or add it to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.5.0"
+adk-rust = "0.6.0"
 tokio = { version = "1.40", features = ["full"] }
 ```
 
@@ -161,23 +161,23 @@ ADK-Rust uses Cargo features for modularity. Three presets control which crates 
 
 ```toml
 # Standard (default) — agents, models, tools, sessions, runner, guardrails, auth
-adk-rust = "0.5.0"
+adk-rust = "0.6.0"
 
 # Full — standard + all stable specialist crates (graph, realtime, browser, eval, rag)
 # Does NOT include experimental crates — use `labs` for those
-adk-rust = { version = "0.5.0", features = ["full"] }
+adk-rust = { version = "0.6.0", features = ["full"] }
 
 # Labs — standard + experimental crates (code, sandbox, audio)
-adk-rust = { version = "0.5.0", features = ["labs"] }
+adk-rust = { version = "0.6.0", features = ["labs"] }
 
 # Full + Labs — everything including experimental crates
-adk-rust = { version = "0.5.0", features = ["full", "labs"] }
+adk-rust = { version = "0.6.0", features = ["full", "labs"] }
 
 # Minimal: Only agents + Gemini + runner
-adk-rust = { version = "0.5.0", default-features = false, features = ["minimal"] }
+adk-rust = { version = "0.6.0", default-features = false, features = ["minimal"] }
 
 # Custom: Pick what you need
-adk-rust = { version = "0.5.0", default-features = false, features = ["agents", "gemini", "tools"] }
+adk-rust = { version = "0.6.0", default-features = false, features = ["agents", "gemini", "tools"] }
 ```
 
 Available features:
