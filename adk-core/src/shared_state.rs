@@ -1,8 +1,8 @@
 //! Thread-safe shared state for parallel agent coordination.
 //!
 //! [`SharedState`] is a concurrent key-value store scoped to a single
-//! `ParallelAgent::run()` invocation. Sub-agents use [`set_shared`],
-//! [`get_shared`], and [`wait_for_key`] to exchange data and coordinate.
+//! `ParallelAgent::run()` invocation. Sub-agents use [`SharedState::set_shared`],
+//! [`SharedState::get_shared`], and [`SharedState::wait_for_key`] to exchange data and coordinate.
 
 use std::collections::HashMap;
 use std::sync::Arc;

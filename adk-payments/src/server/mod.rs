@@ -5,16 +5,16 @@
 //!
 //! # ACP routes
 //!
-//! When the `acp` feature is enabled, [`AcpRouterBuilder`] produces an Axum
+//! When the `acp` feature is enabled, `AcpRouterBuilder` produces an Axum
 //! router covering the stable checkout session lifecycle and delegated payment
 //! endpoints. The `acp-experimental` feature adds discovery and webhook routes
-//! via [`AcpExperimentalRouterBuilder`].
+//! via `AcpExperimentalRouterBuilder`.
 //!
 //! # AP2 integration
 //!
 //! AP2 flows are mandate-based and typically operate over A2A message or MCP
-//! tool surfaces rather than dedicated HTTP routes. The [`Ap2Adapter`] in
-//! [`crate::protocol::ap2`] can be wired into existing A2A or MCP server
+//! tool surfaces rather than dedicated HTTP routes. The `Ap2Adapter` in
+//! `crate::protocol::ap2` can be wired into existing A2A or MCP server
 //! helpers already present in `adk-server`.
 //!
 //! # Payment tools

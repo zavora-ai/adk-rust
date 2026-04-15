@@ -10,7 +10,7 @@
 //! ## Features
 //!
 //! - `tts` (default) — Cloud TTS providers (ElevenLabs, OpenAI, Gemini, Cartesia)
-//! - `stt` (default) — Cloud STT providers (Whisper API, Deepgram, AssemblyAI)
+//! - `stt` (default) — Cloud STT providers (Whisper API, Deepgram, AssemblyAI, Gemini)
 //! - `music` — Music generation providers
 //! - `fx` — DSP processors (normalizer, resampler, noise, compressor)
 //! - `vad` — Voice Activity Detection
@@ -70,13 +70,15 @@ pub use traits::{
 
 // Feature-gated re-exports
 #[cfg(feature = "tts")]
-pub use providers::tts::{CartesiaTts, CloudTtsConfig, ElevenLabsTts, GeminiTts, OpenAiTts};
+pub use providers::tts::{
+    CartesiaTts, CloudTtsConfig, ElevenLabsTts, GeminiTts, OpenAiTts, SpeakerConfig,
+};
 
 #[cfg(feature = "qwen3-tts")]
 pub use providers::tts::{Qwen3TtsNativeProvider, Qwen3TtsVariant};
 
 #[cfg(feature = "stt")]
-pub use providers::stt::{AssemblyAiStt, DeepgramStt, WhisperApiStt};
+pub use providers::stt::{AssemblyAiStt, DeepgramStt, GeminiStt, WhisperApiStt};
 
 #[cfg(feature = "fx")]
 pub use fx::{

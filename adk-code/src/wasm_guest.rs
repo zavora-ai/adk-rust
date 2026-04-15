@@ -99,8 +99,8 @@ impl Default for WasmGuestConfig {
 ///
 /// `WasmGuestExecutor` is NOT a JavaScript executor. It runs precompiled
 /// WebAssembly binary modules. For JavaScript source execution, use
-/// [`crate::EmbeddedJsExecutor`] (secondary scripting) or
-/// [`crate::ContainerCommandExecutor`] (container-isolated Node.js).
+/// `EmbeddedJsExecutor` (secondary scripting) or
+/// [`ContainerCommandExecutor`](crate::ContainerCommandExecutor) (container-isolated Node.js).
 ///
 /// # Example
 ///

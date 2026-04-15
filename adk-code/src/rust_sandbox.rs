@@ -164,8 +164,8 @@ impl Default for RustSandboxConfig {
 /// | Persistent workspace | No | Each execution uses a fresh temp directory |
 /// | Interactive sessions | No | Single-shot execution only |
 ///
-/// Callers should use [`validate_policy`] to check whether a requested
-/// [`SandboxPolicy`] is compatible with these capabilities before execution.
+/// Callers should use `validate_policy` to check whether a requested
+/// `SandboxPolicy` is compatible with these capabilities before execution.
 /// If a policy requests a control the backend cannot enforce (e.g., disabled
 /// network), validation fails with [`ExecutionError::UnsupportedPolicy`].
 ///

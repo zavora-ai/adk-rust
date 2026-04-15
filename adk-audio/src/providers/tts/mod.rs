@@ -19,6 +19,8 @@ pub use elevenlabs::ElevenLabsTts;
 #[cfg(feature = "tts")]
 pub use gemini::GeminiTts;
 #[cfg(feature = "tts")]
+pub use gemini::SpeakerConfig;
+#[cfg(feature = "tts")]
 pub use openai::OpenAiTts;
 
 #[cfg(feature = "qwen3-tts")]

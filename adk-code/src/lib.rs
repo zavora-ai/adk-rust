@@ -57,9 +57,9 @@
 //!
 //! ## Crate Relationships
 //!
-//! - Depends on [`adk-core`] for shared error types
-//! - [`adk-tool`] depends on this crate for language-preset tool wrappers
-//! - [`adk-studio`] depends on this crate for live runner and code generation
+//! - Depends on `adk-core` for shared error types
+//! - `adk-tool` depends on this crate for language-preset tool wrappers
+//! - `adk-studio` depends on this crate for live runner and code generation
 
 pub mod a2a_compat;
 mod code_tool;

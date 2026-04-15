@@ -14,6 +14,30 @@
 >
 > **Announcements:** ADK-Rust Roadmap launched for 2026, we welcome suggestions, comments and ideas. ADK Playground launched! You can now run 70+ ADK-Rust AI Agents online for free. Compile and click. No login, no install. https://playground.adk-rust.com (https://playground.adk-rust.com) And many more discussions, feel free to discuss: [![GitHub Discussions](https://img.shields.io/github/discussions/zavora-ai/adk-rust?style=flat&logo=github&color=5865F2)](https://github.com/zavora-ai/adk-rust/discussions)
 
+---
+
+### 🎧 Rust & Beyond Podcast — Episode 1: What is ADK-Rust?
+
+**Listen to ADK-Rust explain itself.** This podcast episode was generated entirely by ADK-Rust using Gemini 3.1 Flash TTS — two AI hosts, natural voices, zero manual editing.
+
+🔊 **[Listen to Episode 1 (WAV)](docs/podcast/adk-rust-episode-1.wav)** · 2 min 21 sec · Hosts: James (Fenrir) & Ada (Kore)
+
+> *"This episode was created using the Gemini 3.1 Flash TTS model through adk-audio. Two speakers, natural voices, all from a Rust script."* — James, in the episode
+
+<details>
+<summary>How was this made?</summary>
+
+```bash
+export GOOGLE_API_KEY=your-key
+cargo run --manifest-path examples/gemini_audio/Cargo.toml --bin generate-podcast
+```
+
+The script lives in [`examples/gemini_audio/src/podcast.rs`](examples/gemini_audio/src/podcast.rs). It uses `GeminiTts` with multi-speaker `SpeakerConfig` to synthesize a two-host dialogue. The entire pipeline — script, synthesis, WAV encoding — runs in ~60 seconds.
+
+</details>
+
+---
+
 
 
 A production-ready Rust framework for building AI agents enabling you to create powerful and high-performance AI agent systems with a flexible, modular architecture. Model-agnostic. Type-safe. Async.

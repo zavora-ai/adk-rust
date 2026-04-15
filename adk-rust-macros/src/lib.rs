@@ -4,7 +4,7 @@
 //!
 //! ## `#[tool]`
 //!
-//! Turns an async function into a fully-wired [`adk_tool::Tool`] implementation:
+//! Turns an async function into a fully-wired `adk_tool::Tool` implementation:
 //!
 //! ```rust,ignore
 //! use adk_macros::tool;

@@ -1,0 +1,29 @@
+[package]
+name = "gemini-audio-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-core = { path = "../../adk-core" }
+adk-rust = { path = "../../adk-rust", features = ["standard"] }
+adk-model = { path = "../../adk-model", features = ["gemini"] }
+adk-tool = { path = "../../adk-tool" }
+adk-audio = { path = "../../adk-audio", features = ["tts", "stt"] }
+tokio = { version = "1.40", features = ["full"] }
+futures = "0.3"
+serde_json = "1.0"
+dotenvy = "0.15"
+anyhow = "1.0"
+schemars = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+
+[[bin]]
+name = "gemini-audio-example"
+path = "src/main.rs"
+
+[[bin]]
+name = "generate-podcast"
+path = "src/generate_podcast.rs"

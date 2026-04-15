@@ -2,10 +2,12 @@
 
 mod assemblyai;
 mod deepgram;
+mod gemini;
 mod whisper_api;
 
 pub use assemblyai::AssemblyAiStt;
 pub use deepgram::DeepgramStt;
+pub use gemini::GeminiStt;
 pub use whisper_api::WhisperApiStt;
 
 /// Convert an AudioFrame to WAV bytes for upload to STT APIs.

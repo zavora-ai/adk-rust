@@ -13,7 +13,7 @@
 //! | JavaScript | Write to temp file → run with `node`                  |
 //! | TypeScript | Write to temp file → run with `node` (same as JS)     |
 //! | Command    | Execute code as `sh -c "<code>"`                      |
-//! | Wasm       | Not supported — use [`WasmBackend`] instead            |
+//! | Wasm       | Not supported — use `WasmBackend` instead            |
 //!
 //! # Example
 //!

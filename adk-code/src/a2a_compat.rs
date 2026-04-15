@@ -23,7 +23,7 @@
 //!
 //! ### Event Kind → A2A Task State Mapping
 //!
-//! | [`CollaborationEventKind`] | A2A `TaskState` | Notes |
+//! | `CollaborationEventKind` | A2A `TaskState` | Notes |
 //! |---|---|---|
 //! | `NeedWork` | `Submitted` | A new task is submitted for another agent |
 //! | `WorkClaimed` | `Working` | The receiving agent has accepted the task |
@@ -51,7 +51,7 @@
 //! 4. Use `correlation_id` as the A2A `task_id` for routing
 //! 5. Use `producer`/`consumer` to resolve agent card URLs
 //!
-//! The [`Workspace`] API remains unchanged — only the transport implementation
+//! The `Workspace` API remains unchanged — only the transport implementation
 //! swaps from local to remote.
 //!
 //! ## Example

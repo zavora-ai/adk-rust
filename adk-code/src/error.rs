@@ -51,7 +51,7 @@ pub enum ExecutionError {
     InternalError(String),
 }
 
-/// Errors from the language-aware code pipeline ([`RustExecutor`]).
+/// Errors from the language-aware code pipeline (`RustExecutor`).
 ///
 /// Unlike [`ExecutionError`] (which covers the legacy executor), `CodeError`
 /// carries structured diagnostics for compile failures and distinguishes

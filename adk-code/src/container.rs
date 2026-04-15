@@ -751,7 +751,7 @@ pub use docker_impl::DockerExecutor;
 /// Configuration for the CLI-based container command executor.
 ///
 /// This is the fallback executor that shells out to `docker run` for each
-/// execution. For production use, prefer [`DockerExecutor`] (behind the
+/// execution. For production use, prefer `DockerExecutor` (behind the
 /// `docker` feature) which uses persistent containers.
 ///
 /// # Example
@@ -788,10 +788,10 @@ impl Default for ContainerConfig {
 /// CLI-based container executor that shells out to `docker run` per execution.
 ///
 /// Each [`execute`](CodeExecutor::execute) call spawns a new ephemeral container.
-/// This is simpler but less efficient than [`DockerExecutor`] which reuses a
+/// This is simpler but less efficient than `DockerExecutor` which reuses a
 /// persistent container.
 ///
-/// For production use, prefer [`DockerExecutor`] (behind the `docker` feature).
+/// For production use, prefer `DockerExecutor` (behind the `docker` feature).
 ///
 /// # Example
 ///
