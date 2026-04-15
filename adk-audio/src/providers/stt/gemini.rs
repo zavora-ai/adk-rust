@@ -124,7 +124,7 @@ impl SttProvider for GeminiStt {
 
         let resp = self
             .client
-            .post(&self.url())
+            .post(self.url())
             .header("x-goog-api-key", &self.api_key)
             .json(&body)
             .send()

@@ -90,25 +90,25 @@ proptest! {
         prop_assert_eq!(gemini_fr.parts.len(), k + l);
 
         // Verify inline data parts: base64-decoded matches original bytes
-        for i in 0..k {
-            match &gemini_fr.parts[i] {
+        for (actual, expected) in gemini_fr.parts[..k].iter().zip(inline_data.iter()) {
+            match actual {
                 adk_gemini::FunctionResponsePart::InlineData { inline_data: blob } => {
-                    prop_assert_eq!(&blob.mime_type, &inline_data[i].mime_type);
+                    prop_assert_eq!(&blob.mime_type, &expected.mime_type);
                     let decoded = BASE64_STANDARD.decode(&blob.data).unwrap();
-                    prop_assert_eq!(&decoded, &inline_data[i].data);
+                    prop_assert_eq!(&decoded, &expected.data);
                 }
-                other => prop_assert!(false, "expected InlineData at {}, got {:?}", i, other),
+                other => prop_assert!(false, "expected InlineData, got {:?}", other),
             }
         }
 
         // Verify file data parts: MIME type and URI preserved
-        for j in 0..l {
-            match &gemini_fr.parts[k + j] {
+        for (actual, expected) in gemini_fr.parts[k..].iter().zip(file_data.iter()) {
+            match actual {
                 adk_gemini::FunctionResponsePart::FileData { file_data: fdr } => {
-                    prop_assert_eq!(&fdr.mime_type, &file_data[j].mime_type);
-                    prop_assert_eq!(&fdr.file_uri, &file_data[j].file_uri);
+                    prop_assert_eq!(&fdr.mime_type, &expected.mime_type);
+                    prop_assert_eq!(&fdr.file_uri, &expected.file_uri);
                 }
-                other => prop_assert!(false, "expected FileData at {}, got {:?}", k + j, other),
+                other => prop_assert!(false, "expected FileData, got {:?}", other),
             }
         }
     }

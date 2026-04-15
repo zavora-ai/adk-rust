@@ -561,8 +561,8 @@ mod tests {
     #[test]
     fn test_content_function_response_multimodal_parts_nested() {
         use super::super::tools::FunctionResponsePart;
-        let blobs = vec![Blob::new("image/png", "img1"), Blob::new("image/jpeg", "img2")];
-        let files = vec![FileDataRef {
+        let blobs = [Blob::new("image/png", "img1"), Blob::new("image/jpeg", "img2")];
+        let files = [FileDataRef {
             mime_type: "application/pdf".to_string(),
             file_uri: "gs://b/f.pdf".to_string(),
         }];

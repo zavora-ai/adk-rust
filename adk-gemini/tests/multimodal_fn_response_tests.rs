@@ -71,24 +71,24 @@ proptest! {
             prop_assert_eq!(function_response.parts.len(), n + m);
 
             // First N are InlineData (order preserved)
-            for i in 0..n {
-                match &function_response.parts[i] {
+            for (actual, expected) in function_response.parts[..n].iter().zip(inline_data.iter()) {
+                match actual {
                     FunctionResponsePart::InlineData { inline_data: blob } => {
-                        prop_assert_eq!(&blob.mime_type, &inline_data[i].mime_type);
-                        prop_assert_eq!(&blob.data, &inline_data[i].data);
+                        prop_assert_eq!(&blob.mime_type, &expected.mime_type);
+                        prop_assert_eq!(&blob.data, &expected.data);
                     }
-                    other => prop_assert!(false, "expected InlineData at {}, got {:?}", i, other),
+                    other => prop_assert!(false, "expected InlineData, got {:?}", other),
                 }
             }
 
             // Next M are FileData (order preserved)
-            for j in 0..m {
-                match &function_response.parts[n + j] {
+            for (actual, expected) in function_response.parts[n..].iter().zip(file_data.iter()) {
+                match actual {
                     FunctionResponsePart::FileData { file_data: fdr } => {
-                        prop_assert_eq!(&fdr.mime_type, &file_data[j].mime_type);
-                        prop_assert_eq!(&fdr.file_uri, &file_data[j].file_uri);
+                        prop_assert_eq!(&fdr.mime_type, &expected.mime_type);
+                        prop_assert_eq!(&fdr.file_uri, &expected.file_uri);
                     }
-                    other => prop_assert!(false, "expected FileData at {}, got {:?}", n + j, other),
+                    other => prop_assert!(false, "expected FileData, got {:?}", other),
                 }
             }
         }

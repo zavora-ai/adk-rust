@@ -359,7 +359,7 @@ async fn test_fresh_state_per_run() {
                 let mut event = Event::new(&invocation_id);
                 event.author = "write-count".to_string();
                 event.llm_response.content = Some(
-                    Content::new("model").with_text(&format!("{count}")),
+                    Content::new("model").with_text(format!("{count}")),
                 );
                 yield Ok(event);
             };
