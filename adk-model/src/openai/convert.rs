@@ -339,11 +339,17 @@ pub fn from_raw_openai_response(json: &serde_json::Value) -> LlmResponse {
         // Extract visible text content (skip empty strings)
         if let Some(text) = message.get("content").and_then(|v| v.as_str()) {
             if !text.is_empty() {
-                parts.push(Part::Text { text: text.to_string() });
+                // Check for text-based tool calls (Qwen, Llama, Mistral Nemo format)
+                // before adding as plain text
+                if let Some(parsed_parts) = crate::tool_call_parser::parse_text_tool_calls(text) {
+                    parts.extend(parsed_parts);
+                } else {
+                    parts.push(Part::Text { text: text.to_string() });
+                }
             }
         }
 
-        // Extract tool calls
+        // Extract structured tool calls (OpenAI native format)
         if let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
             for tc in tool_calls {
                 let func = &tc["function"];

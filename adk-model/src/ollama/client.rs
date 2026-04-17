@@ -3,7 +3,8 @@
 use super::config::OllamaConfig;
 use super::convert;
 use adk_core::{
-    AdkError, ErrorCategory, ErrorComponent, Llm, LlmRequest, LlmResponseStream, Result,
+    AdkError, Content, ErrorCategory, ErrorComponent, Llm, LlmRequest, LlmResponse,
+    LlmResponseStream, Part, Result,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -155,12 +156,8 @@ impl Llm for OllamaModel {
         }
 
         let response_stream = try_stream! {
-            // When tools are present, use non-streaming mode because ollama-rs
-            // doesn't parse tool_calls in streaming responses
-            let use_streaming = stream && request.tools.is_empty();
-
-            if use_streaming {
-                // Streaming mode (only when no tools)
+            if stream {
+                // Streaming mode — Ollama supports streaming with tool calls since May 2025
                 use futures::StreamExt;
 
                 let stream_result = client
@@ -188,6 +185,31 @@ impl Llm for OllamaModel {
                                 yield convert::text_delta_response(&response.message.content);
                             }
 
+                            // Yield tool calls if present in this chunk
+                            if !response.message.tool_calls.is_empty() {
+                                let mut parts = Vec::new();
+                                for tool_call in &response.message.tool_calls {
+                                    parts.push(Part::FunctionCall {
+                                        name: tool_call.function.name.clone(),
+                                        args: tool_call.function.arguments.clone(),
+                                        id: None,
+                                        thought_signature: None,
+                                    });
+                                }
+                                yield LlmResponse {
+                                    content: Some(Content { role: "model".to_string(), parts }),
+                                    usage_metadata: None,
+                                    finish_reason: None,
+                                    citation_metadata: None,
+                                    partial: false,
+                                    turn_complete: false,
+                                    interrupted: false,
+                                    error_code: None,
+                                    error_message: None,
+                                    provider_metadata: None,
+                                };
+                            }
+
                             // If done, yield final response with metadata
                             if response.done {
                                 yield convert::chat_response_to_llm_response(&response, false);
@@ -204,7 +226,7 @@ impl Llm for OllamaModel {
                     }
                 }
             } else {
-                // Non-streaming mode (required when tools are present)
+                // Non-streaming mode
                 let response = client
                     .send_chat_messages(chat_request)
                     .await

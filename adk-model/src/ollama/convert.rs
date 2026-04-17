@@ -65,7 +65,19 @@ pub fn chat_response_to_llm_response(response: &ChatMessageResponse, partial: bo
 
     // Add text content
     if !response.message.content.is_empty() {
-        parts.push(Part::Text { text: response.message.content.clone() });
+        // Check for text-based tool calls (Qwen, Llama, Mistral Nemo format)
+        // as a fallback when Ollama doesn't parse them natively
+        if response.message.tool_calls.is_empty() {
+            if let Some(parsed_parts) =
+                crate::tool_call_parser::parse_text_tool_calls(&response.message.content)
+            {
+                parts.extend(parsed_parts);
+            } else {
+                parts.push(Part::Text { text: response.message.content.clone() });
+            }
+        } else {
+            parts.push(Part::Text { text: response.message.content.clone() });
+        }
     }
 
     // Handle tool calls if present

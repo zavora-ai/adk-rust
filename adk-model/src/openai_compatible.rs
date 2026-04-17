@@ -428,6 +428,7 @@ impl Llm for OpenAICompatible {
                 let mut buffer = String::new();
                 let mut tool_call_accumulators: HashMap<u32, (String, String, String)> =
                     HashMap::new();
+                let mut text_tool_buffer = crate::tool_call_parser::ToolCallBuffer::new();
 
                 while let Some(chunk_result) = byte_stream.next().await {
                     let chunk = chunk_result.map_err(|e| {
@@ -602,30 +603,60 @@ impl Llm for OpenAICompatible {
                                 }
                             }
 
-                            // Emit partial text content as Part::Text.
+                            // Emit partial text content via tool call buffer.
+                            // The buffer detects <tool_call> tags split across chunks
+                            // and converts them to Part::FunctionCall.
                             if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
                                 if !text.is_empty() {
-                                    yield LlmResponse {
-                                        content: Some(Content {
-                                            role: "model".to_string(),
-                                            parts: vec![Part::Text {
-                                                text: text.to_string(),
-                                            }],
-                                        }),
-                                        usage_metadata: None,
-                                        finish_reason: None,
-                                        citation_metadata: None,
-                                        partial: true,
-                                        turn_complete: false,
-                                        interrupted: false,
-                                        error_code: None,
-                                        error_message: None,
-                                        provider_metadata: None,
-                                    };
+                                    match text_tool_buffer.push(text) {
+                                        crate::tool_call_parser::BufferAction::Emit(parts) => {
+                                            for part in parts {
+                                                let is_tool = matches!(part, Part::FunctionCall { .. });
+                                                yield LlmResponse {
+                                                    content: Some(Content {
+                                                        role: "model".to_string(),
+                                                        parts: vec![part],
+                                                    }),
+                                                    usage_metadata: None,
+                                                    finish_reason: None,
+                                                    citation_metadata: None,
+                                                    partial: !is_tool,
+                                                    turn_complete: false,
+                                                    interrupted: false,
+                                                    error_code: None,
+                                                    error_message: None,
+                                                    provider_metadata: None,
+                                                };
+                                            }
+                                        }
+                                        crate::tool_call_parser::BufferAction::Buffering => {
+                                            // Still accumulating a potential tool call
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
+                }
+
+                // Flush any remaining buffered content from the tool call buffer
+                for part in text_tool_buffer.flush() {
+                    let is_tool = matches!(part, Part::FunctionCall { .. });
+                    yield LlmResponse {
+                        content: Some(Content {
+                            role: "model".to_string(),
+                            parts: vec![part],
+                        }),
+                        usage_metadata: None,
+                        finish_reason: if is_tool { Some(adk_core::FinishReason::Stop) } else { None },
+                        citation_metadata: None,
+                        partial: !is_tool,
+                        turn_complete: is_tool,
+                        interrupted: false,
+                        error_code: None,
+                        error_message: None,
+                        provider_metadata: None,
+                    };
                 }
             };
 

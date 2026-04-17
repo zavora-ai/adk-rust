@@ -285,6 +285,7 @@ pub mod retry;
     feature = "azure-ai"
 ))]
 pub(crate) mod tool_result;
+pub mod tool_call_parser;
 pub mod usage_tracking;
 
 #[cfg(feature = "anthropic")]
