@@ -29,9 +29,9 @@ Automatic detection and parsing of tool calls embedded in text responses from mo
 - **Ollama streaming with tools**: Enabled streaming for Ollama tool-calling requests (previously forced non-streaming). Ollama's API now supports streaming with tool calls natively.
 - **22 unit tests** covering all 7 formats, mixed text+tool content, multiple tool calls, malformed input, and streaming buffer behavior.
 
-#### Ollama Qwen Example (`examples/ollama_qwen35/`)
+#### Ollama Qwen Example (`examples/ollama_qwen/`)
 
-- Standalone example crate demonstrating three scenarios with Qwen 3.5 / Qwen3-Coder on Ollama:
+- Standalone example crate demonstrating three scenarios with Qwen 3.6 / 3.5 / Qwen3-Coder on Ollama:
   1. **Thinking/reasoning**: Extended thinking with `<think>` blocks
   2. **Native Ollama tool calling**: Ollama's built-in tool call API
   3. **OpenAI-compat tool calling**: Text-based tool call parsing via the OpenAI-compatible endpoint

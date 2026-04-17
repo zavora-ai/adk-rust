@@ -2888,7 +2888,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ollama-qwen35-example"
+name = "ollama-qwen-example"
 version = "0.0.1"
 dependencies = [
  "adk-core",

@@ -82,8 +82,9 @@ In a new terminal:
 ollama pull llama3.2:3b
 
 # Other popular models
-ollama pull qwen2.5:7b       # Excellent tool calling
-ollama pull qwen3:14b         # Strong multilingual and coding
+ollama pull qwen3.6:35b-a3b   # Latest Qwen — 73.4% SWE-bench, MoE 35B/3B active
+ollama pull qwen3.5            # Strong multilingual and coding
+ollama pull qwen3-coder:30b    # Code-focused with tool calling
 ollama pull mistral:7b        # Good for code
 ollama pull deepseek-r1:14b   # Reasoning model
 ollama pull devstral:24b      # Optimized for coding
@@ -186,8 +187,10 @@ let model = OllamaModel::new(config)?;
 |-------|------|------------|----------|
 | `llama3.2:3b` | 3B | 4GB | Fast, general purpose |
 | `llama3.1:8b` | 8B | 8GB | Popular balanced model |
-| `qwen2.5:7b` | 7B | 8GB | **Best tool calling** |
-| `qwen3:14b` | 14B | 16GB | Strong multilingual and coding |
+| `qwen3.6:35b-a3b` | 35B (3B active) | 24GB | **Best agentic coding** — 73.4% SWE-bench |
+| `qwen3.5` | varies | varies | Strong multilingual and coding |
+| `qwen3-coder:30b` | 30B | 19GB | Code-focused with tool calling |
+| `qwen2.5:7b` | 7B | 8GB | Good tool calling, lightweight |
 | `mistral:7b` | 7B | 8GB | Code and reasoning |
 | `mistral-nemo:12b` | 12B | 12GB | Enhanced Mistral (128K context) |
 | `deepseek-r1:14b` | 14B | 16GB | Distilled reasoning |
@@ -200,8 +203,9 @@ let model = OllamaModel::new(config)?;
 ### Choosing a Model
 
 - **Limited RAM (8GB)?** → `llama3.2:3b`
-- **Need tool calling?** → `qwen2.5:7b` or `qwen3:14b`
-- **Writing code?** → `devstral:24b` or `codellama:13b`
+- **Best agentic coding?** → `qwen3.6:35b-a3b` (24GB, MoE — only 3B active)
+- **Need tool calling?** → `qwen3.5` or `qwen3-coder:30b`
+- **Writing code?** → `devstral:24b` or `qwen3-coder:30b`
 - **Need reasoning?** → `deepseek-r1:14b` or `deepseek-r1:32b`
 - **Best quality?** → `llama3.3:70b` (needs 48GB+ RAM)
 

@@ -256,7 +256,7 @@ let model = OllamaModel::new(OllamaConfig::new("llama3.2"))?;
 | Anthropic | `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5` | `anthropic` |
 | DeepSeek | `deepseek-chat`, `deepseek-reasoner` | `deepseek` |
 | Groq | `meta-llama/llama-4-scout-17b-16e-instruct`, `llama-3.3-70b-versatile` | `groq` |
-| Ollama | `llama3.2:3b`, `qwen2.5:7b`, `mistral:7b` | `ollama` |
+| Ollama | `qwen3.6:35b-a3b`, `qwen3.5`, `llama3.2:3b` | `ollama` |
 
 ---
 

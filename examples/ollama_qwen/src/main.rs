@@ -1,13 +1,12 @@
-//! Qwen 3.5 on Ollama — Thinking + Tool Calling test.
+//! Qwen on Ollama — Thinking + Tool Calling test.
 //!
-//! Tests two capabilities:
-//! 1. Thinking/reasoning traces (Qwen 3.5 supports /think tags)
+//! Tests two capabilities with Qwen models (3.5, 3.6, Coder):
+//! 1. Thinking/reasoning traces (Qwen supports `<think>` blocks)
 //! 2. Tool calling with function execution
 //!
-//! Prerequisites: `ollama pull qwen3.5`
-//!
+//! Set `OLLAMA_MODEL` to switch models (default: `qwen3.5`):
 //! ```bash
-//! cargo run --manifest-path examples/ollama_qwen35/Cargo.toml
+//! OLLAMA_MODEL=qwen3.6:35b-a3b cargo run --manifest-path examples/ollama_qwen/Cargo.toml
 //! ```
 
 use adk_core::{Content, Part, SessionId, UserId};
@@ -19,7 +18,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-const APP: &str = "ollama-qwen35-test";
+const APP: &str = "ollama-qwen-test";
 
 fn model_name() -> String {
     std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3.5".to_string())

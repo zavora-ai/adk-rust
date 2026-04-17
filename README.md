@@ -44,7 +44,7 @@ The script lives in [`examples/gemini_audio/src/podcast.rs`](examples/gemini_aud
 
 
 
-A production-ready Rust framework for building AI agents enabling you to create powerful and high-performance AI agent systems with a flexible, modular architecture. Model-agnostic. Type-safe. Async.
+ADK-Rust is a production-ready Rust framework for building AI agents enabling you to create powerful and high-performance AI agent systems with a flexible, modular architecture. Model-agnostic. Type-safe. Async.
 
 ```bash
 cargo install cargo-adk
@@ -105,7 +105,7 @@ ADK supports multiple LLM providers with a unified API:
 | Anthropic | `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5` | `anthropic` |
 | DeepSeek | `deepseek-chat`, `deepseek-reasoner` | `deepseek` |
 | Groq | `meta-llama/llama-4-scout-17b-16e-instruct`, `llama-3.3-70b-versatile` | `groq` |
-| Ollama | `llama3.2:3b`, `qwen2.5:7b`, `mistral:7b` | `ollama` |
+| Ollama | `qwen3.6:35b-a3b`, `qwen3.5`, `llama3.2:3b` | `ollama` |
 | Fireworks AI | `accounts/fireworks/models/llama-v3p1-8b-instruct` | `openai` (preset) |
 | Together AI | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | `openai` (preset) |
 | Mistral AI | `mistral-small-latest` | `openai` (preset) |

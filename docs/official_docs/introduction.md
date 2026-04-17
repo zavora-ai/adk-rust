@@ -134,7 +134,7 @@ The underlying LLM that powers LlmAgents. ADK-Rust is optimized for Gemini but s
 - **Anthropic**: `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5`
 - **DeepSeek**: `deepseek-r1`, `deepseek-v3.1`, `deepseek-chat` with thinking mode
 - **Groq**: Ultra-fast inference with `llama-4-scout`, `llama-3.1-70b-versatile`, `mixtral-8x7b-32768`
-- **Ollama**: Local inference with `llama3.2:3b`, `qwen2.5:7b`, `mistral:7b`, `deepseek-r1:14b`
+- **Ollama**: Local inference with `qwen3.6:35b-a3b`, `qwen3.5`, `llama3.2:3b`, `deepseek-r1:14b`
 - **mistral.rs**: High-performance local inference with hardware acceleration
 
 All providers implement the same trait for interchangeable use:
