@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### MCP Server Lifecycle Management (`adk-tool`)
+
+- **adk-tool**: Added `McpServerManager` for managing the full lifecycle of multiple local MCP server child processes. Spawns processes via `TokioChildProcess`, connects them into `McpToolset` instances, monitors health, auto-restarts on crash with exponential backoff, and aggregates tools from all managed servers behind the `Toolset` trait.
+- **adk-tool**: Added `McpServerConfig` and `RestartPolicy` types for server configuration, compatible with Kiro's `mcp.json` format via `#[serde(rename_all = "camelCase")]`.
+- **adk-tool**: Added `ServerStatus` enum (`Running`, `Stopped`, `Crashed`, `Restarting`, `Disabled`, `FailedToStart`) for lifecycle state tracking.
+- **adk-tool**: Added `from_json()` and `from_json_file()` constructors for loading server configs from Kiro `mcp.json` format.
+- **adk-tool**: Added `start_all()` for concurrent startup of all non-disabled servers with per-server result reporting.
+- **adk-tool**: Added `add_server()` and `remove_server()` for dynamic server management at runtime.
+- **adk-tool**: Added `start_monitoring()` / `stop_monitoring()` for background health checks with auto-restart using exponential backoff.
+- **adk-tool**: Added tool name collision resolution — duplicate names across servers are prefixed with `{server_id}__{tool_name}`.
+- **adk-tool**: Added `shutdown()` for graceful shutdown of all managed servers (cancel token → grace period → force-kill).
+- **examples/mcp_manager**: New standalone example crate demonstrating `McpServerManager` with JSON config loading, tool aggregation, dynamic add/remove, and graceful shutdown.
+
 #### Agent Interruption API (`adk-runner`)
 
 - **adk-runner**: Added `Runner::interrupt(session_id)` for cancelling a running agent mid-execution. Preserves events already produced, stops future processing within 1 event cycle. Returns `true` if a running session was found.

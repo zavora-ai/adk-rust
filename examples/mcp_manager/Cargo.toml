@@ -1,0 +1,15 @@
+[package]
+name = "mcp-manager-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-core = { path = "../../adk-core" }
+adk-tool = { path = "../../adk-tool" }
+tokio = { version = "1.40", features = ["full"] }
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
