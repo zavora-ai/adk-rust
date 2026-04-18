@@ -64,34 +64,78 @@ pub struct AllowedPath {
     pub mode: AccessMode,
 }
 
+/// A network access rule specifying an allowed domain and ports.
+///
+/// Used for per-domain network filtering. Only enforced on platforms that
+/// support domain-level network control (macOS Seatbelt). On Linux and
+/// Windows, network access is binary (all or nothing via `allow_network`).
+///
+/// # Example
+///
+/// ```rust
+/// use adk_sandbox::sandbox::NetworkRule;
+///
+/// let rule = NetworkRule {
+///     domain: "api.openai.com".to_string(),
+///     ports: vec![443],
+/// };
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkRule {
+    /// The domain name to allow (e.g., "api.openai.com").
+    pub domain: String,
+    /// The ports to allow on this domain. Empty means all ports.
+    pub ports: Vec<u16>,
+}
+
 /// A declarative sandbox policy describing allowed operations.
 ///
 /// Constructed via [`SandboxPolicyBuilder`]. Defaults to deny-all when
 /// no permissions are granted.
+///
+/// # Network Access
+///
+/// Network access has two levels of control:
+///
+/// 1. **Binary** (`allow_network`): When `true`, all network access is allowed.
+///    When `false`, all network is blocked. Works on all platforms.
+///
+/// 2. **Domain allowlist** (`network_rules`): When `allow_network` is `false`
+///    but `network_rules` is non-empty, only the specified domains/ports are
+///    allowed. **Only enforced on macOS** (Seatbelt supports domain-level
+///    filtering). On Linux and Windows, non-empty `network_rules` with
+///    `allow_network = false` results in all network being blocked — the
+///    rules are ignored with a `tracing::warn`.
 ///
 /// # Example
 ///
 /// ```rust
 /// use adk_sandbox::sandbox::SandboxPolicyBuilder;
 ///
+/// // Allow only OpenAI API access
 /// let policy = SandboxPolicyBuilder::new()
 ///     .allow_read("/usr/lib")
-///     .allow_read_write("/tmp/work")
-///     .allow_network()
+///     .allow_domain("api.openai.com", &[443])
+///     .allow_domain("cdn.openai.com", &[443])
 ///     .env("PATH", "/usr/bin")
 ///     .build();
 ///
-/// assert!(policy.allow_network);
-/// assert!(!policy.allow_process_spawn);
-/// assert_eq!(policy.allowed_paths.len(), 2);
+/// assert!(!policy.allow_network); // full network is denied
+/// assert_eq!(policy.network_rules.len(), 2); // but 2 domains are allowed
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxPolicy {
     /// Filesystem paths the process may access.
     pub allowed_paths: Vec<AllowedPath>,
-    /// Whether the process may access the network.
+    /// Whether the process may access the network (all domains/ports).
     pub allow_network: bool,
+    /// Per-domain network allowlist. Only used when `allow_network` is `false`.
+    /// Only enforced on macOS (Seatbelt). Linux/Windows ignore these rules
+    /// and fall back to binary network control.
+    #[serde(default)]
+    pub network_rules: Vec<NetworkRule>,
     /// Whether the process may spawn child processes.
     pub allow_process_spawn: bool,
     /// Environment variables passed to the sandboxed process.
@@ -144,6 +188,7 @@ impl SandboxPolicyBuilder {
             policy: SandboxPolicy {
                 allowed_paths: Vec::new(),
                 allow_network: false,
+                network_rules: Vec::new(),
                 allow_process_spawn: false,
                 env: HashMap::new(),
             },
@@ -166,9 +211,39 @@ impl SandboxPolicyBuilder {
         self
     }
 
-    /// Enables network access.
+    /// Enables full network access (all domains, all ports).
+    ///
+    /// This overrides any domain-specific rules added via [`allow_domain`](Self::allow_domain).
     pub fn allow_network(mut self) -> Self {
         self.policy.allow_network = true;
+        self
+    }
+
+    /// Allows network access to a specific domain and ports.
+    ///
+    /// When `allow_network` is `false` (the default), only domains added via
+    /// this method are accessible. Pass an empty slice for `ports` to allow
+    /// all ports on the domain.
+    ///
+    /// **Platform support:** Only enforced on macOS (Seatbelt). On Linux and
+    /// Windows, domain-level filtering is not available — if any rules are
+    /// present but `allow_network` is false, all network is blocked.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_sandbox::sandbox::SandboxPolicyBuilder;
+    ///
+    /// let policy = SandboxPolicyBuilder::new()
+    ///     .allow_domain("api.openai.com", &[443])
+    ///     .allow_domain("huggingface.co", &[443, 80])
+    ///     .build();
+    /// ```
+    pub fn allow_domain(mut self, domain: impl Into<String>, ports: &[u16]) -> Self {
+        self.policy.network_rules.push(NetworkRule {
+            domain: domain.into(),
+            ports: ports.to_vec(),
+        });
         self
     }
 

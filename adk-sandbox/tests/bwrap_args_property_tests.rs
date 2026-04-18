@@ -40,6 +40,7 @@ fn arb_sandbox_policy() -> impl Strategy<Value = SandboxPolicy> {
             allowed_paths: paths,
             allow_network: network,
             allow_process_spawn: spawn,
+            network_rules: Vec::new(),
             env: env_pairs.into_iter().collect(),
         })
 }

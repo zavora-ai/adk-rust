@@ -198,6 +198,7 @@ mod tests {
         let policy = SandboxPolicy {
             allowed_paths: vec![],
             allow_network: false,
+            network_rules: vec![],
             allow_process_spawn: false,
             env: std::collections::HashMap::new(),
         };

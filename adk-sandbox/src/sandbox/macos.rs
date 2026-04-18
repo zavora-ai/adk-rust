@@ -88,6 +88,7 @@ impl MacOsEnforcer {
         Self::generate_profile_from_paths(
             &policy.allowed_paths,
             policy.allow_network,
+            &policy.network_rules,
             policy.allow_process_spawn,
         )
     }
@@ -97,6 +98,7 @@ impl MacOsEnforcer {
     /// Uses a "deny what's dangerous" approach rather than "allow only what's needed":
     /// - Start with `(allow default)` so programs can actually run
     /// - Deny network access unless explicitly allowed
+    /// - If network is denied but domain rules exist, allow specific domains/ports
     /// - Deny process spawning unless explicitly allowed
     /// - Restrict filesystem writes to only allowed read-write paths
     ///
@@ -106,6 +108,7 @@ impl MacOsEnforcer {
     fn generate_profile_from_paths(
         paths: &[AllowedPath],
         allow_network: bool,
+        network_rules: &[super::NetworkRule],
         allow_process_spawn: bool,
     ) -> String {
         let mut profile = String::with_capacity(512);
@@ -115,9 +118,37 @@ impl MacOsEnforcer {
         profile.push_str("(deny default)\n");
         profile.push_str("(allow default)\n");
 
-        // Deny network access unless explicitly allowed
-        if !allow_network {
+        // Network access control
+        if allow_network {
+            // Full network access — no deny rule needed
+        } else if network_rules.is_empty() {
+            // No network at all
             profile.push_str("(deny network*)\n");
+        } else {
+            // Domain-level allowlist: deny all network, then allow specific domains
+            profile.push_str("(deny network*)\n");
+            // Allow DNS lookups (required for domain resolution)
+            profile.push_str("(allow network-outbound (remote udp (to \"*:53\")))\n");
+            profile.push_str("(allow network-outbound (remote tcp (to \"*:53\")))\n");
+
+            for rule in network_rules {
+                // Escape dots in domain for regex
+                let escaped_domain = rule.domain.replace('.', "\\\\.");
+                if rule.ports.is_empty() {
+                    // All ports on this domain
+                    profile.push_str(&format!(
+                        "(allow network-outbound (remote tcp (regex #\"^{escaped_domain}$\")))\n"
+                    ));
+                } else {
+                    // Specific ports on this domain
+                    for port in &rule.ports {
+                        profile.push_str(&format!(
+                            "(allow network-outbound (remote tcp (to \"{domain}:{port}\")))\n",
+                            domain = rule.domain,
+                        ));
+                    }
+                }
+            }
         }
 
         // Deny process spawning unless explicitly allowed
@@ -204,6 +235,7 @@ impl SandboxEnforcer for MacOsEnforcer {
         let profile = Self::generate_profile_from_paths(
             &canonicalized_paths,
             policy.allow_network,
+            &policy.network_rules,
             policy.allow_process_spawn,
         );
 
@@ -393,5 +425,46 @@ mod tests {
     fn test_name() {
         let enforcer = MacOsEnforcer::new();
         assert_eq!(enforcer.name(), "seatbelt");
+    }
+
+    #[test]
+    fn test_generate_profile_domain_allowlist() {
+        let policy = SandboxPolicyBuilder::new()
+            .allow_domain("api.openai.com", &[443])
+            .allow_domain("huggingface.co", &[443, 80])
+            .build();
+        let profile = MacOsEnforcer::generate_profile(&policy);
+
+        // Should deny all network first
+        assert!(profile.contains("(deny network*)"));
+        // Should allow DNS
+        assert!(profile.contains("(allow network-outbound (remote udp (to \"*:53\"))"));
+        // Should allow specific domains/ports
+        assert!(profile.contains("api.openai.com:443"));
+        assert!(profile.contains("huggingface.co:443"));
+        assert!(profile.contains("huggingface.co:80"));
+    }
+
+    #[test]
+    fn test_generate_profile_domain_all_ports() {
+        let policy = SandboxPolicyBuilder::new()
+            .allow_domain("example.com", &[])
+            .build();
+        let profile = MacOsEnforcer::generate_profile(&policy);
+
+        assert!(profile.contains("(deny network*)"));
+        assert!(profile.contains("example\\\\.com"));
+    }
+
+    #[test]
+    fn test_generate_profile_full_network_overrides_rules() {
+        let policy = SandboxPolicyBuilder::new()
+            .allow_network()
+            .allow_domain("api.openai.com", &[443])
+            .build();
+        let profile = MacOsEnforcer::generate_profile(&policy);
+
+        // Full network access — no deny rule, domain rules ignored
+        assert!(!profile.contains("(deny network*)"));
     }
 }

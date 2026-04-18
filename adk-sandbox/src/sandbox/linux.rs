@@ -197,6 +197,15 @@ impl SandboxEnforcer for LinuxEnforcer {
         args: &[OsString],
         policy: &SandboxPolicy,
     ) -> Result<WrappedCommand, SandboxError> {
+        // Warn if domain-level network rules are present — bubblewrap can't enforce them
+        if !policy.allow_network && !policy.network_rules.is_empty() {
+            tracing::warn!(
+                rules_count = policy.network_rules.len(),
+                "bubblewrap does not support per-domain network filtering; \
+                 network_rules will be ignored and all network access will be blocked"
+            );
+        }
+
         // 1. Canonicalize all paths in the policy
         let canonicalized_paths = canonicalize_paths(&policy.allowed_paths)?;
 
