@@ -22,6 +22,14 @@ code = ["dep:adk-code", "dep:adk-sandbox"]
 code-embedded-js = ["code", "adk-code/embedded-js"]
 # Enable Docker SDK-based persistent container execution
 code-docker = ["code", "adk-code/docker"]
+# Enable native Slack toolset (send messages, read channels, reactions, threads)
+slack = ["reqwest"]
+# Enable native BigQuery toolset (execute SQL, schemas, datasets)
+bigquery = ["dep:gcp-bigquery-client"]
+# Enable native Spanner toolset (execute SQL, schemas, tables)
+spanner = ["dep:google-cloud-spanner"]
+# Enable MCP sampling callback support (sampling/createMessage handling)
+mcp-sampling = []
 
 [dependencies]
 adk-core.workspace = true
@@ -40,8 +48,12 @@ futures.workspace = true
 # Optional: code execution substrate
 adk-code = { workspace = true, optional = true }
 adk-sandbox = { workspace = true, optional = true }
-# Optional: HTTP client for remote MCP servers
+# Optional: HTTP client for remote MCP servers and Slack toolset
 reqwest = { workspace = true, optional = true }
+# Optional: BigQuery toolset
+gcp-bigquery-client = { version = "0.28", optional = true }
+# Optional: Spanner toolset
+google-cloud-spanner = { version = "0.33", optional = true }
 
 [dev-dependencies]
 async-stream.workspace = true

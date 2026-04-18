@@ -135,6 +135,8 @@ vertex-live = ["gemini", "dep:google-cloud-auth"]
 livekit = ["dep:livekit", "dep:livekit-api", "dep:tokio-tungstenite"]
 # Enable OpenAI WebRTC transport (requires openai + Sans-IO WebRTC + Opus codec)
 openai-webrtc = ["openai", "dep:str0m", "dep:audiopus", "dep:reqwest"]
+# Enable video avatar support for realtime sessions
+video-avatar = []
 # Enable all providers and transports (except openai-webrtc which requires cmake)
 full = ["openai", "gemini", "vertex-live", "livekit"]
 # Enable everything including WebRTC (requires cmake installed)

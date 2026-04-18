@@ -54,6 +54,11 @@ pub mod report;
 pub mod schema;
 pub mod scoring;
 
+#[cfg(feature = "personas")]
+pub mod personas;
+
+pub mod optimizer;
+
 // Re-exports
 pub use criteria::{
     EvaluationCriteria, ResponseMatchConfig, Rubric, RubricConfig, ToolTrajectoryConfig,
@@ -66,6 +71,9 @@ pub use llm_judge::{
 pub use report::{EvaluationReport, EvaluationResult, Failure, TestCaseResult};
 pub use schema::{EvalCase, EvalSet, IntermediateData, SessionInput, TestFile, ToolUse, Turn};
 pub use scoring::{ResponseScorer, ToolTrajectoryScorer};
+
+// Optimizer re-exports
+pub use optimizer::{OptimizationResult, OptimizerConfig, PromptOptimizer};
 
 /// Prelude for convenient imports
 pub mod prelude {

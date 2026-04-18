@@ -41,6 +41,7 @@
 
 pub mod backend;
 pub mod error;
+pub mod sandbox;
 pub mod tool;
 pub mod types;
 
@@ -54,6 +55,10 @@ pub mod wasm;
 // Public re-exports
 pub use backend::{BackendCapabilities, EnforcedLimits, SandboxBackend};
 pub use error::SandboxError;
+pub use sandbox::{
+    AccessMode, AllowedPath, SandboxEnforcer, SandboxPolicy, SandboxPolicyBuilder, WrappedCommand,
+    get_enforcer,
+};
 pub use tool::SandboxTool;
 pub use types::{ExecRequest, ExecResult, Language};
 
@@ -62,3 +67,13 @@ pub use process::{ProcessBackend, ProcessConfig};
 
 #[cfg(feature = "wasm")]
 pub use wasm::WasmBackend;
+
+// Platform-specific enforcer re-exports for sandbox-native convenience
+#[cfg(all(feature = "sandbox-native", target_os = "macos"))]
+pub use sandbox::macos::MacOsEnforcer;
+
+#[cfg(all(feature = "sandbox-native", target_os = "linux"))]
+pub use sandbox::linux::LinuxEnforcer;
+
+#[cfg(all(feature = "sandbox-native", target_os = "windows"))]
+pub use sandbox::windows::WindowsEnforcer;

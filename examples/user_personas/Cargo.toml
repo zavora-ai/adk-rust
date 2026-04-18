@@ -1,0 +1,25 @@
+[package]
+name = "user-personas-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+# ADK crates (path deps to workspace)
+adk-eval = { path = "../../adk-eval", features = ["personas"] }
+adk-core = { path = "../../adk-core" }
+adk-model = { path = "../../adk-model", features = ["gemini"] }
+adk-agent = { path = "../../adk-agent" }
+
+# Common dependencies
+tokio = { version = "1.40", features = ["full"] }
+anyhow = "1.0"
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+async-trait = "0.1"
+futures = "0.3"

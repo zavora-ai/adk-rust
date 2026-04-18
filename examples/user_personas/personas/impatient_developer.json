@@ -1,0 +1,17 @@
+{
+  "name": "impatient-developer",
+  "description": "A senior developer who wants quick, code-focused answers",
+  "traits": {
+    "communicationStyle": "direct and terse",
+    "verbosity": "terse",
+    "expertiseLevel": "expert"
+  },
+  "goals": [
+    "Get a working code example quickly",
+    "Understand performance implications"
+  ],
+  "constraints": [
+    "Never ask for basic explanations",
+    "Prefer code over prose"
+  ]
+}

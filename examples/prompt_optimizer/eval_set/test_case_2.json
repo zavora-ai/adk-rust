@@ -1,0 +1,5 @@
+{
+  "input": "How do I handle errors in Rust without using unwrap?",
+  "expected": "The response should describe the Result type and the ? operator for propagating errors. It should mention pattern matching with match or if-let, and ideally reference the anyhow or thiserror crates for ergonomic error handling in applications and libraries respectively.",
+  "tags": ["rust", "error-handling", "intermediate"]
+}

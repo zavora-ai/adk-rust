@@ -1200,6 +1200,8 @@ pub async fn run_sse(
             cache_capable: controller.config.cache_capable.clone(),
             request_context,
             cancellation_token: None,
+            intra_compaction_config: None,
+            intra_compaction_summarizer: None,
         })
         .map_err(adk_err_to_runtime)?;
 
@@ -1383,6 +1385,8 @@ pub async fn run_sse_compat(
         cache_capable: controller.config.cache_capable.clone(),
         request_context,
         cancellation_token: None,
+        intra_compaction_config: None,
+        intra_compaction_summarizer: None,
     })
     .map_err(adk_err_to_runtime)?;
 

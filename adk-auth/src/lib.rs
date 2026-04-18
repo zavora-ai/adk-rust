@@ -16,6 +16,9 @@
 //!
 //! - `sso` - Enable SSO/OAuth/OIDC support
 //! - `auth-bridge` - Enable JWT request context extraction for `adk-server`
+//! - `aws-secrets` - Enable AWS Secrets Manager provider
+//! - `azure-keyvault` - Enable Azure Key Vault provider
+//! - `gcp-secrets` - Enable GCP Secret Manager provider
 //!
 //! ## Quick Start
 //!
@@ -53,6 +56,9 @@ pub mod auth_bridge;
 // SSO module (feature-gated)
 #[cfg(feature = "sso")]
 pub mod sso;
+
+// Cloud secret manager integration
+pub mod secrets;
 
 pub use access_control::{AccessControl, AccessControlBuilder};
 pub use audit::{AuditEvent, AuditEventType, AuditOutcome, AuditSink, FileAuditSink};

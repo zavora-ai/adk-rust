@@ -98,6 +98,8 @@ fn build_runner_config(
         cache_capable: controller.config.cache_capable.clone(),
         request_context: None,
         cancellation_token,
+        intra_compaction_config: None,
+        intra_compaction_summarizer: None,
     })
 }
 

@@ -16,6 +16,10 @@ readme = "README.md"
 default = []
 sso = ["jsonwebtoken", "reqwest", "dashmap", "base64"]
 auth-bridge = ["sso", "adk-server", "axum"]
+# Cloud secret manager providers
+aws-secrets = ["dep:aws-sdk-secretsmanager", "dep:aws-config"]
+azure-keyvault = ["dep:azure_security_keyvault_secrets", "dep:azure_identity", "dep:azure_core"]
+gcp-secrets = ["dep:google-cloud-secretmanager-v1", "dep:google-cloud-gax"]
 
 [dependencies]
 adk-core.workspace = true
@@ -35,6 +39,19 @@ reqwest = { workspace = true, features = ["json"], optional = true }
 dashmap = { version = "6", optional = true }
 base64 = { version = "0.22", optional = true }
 
+# AWS Secrets Manager (optional)
+aws-sdk-secretsmanager = { version = "1", optional = true }
+aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
+
+# Azure Key Vault (optional)
+azure_security_keyvault_secrets = { version = "0.1", optional = true }
+azure_identity = { version = "0.1", optional = true }
+azure_core = { version = "0.22", optional = true }
+
+# GCP Secret Manager (optional)
+google-cloud-secretmanager-v1 = { version = "1", optional = true }
+google-cloud-gax = { version = "1.9", default-features = false, optional = true }
+
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util"] }
 proptest = "1.5"

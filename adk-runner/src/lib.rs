@@ -45,6 +45,7 @@ pub mod builder;
 mod cache;
 mod callbacks;
 mod context;
+pub mod intra_compaction;
 mod runner;
 
 pub use builder::RunnerConfigBuilder;
@@ -59,6 +60,11 @@ pub use adk_core::RequestContext;
 
 // Re-export compaction types for convenience
 pub use adk_core::{BaseEventsSummarizer, EventsCompactionConfig};
+pub use adk_core::IntraCompactionConfig;
+pub use intra_compaction::IntraInvocationCompactor;
+
+// Re-export secret service trait for convenience
+pub use adk_core::SecretService;
 
 // Re-export cache types for convenience
 pub use adk_core::{CacheCapable, ContextCacheConfig};

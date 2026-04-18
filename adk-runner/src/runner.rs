@@ -45,6 +45,13 @@ pub struct RunnerConfig {
     pub request_context: Option<adk_core::RequestContext>,
     /// Optional cooperative cancellation token for externally managed runs.
     pub cancellation_token: Option<CancellationToken>,
+    /// Optional intra-invocation compaction configuration.
+    /// When set, the runner estimates token count before each agent run
+    /// and triggers mid-invocation summarization when the threshold is exceeded.
+    pub intra_compaction_config: Option<adk_core::IntraCompactionConfig>,
+    /// Optional summarizer for intra-invocation compaction.
+    /// Required when `intra_compaction_config` is set.
+    pub intra_compaction_summarizer: Option<Arc<dyn adk_core::BaseEventsSummarizer>>,
 }
 
 pub struct Runner {
@@ -62,6 +69,7 @@ pub struct Runner {
     cache_manager: Option<Arc<tokio::sync::Mutex<CacheManager>>>,
     request_context: Option<adk_core::RequestContext>,
     cancellation_token: Option<CancellationToken>,
+    intra_compactor: Option<Arc<crate::intra_compaction::IntraInvocationCompactor>>,
 }
 
 impl Runner {
@@ -100,6 +108,16 @@ impl Runner {
         let cache_manager = effective_cache_config
             .as_ref()
             .map(|c| Arc::new(tokio::sync::Mutex::new(CacheManager::new(c.clone()))));
+
+        let intra_compactor = config.intra_compaction_config.as_ref().and_then(|ic_config| {
+            config.intra_compaction_summarizer.as_ref().map(|summarizer| {
+                Arc::new(crate::intra_compaction::IntraInvocationCompactor::new(
+                    ic_config.clone(),
+                    summarizer.clone(),
+                ))
+            })
+        });
+
         Ok(Self {
             app_name: config.app_name,
             root_agent: config.agent,
@@ -115,6 +133,7 @@ impl Runner {
             cache_manager,
             request_context: config.request_context,
             cancellation_token: config.cancellation_token,
+            intra_compactor,
         })
     }
 
@@ -173,6 +192,7 @@ impl Runner {
         let cache_manager_ref = self.cache_manager.clone();
         let request_context = self.request_context.clone();
         let cancellation_token = self.cancellation_token.clone();
+        let intra_compactor = self.intra_compactor.clone();
 
         let s = stream! {
             // Get or create session
@@ -433,6 +453,24 @@ impl Runner {
                             refreshed_ctx = refreshed_ctx.with_request_context(rc);
                         }
                         ctx = Arc::new(refreshed_ctx);
+                    }
+                }
+            }
+
+            // ===== INTRA-INVOCATION COMPACTION =====
+            // If intra-compaction is configured, check if the session events
+            // exceed the token threshold and compact them before the agent runs.
+            if let Some(ref compactor) = intra_compactor {
+                compactor.reset_cycle();
+                let session_events = ctx.mutable_session().as_ref().events_snapshot();
+                match compactor.maybe_compact(&session_events).await {
+                    Ok(Some(compacted_events)) => {
+                        ctx.mutable_session().replace_events(compacted_events);
+                        tracing::info!("intra-invocation compaction applied before agent execution");
+                    }
+                    Ok(None) => {} // No compaction needed
+                    Err(e) => {
+                        tracing::warn!(error = %e, "intra-invocation compaction check failed");
                     }
                 }
             }

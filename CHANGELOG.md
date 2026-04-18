@@ -5,9 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.1] - 2026-04-17
+## [0.7.0] - 2026-04-18
 
 ### Added
+
+#### `ServerBuilder` API (`adk-server`)
+
+- **adk-server**: Added `ServerBuilder` for registering custom Axum controllers alongside built-in routes with shared middleware (auth, CORS, tracing, timeout, security headers). Methods: `add_api_routes()`, `add_root_routes()`, `with_a2a()`, `build()`.
+- **adk-server**: Added `ShutdownHandle` and `POST /api/shutdown` endpoint for graceful shutdown. Enable via `ServerBuilder::enable_shutdown_endpoint()`. The server stops accepting new connections, completes in-flight requests, and exits cleanly — preventing data corruption in SQLite/WAL.
+- **examples/server_builder**: New standalone example crate demonstrating `ServerBuilder` with custom controllers and graceful shutdown endpoint.
+
+#### v0.7.0 Feature Examples
+
+Eleven standalone example crates, each demonstrating one v0.7.0 feature. All are standalone crates in `examples/` with `[workspace]` key, path dependencies to workspace crates, consistent boilerplate (dotenvy, tracing, banner, env validation), and full README documentation.
+
+- **examples/yaml_agent**: YAML agent definition loading — `AgentConfigLoader::load_file()`, `load_directory()`, sub-agent cross-references, validation error handling
+- **examples/agent_registry**: Agent Registry REST API — in-process Axum server, CRUD operations on `AgentCard` entries, tag filtering (no LLM required)
+- **examples/mcp_sampling**: MCP Sampling — `McpToolset::with_sampling_handler()`, `LlmSamplingHandler`, server-side `sampling/createMessage` flow
+- **examples/secret_provider**: Secret Provider — custom `SecretProvider` impl, `CachedSecretProvider` with TTL, `SecretServiceAdapter` bridge, error categories
+- **examples/slack_toolset**: Slack Toolset — `SlackToolset::new(token)`, dry-run mode, `slack_send_message`/`slack_read_channel`/`slack_add_reaction`
+- **examples/bigquery_toolset**: BigQuery Toolset — `BigQueryToolset::with_project()`, dry-run mode, dataset/table/schema discovery, SQL execution
+- **examples/spanner_toolset**: Spanner Toolset — `SpannerToolset::new()`, dry-run mode, table listing, schema inspection, SQL execution
+- **examples/user_personas**: User Personas — `PersonaRegistry::load_directory()`, `UserSimulator`, multi-turn persona-driven conversations
+- **examples/prompt_optimizer**: Prompt Optimizer — `PromptOptimizer`, eval set loading, iterative instruction improvement, early stopping
+- **examples/video_avatar**: Video Avatar — `AvatarConfig` builder, `RealtimeAgentBuilder::avatar()`, JSON serialization, graceful fallback (no LLM required)
+- **examples/intra_compaction**: Intra-Compaction — `IntraCompactionConfig`, `LlmEventSummarizer`, `estimate_tokens()`, overlap preservation, coherence after compaction
+
+#### OS Sandbox Profiles (`adk-sandbox`)
+
+Platform-native OS-level sandbox enforcement for child processes. Restricts filesystem access, blocks network, and controls process spawning at the kernel level.
+
+- **adk-sandbox**: Added `SandboxPolicy`, `SandboxPolicyBuilder`, `SandboxEnforcer` trait, `WrappedCommand`, and `get_enforcer()` registry function
+- **adk-sandbox**: Added `MacOsEnforcer` — Seatbelt enforcement via `sandbox-exec` with "allow default, deny dangerous" strategy
+- **adk-sandbox**: Added `LinuxEnforcer` — bubblewrap enforcement via `bwrap` with namespace-based isolation
+- **adk-sandbox**: Added `WindowsEnforcer` — AppContainer stub (Win32 API implementation deferred)
+- **adk-sandbox**: Extended `ProcessBackend` with `with_sandbox(config, enforcer, policy)` for optional OS-level enforcement
+- **adk-sandbox**: Added 3 new `SandboxError` variants: `EnforcerFailed`, `EnforcerUnavailable`, `PolicyViolation`
+- **adk-sandbox**: Added feature flags: `sandbox-macos`, `sandbox-linux`, `sandbox-windows`, `sandbox-native`
+- **adk-gemini**: Added `Gemini31FlashLitePreview` model variant (`gemini-3.1-flash-lite-preview`)
+- **examples/sandbox_agent**: New LLM-agent-driven example demonstrating sandboxed Python code execution with network blocking
 
 #### Text-Based Tool Call Parser (`adk-model`)
 

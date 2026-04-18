@@ -112,21 +112,147 @@ impl ElicitationHandler for AutoDeclineElicitationHandler {
 ///
 /// Wraps an `Arc<dyn ElicitationHandler>` and implements rmcp's `ClientHandler` trait,
 /// advertising elicitation capabilities and delegating requests to the handler.
+///
+/// When the `mcp-sampling` feature is enabled, also accepts an optional
+/// `Arc<dyn SamplingHandler>` to handle `sampling/createMessage` requests.
 pub struct AdkClientHandler {
     handler: Arc<dyn ElicitationHandler>,
+    #[cfg(feature = "mcp-sampling")]
+    sampling_handler: Option<Arc<dyn crate::sampling::SamplingHandler>>,
 }
 
 impl AdkClientHandler {
     pub fn new(handler: Arc<dyn ElicitationHandler>) -> Self {
-        Self { handler }
+        Self {
+            handler,
+            #[cfg(feature = "mcp-sampling")]
+            sampling_handler: None,
+        }
+    }
+
+    /// Set a sampling handler for `sampling/createMessage` requests.
+    ///
+    /// When configured, the handler advertises sampling capability and
+    /// delegates incoming sampling requests to the provided handler.
+    #[cfg(feature = "mcp-sampling")]
+    pub fn with_sampling_handler(
+        mut self,
+        handler: Arc<dyn crate::sampling::SamplingHandler>,
+    ) -> Self {
+        self.sampling_handler = Some(handler);
+        self
     }
 }
 
 impl rmcp::handler::client::ClientHandler for AdkClientHandler {
     fn get_info(&self) -> ClientInfo {
         let mut info = ClientInfo::default();
-        info.capabilities = rmcp::model::ClientCapabilities::builder().enable_elicitation().build();
+
+        #[cfg(feature = "mcp-sampling")]
+        {
+            if self.sampling_handler.is_some() {
+                info.capabilities = rmcp::model::ClientCapabilities::builder()
+                    .enable_elicitation()
+                    .enable_sampling()
+                    .build();
+            } else {
+                info.capabilities =
+                    rmcp::model::ClientCapabilities::builder().enable_elicitation().build();
+            }
+        }
+
+        #[cfg(not(feature = "mcp-sampling"))]
+        {
+            info.capabilities =
+                rmcp::model::ClientCapabilities::builder().enable_elicitation().build();
+        }
+
         info
+    }
+
+    #[cfg(feature = "mcp-sampling")]
+    async fn create_message(
+        &self,
+        params: rmcp::model::CreateMessageRequestParams,
+        _context: RequestContext<RoleClient>,
+    ) -> Result<rmcp::model::CreateMessageResult, rmcp::ErrorData> {
+        use crate::sampling::{SamplingContent, SamplingMessage, SamplingRequest};
+        use rmcp::model::{CreateMessageResult, Role, SamplingMessageContent};
+
+        let Some(ref sampling_handler) = self.sampling_handler else {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                "sampling handler not configured",
+                None,
+            ));
+        };
+
+        // Convert rmcp SamplingMessages → our SamplingMessages
+        let messages: Vec<SamplingMessage> = params
+            .messages
+            .iter()
+            .map(|msg| {
+                let role = match msg.role {
+                    Role::User => "user",
+                    Role::Assistant => "assistant",
+                };
+                // Extract text from the first content item
+                let content = msg
+                    .content
+                    .first()
+                    .and_then(|c| match c {
+                        SamplingMessageContent::Text(t) => {
+                            Some(SamplingContent::text(t.text.clone()))
+                        }
+                        SamplingMessageContent::Image(img) => {
+                            Some(SamplingContent::image(img.data.clone(), img.mime_type.clone()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| SamplingContent::text(""));
+                SamplingMessage::new(role, content)
+            })
+            .collect();
+
+        let request = SamplingRequest {
+            messages,
+            system_prompt: params.system_prompt.clone(),
+            model_preferences: None,
+            max_tokens: Some(params.max_tokens),
+            temperature: params.temperature.map(|t| t as f64),
+        };
+
+        match std::panic::AssertUnwindSafe(sampling_handler.handle_create_message(request))
+            .catch_unwind()
+            .await
+        {
+            Ok(Ok(response)) => {
+                // Convert our SamplingResponse → rmcp CreateMessageResult
+                let text = match &response.content {
+                    SamplingContent::Text { text } => text.clone(),
+                    SamplingContent::Image { .. } => String::new(),
+                };
+                let message = rmcp::model::SamplingMessage::assistant_text(text);
+                Ok(CreateMessageResult::new(message, response.model)
+                    .with_stop_reason(response.stop_reason))
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "sampling handler returned error");
+                Err(rmcp::ErrorData::new(
+                    rmcp::model::ErrorCode::INTERNAL_ERROR,
+                    format!("sampling handler error: {e}"),
+                    None,
+                ))
+            }
+            Err(_panic) => {
+                tracing::warn!("sampling handler panicked");
+                Err(rmcp::ErrorData::new(
+                    rmcp::model::ErrorCode::INTERNAL_ERROR,
+                    "sampling handler panicked",
+                    None,
+                ))
+            }
+        }
     }
 
     async fn create_elicitation(

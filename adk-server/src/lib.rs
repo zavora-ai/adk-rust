@@ -67,6 +67,12 @@ pub mod ui_protocol;
 pub mod ui_types;
 pub mod web_ui;
 
+#[cfg(feature = "yaml-agent")]
+pub mod yaml_agent;
+
+#[cfg(feature = "agent-registry")]
+pub mod registry;
+
 pub use a2a::{
     A2aClient, Executor, ExecutorConfig, RemoteA2aAgent, RemoteA2aAgentBuilder, RemoteA2aConfig,
     build_agent_card, build_agent_skills,
@@ -74,6 +80,6 @@ pub use a2a::{
 pub use auth_bridge::{RequestContext, RequestContextError, RequestContextExtractor};
 pub use config::{SecurityConfig, ServerConfig};
 pub use rest::{
-    A2aController, RuntimeController, SessionController, create_app, create_app_with_a2a,
-    shutdown_signal,
+    A2aController, RuntimeController, SessionController, ServerBuilder, ShutdownHandle, create_app,
+    create_app_with_a2a, shutdown_signal,
 };

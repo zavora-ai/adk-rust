@@ -105,6 +105,74 @@ controller.
 use adk_server::create_app_with_a2a;
 
 let app = create_app_with_a2a(config, Some("http://localhost:8080"));
+```
+
+### ServerBuilder — Custom Routes
+
+`ServerBuilder` lets you register custom Axum controllers alongside the built-in
+routes. Custom routes share the same middleware stack (auth, CORS, tracing,
+timeout, security headers).
+
+```rust
+use adk_server::{ServerBuilder, ServerConfig};
+use axum::{Router, routing::get, Json};
+
+let app = ServerBuilder::new(config)
+    // Routes nested under /api — get auth middleware automatically
+    .add_api_routes(
+        Router::new()
+            .route("/projects", get(list_projects))
+            .route("/projects/{id}", get(get_project))
+    )
+    // Root-level routes — CORS/tracing/security headers, but no auth middleware
+    .add_root_routes(
+        Router::new()
+            .route("/webhook", axum::routing::post(handle_webhook))
+    )
+    // Enable A2A protocol
+    .with_a2a("http://localhost:8080")
+    .build();
+
+let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+axum::serve(listener, app).await?;
+```
+
+| Method | Description |
+|--------|-------------|
+| `ServerBuilder::new(config)` | Create a builder from a `ServerConfig` |
+| `.add_api_routes(router)` | Add routes nested under `/api` with auth middleware |
+| `.add_root_routes(router)` | Add routes at the root level (no auth middleware) |
+| `.with_a2a(base_url)` | Enable A2A protocol endpoints |
+| `.enable_shutdown_endpoint()` | Enable `POST /api/shutdown` for graceful shutdown |
+| `.build()` | Build the final `axum::Router` with all middleware |
+| `.build_with_shutdown()` | Build and return a `ShutdownHandle` for graceful shutdown |
+
+See [`examples/server_builder/`](../examples/server_builder/) for a complete working example.
+
+### Graceful Shutdown Endpoint
+
+Enable `POST /api/shutdown` for clean process termination (e.g., from an Electron shell):
+
+```rust
+use adk_server::{ServerBuilder, ServerConfig};
+
+let (app, shutdown_handle) = ServerBuilder::new(config)
+    .enable_shutdown_endpoint()
+    .build_with_shutdown();
+
+let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+axum::serve(listener, app)
+    .with_graceful_shutdown(shutdown_handle.signal())
+    .await?;
+```
+
+When `POST /api/shutdown` is called, the server:
+1. Stops accepting new connections
+2. Completes in-flight requests
+3. Flushes pending writes (SQLite WAL, etc.)
+4. Exits with code 0
+
+The `ShutdownHandle::signal()` also responds to Ctrl+C and SIGTERM, combining all shutdown triggers into one future.
 
 // Exposes:
 // GET  /.well-known/agent-card.json  - Agent card with capabilities

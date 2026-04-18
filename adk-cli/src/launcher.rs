@@ -71,6 +71,9 @@ enum LauncherCommand {
         #[arg(long, default_value_t = 8080)]
         port: u16,
     },
+    /// Optimize agent instructions using an evaluation set
+    #[cfg(feature = "optimize")]
+    Optimize(crate::optimize::OptimizeArgs),
 }
 
 /// Controls how the console renders thinking/reasoning content.
@@ -259,6 +262,22 @@ impl Launcher {
         match cli.command.unwrap_or(LauncherCommand::Chat) {
             LauncherCommand::Chat => self.run_console_directly().await,
             LauncherCommand::Serve { port } => self.run_serve_directly(port).await,
+            #[cfg(feature = "optimize")]
+            LauncherCommand::Optimize(args) => {
+                tracing::info!(
+                    agent_path = %args.agent_path.display(),
+                    eval_set_path = %args.eval_set_path.display(),
+                    max_iterations = args.max_iterations,
+                    target = args.target,
+                    output = %args.output.display(),
+                    "starting prompt optimization"
+                );
+                // The actual optimization wiring is done by the caller
+                // who has access to the optimizer LLM and evaluator.
+                // This branch serves as the CLI entry point.
+                tracing::warn!("adk optimize requires wiring via PromptOptimizer — use adk-eval directly");
+                Ok(())
+            }
         }
     }
 
@@ -334,6 +353,8 @@ impl Launcher {
                         cache_capable: None,
                         request_context: None,
                         cancellation_token: Some(cancellation_token.clone()),
+                        intra_compaction_config: None,
+                        intra_compaction_summarizer: None,
                     })?;
                     let mut events = runner
                         .run(

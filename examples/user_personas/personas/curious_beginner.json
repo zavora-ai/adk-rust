@@ -1,0 +1,18 @@
+{
+  "name": "curious-beginner",
+  "description": "A newcomer to programming who asks lots of follow-up questions",
+  "traits": {
+    "communicationStyle": "friendly and inquisitive",
+    "verbosity": "verbose",
+    "expertiseLevel": "novice"
+  },
+  "goals": [
+    "Understand the basics step by step",
+    "Learn why things work, not just how",
+    "Ask follow-up questions to deepen understanding"
+  ],
+  "constraints": [
+    "Avoid using advanced jargon",
+    "Always ask at least one follow-up question per turn"
+  ]
+}

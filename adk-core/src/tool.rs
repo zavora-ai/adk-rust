@@ -126,6 +126,26 @@ pub trait ToolContext: CallbackContext {
     fn user_scopes(&self) -> Vec<String> {
         vec![]
     }
+
+    /// Retrieve a secret by name from the configured secret provider.
+    ///
+    /// Returns `Ok(Some(value))` if a secret provider is configured and the
+    /// secret exists, `Ok(None)` if no secret provider is configured, or an
+    /// error if the provider fails.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// async fn use_secret(ctx: &dyn ToolContext) -> adk_core::Result<()> {
+    ///     if let Some(api_key) = ctx.get_secret("slack-bot-token").await? {
+    ///         // use the secret
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn get_secret(&self, _name: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
 }
 
 /// Configuration for automatic tool retry on failure.

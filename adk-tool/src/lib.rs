@@ -67,6 +67,18 @@ pub mod toolset;
 #[cfg(feature = "code")]
 pub mod code_execution;
 
+#[cfg(feature = "slack")]
+pub mod slack;
+
+#[cfg(feature = "bigquery")]
+pub mod bigquery;
+
+#[cfg(feature = "spanner")]
+pub mod spanner;
+
+#[cfg(feature = "mcp-sampling")]
+pub mod sampling;
+
 pub use adk_core::{AdkError, Result, Tool, ToolContext, Toolset};
 pub use adk_rust_macros::tool;
 

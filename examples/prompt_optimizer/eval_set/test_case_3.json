@@ -1,0 +1,5 @@
+{
+  "input": "Explain the borrow checker and why Rust needs it.",
+  "expected": "The response should explain that the borrow checker enforces ownership rules at compile time to guarantee memory safety without a garbage collector. It should cover the rules: one mutable reference OR any number of immutable references, and that references must always be valid (no dangling pointers).",
+  "tags": ["rust", "ownership", "core-concepts"]
+}

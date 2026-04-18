@@ -35,6 +35,7 @@
 //! assert_eq!(result.stdout.trim(), "hello");
 //! ```
 
+use std::ffi::{OsStr, OsString};
 use std::time::Instant;
 
 use async_trait::async_trait;
@@ -44,6 +45,7 @@ use tracing::{Span, instrument};
 
 use crate::backend::{BackendCapabilities, EnforcedLimits, SandboxBackend};
 use crate::error::SandboxError;
+use crate::sandbox::{SandboxEnforcer, SandboxPolicy};
 use crate::types::{ExecRequest, ExecResult, Language};
 
 /// Maximum output size in bytes (1 MB).
@@ -88,8 +90,8 @@ impl Default for ProcessConfig {
 ///
 /// Executes code by spawning child processes with `tokio::process::Command`.
 /// Enforces timeout via `tokio::time::timeout` and environment isolation
-/// via `env_clear()`. Does **not** enforce memory, network, or filesystem
-/// isolation.
+/// via `env_clear()`. Optionally enforces filesystem and network isolation
+/// when a [`SandboxEnforcer`] is configured via [`with_sandbox()`](Self::with_sandbox).
 ///
 /// # Example
 ///
@@ -99,21 +101,68 @@ impl Default for ProcessConfig {
 /// let backend = ProcessBackend::default();
 /// assert_eq!(backend.name(), "process");
 /// ```
-#[derive(Debug)]
+///
+/// # With OS-level sandbox
+///
+/// ```rust,ignore
+/// use adk_sandbox::{ProcessBackend, ProcessConfig, SandboxPolicyBuilder, get_enforcer};
+///
+/// let enforcer = get_enforcer()?;
+/// let policy = SandboxPolicyBuilder::new()
+///     .allow_read("/usr/lib")
+///     .allow_read_write("/tmp/work")
+///     .build();
+///
+/// let backend = ProcessBackend::with_sandbox(
+///     ProcessConfig::default(),
+///     enforcer,
+///     policy,
+/// );
+/// assert!(backend.capabilities().enforced_limits.filesystem_isolation);
+/// ```
 pub struct ProcessBackend {
     config: ProcessConfig,
+    enforcer: Option<Box<dyn SandboxEnforcer>>,
+    policy: Option<SandboxPolicy>,
 }
 
 impl ProcessBackend {
     /// Creates a new `ProcessBackend` with the given configuration.
     pub fn new(config: ProcessConfig) -> Self {
-        Self { config }
+        Self { config, enforcer: None, policy: None }
+    }
+
+    /// Creates a new `ProcessBackend` with OS-level sandbox enforcement.
+    ///
+    /// All executions through this backend will be sandboxed with the given
+    /// policy. The enforcer wraps commands with platform-specific restrictions
+    /// (Seatbelt on macOS, bubblewrap on Linux, AppContainer on Windows).
+    ///
+    /// If different tools need different policies, create multiple
+    /// `ProcessBackend` instances.
+    pub fn with_sandbox(
+        config: ProcessConfig,
+        enforcer: Box<dyn SandboxEnforcer>,
+        policy: SandboxPolicy,
+    ) -> Self {
+        Self { config, enforcer: Some(enforcer), policy: Some(policy) }
     }
 }
 
 impl Default for ProcessBackend {
     fn default() -> Self {
         Self::new(ProcessConfig::default())
+    }
+}
+
+// ProcessBackend can't derive Debug because Box<dyn SandboxEnforcer> doesn't impl Debug.
+impl std::fmt::Debug for ProcessBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProcessBackend")
+            .field("config", &self.config)
+            .field("enforcer", &self.enforcer.as_ref().map(|e| e.name()))
+            .field("policy", &self.policy)
+            .finish()
     }
 }
 
@@ -139,6 +188,9 @@ impl SandboxBackend for ProcessBackend {
     }
 
     fn capabilities(&self) -> BackendCapabilities {
+        let has_enforcer = self.enforcer.is_some();
+        let denies_network = self.policy.as_ref().is_some_and(|p| !p.allow_network);
+
         BackendCapabilities {
             supported_languages: vec![
                 Language::Rust,
@@ -147,12 +199,16 @@ impl SandboxBackend for ProcessBackend {
                 Language::TypeScript,
                 Language::Command,
             ],
-            isolation_class: "process".to_string(),
+            isolation_class: if has_enforcer {
+                "process+sandbox".to_string()
+            } else {
+                "process".to_string()
+            },
             enforced_limits: EnforcedLimits {
                 timeout: true,
                 memory: false,
-                network_isolation: false,
-                filesystem_isolation: false,
+                network_isolation: has_enforcer && denies_network,
+                filesystem_isolation: has_enforcer,
                 environment_isolation: true,
             },
         }
@@ -269,11 +325,35 @@ impl ProcessBackend {
     }
 
     /// Shared execution logic: env isolation, stdin piping, timeout, output capture.
+    ///
+    /// When a [`SandboxEnforcer`] is configured, the command is wrapped with
+    /// platform-specific sandbox restrictions before spawning.
     async fn run_command(
         &self,
-        mut cmd: Command,
+        cmd: Command,
         request: &ExecRequest,
     ) -> Result<ExecResult, SandboxError> {
+        // If a sandbox enforcer is configured, wrap the command.
+        // We extract the program and args from the pre-built Command,
+        // pass them through the enforcer, and create a new Command.
+        let mut cmd = if let (Some(enforcer), Some(policy)) = (&self.enforcer, &self.policy) {
+            let std_cmd = cmd.as_std();
+            let program = std_cmd.get_program();
+            let args: Vec<OsString> = std_cmd.get_args().map(OsStr::to_owned).collect();
+
+            let wrapped = enforcer.wrap_command(program, &args, policy)?;
+
+            let mut new_cmd = Command::new(&wrapped.program);
+            new_cmd.args(&wrapped.args);
+
+            // Apply any post-construction configuration (e.g., Windows AppContainer)
+            enforcer.configure_command(&mut new_cmd, policy)?;
+
+            new_cmd
+        } else {
+            cmd
+        };
+
         cmd.env_clear();
         for (k, v) in &request.env {
             cmd.env(k, v);

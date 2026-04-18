@@ -600,6 +600,46 @@ impl Evaluator {
 
         Ok(reports)
     }
+
+    /// Run a multi-turn conversation between a [`UserSimulator`](crate::personas::UserSimulator)
+    /// and the agent under test for a configurable number of turns.
+    ///
+    /// Each turn consists of:
+    /// 1. The `UserSimulator` generates a user message based on the conversation history
+    /// 2. The agent processes the user message and produces a response
+    /// 3. Both messages are appended to the conversation history
+    ///
+    /// Returns the full conversation history as a `Vec<Content>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the simulator or agent fails during any turn.
+    #[cfg(feature = "personas")]
+    pub async fn evaluate_multi_turn(
+        &self,
+        agent: Arc<dyn Agent>,
+        simulator: &crate::personas::UserSimulator,
+        num_turns: usize,
+    ) -> Result<Vec<Content>> {
+        let mut history: Vec<Content> = Vec::new();
+
+        for _turn_idx in 0..num_turns {
+            // 1. Generate user message from the simulator
+            let user_message = simulator.generate_message(&history).await?;
+            history.push(user_message.clone());
+
+            // 2. Run the agent with the user message
+            let events = self.run_agent(agent.clone(), user_message).await?;
+
+            // 3. Extract the agent's response text
+            let (response_text, _tool_calls) = self.extract_from_events(&events);
+            if let Some(text) = response_text {
+                history.push(Content::new("model").with_text(text));
+            }
+        }
+
+        Ok(history)
+    }
 }
 
 impl Default for Evaluator {

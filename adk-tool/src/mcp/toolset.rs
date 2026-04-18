@@ -514,6 +514,57 @@ impl McpToolset<super::elicitation::AdkClientHandler> {
             .map_err(|e| AdkError::tool(format!("failed to connect MCP server: {e}")))?;
         Ok(Self::new(client))
     }
+
+    /// Create a McpToolset with MCP sampling support from a transport.
+    ///
+    /// This creates the MCP client using `AdkClientHandler`, which advertises
+    /// both elicitation and sampling capabilities. When the connected MCP server
+    /// sends a `sampling/createMessage` request, it is delegated to the provided
+    /// [`SamplingHandler`](crate::sampling::SamplingHandler).
+    ///
+    /// An elicitation handler is also required because `AdkClientHandler` always
+    /// advertises elicitation. Use [`AutoDeclineElicitationHandler`] if you don't
+    /// need custom elicitation behavior.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_tool::{McpToolset, AutoDeclineElicitationHandler};
+    /// use adk_tool::sampling::LlmSamplingHandler;
+    /// use rmcp::transport::TokioChildProcess;
+    /// use tokio::process::Command;
+    /// use std::sync::Arc;
+    ///
+    /// let transport = TokioChildProcess::new(Command::new("my-mcp-server"))?;
+    /// let elicitation = Arc::new(AutoDeclineElicitationHandler);
+    /// let sampling = Arc::new(LlmSamplingHandler::new(my_llm.clone()));
+    /// let toolset = McpToolset::with_sampling_handler(transport, elicitation, sampling).await?;
+    /// ```
+    ///
+    /// # ConnectionFactory with Sampling
+    ///
+    /// To preserve sampling across reconnections, clone both handler `Arc`s
+    /// into your `ConnectionFactory` implementation and rebuild the
+    /// `AdkClientHandler` on each reconnection.
+    #[cfg(feature = "mcp-sampling")]
+    pub async fn with_sampling_handler<T, E, A>(
+        transport: T,
+        elicitation_handler: std::sync::Arc<dyn super::elicitation::ElicitationHandler>,
+        sampling_handler: std::sync::Arc<dyn crate::sampling::SamplingHandler>,
+    ) -> Result<Self>
+    where
+        T: rmcp::transport::IntoTransport<rmcp::RoleClient, E, A> + Send + 'static,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        use rmcp::ServiceExt;
+        let adk_handler = super::elicitation::AdkClientHandler::new(elicitation_handler)
+            .with_sampling_handler(sampling_handler);
+        let client = adk_handler
+            .serve(transport)
+            .await
+            .map_err(|e| AdkError::tool(format!("failed to connect MCP server: {e}")))?;
+        Ok(Self::new(client))
+    }
 }
 
 /// Individual MCP tool wrapper that implements the ADK `Tool` trait.

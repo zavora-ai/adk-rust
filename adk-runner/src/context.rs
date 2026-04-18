@@ -1,7 +1,7 @@
 use adk_core::{
     AdkIdentity, Agent, AppName, Artifacts, CallbackContext, Content, Event, ExecutionIdentity,
     InvocationContext as InvocationContextTrait, InvocationId, Memory, ReadonlyContext,
-    RequestContext, RunConfig, SessionId, UserId,
+    RequestContext, RunConfig, SecretService, SessionId, UserId,
 };
 use adk_session::Session as AdkSession;
 use async_trait::async_trait;
@@ -77,6 +77,15 @@ impl MutableSession {
             return Vec::new();
         };
         events.clone()
+    }
+
+    /// Replace all events with a new list (used by intra-invocation compaction).
+    pub fn replace_events(&self, new_events: Vec<Event>) {
+        let Ok(mut events) = self.events.write() else {
+            tracing::error!("events RwLock poisoned in replace_events — events unchanged");
+            return;
+        };
+        *events = new_events;
     }
 
     /// Return the number of accumulated events without cloning the full list.
@@ -233,6 +242,9 @@ pub struct InvocationContext {
     request_context: Option<RequestContext>,
     /// Optional shared state for parallel agent coordination.
     shared_state: Option<Arc<adk_core::SharedState>>,
+    /// Optional secret service for retrieving secrets at runtime.
+    /// When present, `get_secret()` delegates to this service.
+    secret_service: Option<Arc<dyn SecretService>>,
 }
 
 impl InvocationContext {
@@ -263,6 +275,7 @@ impl InvocationContext {
             session: Arc::new(MutableSession::new(session)),
             request_context: None,
             shared_state: None,
+            secret_service: None,
         })
     }
 
@@ -314,6 +327,7 @@ impl InvocationContext {
             session,
             request_context: None,
             shared_state: None,
+            secret_service: None,
         })
     }
 
@@ -375,6 +389,16 @@ impl InvocationContext {
     /// Set the shared state for parallel agent coordination.
     pub fn with_shared_state(mut self, shared: Arc<adk_core::SharedState>) -> Self {
         self.shared_state = Some(shared);
+        self
+    }
+
+    /// Set the secret service for runtime secret retrieval.
+    ///
+    /// When configured, tools can call `ctx.get_secret("name")` to retrieve
+    /// secrets from the configured provider (e.g., AWS Secrets Manager,
+    /// Azure Key Vault, GCP Secret Manager).
+    pub fn with_secret_service(mut self, service: Arc<dyn SecretService>) -> Self {
+        self.secret_service = Some(service);
         self
     }
 
@@ -469,5 +493,12 @@ impl InvocationContextTrait for InvocationContext {
                 .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
                 .collect()
         })
+    }
+
+    async fn get_secret(&self, name: &str) -> adk_core::Result<Option<String>> {
+        match &self.secret_service {
+            Some(service) => service.get_secret(name).await.map(Some),
+            None => Ok(None),
+        }
     }
 }

@@ -1,0 +1,11 @@
+name: researcher
+description: "A research assistant that answers questions"
+model:
+  provider: gemini
+  model_id: gemini-2.0-flash
+instructions: |
+  You are a research assistant. Answer questions concisely
+  with factual information.
+config:
+  temperature: 0.3
+  max_tokens: 1024

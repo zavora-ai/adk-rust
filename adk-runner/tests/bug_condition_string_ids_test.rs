@@ -157,7 +157,7 @@ fn make_runner() -> Runner {
         context_cache_config: None,
         cache_capable: None,
         request_context: None,
-        cancellation_token: None,
+        cancellation_token: None, intra_compaction_config: None, intra_compaction_summarizer: None,
     })
     .unwrap()
 }

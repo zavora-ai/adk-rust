@@ -54,6 +54,8 @@ impl Executor {
             cache_capable: self.config.runner_config.cache_capable.clone(),
             request_context: self.config.runner_config.request_context.clone(),
             cancellation_token: cancellation_token.clone(),
+            intra_compaction_config: None,
+            intra_compaction_summarizer: None,
         })?;
 
         // Create processor

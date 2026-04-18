@@ -64,6 +64,8 @@ pub struct RunnerConfigBuilder<A, G, S> {
     cache_capable: Option<Arc<dyn CacheCapable>>,
     request_context: Option<adk_core::RequestContext>,
     cancellation_token: Option<CancellationToken>,
+    intra_compaction_config: Option<adk_core::IntraCompactionConfig>,
+    intra_compaction_summarizer: Option<Arc<dyn adk_core::BaseEventsSummarizer>>,
     _marker: PhantomData<(A, G, S)>,
 }
 
@@ -83,6 +85,8 @@ impl RunnerConfigBuilder<NoAppName, NoAgent, NoSessionService> {
             cache_capable: None,
             request_context: None,
             cancellation_token: None,
+            intra_compaction_config: None,
+            intra_compaction_summarizer: None,
             _marker: PhantomData,
         }
     }
@@ -114,6 +118,8 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             cache_capable: self.cache_capable,
             request_context: self.request_context,
             cancellation_token: self.cancellation_token,
+            intra_compaction_config: self.intra_compaction_config,
+            intra_compaction_summarizer: self.intra_compaction_summarizer,
             _marker: PhantomData,
         }
     }
@@ -133,6 +139,8 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             cache_capable: self.cache_capable,
             request_context: self.request_context,
             cancellation_token: self.cancellation_token,
+            intra_compaction_config: self.intra_compaction_config,
+            intra_compaction_summarizer: self.intra_compaction_summarizer,
             _marker: PhantomData,
         }
     }
@@ -155,6 +163,8 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
             cache_capable: self.cache_capable,
             request_context: self.request_context,
             cancellation_token: self.cancellation_token,
+            intra_compaction_config: self.intra_compaction_config,
+            intra_compaction_summarizer: self.intra_compaction_summarizer,
             _marker: PhantomData,
         }
     }
@@ -218,6 +228,21 @@ impl<A, G, S> RunnerConfigBuilder<A, G, S> {
         self.cancellation_token = Some(token);
         self
     }
+
+    /// Set the intra-invocation compaction configuration (optional).
+    pub fn intra_compaction_config(mut self, config: adk_core::IntraCompactionConfig) -> Self {
+        self.intra_compaction_config = Some(config);
+        self
+    }
+
+    /// Set the summarizer for intra-invocation compaction (optional).
+    pub fn intra_compaction_summarizer(
+        mut self,
+        summarizer: Arc<dyn adk_core::BaseEventsSummarizer>,
+    ) -> Self {
+        self.intra_compaction_summarizer = Some(summarizer);
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +274,8 @@ impl RunnerConfigBuilder<HasAppName, HasAgent, HasSessionService> {
             cache_capable: self.cache_capable,
             request_context: self.request_context,
             cancellation_token: self.cancellation_token,
+            intra_compaction_config: self.intra_compaction_config,
+            intra_compaction_summarizer: self.intra_compaction_summarizer,
         };
         Runner::new(config)
     }

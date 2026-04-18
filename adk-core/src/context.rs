@@ -410,6 +410,15 @@ pub trait InvocationContext: CallbackContext {
     fn request_metadata(&self) -> HashMap<String, serde_json::Value> {
         HashMap::new()
     }
+
+    /// Retrieve a secret by name from the configured secret provider.
+    ///
+    /// Returns `Ok(Some(value))` when a provider is configured and the secret
+    /// exists, `Ok(None)` when no provider is configured, or an error on
+    /// provider failure. The default returns `Ok(None)`.
+    async fn get_secret(&self, _name: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
 }
 
 // Placeholder service traits
@@ -449,6 +458,38 @@ pub trait Memory: Send + Sync {
         let _ = query;
         Err(AdkError::memory("delete not implemented"))
     }
+}
+
+/// Trait for retrieving secrets at runtime.
+///
+/// This is the core-level abstraction used by [`ToolContext::get_secret`] and
+/// [`InvocationContext::get_secret`]. Concrete implementations (e.g., AWS
+/// Secrets Manager, Azure Key Vault, GCP Secret Manager) live in `adk-auth`
+/// behind feature flags and implement this trait via the `SecretProvider`
+/// adapter.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use adk_core::SecretService;
+///
+/// struct EnvSecretService;
+///
+/// #[async_trait::async_trait]
+/// impl SecretService for EnvSecretService {
+///     async fn get_secret(&self, name: &str) -> adk_core::Result<String> {
+///         std::env::var(name).map_err(|_| adk_core::AdkError::not_found(
+///             format!("secret '{name}' not found in environment"),
+///         ))
+///     }
+/// }
+/// ```
+#[async_trait]
+pub trait SecretService: Send + Sync {
+    /// Retrieve a secret value by name.
+    ///
+    /// Returns the secret string on success, or an [`AdkError`] on failure.
+    async fn get_secret(&self, name: &str) -> Result<String>;
 }
 
 #[derive(Debug, Clone)]

@@ -20,6 +20,37 @@ playground versions are being finalized:
 - `examples/payments` — agentic commerce scenario index for ACP/AP2 validation paths
 - `examples/developer_ergonomics` — developer ergonomics validation (RunnerConfigBuilder, ToolExecutionStrategy, SimpleToolContext, StatefulTool, run_str, #[tool] attributes)
 
+## v0.7.0 Feature Examples
+
+Standalone crates demonstrating v0.7.0 features. Each has its own `Cargo.toml`, `README.md`, and `.env.example`.
+
+**No API keys required:**
+
+| Example | Feature | Run |
+|---------|---------|-----|
+| `examples/agent_registry` | Agent Registry REST API | `cargo run --manifest-path examples/agent_registry/Cargo.toml` |
+| `examples/video_avatar` | Video Avatar configuration | `cargo run --manifest-path examples/video_avatar/Cargo.toml` |
+| `examples/server_builder` | ServerBuilder + graceful shutdown | `cargo run --manifest-path examples/server_builder/Cargo.toml` |
+
+**Dry-run mode (no external credentials):**
+
+| Example | Feature | Run |
+|---------|---------|-----|
+| `examples/slack_toolset` | Slack Toolset | `cargo run --manifest-path examples/slack_toolset/Cargo.toml` |
+| `examples/bigquery_toolset` | BigQuery Toolset | `cargo run --manifest-path examples/bigquery_toolset/Cargo.toml` |
+| `examples/spanner_toolset` | Spanner Toolset | `cargo run --manifest-path examples/spanner_toolset/Cargo.toml` |
+
+**Requires `GOOGLE_API_KEY`:**
+
+| Example | Feature | Run |
+|---------|---------|-----|
+| `examples/yaml_agent` | YAML Agent Definition | `cargo run --manifest-path examples/yaml_agent/Cargo.toml` |
+| `examples/mcp_sampling` | MCP Sampling | `cargo build --manifest-path examples/mcp_sampling/Cargo.toml && cargo run --manifest-path examples/mcp_sampling/Cargo.toml --bin sampling-client` |
+| `examples/secret_provider` | Secret Provider | `cargo run --manifest-path examples/secret_provider/Cargo.toml` |
+| `examples/user_personas` | User Personas Evaluation | `cargo run --manifest-path examples/user_personas/Cargo.toml` |
+| `examples/prompt_optimizer` | Prompt Optimizer | `cargo run --manifest-path examples/prompt_optimizer/Cargo.toml` |
+| `examples/intra_compaction` | Intra-Compaction | `cargo run --manifest-path examples/intra_compaction/Cargo.toml` |
+
 ## Quick Start
 
 ```bash

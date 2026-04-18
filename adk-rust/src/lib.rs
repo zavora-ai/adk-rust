@@ -846,6 +846,128 @@ pub mod anthropic_client {
 }
 
 // ============================================================================
+// v0.7.0 Competitive Parity Feature Re-exports (opt-in only)
+// ============================================================================
+
+// --- adk-server features ---
+
+/// YAML agent configuration loader and hot reload watcher.
+///
+/// Declaratively define agents in YAML files with hot reload support:
+/// - [`YamlAgentDefinition`](server::yaml_agent::YamlAgentDefinition) - YAML schema types
+/// - [`AgentConfigLoader`](server::yaml_agent::AgentConfigLoader) - Load and validate YAML agent files
+/// - [`HotReloadWatcher`](server::yaml_agent::HotReloadWatcher) - Watch for file changes and reload agents
+///
+/// Available with feature: `yaml-agent`
+#[cfg(feature = "yaml-agent")]
+#[cfg_attr(docsrs, doc(cfg(feature = "yaml-agent")))]
+pub mod yaml_agent {
+    pub use adk_server::yaml_agent::*;
+}
+
+/// Agent Registry REST API for agent discovery and management.
+///
+/// Register, discover, and manage agents through a REST API:
+/// - [`AgentCard`](server::registry::AgentCard) - Agent metadata
+/// - [`AgentRegistryStore`](server::registry::AgentRegistryStore) - Storage backend trait
+/// - [`InMemoryAgentRegistryStore`](server::registry::InMemoryAgentRegistryStore) - In-memory storage
+/// - [`registry_router`](server::registry::registry_router) - Axum router for registry endpoints
+///
+/// Available with feature: `agent-registry`
+#[cfg(feature = "agent-registry")]
+#[cfg_attr(docsrs, doc(cfg(feature = "agent-registry")))]
+pub mod registry {
+    pub use adk_server::registry::*;
+}
+
+// --- adk-tool features ---
+
+/// MCP sampling callback support.
+///
+/// Handle `sampling/createMessage` requests from MCP servers:
+/// - [`SamplingHandler`](tool::sampling::SamplingHandler) - Trait for handling sampling requests
+/// - [`LlmSamplingHandler`](tool::sampling::LlmSamplingHandler) - Default handler routing to agent's LLM
+/// - [`SamplingRequest`](tool::sampling::SamplingRequest) / [`SamplingResponse`](tool::sampling::SamplingResponse) - Wire types
+///
+/// Available with feature: `mcp-sampling`
+#[cfg(feature = "mcp-sampling")]
+#[cfg_attr(docsrs, doc(cfg(feature = "mcp-sampling")))]
+pub mod sampling {
+    pub use adk_tool::sampling::*;
+}
+
+/// Native Slack toolset for agent-driven Slack interactions.
+///
+/// Built-in Slack tools for agents:
+/// - [`SlackToolset`](tool::slack::SlackToolset) - Toolset implementing `adk_core::Toolset`
+/// - Tools: `slack_send_message`, `slack_read_channel`, `slack_add_reaction`, `slack_list_threads`
+///
+/// Available with feature: `slack`
+#[cfg(feature = "slack")]
+#[cfg_attr(docsrs, doc(cfg(feature = "slack")))]
+pub mod slack {
+    pub use adk_tool::slack::*;
+}
+
+/// Native BigQuery toolset for data-analysis agents.
+///
+/// Built-in BigQuery tools for agents:
+/// - [`BigQueryToolset`](tool::bigquery::BigQueryToolset) - Toolset implementing `adk_core::Toolset`
+/// - Tools: `bigquery_execute_sql`, `bigquery_get_table_schema`, `bigquery_list_datasets`, `bigquery_list_tables`
+///
+/// Available with feature: `bigquery`
+#[cfg(feature = "bigquery")]
+#[cfg_attr(docsrs, doc(cfg(feature = "bigquery")))]
+pub mod bigquery {
+    pub use adk_tool::bigquery::*;
+}
+
+/// Native Spanner toolset for Cloud Spanner interactions.
+///
+/// Built-in Spanner tools for agents:
+/// - [`SpannerToolset`](tool::spanner::SpannerToolset) - Toolset implementing `adk_core::Toolset`
+/// - Tools: `spanner_execute_sql`, `spanner_get_table_schema`, `spanner_list_tables`
+///
+/// Available with feature: `spanner`
+#[cfg(feature = "spanner")]
+#[cfg_attr(docsrs, doc(cfg(feature = "spanner")))]
+pub mod spanner {
+    pub use adk_tool::spanner::*;
+}
+
+// --- adk-eval features ---
+
+/// User personas for evaluation.
+///
+/// Define simulated user personas for realistic multi-turn test conversations:
+/// - [`PersonaProfile`](eval::personas::PersonaProfile) - Persona definition
+/// - [`UserSimulator`](eval::personas::UserSimulator) - Generate persona-driven messages
+/// - [`PersonaRegistry`](eval::personas::PersonaRegistry) - Load personas from directory
+///
+/// Available with feature: `personas`
+#[cfg(feature = "personas")]
+#[cfg_attr(docsrs, doc(cfg(feature = "personas")))]
+pub mod personas {
+    pub use adk_eval::personas::*;
+}
+
+// --- adk-realtime features ---
+
+/// Video avatar configuration for realtime sessions.
+///
+/// Attach a video avatar to realtime voice agents:
+/// - [`AvatarConfig`](realtime::avatar::AvatarConfig) - Avatar source, lip-sync, and rendering settings
+/// - [`LipSyncConfig`](realtime::avatar::LipSyncConfig) - Lip-sync configuration
+/// - [`RenderingConfig`](realtime::avatar::RenderingConfig) - Rendering parameters
+///
+/// Available with feature: `video-avatar`
+#[cfg(feature = "video-avatar")]
+#[cfg_attr(docsrs, doc(cfg(feature = "video-avatar")))]
+pub mod avatar {
+    pub use adk_realtime::avatar::*;
+}
+
+// ============================================================================
 // Convenience Functions
 // ============================================================================
 
@@ -1010,6 +1132,8 @@ pub async fn run(instructions: &str, input: &str) -> Result<String> {
         cache_capable,
         request_context: None,
         cancellation_token: None,
+        intra_compaction_config: None,
+        intra_compaction_summarizer: None,
     })?;
 
     let content = Content::new("user").with_text(input);

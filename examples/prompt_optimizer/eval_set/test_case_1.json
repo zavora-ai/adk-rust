@@ -1,0 +1,5 @@
+{
+  "input": "What is the difference between a Vec and a slice in Rust?",
+  "expected": "The response should clearly explain that Vec is an owned, heap-allocated, growable collection while a slice is a borrowed view into a contiguous sequence. It should mention that Vec<T> owns its data and can be resized, whereas &[T] is a reference that cannot grow or shrink.",
+  "tags": ["rust", "data-structures", "beginner"]
+}

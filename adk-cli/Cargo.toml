@@ -54,6 +54,11 @@ keyring = { version = "3.6.3", default-features = false, features = ["windows-na
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 
+[features]
+default = []
+# Prompt optimization CLI command (adk optimize)
+optimize = []
+
 [dev-dependencies]
 async-trait.workspace = true
 tower = { version = "0.5", features = ["util"] }

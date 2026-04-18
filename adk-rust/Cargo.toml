@@ -121,6 +121,30 @@ vertex-live = ["realtime", "adk-realtime/vertex-live"]
 livekit = ["realtime", "adk-realtime/livekit"]
 openai-webrtc = ["realtime", "adk-realtime/openai-webrtc"]
 
+# v0.7.0 competitive parity features (opt-in only, NOT included in standard or full)
+# YAML agent config and hot reload (forwarded to adk-server)
+yaml-agent = ["server", "adk-server/yaml-agent"]
+# Agent Registry REST API (forwarded to adk-server)
+agent-registry = ["server", "adk-server/agent-registry"]
+# MCP sampling callback support (forwarded to adk-tool)
+mcp-sampling = ["tools", "adk-tool/mcp-sampling"]
+# Native Slack toolset (forwarded to adk-tool)
+slack = ["tools", "adk-tool/slack"]
+# Native BigQuery toolset (forwarded to adk-tool)
+bigquery = ["tools", "adk-tool/bigquery"]
+# Native Spanner toolset (forwarded to adk-tool)
+spanner = ["tools", "adk-tool/spanner"]
+# User personas for evaluation (forwarded to adk-eval)
+personas = ["eval", "adk-eval/personas"]
+# Prompt optimization CLI command (forwarded to adk-cli)
+optimize = ["cli", "adk-cli/optimize"]
+# Cloud secret manager providers (forwarded to adk-auth)
+aws-secrets = ["auth", "adk-auth/aws-secrets"]
+azure-keyvault = ["auth", "adk-auth/azure-keyvault"]
+gcp-secrets = ["auth", "adk-auth/gcp-secrets"]
+# Video avatar support for realtime sessions (forwarded to adk-realtime)
+video-avatar = ["realtime", "adk-realtime/video-avatar"]
+
 # Audio features (forwarded to adk-audio)
 audio = ["dep:adk-audio"]
 audio-tts = ["audio", "adk-audio/tts"]

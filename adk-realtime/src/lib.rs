@@ -97,6 +97,9 @@ pub mod gemini;
 #[cfg(feature = "livekit")]
 pub mod livekit;
 
+#[cfg(feature = "video-avatar")]
+pub mod avatar;
+
 // Re-exports
 pub use agent::{RealtimeAgent, RealtimeAgentBuilder};
 pub use audio::{AudioEncoding, AudioFormat};

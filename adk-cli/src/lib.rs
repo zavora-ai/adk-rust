@@ -34,4 +34,7 @@ pub mod console;
 pub mod launcher;
 pub mod serve;
 
+#[cfg(feature = "optimize")]
+pub mod optimize;
+
 pub use launcher::Launcher;

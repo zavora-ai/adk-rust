@@ -27,7 +27,13 @@ chrono.workspace = true
 futures.workspace = true
 tracing.workspace = true
 
+[features]
+default = []
+# User personas for evaluation (User_Simulator, Persona_Profile, PersonaRegistry)
+personas = []
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
 tokio-test = "0.4"
 tempfile = "3.0"
+proptest = "1.5"

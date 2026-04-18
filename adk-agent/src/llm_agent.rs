@@ -700,6 +700,10 @@ impl ToolContext for AgentToolContext {
     fn user_scopes(&self) -> Vec<String> {
         self.parent_ctx.user_scopes()
     }
+
+    async fn get_secret(&self, name: &str) -> Result<Option<String>> {
+        self.parent_ctx.get_secret(name).await
+    }
 }
 
 /// Wrapper that adds ToolOutcome to an existing CallbackContext.

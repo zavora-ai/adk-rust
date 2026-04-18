@@ -10,6 +10,10 @@ Isolated code execution runtime for [ADK-Rust](https://github.com/zavora-ai/adk-
 |-----------|--------------------------------------------|---------|--------------------|
 | `process` | Subprocess execution via `tokio::process`  | ✅      | None (uses tokio)  |
 | `wasm`    | In-process WASM execution via `wasmtime`   | ❌      | `wasmtime`, `wasmtime-wasi` |
+| `sandbox-macos` | macOS Seatbelt enforcement          | ❌      | None               |
+| `sandbox-linux` | Linux bubblewrap enforcement        | ❌      | None (external `bwrap` binary) |
+| `sandbox-windows` | Windows AppContainer enforcement  | ❌      | `windows-sys`      |
+| `sandbox-native` | Auto-detect platform enforcer      | ❌      | All of the above   |
 
 ## Backend Comparison
 
@@ -87,8 +91,69 @@ All backend errors use `SandboxError`:
 | `ExecutionFailed`  | Internal error (I/O, spawn failure)           |
 | `InvalidRequest`   | Unsupported language for this backend         |
 | `BackendUnavailable` | Missing runtime or feature not enabled      |
+| `EnforcerFailed`   | Sandbox enforcer failed to apply profile      |
+| `EnforcerUnavailable` | Sandbox enforcer not functional on this system |
+| `PolicyViolation`  | A policy path could not be resolved           |
 
 Non-zero exit codes are **not** errors — they are returned in `ExecResult.exit_code`.
+
+## OS Sandbox Profiles
+
+OS-level sandbox enforcement restricts child processes at the kernel level — blocking network access, limiting filesystem writes, and controlling process spawning. This goes beyond `ProcessBackend`'s default environment isolation.
+
+### Feature Flags
+
+| Feature | Platform | Enforcer | Extra Dependencies |
+|---------|----------|----------|--------------------|
+| `sandbox-macos` | macOS | Seatbelt (`sandbox-exec`) | None |
+| `sandbox-linux` | Linux | bubblewrap (`bwrap`) | None (external binary) |
+| `sandbox-windows` | Windows | AppContainer | `windows-sys` |
+| `sandbox-native` | Auto-detect | Platform-appropriate | All of the above |
+
+### Usage
+
+```rust
+use adk_sandbox::{
+    ProcessBackend, ProcessConfig, SandboxBackend,
+    SandboxPolicyBuilder, get_enforcer,
+};
+
+// 1. Build a policy
+let policy = SandboxPolicyBuilder::new()
+    .allow_read("/usr")
+    .allow_read("/tmp")
+    .allow_read_write("/tmp/work")
+    .allow_process_spawn()
+    // Network is denied by default
+    .env("PATH", "/usr/bin:/usr/local/bin")
+    .build();
+
+// 2. Get the platform enforcer
+let enforcer = get_enforcer()?;
+println!("Using enforcer: {}", enforcer.name());
+
+// 3. Create a sandboxed backend
+let backend = ProcessBackend::with_sandbox(
+    ProcessConfig::default(),
+    enforcer,
+    policy,
+);
+
+// 4. Execute code — network is blocked, writes restricted
+let result = backend.execute(request).await?;
+```
+
+### Platform Differences
+
+| Aspect | macOS Seatbelt | Linux bubblewrap | Windows AppContainer |
+|--------|---------------|-----------------|---------------------|
+| Strategy | "Allow default, deny dangerous" | Whitelist (mount only what's needed) | Whitelist (grant ACLs) |
+| Network | `(deny network*)` rule | `--unshare-net` namespace | Omit `INTERNET_CLIENT` |
+| Writes | `(deny file-write*)` + selective allows | Only `--bind` paths writable | Only ACL-granted paths |
+
+### Example
+
+See [`examples/sandbox_agent/`](../examples/sandbox_agent/) for a full LLM-agent-driven example that executes Python code in a sandboxed environment with network access blocked.
 
 ## License
 

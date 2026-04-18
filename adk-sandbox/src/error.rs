@@ -43,6 +43,28 @@ pub enum SandboxError {
     /// The backend is not available (e.g., missing runtime or feature not enabled).
     #[error("backend unavailable: {0}")]
     BackendUnavailable(String),
+
+    /// The sandbox enforcer failed to apply the profile.
+    #[error("enforcer '{enforcer}' failed: {message}")]
+    EnforcerFailed {
+        /// The enforcer name (e.g., "seatbelt", "bubblewrap", "appcontainer").
+        enforcer: String,
+        /// A descriptive message explaining what failed.
+        message: String,
+    },
+
+    /// The sandbox enforcer is not available on this system.
+    #[error("enforcer '{enforcer}' unavailable: {message}")]
+    EnforcerUnavailable {
+        /// The enforcer name.
+        enforcer: String,
+        /// A message explaining why the enforcer is not functional.
+        message: String,
+    },
+
+    /// A policy path or resource could not be resolved.
+    #[error("policy violation: {0}")]
+    PolicyViolation(String),
 }
 
 impl From<std::io::Error> for SandboxError {
@@ -63,6 +85,15 @@ impl From<SandboxError> for adk_core::AdkError {
             }
             SandboxError::BackendUnavailable(_) => {
                 (ErrorCategory::Unavailable, "code.sandbox_unavailable")
+            }
+            SandboxError::EnforcerFailed { .. } => {
+                (ErrorCategory::Internal, "code.sandbox_enforcer_failed")
+            }
+            SandboxError::EnforcerUnavailable { .. } => {
+                (ErrorCategory::Unavailable, "code.sandbox_enforcer_unavailable")
+            }
+            SandboxError::PolicyViolation(_) => {
+                (ErrorCategory::InvalidInput, "code.sandbox_policy_violation")
             }
         };
         adk_core::AdkError::new(ErrorComponent::Code, category, code, err.to_string())

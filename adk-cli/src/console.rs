@@ -44,6 +44,8 @@ pub async fn run_console(agent: Arc<dyn Agent>, app_name: String, user_id: Strin
         cache_capable: None,
         request_context: None,
         cancellation_token: None,
+        intra_compaction_config: None,
+        intra_compaction_summarizer: None,
     })?;
 
     let mut rl = DefaultEditor::new()?;

@@ -79,6 +79,7 @@ pub mod error;
 pub mod event;
 pub mod identity;
 pub mod instruction_template;
+pub mod intra_compaction;
 pub mod model;
 pub mod request_context;
 pub mod shared_state;
@@ -93,11 +94,12 @@ pub use callbacks::{
     BeforeToolCallback, EventsCompactionConfig, GlobalInstructionProvider, InstructionProvider,
     OnToolErrorCallback,
 };
+pub use intra_compaction::IntraCompactionConfig;
 pub use context::{
     Artifacts, CallbackContext, IncludeContents, InvocationContext, MAX_STATE_KEY_LEN, Memory,
-    MemoryEntry, ReadonlyContext, ReadonlyState, RunConfig, Session, State, StreamingMode,
-    ToolCallbackContext, ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest,
-    ToolOutcome, validate_state_key,
+    MemoryEntry, ReadonlyContext, ReadonlyState, RunConfig, SecretService, Session, State,
+    StreamingMode, ToolCallbackContext, ToolConfirmationDecision, ToolConfirmationPolicy,
+    ToolConfirmationRequest, ToolOutcome, validate_state_key,
 };
 pub use error::{AdkError, ErrorCategory, ErrorComponent, ErrorDetails, Result, RetryHint};
 pub use event::{

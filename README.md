@@ -8,7 +8,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 [![GitHub Discussions](https://img.shields.io/github/discussions/zavora-ai/adk-rust?style=flat&logo=github&color=5865F2)](https://github.com/zavora-ai/adk-rust/discussions)
 
-> **🚀 v0.6.0 Released!** A2A Protocol v1.0.0 full compliance (9 fixes, all 11 operations), ParallelAgent `SharedState` for cross-agent coordination (`set_shared`/`get_shared`/`wait_for_key`), tool authorization documentation (HITL confirmation, callbacks, RBAC, graph interrupts), parallel tool execution (`ToolExecutionStrategy::Parallel`/`Auto`). Breaking: `build_v1_agent_card()` signature, `TaskStore`/`PushNotificationSender` trait changes, `message_stream` return type. See [CHANGELOG](CHANGELOG.md) for full details.
+> **🚀 v0.7.0 Released!** OS-level sandbox profiles (Seatbelt/bubblewrap/AppContainer), ServerBuilder API for custom controllers, graceful shutdown endpoint, Gemini 3.1 Flash-Lite support, 11 new v0.7.0 feature examples. See [CHANGELOG](CHANGELOG.md) for full details.
 >
 > **Contributors:** Many thanks to [@mikefaille](https://github.com/mikefaille) — AdkIdentity design, realtime audio, LiveKit bridge, skill system. [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI-compatible providers, xAI, multimodal content. [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [@tomtom215](https://github.com/tomtom215) — A2A Protocol v1.0.0 types crate ([a2a-protocol-types](https://crates.io/crates/a2a-protocol-types)), Foundation-verified wire types powering our A2A v1 layer. [@danielsan](https://github.com/danielsan) — Google deps issue & PR (#181, #203), RAG crash report (#205). [@CodingFlow](https://github.com/CodingFlow) — Gemini 3 thinking level, global endpoint, citationSources (#177, #178, #179). [@ctylx](https://github.com/ctylx) — skill discovery fix (#204). [@poborin](https://github.com/poborin) — project config proposal (#176). [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 >
@@ -99,7 +99,7 @@ ADK supports multiple LLM providers with a unified API:
 
 | Provider | Model Examples | Feature Flag |
 |----------|---------------|--------------|
-| Gemini | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-pro-preview`, `gemini-3-flash-preview` | (default) |
+| Gemini | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-flash-lite-preview`, `gemini-3.1-pro-preview` | (default) |
 | OpenAI | `gpt-5`, `gpt-5-mini`, `gpt-5-nano` | `openai` |
 | OpenAI Responses API | `gpt-4.1`, `o3`, `o4-mini` | `openai` |
 | Anthropic | `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5` | `anthropic` |
@@ -191,6 +191,7 @@ Built-in tools:
 | `adk-eval` | Agent evaluation | Test definitions, trajectory validation, LLM-judged scoring, rubrics |
 | `adk-guardrail` | Input/output validation | PII redaction, content filtering, JSON schema validation |
 | `adk-auth` | Access control | Role-based permissions, declarative scope-based security, SSO/OAuth, audit logging |
+| `adk-sandbox` | Sandboxed code execution | Process/WASM backends, OS-level sandbox profiles (Seatbelt, bubblewrap, AppContainer) |
 | `adk-telemetry` | Observability | Structured logging, OpenTelemetry tracing, span helpers |
 
 > **Extracted to standalone repos:** [adk-ui](https://github.com/zavora-ai/adk-ui) (dynamic UI generation), [adk-studio](https://github.com/zavora-ai/adk-studio) (visual agent builder), [adk-playground](https://github.com/zavora-ai/adk-playground) (120+ examples).
@@ -219,10 +220,10 @@ Requires Rust 1.85 or later (Rust 2024 edition). Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.6.0"  # Standard: agents, models, tools, sessions, runner, server, CLI
+adk-rust = "0.7.0"  # Standard: agents, models, tools, sessions, runner, server, CLI
 
 # Need graph, browser, eval, realtime, audio, RAG?
-# adk-rust = { version = "0.6.0", features = ["full"] }
+# adk-rust = { version = "0.7.0", features = ["full"] }
 ```
 
 Set your API key:

@@ -3,6 +3,9 @@ use std::{sync::Arc, time::Duration};
 use crate::auth_bridge::RequestContextExtractor;
 use adk_core::{CacheCapable, ContextCacheConfig, EventsCompactionConfig};
 
+#[cfg(feature = "yaml-agent")]
+use std::path::PathBuf;
+
 /// Security configuration for the ADK server.
 #[derive(Clone, Debug)]
 pub struct SecurityConfig {
@@ -68,6 +71,10 @@ pub struct ServerConfig {
     pub backend_url: Option<String>,
     pub security: SecurityConfig,
     pub request_context_extractor: Option<Arc<dyn RequestContextExtractor>>,
+    /// Directories containing YAML agent definitions to watch for hot reload.
+    /// Only used when the `yaml-agent` feature is enabled.
+    #[cfg(feature = "yaml-agent")]
+    pub yaml_agent_dirs: Vec<PathBuf>,
 }
 
 impl ServerConfig {
@@ -87,6 +94,8 @@ impl ServerConfig {
             backend_url: None,
             security: SecurityConfig::default(),
             request_context_extractor: None,
+            #[cfg(feature = "yaml-agent")]
+            yaml_agent_dirs: Vec::new(),
         }
     }
 
@@ -183,6 +192,27 @@ impl ServerConfig {
     /// making scopes available via `ToolContext::user_scopes()`.
     pub fn with_request_context(mut self, extractor: Arc<dyn RequestContextExtractor>) -> Self {
         self.request_context_extractor = Some(extractor);
+        self
+    }
+
+    /// Configure directories containing YAML agent definitions to watch.
+    ///
+    /// When the `yaml-agent` feature is enabled and directories are configured,
+    /// the server starts a [`HotReloadWatcher`](crate::yaml_agent::HotReloadWatcher)
+    /// for each directory at startup, automatically loading and hot-reloading
+    /// YAML-defined agents.
+    #[cfg(feature = "yaml-agent")]
+    pub fn with_yaml_agent_dirs(mut self, dirs: Vec<PathBuf>) -> Self {
+        self.yaml_agent_dirs = dirs;
+        self
+    }
+
+    /// Add a single YAML agent directory to watch.
+    ///
+    /// Convenience method that appends one directory to the list.
+    #[cfg(feature = "yaml-agent")]
+    pub fn with_yaml_agent_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.yaml_agent_dirs.push(dir.into());
         self
     }
 }

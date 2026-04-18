@@ -105,6 +105,10 @@ pub struct RealtimeAgent {
     on_transcript: Option<TranscriptCallback>,
     on_speech_started: Option<SpeechCallback>,
     on_speech_stopped: Option<SpeechCallback>,
+
+    // Video avatar configuration
+    #[cfg(feature = "video-avatar")]
+    avatar_config: Option<crate::avatar::AvatarConfig>,
 }
 
 /// Callback for audio output events (receives raw PCM bytes).
@@ -163,6 +167,9 @@ pub struct RealtimeAgentBuilder {
     on_transcript: Option<TranscriptCallback>,
     on_speech_started: Option<SpeechCallback>,
     on_speech_stopped: Option<SpeechCallback>,
+
+    #[cfg(feature = "video-avatar")]
+    avatar_config: Option<crate::avatar::AvatarConfig>,
 }
 
 impl RealtimeAgentBuilder {
@@ -190,6 +197,8 @@ impl RealtimeAgentBuilder {
             on_transcript: None,
             on_speech_started: None,
             on_speech_stopped: None,
+            #[cfg(feature = "video-avatar")]
+            avatar_config: None,
         }
     }
 
@@ -330,6 +339,19 @@ impl RealtimeAgentBuilder {
         self
     }
 
+    /// Set the video avatar configuration for this agent.
+    ///
+    /// When set, the avatar configuration is included in the session setup
+    /// payload sent to the realtime provider. If the provider does not support
+    /// video avatars, a warning is logged and the session proceeds audio-only.
+    ///
+    /// Requires the `video-avatar` feature flag.
+    #[cfg(feature = "video-avatar")]
+    pub fn avatar(mut self, config: crate::avatar::AvatarConfig) -> Self {
+        self.avatar_config = Some(config);
+        self
+    }
+
     /// Build the RealtimeAgent.
     pub fn build(self) -> Result<RealtimeAgent> {
         let model =
@@ -357,6 +379,8 @@ impl RealtimeAgentBuilder {
             on_transcript: self.on_transcript,
             on_speech_started: self.on_speech_started,
             on_speech_stopped: self.on_speech_stopped,
+            #[cfg(feature = "video-avatar")]
+            avatar_config: self.avatar_config,
         })
     }
 }
@@ -385,6 +409,14 @@ impl RealtimeAgent {
     /// Get the list of tools.
     pub fn tools(&self) -> &[Arc<dyn Tool>] {
         &self.tools
+    }
+
+    /// Get the avatar configuration, if set.
+    ///
+    /// Requires the `video-avatar` feature flag.
+    #[cfg(feature = "video-avatar")]
+    pub fn avatar_config(&self) -> Option<&crate::avatar::AvatarConfig> {
+        self.avatar_config.as_ref()
     }
 
     /// Build the realtime configuration from agent settings.
@@ -464,6 +496,28 @@ impl RealtimeAgent {
                 })),
             });
             config.tools = Some(tools);
+        }
+
+        // Include avatar configuration in session setup if present.
+        // Currently no realtime provider supports video avatars natively,
+        // so we log a warning and proceed audio-only. The config is still
+        // placed in `extra` so future provider implementations can read it.
+        #[cfg(feature = "video-avatar")]
+        if let Some(ref avatar) = self.avatar_config {
+            tracing::warn!(
+                agent = %self.name,
+                source_url = %avatar.source_url,
+                "video avatar configured but the current realtime provider does not support video avatars; proceeding audio-only"
+            );
+            let avatar_json = serde_json::to_value(avatar)
+                .unwrap_or_else(|e| {
+                    tracing::warn!("failed to serialize avatar config: {e}");
+                    serde_json::Value::Null
+                });
+            let extra = config.extra.get_or_insert_with(|| serde_json::json!({}));
+            if let Some(obj) = extra.as_object_mut() {
+                obj.insert("avatarConfig".to_string(), avatar_json);
+            }
         }
 
         Ok(config)

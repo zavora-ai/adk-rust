@@ -1,0 +1,12 @@
+name: assistant
+description: "A helpful assistant that delegates research tasks"
+model:
+  provider: gemini
+  model_id: gemini-2.0-flash
+instructions: |
+  You are a helpful assistant. For research questions,
+  delegate to the researcher sub-agent.
+sub_agents:
+  - ref: researcher
+config:
+  temperature: 0.7

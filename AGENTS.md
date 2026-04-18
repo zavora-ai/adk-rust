@@ -72,7 +72,8 @@ adk-anthropic/   Dedicated Anthropic API client with streaming, thinking, cachin
 adk-doc-audit/   Documentation audit: rustdoc coverage, link checking, crate validation
 adk-rust-macros/ Procedural macros (#[tool] attribute)
 adk-code/        Code execution (experimental)
-adk-sandbox/     Sandboxed execution environments (experimental)
+adk-sandbox/     Sandboxed execution environments — process/WASM backends, OS-level sandbox profiles
+                 (Seatbelt on macOS, bubblewrap on Linux, AppContainer on Windows)
 adk-audio/       Audio processing, STT/TTS providers, Deepgram streaming (experimental)
 adk-rag/         Retrieval-augmented generation pipelines
 adk-action/      Action node execution for deterministic workflow operations
@@ -119,6 +120,20 @@ docs/official_docs/    Comprehensive documentation site content
 - `azure-ai` — Azure AI Inference endpoints
 - `all-providers` — enables all eight real feature flags
 - `fireworks`, `together`, `mistral`, `perplexity`, `cerebras`, `sambanova`, `xai` — backward-compat aliases for `openai`. Use `OpenAICompatibleConfig` presets instead of separate client types.
+
+### Gemini model selection
+
+Use current-generation models. Gemini 2.0 models are deprecated (shut down March 31, 2026).
+
+| Use case | Model ID | Notes |
+|----------|----------|-------|
+| Default / general | `gemini-2.5-flash` | Default in `adk-gemini` |
+| Cost-efficient / high-volume | `gemini-3.1-flash-lite-preview` | Cheapest, fastest, best for agentic routing |
+| Advanced reasoning | `gemini-3.1-pro-preview` | Strongest reasoning |
+| Image generation | `gemini-2.5-flash-image` | Multimodal output |
+| Code + agents | `gemini-3-flash-preview` | Good balance of speed and capability |
+
+**Avoid deprecated models:** `gemini-2.0-flash`, `gemini-2.0-flash-lite` — these are shut down.
 
 ### adk-realtime
 
