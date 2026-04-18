@@ -591,6 +591,182 @@ See `examples/mcp_elicitation/` for a full working example with:
 - An LLM-powered agent client with interactive stdin-based elicitation
 - Run: `cargo run --manifest-path examples/mcp_elicitation/Cargo.toml --bin elicitation-client`
 
+## McpServerManager — Multi-Server Lifecycle Management
+
+For applications that need to manage multiple MCP servers simultaneously, `McpServerManager` provides a higher-level API that handles process spawning, health monitoring, auto-restart with exponential backoff, and tool aggregation across all managed servers.
+
+### Overview
+
+`McpServerManager`:
+- **Spawns and manages** multiple MCP server child processes
+- **Monitors health** via periodic checks, detecting crashed servers
+- **Auto-restarts** crashed servers with configurable exponential backoff
+- **Aggregates tools** from all running servers behind the `Toolset` trait
+- **Resolves name collisions** by prefixing duplicate tool names with `{server_id}__`
+- **Loads config** from Kiro's `mcp.json` format
+
+### Quick Start
+
+```rust
+use adk_tool::mcp::manager::McpServerManager;
+use std::time::Duration;
+
+// Load from Kiro mcp.json format
+let manager = McpServerManager::from_json(r#"{
+    "mcpServers": {
+        "playwright": {
+            "command": "npx",
+            "args": ["--yes", "@playwright/mcp@latest"],
+            "autoApprove": ["browser_click"]
+        },
+        "filesystem": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+        }
+    }
+}"#)?
+    .with_health_check_interval(Duration::from_secs(30))
+    .with_grace_period(Duration::from_secs(5))
+    .with_name("my_servers");
+
+// Start all non-disabled servers concurrently
+let results = manager.start_all().await;
+for (id, result) in &results {
+    match result {
+        Ok(()) => println!("{id}: started"),
+        Err(e) => eprintln!("{id}: failed: {e}"),
+    }
+}
+```
+
+### Using as a Toolset
+
+`McpServerManager` implements the `Toolset` trait, so you can pass it directly to an agent:
+
+```rust
+use adk_core::Toolset;
+
+let agent = LlmAgentBuilder::new("multi_mcp_agent")
+    .model(model)
+    .toolset(Arc::new(manager))
+    .build()?;
+```
+
+Tools from all running servers are aggregated. If two servers expose a tool with the same name (e.g., both have `read_file`), the manager prefixes them: `playwright__read_file`, `filesystem__read_file`. Unique names are left unchanged.
+
+### Builder Pattern
+
+```rust
+use adk_tool::mcp::manager::McpServerManager;
+use adk_tool::AutoDeclineElicitationHandler;
+use std::sync::Arc;
+
+let manager = McpServerManager::new(configs)
+    .with_elicitation_handler(Arc::new(AutoDeclineElicitationHandler))
+    .with_health_check_interval(Duration::from_secs(15))
+    .with_grace_period(Duration::from_secs(3))
+    .with_name("my_manager");
+```
+
+### Individual Server Control
+
+```rust
+// Start/stop/restart individual servers
+manager.start_server("playwright").await?;
+manager.stop_server("playwright").await?;
+manager.restart_server("playwright").await?;
+
+// Query status
+let status = manager.server_status("playwright").await?;
+let all = manager.all_statuses().await;
+let count = manager.running_server_count().await;
+```
+
+### Dynamic Server Management
+
+Add and remove servers at runtime without restarting the manager:
+
+```rust
+use adk_tool::mcp::manager::McpServerConfig;
+
+// Add a new server
+manager.add_server("github".into(), McpServerConfig {
+    command: "npx".into(),
+    args: vec!["--yes".into(), "@modelcontextprotocol/server-github".into()],
+    env: HashMap::new(),
+    disabled: false,
+    auto_approve: vec![],
+    restart_policy: None,
+}).await?;
+
+manager.start_server("github").await?;
+
+// Remove (stops if running, then removes config)
+manager.remove_server("github").await?;
+```
+
+### Health Monitoring and Auto-Restart
+
+Enable background health monitoring with auto-restart on crash:
+
+```rust
+use adk_tool::mcp::manager::RestartPolicy;
+
+let config = McpServerConfig {
+    command: "npx".into(),
+    args: vec!["--yes".into(), "my-server".into()],
+    restart_policy: Some(RestartPolicy {
+        initial_delay_ms: 1000,     // First retry after 1s
+        max_delay_ms: 30000,        // Cap at 30s
+        backoff_multiplier: 2.0,    // Double each time
+        max_restart_attempts: 10,   // Give up after 10 failures
+    }),
+    ..Default::default()
+};
+
+// Start monitoring — checks each server periodically
+manager.start_monitoring();
+
+// Stop monitoring
+manager.stop_monitoring();
+```
+
+The backoff formula: `delay = min(initial_delay_ms × backoff_multiplier^attempt, max_delay_ms)`
+
+### Graceful Shutdown
+
+Always call `shutdown()` before dropping the manager:
+
+```rust
+manager.shutdown().await?;
+// All servers stopped, safe to drop
+```
+
+If you drop without calling `shutdown()`, a warning is logged but no async cleanup is attempted.
+
+### Loading from File
+
+```rust
+let manager = McpServerManager::from_json_file("~/.kiro/settings/mcp.json")?;
+```
+
+### Server Status Lifecycle
+
+```
+Stopped → Running (start)
+Running → Stopped (stop/shutdown)
+Running → Crashed (health check failure)
+Running → Restarting (restart)
+Crashed → Restarting (auto-restart)
+Restarting → Running (restart success)
+Restarting → FailedToStart (restart failure)
+Disabled (config.disabled = true, no transitions)
+```
+
+### Complete Example
+
+See `examples/mcp_manager/` for a full working example demonstrating JSON config loading, start/stop, tool aggregation, dynamic add/remove, and graceful shutdown.
+
 ## Related
 
 - [Function Tools](function-tools.md) - Creating custom tools in Rust
@@ -598,6 +774,7 @@ See `examples/mcp_elicitation/` for a full working example with:
 - [LlmAgent](../agents/llm-agent.md) - Adding tools to agents
 - [rmcp SDK](https://github.com/modelcontextprotocol/rust-sdk) - Official Rust MCP SDK
 - [MCP Specification](https://modelcontextprotocol.io/) - Protocol documentation
+
 
 ---
 

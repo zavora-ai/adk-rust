@@ -264,6 +264,25 @@ where
         client.cancellation_token()
     }
 
+    /// Check whether the underlying MCP service connection has been closed or cancelled.
+    ///
+    /// Returns `true` if the service loop has terminated (transport closed,
+    /// cancellation token fired, or the background task completed). This is
+    /// useful for health monitoring — a closed connection indicates the server
+    /// process has crashed or the transport has been lost.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if toolset.is_closed().await {
+    ///     tracing::warn!("MCP server connection lost");
+    /// }
+    /// ```
+    pub async fn is_closed(&self) -> bool {
+        let client = self.client.lock().await;
+        client.is_closed()
+    }
+
     async fn try_refresh_connection(&self) -> Result<bool> {
         let Some(factory) = self.connection_factory.clone() else {
             return Ok(false);

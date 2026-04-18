@@ -10,6 +10,7 @@
 //! - [`AgentTool`] - Use agents as callable tools for composition
 //! - [`GoogleSearchTool`] - Web search via Gemini's grounding
 //! - [`McpToolset`] - Model Context Protocol integration
+//! - [`McpServerManager`](mcp::manager::McpServerManager) - Multi-server lifecycle management with health monitoring
 //! - [`BasicToolset`] - Group multiple tools together
 //! - [`ExitLoopTool`] - Control flow for loop agents
 //! - [`LoadArtifactsTool`] - Inject binary artifacts into context
@@ -99,7 +100,8 @@ pub use builtin::{
 pub use function_tool::FunctionTool;
 pub use mcp::{
     AutoDeclineElicitationHandler, ElicitationHandler, McpAuth, McpHttpClientBuilder,
-    McpTaskConfig, McpToolset, OAuth2Config, Resource, ResourceContents, ResourceTemplate,
+    McpServerManager, McpTaskConfig, McpToolset, OAuth2Config, Resource, ResourceContents,
+    ResourceTemplate,
 };
 pub use simple_context::SimpleToolContext;
 pub use stateful_tool::StatefulTool;

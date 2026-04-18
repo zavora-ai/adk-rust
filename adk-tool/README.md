@@ -17,6 +17,7 @@ Tool system for Rust Agent Development Kit (ADK-Rust) agents (FunctionTool, MCP,
 - **GoogleSearchTool** - Web search via Gemini's grounding
 - **Provider-native wrappers** - Typed declarations for Gemini, Anthropic, and OpenAI built-in tools
 - **McpToolset** - Model Context Protocol integration (local & remote servers)
+- **McpServerManager** - Multi-server lifecycle management with health monitoring and auto-restart
 - **BasicToolset** - Group multiple tools together
 - **FilteredToolset** - Filter tools from any toolset by predicate
 - **MergedToolset** - Combine multiple toolsets into one
@@ -126,6 +127,51 @@ let result = my_tool.execute(Arc::new(ctx), json!({"key": "value"})).await?;
 ```
 
 Defaults: `user_id()` → `"anonymous"`, `session_id()` → `""`, unique UUIDs for invocation and function call IDs.
+
+### MCP Server Manager (Multi-Server Lifecycle)
+
+Manage multiple MCP server processes with health monitoring, auto-restart, and tool aggregation:
+
+```rust
+use adk_tool::mcp::manager::{McpServerManager, McpServerConfig};
+use std::collections::HashMap;
+use std::time::Duration;
+
+// Load from Kiro mcp.json format
+let manager = McpServerManager::from_json(r#"{
+    "mcpServers": {
+        "playwright": {
+            "command": "npx",
+            "args": ["--yes", "@playwright/mcp@latest"],
+            "autoApprove": ["browser_click"]
+        },
+        "filesystem": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+        }
+    }
+}"#)?
+    .with_health_check_interval(Duration::from_secs(30))
+    .with_grace_period(Duration::from_secs(5));
+
+// Start all non-disabled servers
+let results = manager.start_all().await;
+
+// Use as a Toolset — tools from all servers are aggregated
+// Name collisions are resolved with {server_id}__{tool_name} prefixes
+let agent = LlmAgentBuilder::new("agent")
+    .model(model)
+    .toolset(Arc::new(manager))
+    .build()?;
+
+// Dynamic management at runtime
+manager.add_server("github".into(), github_config).await?;
+manager.start_server("github").await?;
+manager.remove_server("github").await?;
+
+// Graceful shutdown
+manager.shutdown().await?;
+```
 
 ### MCP Tools (Local Server via stdio)
 
