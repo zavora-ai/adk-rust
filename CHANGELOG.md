@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Agent Interruption API (`adk-runner`)
+
+- **adk-runner**: Added `Runner::interrupt(session_id)` for cancelling a running agent mid-execution. Preserves events already produced, stops future processing within 1 event cycle. Returns `true` if a running session was found.
+- **adk-runner**: Added `Runner::active_session_ids()` to list currently running sessions.
+- **adk-runner**: Per-session cancellation tokens — each `run()` call gets its own token, composable with the global `cancellation_token` from `RunnerConfig`.
+
 #### `ServerBuilder` API (`adk-server`)
 
 - **adk-server**: Added `ServerBuilder` for registering custom Axum controllers alongside built-in routes with shared middleware (auth, CORS, tracing, timeout, security headers). Methods: `add_api_routes()`, `add_root_routes()`, `with_a2a()`, `build()`.

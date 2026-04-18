@@ -70,6 +70,9 @@ pub struct Runner {
     request_context: Option<adk_core::RequestContext>,
     cancellation_token: Option<CancellationToken>,
     intra_compactor: Option<Arc<crate::intra_compaction::IntraInvocationCompactor>>,
+    /// Per-session cancellation tokens for the interrupt API.
+    /// Each `run()` call registers a token here; `interrupt()` cancels it.
+    active_sessions: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
 }
 
 impl Runner {
@@ -134,6 +137,7 @@ impl Runner {
             request_context: config.request_context,
             cancellation_token: config.cancellation_token,
             intra_compactor,
+            active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         })
     }
 
@@ -194,7 +198,59 @@ impl Runner {
         let cancellation_token = self.cancellation_token.clone();
         let intra_compactor = self.intra_compactor.clone();
 
+        // Register a per-session cancellation token for the interrupt API.
+        // If a global token is configured, create a child token so that
+        // either global cancellation OR per-session interrupt stops this run.
+        let session_token = CancellationToken::new();
+        let session_id_str = session_id.as_str().to_string();
+        {
+            let mut sessions = self.active_sessions.lock().unwrap();
+            sessions.insert(session_id_str.clone(), session_token.clone());
+        }
+        let active_sessions = self.active_sessions.clone();
+
+        // Effective token: cancelled if either the global token or the session token fires
+        let effective_token = if let Some(ref global) = cancellation_token {
+            let combined = CancellationToken::new();
+            let combined_clone = combined.clone();
+            let global_clone = global.clone();
+            let session_clone = session_token.clone();
+            // Watch both tokens — cancel the combined token when either fires
+            let combined_for_global = combined_clone.clone();
+            tokio::spawn(async move {
+                global_clone.cancelled().await;
+                combined_for_global.cancel();
+            });
+            let combined_for_session = combined_clone;
+            tokio::spawn(async move {
+                session_clone.cancelled().await;
+                combined_for_session.cancel();
+            });
+            Some(combined)
+        } else {
+            Some(session_token.clone())
+        };
+
         let s = stream! {
+            // Clean up session tracking when the stream ends.
+            // We use a simple struct with Drop to ensure cleanup even on early return.
+            struct SessionCleanup {
+                active_sessions: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
+                session_id: String,
+            }
+            impl Drop for SessionCleanup {
+                fn drop(&mut self) {
+                    let mut sessions = self.active_sessions.lock().unwrap();
+                    sessions.remove(&self.session_id);
+                }
+            }
+            let _cleanup = SessionCleanup {
+                active_sessions: active_sessions.clone(),
+                session_id: session_id_str,
+            };
+
+            // Use the effective token (combines global + per-session)
+            let cancellation_token = effective_token;
             // Get or create session
             let session = match session_service
                 .get(adk_session::GetRequest {
@@ -840,6 +896,48 @@ impl Runner {
         let user_id = UserId::try_from(user_id)?;
         let session_id = SessionId::try_from(session_id)?;
         self.run(user_id, session_id, user_content).await
+    }
+
+    /// Interrupt a running agent for the given session.
+    ///
+    /// Cancels the agent's current execution within the event loop. Events
+    /// already produced and appended to the session are preserved — only
+    /// future events are stopped. The caller can then issue a new `run()`
+    /// call with a different instruction to redirect the agent.
+    ///
+    /// Returns `true` if a running session was found and interrupted,
+    /// `false` if no active run exists for that session ID.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Start a run in the background
+    /// let mut stream = runner.run(user_id, session_id, content).await?;
+    /// tokio::spawn(async move { while stream.next().await.is_some() {} });
+    ///
+    /// // Later, interrupt it
+    /// let was_running = runner.interrupt("session-1");
+    /// assert!(was_running);
+    ///
+    /// // Redirect with a new instruction
+    /// let mut stream = runner.run(user_id, session_id, new_content).await?;
+    /// ```
+    pub fn interrupt(&self, session_id: &str) -> bool {
+        let sessions = self.active_sessions.lock().unwrap();
+        if let Some(token) = sessions.get(session_id) {
+            tracing::info!(session.id = session_id, "interrupting running agent");
+            token.cancel();
+            true
+        } else {
+            tracing::debug!(session.id = session_id, "no active run to interrupt");
+            false
+        }
+    }
+
+    /// Returns the session IDs of all currently running agent executions.
+    pub fn active_session_ids(&self) -> Vec<String> {
+        let sessions = self.active_sessions.lock().unwrap();
+        sessions.keys().cloned().collect()
     }
 
     /// Find which agent should handle the request based on session history
