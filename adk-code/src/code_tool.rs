@@ -124,6 +124,18 @@ fn code_error_to_json(err: &CodeError) -> Value {
                     "status": "error",
                     "stderr": msg,
                 }),
+                SandboxError::EnforcerFailed { enforcer, message } => json!({
+                    "status": "error",
+                    "stderr": format!("sandbox enforcer '{enforcer}' failed: {message}"),
+                }),
+                SandboxError::EnforcerUnavailable { enforcer, message } => json!({
+                    "status": "error",
+                    "stderr": format!("sandbox enforcer '{enforcer}' unavailable: {message}"),
+                }),
+                SandboxError::PolicyViolation(msg) => json!({
+                    "status": "error",
+                    "stderr": msg,
+                }),
             }
         }
         CodeError::InvalidCode(msg) => json!({

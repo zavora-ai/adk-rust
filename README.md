@@ -8,7 +8,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 [![GitHub Discussions](https://img.shields.io/github/discussions/zavora-ai/adk-rust?style=flat&logo=github&color=5865F2)](https://github.com/zavora-ai/adk-rust/discussions)
 
-> **🚀 v0.7.0 Released!** OS-level sandbox profiles (Seatbelt/bubblewrap/AppContainer), ServerBuilder API for custom controllers, graceful shutdown endpoint, Gemini 3.1 Flash-Lite support, 11 new v0.7.0 feature examples. See [CHANGELOG](CHANGELOG.md) for full details.
+> **🚀 v0.7.0 Released!** Project-scoped memory isolation (6 backends), OS-level sandbox profiles (Seatbelt/bubblewrap/AppContainer), ServerBuilder API for custom controllers, graceful shutdown endpoint, Gemini 3.1 Flash-Lite support, 11 new v0.7.0 feature examples. See [CHANGELOG](CHANGELOG.md) for full details.
 >
 > **Contributors:** Many thanks to [@mikefaille](https://github.com/mikefaille) — AdkIdentity design, realtime audio, LiveKit bridge, skill system. [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI-compatible providers, xAI, multimodal content. [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [@tomtom215](https://github.com/tomtom215) — A2A Protocol v1.0.0 types crate ([a2a-protocol-types](https://crates.io/crates/a2a-protocol-types)), Foundation-verified wire types powering our A2A v1 layer. [@danielsan](https://github.com/danielsan) — Google deps issue & PR (#181, #203), RAG crash report (#205). [@CodingFlow](https://github.com/CodingFlow) — Gemini 3 thinking level, global endpoint, citationSources (#177, #178, #179). [@ctylx](https://github.com/ctylx) — skill discovery fix (#204). [@poborin](https://github.com/poborin) — project config proposal (#176). [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 >
@@ -65,7 +65,7 @@ ADK-Rust provides a comprehensive framework for building AI agents in Rust, feat
 - **RAG pipeline**: Document chunking, vector embeddings, semantic search with 6 vector store backends
 - **Security**: Role-based access control, declarative scope-based tool security, SSO/OAuth, audit logging
 - **Agentic commerce**: ACP and AP2 payment orchestration with durable transaction journals and evidence-backed recall
-- **Production features**: Session management, artifact storage, memory systems, REST/A2A APIs
+- **Production features**: Session management, artifact storage, memory systems with project-scoped isolation, REST/A2A APIs
 - **Developer experience**: Interactive CLI, 120+ working examples, comprehensive documentation
 
 **Status**: Production-ready, actively maintained
@@ -158,7 +158,7 @@ Built-in tools:
 ### Production Features
 
 - **Session Management**: In-memory and SQLite-backed sessions with state persistence, encrypted sessions with AES-256-GCM and key rotation
-- **Memory System**: Long-term memory with semantic search and vector embeddings
+- **Memory System**: Long-term memory with semantic search, vector embeddings, and project-scoped isolation
 - **Servers**: REST API with SSE streaming, A2A v1.0.0 protocol for agent-to-agent communication
 - **Guardrails**: PII redaction, content filtering, JSON schema validation
 - **Tool Authorization**: Human-in-the-loop confirmation, before-tool callbacks, RBAC, graph interrupts
@@ -179,7 +179,7 @@ Built-in tools:
 | `adk-tool` | Tool system and extensibility | `FunctionTool`, Google Search, MCP protocol with elicitation, schema validation |
 | `adk-session` | Session and state management | SQLite/in-memory backends, conversation history, state persistence |
 | `adk-artifact` | Artifact storage system | File-based storage, MIME type handling, image/PDF/video support |
-| `adk-memory` | Long-term memory | Vector embeddings, semantic search, Qdrant integration |
+| `adk-memory` | Long-term memory | Vector embeddings, semantic search, project-scoped isolation, 6 backends |
 | `adk-payments` | Agentic commerce orchestration | ACP/AP2 adapters, canonical transaction kernel, durable journals, evidence-backed payment flows |
 | `adk-rag` | RAG pipeline | Document chunking, embeddings, vector search, reranking, 6 backends |
 | `adk-runner` | Agent execution runtime | Context management, event streaming, session lifecycle, callbacks |
@@ -814,20 +814,20 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 # Standard (default) — agents, models, tools, sessions, runner, server, CLI, guardrails, auth
-adk-rust = "0.6.0"
+adk-rust = "0.7.0"
 
 # Full — adds graph, browser, eval, realtime, audio, RAG, code, sandbox
-adk-rust = { version = "0.6.0", features = ["full"] }
+adk-rust = { version = "0.7.0", features = ["full"] }
 
 # Minimal — just agents + Gemini + runner (fastest build)
-adk-rust = { version = "0.6.0", default-features = false, features = ["minimal"] }
+adk-rust = { version = "0.7.0", default-features = false, features = ["minimal"] }
 
 # Or individual crates for finer control
-adk-core = "0.6.0"
-adk-agent = "0.6.0"
-adk-model = { version = "0.6.0", features = ["openai", "anthropic"] }
-adk-tool = "0.6.0"
-adk-runner = "0.6.0"
+adk-core = "0.7.0"
+adk-agent = "0.7.0"
+adk-model = { version = "0.7.0", features = ["openai", "anthropic"] }
+adk-tool = "0.7.0"
+adk-runner = "0.7.0"
 ```
 
 ## Examples
@@ -919,6 +919,7 @@ See [examples/](examples/) directory for complete, runnable examples:
 **Production Features**
 - `load_artifacts/` - Working with images and PDFs
 - `mcp/` - Model Context Protocol integration
+- `project_scoped_memory/` - Project-scoped memory isolation, search, deletion, adapter, GDPR
 - `server/` - REST API deployment
 - `a2a/` - Agent-to-Agent v1.0.0 communication (research + writing pipeline with full client)
 - `web/` - Web UI with streaming
@@ -998,7 +999,18 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 
 ## Roadmap
 
-**v0.6.0** (current) — A2A v1.0.0 compliance, ParallelAgent SharedState, tool authorization:
+**v0.7.0** (current) — OS sandbox profiles, ServerBuilder, project-scoped memory, Gemini 3.1 Flash-Lite:
+- **Project-Scoped Memory** — Optional `project_id` dimension for memory isolation across all 6 backends (InMemory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j). Global entries visible everywhere, project entries isolated. `MemoryServiceAdapter::with_project_id()`, `Memory::search_in_project()`, `Memory::add_to_project()`, GDPR-compliant `delete_user` across all projects.
+- **OS Sandbox Profiles** — Platform-native sandbox enforcement (Seatbelt on macOS, bubblewrap on Linux, AppContainer on Windows).
+- **ServerBuilder API** — Custom Axum controllers alongside built-in routes with shared middleware. Graceful shutdown endpoint.
+- **MCP Server Lifecycle** — `McpServerManager` for spawning, monitoring, and auto-restarting MCP server processes.
+- **Agent Interruption** — `Runner::interrupt(session_id)` for mid-execution cancellation.
+- **Breaking** — `SearchRequest` now has `project_id` field (add `project_id: None` to struct literals). `delete_entries` on InMemory now scopes to global entries only.
+
+<details>
+<summary>v0.6.0 and earlier</summary>
+
+**v0.6.0**: A2A v1.0.0 compliance, ParallelAgent SharedState, tool authorization:
 - **A2A v1.0.0 Protocol Compliance** — 9 fixes: timestamps, capabilities, idempotency, push auth, multi-turn, validation, Content-Type, streaming first-event, context lookup. All 11 JSON-RPC operations. Wire types by [@tomtom215](https://github.com/tomtom215).
 - **ParallelAgent SharedState** — `set_shared`/`get_shared`/`wait_for_key` coordination primitives for cross-agent state sharing. Enables parallel sub-agents to work on the same artifact.
 - **Tool Authorization** — Documentation for `ToolConfirmationPolicy` (HITL), `BeforeToolCallback`, RBAC, graph interrupts with CLI and web server examples.
@@ -1016,6 +1028,8 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 **v0.3.0**: adk-gemini Vertex AI overhaul, context compaction, production hardening, ADK Studio debug mode, action nodes code generation, SSO/OAuth, plugin system.
 
 **v0.2.0**: Core framework, multi-provider LLM, tool system with MCP, sessions, artifacts, memory, REST/A2A servers, CLI, realtime voice, graph workflows, browser automation, evaluation, guardrails.
+</details>
+
 </details>
 
 **Planned** (see [docs/roadmap/](docs/roadmap/)):

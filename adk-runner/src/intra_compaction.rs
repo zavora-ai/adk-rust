@@ -45,15 +45,8 @@ pub struct IntraInvocationCompactor {
 
 impl IntraInvocationCompactor {
     /// Create a new compactor with the given config and summarizer.
-    pub fn new(
-        config: IntraCompactionConfig,
-        summarizer: Arc<dyn BaseEventsSummarizer>,
-    ) -> Self {
-        Self {
-            config,
-            summarizer,
-            compacted_this_cycle: AtomicBool::new(false),
-        }
+    pub fn new(config: IntraCompactionConfig, summarizer: Arc<dyn BaseEventsSummarizer>) -> Self {
+        Self { config, summarizer, compacted_this_cycle: AtomicBool::new(false) }
     }
 
     /// Check if compaction is needed and perform it if so.

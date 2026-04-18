@@ -80,11 +80,7 @@ impl Tool for PrefixedTool {
         self.inner.enhanced_description()
     }
 
-    async fn execute(
-        &self,
-        ctx: Arc<dyn adk_core::ToolContext>,
-        args: Value,
-    ) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn adk_core::ToolContext>, args: Value) -> Result<Value> {
         self.inner.execute(ctx, args).await
     }
 }
@@ -94,9 +90,7 @@ impl Tool for PrefixedTool {
 /// For tool names that appear in two or more servers, the tool is wrapped in a
 /// [`PrefixedTool`] with the format `{server_id}__{tool_name}`. Tools with
 /// unique names across all servers retain their original names.
-fn resolve_tool_names(
-    server_tools: &ServerToolMap,
-) -> Vec<Arc<dyn Tool>> {
+fn resolve_tool_names(server_tools: &ServerToolMap) -> Vec<Arc<dyn Tool>> {
     // Step 1: Count occurrences of each tool name across all servers
     let mut name_counts: HashMap<&str, Vec<&str>> = HashMap::new();
     for (server_id, tools) in server_tools {
@@ -133,7 +127,7 @@ impl Toolset for McpServerManager {
         let servers = self.servers.read().await;
 
         // Collect tools from each Running server
-        let mut server_tools: HashMap<String, Vec<(String, Arc<dyn Tool>)>> = HashMap::new();
+        let mut server_tools: ServerToolMap = HashMap::new();
 
         for (server_id, entry) in servers.iter() {
             if entry.status != ServerStatus::Running {
@@ -186,33 +180,22 @@ mod tests {
             &self.description
         }
 
-        async fn execute(
-            &self,
-            _ctx: Arc<dyn ToolContext>,
-            _args: Value,
-        ) -> Result<Value> {
+        async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
             Ok(Value::String("ok".to_string()))
         }
     }
 
     fn make_tool(name: &str) -> Arc<dyn Tool> {
-        Arc::new(FakeTool {
-            name: name.to_string(),
-            description: format!("Tool {name}"),
-        })
+        Arc::new(FakeTool { name: name.to_string(), description: format!("Tool {name}") })
     }
 
     #[test]
     fn test_resolve_no_collisions() {
-        let mut server_tools: HashMap<String, Vec<(String, Arc<dyn Tool>)>> = HashMap::new();
-        server_tools.insert(
-            "server_a".to_string(),
-            vec![("tool_x".to_string(), make_tool("tool_x"))],
-        );
-        server_tools.insert(
-            "server_b".to_string(),
-            vec![("tool_y".to_string(), make_tool("tool_y"))],
-        );
+        let mut server_tools: ServerToolMap = HashMap::new();
+        server_tools
+            .insert("server_a".to_string(), vec![("tool_x".to_string(), make_tool("tool_x"))]);
+        server_tools
+            .insert("server_b".to_string(), vec![("tool_y".to_string(), make_tool("tool_y"))]);
 
         let result = resolve_tool_names(&server_tools);
         assert_eq!(result.len(), 2);
@@ -224,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_resolve_with_collisions() {
-        let mut server_tools: HashMap<String, Vec<(String, Arc<dyn Tool>)>> = HashMap::new();
+        let mut server_tools: ServerToolMap = HashMap::new();
         server_tools.insert(
             "server_a".to_string(),
             vec![("read_file".to_string(), make_tool("read_file"))],
@@ -244,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_resolve_mixed_collision_and_unique() {
-        let mut server_tools: HashMap<String, Vec<(String, Arc<dyn Tool>)>> = HashMap::new();
+        let mut server_tools: ServerToolMap = HashMap::new();
         server_tools.insert(
             "server_a".to_string(),
             vec![
@@ -267,18 +250,13 @@ mod tests {
         names.sort();
         assert_eq!(
             names,
-            vec![
-                "server_a__read_file",
-                "server_b__read_file",
-                "unique_a",
-                "unique_b",
-            ]
+            vec!["server_a__read_file", "server_b__read_file", "unique_a", "unique_b",]
         );
     }
 
     #[test]
     fn test_resolve_empty_servers() {
-        let server_tools: HashMap<String, Vec<(String, Arc<dyn Tool>)>> = HashMap::new();
+        let server_tools: ServerToolMap = HashMap::new();
         let result = resolve_tool_names(&server_tools);
         assert!(result.is_empty());
     }
@@ -286,10 +264,8 @@ mod tests {
     #[test]
     fn test_prefixed_tool_delegates_description() {
         let inner = make_tool("original");
-        let prefixed = PrefixedTool {
-            inner: inner.clone(),
-            prefixed_name: "server__original".to_string(),
-        };
+        let prefixed =
+            PrefixedTool { inner: inner.clone(), prefixed_name: "server__original".to_string() };
 
         assert_eq!(prefixed.name(), "server__original");
         assert_eq!(prefixed.description(), inner.description());
@@ -302,10 +278,7 @@ mod tests {
     #[test]
     fn test_prefixed_tool_declaration_overrides_name() {
         let inner = make_tool("original");
-        let prefixed = PrefixedTool {
-            inner,
-            prefixed_name: "server__original".to_string(),
-        };
+        let prefixed = PrefixedTool { inner, prefixed_name: "server__original".to_string() };
 
         let decl = prefixed.declaration();
         assert_eq!(decl["name"], "server__original");
@@ -313,19 +286,10 @@ mod tests {
 
     #[test]
     fn test_resolve_three_way_collision() {
-        let mut server_tools: HashMap<String, Vec<(String, Arc<dyn Tool>)>> = HashMap::new();
-        server_tools.insert(
-            "a".to_string(),
-            vec![("shared".to_string(), make_tool("shared"))],
-        );
-        server_tools.insert(
-            "b".to_string(),
-            vec![("shared".to_string(), make_tool("shared"))],
-        );
-        server_tools.insert(
-            "c".to_string(),
-            vec![("shared".to_string(), make_tool("shared"))],
-        );
+        let mut server_tools: ServerToolMap = HashMap::new();
+        server_tools.insert("a".to_string(), vec![("shared".to_string(), make_tool("shared"))]);
+        server_tools.insert("b".to_string(), vec![("shared".to_string(), make_tool("shared"))]);
+        server_tools.insert("c".to_string(), vec![("shared".to_string(), make_tool("shared"))]);
 
         let result = resolve_tool_names(&server_tools);
         assert_eq!(result.len(), 3);

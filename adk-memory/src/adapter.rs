@@ -31,6 +31,7 @@ pub struct MemoryServiceAdapter {
     inner: Arc<dyn MemoryService>,
     app_name: String,
     user_id: String,
+    project_id: Option<String>,
 }
 
 impl MemoryServiceAdapter {
@@ -40,7 +41,16 @@ impl MemoryServiceAdapter {
         app_name: impl Into<String>,
         user_id: impl Into<String>,
     ) -> Self {
-        Self { inner, app_name: app_name.into(), user_id: user_id.into() }
+        Self { inner, app_name: app_name.into(), user_id: user_id.into(), project_id: None }
+    }
+
+    /// Bind this adapter to a specific project scope.
+    ///
+    /// When set, `search` includes project entries, and `add`/`delete`
+    /// operate within the project scope.
+    pub fn with_project_id(mut self, project_id: impl Into<String>) -> Self {
+        self.project_id = Some(project_id.into());
+        self
     }
 }
 
@@ -55,6 +65,7 @@ impl adk_core::Memory for MemoryServiceAdapter {
                 user_id: self.user_id.clone(),
                 limit: None,
                 min_score: None,
+                project_id: self.project_id.clone(),
             })
             .await?;
 
@@ -72,16 +83,62 @@ impl adk_core::Memory for MemoryServiceAdapter {
             author: entry.author,
             timestamp: Utc::now(),
         };
-        inner.add_entry(&self.app_name, &self.user_id, mem_entry).await
+        if let Some(ref pid) = self.project_id {
+            inner.add_entry_to_project(&self.app_name, &self.user_id, pid, mem_entry).await
+        } else {
+            inner.add_entry(&self.app_name, &self.user_id, mem_entry).await
+        }
     }
 
     async fn delete(&self, query: &str) -> adk_core::Result<u64> {
         let inner = self.inner.clone();
-        inner.delete_entries(&self.app_name, &self.user_id, query).await
+        if let Some(ref pid) = self.project_id {
+            inner.delete_entries_in_project(&self.app_name, &self.user_id, pid, query).await
+        } else {
+            inner.delete_entries(&self.app_name, &self.user_id, query).await
+        }
     }
 
     async fn health_check(&self) -> adk_core::Result<()> {
         let inner = self.inner.clone();
         inner.health_check().await
+    }
+
+    async fn search_in_project(
+        &self,
+        query: &str,
+        project_id: &str,
+    ) -> adk_core::Result<Vec<adk_core::MemoryEntry>> {
+        let inner = self.inner.clone();
+        let resp = inner
+            .search(SearchRequest {
+                query: query.to_string(),
+                app_name: self.app_name.clone(),
+                user_id: self.user_id.clone(),
+                limit: None,
+                min_score: None,
+                project_id: Some(project_id.to_string()),
+            })
+            .await?;
+
+        Ok(resp
+            .memories
+            .into_iter()
+            .map(|m| adk_core::MemoryEntry { content: m.content, author: m.author })
+            .collect())
+    }
+
+    async fn add_to_project(
+        &self,
+        entry: adk_core::MemoryEntry,
+        project_id: &str,
+    ) -> adk_core::Result<()> {
+        let inner = self.inner.clone();
+        let mem_entry = crate::MemoryEntry {
+            content: entry.content,
+            author: entry.author,
+            timestamp: Utc::now(),
+        };
+        inner.add_entry_to_project(&self.app_name, &self.user_id, project_id, mem_entry).await
     }
 }

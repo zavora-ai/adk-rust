@@ -18,20 +18,21 @@ Semantic memory and search for Rust Agent Development Kit (ADK-Rust) agents.
 - **RedisMemoryService** - Redis-backed persistence (`redis-memory` feature)
 - **MemoryService** - Trait for custom storage backends
 - **Semantic Search** - Query memories by content similarity
+- **Project-Scoped Isolation** - Isolate memories by project within a user
 - **Schema Migrations** - Versioned, forward-only migrations for all database backends
 
 ## Installation
 
 ```toml
 [dependencies]
-adk-memory = "0.6.0"
+adk-memory = "0.7.0"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.6.0", features = ["memory"] }
+adk-rust = { version = "0.7.0", features = ["memory"] }
 ```
 
 ## Quick Start
@@ -57,11 +58,115 @@ let response = service.search(SearchRequest {
     query: "what theme does the user like?".to_string(),
     user_id: "user_123".to_string(),
     app_name: "my_app".to_string(),
+    limit: None,
+    min_score: None,
+    project_id: None, // None = global entries only
 }).await?;
 
 for memory in response.memories {
     println!("Found: {:?}", memory.content);
 }
+```
+
+## Project-Scoped Memory
+
+Memories can be scoped to a project within a user. The isolation key is `(app_name, user_id, project_id?)`:
+
+- **Global entries** (`project_id = None`): visible in all project contexts and in global-only searches.
+- **Project entries** (`project_id = Some(id)`): visible only when searching within that specific project.
+- **Project search** (`project_id = Some(id)`): returns global entries + entries for that project.
+- **Global search** (`project_id = None`): returns only global entries.
+
+### Writing project-scoped entries
+
+```rust
+use adk_memory::{InMemoryMemoryService, MemoryService, MemoryEntry};
+use adk_core::Content;
+use chrono::Utc;
+
+let service = InMemoryMemoryService::new();
+
+// Global entry (no project scope)
+service.add_session("app", "user", "sess-1", vec![entry]).await?;
+
+// Project-scoped entry
+service.add_session_to_project("app", "user", "sess-2", "my-project", vec![entry]).await?;
+
+// Single entry to a project
+service.add_entry_to_project("app", "user", "my-project", entry).await?;
+```
+
+### Searching with project scope
+
+```rust
+use adk_memory::SearchRequest;
+
+// Global-only search — returns only global entries
+let global = service.search(SearchRequest {
+    query: "topic".into(),
+    user_id: "user".into(),
+    app_name: "app".into(),
+    limit: None,
+    min_score: None,
+    project_id: None,
+}).await?;
+
+// Project search — returns global + project entries
+let project = service.search(SearchRequest {
+    query: "topic".into(),
+    user_id: "user".into(),
+    app_name: "app".into(),
+    limit: None,
+    min_score: None,
+    project_id: Some("my-project".into()),
+}).await?;
+```
+
+### Project-scoped deletion
+
+```rust
+// Delete entries matching a query within a project only
+service.delete_entries_in_project("app", "user", "my-project", "query").await?;
+
+// Delete ALL entries for a project
+service.delete_project("app", "user", "my-project").await?;
+
+// Global delete — only removes global entries
+service.delete_entries("app", "user", "query").await?;
+
+// GDPR delete_user — removes everything (global + all projects)
+service.delete_user("app", "user").await?;
+```
+
+### MemoryServiceAdapter with project scope
+
+```rust
+use adk_memory::{InMemoryMemoryService, MemoryServiceAdapter};
+use adk_core::Memory;
+use std::sync::Arc;
+
+let service = Arc::new(InMemoryMemoryService::new());
+
+// Adapter without project — operates on global entries
+let global_adapter = MemoryServiceAdapter::new(service.clone(), "app", "user");
+
+// Adapter with project — all operations scoped to the project
+let project_adapter = MemoryServiceAdapter::new(service.clone(), "app", "user")
+    .with_project_id("my-project");
+
+// Core Memory trait methods for ad-hoc project access
+global_adapter.search_in_project("query", "other-project").await?;
+global_adapter.add_to_project(entry, "other-project").await?;
+```
+
+### Project ID validation
+
+```rust
+use adk_memory::validate_project_id;
+
+validate_project_id("my-project")?;  // Ok
+validate_project_id("")?;            // Err: must not be empty
+validate_project_id(&"x".repeat(257))?; // Err: exceeds 256 chars
 ```
 
 ## Feature Flags
@@ -76,22 +181,27 @@ for memory in response.memories {
 
 ```toml
 # SQLite
-adk-memory = { version = "0.6.0", features = ["sqlite-memory"] }
+adk-memory = { version = "0.7.0", features = ["sqlite-memory"] }
 
 # PostgreSQL + pgvector
-adk-memory = { version = "0.6.0", features = ["database-memory"] }
+adk-memory = { version = "0.7.0", features = ["database-memory"] }
 ```
 
 ## Schema Migrations
 
-All database backends (SQLite, PostgreSQL, MongoDB, Neo4j) include a versioned migration system. Migrations are forward-only, idempotent, and tracked in a `_schema_migrations` registry table.
+All database backends (SQLite, PostgreSQL, MongoDB, Neo4j) include a versioned migration system. Migrations are forward-only, idempotent, and tracked in a registry table.
+
+| Version | Description |
+|---------|-------------|
+| v1 | Initial schema (tables, indexes, FTS) |
+| v2 | Add `project_id` column/index for project-scoped memory |
 
 ```rust
 use adk_memory::SqliteMemoryService;
 
 let service = SqliteMemoryService::new("sqlite:memory.db").await?;
 
-// Run all pending migrations
+// Run all pending migrations (v1 + v2)
 service.migrate().await?;
 
 // Check current schema version
@@ -104,15 +214,22 @@ println!("Schema version: {version}");
 ```rust
 #[async_trait]
 pub trait MemoryService: Send + Sync {
-    async fn add_session(
-        &self,
-        app_name: &str,
-        user_id: &str,
-        session_id: &str,
-        entries: Vec<MemoryEntry>,
-    ) -> Result<()>;
-    
+    // Core methods
+    async fn add_session(&self, app_name: &str, user_id: &str, session_id: &str, entries: Vec<MemoryEntry>) -> Result<()>;
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse>;
+
+    // Project-scoped methods (defaults delegate to non-project versions)
+    async fn add_session_to_project(&self, app_name: &str, user_id: &str, session_id: &str, project_id: &str, entries: Vec<MemoryEntry>) -> Result<()>;
+    async fn add_entry_to_project(&self, app_name: &str, user_id: &str, project_id: &str, entry: MemoryEntry) -> Result<()>;
+    async fn delete_entries_in_project(&self, app_name: &str, user_id: &str, project_id: &str, query: &str) -> Result<u64>;
+    async fn delete_project(&self, app_name: &str, user_id: &str, project_id: &str) -> Result<u64>;
+
+    // Lifecycle methods
+    async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<()>;
+    async fn delete_session(&self, app_name: &str, user_id: &str, session_id: &str) -> Result<()>;
+    async fn add_entry(&self, app_name: &str, user_id: &str, entry: MemoryEntry) -> Result<()>;
+    async fn delete_entries(&self, app_name: &str, user_id: &str, query: &str) -> Result<u64>;
+    async fn health_check(&self) -> Result<()>;
 }
 ```
 

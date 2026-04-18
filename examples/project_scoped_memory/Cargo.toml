@@ -1,0 +1,17 @@
+[package]
+name = "project-scoped-memory-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "project-scoped-memory"
+path = "src/main.rs"
+
+[dependencies]
+adk-core = { path = "../../adk-core" }
+adk-memory = { path = "../../adk-memory" }
+tokio = { version = "1", features = ["full"] }
+chrono = "0.4"

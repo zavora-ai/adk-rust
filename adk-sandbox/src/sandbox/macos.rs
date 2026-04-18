@@ -447,9 +447,7 @@ mod tests {
 
     #[test]
     fn test_generate_profile_domain_all_ports() {
-        let policy = SandboxPolicyBuilder::new()
-            .allow_domain("example.com", &[])
-            .build();
+        let policy = SandboxPolicyBuilder::new().allow_domain("example.com", &[]).build();
         let profile = MacOsEnforcer::generate_profile(&policy);
 
         assert!(profile.contains("(deny network*)"));

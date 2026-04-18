@@ -382,6 +382,7 @@ async fn validate_memory_service_add_delete(passed: &mut u32, failed: &mut u32) 
         user_id: "user1".to_string(),
         limit: None,
         min_score: None,
+        project_id: None,
     }).await {
         Ok(resp) => {
             if resp.memories.is_empty() {
@@ -416,6 +417,7 @@ async fn validate_memory_service_add_delete(passed: &mut u32, failed: &mut u32) 
         user_id: "user1".to_string(),
         limit: None,
         min_score: None,
+        project_id: None,
     }).await {
         Ok(resp) => {
             if resp.memories.is_empty() {
@@ -458,6 +460,7 @@ async fn validate_adapter_forwarding(passed: &mut u32, failed: &mut u32) {
         user_id: "user".to_string(),
         limit: None,
         min_score: None,
+        project_id: None,
     }).await.unwrap();
     if direct.memories.is_empty() {
         *failed += 1;

@@ -240,10 +240,9 @@ impl SandboxPolicyBuilder {
     ///     .build();
     /// ```
     pub fn allow_domain(mut self, domain: impl Into<String>, ports: &[u16]) -> Self {
-        self.policy.network_rules.push(NetworkRule {
-            domain: domain.into(),
-            ports: ports.to_vec(),
-        });
+        self.policy
+            .network_rules
+            .push(NetworkRule { domain: domain.into(), ports: ports.to_vec() });
         self
     }
 

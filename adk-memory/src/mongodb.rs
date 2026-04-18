@@ -69,7 +69,7 @@ impl MongoMemoryService {
     /// Each entry is `(version, description)`. The actual migration logic is
     /// dispatched by version number in [`run_mongo_memory_step`].
     const MONGO_MEMORY_MIGRATIONS: &'static [(i64, &'static str)] =
-        &[(1, "create initial indexes")];
+        &[(1, "create initial indexes"), (2, "add project_id compound index")];
 
     /// Run versioned migrations for MongoDB memory storage.
     ///
@@ -230,6 +230,7 @@ impl MongoMemoryService {
 async fn run_mongo_memory_step(db: &Database, version: i64) -> Result<()> {
     match version {
         1 => mongo_memory_v1(db).await,
+        2 => mongo_memory_v2(db).await,
         _ => Err(adk_core::AdkError::memory(format!("unknown migration version: {version}"))),
     }
 }
@@ -267,6 +268,32 @@ async fn mongo_memory_v1(db: &Database) -> Result<()> {
         )
         .await
         .map_err(|e| adk_core::AdkError::memory(format!("text index creation failed: {e}")))?;
+
+    Ok(())
+}
+
+/// V2: Add compound index on `(app_name, user_id, project_id)` for project-scoped queries.
+///
+/// Existing documents without a `project_id` field are treated as `null` by
+/// MongoDB query semantics, which is the correct behavior for global entries.
+async fn mongo_memory_v2(db: &Database) -> Result<()> {
+    let collection = db.collection::<Document>("memory_entries");
+
+    collection
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! { "app_name": 1, "user_id": 1, "project_id": 1 })
+                .options(
+                    IndexOptions::builder()
+                        .name("idx_memory_entries_app_user_project".to_string())
+                        .build(),
+                )
+                .build(),
+        )
+        .await
+        .map_err(|e| {
+            adk_core::AdkError::memory(format!("project_id compound index creation failed: {e}"))
+        })?;
 
     Ok(())
 }
@@ -320,6 +347,7 @@ impl MemoryService for MongoMemoryService {
                 "content_text": &texts[i],
                 "author": &entry.author,
                 "timestamp": timestamp,
+                "project_id": mongodb::bson::Bson::Null,
             };
 
             if let Some(ref embs) = embeddings {
@@ -339,6 +367,124 @@ impl MemoryService for MongoMemoryService {
         Ok(())
     }
 
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, session_id = %session_id, project_id = %project_id, entry_count = entries.len()))]
+    async fn add_session_to_project(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        project_id: &str,
+        entries: Vec<MemoryEntry>,
+    ) -> Result<()> {
+        validate_project_id(project_id)?;
+
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let collection = self.db.collection::<Document>("memory_entries");
+
+        // Collect texts for batch embedding
+        let texts: Vec<String> =
+            entries.iter().map(|e| crate::text::extract_text(&e.content)).collect();
+
+        let embeddings = if let Some(provider) = &self.embedding_provider {
+            let non_empty_texts: Vec<String> = texts
+                .iter()
+                .map(|t| if t.is_empty() { " ".to_string() } else { t.clone() })
+                .collect();
+            Some(provider.embed(&non_empty_texts).await.map_err(|e| {
+                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
+            })?)
+        } else {
+            None
+        };
+
+        let mut documents = Vec::with_capacity(entries.len());
+        for (i, entry) in entries.iter().enumerate() {
+            let content_json = serde_json::to_value(&entry.content)
+                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+            let content_bson = mongodb::bson::to_bson(&content_json)
+                .map_err(|e| adk_core::AdkError::memory(format!("bson conversion failed: {e}")))?;
+
+            let timestamp = BsonDateTime::from_millis(entry.timestamp.timestamp_millis());
+
+            let mut document = doc! {
+                "app_name": app_name,
+                "user_id": user_id,
+                "session_id": session_id,
+                "content": content_bson,
+                "content_text": &texts[i],
+                "author": &entry.author,
+                "timestamp": timestamp,
+                "project_id": project_id,
+            };
+
+            if let Some(ref embs) = embeddings {
+                let embedding_vec: Vec<mongodb::bson::Bson> =
+                    embs[i].iter().map(|&v| mongodb::bson::Bson::Double(v as f64)).collect();
+                document.insert("embedding", embedding_vec);
+            }
+
+            documents.push(document);
+        }
+
+        collection.insert_many(documents).await.map_err(|e| {
+            adk_core::AdkError::memory(format!("add_session_to_project failed: {e}"))
+        })?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
+    async fn add_entry_to_project(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        project_id: &str,
+        entry: MemoryEntry,
+    ) -> Result<()> {
+        validate_project_id(project_id)?;
+
+        let collection = self.db.collection::<Document>("memory_entries");
+
+        let content_text = crate::text::extract_text(&entry.content);
+        let content_json = serde_json::to_value(&entry.content)
+            .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+        let content_bson = mongodb::bson::to_bson(&content_json)
+            .map_err(|e| adk_core::AdkError::memory(format!("bson conversion failed: {e}")))?;
+
+        let timestamp = BsonDateTime::from_millis(entry.timestamp.timestamp_millis());
+
+        let mut document = doc! {
+            "app_name": app_name,
+            "user_id": user_id,
+            "content": content_bson,
+            "content_text": &content_text,
+            "author": &entry.author,
+            "timestamp": timestamp,
+            "project_id": project_id,
+        };
+
+        if let Some(ref provider) = self.embedding_provider {
+            let text_for_embed =
+                if content_text.is_empty() { " ".to_string() } else { content_text };
+            let embeddings = provider.embed(&[text_for_embed]).await.map_err(|e| {
+                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
+            })?;
+            let embedding_vec: Vec<mongodb::bson::Bson> =
+                embeddings[0].iter().map(|&v| mongodb::bson::Bson::Double(v as f64)).collect();
+            document.insert("embedding", embedding_vec);
+        }
+
+        collection
+            .insert_one(document)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("add_entry_to_project failed: {e}")))?;
+
+        Ok(())
+    }
+
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {
         let collection = self.db.collection::<Document>("memory_entries");
@@ -353,6 +499,25 @@ impl MemoryService for MongoMemoryService {
             let query_vec: Vec<mongodb::bson::Bson> =
                 query_embedding[0].iter().map(|&v| mongodb::bson::Bson::Double(v as f64)).collect();
 
+            let mut match_filter = doc! {
+                "app_name": &req.app_name,
+                "user_id": &req.user_id,
+            };
+            match &req.project_id {
+                None => {
+                    match_filter.insert("project_id", mongodb::bson::Bson::Null);
+                }
+                Some(id) => {
+                    match_filter.insert(
+                        "$or",
+                        vec![
+                            doc! { "project_id": mongodb::bson::Bson::Null },
+                            doc! { "project_id": id },
+                        ],
+                    );
+                }
+            }
+
             let pipeline = vec![
                 doc! {
                     "$vectorSearch": {
@@ -364,10 +529,7 @@ impl MemoryService for MongoMemoryService {
                     }
                 },
                 doc! {
-                    "$match": {
-                        "app_name": &req.app_name,
-                        "user_id": &req.user_id,
-                    }
+                    "$match": match_filter,
                 },
             ];
 
@@ -398,11 +560,25 @@ impl MemoryService for MongoMemoryService {
             results
         } else {
             // Text search fallback
-            let filter = doc! {
+            let mut filter = doc! {
                 "app_name": &req.app_name,
                 "user_id": &req.user_id,
                 "$text": { "$search": &req.query },
             };
+            match &req.project_id {
+                None => {
+                    filter.insert("project_id", mongodb::bson::Bson::Null);
+                }
+                Some(id) => {
+                    filter.insert(
+                        "$or",
+                        vec![
+                            doc! { "project_id": mongodb::bson::Bson::Null },
+                            doc! { "project_id": id.as_str() },
+                        ],
+                    );
+                }
+            }
 
             let mut cursor = collection
                 .find(filter)
@@ -449,6 +625,46 @@ impl MemoryService for MongoMemoryService {
                 .collect();
 
         Ok(SearchResponse { memories })
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
+    async fn delete_entries_in_project(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        project_id: &str,
+        query: &str,
+    ) -> Result<u64> {
+        validate_project_id(project_id)?;
+
+        let collection = self.db.collection::<Document>("memory_entries");
+        let filter = doc! {
+            "app_name": app_name,
+            "user_id": user_id,
+            "project_id": project_id,
+            "$text": { "$search": query },
+        };
+        let result = collection.delete_many(filter).await.map_err(|e| {
+            adk_core::AdkError::memory(format!("delete_entries_in_project failed: {e}"))
+        })?;
+        Ok(result.deleted_count)
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
+    async fn delete_project(&self, app_name: &str, user_id: &str, project_id: &str) -> Result<u64> {
+        validate_project_id(project_id)?;
+
+        let collection = self.db.collection::<Document>("memory_entries");
+        let filter = doc! {
+            "app_name": app_name,
+            "user_id": user_id,
+            "project_id": project_id,
+        };
+        let result = collection
+            .delete_many(filter)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("delete_project failed: {e}")))?;
+        Ok(result.deleted_count)
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]

@@ -108,10 +108,11 @@ impl SqliteMemoryService {
     /// Each entry is `(version, description, sql)`. Version 1 is the baseline
     /// that creates the initial schema matching the original `CREATE TABLE IF
     /// NOT EXISTS` / FTS5 / trigger statements.
-    const SQLITE_MEMORY_MIGRATIONS: &'static [(i64, &'static str, &'static str)] = &[(
-        1,
-        "create memory_entries table, FTS5 virtual table, and sync triggers",
-        "\
+    const SQLITE_MEMORY_MIGRATIONS: &'static [(i64, &'static str, &'static str)] = &[
+        (
+            1,
+            "create memory_entries table, FTS5 virtual table, and sync triggers",
+            "\
 CREATE TABLE IF NOT EXISTS memory_entries (\
     id INTEGER PRIMARY KEY AUTOINCREMENT, \
     app_name TEXT NOT NULL, \
@@ -132,7 +133,15 @@ END;\
 CREATE TRIGGER IF NOT EXISTS memory_entries_ad AFTER DELETE ON memory_entries BEGIN \
     INSERT INTO memory_entries_fts(memory_entries_fts, rowid, content_text) VALUES('delete', old.id, old.content_text); \
 END;",
-    )];
+        ),
+        (
+            2,
+            "add project_id column and index",
+            "\
+ALTER TABLE memory_entries ADD COLUMN project_id TEXT;\
+CREATE INDEX IF NOT EXISTS idx_memory_project_id ON memory_entries(project_id);",
+        ),
+    ];
 
     /// Create the `memory_entries` table and FTS5 virtual table.
     ///
@@ -207,8 +216,8 @@ END;",
 
             sqlx::query(
                 "INSERT INTO memory_entries \
-                 (app_name, user_id, session_id, content, content_text, author, timestamp) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (app_name, user_id, session_id, content, content_text, author, timestamp, project_id) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
             )
             .bind(app_name)
             .bind(user_id)
@@ -251,8 +260,8 @@ impl MemoryService for SqliteMemoryService {
 
             sqlx::query(
                 "INSERT INTO memory_entries \
-                 (app_name, user_id, session_id, content, content_text, author, timestamp) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (app_name, user_id, session_id, content, content_text, author, timestamp, project_id) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
             )
             .bind(app_name)
             .bind(user_id)
@@ -274,24 +283,48 @@ impl MemoryService for SqliteMemoryService {
         let pool = self.pool.clone();
         let limit = req.limit.unwrap_or(10) as i64;
 
-        let rows = sqlx::query(
-            r#"
-            SELECT m.content, m.author, m.timestamp, f.rank
-            FROM memory_entries_fts f
-            JOIN memory_entries m ON m.id = f.rowid
-            WHERE memory_entries_fts MATCH ?
-              AND m.app_name = ? AND m.user_id = ?
-            ORDER BY f.rank
-            LIMIT ?
-            "#,
-        )
-        .bind(&req.query)
-        .bind(&req.app_name)
-        .bind(&req.user_id)
-        .bind(limit)
-        .fetch_all(&pool)
-        .await
-        .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?;
+        let rows = if let Some(ref project_id) = req.project_id {
+            sqlx::query(
+                r#"
+                SELECT m.content, m.author, m.timestamp, f.rank
+                FROM memory_entries_fts f
+                JOIN memory_entries m ON m.id = f.rowid
+                WHERE memory_entries_fts MATCH ?
+                  AND m.app_name = ? AND m.user_id = ?
+                  AND (m.project_id IS NULL OR m.project_id = ?)
+                ORDER BY f.rank
+                LIMIT ?
+                "#,
+            )
+            .bind(&req.query)
+            .bind(&req.app_name)
+            .bind(&req.user_id)
+            .bind(project_id)
+            .bind(limit)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT m.content, m.author, m.timestamp, f.rank
+                FROM memory_entries_fts f
+                JOIN memory_entries m ON m.id = f.rowid
+                WHERE memory_entries_fts MATCH ?
+                  AND m.app_name = ? AND m.user_id = ?
+                  AND m.project_id IS NULL
+                ORDER BY f.rank
+                LIMIT ?
+                "#,
+            )
+            .bind(&req.query)
+            .bind(&req.app_name)
+            .bind(&req.user_id)
+            .bind(limit)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?
+        };
 
         let memories = rows
             .iter()
@@ -351,8 +384,8 @@ impl MemoryService for SqliteMemoryService {
 
         sqlx::query(
             "INSERT INTO memory_entries \
-             (app_name, user_id, session_id, content, content_text, author, timestamp) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             (app_name, user_id, session_id, content, content_text, author, timestamp, project_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
         )
         .bind(app_name)
         .bind(user_id)
@@ -376,7 +409,8 @@ impl MemoryService for SqliteMemoryService {
                 SELECT m.id FROM memory_entries_fts f \
                 JOIN memory_entries m ON m.id = f.rowid \
                 WHERE memory_entries_fts MATCH ? \
-                AND m.app_name = ? AND m.user_id = ?\
+                AND m.app_name = ? AND m.user_id = ? \
+                AND m.project_id IS NULL\
             )",
         )
         .bind(query)
@@ -397,5 +431,127 @@ impl MemoryService for SqliteMemoryService {
             .await
             .map_err(|e| adk_core::AdkError::memory(format!("health check failed: {e}")))?;
         Ok(())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, session_id = %session_id, project_id = %project_id, entry_count = entries.len()))]
+    async fn add_session_to_project(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        project_id: &str,
+        entries: Vec<MemoryEntry>,
+    ) -> Result<()> {
+        validate_project_id(project_id)?;
+        let pool = self.pool.clone();
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        for entry in &entries {
+            let content_json = serde_json::to_string(&entry.content)
+                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+            let content_text = crate::text::extract_text(&entry.content);
+            let timestamp_str = entry.timestamp.to_rfc3339();
+
+            sqlx::query(
+                "INSERT INTO memory_entries \
+                 (app_name, user_id, session_id, content, content_text, author, timestamp, project_id) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(app_name)
+            .bind(user_id)
+            .bind(session_id)
+            .bind(&content_json)
+            .bind(&content_text)
+            .bind(&entry.author)
+            .bind(&timestamp_str)
+            .bind(project_id)
+            .execute(&pool)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
+    async fn add_entry_to_project(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        project_id: &str,
+        entry: MemoryEntry,
+    ) -> Result<()> {
+        validate_project_id(project_id)?;
+        let pool = self.pool.clone();
+        let content_json = serde_json::to_string(&entry.content)
+            .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+        let content_text = crate::text::extract_text(&entry.content);
+        let timestamp_str = entry.timestamp.to_rfc3339();
+
+        sqlx::query(
+            "INSERT INTO memory_entries \
+             (app_name, user_id, session_id, content, content_text, author, timestamp, project_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(app_name)
+        .bind(user_id)
+        .bind("__direct__")
+        .bind(&content_json)
+        .bind(&content_text)
+        .bind(&entry.author)
+        .bind(&timestamp_str)
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
+    async fn delete_entries_in_project(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        project_id: &str,
+        query: &str,
+    ) -> Result<u64> {
+        let pool = self.pool.clone();
+        let result = sqlx::query(
+            "DELETE FROM memory_entries WHERE id IN (\
+                SELECT m.id FROM memory_entries_fts f \
+                JOIN memory_entries m ON m.id = f.rowid \
+                WHERE memory_entries_fts MATCH ? \
+                AND m.app_name = ? AND m.user_id = ? \
+                AND m.project_id = ?\
+            )",
+        )
+        .bind(query)
+        .bind(app_name)
+        .bind(user_id)
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("delete failed: {e}")))?;
+
+        Ok(result.rows_affected())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
+    async fn delete_project(&self, app_name: &str, user_id: &str, project_id: &str) -> Result<u64> {
+        let pool = self.pool.clone();
+        let result = sqlx::query(
+            "DELETE FROM memory_entries WHERE app_name = ? AND user_id = ? AND project_id = ?",
+        )
+        .bind(app_name)
+        .bind(user_id)
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("delete_project failed: {e}")))?;
+
+        Ok(result.rows_affected())
     }
 }

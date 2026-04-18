@@ -67,18 +67,26 @@ impl Neo4jMemoryService {
     ///
     /// The vector index step is handled separately in [`migrate`](Self::migrate)
     /// because it depends on the configured embedding dimensions.
-    const NEO4J_MEMORY_MIGRATIONS: &'static [(i64, &'static str, &'static [&'static str])] = &[(
-        1,
-        "create initial constraints and indexes",
-        &[
-            "CREATE CONSTRAINT memory_entry_unique IF NOT EXISTS \
-             FOR (m:MemoryEntry) REQUIRE (m.id) IS UNIQUE",
-            "CREATE INDEX memory_app_user IF NOT EXISTS \
-             FOR (m:MemoryEntry) ON (m.app_name, m.user_id)",
-            "CREATE FULLTEXT INDEX memory_content IF NOT EXISTS \
-             FOR (m:MemoryEntry) ON EACH [m.content_text]",
-        ],
-    )];
+    const NEO4J_MEMORY_MIGRATIONS: &'static [(i64, &'static str, &'static [&'static str])] = &[
+        (
+            1,
+            "create initial constraints and indexes",
+            &[
+                "CREATE CONSTRAINT memory_entry_unique IF NOT EXISTS \
+                 FOR (m:MemoryEntry) REQUIRE (m.id) IS UNIQUE",
+                "CREATE INDEX memory_app_user IF NOT EXISTS \
+                 FOR (m:MemoryEntry) ON (m.app_name, m.user_id)",
+                "CREATE FULLTEXT INDEX memory_content IF NOT EXISTS \
+                 FOR (m:MemoryEntry) ON EACH [m.content_text]",
+            ],
+        ),
+        (
+            2,
+            "add project_id index",
+            &["CREATE INDEX memory_project_id IF NOT EXISTS \
+                 FOR (m:MemoryEntry) ON (m.project_id)"],
+        ),
+    ];
 
     /// Create a Neo4j memory service from an existing graph connection.
     ///
@@ -349,7 +357,8 @@ impl MemoryService for Neo4jMemoryService {
                              id: $id, app_name: $app_name, user_id: $user_id, \
                              session_id: $session_id, content: $content, \
                              content_text: $content_text, author: $author, \
-                             timestamp: $timestamp, embedding: $embedding \
+                             timestamp: $timestamp, embedding: $embedding, \
+                             project_id: null \
                          })",
                     )
                     .param("session_id", session_id.to_string())
@@ -373,7 +382,8 @@ impl MemoryService for Neo4jMemoryService {
                              id: $id, app_name: $app_name, user_id: $user_id, \
                              session_id: $session_id, content: $content, \
                              content_text: $content_text, author: $author, \
-                             timestamp: $timestamp \
+                             timestamp: $timestamp, \
+                             project_id: null \
                          })",
                     )
                     .param("session_id", session_id.to_string())
@@ -414,9 +424,240 @@ impl MemoryService for Neo4jMemoryService {
         Ok(())
     }
 
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, session_id = %session_id, project_id = %project_id, entry_count = entries.len()))]
+    async fn add_session_to_project(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        project_id: &str,
+        entries: Vec<MemoryEntry>,
+    ) -> Result<()> {
+        validate_project_id(project_id)?;
+
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        // Collect texts for batch embedding
+        let texts: Vec<String> =
+            entries.iter().map(|e| crate::text::extract_text(&e.content)).collect();
+
+        let embeddings = if let Some(provider) = &self.embedding_provider {
+            let non_empty_texts: Vec<String> = texts
+                .iter()
+                .map(|t| if t.is_empty() { " ".to_string() } else { t.clone() })
+                .collect();
+            Some(provider.embed(&non_empty_texts).await.map_err(|e| {
+                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
+            })?)
+        } else {
+            None
+        };
+
+        let mut txn = self
+            .graph
+            .start_txn()
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("transaction failed: {e}")))?;
+
+        // MERGE the MemorySession node
+        txn.run(
+            neo4rs::query(
+                "MERGE (:MemorySession {session_id: $session_id, \
+                 app_name: $app_name, user_id: $user_id})",
+            )
+            .param("session_id", session_id.to_string())
+            .param("app_name", app_name.to_string())
+            .param("user_id", user_id.to_string()),
+        )
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("add_session_to_project failed: {e}")))?;
+
+        // Create MemoryEntry nodes with project_id and FROM_SESSION relationships
+        let mut entry_ids: Vec<String> = Vec::with_capacity(entries.len());
+
+        for (i, entry) in entries.iter().enumerate() {
+            let entry_id = format!("{session_id}_{i}");
+            entry_ids.push(entry_id.clone());
+
+            let content_json = serde_json::to_string(&entry.content)
+                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+            let content_text = &texts[i];
+            let timestamp_str = entry.timestamp.to_rfc3339();
+
+            if let Some(ref embs) = embeddings {
+                let embedding_f64: Vec<f64> = embs[i].iter().map(|&v| v as f64).collect();
+
+                txn.run(
+                    neo4rs::query(
+                        "MATCH (s:MemorySession {session_id: $session_id, \
+                         app_name: $app_name, user_id: $user_id}) \
+                         CREATE (s)-[:FROM_SESSION]->(e:MemoryEntry { \
+                             id: $id, app_name: $app_name, user_id: $user_id, \
+                             session_id: $session_id, content: $content, \
+                             content_text: $content_text, author: $author, \
+                             timestamp: $timestamp, embedding: $embedding, \
+                             project_id: $project_id \
+                         })",
+                    )
+                    .param("session_id", session_id.to_string())
+                    .param("app_name", app_name.to_string())
+                    .param("user_id", user_id.to_string())
+                    .param("id", entry_id)
+                    .param("content", content_json)
+                    .param("content_text", content_text.clone())
+                    .param("author", entry.author.clone())
+                    .param("timestamp", timestamp_str)
+                    .param("embedding", embedding_f64)
+                    .param("project_id", project_id.to_string()),
+                )
+                .await
+                .map_err(|e| {
+                    adk_core::AdkError::memory(format!("add_session_to_project failed: {e}"))
+                })?;
+            } else {
+                txn.run(
+                    neo4rs::query(
+                        "MATCH (s:MemorySession {session_id: $session_id, \
+                         app_name: $app_name, user_id: $user_id}) \
+                         CREATE (s)-[:FROM_SESSION]->(e:MemoryEntry { \
+                             id: $id, app_name: $app_name, user_id: $user_id, \
+                             session_id: $session_id, content: $content, \
+                             content_text: $content_text, author: $author, \
+                             timestamp: $timestamp, \
+                             project_id: $project_id \
+                         })",
+                    )
+                    .param("session_id", session_id.to_string())
+                    .param("app_name", app_name.to_string())
+                    .param("user_id", user_id.to_string())
+                    .param("id", entry_id)
+                    .param("content", content_json)
+                    .param("content_text", content_text.clone())
+                    .param("author", entry.author.clone())
+                    .param("timestamp", timestamp_str)
+                    .param("project_id", project_id.to_string()),
+                )
+                .await
+                .map_err(|e| {
+                    adk_core::AdkError::memory(format!("add_session_to_project failed: {e}"))
+                })?;
+            }
+        }
+
+        // Create FOLLOWS relationships between consecutive entries
+        for i in 0..entry_ids.len().saturating_sub(1) {
+            txn.run(
+                neo4rs::query(
+                    "MATCH (prev:MemoryEntry {id: $prev_id}) \
+                     MATCH (curr:MemoryEntry {id: $curr_id}) \
+                     CREATE (prev)-[:FOLLOWS]->(curr)",
+                )
+                .param("prev_id", entry_ids[i].clone())
+                .param("curr_id", entry_ids[i + 1].clone()),
+            )
+            .await
+            .map_err(|e| {
+                adk_core::AdkError::memory(format!(
+                    "add_session_to_project failed: FOLLOWS creation: {e}"
+                ))
+            })?;
+        }
+
+        txn.commit()
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("commit failed: {e}")))?;
+
+        Ok(())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
+    async fn add_entry_to_project(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        project_id: &str,
+        entry: MemoryEntry,
+    ) -> Result<()> {
+        validate_project_id(project_id)?;
+
+        let content_text = crate::text::extract_text(&entry.content);
+        let content_json = serde_json::to_string(&entry.content)
+            .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+        let timestamp_str = entry.timestamp.to_rfc3339();
+        let entry_id = format!("entry_{}", chrono::Utc::now().timestamp_millis());
+
+        if let Some(ref provider) = self.embedding_provider {
+            let text_for_embed =
+                if content_text.is_empty() { " ".to_string() } else { content_text.clone() };
+            let embeddings = provider.embed(&[text_for_embed]).await.map_err(|e| {
+                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
+            })?;
+            let embedding_f64: Vec<f64> = embeddings[0].iter().map(|&v| v as f64).collect();
+
+            self.graph
+                .run(
+                    neo4rs::query(
+                        "CREATE (e:MemoryEntry { \
+                             id: $id, app_name: $app_name, user_id: $user_id, \
+                             content: $content, content_text: $content_text, \
+                             author: $author, timestamp: $timestamp, \
+                             embedding: $embedding, project_id: $project_id \
+                         })",
+                    )
+                    .param("id", entry_id)
+                    .param("app_name", app_name.to_string())
+                    .param("user_id", user_id.to_string())
+                    .param("content", content_json)
+                    .param("content_text", content_text)
+                    .param("author", entry.author.clone())
+                    .param("timestamp", timestamp_str)
+                    .param("embedding", embedding_f64)
+                    .param("project_id", project_id.to_string()),
+                )
+                .await
+                .map_err(|e| {
+                    adk_core::AdkError::memory(format!("add_entry_to_project failed: {e}"))
+                })?;
+        } else {
+            self.graph
+                .run(
+                    neo4rs::query(
+                        "CREATE (e:MemoryEntry { \
+                             id: $id, app_name: $app_name, user_id: $user_id, \
+                             content: $content, content_text: $content_text, \
+                             author: $author, timestamp: $timestamp, \
+                             project_id: $project_id \
+                         })",
+                    )
+                    .param("id", entry_id)
+                    .param("app_name", app_name.to_string())
+                    .param("user_id", user_id.to_string())
+                    .param("content", content_json)
+                    .param("content_text", content_text)
+                    .param("author", entry.author.clone())
+                    .param("timestamp", timestamp_str)
+                    .param("project_id", project_id.to_string()),
+                )
+                .await
+                .map_err(|e| {
+                    adk_core::AdkError::memory(format!("add_entry_to_project failed: {e}"))
+                })?;
+        }
+
+        Ok(())
+    }
+
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id))]
     async fn search(&self, req: SearchRequest) -> Result<SearchResponse> {
         let limit = req.limit.unwrap_or(10) as i64;
+
+        // Build the project_id filter clause
+        let project_filter = match &req.project_id {
+            None => "AND node.project_id IS NULL".to_string(),
+            Some(_) => "AND (node.project_id IS NULL OR node.project_id = $project_id)".to_string(),
+        };
 
         let results = if let Some(ref provider) = self.embedding_provider {
             // Vector search via db.index.vector.queryNodes
@@ -426,29 +667,36 @@ impl MemoryService for Neo4jMemoryService {
                 .map_err(|e| adk_core::AdkError::memory(format!("query embedding failed: {e}")))?;
             let query_vec: Vec<f64> = query_embedding[0].iter().map(|&v| v as f64).collect();
 
+            let cypher = format!(
+                "CALL db.index.vector.queryNodes('memory_embedding', $limit, \
+                 $query_embedding) \
+                 YIELD node, score \
+                 WHERE node.app_name = $app_name AND node.user_id = $user_id \
+                 {project_filter} \
+                 OPTIONAL MATCH (node)-[:FOLLOWS]-(adjacent:MemoryEntry) \
+                 RETURN node.id AS id, node.content AS content, \
+                        node.author AS author, node.timestamp AS timestamp, \
+                        score, \
+                        collect(adjacent.id) AS adj_ids, \
+                        collect(adjacent.content) AS adj_contents, \
+                        collect(adjacent.author) AS adj_authors, \
+                        collect(adjacent.timestamp) AS adj_timestamps \
+                 ORDER BY score DESC"
+            );
+
+            let mut query = neo4rs::query(&cypher)
+                .param("limit", limit)
+                .param("query_embedding", query_vec)
+                .param("app_name", req.app_name.clone())
+                .param("user_id", req.user_id.clone());
+
+            if let Some(ref pid) = req.project_id {
+                query = query.param("project_id", pid.clone());
+            }
+
             let mut row_stream = self
                 .graph
-                .execute(
-                    neo4rs::query(
-                        "CALL db.index.vector.queryNodes('memory_embedding', $limit, \
-                         $query_embedding) \
-                         YIELD node, score \
-                         WHERE node.app_name = $app_name AND node.user_id = $user_id \
-                         OPTIONAL MATCH (node)-[:FOLLOWS]-(adjacent:MemoryEntry) \
-                         RETURN node.id AS id, node.content AS content, \
-                                node.author AS author, node.timestamp AS timestamp, \
-                                score, \
-                                collect(adjacent.id) AS adj_ids, \
-                                collect(adjacent.content) AS adj_contents, \
-                                collect(adjacent.author) AS adj_authors, \
-                                collect(adjacent.timestamp) AS adj_timestamps \
-                         ORDER BY score DESC",
-                    )
-                    .param("limit", limit)
-                    .param("query_embedding", query_vec)
-                    .param("app_name", req.app_name.clone())
-                    .param("user_id", req.user_id.clone()),
-                )
+                .execute(query)
                 .await
                 .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?;
 
@@ -475,29 +723,36 @@ impl MemoryService for Neo4jMemoryService {
             entries
         } else {
             // Full-text search fallback
+            let cypher = format!(
+                "CALL db.index.fulltext.queryNodes('memory_content', $query) \
+                 YIELD node, score \
+                 WHERE node.app_name = $app_name AND node.user_id = $user_id \
+                 {project_filter} \
+                 OPTIONAL MATCH (node)-[:FOLLOWS]-(adjacent:MemoryEntry) \
+                 RETURN node.id AS id, node.content AS content, \
+                        node.author AS author, node.timestamp AS timestamp, \
+                        score, \
+                        collect(adjacent.id) AS adj_ids, \
+                        collect(adjacent.content) AS adj_contents, \
+                        collect(adjacent.author) AS adj_authors, \
+                        collect(adjacent.timestamp) AS adj_timestamps \
+                 ORDER BY score DESC \
+                 LIMIT $limit"
+            );
+
+            let mut query = neo4rs::query(&cypher)
+                .param("query", req.query.clone())
+                .param("app_name", req.app_name.clone())
+                .param("user_id", req.user_id.clone())
+                .param("limit", limit);
+
+            if let Some(ref pid) = req.project_id {
+                query = query.param("project_id", pid.clone());
+            }
+
             let mut row_stream = self
                 .graph
-                .execute(
-                    neo4rs::query(
-                        "CALL db.index.fulltext.queryNodes('memory_content', $query) \
-                         YIELD node, score \
-                         WHERE node.app_name = $app_name AND node.user_id = $user_id \
-                         OPTIONAL MATCH (node)-[:FOLLOWS]-(adjacent:MemoryEntry) \
-                         RETURN node.id AS id, node.content AS content, \
-                                node.author AS author, node.timestamp AS timestamp, \
-                                score, \
-                                collect(adjacent.id) AS adj_ids, \
-                                collect(adjacent.content) AS adj_contents, \
-                                collect(adjacent.author) AS adj_authors, \
-                                collect(adjacent.timestamp) AS adj_timestamps \
-                         ORDER BY score DESC \
-                         LIMIT $limit",
-                    )
-                    .param("query", req.query.clone())
-                    .param("app_name", req.app_name.clone())
-                    .param("user_id", req.user_id.clone())
-                    .param("limit", limit),
-                )
+                .execute(query)
                 .await
                 .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?;
 
@@ -525,6 +780,98 @@ impl MemoryService for Neo4jMemoryService {
         };
 
         Ok(SearchResponse { memories: results })
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
+    async fn delete_entries_in_project(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        project_id: &str,
+        query: &str,
+    ) -> Result<u64> {
+        validate_project_id(project_id)?;
+
+        // Use full-text search to find matching entries, then delete those in the project
+        let mut row_stream = self
+            .graph
+            .execute(
+                neo4rs::query(
+                    "CALL db.index.fulltext.queryNodes('memory_content', $query) \
+                     YIELD node \
+                     WHERE node.app_name = $app_name AND node.user_id = $user_id \
+                     AND node.project_id = $project_id \
+                     DETACH DELETE node \
+                     RETURN count(node) AS deleted_count",
+                )
+                .param("query", query.to_string())
+                .param("app_name", app_name.to_string())
+                .param("user_id", user_id.to_string())
+                .param("project_id", project_id.to_string()),
+            )
+            .await
+            .map_err(|e| {
+                adk_core::AdkError::memory(format!("delete_entries_in_project failed: {e}"))
+            })?;
+
+        let count = if let Some(row) = row_stream.next().await.map_err(|e| {
+            adk_core::AdkError::memory(format!("delete_entries_in_project failed: {e}"))
+        })? {
+            row.get::<i64>("deleted_count").unwrap_or(0) as u64
+        } else {
+            0
+        };
+
+        Ok(count)
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
+    async fn delete_project(&self, app_name: &str, user_id: &str, project_id: &str) -> Result<u64> {
+        validate_project_id(project_id)?;
+
+        let mut row_stream = self
+            .graph
+            .execute(
+                neo4rs::query(
+                    "MATCH (e:MemoryEntry {app_name: $app_name, user_id: $user_id, \
+                     project_id: $project_id}) \
+                     DETACH DELETE e \
+                     RETURN count(e) AS deleted_count",
+                )
+                .param("app_name", app_name.to_string())
+                .param("user_id", user_id.to_string())
+                .param("project_id", project_id.to_string()),
+            )
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("delete_project failed: {e}")))?;
+
+        let count = if let Some(row) = row_stream
+            .next()
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("delete_project failed: {e}")))?
+        {
+            row.get::<i64>("deleted_count").unwrap_or(0) as u64
+        } else {
+            0
+        };
+
+        // Clean up orphaned session nodes
+        self.graph
+            .run(
+                neo4rs::query(
+                    "MATCH (s:MemorySession {app_name: $app_name, user_id: $user_id}) \
+                     WHERE NOT (s)-[:FROM_SESSION]->() \
+                     DELETE s",
+                )
+                .param("app_name", app_name.to_string())
+                .param("user_id", user_id.to_string()),
+            )
+            .await
+            .map_err(|e| {
+                adk_core::AdkError::memory(format!("delete_project cleanup failed: {e}"))
+            })?;
+
+        Ok(count)
     }
 
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]

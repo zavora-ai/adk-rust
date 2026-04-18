@@ -509,11 +509,10 @@ impl RealtimeAgent {
                 source_url = %avatar.source_url,
                 "video avatar configured but the current realtime provider does not support video avatars; proceeding audio-only"
             );
-            let avatar_json = serde_json::to_value(avatar)
-                .unwrap_or_else(|e| {
-                    tracing::warn!("failed to serialize avatar config: {e}");
-                    serde_json::Value::Null
-                });
+            let avatar_json = serde_json::to_value(avatar).unwrap_or_else(|e| {
+                tracing::warn!("failed to serialize avatar config: {e}");
+                serde_json::Value::Null
+            });
             let extra = config.extra.get_or_insert_with(|| serde_json::json!({}));
             if let Some(obj) = extra.as_object_mut() {
                 obj.insert("avatarConfig".to_string(), avatar_json);

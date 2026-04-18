@@ -340,6 +340,7 @@ impl MultiActorHarness {
                 app_name: self.identity.app_name.as_ref().to_string(),
                 limit: Some(10),
                 min_score: None,
+                project_id: None,
             })
             .await
             .unwrap();

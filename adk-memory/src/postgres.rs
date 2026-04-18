@@ -216,6 +216,12 @@ impl PostgresMemoryService {
     /// The registry table used to track applied migration versions.
     const REGISTRY_TABLE: &'static str = "_adk_memory_migrations";
 
+    /// V2 migration: add project_id column and composite index.
+    const V2_MIGRATION_SQL: &'static str = "\
+        ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS project_id TEXT;\
+        CREATE INDEX IF NOT EXISTS idx_memory_app_user_project \
+            ON memory_entries(app_name, user_id, project_id);";
+
     /// Advisory lock key derived from the registry table name.
     ///
     /// This is a fixed `i64` used with `pg_advisory_lock` /
@@ -335,9 +341,12 @@ impl PostgresMemoryService {
 
         // Build the v1 SQL dynamically (parameterized by dims + index type)
         let v1_sql = self.build_v1_migration_sql()?;
+        let v2_sql = Self::V2_MIGRATION_SQL;
 
-        let steps: &[(i64, &str, &str)] =
-            &[(1, "create memory_entries table with vector and tsvector columns", &v1_sql)];
+        let steps: &[(i64, &str, &str)] = &[
+            (1, "create memory_entries table with vector and tsvector columns", &v1_sql),
+            (2, "add project_id column and composite index", v2_sql),
+        ];
 
         // Acquire advisory lock to prevent concurrent migration races
         sqlx::query(&format!("SELECT pg_advisory_lock({})", Self::ADVISORY_LOCK_KEY))
@@ -417,9 +426,9 @@ impl MemoryService for PostgresMemoryService {
                 sqlx::query(
                     r#"
                     INSERT INTO memory_entries
-                        (app_name, user_id, session_id, content, author, timestamp, embedding, search_text)
+                        (app_name, user_id, session_id, content, author, timestamp, embedding, search_text, project_id)
                     VALUES
-                        ($1, $2, $3, $4, $5, $6, $7, to_tsvector('english', $8))
+                        ($1, $2, $3, $4, $5, $6, $7, to_tsvector('english', $8), $9)
                     "#,
                 )
                 .bind(app_name)
@@ -430,6 +439,7 @@ impl MemoryService for PostgresMemoryService {
                 .bind(entry.timestamp)
                 .bind(embedding)
                 .bind(text)
+                .bind(None::<String>)
                 .execute(&self.pool)
                 .await
                 .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
@@ -437,9 +447,9 @@ impl MemoryService for PostgresMemoryService {
                 sqlx::query(
                     r#"
                     INSERT INTO memory_entries
-                        (app_name, user_id, session_id, content, author, timestamp, search_text)
+                        (app_name, user_id, session_id, content, author, timestamp, search_text, project_id)
                     VALUES
-                        ($1, $2, $3, $4, $5, $6, to_tsvector('english', $7))
+                        ($1, $2, $3, $4, $5, $6, to_tsvector('english', $7), $8)
                     "#,
                 )
                 .bind(app_name)
@@ -449,6 +459,7 @@ impl MemoryService for PostgresMemoryService {
                 .bind(&entry.author)
                 .bind(entry.timestamp)
                 .bind(text)
+                .bind(None::<String>)
                 .execute(&self.pool)
                 .await
                 .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
@@ -478,61 +489,139 @@ impl MemoryService for PostgresMemoryService {
             if self.use_halfvec {
                 // Cast both sides to halfvec so the expression index is used
                 let dims = provider.dimensions();
-                let sql = format!(
-                    r#"
-                    SELECT content, author, timestamp,
-                           (embedding::halfvec({dims}) <=> $3::halfvec({dims})) AS distance
-                    FROM memory_entries
-                    WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
-                    ORDER BY embedding::halfvec({dims}) <=> $3::halfvec({dims})
-                    LIMIT $4
-                    "#
-                );
-                sqlx::query(&sql)
+                match &req.project_id {
+                    None => {
+                        let sql = format!(
+                            r#"
+                            SELECT content, author, timestamp,
+                                   (embedding::halfvec({dims}) <=> $3::halfvec({dims})) AS distance
+                            FROM memory_entries
+                            WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
+                              AND project_id IS NULL
+                            ORDER BY embedding::halfvec({dims}) <=> $3::halfvec({dims})
+                            LIMIT $4
+                            "#
+                        );
+                        sqlx::query(&sql)
+                            .bind(&req.app_name)
+                            .bind(&req.user_id)
+                            .bind(&query_vec)
+                            .bind(limit)
+                            .fetch_all(&self.pool)
+                            .await
+                            .map_err(|e| {
+                                adk_core::AdkError::memory(format!("search failed: {e}"))
+                            })?
+                    }
+                    Some(pid) => {
+                        let sql = format!(
+                            r#"
+                            SELECT content, author, timestamp,
+                                   (embedding::halfvec({dims}) <=> $3::halfvec({dims})) AS distance
+                            FROM memory_entries
+                            WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
+                              AND (project_id IS NULL OR project_id = $5)
+                            ORDER BY embedding::halfvec({dims}) <=> $3::halfvec({dims})
+                            LIMIT $4
+                            "#
+                        );
+                        sqlx::query(&sql)
+                            .bind(&req.app_name)
+                            .bind(&req.user_id)
+                            .bind(&query_vec)
+                            .bind(limit)
+                            .bind(pid)
+                            .fetch_all(&self.pool)
+                            .await
+                            .map_err(|e| {
+                                adk_core::AdkError::memory(format!("search failed: {e}"))
+                            })?
+                    }
+                }
+            } else {
+                match &req.project_id {
+                    None => sqlx::query(
+                        r#"
+                            SELECT content, author, timestamp, (embedding <=> $3) AS distance
+                            FROM memory_entries
+                            WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
+                              AND project_id IS NULL
+                            ORDER BY embedding <=> $3
+                            LIMIT $4
+                            "#,
+                    )
                     .bind(&req.app_name)
                     .bind(&req.user_id)
                     .bind(&query_vec)
                     .bind(limit)
                     .fetch_all(&self.pool)
                     .await
-                    .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?
-            } else {
-                sqlx::query(
-                    r#"
-                    SELECT content, author, timestamp, (embedding <=> $3) AS distance
-                    FROM memory_entries
-                    WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
-                    ORDER BY embedding <=> $3
-                    LIMIT $4
-                    "#,
-                )
-                .bind(&req.app_name)
-                .bind(&req.user_id)
-                .bind(query_vec)
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?
+                    .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?,
+                    Some(pid) => sqlx::query(
+                        r#"
+                            SELECT content, author, timestamp, (embedding <=> $3) AS distance
+                            FROM memory_entries
+                            WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
+                              AND (project_id IS NULL OR project_id = $5)
+                            ORDER BY embedding <=> $3
+                            LIMIT $4
+                            "#,
+                    )
+                    .bind(&req.app_name)
+                    .bind(&req.user_id)
+                    .bind(query_vec)
+                    .bind(limit)
+                    .bind(pid)
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?,
+                }
             }
         } else {
             // Full-text search fallback
-            sqlx::query(
-                r#"
-                SELECT content, author, timestamp, ts_rank(search_text, plainto_tsquery('english', $3)) AS rank_score
-                FROM memory_entries
-                WHERE app_name = $1 AND user_id = $2
-                  AND search_text @@ plainto_tsquery('english', $3)
-                ORDER BY rank_score DESC
-                LIMIT $4
-                "#,
-            )
-            .bind(&req.app_name)
-            .bind(&req.user_id)
-            .bind(&req.query)
-            .bind(limit)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?
+            match &req.project_id {
+                None => {
+                    sqlx::query(
+                        r#"
+                        SELECT content, author, timestamp, ts_rank(search_text, plainto_tsquery('english', $3)) AS rank_score
+                        FROM memory_entries
+                        WHERE app_name = $1 AND user_id = $2
+                          AND search_text @@ plainto_tsquery('english', $3)
+                          AND project_id IS NULL
+                        ORDER BY rank_score DESC
+                        LIMIT $4
+                        "#,
+                    )
+                    .bind(&req.app_name)
+                    .bind(&req.user_id)
+                    .bind(&req.query)
+                    .bind(limit)
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?
+                }
+                Some(pid) => {
+                    sqlx::query(
+                        r#"
+                        SELECT content, author, timestamp, ts_rank(search_text, plainto_tsquery('english', $3)) AS rank_score
+                        FROM memory_entries
+                        WHERE app_name = $1 AND user_id = $2
+                          AND search_text @@ plainto_tsquery('english', $3)
+                          AND (project_id IS NULL OR project_id = $5)
+                        ORDER BY rank_score DESC
+                        LIMIT $4
+                        "#,
+                    )
+                    .bind(&req.app_name)
+                    .bind(&req.user_id)
+                    .bind(&req.query)
+                    .bind(limit)
+                    .bind(pid)
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| adk_core::AdkError::memory(format!("search failed: {e}")))?
+                }
+            }
         };
 
         let min_score = req.min_score;
@@ -588,6 +677,225 @@ impl MemoryService for PostgresMemoryService {
         .await
         .map_err(|e| adk_core::AdkError::memory(format!("delete_session failed: {e}")))?;
         Ok(())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, query = %query))]
+    async fn delete_entries(&self, app_name: &str, user_id: &str, query: &str) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM memory_entries
+            WHERE app_name = $1 AND user_id = $2
+              AND search_text @@ plainto_tsquery('english', $3)
+              AND project_id IS NULL
+            "#,
+        )
+        .bind(app_name)
+        .bind(user_id)
+        .bind(query)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("delete_entries failed: {e}")))?;
+        Ok(result.rows_affected())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, session_id = %session_id, project_id = %project_id))]
+    async fn add_session_to_project(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        project_id: &str,
+        entries: Vec<MemoryEntry>,
+    ) -> Result<()> {
+        validate_project_id(project_id)?;
+
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        // Collect texts for batch embedding
+        let texts: Vec<String> =
+            entries.iter().map(|e| crate::text::extract_text(&e.content)).collect();
+
+        let embeddings = if let Some(provider) = &self.embedding_provider {
+            let non_empty_texts: Vec<String> = texts
+                .iter()
+                .map(|t| if t.is_empty() { " ".to_string() } else { t.clone() })
+                .collect();
+            Some(provider.embed(&non_empty_texts).await.map_err(|e| {
+                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
+            })?)
+        } else {
+            None
+        };
+
+        for (i, entry) in entries.iter().enumerate() {
+            let content_json = serde_json::to_value(&entry.content)
+                .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+            let text = &texts[i];
+
+            if let Some(ref embs) = embeddings {
+                let embedding = pgvector::Vector::from(embs[i].clone());
+                sqlx::query(
+                    r#"
+                    INSERT INTO memory_entries
+                        (app_name, user_id, session_id, content, author, timestamp, embedding, search_text, project_id)
+                    VALUES
+                        ($1, $2, $3, $4, $5, $6, $7, to_tsvector('english', $8), $9)
+                    "#,
+                )
+                .bind(app_name)
+                .bind(user_id)
+                .bind(session_id)
+                .bind(&content_json)
+                .bind(&entry.author)
+                .bind(entry.timestamp)
+                .bind(embedding)
+                .bind(text)
+                .bind(project_id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
+            } else {
+                sqlx::query(
+                    r#"
+                    INSERT INTO memory_entries
+                        (app_name, user_id, session_id, content, author, timestamp, search_text, project_id)
+                    VALUES
+                        ($1, $2, $3, $4, $5, $6, to_tsvector('english', $7), $8)
+                    "#,
+                )
+                .bind(app_name)
+                .bind(user_id)
+                .bind(session_id)
+                .bind(&content_json)
+                .bind(&entry.author)
+                .bind(entry.timestamp)
+                .bind(text)
+                .bind(project_id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
+    async fn add_entry_to_project(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        project_id: &str,
+        entry: MemoryEntry,
+    ) -> Result<()> {
+        validate_project_id(project_id)?;
+
+        let text = crate::text::extract_text(&entry.content);
+        let content_json = serde_json::to_value(&entry.content)
+            .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+
+        if let Some(provider) = &self.embedding_provider {
+            let embed_text = if text.is_empty() { " ".to_string() } else { text.clone() };
+            let embeddings = provider.embed(&[embed_text]).await.map_err(|e| {
+                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
+            })?;
+            let embedding =
+                pgvector::Vector::from(embeddings.into_iter().next().ok_or_else(|| {
+                    adk_core::AdkError::memory(
+                        "embedding provider returned empty result".to_string(),
+                    )
+                })?);
+            sqlx::query(
+                r#"
+                INSERT INTO memory_entries
+                    (app_name, user_id, session_id, content, author, timestamp, embedding, search_text, project_id)
+                VALUES
+                    ($1, $2, $3, $4, $5, $6, $7, to_tsvector('english', $8), $9)
+                "#,
+            )
+            .bind(app_name)
+            .bind(user_id)
+            .bind("")
+            .bind(&content_json)
+            .bind(&entry.author)
+            .bind(entry.timestamp)
+            .bind(embedding)
+            .bind(&text)
+            .bind(project_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
+        } else {
+            sqlx::query(
+                r#"
+                INSERT INTO memory_entries
+                    (app_name, user_id, session_id, content, author, timestamp, search_text, project_id)
+                VALUES
+                    ($1, $2, $3, $4, $5, $6, to_tsvector('english', $7), $8)
+                "#,
+            )
+            .bind(app_name)
+            .bind(user_id)
+            .bind("")
+            .bind(&content_json)
+            .bind(&entry.author)
+            .bind(entry.timestamp)
+            .bind(&text)
+            .bind(project_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id, query = %query))]
+    async fn delete_entries_in_project(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        project_id: &str,
+        query: &str,
+    ) -> Result<u64> {
+        validate_project_id(project_id)?;
+
+        let result = sqlx::query(
+            r#"
+            DELETE FROM memory_entries
+            WHERE app_name = $1 AND user_id = $2
+              AND search_text @@ plainto_tsquery('english', $3)
+              AND project_id = $4
+            "#,
+        )
+        .bind(app_name)
+        .bind(user_id)
+        .bind(query)
+        .bind(project_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            adk_core::AdkError::memory(format!("delete_entries_in_project failed: {e}"))
+        })?;
+        Ok(result.rows_affected())
+    }
+
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
+    async fn delete_project(&self, app_name: &str, user_id: &str, project_id: &str) -> Result<u64> {
+        validate_project_id(project_id)?;
+
+        let result = sqlx::query(
+            "DELETE FROM memory_entries WHERE app_name = $1 AND user_id = $2 AND project_id = $3",
+        )
+        .bind(app_name)
+        .bind(user_id)
+        .bind(project_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("delete_project failed: {e}")))?;
+        Ok(result.rows_affected())
     }
 
     #[instrument(skip_all)]

@@ -42,11 +42,7 @@ pub struct IntraCompactionConfig {
 
 impl Default for IntraCompactionConfig {
     fn default() -> Self {
-        Self {
-            token_threshold: 100_000,
-            overlap_event_count: 10,
-            chars_per_token: 4,
-        }
+        Self { token_threshold: 100_000, overlap_event_count: 10, chars_per_token: 4 }
     }
 }
 
@@ -118,9 +114,7 @@ fn estimate_part_chars(part: &Part) -> usize {
         Part::FunctionCall { name, args, .. } => {
             name.len() + serde_json::to_string(args).map_or(0, |s| s.len())
         }
-        Part::FunctionResponse {
-            function_response, ..
-        } => {
+        Part::FunctionResponse { function_response, .. } => {
             function_response.name.len()
                 + serde_json::to_string(&function_response.response).map_or(0, |s| s.len())
         }

@@ -63,6 +63,9 @@ let request = SearchRequest {
     query: "user preferences".to_string(),
     user_id: "user-123".to_string(),
     app_name: "my_app".to_string(),
+    limit: None,
+    min_score: None,
+    project_id: None, // None = global only, Some("id") = global + project
 };
 ```
 
@@ -100,6 +103,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         query: "Rust".to_string(),
         user_id: "user-123".to_string(),
         app_name: "my_app".to_string(),
+        limit: None,
+        min_score: None,
+        project_id: None,
     };
 
     let response = memory.search(request).await?;
@@ -114,6 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Memories are isolated by:
 - **app_name**: Different applications have separate memory spaces
 - **user_id**: Each user's memories are private
+- **project_id** (optional): Entries can be scoped to a project within a user
 
 ```rust
 // User A's memories
@@ -127,8 +134,140 @@ let request = SearchRequest {
     query: "topic".to_string(),
     user_id: "user-a".to_string(),
     app_name: "app".to_string(),
+    limit: None,
+    min_score: None,
+    project_id: None, // None = global entries only
 };
 ```
+
+## Project-Scoped Memory
+
+Memories can be scoped to a project within a user. The isolation key becomes `(app_name, user_id, project_id?)`:
+
+- **Global entries** (`project_id = None`): visible in all project contexts and in global-only searches.
+- **Project entries** (`project_id = Some(id)`): visible only when searching within that specific project.
+- **Project search** (`project_id = Some(id)`): returns global entries + entries for that project.
+- **Global search** (`project_id = None`): returns only global entries.
+
+### Storing project-scoped entries
+
+```rust
+use adk_memory::{InMemoryMemoryService, MemoryService, MemoryEntry};
+use adk_core::Content;
+use chrono::Utc;
+
+let service = InMemoryMemoryService::new();
+
+let entry = MemoryEntry {
+    content: Content::new("user").with_text("Project uses microservices"),
+    author: "user".to_string(),
+    timestamp: Utc::now(),
+};
+
+// Global entry (no project scope)
+service.add_session("app", "user-1", "sess-1", vec![entry.clone()]).await?;
+
+// Project-scoped entry
+service.add_session_to_project("app", "user-1", "sess-2", "my-project", vec![entry.clone()]).await?;
+
+// Single entry to a project
+service.add_entry_to_project("app", "user-1", "my-project", entry).await?;
+```
+
+### Searching with project scope
+
+```rust
+use adk_memory::SearchRequest;
+
+// Global-only search — returns only global entries
+let global = service.search(SearchRequest {
+    query: "microservices".into(),
+    user_id: "user-1".into(),
+    app_name: "app".into(),
+    limit: None,
+    min_score: None,
+    project_id: None,
+}).await?;
+
+// Project search — returns global + project entries
+let project = service.search(SearchRequest {
+    query: "microservices".into(),
+    user_id: "user-1".into(),
+    app_name: "app".into(),
+    limit: None,
+    min_score: None,
+    project_id: Some("my-project".into()),
+}).await?;
+```
+
+### Project-scoped deletion
+
+```rust
+// Delete entries matching a query within a project only
+service.delete_entries_in_project("app", "user-1", "my-project", "microservices").await?;
+
+// Delete ALL entries for a project
+service.delete_project("app", "user-1", "my-project").await?;
+
+// Global delete — only removes global entries, project entries are unaffected
+service.delete_entries("app", "user-1", "microservices").await?;
+
+// GDPR delete_user — removes everything (global + all projects)
+service.delete_user("app", "user-1").await?;
+```
+
+### MemoryServiceAdapter with project scope
+
+The `MemoryServiceAdapter` bridges `MemoryService` to `adk_core::Memory`. Use `with_project_id()` to scope all operations:
+
+```rust
+use adk_memory::{InMemoryMemoryService, MemoryServiceAdapter};
+use adk_core::Memory;
+use std::sync::Arc;
+
+let service = Arc::new(InMemoryMemoryService::new());
+
+// Adapter without project — operates on global entries
+let global_adapter = MemoryServiceAdapter::new(service.clone(), "app", "user-1");
+
+// Adapter with project — all search/add/delete operations scoped to the project
+let project_adapter = MemoryServiceAdapter::new(service.clone(), "app", "user-1")
+    .with_project_id("my-project");
+
+// Core Memory trait also supports ad-hoc project access
+global_adapter.search_in_project("query", "other-project").await?;
+global_adapter.add_to_project(entry, "other-project").await?;
+```
+
+### Project ID validation
+
+Project identifiers are validated on all write operations:
+- Must not be empty
+- Must not exceed 256 characters
+
+```rust
+use adk_memory::validate_project_id;
+
+validate_project_id("my-project")?;       // Ok
+validate_project_id("")?;                  // Err: must not be empty
+validate_project_id(&"x".repeat(257))?;   // Err: exceeds 256 chars
+```
+
+### Search semantics matrix
+
+| `SearchRequest.project_id` | Returns Global Entries | Returns Project Entries |
+|---|---|---|
+| `None` | ✅ matching query | ❌ none |
+| `Some("A")` | ✅ matching query | ✅ only project "A" entries matching query |
+
+### Delete semantics matrix
+
+| Operation | Scope |
+|---|---|
+| `delete_entries` (no project) | Global entries matching query only |
+| `delete_entries_in_project("A")` | Project "A" entries matching query only |
+| `delete_project("A")` | All entries for project "A" |
+| `delete_user` | All entries (global + all projects) |
 
 ## Search Behavior
 
@@ -213,19 +352,23 @@ When memory is configured:
 ┌─────────────────────────────────────────────────────────────┐
 │                    Memory Search                            │
 │                                                             │
-│   SearchRequest { query, user_id, app_name }               │
+│   SearchRequest { query, user_id, app_name, project_id }   │
 │                         │                                   │
 │                         ▼                                   │
 │   ┌─────────────────────────────────────────────────────┐  │
 │   │              MemoryService                          │  │
-│   │  ┌─────────────┐  ┌─────────────┐  ┌────────────┐  │  │
-│   │  │ InMemory    │  │ Vector DB   │  │ Custom     │  │  │
-│   │  │ (dev/test)  │  │ (Qdrant)    │  │ Backend    │  │  │
-│   │  └─────────────┘  └─────────────┘  └────────────┘  │  │
+│   │  ┌─────────┐ ┌──────────┐ ┌────────┐ ┌──────────┐  │  │
+│   │  │InMemory │ │ SQLite   │ │Postgres│ │  Redis   │  │  │
+│   │  │(dev)    │ │          │ │pgvector│ │          │  │  │
+│   │  └─────────┘ └──────────┘ └────────┘ └──────────┘  │  │
+│   │  ┌─────────┐ ┌──────────┐                           │  │
+│   │  │MongoDB  │ │  Neo4j   │                           │  │
+│   │  └─────────┘ └──────────┘                           │  │
 │   └─────────────────────────────────────────────────────┘  │
 │                         │                                   │
 │                         ▼                                   │
 │   SearchResponse { memories: Vec<MemoryEntry> }            │
+│   (filtered by project scope)                              │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -245,6 +388,7 @@ When memory is configured:
 │                   Memory Storage                            │
 │                                                             │
 │   Session conversation stored for future recall            │
+│   (global or project-scoped)                               │
 └─────────────────────────────────────────────────────────────┘
 ```
 

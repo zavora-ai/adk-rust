@@ -347,7 +347,9 @@ async fn test_runner_triggers_compaction_at_interval() {
         context_cache_config: None,
         cache_capable: None,
         request_context: None,
-        cancellation_token: None, intra_compaction_config: None, intra_compaction_summarizer: None,
+        cancellation_token: None,
+        intra_compaction_config: None,
+        intra_compaction_summarizer: None,
     })
     .unwrap();
 
@@ -409,7 +411,9 @@ async fn test_runner_no_compaction_before_interval() {
         context_cache_config: None,
         cache_capable: None,
         request_context: None,
-        cancellation_token: None, intra_compaction_config: None, intra_compaction_summarizer: None,
+        cancellation_token: None,
+        intra_compaction_config: None,
+        intra_compaction_summarizer: None,
     })
     .unwrap();
 

@@ -275,7 +275,9 @@ impl Launcher {
                 // The actual optimization wiring is done by the caller
                 // who has access to the optimizer LLM and evaluator.
                 // This branch serves as the CLI entry point.
-                tracing::warn!("adk optimize requires wiring via PromptOptimizer — use adk-eval directly");
+                tracing::warn!(
+                    "adk optimize requires wiring via PromptOptimizer — use adk-eval directly"
+                );
                 Ok(())
             }
         }

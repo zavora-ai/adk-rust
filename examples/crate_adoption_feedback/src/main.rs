@@ -64,6 +64,7 @@ impl Tool for MemorySearchTool {
                 query: query.into(),
                 limit: Some(3),
                 min_score: None,
+                project_id: None,
             })
             .await?;
 

@@ -458,6 +458,21 @@ pub trait Memory: Send + Sync {
         let _ = query;
         Err(AdkError::memory("delete not implemented"))
     }
+
+    /// Search for memories within a specific project.
+    /// Returns global entries + entries for the given project.
+    /// Default delegates to `search` (global-only results).
+    async fn search_in_project(&self, query: &str, project_id: &str) -> Result<Vec<MemoryEntry>> {
+        let _ = project_id;
+        self.search(query).await
+    }
+
+    /// Add a memory entry scoped to a specific project.
+    /// Default delegates to `add` (global entry).
+    async fn add_to_project(&self, entry: MemoryEntry, project_id: &str) -> Result<()> {
+        let _ = project_id;
+        self.add(entry).await
+    }
 }
 
 /// Trait for retrieving secrets at runtime.

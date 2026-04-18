@@ -31,12 +31,8 @@ fn arb_sync_mode() -> impl Strategy<Value = String> {
 
 /// Generate an arbitrary LipSyncConfig.
 fn arb_lip_sync_config() -> impl Strategy<Value = LipSyncConfig> {
-    (any::<bool>(), proptest::option::of(arb_sync_mode())).prop_map(|(enabled, sync_mode)| {
-        LipSyncConfig {
-            enabled,
-            sync_mode,
-        }
-    })
+    (any::<bool>(), proptest::option::of(arb_sync_mode()))
+        .prop_map(|(enabled, sync_mode)| LipSyncConfig { enabled, sync_mode })
 }
 
 /// Generate an arbitrary resolution string.
@@ -53,14 +49,8 @@ fn arb_resolution() -> impl Strategy<Value = String> {
 
 /// Generate an arbitrary RenderingConfig.
 fn arb_rendering_config() -> impl Strategy<Value = RenderingConfig> {
-    (
-        proptest::option::of(arb_resolution()),
-        proptest::option::of(1u32..120),
-    )
-        .prop_map(|(resolution, frame_rate)| RenderingConfig {
-            resolution,
-            frame_rate,
-        })
+    (proptest::option::of(arb_resolution()), proptest::option::of(1u32..120))
+        .prop_map(|(resolution, frame_rate)| RenderingConfig { resolution, frame_rate })
 }
 
 /// Generate an arbitrary AvatarConfig.

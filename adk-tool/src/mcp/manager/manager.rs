@@ -153,10 +153,7 @@ impl McpServerManager {
     pub fn from_json_file(path: impl AsRef<std::path::Path>) -> adk_core::Result<Self> {
         let path = path.as_ref();
         let content = std::fs::read_to_string(path).map_err(|e| {
-            AdkError::tool(format!(
-                "failed to read config file '{}': {e}",
-                path.display()
-            ))
+            AdkError::tool(format!("failed to read config file '{}': {e}", path.display()))
         })?;
         Self::from_json(&content)
     }
@@ -669,11 +666,7 @@ impl McpServerManager {
     /// };
     /// manager.add_server("new-server".to_string(), config).await?;
     /// ```
-    pub async fn add_server(
-        &self,
-        id: String,
-        config: McpServerConfig,
-    ) -> adk_core::Result<()> {
+    pub async fn add_server(&self, id: String, config: McpServerConfig) -> adk_core::Result<()> {
         let mut servers = self.servers.write().await;
         if servers.contains_key(&id) {
             return Err(AdkError::tool(format!("server ID '{id}' already exists")));
@@ -814,8 +807,7 @@ impl Drop for McpServerManager {
     fn drop(&mut self) {
         // Use try_read() to avoid blocking in Drop
         if let Ok(servers) = self.servers.try_read() {
-            let running =
-                servers.values().filter(|e| e.status == ServerStatus::Running).count();
+            let running = servers.values().filter(|e| e.status == ServerStatus::Running).count();
             if running > 0 {
                 tracing::warn!(
                     running_count = running,
@@ -1085,10 +1077,7 @@ mod tests {
         );
         assert_eq!(fs_entry.config.env["NODE_ENV"], "production");
         assert!(!fs_entry.config.disabled);
-        assert_eq!(
-            fs_entry.config.auto_approve,
-            vec!["read_file", "list_directory"]
-        );
+        assert_eq!(fs_entry.config.auto_approve, vec!["read_file", "list_directory"]);
         assert_eq!(fs_entry.status, ServerStatus::Stopped);
 
         let gh_entry = &servers["github"];
@@ -1132,10 +1121,7 @@ mod tests {
         let result = McpServerManager::from_json_file("/nonexistent/path/mcp.json");
         let err = result.err().expect("should fail on nonexistent file");
         let err_msg = format!("{err}");
-        assert!(
-            err_msg.contains("failed to read config file"),
-            "error message was: {err_msg}"
-        );
+        assert!(err_msg.contains("failed to read config file"), "error message was: {err_msg}");
         assert!(
             err_msg.contains("/nonexistent/path/mcp.json"),
             "error message should contain the path: {err_msg}"

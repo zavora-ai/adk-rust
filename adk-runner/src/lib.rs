@@ -59,8 +59,8 @@ pub use runner::{Runner, RunnerConfig};
 pub use adk_core::RequestContext;
 
 // Re-export compaction types for convenience
-pub use adk_core::{BaseEventsSummarizer, EventsCompactionConfig};
 pub use adk_core::IntraCompactionConfig;
+pub use adk_core::{BaseEventsSummarizer, EventsCompactionConfig};
 pub use intra_compaction::IntraInvocationCompactor;
 
 // Re-export secret service trait for convenience

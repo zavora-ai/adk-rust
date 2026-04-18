@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Project-Scoped Memory (`adk-memory`, `adk-core`)
+
+Optional `project_id` dimension for memory isolation. Memories are now scoped by `(app_name, user_id, project_id?)` — global entries (no project) are visible everywhere, project entries are isolated to their project.
+
+- **adk-memory**: Added `project_id: Option<String>` field with `#[serde(default)]` to `SearchRequest`. Existing callers that construct `SearchRequest` must add `project_id: None` to the struct literal (the field has no default in struct construction). JSON deserialization is backward-compatible via `#[serde(default)]`.
+- **adk-memory**: Added `validate_project_id()` — rejects empty strings and strings over 256 characters.
+- **adk-memory**: Added `MemoryService::add_session_to_project()` — store session entries scoped to a project. Default delegates to `add_session`.
+- **adk-memory**: Added `MemoryService::add_entry_to_project()` — store a single entry scoped to a project. Default delegates to `add_entry`.
+- **adk-memory**: Added `MemoryService::delete_entries_in_project()` — delete entries matching a query within a project. Default delegates to `delete_entries`.
+- **adk-memory**: Added `MemoryService::delete_project()` — delete all entries for a project. Default returns "not implemented" error.
+- **adk-memory**: Added `MemoryServiceAdapter::with_project_id()` builder — binds a project scope so all `search`/`add`/`delete` operations go through project-scoped methods.
+- **adk-memory**: All six backends (InMemory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j) implement project-scoped storage, search isolation, and deletion.
+- **adk-memory**: SQLite, PostgreSQL, MongoDB, and Neo4j backends include migration v2 for the `project_id` column/index/property.
+- **adk-core**: Added `Memory::search_in_project(query, project_id)` — search within a project scope. Default delegates to `search`.
+- **adk-core**: Added `Memory::add_to_project(entry, project_id)` — add an entry to a project scope. Default delegates to `add`.
+- **examples/project_scoped_memory**: New standalone example demonstrating all project-scoped memory capabilities.
+
+### Breaking Changes (minor)
+
+- **adk-memory**: `SearchRequest` now has a `project_id: Option<String>` field. Code that constructs `SearchRequest` via struct literal must add `project_id: None`. This does **not** affect JSON deserialization (the field defaults to `None` via `#[serde(default)]`).
+- **adk-memory**: `InMemoryMemoryService::delete_entries()` now only deletes global entries (entries with `project_id = None`). Previously it deleted all matching entries regardless of scope. Use `delete_entries_in_project()` to delete project-scoped entries.
+
 #### MCP Server Lifecycle Management (`adk-tool`)
 
 - **adk-tool**: Added `McpServerManager` for managing the full lifecycle of multiple local MCP server child processes. Spawns processes via `TokioChildProcess`, connects them into `McpToolset` instances, monitors health, auto-restarts on crash with exponential backoff, and aggregates tools from all managed servers behind the `Toolset` trait.

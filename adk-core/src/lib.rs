@@ -94,7 +94,6 @@ pub use callbacks::{
     BeforeToolCallback, EventsCompactionConfig, GlobalInstructionProvider, InstructionProvider,
     OnToolErrorCallback,
 };
-pub use intra_compaction::IntraCompactionConfig;
 pub use context::{
     Artifacts, CallbackContext, IncludeContents, InvocationContext, MAX_STATE_KEY_LEN, Memory,
     MemoryEntry, ReadonlyContext, ReadonlyState, RunConfig, SecretService, Session, State,
@@ -109,6 +108,7 @@ pub use identity::{
     AdkIdentity, AppName, ExecutionIdentity, IdentityError, InvocationId, SessionId, UserId,
 };
 pub use instruction_template::inject_session_state;
+pub use intra_compaction::IntraCompactionConfig;
 pub use model::{
     CacheCapable, CitationMetadata, CitationSource, ContextCacheConfig, FinishReason,
     GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream, UsageMetadata,

@@ -7,12 +7,6 @@
 //!
 //! Run with: `cargo nextest run -p adk-sandbox --features sandbox-macos -- --ignored`
 
-use std::collections::HashMap;
-use std::time::Duration;
-
-use adk_sandbox::sandbox::{SandboxPolicyBuilder, get_enforcer};
-use adk_sandbox::types::{ExecRequest, Language};
-
 // ---------------------------------------------------------------------------
 // macOS Seatbelt integration tests
 // ---------------------------------------------------------------------------
@@ -24,9 +18,13 @@ use adk_sandbox::types::{ExecRequest, Language};
 #[ignore]
 async fn test_macos_sandbox_read_allowed_path() {
     use adk_sandbox::sandbox::SandboxEnforcer;
+    use adk_sandbox::sandbox::SandboxPolicyBuilder;
     use adk_sandbox::sandbox::macos::MacOsEnforcer;
+    use adk_sandbox::types::{ExecRequest, Language};
     use adk_sandbox::{ProcessBackend, ProcessConfig, SandboxBackend};
+    use std::collections::HashMap;
     use std::io::Write;
+    use std::time::Duration;
 
     // Create a temp file with known content
     let mut tmp = tempfile::NamedTempFile::new_in("/tmp").expect("create temp file");
@@ -75,8 +73,12 @@ async fn test_macos_sandbox_read_allowed_path() {
 #[tokio::test]
 #[ignore]
 async fn test_macos_sandbox_network_blocked() {
+    use adk_sandbox::sandbox::SandboxPolicyBuilder;
     use adk_sandbox::sandbox::macos::MacOsEnforcer;
+    use adk_sandbox::types::{ExecRequest, Language};
     use adk_sandbox::{ProcessBackend, ProcessConfig, SandboxBackend};
+    use std::collections::HashMap;
+    use std::time::Duration;
 
     // Build policy: deny network, allow process spawn, allow read to system paths
     let policy = SandboxPolicyBuilder::new()
@@ -131,6 +133,7 @@ async fn test_macos_sandbox_network_blocked() {
 #[test]
 #[ignore]
 fn test_get_enforcer_macos() {
+    use adk_sandbox::sandbox::get_enforcer;
     let enforcer =
         get_enforcer().expect("get_enforcer should succeed on macOS with sandbox-macos feature");
     assert_eq!(enforcer.name(), "seatbelt");
@@ -142,6 +145,7 @@ fn test_get_enforcer_macos() {
 #[test]
 #[ignore]
 fn test_get_enforcer_linux() {
+    use adk_sandbox::sandbox::get_enforcer;
     let result = get_enforcer();
     match result {
         Ok(enforcer) => {

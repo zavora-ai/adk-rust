@@ -46,9 +46,7 @@ struct TestContext {
 
 impl TestContext {
     fn new() -> Self {
-        Self {
-            user_content: Content::new("user").with_text("test"),
-        }
+        Self { user_content: Content::new("user").with_text("test") }
     }
 }
 
@@ -100,10 +98,7 @@ async fn test_start_stop_single_server() {
     assert_eq!(status, ServerStatus::Running);
 
     // Stop the server
-    manager
-        .stop_server("playwright")
-        .await
-        .expect("stop_server failed");
+    manager.stop_server("playwright").await.expect("stop_server failed");
 
     // Verify Stopped
     let status = manager.server_status("playwright").await.unwrap();
@@ -129,20 +124,12 @@ async fn test_start_all_multiple_servers() {
 
     // Verify both started successfully
     for (id, result) in &results {
-        result
-            .as_ref()
-            .unwrap_or_else(|e| panic!("server '{id}' failed to start: {e}"));
+        result.as_ref().unwrap_or_else(|e| panic!("server '{id}' failed to start: {e}"));
     }
 
     // Verify both are Running
-    assert_eq!(
-        manager.server_status("playwright").await.unwrap(),
-        ServerStatus::Running
-    );
-    assert_eq!(
-        manager.server_status("computer-use").await.unwrap(),
-        ServerStatus::Running
-    );
+    assert_eq!(manager.server_status("playwright").await.unwrap(), ServerStatus::Running);
+    assert_eq!(manager.server_status("computer-use").await.unwrap(), ServerStatus::Running);
     assert_eq!(manager.running_server_count().await, 2);
 
     manager.shutdown().await.expect("shutdown failed");
@@ -160,10 +147,7 @@ async fn test_restart_server() {
         .expect("start_server timed out")
         .expect("start_server failed");
 
-    assert_eq!(
-        manager.server_status("playwright").await.unwrap(),
-        ServerStatus::Running
-    );
+    assert_eq!(manager.server_status("playwright").await.unwrap(), ServerStatus::Running);
 
     // Restart the server
     tokio::time::timeout(Duration::from_secs(60), manager.restart_server("playwright"))
@@ -172,10 +156,7 @@ async fn test_restart_server() {
         .expect("restart_server failed");
 
     // Verify still Running after restart
-    assert_eq!(
-        manager.server_status("playwright").await.unwrap(),
-        ServerStatus::Running
-    );
+    assert_eq!(manager.server_status("playwright").await.unwrap(), ServerStatus::Running);
 
     manager.shutdown().await.expect("shutdown failed");
 }
@@ -198,10 +179,7 @@ async fn test_tool_aggregation() {
     let tools = manager.tools(ctx).await.expect("tools() failed");
 
     // Playwright MCP server should expose at least one tool
-    assert!(
-        !tools.is_empty(),
-        "expected at least one tool from playwright server"
-    );
+    assert!(!tools.is_empty(), "expected at least one tool from playwright server");
 
     // Verify tools have names
     for tool in &tools {
@@ -235,15 +213,10 @@ async fn test_from_json_and_start() {
         .expect("start_all timed out");
 
     for (id, result) in &results {
-        result
-            .as_ref()
-            .unwrap_or_else(|e| panic!("server '{id}' failed to start: {e}"));
+        result.as_ref().unwrap_or_else(|e| panic!("server '{id}' failed to start: {e}"));
     }
 
-    assert_eq!(
-        manager.server_status("playwright").await.unwrap(),
-        ServerStatus::Running
-    );
+    assert_eq!(manager.server_status("playwright").await.unwrap(), ServerStatus::Running);
 
     manager.shutdown().await.expect("shutdown failed");
 }
@@ -263,9 +236,7 @@ async fn test_graceful_shutdown() {
         .expect("start_all timed out");
 
     for (id, result) in &results {
-        result
-            .as_ref()
-            .unwrap_or_else(|e| panic!("server '{id}' failed to start: {e}"));
+        result.as_ref().unwrap_or_else(|e| panic!("server '{id}' failed to start: {e}"));
     }
 
     assert_eq!(manager.running_server_count().await, 2);
@@ -296,10 +267,7 @@ async fn test_dynamic_add_remove() {
         .await
         .expect("add_server failed");
 
-    assert_eq!(
-        manager.server_status("playwright").await.unwrap(),
-        ServerStatus::Stopped
-    );
+    assert_eq!(manager.server_status("playwright").await.unwrap(), ServerStatus::Stopped);
 
     // Start the dynamically added server
     tokio::time::timeout(Duration::from_secs(60), manager.start_server("playwright"))
@@ -307,16 +275,10 @@ async fn test_dynamic_add_remove() {
         .expect("start_server timed out")
         .expect("start_server failed");
 
-    assert_eq!(
-        manager.server_status("playwright").await.unwrap(),
-        ServerStatus::Running
-    );
+    assert_eq!(manager.server_status("playwright").await.unwrap(), ServerStatus::Running);
 
     // Remove the server (should stop it first)
-    manager
-        .remove_server("playwright")
-        .await
-        .expect("remove_server failed");
+    manager.remove_server("playwright").await.expect("remove_server failed");
 
     // Verify it no longer exists
     let result = manager.server_status("playwright").await;
@@ -349,14 +311,8 @@ async fn test_status_reporting() {
         .expect("start_server failed");
 
     // Check individual status
-    assert_eq!(
-        manager.server_status("playwright").await.unwrap(),
-        ServerStatus::Running
-    );
-    assert_eq!(
-        manager.server_status("computer-use").await.unwrap(),
-        ServerStatus::Stopped
-    );
+    assert_eq!(manager.server_status("playwright").await.unwrap(), ServerStatus::Running);
+    assert_eq!(manager.server_status("computer-use").await.unwrap(), ServerStatus::Stopped);
 
     // Check running count
     assert_eq!(manager.running_server_count().await, 1);
@@ -392,16 +348,10 @@ async fn test_stop_server_not_running_is_noop() {
 
     // Server is Stopped, stopping it again should be a no-op
     let result = manager.stop_server("playwright").await;
-    assert!(
-        result.is_ok(),
-        "stopping a non-running server should succeed as no-op"
-    );
+    assert!(result.is_ok(), "stopping a non-running server should succeed as no-op");
 
     // Status should still be Stopped
-    assert_eq!(
-        manager.server_status("playwright").await.unwrap(),
-        ServerStatus::Stopped
-    );
+    assert_eq!(manager.server_status("playwright").await.unwrap(), ServerStatus::Stopped);
 
     manager.shutdown().await.ok();
 }

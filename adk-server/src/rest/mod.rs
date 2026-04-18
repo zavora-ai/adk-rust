@@ -679,8 +679,7 @@ impl ServerBuilder {
             .route("/sessions", post(controllers::session::create_session))
             .route(
                 "/sessions/{app_name}/{user_id}/{session_id}",
-                get(controllers::session::get_session)
-                    .delete(controllers::session::delete_session),
+                get(controllers::session::get_session).delete(controllers::session::delete_session),
             )
             .route(
                 "/apps/{app_name}/users/{user_id}/sessions",
@@ -697,10 +696,7 @@ impl ServerBuilder {
             .layer(auth_layer.clone());
 
         let runtime_router = Router::new()
-            .route(
-                "/run/{app_name}/{user_id}/{session_id}",
-                post(controllers::runtime::run_sse),
-            )
+            .route("/run/{app_name}/{user_id}/{session_id}", post(controllers::runtime::run_sse))
             .route("/run_sse", post(controllers::runtime::run_sse_compat))
             .with_state(runtime_controller);
 
@@ -717,10 +713,7 @@ impl ServerBuilder {
             .layer(auth_layer.clone());
 
         let mut debug_router = Router::new()
-            .route(
-                "/debug/trace/session/{session_id}",
-                get(controllers::debug::get_session_traces),
-            )
+            .route("/debug/trace/session/{session_id}", get(controllers::debug::get_session_traces))
             .route(
                 "/debug/graph/{app_name}/{user_id}/{session_id}/{event_id}",
                 get(controllers::debug::get_graph),
@@ -806,29 +799,32 @@ impl ServerBuilder {
             )
         });
 
-        (app.layer(
-            ServiceBuilder::new()
-                .layer(middleware::from_fn(request_id_middleware))
-                .layer(trace_layer)
-                .layer(TimeoutLayer::with_status_code(
-                    StatusCode::REQUEST_TIMEOUT,
-                    config.security.request_timeout,
-                ))
-                .layer(DefaultBodyLimit::max(config.security.max_body_size))
-                .layer(cors_layer)
-                .layer(SetResponseHeaderLayer::if_not_present(
-                    header::X_CONTENT_TYPE_OPTIONS,
-                    HeaderValue::from_static("nosniff"),
-                ))
-                .layer(SetResponseHeaderLayer::if_not_present(
-                    header::X_FRAME_OPTIONS,
-                    HeaderValue::from_static("DENY"),
-                ))
-                .layer(SetResponseHeaderLayer::if_not_present(
-                    header::X_XSS_PROTECTION,
-                    HeaderValue::from_static("1; mode=block"),
-                )),
-        ), shutdown_handle)
+        (
+            app.layer(
+                ServiceBuilder::new()
+                    .layer(middleware::from_fn(request_id_middleware))
+                    .layer(trace_layer)
+                    .layer(TimeoutLayer::with_status_code(
+                        StatusCode::REQUEST_TIMEOUT,
+                        config.security.request_timeout,
+                    ))
+                    .layer(DefaultBodyLimit::max(config.security.max_body_size))
+                    .layer(cors_layer)
+                    .layer(SetResponseHeaderLayer::if_not_present(
+                        header::X_CONTENT_TYPE_OPTIONS,
+                        HeaderValue::from_static("nosniff"),
+                    ))
+                    .layer(SetResponseHeaderLayer::if_not_present(
+                        header::X_FRAME_OPTIONS,
+                        HeaderValue::from_static("DENY"),
+                    ))
+                    .layer(SetResponseHeaderLayer::if_not_present(
+                        header::X_XSS_PROTECTION,
+                        HeaderValue::from_static("1; mode=block"),
+                    )),
+            ),
+            shutdown_handle,
+        )
     }
 }
 

@@ -4,8 +4,8 @@
 //! and at-most-once-per-cycle guard.
 
 use adk_core::intra_compaction::{IntraCompactionConfig, estimate_tokens};
-use adk_core::{BaseEventsSummarizer, Content, Event, EventActions, EventCompaction};
 use adk_core::{AdkError, ErrorComponent};
+use adk_core::{BaseEventsSummarizer, Content, Event, EventActions, EventCompaction};
 use adk_runner::IntraInvocationCompactor;
 use async_trait::async_trait;
 use proptest::prelude::*;
@@ -41,10 +41,7 @@ impl BaseEventsSummarizer for MockSummarizer {
         let mut event = Event::new("compaction");
         event.author = "system".to_string();
         event.llm_response.content = Some(summary_content);
-        event.actions = EventActions {
-            compaction: Some(compaction),
-            ..Default::default()
-        };
+        event.actions = EventActions { compaction: Some(compaction), ..Default::default() };
 
         Ok(Some(event))
     }
@@ -328,11 +325,8 @@ async fn test_summarizer_error_returns_none() {
         .map(|i| make_text_event(&format!("Event {i} with enough text to exceed threshold")))
         .collect();
 
-    let config = IntraCompactionConfig {
-        token_threshold: 1,
-        overlap_event_count: 1,
-        chars_per_token: 4,
-    };
+    let config =
+        IntraCompactionConfig { token_threshold: 1, overlap_event_count: 1, chars_per_token: 4 };
 
     let compactor = IntraInvocationCompactor::new(config, Arc::new(FailingSummarizer));
 

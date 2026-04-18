@@ -405,6 +405,7 @@ mod tests {
                 app_name: identity.app_name.as_ref().to_string(),
                 limit: None,
                 min_score: None,
+                project_id: None,
             })
             .await
             .unwrap();
@@ -492,6 +493,7 @@ mod tests {
                 app_name: identity.app_name.as_ref().to_string(),
                 limit: None,
                 min_score: None,
+                project_id: None,
             })
             .await
             .unwrap();

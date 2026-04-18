@@ -96,11 +96,7 @@ impl PromptOptimizer {
     ///   (separate from the agent's own LLM).
     /// * `evaluator` - The evaluator used to score the agent against the eval set.
     /// * `config` - Optimization configuration (max iterations, target threshold, output path).
-    pub fn new(
-        optimizer_llm: Arc<dyn Llm>,
-        evaluator: Evaluator,
-        config: OptimizerConfig,
-    ) -> Self {
+    pub fn new(optimizer_llm: Arc<dyn Llm>, evaluator: Evaluator, config: OptimizerConfig) -> Self {
         Self { optimizer_llm, evaluator, config }
     }
 
@@ -129,11 +125,7 @@ impl PromptOptimizer {
 
         // Run initial evaluation
         let initial_score = self.evaluate_agent(agent.clone(), eval_set).await?;
-        info!(
-            iteration = 0,
-            score = initial_score,
-            "initial evaluation complete"
-        );
+        info!(iteration = 0, score = initial_score, "initial evaluation complete");
 
         // Check if initial score already meets threshold
         if initial_score >= self.config.target_threshold {
@@ -161,9 +153,7 @@ impl PromptOptimizer {
             iterations_run = iteration;
 
             // Propose improved instructions via optimizer LLM
-            let proposed = self
-                .propose_improvements(&current_instructions, best_score)
-                .await?;
+            let proposed = self.propose_improvements(&current_instructions, best_score).await?;
 
             info!(
                 iteration,
@@ -178,12 +168,7 @@ impl PromptOptimizer {
             // Re-evaluate with the new instructions
             let score = self.evaluate_agent(agent.clone(), eval_set).await?;
 
-            info!(
-                iteration,
-                score,
-                previous_best = best_score,
-                "evaluation complete"
-            );
+            info!(iteration, score, previous_best = best_score, "evaluation complete");
 
             if score > best_score {
                 best_score = score;
@@ -192,9 +177,7 @@ impl PromptOptimizer {
                 // Revert to best instructions if score didn't improve
                 warn!(
                     iteration,
-                    score,
-                    best_score,
-                    "score did not improve, reverting to best instructions"
+                    score, best_score, "score did not improve, reverting to best instructions"
                 );
                 current_instructions = best_instructions.clone();
             }
@@ -231,11 +214,7 @@ impl PromptOptimizer {
     }
 
     /// Evaluate the agent against the eval set and return an aggregate score.
-    async fn evaluate_agent(
-        &self,
-        agent: Arc<dyn Agent>,
-        eval_set: &EvalSet,
-    ) -> Result<f64> {
+    async fn evaluate_agent(&self, agent: Arc<dyn Agent>, eval_set: &EvalSet) -> Result<f64> {
         let base_path = std::path::Path::new(".");
         let cases = eval_set.get_all_cases(base_path)?;
 
@@ -282,16 +261,16 @@ impl PromptOptimizer {
             vec![Content::new("user").with_text(prompt)],
         );
 
-        let mut stream = self
-            .optimizer_llm
-            .generate_content(request, false)
-            .await
-            .map_err(|e| EvalError::ExecutionError(format!("optimizer LLM call failed: {e}")))?;
+        let mut stream =
+            self.optimizer_llm.generate_content(request, false).await.map_err(|e| {
+                EvalError::ExecutionError(format!("optimizer LLM call failed: {e}"))
+            })?;
 
         let mut result_text = String::new();
         while let Some(response) = stream.next().await {
-            let response = response
-                .map_err(|e| EvalError::ExecutionError(format!("optimizer LLM stream error: {e}")))?;
+            let response = response.map_err(|e| {
+                EvalError::ExecutionError(format!("optimizer LLM stream error: {e}"))
+            })?;
             if let Some(content) = &response.content {
                 for part in &content.parts {
                     if let Some(text) = part.text() {
