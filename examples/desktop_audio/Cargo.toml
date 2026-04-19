@@ -1,0 +1,49 @@
+[package]
+name = "desktop-audio-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-audio = { path = "../../adk-audio", features = ["desktop-audio", "tts", "stt", "vad"] }
+adk-core = { path = "../../adk-core" }
+adk-agent = { path = "../../adk-agent" }
+adk-model = { path = "../../adk-model", features = ["gemini"] }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+futures = "0.3"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy = "0.15"
+bytes = "1"
+
+[dev-dependencies]
+proptest = "1"
+
+[[bin]]
+name = "list-devices"
+path = "src/list_devices.rs"
+
+[[bin]]
+name = "capture-audio"
+path = "src/capture_audio.rs"
+
+[[bin]]
+name = "playback-audio"
+path = "src/playback_audio.rs"
+
+[[bin]]
+name = "vad-turn-taking"
+path = "src/vad_turn_taking.rs"
+
+[[bin]]
+name = "voice-agent"
+path = "src/voice_agent.rs"
+
+[[bin]]
+name = "config-validation"
+path = "src/config_validation.rs"

@@ -58,6 +58,30 @@ Optional `project_id` dimension for memory isolation. Memories are now scoped by
 
 #### v0.7.0 Feature Examples
 
+#### Desktop Audio Pipeline (`adk-audio`)
+
+Cross-platform desktop audio I/O behind the `desktop-audio` feature flag. Three new components — `AudioCapture`, `AudioPlayback`, and `VadTurnManager` — provide microphone capture, speaker playback, and VAD-driven turn-taking. All components produce and consume the existing `AudioFrame` type and integrate with `AudioPipelineBuilder`.
+
+- **adk-audio**: Added `desktop-audio` feature flag (`desktop-audio = ["dep:cpal", "vad"]`). Intentionally excluded from the `all` feature to avoid pulling `cpal` into CI builds without audio hardware.
+- **adk-audio**: Added `AudioError::Device(String)` variant gated behind `#[cfg(feature = "desktop-audio")]` for system audio device errors.
+- **adk-audio**: Added `AudioDevice` struct — opaque device descriptor with `id()` and `name()` accessors, shared by capture and playback.
+- **adk-audio**: Added `CaptureConfig` struct with `sample_rate`, `channels`, `frame_duration_ms` fields and `validate()` method that rejects zero values.
+- **adk-audio**: Added `AudioCapture` struct — microphone capture via `cpal`. Methods: `list_input_devices()`, `start_capture(device_id, config) -> AudioStream`, `stop_capture()`. Produces `AudioFrame` values through a bounded mpsc channel (capacity 64).
+- **adk-audio**: Added `AudioStream` type alias (`tokio::sync::mpsc::Receiver<AudioFrame>`).
+- **adk-audio**: Added `AudioPlayback` struct — speaker playback via `cpal`. Methods: `list_output_devices()`, `play(device_id, frame)`, `stop()`. Accepts `AudioFrame` values in PCM-16 LE format.
+- **adk-audio**: Added `VadMode` enum (`HandsFree`, `PushToTalk`) and `VadConfig` struct with `validate()` method.
+- **adk-audio**: Added `VoiceActivityEvent` enum (`SpeechStarted`, `SpeechEnded { duration_ms }`) for turn-taking events.
+- **adk-audio**: Added `VadTurnManager` struct — consumes `AudioStream`, applies `VadProcessor::is_speech()`, emits `VoiceActivityEvent` via callback. HandsFree mode detects speech boundaries using configurable thresholds. PushToTalk mode suppresses automatic events.
+- **adk-audio**: Extended `AudioPipelineBuilder` with `capture()` and `playback()` builder methods gated behind `desktop-audio`.
+- **adk-audio**: All new types are `Send + Sync` for use across Tokio tasks.
+- **examples/desktop_audio**: New standalone example crate with 6 binaries:
+  - `list-devices` — enumerate input/output audio devices
+  - `capture-audio` — capture 3 seconds of microphone audio
+  - `playback-audio` — play silence through speakers
+  - `vad-turn-taking` — HandsFree VAD with speech start/end events
+  - `voice-agent` — full conversational voice agent: Mic → GeminiStt → LlmAgent (gemini-2.5-flash) → GeminiTts → Speaker. Uses real Gemini cloud providers, no mocks.
+  - `config-validation` — demonstrate config validation and error handling
+
 Eleven standalone example crates, each demonstrating one v0.7.0 feature. All are standalone crates in `examples/` with `[workspace]` key, path dependencies to workspace crates, consistent boilerplate (dotenvy, tracing, banner, env validation), and full README documentation.
 
 - **examples/yaml_agent**: YAML agent definition loading — `AgentConfigLoader::load_file()`, `load_directory()`, sub-agent cross-references, validation error handling

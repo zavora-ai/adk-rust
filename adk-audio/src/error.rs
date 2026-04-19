@@ -60,6 +60,11 @@ pub enum AudioError {
     #[cfg(any(feature = "tts", feature = "stt", feature = "music"))]
     #[error("Network error: {0}")]
     Network(#[from] reqwest::Error),
+
+    /// Desktop audio device error (capture, playback, enumeration).
+    #[cfg(feature = "desktop-audio")]
+    #[error("Device error: {0}")]
+    Device(String),
 }
 
 /// Convenience result type for audio operations.

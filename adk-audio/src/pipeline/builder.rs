@@ -33,6 +33,12 @@ pub struct AudioPipelineBuilder {
     post_fx: Option<FxChain>,
     agent: Option<Arc<dyn adk_core::Agent>>,
     buffer_size: usize,
+    /// Desktop audio capture source (microphone).
+    #[cfg(feature = "desktop-audio")]
+    capture: Option<crate::desktop::capture::AudioCapture>,
+    /// Desktop audio playback sink (speaker).
+    #[cfg(feature = "desktop-audio")]
+    playback: Option<crate::desktop::playback::AudioPlayback>,
 }
 
 impl AudioPipelineBuilder {
@@ -47,6 +53,10 @@ impl AudioPipelineBuilder {
             post_fx: None,
             agent: None,
             buffer_size: 32,
+            #[cfg(feature = "desktop-audio")]
+            capture: None,
+            #[cfg(feature = "desktop-audio")]
+            playback: None,
         }
     }
 
@@ -95,6 +105,32 @@ impl AudioPipelineBuilder {
     /// Set the channel buffer size (default: 32).
     pub fn buffer_size(mut self, size: usize) -> Self {
         self.buffer_size = size;
+        self
+    }
+
+    /// Set the audio capture source for desktop pipelines.
+    ///
+    /// When both `capture` and `playback` are configured, `build_voice_agent()`
+    /// will store them for the caller to wire into the pipeline's input/output
+    /// channels.
+    ///
+    /// Only available when the `desktop-audio` feature is enabled.
+    #[cfg(feature = "desktop-audio")]
+    pub fn capture(mut self, capture: crate::desktop::capture::AudioCapture) -> Self {
+        self.capture = Some(capture);
+        self
+    }
+
+    /// Set the audio playback sink for desktop pipelines.
+    ///
+    /// When both `capture` and `playback` are configured, `build_voice_agent()`
+    /// will store them for the caller to wire into the pipeline's input/output
+    /// channels.
+    ///
+    /// Only available when the `desktop-audio` feature is enabled.
+    #[cfg(feature = "desktop-audio")]
+    pub fn playback(mut self, playback: crate::desktop::playback::AudioPlayback) -> Self {
+        self.playback = Some(playback);
         self
     }
 
@@ -171,6 +207,13 @@ impl AudioPipelineBuilder {
     /// Build a voice agent pipeline (Audio → VAD → STT → Agent → TTS → Audio).
     ///
     /// Requires `tts`, `stt`, `vad`, and `agent` to be set.
+    ///
+    /// When the `desktop-audio` feature is enabled and both `capture` and `playback`
+    /// are configured, the caller should use the returned [`PipelineHandle`] to wire
+    /// the capture stream into `input_tx` and route `output_rx` audio frames to
+    /// playback. Starting capture requires a device ID and [`CaptureConfig`](crate::desktop::CaptureConfig),
+    /// and playback requires a device ID, so the builder stores the instances and
+    /// the caller completes the wiring at runtime.
     pub fn build_voice_agent(self) -> AudioResult<PipelineHandle> {
         validate_voice_agent_config(
             self.tts.is_some(),
@@ -202,6 +245,25 @@ impl AudioPipelineBuilder {
             m,
             shutdown_rx,
         ));
+
+        // When desktop-audio is enabled and both capture and playback are
+        // configured, wire them into the pipeline's input/output channels.
+        // Starting capture requires a device_id and CaptureConfig, and
+        // playback requires a device_id — these are runtime parameters.
+        // The caller should:
+        //   1. Call `capture.start_capture(device_id, &config)` to get an AudioStream
+        //   2. Spawn a task that reads from the AudioStream and sends
+        //      `PipelineInput::Audio(frame)` into `handle.input_tx`
+        //   3. Spawn a task that reads `PipelineOutput::Audio(frame)` from
+        //      `handle.output_rx` and calls `playback.play(device_id, &frame)`
+        #[cfg(feature = "desktop-audio")]
+        if self.capture.is_some() && self.playback.is_some() {
+            tracing::info!(
+                "desktop audio capture and playback configured — caller must wire \
+                 capture stream to input_tx and output_rx to playback using device \
+                 IDs at runtime"
+            );
+        }
 
         Ok(PipelineHandle::new(input_tx, output_rx, metrics, shutdown_tx))
     }

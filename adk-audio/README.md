@@ -37,6 +37,7 @@ adk-rust = { version = "0.6.0", features = ["audio"] }
 | `qwen3-tts` | Qwen3-TTS native Candle-based TTS (0.6B / 1.7B) | `qwen_tts`, `candle-core`, `hf-hub` |
 | `all-onnx` | All ONNX backends (STT + TTS) | combines above |
 | `livekit` | adk-realtime bridge | `livekit-api`, `adk-realtime` |
+| `desktop-audio` | Desktop mic capture, speaker playback, VAD turn-taking | `cpal` (implies `vad`) |
 | `streaming` | Streaming support marker | — |
 | `all` | All portable features — safe for CI on any platform | everything above |
 

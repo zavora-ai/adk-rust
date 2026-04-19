@@ -49,6 +49,9 @@ candle-core = { version = "0.9", optional = true }
 # Qwen3 TTS native (Candle-based, optional)
 qwen_tts = { version = "0.1", optional = true }
 
+# Desktop audio I/O (optional)
+cpal = { version = "0.15", optional = true }
+
 # Streaming (optional)
 tokio-tungstenite = { workspace = true, optional = true }
 
@@ -69,6 +72,9 @@ music = ["dep:reqwest"]
 fx = ["dep:rubato", "dep:dasp"]
 vad = ["dep:webrtc-vad"]
 streaming = []
+
+# Desktop audio I/O (cpal-based, not included in `all` — requires audio hardware)
+desktop-audio = ["dep:cpal", "vad"]
 
 # Cross-platform local inference
 onnx = ["dep:ort", "dep:tokenizers", "dep:hf-hub"]

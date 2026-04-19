@@ -51,6 +51,15 @@ pub mod onnx;
 #[cfg(feature = "livekit")]
 pub mod bridge;
 
+#[cfg(feature = "desktop-audio")]
+pub mod desktop;
+
+#[cfg(feature = "desktop-audio")]
+pub use desktop::{
+    AudioCapture, AudioDevice, AudioPlayback, AudioStream, CaptureConfig, VadConfig, VadMode,
+    VadTurnManager, VoiceActivityEvent,
+};
+
 pub mod registry;
 
 // Re-exports
