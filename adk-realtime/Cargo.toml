@@ -144,3 +144,11 @@ did-avatar = ["video-avatar", "dep:str0m", "dep:reqwest"]
 full = ["openai", "gemini", "vertex-live", "livekit"]
 # Enable everything including WebRTC (requires cmake installed)
 full-webrtc = ["full", "openai-webrtc"]
+
+[[example]]
+name = "heygen_avatar"
+required-features = ["heygen-avatar"]
+
+[[example]]
+name = "did_avatar"
+required-features = ["did-avatar"]
