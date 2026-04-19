@@ -7,7 +7,7 @@
 //! equivalent `AvatarConfig`.
 //! **Validates: Requirements 11.1, 11.5**
 
-use adk_realtime::avatar::{AvatarConfig, LipSyncConfig, RenderingConfig};
+use adk_realtime::avatar::{AvatarConfig, AvatarProviderKind, LipSyncConfig, RenderingConfig};
 use proptest::prelude::*;
 
 /// Generate an arbitrary URL-like string for the avatar source.
@@ -53,17 +53,24 @@ fn arb_rendering_config() -> impl Strategy<Value = RenderingConfig> {
         .prop_map(|(resolution, frame_rate)| RenderingConfig { resolution, frame_rate })
 }
 
+/// Generate an arbitrary AvatarProviderKind.
+fn arb_provider_kind() -> impl Strategy<Value = AvatarProviderKind> {
+    prop_oneof![Just(AvatarProviderKind::HeyGen), Just(AvatarProviderKind::DId),]
+}
+
 /// Generate an arbitrary AvatarConfig.
 fn arb_avatar_config() -> impl Strategy<Value = AvatarConfig> {
     (
         arb_source_url(),
         proptest::option::of(arb_lip_sync_config()),
         proptest::option::of(arb_rendering_config()),
+        proptest::option::of(arb_provider_kind()),
     )
-        .prop_map(|(source_url, lip_sync, rendering)| AvatarConfig {
+        .prop_map(|(source_url, lip_sync, rendering, provider)| AvatarConfig {
             source_url,
             lip_sync,
             rendering,
+            provider,
         })
 }
 
