@@ -1,7 +1,8 @@
 //! Integration tests for McpServerManager.
 //!
 //! These tests run against real MCP server processes via npx.
-//! Run with: `cargo nextest run -p adk-tool --test mcp_server_lifecycle_integration_tests`
+//! They require Node.js and npx to be installed on the system.
+//! Run with: `cargo nextest run -p adk-tool --test mcp_server_lifecycle_integration_tests -- --ignored`
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -83,6 +84,7 @@ impl ReadonlyContext for TestContext {
 /// Start a single MCP server (playwright), verify status is Running,
 /// stop it, verify status is Stopped.
 #[tokio::test]
+#[ignore] // requires npx (Node.js)
 async fn test_start_stop_single_server() {
     let configs = HashMap::from([("playwright".to_string(), playwright_config())]);
     let manager = McpServerManager::new(configs);
@@ -110,6 +112,7 @@ async fn test_start_stop_single_server() {
 /// Create manager with both servers, call start_all(), verify both are
 /// Running, then shutdown.
 #[tokio::test]
+#[ignore] // requires npx (Node.js)
 async fn test_start_all_multiple_servers() {
     let configs = HashMap::from([
         ("playwright".to_string(), playwright_config()),
@@ -137,6 +140,7 @@ async fn test_start_all_multiple_servers() {
 
 /// Start a server, restart it, verify it's still Running after restart.
 #[tokio::test]
+#[ignore] // requires npx (Node.js)
 async fn test_restart_server() {
     let configs = HashMap::from([("playwright".to_string(), playwright_config())]);
     let manager = McpServerManager::new(configs);
@@ -164,6 +168,7 @@ async fn test_restart_server() {
 /// Start a server, use the Toolset::tools() method to list tools, verify
 /// we get tools back.
 #[tokio::test]
+#[ignore] // requires npx (Node.js)
 async fn test_tool_aggregation() {
     let configs = HashMap::from([("playwright".to_string(), playwright_config())]);
     let manager = McpServerManager::new(configs);
@@ -192,6 +197,7 @@ async fn test_tool_aggregation() {
 /// Load config from a JSON string (using the real server configs), start
 /// all, verify running.
 #[tokio::test]
+#[ignore] // requires npx (Node.js)
 async fn test_from_json_and_start() {
     let json = r#"{
         "mcpServers": {
@@ -223,6 +229,7 @@ async fn test_from_json_and_start() {
 
 /// Start multiple servers, call shutdown(), verify all are Stopped.
 #[tokio::test]
+#[ignore] // requires npx (Node.js)
 async fn test_graceful_shutdown() {
     let configs = HashMap::from([
         ("playwright".to_string(), playwright_config()),
@@ -258,6 +265,7 @@ async fn test_graceful_shutdown() {
 
 /// Create empty manager, add a server dynamically, start it, remove it.
 #[tokio::test]
+#[ignore] // requires npx (Node.js)
 async fn test_dynamic_add_remove() {
     let manager = McpServerManager::new(HashMap::new());
 
@@ -290,6 +298,7 @@ async fn test_dynamic_add_remove() {
 /// Start some servers, check server_status(), all_statuses(),
 /// running_server_count().
 #[tokio::test]
+#[ignore] // requires npx (Node.js)
 async fn test_status_reporting() {
     let configs = HashMap::from([
         ("playwright".to_string(), playwright_config()),
