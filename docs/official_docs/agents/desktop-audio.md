@@ -12,14 +12,21 @@ Microphone → AudioCapture → AudioStream → [VAD → STT → Agent → TTS] 
 
 All components use the `cpal` crate for cross-platform audio (CoreAudio on macOS, PipeWire/ALSA/PulseAudio on Linux, WASAPI on Windows) and produce/consume the standard `AudioFrame` type.
 
-## Feature Flag
+## Feature Flags
 
 ```toml
 [dependencies]
+# Cross-platform (macOS, Linux, Windows) via cpal
 adk-audio = { version = "0.7.0", features = ["desktop-audio"] }
 ```
 
-The `desktop-audio` feature implies `vad` (for `VadProcessor`) and adds `cpal` as a dependency. It is intentionally excluded from the `all` feature to avoid pulling platform-specific audio dependencies into CI builds without audio hardware.
+The `desktop-audio` feature implies `vad` (for `VadProcessor`) and adds `cpal` as a dependency. It is intentionally excluded from the `all` feature to avoid pulling platform-specific audio dependencies into CI builds.
+
+### PipeWire Support
+
+On modern Linux (Fedora 34+, Ubuntu 22.10+, Arch), PipeWire has replaced PulseAudio and ALSA as the default audio server. The `desktop-audio` feature works on PipeWire transparently through its ALSA compatibility layer — no extra configuration needed.
+
+A native PipeWire backend (`desktop-pipewire`) using the [`pipewire`](https://crates.io/crates/pipewire) crate (v0.9) is planned for a future release. Native PipeWire would provide lower latency and direct session management. It is currently blocked by a dependency conflict: `redis-protocol 6.0.0` pins `cookie-factory =0.3.2` while `pipewire`'s `libspa` requires `0.3.3`. Once upstream relaxes this pin, the native backend can be added.
 
 ## Quick Start
 
@@ -184,10 +191,11 @@ Desktop audio errors use the existing `AudioError` enum:
 | Platform | Audio Backend | Status |
 |----------|--------------|--------|
 | macOS | CoreAudio | Supported |
-| Linux | PipeWire (via ALSA compat), ALSA, PulseAudio | Supported (install `libasound2-dev`) |
+| Linux | PipeWire (via ALSA compat) | Supported (install `libasound2-dev`) |
+| Linux | ALSA / PulseAudio (legacy) | Supported (install `libasound2-dev`) |
 | Windows | WASAPI | Supported |
 
-On modern Linux distributions, PipeWire is the default audio server and provides full ALSA and PulseAudio compatibility. `cpal` connects through the ALSA interface, which PipeWire handles transparently — no extra configuration needed.
+On modern Linux, PipeWire is the default audio server and has replaced PulseAudio and ALSA. The `desktop-audio` feature works on PipeWire transparently through its ALSA compatibility layer. A native PipeWire backend using the `pipewire` crate is planned for a future release (currently blocked by an upstream dependency conflict in `redis-protocol`).
 
 ## Examples
 
