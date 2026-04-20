@@ -104,8 +104,28 @@ impl std::fmt::Debug for HeyGenProvider {
 
 impl HeyGenProvider {
     /// Create a new `HeyGenProvider` with the given configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `api_base_url` does not use HTTPS (cleartext transport
+    /// would expose API keys and session data).
     pub fn new(config: HeyGenConfig) -> Self {
+        assert!(
+            config.api_base_url.starts_with("https://"),
+            "heygen: api_base_url must use https:// for secure transport, got: {}",
+            config.api_base_url
+        );
         Self { config, http_client: reqwest::Client::new(), sessions: RwLock::new(HashMap::new()) }
+    }
+
+    /// Build a URL under the API base, enforcing HTTPS.
+    fn secure_url(&self, path: &str) -> AvatarResult<String> {
+        if !self.config.api_base_url.starts_with("https://") {
+            return Err(RealtimeError::provider(
+                "heygen: api_base_url must use https:// for secure transport",
+            ));
+        }
+        Ok(format!("{}{path}", self.config.api_base_url))
     }
 }
 
@@ -139,7 +159,7 @@ impl AvatarProvider for HeyGenProvider {
             version: Some("v2".to_string()),
         };
 
-        let url = format!("{}/v1/streaming.new", self.config.api_base_url);
+        let url = self.secure_url("/v1/streaming.new")?;
         tracing::info!(url = %url, "heygen: creating streaming session");
 
         let response = self
@@ -286,7 +306,7 @@ impl AvatarProvider for HeyGenProvider {
         let request_body =
             api::TaskRequest { session_id: session_id.to_string(), text: String::new() };
 
-        let url = format!("{}/v1/streaming.task", self.config.api_base_url);
+        let url = self.secure_url("/v1/streaming.task")?;
         let response = self
             .http_client
             .post(&url)
@@ -322,7 +342,7 @@ impl AvatarProvider for HeyGenProvider {
         // Step 1: Call HeyGen REST API to stop the streaming session.
         let request_body = api::StopSessionRequest { session_id: session_id.to_string() };
 
-        let url = format!("{}/v1/streaming.stop", self.config.api_base_url);
+        let url = self.secure_url("/v1/streaming.stop")?;
         tracing::info!(session_id = %session_id, "heygen: stopping session");
 
         let result = self

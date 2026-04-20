@@ -96,8 +96,28 @@ impl std::fmt::Debug for DIDProvider {
 
 impl DIDProvider {
     /// Create a new `DIDProvider` with the given configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `api_base_url` does not use HTTPS (cleartext transport
+    /// would expose API keys and session data).
     pub fn new(config: DIDConfig) -> Self {
+        assert!(
+            config.api_base_url.starts_with("https://"),
+            "d-id: api_base_url must use https:// for secure transport, got: {}",
+            config.api_base_url
+        );
         Self { config, http_client: reqwest::Client::new(), sessions: RwLock::new(HashMap::new()) }
+    }
+
+    /// Build a URL under the API base, enforcing HTTPS.
+    fn secure_url(&self, path: &str) -> AvatarResult<String> {
+        if !self.config.api_base_url.starts_with("https://") {
+            return Err(RealtimeError::provider(
+                "d-id: api_base_url must use https:// for secure transport",
+            ));
+        }
+        Ok(format!("{}{path}", self.config.api_base_url))
     }
 }
 
@@ -126,7 +146,7 @@ impl AvatarProvider for DIDProvider {
             knowledge_id: self.config.knowledge_id.clone(),
         };
 
-        let url = format!("{}/agents/{}/chat", self.config.api_base_url, self.config.agent_id);
+        let url = self.secure_url(&format!("/agents/{}/chat", self.config.agent_id))?;
         tracing::info!(url = %url, "d-id: creating agent chat session");
 
         // Step 2: Call D-ID REST API.
@@ -234,10 +254,9 @@ impl AvatarProvider for DIDProvider {
         };
 
         // Call D-ID REST API to delete the agent chat session.
-        let url = format!(
-            "{}/agents/{}/chat/{}",
-            self.config.api_base_url, self.config.agent_id, session_id
-        );
+        // Enforce HTTPS to prevent cleartext transmission of session identifiers.
+        let url =
+            self.secure_url(&format!("/agents/{}/chat/{session_id}", self.config.agent_id))?;
         tracing::info!(session_id = %session_id, "d-id: stopping session");
 
         let result = self
