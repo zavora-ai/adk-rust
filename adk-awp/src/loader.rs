@@ -223,33 +223,20 @@ access_level = "anonymous"
 
     #[test]
     fn test_validate_business_context_valid() {
-        let ctx = BusinessContext {
-            site_name: "Test".to_string(),
-            site_description: "Test".to_string(),
-            domain: "example.com".to_string(),
-            capabilities: vec![BusinessCapability {
-                name: "read".to_string(),
-                description: "Read".to_string(),
-                endpoint: "/api/read".to_string(),
-                method: "GET".to_string(),
-                access_level: TrustLevel::Anonymous,
-            }],
-            policies: vec![],
-            contact: None,
-        };
+        let mut ctx = BusinessContext::core("Test", "Test", "example.com");
+        ctx.capabilities = vec![BusinessCapability {
+            name: "read".to_string(),
+            description: "Read".to_string(),
+            endpoint: "/api/read".to_string(),
+            method: "GET".to_string(),
+            access_level: TrustLevel::Anonymous,
+        }];
         assert!(validate_business_context(&ctx).is_ok());
     }
 
     #[test]
     fn test_validate_empty_capabilities() {
-        let ctx = BusinessContext {
-            site_name: "Test".to_string(),
-            site_description: "Test".to_string(),
-            domain: "example.com".to_string(),
-            capabilities: vec![],
-            policies: vec![],
-            contact: None,
-        };
+        let ctx = BusinessContext::core("Test", "Test", "example.com");
         assert!(validate_business_context(&ctx).is_ok());
     }
 }

@@ -27,17 +27,23 @@ mod business;
 mod capability;
 mod discovery;
 mod error;
+mod payment;
 mod request;
 mod requester;
 mod response;
 mod trust;
 mod version;
 
-pub use a2a::{A2aMessage, A2aMessageType};
-pub use business::{BusinessCapability, BusinessContext, BusinessPolicy};
+pub use a2a::{A2aMessage, A2aMessageType, AwpMessageType, AwpTypedMessage};
+pub use business::{
+    BrandVoice, BusinessCapability, BusinessContext, BusinessIdentity, BusinessPolicy,
+    ChannelConfig, ContentConfig, OutreachConfig, PaymentConfig, Product, ReviewConfig,
+    SupportConfig,
+};
 pub use capability::{CapabilityEntry, CapabilityManifest};
 pub use discovery::AwpDiscoveryDocument;
 pub use error::AwpError;
+pub use payment::{PaymentIntent, PaymentIntentState, PaymentPolicy, PaymentPolicyDecision};
 pub use request::AwpRequest;
 pub use requester::RequesterType;
 pub use response::AwpResponse;

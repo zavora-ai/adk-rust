@@ -39,24 +39,20 @@ mod tests {
 
     #[test]
     fn test_business_context_to_toml_round_trip() {
-        let ctx = BusinessContext {
-            site_name: "Test Site".to_string(),
-            site_description: "A test".to_string(),
-            domain: "example.com".to_string(),
-            capabilities: vec![BusinessCapability {
-                name: "read".to_string(),
-                description: "Read data".to_string(),
-                endpoint: "/api/read".to_string(),
-                method: "GET".to_string(),
-                access_level: TrustLevel::Anonymous,
-            }],
-            policies: vec![BusinessPolicy {
-                name: "privacy".to_string(),
-                description: "Privacy policy".to_string(),
-                policy_type: "privacy".to_string(),
-            }],
-            contact: Some("admin@example.com".to_string()),
-        };
+        let mut ctx = BusinessContext::core("Test Site", "A test", "example.com");
+        ctx.capabilities = vec![BusinessCapability {
+            name: "read".to_string(),
+            description: "Read data".to_string(),
+            endpoint: "/api/read".to_string(),
+            method: "GET".to_string(),
+            access_level: TrustLevel::Anonymous,
+        }];
+        ctx.policies = vec![BusinessPolicy {
+            name: "privacy".to_string(),
+            description: "Privacy policy".to_string(),
+            policy_type: "privacy".to_string(),
+        }];
+        ctx.contact = Some("admin@example.com".to_string());
 
         let toml_str = business_context_to_toml(&ctx).unwrap();
         let parsed: BusinessContext = toml::from_str(&toml_str).unwrap();
@@ -65,14 +61,7 @@ mod tests {
 
     #[test]
     fn test_business_context_to_toml_no_contact() {
-        let ctx = BusinessContext {
-            site_name: "Test".to_string(),
-            site_description: "Test".to_string(),
-            domain: "example.com".to_string(),
-            capabilities: vec![],
-            policies: vec![],
-            contact: None,
-        };
+        let ctx = BusinessContext::core("Test", "Test", "example.com");
 
         let toml_str = business_context_to_toml(&ctx).unwrap();
         assert!(toml_str.contains("site_name"));

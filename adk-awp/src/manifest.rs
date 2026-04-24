@@ -13,20 +13,14 @@ use awp_types::{BusinessContext, CapabilityEntry, CapabilityManifest};
 /// use awp_types::{BusinessContext, BusinessCapability, TrustLevel};
 /// use adk_awp::build_manifest;
 ///
-/// let ctx = BusinessContext {
-///     site_name: "My API".to_string(),
-///     site_description: "An API".to_string(),
-///     domain: "api.example.com".to_string(),
-///     capabilities: vec![BusinessCapability {
-///         name: "get_data".to_string(),
-///         description: "Get data".to_string(),
-///         endpoint: "/api/data".to_string(),
-///         method: "GET".to_string(),
-///         access_level: TrustLevel::Anonymous,
-///     }],
-///     policies: vec![],
-///     contact: None,
-/// };
+/// let mut ctx = BusinessContext::core("My API", "An API", "api.example.com");
+/// ctx.capabilities = vec![BusinessCapability {
+///     name: "get_data".to_string(),
+///     description: "Get data".to_string(),
+///     endpoint: "/api/data".to_string(),
+///     method: "GET".to_string(),
+///     access_level: TrustLevel::Anonymous,
+/// }];
 /// let manifest = build_manifest(&ctx);
 /// assert_eq!(manifest.context, "https://schema.org");
 /// assert_eq!(manifest.capabilities.len(), 1);
@@ -58,33 +52,29 @@ mod tests {
     use awp_types::{BusinessCapability, BusinessPolicy, TrustLevel};
 
     fn sample_context() -> BusinessContext {
-        BusinessContext {
-            site_name: "Test API".to_string(),
-            site_description: "A test API".to_string(),
-            domain: "api.example.com".to_string(),
-            capabilities: vec![
-                BusinessCapability {
-                    name: "read_data".to_string(),
-                    description: "Read data".to_string(),
-                    endpoint: "/api/data".to_string(),
-                    method: "GET".to_string(),
-                    access_level: TrustLevel::Anonymous,
-                },
-                BusinessCapability {
-                    name: "write_data".to_string(),
-                    description: "Write data".to_string(),
-                    endpoint: "/api/data".to_string(),
-                    method: "POST".to_string(),
-                    access_level: TrustLevel::Known,
-                },
-            ],
-            policies: vec![BusinessPolicy {
-                name: "privacy".to_string(),
-                description: "Privacy policy".to_string(),
-                policy_type: "privacy".to_string(),
-            }],
-            contact: None,
-        }
+        let mut ctx = BusinessContext::core("Test API", "A test API", "api.example.com");
+        ctx.capabilities = vec![
+            BusinessCapability {
+                name: "read_data".to_string(),
+                description: "Read data".to_string(),
+                endpoint: "/api/data".to_string(),
+                method: "GET".to_string(),
+                access_level: TrustLevel::Anonymous,
+            },
+            BusinessCapability {
+                name: "write_data".to_string(),
+                description: "Write data".to_string(),
+                endpoint: "/api/data".to_string(),
+                method: "POST".to_string(),
+                access_level: TrustLevel::Known,
+            },
+        ];
+        ctx.policies = vec![BusinessPolicy {
+            name: "privacy".to_string(),
+            description: "Privacy policy".to_string(),
+            policy_type: "privacy".to_string(),
+        }];
+        ctx
     }
 
     #[test]
@@ -121,14 +111,7 @@ mod tests {
 
     #[test]
     fn test_build_manifest_empty_capabilities() {
-        let ctx = BusinessContext {
-            site_name: "Empty".to_string(),
-            site_description: "No caps".to_string(),
-            domain: "example.com".to_string(),
-            capabilities: vec![],
-            policies: vec![],
-            contact: None,
-        };
+        let ctx = BusinessContext::core("Empty", "No caps", "example.com");
         let manifest = build_manifest(&ctx);
         assert!(manifest.capabilities.is_empty());
         assert_eq!(manifest.context, "https://schema.org");

@@ -19,33 +19,34 @@ use axum::http::{Request, StatusCode};
 use tower::util::ServiceExt;
 
 fn sample_context() -> BusinessContext {
-    BusinessContext {
-        site_name: "Conformance Test Site".to_string(),
-        site_description: "AWP conformance testing".to_string(),
-        domain: "test.example.com".to_string(),
-        capabilities: vec![
-            BusinessCapability {
-                name: "read_data".to_string(),
-                description: "Read data".to_string(),
-                endpoint: "/api/data".to_string(),
-                method: "GET".to_string(),
-                access_level: TrustLevel::Anonymous,
-            },
-            BusinessCapability {
-                name: "write_data".to_string(),
-                description: "Write data".to_string(),
-                endpoint: "/api/data".to_string(),
-                method: "POST".to_string(),
-                access_level: TrustLevel::Known,
-            },
-        ],
-        policies: vec![BusinessPolicy {
-            name: "privacy".to_string(),
-            description: "Privacy policy".to_string(),
-            policy_type: "privacy".to_string(),
-        }],
-        contact: Some("test@example.com".to_string()),
-    }
+    let mut ctx = BusinessContext::core(
+        "Conformance Test Site",
+        "AWP conformance testing",
+        "test.example.com",
+    );
+    ctx.capabilities = vec![
+        BusinessCapability {
+            name: "read_data".to_string(),
+            description: "Read data".to_string(),
+            endpoint: "/api/data".to_string(),
+            method: "GET".to_string(),
+            access_level: TrustLevel::Anonymous,
+        },
+        BusinessCapability {
+            name: "write_data".to_string(),
+            description: "Write data".to_string(),
+            endpoint: "/api/data".to_string(),
+            method: "POST".to_string(),
+            access_level: TrustLevel::Known,
+        },
+    ];
+    ctx.policies = vec![BusinessPolicy {
+        name: "privacy".to_string(),
+        description: "Privacy policy".to_string(),
+        policy_type: "privacy".to_string(),
+    }];
+    ctx.contact = Some("test@example.com".to_string());
+    ctx
 }
 
 fn build_state(ctx: BusinessContext) -> AwpState {

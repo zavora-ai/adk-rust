@@ -12,14 +12,7 @@ use awp_types::{AwpDiscoveryDocument, BusinessContext, CURRENT_VERSION, TrustLev
 /// use awp_types::{BusinessContext, TrustLevel, CURRENT_VERSION};
 /// use adk_awp::generate_discovery_document;
 ///
-/// let ctx = BusinessContext {
-///     site_name: "My Site".to_string(),
-///     site_description: "A site".to_string(),
-///     domain: "example.com".to_string(),
-///     capabilities: vec![],
-///     policies: vec![],
-///     contact: None,
-/// };
+/// let ctx = BusinessContext::core("My Site", "A site", "example.com");
 /// let doc = generate_discovery_document(&ctx);
 /// assert_eq!(doc.version, CURRENT_VERSION);
 /// assert_eq!(doc.site_name, "My Site");
@@ -47,14 +40,7 @@ mod tests {
     use super::*;
 
     fn sample_context() -> BusinessContext {
-        BusinessContext {
-            site_name: "Test Site".to_string(),
-            site_description: "A test site".to_string(),
-            domain: "example.com".to_string(),
-            capabilities: vec![],
-            policies: vec![],
-            contact: None,
-        }
+        BusinessContext::core("Test Site", "A test site", "example.com")
     }
 
     #[test]
