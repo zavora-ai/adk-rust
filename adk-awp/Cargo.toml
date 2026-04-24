@@ -1,0 +1,43 @@
+[package]
+name = "adk-awp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Agentic Web Protocol (AWP) implementation for ADK-Rust"
+
+[dependencies]
+awp-types = { workspace = true }
+adk-core = { workspace = true }
+axum = { version = "0.8", features = ["macros"] }
+tokio = { workspace = true, features = ["sync", "time", "fs"] }
+async-trait = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true }
+toml = { workspace = true }
+arc-swap = "1"
+notify = "6"
+hmac = "0.12"
+sha2 = { workspace = true }
+hex = { workspace = true }
+reqwest = { workspace = true, optional = true }
+dashmap = "5"
+tracing = { workspace = true }
+thiserror = { workspace = true }
+uuid = { version = "1", features = ["v7"] }
+chrono = { version = "0.4", features = ["serde"] }
+tower = { version = "0.5", features = ["util"] }
+http = "1"
+bytes = "1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+proptest = "1"
+tempfile = "3"
+
+[features]
+default = []
+webhook-delivery = ["dep:reqwest"]

@@ -59,6 +59,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [Launcher](deployment/launcher.md) - Running agents in console or server mode
 - [Server](deployment/server.md) - REST API and web UI integration
 - [A2A Protocol](deployment/a2a.md) - Agent-to-Agent communication
+- [Agentic Web Protocol](deployment/awp.md) - AWP protocol for agent-native web services
 
 ## Evaluation
 

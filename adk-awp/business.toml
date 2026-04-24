@@ -1,0 +1,40 @@
+site_name = "Agentic Web Protocol"
+site_description = "The reference AWP implementation — protocol specification, conformance testing, and developer resources for building agent-native web experiences."
+domain = "agenticwebprotocol.com"
+contact = "hello@agenticwebprotocol.com"
+
+[[capabilities]]
+name = "read_spec"
+description = "Read the AWP protocol specification and documentation"
+endpoint = "/api/spec"
+method = "GET"
+access_level = "anonymous"
+
+[[capabilities]]
+name = "get_implementation_status"
+description = "Get the current implementation status of AWP features across the ecosystem"
+endpoint = "/api/status"
+method = "GET"
+access_level = "known"
+
+[[capabilities]]
+name = "run_conformance_test"
+description = "Run the AWP conformance test suite against a target endpoint"
+endpoint = "/api/conformance"
+method = "POST"
+access_level = "partner"
+
+[[policies]]
+name = "privacy"
+description = "We collect minimal data required for protocol operation. No personal data is stored beyond session scope."
+policy_type = "privacy"
+
+[[policies]]
+name = "rate-limiting"
+description = "Anonymous: 30 req/min, Known: 120 req/min, Partner: 600 req/min, Internal: unlimited."
+policy_type = "rate-limiting"
+
+[[policies]]
+name = "data-retention"
+description = "Session data is ephemeral. Event subscriptions persist until explicitly deleted. No long-term visitor tracking."
+policy_type = "data-retention"

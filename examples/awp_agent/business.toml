@@ -1,0 +1,90 @@
+site_name = "Acme Widget Co"
+site_description = "Premium widgets and gadgets — powered by an AWP-compliant AI agent."
+domain = "localhost:3456"
+contact = "support@acme-widgets.example"
+
+[business]
+name = "Acme Widget Co"
+country = "US"
+languages = ["en"]
+currency = "USD"
+timezone = "America/New_York"
+
+[brand_voice]
+tone = "friendly and helpful"
+greeting = "Welcome to Acme Widgets! How can I help you today?"
+escalation_message = "Let me connect you with our support team."
+
+[[capabilities]]
+name = "browse_products"
+description = "Browse the product catalog"
+endpoint = "/api/products"
+method = "GET"
+access_level = "anonymous"
+
+[[capabilities]]
+name = "check_inventory"
+description = "Check real-time inventory for a product"
+endpoint = "/api/inventory"
+method = "GET"
+access_level = "known"
+
+[[capabilities]]
+name = "place_order"
+description = "Place an order for products"
+endpoint = "/api/orders"
+method = "POST"
+access_level = "known"
+
+[[products]]
+sku = "WIDGET-001"
+name = "Standard Widget"
+price = 1999
+inventory = 500
+tags = ["widget", "standard"]
+description = "Our classic widget — reliable and affordable."
+
+[[products]]
+sku = "WIDGET-PRO"
+name = "Pro Widget"
+price = 4999
+inventory = 150
+tags = ["widget", "premium"]
+description = "Professional-grade widget with extended warranty."
+
+[[products]]
+sku = "GADGET-X"
+name = "Gadget X"
+price = 7999
+inventory = 42
+tags = ["gadget", "premium", "new"]
+description = "Next-generation gadget with AI-powered features."
+
+[[policies]]
+name = "privacy"
+description = "We collect only data necessary for order fulfillment. No tracking beyond session scope."
+policy_type = "privacy"
+
+[[policies]]
+name = "returns"
+description = "30-day return policy on all products. Free returns for Pro and Gadget X."
+policy_type = "returns"
+
+[[policies]]
+name = "rate-limiting"
+description = "Anonymous: 30 req/min, Known: 120 req/min, Partner: 600 req/min."
+policy_type = "rate-limiting"
+
+[payments]
+providers = ["stripe"]
+auto_approve_threshold = 10000
+require_approval_threshold = 50000
+
+[support]
+escalation_contacts = ["support@acme-widgets.example"]
+hours = "Mon-Fri 9:00-17:00 EST"
+sla = "4h"
+
+[outreach]
+follow_up_delay = "48h"
+require_consent = true

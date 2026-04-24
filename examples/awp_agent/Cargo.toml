@@ -1,0 +1,28 @@
+[package]
+name = "awp-agent-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-awp = { path = "../../adk-awp" }
+adk-core = { path = "../../adk-core" }
+adk-agent = { path = "../../adk-agent" }
+adk-model = { path = "../../adk-model", features = ["gemini"] }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+awp-types = { path = "../../awp-types" }
+axum = { version = "0.8", features = ["macros"] }
+arc-swap = "1"
+tokio = { version = "1.40", features = ["full"] }
+anyhow = "1.0"
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", features = ["json"] }
+uuid = { version = "1", features = ["v4"] }
+futures = "0.3"
