@@ -1,0 +1,24 @@
+[package]
+name = "deepseek-v4-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-core = { path = "../../adk-core" }
+adk-agent = { path = "../../adk-agent" }
+adk-model = { path = "../../adk-model", features = ["deepseek"] }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+adk-tool = { path = "../../adk-tool" }
+tokio = { version = "1.40", features = ["full"] }
+futures = "0.3"
+anyhow = "1.0"
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+schemars = "1"
