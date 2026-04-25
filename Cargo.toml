@@ -35,6 +35,7 @@ members = [
 
     # AWP protocol crates
     "awp-types",
+    "adk-awp",
 
     # CLI tools
     "cargo-adk",
@@ -160,3 +161,4 @@ adk-payments = { path = "adk-payments", version = "0.7.0" }
 adk-action = { path = "adk-action", version = "0.7.0" }
 adk-anthropic = { path = "adk-anthropic", version = "0.7.0" }
 awp-types = { path = "awp-types", version = "0.7.0" }
+adk-awp = { path = "adk-awp", version = "0.7.0" }
