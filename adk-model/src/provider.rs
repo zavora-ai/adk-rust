@@ -40,7 +40,7 @@ impl ModelProvider {
             Self::Gemini => "gemini-3.1-flash-lite-preview",
             Self::Openai => "gpt-5-mini",
             Self::Anthropic => "claude-sonnet-4-5-20250929",
-            Self::Deepseek => "deepseek-chat",
+            Self::Deepseek => "deepseek-v4-flash",
             Self::Groq => "llama-3.3-70b-versatile",
             Self::Ollama => "qwen3.5",
         }

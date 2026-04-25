@@ -51,6 +51,9 @@ pub struct FunctionDef {
     pub name: String,
     pub description: String,
     pub parameters: Value,
+    /// When `true` (beta), the model strictly follows the JSON schema.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
 }
 
 /// DeepSeek chat completion request.
@@ -70,9 +73,15 @@ pub struct ChatCompletionRequest {
     pub tools: Option<Vec<Tool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
-    /// Thinking mode configuration for deepseek-reasoner.
+    /// Thinking mode configuration (`{"type": "enabled"}` or `{"type": "disabled"}`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingConfig>,
+    /// Reasoning effort level (`"high"` or `"max"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// Stop sequences.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
 }
 
 /// Response format configuration.
@@ -90,8 +99,14 @@ pub struct ThinkingConfig {
 }
 
 impl ThinkingConfig {
+    /// Create a thinking config that enables chain-of-thought reasoning.
     pub fn enabled() -> Self {
         Self { thinking_type: "enabled".to_string() }
+    }
+
+    /// Create a thinking config that explicitly disables thinking.
+    pub fn disabled() -> Self {
+        Self { thinking_type: "disabled".to_string() }
     }
 }
 
@@ -176,7 +191,6 @@ pub struct Usage {
     pub prompt_cache_hit_tokens: Option<u32>,
     /// Non-cached input tokens.
     #[serde(default)]
-    #[allow(dead_code)]
     pub prompt_cache_miss_tokens: Option<u32>,
 }
 
@@ -243,7 +257,10 @@ pub fn content_to_message(content: &Content) -> Message {
 }
 
 /// Convert ADK tools to DeepSeek tools.
-pub fn convert_tools(tools: &std::collections::HashMap<String, Value>) -> Vec<Tool> {
+///
+/// When `strict` is `true`, each tool definition includes `"strict": true`
+/// for the beta strict tool mode.
+pub fn convert_tools(tools: &std::collections::HashMap<String, Value>, strict: bool) -> Vec<Tool> {
     tools
         .values()
         .filter_map(|tool| {
@@ -260,6 +277,7 @@ pub fn convert_tools(tools: &std::collections::HashMap<String, Value>) -> Vec<To
                     name: name.to_string(),
                     description: description.to_string(),
                     parameters,
+                    strict: if strict { Some(true) } else { None },
                 },
             })
         })
@@ -331,6 +349,7 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
         total_token_count: u.total_tokens as i32,
         thinking_token_count: u.reasoning_tokens.map(|t| t as i32),
         cache_read_input_token_count: u.prompt_cache_hit_tokens.map(|t| t as i32),
+        cache_creation_input_token_count: u.prompt_cache_miss_tokens.map(|t| t as i32),
         ..Default::default()
     });
 
