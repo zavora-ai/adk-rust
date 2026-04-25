@@ -2,6 +2,10 @@
 
 Agentic Web Protocol (AWP) implementation for [ADK-Rust](https://github.com/zavora-ai/adk-rust).
 
+[![crates.io](https://img.shields.io/crates/v/adk-awp.svg)](https://crates.io/crates/adk-awp)
+[![docs.rs](https://docs.rs/adk-awp/badge.svg)](https://docs.rs/adk-awp)
+[![AWP](https://img.shields.io/badge/AWP-agenticwebprotocol.com-0F8A8A)](https://agenticwebprotocol.com)
+
 `adk-awp` provides the full AWP protocol implementation — route registration,
 middleware, rate limiting, consent, events, health monitoring, and business
 context management. Plug `awp_routes()` into any Axum app to make it

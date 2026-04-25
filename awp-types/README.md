@@ -2,6 +2,10 @@
 
 Shared protocol types for the [Agentic Web Protocol (AWP)](https://agenticwebprotocol.com).
 
+[![crates.io](https://img.shields.io/crates/v/awp-types.svg)](https://crates.io/crates/awp-types)
+[![docs.rs](https://docs.rs/awp-types/badge.svg)](https://docs.rs/awp-types)
+[![AWP](https://img.shields.io/badge/AWP-agenticwebprotocol.com-0F8A8A)](https://agenticwebprotocol.com)
+
 `awp-types` provides pure protocol types with **zero `adk-*` dependencies**, making it importable by any Rust project that needs to work with AWP messages — gateways, agents, CLI tools, or third-party integrations.
 
 ## Overview
