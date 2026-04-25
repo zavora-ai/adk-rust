@@ -169,10 +169,16 @@ impl DeepSeekConfig {
     // --- Builder methods ---
 
     /// Set thinking mode explicitly.
+    ///
+    /// When set to `Disabled`, `reasoning_effort` is cleared since the API
+    /// rejects the combination of disabled thinking with a reasoning effort.
     pub fn with_thinking_mode(mut self, mode: ThinkingMode) -> Self {
         self.thinking = Some(mode);
         if mode == ThinkingMode::Enabled {
             self.thinking_enabled = true;
+        } else {
+            self.thinking_enabled = false;
+            self.reasoning_effort = None; // API rejects disabled + effort
         }
         self
     }
@@ -181,6 +187,9 @@ impl DeepSeekConfig {
     pub fn with_thinking(mut self, enabled: bool) -> Self {
         self.thinking_enabled = enabled;
         self.thinking = Some(if enabled { ThinkingMode::Enabled } else { ThinkingMode::Disabled });
+        if !enabled {
+            self.reasoning_effort = None; // API rejects disabled + effort
+        }
         self
     }
 
