@@ -8,6 +8,11 @@ authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 description = "Shared protocol types for the Agentic Web Protocol (AWP)"
+documentation = "https://docs.rs/awp-types"
+readme = "README.md"
+keywords = ["awp", "agent", "protocol", "agentic", "web"]
+categories = ["web-programming", "data-structures"]
+include = ["src/**/*", "Cargo.toml", "README.md"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

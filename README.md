@@ -8,7 +8,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 [![GitHub Discussions](https://img.shields.io/github/discussions/zavora-ai/adk-rust?style=flat&logo=github&color=5865F2)](https://github.com/zavora-ai/adk-rust/discussions)
 
-> **🚀 v0.7.0 Released!** Project-scoped memory isolation (6 backends), OS-level sandbox profiles (Seatbelt/bubblewrap/AppContainer), ServerBuilder API for custom controllers, graceful shutdown endpoint, Gemini 3.1 Flash-Lite support, 11 new v0.7.0 feature examples. See [CHANGELOG](CHANGELOG.md) for full details.
+> **🚀 v0.7.0 Released!** Agentic Web Protocol (AWP) implementation, video avatar providers (HeyGen, D-ID), project-scoped memory isolation (6 backends), OS-level sandbox profiles (Seatbelt/bubblewrap/AppContainer), ServerBuilder API for custom controllers, graceful shutdown endpoint, Gemini 3.1 Flash-Lite support, 11 new v0.7.0 feature examples. See [CHANGELOG](CHANGELOG.md) for full details.
 >
 > **Contributors:** Many thanks to [@mikefaille](https://github.com/mikefaille) — AdkIdentity design, realtime audio, LiveKit bridge, skill system. [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI-compatible providers, xAI, multimodal content. [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [@tomtom215](https://github.com/tomtom215) — A2A Protocol v1.0.0 types crate ([a2a-protocol-types](https://crates.io/crates/a2a-protocol-types)), Foundation-verified wire types powering our A2A v1 layer. [@danielsan](https://github.com/danielsan) — Google deps issue & PR (#181, #203), RAG crash report (#205). [@CodingFlow](https://github.com/CodingFlow) — Gemini 3 thinking level, global endpoint, citationSources (#177, #178, #179). [@ctylx](https://github.com/ctylx) — skill discovery fix (#204). [@poborin](https://github.com/poborin) — project config proposal (#176). [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 >
@@ -65,6 +65,7 @@ ADK-Rust provides a comprehensive framework for building AI agents in Rust, feat
 - **RAG pipeline**: Document chunking, vector embeddings, semantic search with 6 vector store backends
 - **Security**: Role-based access control, declarative scope-based tool security, SSO/OAuth, audit logging
 - **Agentic commerce**: ACP and AP2 payment orchestration with durable transaction journals and evidence-backed recall
+- **Agentic Web Protocol (AWP)**: Make websites agent-native with discovery, capability manifests, trust levels, rate limiting, consent, and health monitoring
 - **Production features**: Session management, artifact storage, memory systems with project-scoped isolation, REST/A2A APIs
 - **Developer experience**: Interactive CLI, 120+ working examples, comprehensive documentation
 
@@ -181,6 +182,8 @@ Built-in tools:
 | `adk-artifact` | Artifact storage system | File-based storage, MIME type handling, image/PDF/video support |
 | `adk-memory` | Long-term memory | Vector embeddings, semantic search, project-scoped isolation, 6 backends |
 | `adk-payments` | Agentic commerce orchestration | ACP/AP2 adapters, canonical transaction kernel, durable journals, evidence-backed payment flows |
+| `awp-types` | AWP protocol types | Trust levels, requester types, discovery documents, capability manifests, payment intents, typed A2A messages — zero `adk-*` deps |
+| `adk-awp` | Agentic Web Protocol implementation | Business context loading, discovery/manifest generation, rate limiting, consent, events, health state machine, AWP routes |
 | `adk-rag` | RAG pipeline | Document chunking, embeddings, vector search, reranking, 6 backends |
 | `adk-runner` | Agent execution runtime | Context management, event streaming, session lifecycle, callbacks |
 | `adk-server` | Production API servers | REST API, A2A v1.0.0 protocol (all 11 operations), middleware, health checks |
@@ -542,6 +545,43 @@ cargo run -p adk-realtime --example openai_webrtc --features openai-webrtc
 cargo run -p adk-realtime --example openai_session_update --features openai
 cargo run -p adk-realtime --example gemini_context_mutation --features gemini
 ```
+
+### Agentic Web Protocol (AWP)
+
+Make any website or service natively accessible to AI agents using the `awp-types` and `adk-awp` crates:
+
+```rust
+use adk_awp::{AwpState, BusinessContextLoader, awp_routes};
+
+// Load business context from TOML
+let loader = BusinessContextLoader::from_file("business.toml".as_ref())?;
+
+// Build AWP state with sensible defaults (rate limiting, consent, health, events)
+let state = AwpState::builder(loader.context_ref()).build();
+
+// Merge AWP routes into your Axum app — 7 endpoints, version negotiation included
+let app = axum::Router::new()
+    .merge(awp_routes(state))
+    .merge(your_custom_routes);
+```
+
+**AWP Endpoints**:
+- `GET /.well-known/awp.json` — Discovery document (entry point for agents)
+- `GET /awp/manifest` — JSON-LD capability manifest
+- `GET /awp/health` — Health state (Healthy/Degrading/Degraded)
+- `POST /awp/events/subscribe` — Webhook subscriptions with HMAC-SHA256 signing
+- `POST /awp/a2a` — Agent-to-agent message handling
+
+**Features**: Trust levels (Anonymous/Known/Partner/Internal), per-trust-level rate limiting, consent management (in-memory or file-backed), health state machine with event emission, version negotiation, business context hot-reload.
+
+**Run the AWP example**:
+```bash
+cd examples/awp_agent
+cp .env.example .env   # add your GOOGLE_API_KEY
+cargo run
+```
+
+See [AWP Documentation](docs/official_docs/deployment/awp.md) for the full guide.
 
 ### Graph-Based Workflows
 

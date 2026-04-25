@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Agentic Web Protocol (`awp-types`, `adk-awp`)
+
+Two new workspace crates implementing the Agentic Web Protocol (AWP) — a protocol for making websites and services natively accessible to AI agents.
+
+- **awp-types**: Pure protocol types with zero `adk-*` dependencies. Includes `TrustLevel` (Anonymous/Known/Partner/Internal), `RequesterType` (Human/Agent), `AwpVersion` with compatibility checks, `AwpError` with HTTP status mapping, `AwpRequest`/`AwpResponse` envelopes, `A2aMessage`/`A2aMessageType`, `AwpDiscoveryDocument`, `CapabilityManifest` (JSON-LD), `BusinessContext` with full schema (business identity, brand voice, products, channels, payments, support, content, reviews, outreach), `PaymentIntent`/`PaymentIntentState`/`PaymentPolicy` for owner-policy-driven payments, `AwpMessageType` with 9 typed message categories for agent routing.
+- **adk-awp**: Full protocol implementation with axum 0.8. Includes `BusinessContextLoader` with hot-reload via ArcSwap, discovery document and capability manifest generation, requester type detection (human vs agent from headers), trust level assignment, `InMemoryRateLimiter` with per-trust-level sliding window (30/120/600/unlimited), `InMemoryConsentService` and `FileConsentService` (JSON file-backed for GDPR/KPA compliance), `InMemoryEventSubscriptionService` with HMAC-SHA256 webhook signing, `HealthStateMachine` (Healthy/Degrading/Degraded) with event emission, AWP version negotiation middleware, `awp_routes()` returning 7 Axum endpoints, `AwpStateBuilder` with sensible defaults.
+- **AWP Endpoints**: `GET /.well-known/awp.json` (discovery), `GET /awp/manifest` (JSON-LD capabilities), `GET /awp/health` (health state), `POST /awp/events/subscribe`, `GET /awp/events/subscriptions`, `DELETE /awp/events/subscriptions/{id}`, `POST /awp/a2a` (A2A messages).
+- **examples/awp_agent**: Standalone example with LLM agent serving AWP-compliant endpoints. Loads `business.toml`, derives agent instructions from business context, exercises all endpoints.
+- **docs/official_docs/deployment/awp.md**: Dedicated AWP documentation section covering architecture, quick start, all endpoints, trust levels, rate limiting, version negotiation, events, health, consent, message types, payment intents, and full `business.toml` schema reference.
+
+#### Video Avatar Providers (`adk-realtime`)
+
+- **adk-realtime**: Added `AvatarProvider` trait (object-safe, Send+Sync+Debug) with `start_session`, `stop_session`, `push_audio`, `is_active` methods.
+- **adk-realtime**: Added `HeyGenProvider` — REST API session management + LiveKit audio publishing. Feature flag: `heygen-avatar`.
+- **adk-realtime**: Added `DIDProvider` — REST API session management + WebRTC signaling. Feature flag: `did-avatar`.
+- **adk-realtime**: Wired avatar providers into `RealtimeAgent` event loop with session lifecycle, audio routing, keep-alive, and graceful degradation.
+- **adk-realtime**: HTTPS enforcement on all avatar provider API URLs (CodeQL fix).
+- **adk-realtime**: Feature flags: `heygen-avatar`, `did-avatar`, `video-avatar` (both).
+- **examples/video_avatar**: HeyGen and D-ID avatar provider examples.
+
+#### GeminiModel Thinking Config (`adk-model`)
+
+- **adk-model**: Added `with_thinking_config()` and `set_thinking_config()` to `GeminiModel`, matching OpenAI (`reasoning_effort`) and Anthropic (`thinking_mode`) patterns.
+- **adk-model**: Re-exported `ThinkingConfig` and `ThinkingLevel` from `adk_model::gemini`.
+
+### Changed
+
+- **adk-awp**: Upgraded from axum 0.7 to axum 0.8, aligning with adk-server, adk-auth, and adk-payments.
+
+### Security
+
+- **rustls-webpki**: Updated 0.103.10 → 0.103.13 (fixes DoS via panic on malformed CRL BIT STRING).
+- **openssl**: Updated 0.10.76 → 0.10.78 (fixes buffer overflow, unchecked callback length, incorrect bounds assertion, OOB read in PEM callback).
+- **rand**: Updated 0.8.5 → 0.8.6 (fixes unsound behavior with custom logger).
+
 #### Project-Scoped Memory (`adk-memory`, `adk-core`)
 
 Optional `project_id` dimension for memory isolation. Memories are now scoped by `(app_name, user_id, project_id?)` — global entries (no project) are visible everywhere, project entries are isolated to their project.

@@ -44,7 +44,7 @@ pub mod state;
 pub mod trust;
 
 pub use config::{AwpConfigError, business_context_to_toml};
-pub use consent::{ConsentService, InMemoryConsentService};
+pub use consent::{ConsentService, FileConsentService, InMemoryConsentService};
 pub use detect::detect_requester_type;
 pub use discovery::generate_discovery_document;
 pub use events::{
@@ -56,5 +56,5 @@ pub use loader::BusinessContextLoader;
 pub use manifest::build_manifest;
 pub use rate_limit::{InMemoryRateLimiter, RateLimitConfig, RateLimiter};
 pub use router::awp_routes;
-pub use state::AwpState;
+pub use state::{AwpState, AwpStateBuilder};
 pub use trust::{DefaultTrustAssigner, TrustLevelAssigner};
