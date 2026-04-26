@@ -38,11 +38,31 @@ Two new workspace crates implementing the Agentic Web Protocol (AWP) — a proto
 
 - **adk-awp**: Upgraded from axum 0.7 to axum 0.8, aligning with adk-server, adk-auth, and adk-payments.
 
+### Fixed
+
+- **adk-agent**: Fixed streaming chunk bloat in `SequentialAgent`/`LoopAgent` history. Consecutive same-role streaming chunks are now consolidated into a single `Content` entry instead of creating N separate entries that bloat LLM context for subsequent agents.
+- **adk-realtime**: Enforced HTTPS on all avatar provider API URLs (CodeQL cleartext transmission fix).
+- **examples/secret_provider**: Removed all secret-derived output from print statements (CodeQL cleartext logging fix).
+
+#### DeepSeek V4 Provider (`adk-model`)
+
+- **adk-model**: Added `DeepSeekConfig::v4_pro()` and `DeepSeekConfig::v4_flash()` constructors for DeepSeek V4 models.
+- **adk-model**: Added `ThinkingMode` enum (`Enabled`/`Disabled`) replacing the boolean `thinking_enabled` toggle. Can now explicitly disable thinking on V4 models that default to enabled.
+- **adk-model**: Added `ReasoningEffort` enum (`High`/`Max`) for controlling thinking depth via the `reasoning_effort` request parameter.
+- **adk-model**: Added strict tool mode support (beta) — `with_strict_tools()` adds `"strict": true` to tool definitions.
+- **adk-model**: Added beta base URL support — `with_beta()` for prefix completion, FIM, and strict tools.
+- **adk-model**: Added `DEEPSEEK_ANTHROPIC_API_BASE` constant for Anthropic API compatibility.
+- **adk-model**: Exposed `prompt_cache_miss_tokens` in usage metadata.
+- **adk-model**: Updated default DeepSeek model from `deepseek-chat` to `deepseek-v4-flash`.
+- **adk-model**: Full backward compatibility — `chat()` and `reasoner()` constructors unchanged.
+- **examples/deepseek_v4**: New standalone example demonstrating all 7 V4 API features (flash, thinking high/max, tool calls with thinking, thinking disabled, multi-turn, legacy compat).
+
 ### Security
 
 - **rustls-webpki**: Updated 0.103.10 → 0.103.13 (fixes DoS via panic on malformed CRL BIT STRING).
 - **openssl**: Updated 0.10.76 → 0.10.78 (fixes buffer overflow, unchecked callback length, incorrect bounds assertion, OOB read in PEM callback).
 - **rand**: Updated 0.8.5 → 0.8.6 (fixes unsound behavior with custom logger).
+- **examples**: Updated all 34 standalone example lockfiles with patched openssl and rustls-webpki.
 
 #### Project-Scoped Memory (`adk-memory`, `adk-core`)
 
