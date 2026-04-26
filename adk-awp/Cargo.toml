@@ -29,7 +29,7 @@ hmac = "0.12"
 sha2 = { workspace = true }
 hex = { workspace = true }
 reqwest = { workspace = true, optional = true }
-dashmap = "5"
+dashmap = "6"
 tracing = { workspace = true }
 thiserror = { workspace = true }
 uuid = { version = "1", features = ["v7"] }

@@ -152,7 +152,7 @@ dependencies = [
  "azure_security_keyvault_secrets",
  "base64 0.22.1",
  "chrono",
- "dashmap 6.1.0",
+ "dashmap",
  "google-cloud-gax 1.9.0",
  "google-cloud-secretmanager-v1",
  "jsonwebtoken 10.3.0",
@@ -176,7 +176,7 @@ dependencies = [
  "axum 0.8.8",
  "bytes",
  "chrono",
- "dashmap 5.5.3",
+ "dashmap",
  "hex",
  "hmac",
  "http 1.4.0",
@@ -2751,7 +2751,7 @@ dependencies = [
  "boa_string",
  "bytemuck",
  "cfg-if",
- "dashmap 6.1.0",
+ "dashmap",
  "fast-float2",
  "hashbrown 0.15.5",
  "icu_normalizer 1.5.0",
@@ -4348,19 +4348,6 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "5.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
-dependencies = [
- "cfg-if",
- "hashbrown 0.14.5",
- "lock_api",
- "once_cell",
- "parking_lot_core",
-]
-
-[[package]]
-name = "dashmap"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
@@ -4555,7 +4542,7 @@ checksum = "3c75a4ce672b27fb8423810efb92a3600027717a1664d06a2c307eeeabcec694"
 dependencies = [
  "arrow",
  "async-trait",
- "dashmap 6.1.0",
+ "dashmap",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-datasource",
@@ -4741,7 +4728,7 @@ dependencies = [
  "arrow",
  "async-trait",
  "chrono",
- "dashmap 6.1.0",
+ "dashmap",
  "datafusion-common",
  "datafusion-expr",
  "futures",
@@ -8623,7 +8610,7 @@ dependencies = [
  "bytes",
  "chrono",
  "crossbeam-skiplist",
- "dashmap 6.1.0",
+ "dashmap",
  "datafusion",
  "datafusion-expr",
  "datafusion-functions",
@@ -14505,7 +14492,7 @@ dependencies = [
  "bytes",
  "chrono",
  "ciborium",
- "dashmap 6.1.0",
+ "dashmap",
  "deunicode",
  "dmp",
  "ext-sort",
