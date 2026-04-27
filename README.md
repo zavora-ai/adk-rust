@@ -8,7 +8,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 [![GitHub Discussions](https://img.shields.io/github/discussions/zavora-ai/adk-rust?style=flat&logo=github&color=5865F2)](https://github.com/zavora-ai/adk-rust/discussions)
 
-> **🚀 v0.7.0 Released!** Agentic Web Protocol (AWP) implementation, video avatar providers (HeyGen, D-ID), project-scoped memory isolation (6 backends), OS-level sandbox profiles (Seatbelt/bubblewrap/AppContainer), ServerBuilder API for custom controllers, graceful shutdown endpoint, Gemini 3.1 Flash-Lite support, 11 new v0.7.0 feature examples. See [CHANGELOG](CHANGELOG.md) for full details.
+> **🚀 v0.8.0 Released!** Dependency diet — default build is now 32% lighter. New feature tiers: `minimal` (default), `standard`, `enterprise`, `full`. Plus: AWP protocol, DeepSeek V4, video avatars, desktop audio, project-scoped memory. See [CHANGELOG](CHANGELOG.md) for full details.
 >
 > **Contributors:** Many thanks to [@mikefaille](https://github.com/mikefaille) — AdkIdentity design, realtime audio, LiveKit bridge, skill system. [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI-compatible providers, xAI, multimodal content. [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [@tomtom215](https://github.com/tomtom215) — A2A Protocol v1.0.0 types crate ([a2a-protocol-types](https://crates.io/crates/a2a-protocol-types)), Foundation-verified wire types powering our A2A v1 layer. [@danielsan](https://github.com/danielsan) — Google deps issue & PR (#181, #203), RAG crash report (#205). [@CodingFlow](https://github.com/CodingFlow) — Gemini 3 thinking level, global endpoint, citationSources (#177, #178, #179). [@ctylx](https://github.com/ctylx) — skill discovery fix (#204). [@poborin](https://github.com/poborin) — project config proposal (#176). [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 >
@@ -223,11 +223,25 @@ Requires Rust 1.85 or later (Rust 2024 edition). Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.7.0"  # Standard: agents, models, tools, sessions, runner, server, CLI
+adk-rust = "0.8.0"  # Minimal (default): Gemini + OpenAI + Anthropic, tools, memory, sessions
 
-# Need graph, browser, eval, realtime, audio, RAG?
-# adk-rust = { version = "0.7.0", features = ["full"] }
+# Need server, auth, graph workflows, eval?
+# adk-rust = { version = "0.8.0", features = ["standard"] }
+
+# Need everything (realtime, browser, RAG, payments, AWP)?
+# adk-rust = { version = "0.8.0", features = ["enterprise"] }
 ```
+
+**Feature tiers:**
+
+| Tier | Includes | Use case |
+|------|----------|----------|
+| `minimal` (default) | 3 LLM providers, tools, memory, sessions, telemetry | Building agents — fast builds |
+| `standard` | minimal + server, CLI, auth, graph, eval, guardrails | Production deployment |
+| `enterprise` | standard + realtime, browser, RAG, payments, AWP | Full-featured production |
+| `full` | enterprise + audio, code execution, sandbox | Everything |
+
+> **Upgrading from 0.7.x?** The default changed from `standard` to `minimal`. Add `features = ["standard"]` to restore the previous behavior.
 
 Set your API key:
 
