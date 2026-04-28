@@ -677,12 +677,19 @@ pub mod sandbox {
     pub use adk_sandbox::*;
 }
 
-/// CLI launcher for running agents.
+/// Lightweight console launcher — always available with the `runner` feature.
 ///
-/// Quick way to run agents in console or server mode:
-/// - [`Launcher`] - Main entry point for CLI apps
+/// When the `cli` feature is enabled, this is replaced by the full-featured
+/// [`adk_cli::Launcher`] with `--serve` mode, readline history, and thinking
+/// block rendering.
+#[cfg(all(feature = "runner", not(feature = "cli")))]
+#[cfg_attr(docsrs, doc(cfg(feature = "runner")))]
+pub use adk_runner::Launcher;
+
+/// Full-featured CLI launcher with console and serve modes.
 ///
-/// Available with feature: `cli`
+/// Requires the `cli` feature (included in `standard` tier).
+/// Provides `--serve` mode, `rustyline` history, and `clap` CLI parsing.
 #[cfg(feature = "cli")]
 #[cfg_attr(docsrs, doc(cfg(feature = "cli")))]
 pub use adk_cli::Launcher;
