@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-04-28
+
+### Breaking Changes
+
+- **Default feature changed from `standard` to `minimal`**: `adk-rust = "0.8.0"` now activates `agents`, `gemini`, `openai`, `anthropic`, `runner`, `sessions`, `tools`, `memory`, and `telemetry`. To restore the 0.7.x default:
+  ```toml
+  adk-rust = { version = "0.8.0", features = ["standard"] }
+  ```
+
+### Changed
+
+#### Dependency Diet — New Feature Tiers
+
+Restructured the `adk-rust` umbrella crate feature tiers to reduce default build times. A hello-world agent now compiles ~165 fewer crates.
+
+| Tier | What's included | Use case |
+|------|----------------|----------|
+| `minimal` (default) | agents, gemini, openai, anthropic, runner, sessions, tools, memory, telemetry | Building agents — fast builds |
+| `standard` | minimal + skills, graph, auth, server, cli, eval, guardrail, plugin, artifacts | Production deployment |
+| `enterprise` | standard + realtime, browser, rag, payments, awp | Full-featured production |
+| `audio` | adk-audio (STT/TTS/desktop) | Voice agents (composable add-on) |
+| `code` | adk-code + adk-sandbox | Code execution (composable add-on) |
+| `full` | enterprise + audio + code + sandbox | Everything |
+
+- **Removed `labs` tier** — replaced by composable add-ons (`audio`, `code`, `sandbox`) that can be mixed with any tier
+- **Added `enterprise` tier** — between `standard` and `full` for production deployments needing realtime, browser, RAG, payments, and AWP
+- **Added `awp` feature** — `adk-awp` is now available through the umbrella crate
+
 ## [0.7.0] - 2026-04-18
 
 ### Added

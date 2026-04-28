@@ -46,6 +46,7 @@ mod cache;
 mod callbacks;
 mod context;
 pub mod intra_compaction;
+mod launcher;
 mod runner;
 
 pub use builder::RunnerConfigBuilder;
@@ -53,6 +54,7 @@ pub use callbacks::{
     AfterModelCallback, AfterToolCallback, BeforeModelCallback, BeforeToolCallback, Callbacks,
 };
 pub use context::{InvocationContext, MutableSession};
+pub use launcher::Launcher;
 pub use runner::{Runner, RunnerConfig};
 
 // Re-export RequestContext for convenience

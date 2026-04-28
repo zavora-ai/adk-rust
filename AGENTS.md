@@ -149,11 +149,14 @@ All opt-in, no defaults:
 
 ### adk-rust (umbrella)
 
-Four presets control which crates are compiled:
+Five presets control which crates are compiled:
 
-- `standard` **(default)** — agents, models, gemini, anthropic, tools, skills, sessions, artifacts, memory, runner, telemetry, guardrail, auth, plugin. Everything needed to build and run agents.
-- `full` — standard + graph, realtime, browser, eval, rag. All stable specialist crates. Does **not** include experimental crates.
-- `labs` — standard + code, sandbox, audio. Experimental crates that may have unstable APIs.
+- `minimal` **(default)** — agents, gemini, openai, anthropic, runner, sessions, tools, memory, telemetry. Everything needed to build agents with fast compile times.
+- `standard` — minimal + skills, graph, auth, server, cli, eval, guardrail, plugin, artifacts. Production deployment with server and auth.
+- `enterprise` — standard + realtime, browser, rag, payments, awp. Full-featured production.
+- `full` — enterprise + audio, code, sandbox. Everything.
+
+Domain add-ons (`audio`, `code`, `sandbox`) are composable with any tier: `features = ["minimal", "audio"]`.
 - `minimal` — agents, gemini, runner. Fastest possible build.
 
 To compile everything (stable + experimental): `features = ["full", "labs"]`.
