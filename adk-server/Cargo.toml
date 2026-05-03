@@ -44,7 +44,7 @@ a2a-protocol-types = { version = "0.5", optional = true }
 # Optional: YAML agent definition parsing
 serde_yaml = { version = "0.9", optional = true }
 # Optional: filesystem watcher for hot reload
-notify = { version = "7", optional = true }
+notify = { version = "8", optional = true }
 
 [features]
 default = []
