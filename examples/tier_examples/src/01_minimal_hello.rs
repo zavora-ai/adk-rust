@@ -1,4 +1,4 @@
-//! # 01 — Minimal Hello World
+//! # 01 — Minimal Hello World (`adk::run()` one-liner)
 //!
 //! Verbatim from the README "Fastest Start" section.
 //! Uses default features (minimal tier) — no explicit features needed.

@@ -1,7 +1,7 @@
-//! # 05 — Minimal with Memory
+//! # 07 — Minimal with Session Memory
 //!
-//! Memory is included in the minimal tier. This example shows multi-turn
-//! conversation with session state preserved across turns.
+//! Memory and sessions are included in the minimal tier. This example shows
+//! multi-turn conversation with session state preserved across turns.
 //!
 //! ```toml
 //! [dependencies]

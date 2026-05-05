@@ -1,0 +1,19 @@
+[package]
+name = "tier-full"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+# Full tier — everything: enterprise + audio, code, sandbox.
+[dependencies]
+adk-rust = { path = "../../../adk-rust", features = ["full"] }
+tokio = { version = "1.40", features = ["full"] }
+anyhow = "1.0"
+dotenvy = "0.15"
+serde_json = "1.0"
+
+[[bin]]
+name = "16-full-sandbox"
+path = "../src/16_full_sandbox.rs"

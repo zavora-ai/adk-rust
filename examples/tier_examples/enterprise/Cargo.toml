@@ -1,0 +1,27 @@
+[package]
+name = "tier-enterprise"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+# Enterprise tier — standard + realtime, browser, RAG, payments, AWP.
+[dependencies]
+adk-rust = { path = "../../../adk-rust", features = ["enterprise"] }
+adk-tool = { path = "../../../adk-tool" }
+tokio = { version = "1.40", features = ["full"] }
+anyhow = "1.0"
+dotenvy = "0.15"
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+schemars = "1"
+
+[[bin]]
+name = "14-enterprise-multi-agent"
+path = "../src/14_enterprise_multi_agent.rs"
+
+[[bin]]
+name = "15-enterprise-parallel"
+path = "../src/15_enterprise_parallel.rs"

@@ -8,11 +8,11 @@
 //! adk-rust = "0.8.0"
 //! ```
 
-use adk_rust::prelude::*;
 use adk_rust::Launcher;
+use adk_rust::prelude::*;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> AnyhowResult<()> {
     dotenvy::dotenv().ok();
     let api_key = std::env::var("GOOGLE_API_KEY")?;
     let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;

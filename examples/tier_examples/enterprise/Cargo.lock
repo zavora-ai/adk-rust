@@ -55,27 +55,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "adk-audio"
-version = "0.8.0"
-dependencies = [
- "adk-core",
- "async-stream",
- "async-trait",
- "base64",
- "bytemuck",
- "bytes",
- "futures",
- "pin-project-lite",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite",
- "tracing",
-]
-
-[[package]]
 name = "adk-auth"
 version = "0.8.0"
 dependencies = [
@@ -162,28 +141,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "adk-code"
-version = "0.8.0"
-dependencies = [
- "adk-core",
- "adk-sandbox",
- "async-trait",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "adk-core"
 version = "0.8.0"
 dependencies = [
  "async-trait",
  "chrono",
  "futures",
- "rustls",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -419,12 +382,10 @@ dependencies = [
  "adk-agent",
  "adk-anthropic",
  "adk-artifact",
- "adk-audio",
  "adk-auth",
  "adk-awp",
  "adk-browser",
  "adk-cli",
- "adk-code",
  "adk-core",
  "adk-eval",
  "adk-graph",
@@ -436,7 +397,6 @@ dependencies = [
  "adk-rag",
  "adk-realtime",
  "adk-runner",
- "adk-sandbox",
  "adk-server",
  "adk-session",
  "adk-skill",
@@ -457,20 +417,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "adk-sandbox"
-version = "0.8.0"
-dependencies = [
- "adk-core",
- "async-trait",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -658,7 +604,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -669,7 +615,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1504,20 +1450,6 @@ name = "bytemuck"
 version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
-dependencies = [
- "bytemuck_derive",
-]
-
-[[package]]
-name = "bytemuck_derive"
-version = "1.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9abbd1bc6865053c427f7198e6af43bfdedc55ab791faed4fbd361d789575ff"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
 
 [[package]]
 name = "byteorder"
@@ -1991,7 +1923,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4831,7 +4763,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tier-examples"
+name = "tier-enterprise"
 version = "0.0.1"
 dependencies = [
  "adk-rust",
@@ -4968,11 +4900,7 @@ checksum = "d25a406cddcc431a75d3d9afc6a7c0f7428d4891dd973e4d54c56b46127bf857"
 dependencies = [
  "futures-util",
  "log",
- "rustls",
- "rustls-native-certs",
- "rustls-pki-types",
  "tokio",
- "tokio-rustls",
  "tungstenite",
 ]
 
@@ -5269,14 +5197,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8628dcc84e5a09eb3d8423d6cb682965dea9133204e8fb3efee74c2a0c259442"
 dependencies = [
  "bytes",
- "data-encoding",
- "http 1.4.0",
- "httparse",
  "log",
  "rand 0.9.4",
- "rustls",
- "rustls-pki-types",
- "sha1",
  "thiserror 2.0.18",
  "utf-8",
 ]
@@ -5295,7 +5217,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

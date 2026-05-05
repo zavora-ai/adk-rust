@@ -1,0 +1,31 @@
+[package]
+name = "tier-standard"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+# Standard tier — adds server, CLI, auth, graph, eval, guardrails, plugin, artifacts, skills.
+[dependencies]
+adk-rust = { path = "../../../adk-rust", features = ["standard"] }
+adk-tool = { path = "../../../adk-tool" }
+tokio = { version = "1.40", features = ["full"] }
+anyhow = "1.0"
+dotenvy = "0.15"
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+schemars = "1"
+
+[[bin]]
+name = "11-standard-graph"
+path = "../src/11_standard_graph.rs"
+
+[[bin]]
+name = "12-standard-sequential"
+path = "../src/12_standard_sequential.rs"
+
+[[bin]]
+name = "13-standard-cli-launcher"
+path = "../src/13_standard_cli_launcher.rs"
