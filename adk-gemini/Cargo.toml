@@ -9,6 +9,7 @@ autoexamples = false
 autotests = false
 autobenches = false
 description = "Rust client for Google Gemini API"
+documentation = "https://docs.rs/adk-gemini"
 readme = "README.md"
 keywords = [
     "gemini",

@@ -4,7 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/adk-audio"
+readme = "README.md"
 description = "Audio intelligence and pipeline orchestration for ADK-Rust agents"
+keywords = ["adk", "audio", "tts", "stt", "speech"]
+categories = ["multimedia::audio", "asynchronous"]
 
 [dependencies]
 # Core (always included)

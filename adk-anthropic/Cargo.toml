@@ -8,6 +8,10 @@ license.workspace = true
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/adk-anthropic"
+readme = "README.md"
+keywords = ["ai", "anthropic", "claude", "llm", "adk"]
+categories = ["api-bindings", "asynchronous"]
 autoexamples = false
 
 [dependencies]

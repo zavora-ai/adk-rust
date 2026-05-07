@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 description = "AgentSkills parser, index, and runtime injection helpers for ADK-Rust"
 repository.workspace = true
+documentation = "https://docs.rs/adk-skill"
 readme = "README.md"
 keywords = ["adk", "skills", "agent", "prompt"]
 categories = ["development-tools", "asynchronous"]

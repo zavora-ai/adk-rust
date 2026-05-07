@@ -7,10 +7,11 @@ license.workspace = true
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/adk-deploy"
+readme = "README.md"
 description = "Deployment manifest, bundling, and control-plane client for ADK-Rust"
 keywords = ["adk", "deploy", "agents", "platform"]
 categories = ["development-tools", "config"]
-readme = "README.md"
 
 [dependencies]
 serde.workspace = true
