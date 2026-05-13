@@ -99,6 +99,7 @@ plugin = ["dep:adk-plugin"]
 rag = ["dep:adk-rag"]
 payments = ["dep:adk-payments"]
 awp = ["dep:adk-awp"]
+acp = ["dep:adk-acp"]
 
 # Model provider features (forwarded to adk-model)
 gemini = ["models", "adk-model/gemini"]
@@ -225,6 +226,7 @@ adk-audio = { workspace = true, optional = true }
 adk-action = { workspace = true, optional = true }
 adk-anthropic = { workspace = true, optional = true }
 adk-awp = { workspace = true, optional = true }
+adk-acp = { workspace = true, optional = true }
 
 # Re-export common dependencies
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "signal", "fs", "process", "io-util"] }

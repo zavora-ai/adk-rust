@@ -40,8 +40,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-acp"
+version = "0.8.1"
+dependencies = [
+ "adk-core",
+ "agent-client-protocol",
+ "agent-client-protocol-tokio",
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "adk-action"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "proptest",
@@ -53,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "adk-agent"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "adk-guardrail",
@@ -74,7 +90,7 @@ dependencies = [
 
 [[package]]
 name = "adk-anthropic"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -91,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "adk-artifact"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -102,7 +118,7 @@ dependencies = [
 
 [[package]]
 name = "adk-audio"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "adk-realtime",
@@ -139,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "adk-auth"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "adk-server",
@@ -167,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "adk-awp"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "arc-swap",
@@ -196,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "adk-browser"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -212,7 +228,7 @@ dependencies = [
 
 [[package]]
 name = "adk-cli"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-agent",
  "adk-artifact",
@@ -244,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "adk-code"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "adk-sandbox",
@@ -264,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "adk-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -281,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "adk-deploy"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -303,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "adk-eval"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "adk-model",
@@ -325,7 +341,7 @@ dependencies = [
 
 [[package]]
 name = "adk-gemini"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -356,7 +372,7 @@ dependencies = [
 
 [[package]]
 name = "adk-graph"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-action",
  "adk-core",
@@ -379,7 +395,7 @@ dependencies = [
 
 [[package]]
 name = "adk-guardrail"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -395,7 +411,7 @@ dependencies = [
 
 [[package]]
 name = "adk-memory"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -414,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "adk-model"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-anthropic",
  "adk-core",
@@ -444,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "adk-payments"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-artifact",
  "adk-auth",
@@ -473,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "adk-plugin"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "serde_json",
@@ -483,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "adk-rag"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "adk-gemini",
@@ -507,7 +523,7 @@ dependencies = [
 
 [[package]]
 name = "adk-realtime"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "adk-gemini",
@@ -544,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "adk-runner"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-artifact",
  "adk-core",
@@ -567,8 +583,9 @@ dependencies = [
 
 [[package]]
 name = "adk-rust"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
+ "adk-acp",
  "adk-action",
  "adk-agent",
  "adk-anthropic",
@@ -606,7 +623,7 @@ dependencies = [
 
 [[package]]
 name = "adk-rust-macros"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -621,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "adk-sandbox"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -639,7 +656,7 @@ dependencies = [
 
 [[package]]
 name = "adk-server"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "a2a-protocol-types",
  "adk-agent",
@@ -679,7 +696,7 @@ dependencies = [
 
 [[package]]
 name = "adk-session"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "aes-gcm",
@@ -705,7 +722,7 @@ dependencies = [
 
 [[package]]
 name = "adk-skill"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-core",
  "adk-plugin",
@@ -722,7 +739,7 @@ dependencies = [
 
 [[package]]
 name = "adk-telemetry"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -736,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "adk-tool"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "adk-code",
  "adk-core",
@@ -815,6 +832,72 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "winapi",
+]
+
+[[package]]
+name = "agent-client-protocol"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af62fb84df2af0f933d8f5fd78b843fa5eb0ec5a48fa1b528c41951d0bbe36c"
+dependencies = [
+ "agent-client-protocol-derive",
+ "agent-client-protocol-schema",
+ "anyhow",
+ "futures",
+ "futures-concurrency",
+ "jsonrpcmsg",
+ "rmcp",
+ "rustc-hash 2.1.1",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid 1.23.0",
+]
+
+[[package]]
+name = "agent-client-protocol-derive"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce42c2d3c048c12897eef2e577dfff1e3355c632c9f1625cc953b9df48b44631"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "agent-client-protocol-schema"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49bae57dad1c28a362fbdcf7bab0583316a02b45a70792109fced55780a3b63c"
+dependencies = [
+ "anyhow",
+ "derive_more",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "strum 0.28.0",
+ "tracing",
+]
+
+[[package]]
+name = "agent-client-protocol-tokio"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e1572b219f22c4b3be0f20f934c8b6f1d1457126ce72923c4f6608f96153b65"
+dependencies = [
+ "agent-client-protocol",
+ "futures",
+ "serde",
+ "serde_json",
+ "shell-words",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1771,7 +1854,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "awp-types"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "chrono",
  "proptest",
@@ -3233,9 +3316,15 @@ dependencies = [
 
 [[package]]
 name = "cargo-adk"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
+ "adk-deploy",
  "clap",
+ "flate2",
+ "hex",
+ "sha2",
+ "tar",
+ "tokio",
 ]
 
 [[package]]
@@ -6226,6 +6315,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures-concurrency"
+version = "7.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "175cd8cca9e1d45b87f18ffa75088f2099e3c4fe5e2f83e42de112560bea8ea6"
+dependencies = [
+ "fixedbitset 0.5.7",
+ "futures-core",
+ "futures-lite 2.6.1",
+ "pin-project",
+ "smallvec",
+]
+
+[[package]]
 name = "futures-core"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8454,6 +8556,16 @@ dependencies = [
  "ordered-float",
  "rand 0.9.4",
  "ryu",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "jsonrpcmsg"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d833a15225c779251e13929203518c2ff26e2fe0f322d584b213f4f4dad37bd"
+dependencies = [
  "serde",
  "serde_json",
 ]
@@ -11624,7 +11736,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22505a5c94da8e3b7c2996394d1c933236c4d743e81a410bcca4e6989fc066a4"
 dependencies = [
  "bytes",
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools 0.12.1",
  "log",
  "multimap",
@@ -11644,7 +11756,7 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools 0.14.0",
  "log",
  "multimap",
@@ -13701,6 +13813,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "shell-words"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
+
+[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13811,7 +13929,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -13823,7 +13941,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54254b8531cafa275c5e096f62d48c81435d1015405a91198ddb11e967301d40"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

@@ -1,0 +1,32 @@
+[package]
+name = "adk-acp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/adk-acp"
+readme = "README.md"
+description = "Agent Client Protocol (ACP) integration for ADK-Rust — connect to Claude Code, Codex, and other ACP agents"
+keywords = ["adk", "acp", "agent", "protocol", "ai"]
+categories = ["development-tools", "asynchronous"]
+
+[features]
+default = []
+server = []  # AcpServer: expose ADK agents as ACP-compatible agents
+
+[dependencies]
+adk-core = { workspace = true }
+agent-client-protocol = "0.11"
+agent-client-protocol-tokio = "0.11"
+async-trait = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "process", "io-util"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }

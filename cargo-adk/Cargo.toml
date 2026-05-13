@@ -17,4 +17,10 @@ name = "cargo-adk"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
+adk-deploy = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+sha2 = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+hex = { workspace = true }

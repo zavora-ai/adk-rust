@@ -87,3 +87,6 @@ mistral-rs-ref/
 adk-server/src/.DS_Store
 .DS_Store
 *.bak
+
+# Reference projects (cloned for development, not committed)
+reference/

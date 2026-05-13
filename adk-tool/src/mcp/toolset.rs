@@ -36,10 +36,32 @@ pub type ToolFilter = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 /// that some LLM APIs (like Gemini) don't accept.
 fn sanitize_schema(value: &mut Value) {
     if let Value::Object(map) = value {
+        // Remove fields unsupported by Gemini's function declaration schema
         map.remove("$schema");
         map.remove("definitions");
         map.remove("$ref");
         map.remove("additionalProperties");
+        map.remove("exclusiveMinimum");
+        map.remove("exclusiveMaximum");
+
+        // Convert "type": ["string", "null"] → "type": "string"
+        // Gemini doesn't support type arrays; pick the first non-null type.
+        if let Some(type_val) = map.get_mut("type") {
+            if let Value::Array(types) = type_val {
+                let first_non_null = types
+                    .iter()
+                    .find(|t| t.as_str() != Some("null"))
+                    .cloned()
+                    .unwrap_or_else(|| Value::String("string".to_string()));
+                *type_val = first_non_null;
+            }
+        }
+
+        // Remove "items" when type isn't "array" (Gemini rejects items on non-array types)
+        let is_array_type = map.get("type").and_then(|t| t.as_str()).is_some_and(|t| t == "array");
+        if !is_array_type {
+            map.remove("items");
+        }
 
         for (_, v) in map.iter_mut() {
             sanitize_schema(v);

@@ -54,17 +54,17 @@ Choose only the features you need:
 
 ```toml
 [dependencies]
-adk-payments = { version = "0.8.0", features = ["acp"] }
+adk-payments = { version = "0.8.1", features = ["acp"] }
 ```
 
 ```toml
 [dependencies]
-adk-payments = { version = "0.8.0", features = ["ap2", "ap2-a2a", "ap2-mcp"] }
+adk-payments = { version = "0.8.1", features = ["ap2", "ap2-a2a", "ap2-mcp"] }
 ```
 
 ```toml
 [dependencies]
-adk-payments = { version = "0.8.0", features = ["acp", "acp-experimental", "ap2"] }
+adk-payments = { version = "0.8.1", features = ["acp", "acp-experimental", "ap2"] }
 ```
 
 ## Core Concepts

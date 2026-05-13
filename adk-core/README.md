@@ -25,14 +25,14 @@ This crate is model-agnostic and contains no LLM-specific code.
 
 ```toml
 [dependencies]
-adk-core = "0.8.0"
+adk-core = "0.8.1"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = "0.8.0"
+adk-rust = "0.8.1"
 ```
 
 ## Core Traits

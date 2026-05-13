@@ -19,14 +19,14 @@ OpenTelemetry integration for Rust Agent Development Kit (ADK-Rust) agent observ
 
 ```toml
 [dependencies]
-adk-telemetry = "0.8.0"
+adk-telemetry = "0.8.1"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.8.0", features = ["telemetry"] }
+adk-rust = { version = "0.8.1", features = ["telemetry"] }
 ```
 
 ## Quick Start

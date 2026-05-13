@@ -8,9 +8,9 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 [![GitHub Discussions](https://img.shields.io/github/discussions/zavora-ai/adk-rust?style=flat&logo=github&color=5865F2)](https://github.com/zavora-ai/adk-rust/discussions)
 
-> **🚀 v0.8.0 Released!** Dependency diet — default build is now 32% lighter. New feature tiers: `minimal` (default), `standard`, `enterprise`, `full`. Plus: AWP protocol, DeepSeek V4, video avatars, desktop audio, project-scoped memory. See [CHANGELOG](CHANGELOG.md) for full details.
+> **🚀 v0.8.1 Released!** ACP integration (connect to Claude Code, Codex, Kiro CLI as tools), MCP schema fixes for Gemini, `cargo adk deploy`. Plus: dependency diet, new feature tiers (`minimal`, `standard`, `enterprise`, `full`), AWP protocol, DeepSeek V4. See [CHANGELOG](CHANGELOG.md) for full details.
 >
-> **Contributors:** Many thanks to [@mikefaille](https://github.com/mikefaille) — AdkIdentity design, realtime audio, LiveKit bridge, skill system. [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI-compatible providers, xAI, multimodal content. [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [@tomtom215](https://github.com/tomtom215) — A2A Protocol v1.0.0 types crate ([a2a-protocol-types](https://crates.io/crates/a2a-protocol-types)), Foundation-verified wire types powering our A2A v1 layer. [@danielsan](https://github.com/danielsan) — Google deps issue & PR (#181, #203), RAG crash report (#205). [@CodingFlow](https://github.com/CodingFlow) — Gemini 3 thinking level, global endpoint, citationSources (#177, #178, #179). [@ctylx](https://github.com/ctylx) — skill discovery fix (#204). [@poborin](https://github.com/poborin) — project config proposal (#176). [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
+> **Contributors:** Many thanks to [@mikefaille](https://github.com/mikefaille) — AdkIdentity design, realtime audio, LiveKit bridge, skill system. [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI-compatible providers, xAI, multimodal content. [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [@tomtom215](https://github.com/tomtom215) — A2A Protocol v1.0.0 types crate ([a2a-protocol-types](https://crates.io/crates/a2a-protocol-types)), Foundation-verified wire types powering our A2A v1 layer. [@danielsan](https://github.com/danielsan) — Google deps issue & PR (#181, #203), RAG crash report (#205). [@CodingFlow](https://github.com/CodingFlow) — Gemini 3 thinking level, global endpoint, citationSources (#177, #178, #179). [@ctylx](https://github.com/ctylx) — skill discovery fix (#204). [@poborin](https://github.com/poborin) — project config proposal (#176). [@chillin-capybara](https://github.com/chillin-capybara) — ACP integration, adk-acp crate. [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 >
 > **Announcements:** ADK-Rust Roadmap launched for 2026, we welcome suggestions, comments and ideas. ADK Playground launched! You can now run 70+ ADK-Rust AI Agents online for free. Compile and click. No login, no install. https://playground.adk-rust.com (https://playground.adk-rust.com) And many more discussions, feel free to discuss: [![GitHub Discussions](https://img.shields.io/github/discussions/zavora-ai/adk-rust?style=flat&logo=github&color=5865F2)](https://github.com/zavora-ai/adk-rust/discussions)
 
@@ -184,6 +184,7 @@ Built-in tools:
 | `adk-payments` | Agentic commerce orchestration | ACP/AP2 adapters, canonical transaction kernel, durable journals, evidence-backed payment flows |
 | `awp-types` | AWP protocol types | Trust levels, requester types, discovery documents, capability manifests, payment intents, typed A2A messages — zero `adk-*` deps |
 | `adk-awp` | Agentic Web Protocol implementation | Business context loading, discovery/manifest generation, rate limiting, consent, events, health state machine, AWP routes |
+| `adk-acp` | Agent Client Protocol integration | Connect to ACP agents (Claude Code, Codex, Kiro CLI) as tools, `AcpAgentTool`, `AcpToolset`, auto-approve permissions |
 | `adk-rag` | RAG pipeline | Document chunking, embeddings, vector search, reranking, 6 backends |
 | `adk-runner` | Agent execution runtime | Context management, event streaming, session lifecycle, callbacks |
 | `adk-server` | Production API servers | REST API, A2A v1.0.0 protocol (all 11 operations), middleware, health checks |
@@ -223,13 +224,13 @@ Requires Rust 1.85 or later (Rust 2024 edition). Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.8.0"  # Minimal (default): Gemini + agent runtime + sessions
+adk-rust = "0.8.1"  # Minimal (default): Gemini + agent runtime + sessions
 
 # Need server, auth, graph workflows, eval?
-# adk-rust = { version = "0.8.0", features = ["standard"] }
+# adk-rust = { version = "0.8.1", features = ["standard"] }
 
 # Need everything (realtime, browser, RAG, payments, AWP)?
-# adk-rust = { version = "0.8.0", features = ["enterprise"] }
+# adk-rust = { version = "0.8.1", features = ["enterprise"] }
 ```
 
 **Feature tiers:**
@@ -332,7 +333,7 @@ async fn main() -> AnyhowResult<()> {
 
 ### OpenAI Example
 
-Enable OpenAI with `adk-rust = { version = "0.8.0", features = ["openai"] }`.
+Enable OpenAI with `adk-rust = { version = "0.8.1", features = ["openai"] }`.
 
 ```rust
 use adk_rust::prelude::*;
@@ -382,7 +383,7 @@ async fn main() -> AnyhowResult<()> {
 
 ### Anthropic Example
 
-Enable Anthropic with `adk-rust = { version = "0.8.0", features = ["anthropic"] }`.
+Enable Anthropic with `adk-rust = { version = "0.8.1", features = ["anthropic"] }`.
 
 ```rust
 use adk_rust::prelude::*;
@@ -406,7 +407,7 @@ async fn main() -> AnyhowResult<()> {
 
 ### DeepSeek Example
 
-Enable DeepSeek with `adk-rust = { version = "0.8.0", features = ["deepseek"] }`.
+Enable DeepSeek with `adk-rust = { version = "0.8.1", features = ["deepseek"] }`.
 
 ```rust
 use adk_rust::prelude::*;
@@ -435,7 +436,7 @@ async fn main() -> AnyhowResult<()> {
 
 ### Groq Example (Ultra-Fast)
 
-Enable Groq with `adk-rust = { version = "0.8.0", features = ["groq"] }`.
+Enable Groq with `adk-rust = { version = "0.8.1", features = ["groq"] }`.
 
 ```rust
 use adk_rust::prelude::*;
@@ -459,7 +460,7 @@ async fn main() -> AnyhowResult<()> {
 
 ### Ollama Example (Local)
 
-Enable Ollama with `adk-rust = { version = "0.8.0", features = ["ollama"] }`.
+Enable Ollama with `adk-rust = { version = "0.8.1", features = ["ollama"] }`.
 
 ```rust
 use adk_rust::prelude::*;
@@ -865,26 +866,26 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 # Minimal (default) — Gemini, agents, runner, sessions
-adk-rust = "0.8.0"
+adk-rust = "0.8.1"
 
 # Add a provider explicitly when you need it
-adk-rust = { version = "0.8.0", features = ["openai"] }
+adk-rust = { version = "0.8.1", features = ["openai"] }
 
 # Production tier without CLI provider fan-out
-adk-rust = { version = "0.8.0", features = ["standard"] }
+adk-rust = { version = "0.8.1", features = ["standard"] }
 
 # Full — enterprise plus audio, code execution, sandbox
-adk-rust = { version = "0.8.0", features = ["full"] }
+adk-rust = { version = "0.8.1", features = ["full"] }
 
 # Minimal — just agents + Gemini + runner (fastest build)
-adk-rust = { version = "0.8.0", default-features = false, features = ["minimal"] }
+adk-rust = { version = "0.8.1", default-features = false, features = ["minimal"] }
 
 # Or individual crates for finer control
-adk-core = "0.8.0"
-adk-agent = "0.8.0"
-adk-model = { version = "0.8.0", features = ["openai", "anthropic"] }
-adk-tool = "0.8.0"
-adk-runner = "0.8.0"
+adk-core = "0.8.1"
+adk-agent = "0.8.1"
+adk-model = { version = "0.8.1", features = ["openai", "anthropic"] }
+adk-tool = "0.8.1"
+adk-runner = "0.8.1"
 ```
 
 ## Examples

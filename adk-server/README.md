@@ -23,14 +23,14 @@ HTTP server and A2A v1.0.0 protocol for Rust Agent Development Kit (ADK-Rust) ag
 
 ```toml
 [dependencies]
-adk-server = "0.8.0"
+adk-server = "0.8.1"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.8.0", features = ["server"] }
+adk-rust = { version = "0.8.1", features = ["server"] }
 ```
 
 ## Quick Start
