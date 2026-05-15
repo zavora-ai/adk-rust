@@ -9,7 +9,9 @@ use adk_anthropic::{
     PlainTextSource, StopReason, SystemPrompt, TextBlock, ToolParam, ToolResultBlock,
     ToolResultBlockContent, ToolUnionParam, ToolUseBlock, UrlImageSource, UrlPdfSource,
 };
-use adk_core::{Content, FinishReason, LlmResponse, Part, UsageMetadata};
+use adk_core::{
+    Content, FinishReason, LlmResponse, Part, SchemaAdapter, SchemaCache, UsageMetadata,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -161,6 +163,8 @@ pub fn content_to_message(
 /// Convert ADK tools to adk-anthropic ToolUnionParam format.
 pub fn convert_tools(
     tools: &HashMap<String, Value>,
+    adapter: &dyn SchemaAdapter,
+    cache: &SchemaCache,
 ) -> Result<Vec<ToolUnionParam>, ConversionError> {
     tools
         .iter()
@@ -177,12 +181,13 @@ pub fn convert_tools(
 
             let description = decl.get("description").and_then(|d| d.as_str()).map(String::from);
 
-            let input_schema = decl.get("parameters").cloned().unwrap_or(serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }));
+            let input_schema =
+                decl.get("parameters").cloned().unwrap_or_else(|| adapter.empty_schema());
+            let normalized_schema = cache.get_or_normalize(&input_schema, adapter);
 
-            let mut tool_param = ToolParam::new(name.clone(), input_schema);
+            let normalized_name = adapter.normalize_tool_name(name);
+
+            let mut tool_param = ToolParam::new(normalized_name.into_owned(), normalized_schema);
             if let Some(desc) = description {
                 tool_param = tool_param.with_description(desc);
             }
@@ -627,6 +632,7 @@ mod tests {
 
     #[test]
     fn test_convert_tools() {
+        use super::super::schema_adapter::AnthropicSchemaAdapter;
         let mut tools = HashMap::new();
         tools.insert(
             "get_weather".to_string(),
@@ -641,12 +647,16 @@ mod tests {
             }),
         );
 
-        let claude_tools = convert_tools(&tools).expect("tool conversion should succeed");
+        let adapter = AnthropicSchemaAdapter;
+        let cache = SchemaCache::new();
+        let claude_tools =
+            convert_tools(&tools, &adapter, &cache).expect("tool conversion should succeed");
         assert_eq!(claude_tools.len(), 1);
     }
 
     #[test]
     fn test_convert_tools_supports_native_anthropic_tool_declarations() {
+        use super::super::schema_adapter::AnthropicSchemaAdapter;
         let mut tools = HashMap::new();
         tools.insert(
             "bash".to_string(),
@@ -658,7 +668,10 @@ mod tests {
             }),
         );
 
-        let claude_tools = convert_tools(&tools).expect("tool conversion should succeed");
+        let adapter = AnthropicSchemaAdapter;
+        let cache = SchemaCache::new();
+        let claude_tools =
+            convert_tools(&tools, &adapter, &cache).expect("tool conversion should succeed");
         assert_eq!(claude_tools.len(), 1);
         let value = serde_json::to_value(&claude_tools[0]).expect("tool should serialize");
         assert_eq!(value["type"], "bash_20250124");

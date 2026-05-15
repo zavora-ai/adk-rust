@@ -6,7 +6,7 @@ Validates that all README and quickstart code examples work across every feature
 
 ### Minimal (default — no features needed)
 
-These examples use `adk-rust = "0.8.1"` with **no explicit features**. The `minimal` default includes Gemini, agents, runner, sessions, and the lightweight launcher.
+These examples use `adk-rust = "0.8.2"` with **no explicit features**. The `minimal` default includes Gemini, agents, runner, sessions, and the lightweight launcher.
 
 | # | Example | What it validates | Source |
 |---|---------|-------------------|--------|
@@ -90,7 +90,7 @@ cargo run --bin 16-full-sandbox            # needs python3 and rustc
 
 ## Key Point
 
-All minimal/quickstart examples use `adk-rust = "0.8.1"` with **no explicit features** unless the example name is a provider opt-in. The `minimal` default includes the smallest useful agent stack: Gemini, agents, runner, sessions, and the lightweight launcher.
+All minimal/quickstart examples use `adk-rust = "0.8.2"` with **no explicit features** unless the example name is a provider opt-in. The `minimal` default includes the smallest useful agent stack: Gemini, agents, runner, sessions, and the lightweight launcher.
 
 Higher tiers add production and specialist capabilities:
 - **standard** → tools, memory, telemetry, server, auth, graph workflows, eval

@@ -7,8 +7,8 @@ use super::config::{DeepSeekConfig, ThinkingMode};
 use super::convert::{self, ChatCompletionRequest, ChatCompletionResponse, ThinkingConfig};
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
-    AdkError, ErrorCategory, ErrorComponent, FinishReason, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Part,
+    AdkError, ErrorCategory, ErrorComponent, FinishReason, GenericSchemaAdapter, Llm, LlmRequest,
+    LlmResponse, LlmResponseStream, Part, SchemaAdapter,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -155,6 +155,13 @@ impl DeepSeekClient {
 impl Llm for DeepSeekClient {
     fn name(&self) -> &str {
         &self.config.model
+    }
+
+    fn schema_adapter(&self) -> &dyn SchemaAdapter {
+        // DeepSeek uses the OpenAI-compatible API, so it uses the same transforms
+        // as OpenAiSchemaAdapter (which is functionally identical to GenericSchemaAdapter).
+        static ADAPTER: GenericSchemaAdapter = GenericSchemaAdapter;
+        &ADAPTER
     }
 
     async fn generate_content(

@@ -31,7 +31,7 @@ Plugin system for ADK-Rust agents.
 
 ```toml
 [dependencies]
-adk-plugin = "0.8.1"
+adk-plugin = "0.8.2"
 ```
 
 ## Quick Start

@@ -29,10 +29,10 @@ This means your agent can answer questions about product docs, company policies,
 ```toml
 [dependencies]
 # Core only (in-memory store, all chunkers, no external deps)
-adk-rag = "0.8.1"
+adk-rag = "0.8.2"
 
 # With Gemini embeddings (recommended for getting started)
-adk-rag = { version = "0.8.1", features = ["gemini"] }
+adk-rag = { version = "0.8.2", features = ["gemini"] }
 ```
 
 ---
@@ -353,13 +353,13 @@ Only pull the dependencies you need:
 
 ```toml
 # Just core
-adk-rag = "0.8.1"
+adk-rag = "0.8.2"
 
 # With Gemini embeddings
-adk-rag = { version = "0.8.1", features = ["gemini"] }
+adk-rag = { version = "0.8.2", features = ["gemini"] }
 
 # Everything
-adk-rag = { version = "0.8.1", features = ["full"] }
+adk-rag = { version = "0.8.2", features = ["full"] }
 ```
 
 > **Note:** The `lancedb` feature requires `protoc` installed. Install with `brew install protobuf` (macOS) or `apt install protobuf-compiler` (Ubuntu).

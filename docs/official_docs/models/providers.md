@@ -41,14 +41,14 @@ Add the providers you need to your `Cargo.toml`:
 ```toml
 [dependencies]
 # Pick one or more providers:
-adk-model = { version = "0.8.1", features = ["gemini"] }        # Google Gemini (default)
-adk-model = { version = "0.8.1", features = ["openai"] }        # OpenAI GPT-5
-adk-model = { version = "0.8.1", features = ["anthropic"] }     # Anthropic Claude
-adk-model = { version = "0.8.1", features = ["deepseek"] }      # DeepSeek
-adk-model = { version = "0.8.1", features = ["groq"] }          # Groq (ultra-fast)
+adk-model = { version = "0.8.2", features = ["gemini"] }        # Google Gemini (default)
+adk-model = { version = "0.8.2", features = ["openai"] }        # OpenAI GPT-5
+adk-model = { version = "0.8.2", features = ["anthropic"] }     # Anthropic Claude
+adk-model = { version = "0.8.2", features = ["deepseek"] }      # DeepSeek
+adk-model = { version = "0.8.2", features = ["groq"] }          # Groq (ultra-fast)
 
 # Or all cloud providers at once:
-adk-model = { version = "0.8.1", features = ["all-providers"] }
+adk-model = { version = "0.8.2", features = ["all-providers"] }
 ```
 
 ## Step 2: Set Your API Key
@@ -60,6 +60,30 @@ export ANTHROPIC_API_KEY="your-key"   # Anthropic
 export DEEPSEEK_API_KEY="your-key"    # DeepSeek
 export GROQ_API_KEY="your-key"        # Groq
 ```
+
+## Schema Normalization
+
+Each provider automatically normalizes MCP tool schemas at request time. You don't need to do anything — it works transparently. But here's what happens under the hood:
+
+| Provider | Schema Adapter | Behavior |
+|----------|---------------|----------|
+| Gemini | `GeminiSchemaAdapter` | Aggressive: resolves `$ref`, collapses combiners, strips unsupported keywords |
+| OpenAI (strict) | `OpenAiStrictSchemaAdapter` | Preserves structure, adds `additionalProperties: false` |
+| OpenAI | `OpenAiSchemaAdapter` | Minimal safe fixes |
+| Anthropic | `AnthropicSchemaAdapter` | Near pass-through |
+| DeepSeek | `GenericSchemaAdapter` | Conservative safe transforms |
+| Ollama | `GenericSchemaAdapter` | Conservative safe transforms |
+
+Access the adapter programmatically via the `Llm` trait:
+
+```rust
+use adk_core::{Llm, SchemaAdapter};
+
+let adapter = model.schema_adapter();
+let normalized = adapter.normalize_schema(raw_schema);
+```
+
+See [Schema Normalization](../tools/schema-normalization.md) for full documentation.
 
 ---
 

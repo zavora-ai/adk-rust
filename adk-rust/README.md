@@ -39,7 +39,7 @@ cargo new my_agent && cd my_agent
 
 ```toml
 [dependencies]
-adk-rust = "0.8.1"
+adk-rust = "0.8.2"
 tokio = { version = "1.40", features = ["full"] }
 dotenvy = "0.15"
 ```
@@ -290,26 +290,26 @@ cargo run -- serve --port 8080
 
 ```toml
 # Standard (default) — agents, models, tools, sessions, runner, guardrails, auth
-adk-rust = "0.8.1"
+adk-rust = "0.8.2"
 
 # Full — standard + all stable specialist crates (graph, realtime, browser, eval, rag)
 # Does NOT include experimental crates (code, sandbox, audio) — use `labs` for those
-adk-rust = { version = "0.8.1", features = ["full"] }
+adk-rust = { version = "0.8.2", features = ["full"] }
 
 # Labs — standard + experimental crates (code, sandbox, audio)
-adk-rust = { version = "0.8.1", features = ["labs"] }
+adk-rust = { version = "0.8.2", features = ["labs"] }
 
 # Full + Labs — everything including experimental crates
-adk-rust = { version = "0.8.1", features = ["full", "labs"] }
+adk-rust = { version = "0.8.2", features = ["full", "labs"] }
 
 # Minimal
-adk-rust = { version = "0.8.1", default-features = false, features = ["minimal"] }
+adk-rust = { version = "0.8.2", default-features = false, features = ["minimal"] }
 
 # Custom
-adk-rust = { version = "0.8.1", default-features = false, features = ["agents", "gemini", "tools"] }
+adk-rust = { version = "0.8.2", default-features = false, features = ["agents", "gemini", "tools"] }
 
 # With new providers (forwarded to adk-model)
-adk-model = { version = "0.8.1", features = ["fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova", "bedrock", "azure-ai"] }
+adk-model = { version = "0.8.2", features = ["fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova", "bedrock", "azure-ai"] }
 ```
 
 ## Documentation

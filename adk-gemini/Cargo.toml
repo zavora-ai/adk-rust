@@ -208,6 +208,9 @@ path = "examples/tracing_telemetry.rs"
 name = "url_context"
 path = "examples/url_context.rs"
 
+[dependencies.adk-core]
+workspace = true
+
 [dependencies.async-stream]
 version = "0.3"
 
@@ -306,8 +309,16 @@ name = "config_validation_tests"
 path = "tests/config_validation_tests.rs"
 
 [[test]]
+name = "gemini_e2e_schema_tests"
+path = "tests/gemini_e2e_schema_tests.rs"
+
+[[test]]
 name = "multimodal_fn_response_tests"
 path = "tests/multimodal_fn_response_tests.rs"
+
+[[test]]
+name = "schema_property_tests"
+path = "tests/schema_property_tests.rs"
 
 [dev-dependencies.display-error-chain]
 version = "0.2"

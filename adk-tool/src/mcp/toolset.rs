@@ -31,56 +31,6 @@ type DynConnectionFactory<S> = Arc<dyn ConnectionFactory<S>>;
 /// Type alias for tool filter predicate
 pub type ToolFilter = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
-/// Sanitize JSON schema for LLM compatibility.
-/// Removes fields like `$schema`, `additionalProperties`, `definitions`, `$ref`
-/// that some LLM APIs (like Gemini) don't accept.
-fn sanitize_schema(value: &mut Value) {
-    if let Value::Object(map) = value {
-        // Remove fields unsupported by Gemini's function declaration schema
-        map.remove("$schema");
-        map.remove("definitions");
-        map.remove("$ref");
-        map.remove("additionalProperties");
-        map.remove("exclusiveMinimum");
-        map.remove("exclusiveMaximum");
-        map.remove("propertyNames");
-
-        // Convert "type": ["string", "null"] → "type": "string"
-        // Gemini doesn't support type arrays; pick the first non-null type.
-        if let Some(type_val) = map.get_mut("type") {
-            if let Value::Array(types) = type_val {
-                let first_non_null = types
-                    .iter()
-                    .find(|t| t.as_str() != Some("null"))
-                    .cloned()
-                    .unwrap_or_else(|| Value::String("string".to_string()));
-                *type_val = first_non_null;
-            }
-        }
-
-        // Remove "items" when type isn't "array" (Gemini rejects items on non-array types)
-        let is_array_type = map.get("type").and_then(|t| t.as_str()).is_some_and(|t| t == "array");
-        if !is_array_type {
-            map.remove("items");
-        } else if let Some(items_val) = map.get_mut("items") {
-            // Gemini only supports "items": {object} not "items": [array] (tuple validation).
-            // Convert array form to the first element's schema.
-            if let Value::Array(arr) = items_val.clone() {
-                *items_val =
-                    arr.into_iter().next().unwrap_or(Value::Object(serde_json::Map::new()));
-            }
-        }
-
-        for (_, v) in map.iter_mut() {
-            sanitize_schema(v);
-        }
-    } else if let Value::Array(arr) = value {
-        for v in arr.iter_mut() {
-            sanitize_schema(v);
-        }
-    }
-}
-
 fn should_retry_mcp_operation(
     error: &str,
     attempt: u32,
@@ -472,19 +422,19 @@ where
                 }
             }
 
+            let input_schema = Some(Value::Object(mcp_tool.input_schema.as_ref().clone()));
+
+            debug!(
+                tool_name = %tool_name,
+                schema = ?input_schema,
+                "registering MCP tool with raw schema"
+            );
+
             let adk_tool = McpTool {
                 name: tool_name,
                 description: mcp_tool.description.map(|d| d.to_string()).unwrap_or_default(),
-                input_schema: {
-                    let mut schema = Value::Object(mcp_tool.input_schema.as_ref().clone());
-                    sanitize_schema(&mut schema);
-                    Some(schema)
-                },
-                output_schema: mcp_tool.output_schema.map(|s| {
-                    let mut schema = Value::Object(s.as_ref().clone());
-                    sanitize_schema(&mut schema);
-                    schema
-                }),
+                input_schema,
+                output_schema: mcp_tool.output_schema.map(|s| Value::Object(s.as_ref().clone())),
                 client: self.client.clone(),
                 connection_factory: self.connection_factory.clone(),
                 refresh_config: self.refresh_config.clone(),

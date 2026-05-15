@@ -5,7 +5,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! adk-rust = { version = "0.8.1", features = ["full"] }
+//! adk-rust = { version = "0.8.2", features = ["full"] }
 //! ```
 
 use adk_rust::sandbox::{ExecRequest, Language, ProcessBackend, ProcessConfig, SandboxBackend};

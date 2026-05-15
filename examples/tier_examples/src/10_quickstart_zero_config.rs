@@ -5,7 +5,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! adk-rust = "0.8.1"
+//! adk-rust = "0.8.2"
 //! ```
 
 use adk_rust::run;
