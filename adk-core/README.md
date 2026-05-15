@@ -13,6 +13,7 @@ Core traits and types for ADK-Rust agents, tools, sessions, and events.
 - **Agent trait** - The fundamental abstraction for all agents
 - **Tool / Toolset traits** - For extending agents with custom capabilities
 - **Llm trait** - For LLM provider integrations
+- **SchemaAdapter trait** - Provider-aware JSON Schema normalization for MCP tools
 - **Context hierarchy** - ReadonlyContext → CallbackContext → ToolContext/InvocationContext
 - **Content / Part** - Message content structures
 - **Event system** - For streaming agent responses
@@ -25,14 +26,14 @@ This crate is model-agnostic and contains no LLM-specific code.
 
 ```toml
 [dependencies]
-adk-core = "0.8.1"
+adk-core = "0.8.2"
 ```
 
 Or use the meta-crate:
 
 ```toml
 [dependencies]
-adk-rust = "0.8.1"
+adk-rust = "0.8.2"
 ```
 
 ## Core Traits
@@ -83,8 +84,21 @@ pub trait Toolset: Send + Sync {
 pub trait Llm: Send + Sync {
     fn name(&self) -> &str;
     async fn generate_content(&self, request: LlmRequest, stream: bool) -> Result<LlmResponseStream>;
+    fn schema_adapter(&self) -> &dyn SchemaAdapter; // default: GenericSchemaAdapter
 }
 ```
+
+### SchemaAdapter
+
+```rust
+pub trait SchemaAdapter: Send + Sync + Debug {
+    fn normalize_schema(&self, schema: Value) -> Value;
+    fn normalize_tool_name<'a>(&self, name: &'a str) -> Cow<'a, str>;
+    fn empty_schema(&self) -> Value;
+}
+```
+
+Provider-specific schema normalization for MCP tools. Each `Llm` implementation returns its adapter via `schema_adapter()`. See `GenericSchemaAdapter` for the default implementation.
 
 ## Key Types
 

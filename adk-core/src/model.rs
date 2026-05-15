@@ -1,3 +1,4 @@
+use crate::schema_adapter::{GenericSchemaAdapter, SchemaAdapter};
 use crate::{Result, types::Content};
 use async_trait::async_trait;
 use futures::stream::Stream;
@@ -11,6 +12,19 @@ pub type LlmResponseStream = Pin<Box<dyn Stream<Item = Result<LlmResponse>> + Se
 pub trait Llm: Send + Sync {
     fn name(&self) -> &str;
     async fn generate_content(&self, req: LlmRequest, stream: bool) -> Result<LlmResponseStream>;
+
+    /// Returns the schema adapter for this provider.
+    ///
+    /// The schema adapter normalizes raw JSON Schema from MCP tools into the
+    /// format accepted by this provider's function-calling API.
+    ///
+    /// Default implementation returns [`GenericSchemaAdapter`], which applies
+    /// safe transforms suitable for most providers. Override this method to
+    /// return a provider-specific adapter (e.g., `GeminiSchemaAdapter`,
+    /// `OpenAiStrictSchemaAdapter`).
+    fn schema_adapter(&self) -> &dyn SchemaAdapter {
+        &GenericSchemaAdapter
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -4,12 +4,16 @@ use super::config::AnthropicConfig;
 use super::convert;
 use super::error::AnthropicApiError;
 use super::rate_limit::RateLimitInfo;
+use super::schema_adapter::AnthropicSchemaAdapter;
 use crate::retry::{RetryConfig, ServerRetryHint, execute_with_retry, is_retryable_model_error};
 use adk_anthropic::{
     Anthropic, ContentBlock, ContentBlockDelta, ContentBlockDeltaEvent, MessageStreamEvent,
     StopReason, TextDelta,
 };
-use adk_core::{AdkError, ErrorCategory, ErrorComponent, FinishReason, Llm, LlmRequest, Part};
+use adk_core::{
+    AdkError, ErrorCategory, ErrorComponent, FinishReason, Llm, LlmRequest, Part, SchemaAdapter,
+    SchemaCache,
+};
 use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -177,7 +181,10 @@ impl AnthropicClient {
             if filtered_tools.is_empty() {
                 Vec::new()
             } else {
-                convert::convert_tools(&filtered_tools)?
+                use std::sync::LazyLock;
+                static ADAPTER: AnthropicSchemaAdapter = AnthropicSchemaAdapter;
+                static SCHEMA_CACHE: LazyLock<SchemaCache> = LazyLock::new(SchemaCache::new);
+                convert::convert_tools(&filtered_tools, &ADAPTER, &SCHEMA_CACHE)?
             }
         };
 
@@ -464,6 +471,11 @@ fn extract_retry_hint(e: &adk_anthropic::Error) -> Option<ServerRetryHint> {
 impl Llm for AnthropicClient {
     fn name(&self) -> &str {
         &self.model
+    }
+
+    fn schema_adapter(&self) -> &dyn SchemaAdapter {
+        static ADAPTER: AnthropicSchemaAdapter = AnthropicSchemaAdapter;
+        &ADAPTER
     }
 
     #[tracing::instrument(

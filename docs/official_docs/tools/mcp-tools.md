@@ -204,8 +204,11 @@ for tool in &tools {
 
 Each discovered tool:
 - Has its name and description from the MCP server
-- Includes parameter schemas for LLM accuracy
+- Includes raw parameter schemas (unmodified from the MCP server)
 - Executes via the MCP protocol when called
+- Has its schema automatically normalized for the target LLM provider at request time
+
+> **Note**: `McpToolset` returns raw schemas verbatim. Schema normalization (removing unsupported keywords, resolving `$ref`, etc.) happens automatically when the model builds its API request. This means the same MCP tool works correctly with Gemini, OpenAI, Anthropic, and any other provider. See [Schema Normalization](schema-normalization.md) for details.
 
 ## Adding Tools to Agent
 
@@ -769,6 +772,7 @@ See `examples/mcp_manager/` for a full working example demonstrating JSON config
 
 ## Related
 
+- [Schema Normalization](schema-normalization.md) - How schemas are normalized per-provider
 - [Function Tools](function-tools.md) - Creating custom tools in Rust
 - [Built-in Tools](built-in-tools.md) - Pre-built tools included with ADK
 - [LlmAgent](../agents/llm-agent.md) - Adding tools to agents

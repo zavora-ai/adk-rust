@@ -5,7 +5,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! adk-rust = { version = "0.8.1", features = ["standard"] }
+//! adk-rust = { version = "0.8.2", features = ["standard"] }
 //! ```
 
 use adk_rust::graph::node::AgentNode;

@@ -2,9 +2,11 @@ use crate::attachment;
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
     CacheCapable, CitationMetadata, CitationSource, Content, ErrorCategory, ErrorComponent,
-    FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part, Result, UsageMetadata,
+    FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part, Result, SchemaAdapter,
+    SchemaCache, UsageMetadata,
 };
 use adk_gemini::Gemini;
+use adk_gemini::schema_adapter::GeminiSchemaAdapter;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use futures::TryStreamExt;
@@ -407,6 +409,8 @@ impl GeminiModel {
 
     fn build_gemini_tools(
         tools: &std::collections::HashMap<String, serde_json::Value>,
+        adapter: &dyn SchemaAdapter,
+        cache: &SchemaCache,
     ) -> Result<(Vec<adk_gemini::Tool>, adk_gemini::ToolConfig)> {
         let mut gemini_tools = Vec::new();
         let mut function_declarations = Vec::new();
@@ -423,14 +427,44 @@ impl GeminiModel {
                     })?;
                 has_provider_native_tools = true;
                 gemini_tools.push(tool);
-            } else if let Ok(func_decl) =
-                serde_json::from_value::<adk_gemini::FunctionDeclaration>(tool_decl.clone())
-            {
-                function_declarations.push(func_decl);
             } else {
-                return Err(adk_core::AdkError::model(format!(
-                    "failed to deserialize Gemini tool '{name}' as a function declaration"
-                )));
+                // Normalize tool name via the schema adapter
+                let normalized_name = adapter.normalize_tool_name(name);
+
+                // Get the parameters schema from the declaration, or use the
+                // adapter's empty_schema fallback when none is provided.
+                let schema =
+                    tool_decl.get("parameters").cloned().unwrap_or_else(|| adapter.empty_schema());
+                let normalized_schema = cache.get_or_normalize(&schema, adapter);
+
+                // Build the FunctionDeclaration with normalized values
+                let description =
+                    tool_decl.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                let mut func_decl_json = serde_json::json!({
+                    "name": normalized_name.as_ref(),
+                    "description": description,
+                    "parameters": normalized_schema,
+                });
+
+                // Preserve response schema if present
+                if let Some(response) = tool_decl.get("response") {
+                    func_decl_json["response"] = response.clone();
+                }
+
+                // Preserve behavior if present
+                if let Some(behavior) = tool_decl.get("behavior") {
+                    func_decl_json["behavior"] = behavior.clone();
+                }
+
+                let func_decl =
+                    serde_json::from_value::<adk_gemini::FunctionDeclaration>(func_decl_json)
+                        .map_err(|error| {
+                            adk_core::AdkError::model(format!(
+                                "failed to build Gemini function declaration for '{name}': {error}"
+                            ))
+                        })?;
+                function_declarations.push(func_decl);
             }
 
             if let Some(tool_config) = tool_decl.get("x-adk-gemini-tool-config") {
@@ -755,7 +789,11 @@ impl GeminiModel {
 
         // Add tools
         if !req.tools.is_empty() {
-            let (gemini_tools, tool_config) = Self::build_gemini_tools(&req.tools)?;
+            let adapter = self.schema_adapter();
+            use std::sync::LazyLock;
+            static SCHEMA_CACHE: LazyLock<SchemaCache> = LazyLock::new(SchemaCache::new);
+            let (gemini_tools, tool_config) =
+                Self::build_gemini_tools(&req.tools, adapter, &SCHEMA_CACHE)?;
             for tool in gemini_tools {
                 builder = builder.with_tool(tool);
             }
@@ -834,7 +872,10 @@ impl GeminiModel {
             .with_system_instruction(system_instruction)
             .with_ttl(std::time::Duration::from_secs(u64::from(ttl_seconds)));
 
-        let (gemini_tools, tool_config) = Self::build_gemini_tools(tools)?;
+        let adapter = self.schema_adapter();
+        use std::sync::LazyLock;
+        static SCHEMA_CACHE: LazyLock<SchemaCache> = LazyLock::new(SchemaCache::new);
+        let (gemini_tools, tool_config) = Self::build_gemini_tools(tools, adapter, &SCHEMA_CACHE)?;
         if !gemini_tools.is_empty() {
             cache_builder = cache_builder.with_tools(gemini_tools);
         }
@@ -867,6 +908,12 @@ impl Llm for GeminiModel {
         &self.model_name
     }
 
+    fn schema_adapter(&self) -> &dyn SchemaAdapter {
+        use std::sync::LazyLock;
+        static ADAPTER: LazyLock<GeminiSchemaAdapter> = LazyLock::new(GeminiSchemaAdapter::new);
+        &*ADAPTER
+    }
+
     #[adk_telemetry::instrument(
         name = "call_llm",
         skip(self, req),
@@ -894,6 +941,14 @@ impl Llm for GeminiModel {
 mod native_tool_tests {
     use super::*;
 
+    fn test_adapter() -> GeminiSchemaAdapter {
+        GeminiSchemaAdapter::new()
+    }
+
+    fn test_cache() -> SchemaCache {
+        SchemaCache::new()
+    }
+
     #[test]
     fn test_build_gemini_tools_supports_native_tool_metadata() {
         let mut tools = std::collections::HashMap::new();
@@ -919,8 +974,10 @@ mod native_tool_tests {
             }),
         );
 
-        let (gemini_tools, tool_config) =
-            GeminiModel::build_gemini_tools(&tools).expect("tool conversion should succeed");
+        let adapter = test_adapter();
+        let cache = test_cache();
+        let (gemini_tools, tool_config) = GeminiModel::build_gemini_tools(&tools, &adapter, &cache)
+            .expect("tool conversion should succeed");
 
         assert_eq!(gemini_tools.len(), 2);
         assert_eq!(tool_config.include_server_side_tool_invocations, Some(true));
@@ -938,8 +995,11 @@ mod native_tool_tests {
             }),
         );
 
+        let adapter = test_adapter();
+        let cache = test_cache();
         let (_gemini_tools, tool_config) =
-            GeminiModel::build_gemini_tools(&tools).expect("tool conversion should succeed");
+            GeminiModel::build_gemini_tools(&tools, &adapter, &cache)
+                .expect("tool conversion should succeed");
 
         assert_eq!(
             tool_config.include_server_side_tool_invocations,
@@ -965,8 +1025,11 @@ mod native_tool_tests {
             }),
         );
 
+        let adapter = test_adapter();
+        let cache = test_cache();
         let (_gemini_tools, tool_config) =
-            GeminiModel::build_gemini_tools(&tools).expect("tool conversion should succeed");
+            GeminiModel::build_gemini_tools(&tools, &adapter, &cache)
+                .expect("tool conversion should succeed");
 
         assert_eq!(
             tool_config.include_server_side_tool_invocations, None,
@@ -996,8 +1059,11 @@ mod native_tool_tests {
             }),
         );
 
+        let adapter = test_adapter();
+        let cache = test_cache();
         let (_gemini_tools, tool_config) =
-            GeminiModel::build_gemini_tools(&tools).expect("tool conversion should succeed");
+            GeminiModel::build_gemini_tools(&tools, &adapter, &cache)
+                .expect("tool conversion should succeed");
 
         assert_eq!(
             tool_config.retrieval_config,

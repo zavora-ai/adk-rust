@@ -8,14 +8,14 @@ Provides unified traits for Text-to-Speech (TTS), Speech-to-Text (STT), music ge
 
 ```toml
 [dependencies]
-adk-audio = "0.8.1"
+adk-audio = "0.8.2"
 ```
 
 Or via the umbrella crate (experimental):
 
 ```toml
 [dependencies]
-adk-rust = { version = "0.8.1", features = ["audio"] }
+adk-rust = { version = "0.8.2", features = ["audio"] }
 ```
 
 ## Feature Flags

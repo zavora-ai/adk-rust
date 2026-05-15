@@ -82,6 +82,9 @@ pub mod instruction_template;
 pub mod intra_compaction;
 pub mod model;
 pub mod request_context;
+pub mod schema_adapter;
+pub mod schema_cache;
+pub mod schema_utils;
 pub mod shared_state;
 pub mod tool;
 pub mod types;
@@ -114,6 +117,8 @@ pub use model::{
     GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream, UsageMetadata,
 };
 pub use request_context::RequestContext;
+pub use schema_adapter::{GenericSchemaAdapter, SchemaAdapter};
+pub use schema_cache::SchemaCache;
 pub use shared_state::{SharedState, SharedStateError};
 pub use tool::{
     RetryBudget, Tool, ToolContext, ToolExecutionStrategy, ToolPredicate, ToolRegistry, Toolset,

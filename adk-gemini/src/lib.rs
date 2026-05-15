@@ -33,6 +33,7 @@ pub mod client;
 pub mod model_info;
 mod models;
 pub mod pricing;
+pub mod schema_adapter;
 
 /// Convenient re-exports of commonly used types
 pub mod prelude;
@@ -150,3 +151,8 @@ pub use cache::{
 // Token cost estimation for Gemini models
 
 pub use pricing::{CostBreakdown, GeminiPricing, estimate_cost, estimate_cost_long};
+
+// ========== Schema Adapter ==========
+// Provider-specific schema normalization for Gemini function-calling API
+
+pub use schema_adapter::GeminiSchemaAdapter;

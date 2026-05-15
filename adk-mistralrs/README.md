@@ -68,8 +68,8 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-core = "0.8.1"
-adk-agent = "0.8.1"
+adk-core = "0.8.2"
+adk-agent = "0.8.2"
 
 # mistral.rs support (git dependency - not on crates.io)
 adk-mistralrs = { git = "https://github.com/zavora-ai/adk-rust" }

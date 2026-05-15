@@ -3,8 +3,8 @@
 use super::config::OllamaConfig;
 use super::convert;
 use adk_core::{
-    AdkError, Content, ErrorCategory, ErrorComponent, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Part, Result,
+    AdkError, Content, ErrorCategory, ErrorComponent, GenericSchemaAdapter, Llm, LlmRequest,
+    LlmResponse, LlmResponseStream, Part, Result, SchemaAdapter,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -126,6 +126,13 @@ fn ollama_error_to_adk(msg: &str) -> AdkError {
 impl Llm for OllamaModel {
     fn name(&self) -> &str {
         &self.model_name
+    }
+
+    // OllamaModel uses the default GenericSchemaAdapter from the Llm trait.
+    // This explicit override documents the intentional adapter selection.
+    fn schema_adapter(&self) -> &dyn SchemaAdapter {
+        static ADAPTER: GenericSchemaAdapter = GenericSchemaAdapter;
+        &ADAPTER
     }
 
     async fn generate_content(

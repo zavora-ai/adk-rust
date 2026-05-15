@@ -6,7 +6,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! adk-rust = { version = "0.8.1", features = ["enterprise"] }
+//! adk-rust = { version = "0.8.2", features = ["enterprise"] }
 //! ```
 
 use adk_rust::artifact::{ArtifactService, InMemoryArtifactService, SaveRequest};

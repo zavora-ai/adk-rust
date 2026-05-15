@@ -2,9 +2,13 @@
 
 use super::config::{AzureConfig, OpenAIConfig};
 use super::convert;
+use super::schema_adapter::OpenAiSchemaAdapter;
 use crate::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig, build_request_json};
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
-use adk_core::{AdkError, ErrorCategory, ErrorComponent, Llm, LlmRequest, LlmResponseStream};
+use adk_core::{
+    AdkError, ErrorCategory, ErrorComponent, Llm, LlmRequest, LlmResponseStream, SchemaAdapter,
+    SchemaCache,
+};
 use async_openai::types::chat::ReasoningEffort;
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -74,6 +78,11 @@ impl Llm for OpenAIClient {
         self.inner.name()
     }
 
+    fn schema_adapter(&self) -> &dyn SchemaAdapter {
+        static ADAPTER: OpenAiSchemaAdapter = OpenAiSchemaAdapter;
+        &ADAPTER
+    }
+
     async fn generate_content(
         &self,
         request: LlmRequest,
@@ -127,6 +136,11 @@ impl Llm for AzureOpenAIClient {
         &self.deployment_id
     }
 
+    fn schema_adapter(&self) -> &dyn SchemaAdapter {
+        static ADAPTER: OpenAiSchemaAdapter = OpenAiSchemaAdapter;
+        &ADAPTER
+    }
+
     async fn generate_content(
         &self,
         request: LlmRequest,
@@ -140,7 +154,13 @@ impl Llm for AzureOpenAIClient {
         let api_base = self.api_base.clone();
         let api_version = self.api_version.clone();
         let retry_config = self.retry_config.clone();
-        let request_for_retry = request.clone();
+
+        // Normalize tool schemas at request time using the schema adapter.
+        let adapter = self.schema_adapter();
+        use std::sync::LazyLock;
+        static SCHEMA_CACHE: LazyLock<SchemaCache> = LazyLock::new(SchemaCache::new);
+        let request_body =
+            build_request_json(&deployment_id, &request, &None, adapter, &SCHEMA_CACHE)?;
 
         let stream = try_stream! {
             let response = execute_with_retry(&retry_config, is_retryable_model_error, || {
@@ -149,10 +169,8 @@ impl Llm for AzureOpenAIClient {
                 let api_key = api_key.clone();
                 let api_base = api_base.clone();
                 let api_version = api_version.clone();
-                let request = request_for_retry.clone();
+                let body = request_body.clone();
                 async move {
-                    let body = build_request_json(&deployment_id, &request, &None)?;
-
                     let url = format!(
                         "{api_base}/openai/deployments/{deployment_id}/chat/completions?api-version={api_version}"
                     );

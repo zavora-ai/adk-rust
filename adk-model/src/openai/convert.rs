@@ -1,7 +1,9 @@
 //! Type conversions between ADK and async-openai types.
 
 use crate::attachment;
-use adk_core::{Content, FinishReason, LlmResponse, Part, UsageMetadata};
+use adk_core::{
+    Content, FinishReason, LlmResponse, Part, SchemaAdapter, SchemaCache, UsageMetadata,
+};
 use async_openai::types::chat::{
     ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
     ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
@@ -221,17 +223,30 @@ fn extract_tool_calls(parts: &[Part]) -> Vec<ChatCompletionMessageToolCalls> {
 }
 
 /// Convert ADK tools to OpenAI ChatCompletionTools.
-pub fn convert_tools(tools: &HashMap<String, serde_json::Value>) -> Vec<ChatCompletionTools> {
+pub fn convert_tools(
+    tools: &HashMap<String, serde_json::Value>,
+    adapter: &dyn SchemaAdapter,
+    cache: &SchemaCache,
+) -> Vec<ChatCompletionTools> {
     tools
         .iter()
         .map(|(name, decl)| {
             let description = decl.get("description").and_then(|d| d.as_str()).map(String::from);
 
-            let parameters = decl.get("parameters").cloned();
+            // Normalize tool name via the schema adapter
+            let normalized_name = adapter.normalize_tool_name(name);
+
+            // Get the parameters schema from the declaration, or use the
+            // adapter's empty_schema fallback when none is provided.
+            let parameters = decl
+                .get("parameters")
+                .cloned()
+                .map(|schema| cache.get_or_normalize(&schema, adapter))
+                .or_else(|| Some(adapter.empty_schema()));
 
             ChatCompletionTools::Function(ChatCompletionTool {
                 function: FunctionObject {
-                    name: name.clone(),
+                    name: normalized_name.into_owned(),
                     description,
                     parameters,
                     strict: None,
@@ -747,6 +762,8 @@ mod tests {
 
     #[test]
     fn test_convert_tools() {
+        use super::super::schema_adapter::OpenAiSchemaAdapter;
+
         let mut tools = HashMap::new();
         tools.insert(
             "get_weather".to_string(),
@@ -761,7 +778,9 @@ mod tests {
             }),
         );
 
-        let openai_tools = convert_tools(&tools);
+        let adapter = OpenAiSchemaAdapter;
+        let cache = SchemaCache::new();
+        let openai_tools = convert_tools(&tools, &adapter, &cache);
         assert_eq!(openai_tools.len(), 1);
         if let ChatCompletionTools::Function(tool) = &openai_tools[0] {
             assert_eq!(tool.function.name, "get_weather");

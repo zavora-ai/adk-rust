@@ -4,7 +4,7 @@ use crate::openai::convert;
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
     AdkError, Content, ErrorCategory, ErrorComponent, FinishReason, Llm, LlmRequest, LlmResponse,
-    LlmResponseStream, Part, UsageMetadata,
+    LlmResponseStream, Part, SchemaAdapter, SchemaCache, UsageMetadata,
 };
 use async_openai::types::chat::{
     CreateChatCompletionRequestArgs, ReasoningEffort, ResponseFormat, ResponseFormatJsonSchema,
@@ -199,6 +199,8 @@ pub(crate) fn build_request_json(
     model: &str,
     request: &LlmRequest,
     reasoning_effort: &Option<ReasoningEffort>,
+    adapter: &dyn SchemaAdapter,
+    cache: &SchemaCache,
 ) -> Result<serde_json::Value, AdkError> {
     let messages: Vec<_> = request.contents.iter().map(convert::content_to_message).collect();
 
@@ -206,7 +208,7 @@ pub(crate) fn build_request_json(
     request_builder.model(model).messages(messages);
 
     if !request.tools.is_empty() {
-        let tools = convert::convert_tools(&request.tools);
+        let tools = convert::convert_tools(&request.tools, adapter, cache);
         request_builder.tools(tools);
         // OpenAI defaults parallel_tool_calls to true. Users can override
         // via config.extensions["openai"]["parallel_tool_calls"] = false
@@ -388,17 +390,23 @@ impl Llm for OpenAICompatible {
         let api_key = self.api_key.clone();
         let base_url = self.base_url.clone();
         let retry_config = self.retry_config.clone();
-        let request_for_retry = request.clone();
         let reasoning_effort = self.reasoning_effort.clone();
         let organization_id = self.organization_id.clone();
+
+        // Normalize tool schemas at request time using the schema adapter.
+        let adapter = self.schema_adapter();
+        use std::sync::LazyLock;
+        static SCHEMA_CACHE: LazyLock<SchemaCache> = LazyLock::new(SchemaCache::new);
+        let request_body =
+            build_request_json(&model, &request, &reasoning_effort, adapter, &SCHEMA_CACHE)?;
 
         let usage_span = adk_telemetry::llm_generate_span(&provider_name, &model, stream);
 
         if stream {
             // ── Streaming path ──────────────────────────────────────
             let response_stream = try_stream! {
-                // Build the request JSON and inject streaming fields.
-                let mut body = build_request_json(&model, &request_for_retry, &reasoning_effort)?;
+                // Inject streaming fields into the pre-built request body.
+                let mut body = request_body.clone();
                 if let Some(obj) = body.as_object_mut() {
                     obj.insert("stream".to_string(), serde_json::json!(true));
                     obj.insert(
@@ -670,12 +678,9 @@ impl Llm for OpenAICompatible {
                     let http = http.clone();
                     let api_key = api_key.clone();
                     let base_url = base_url.clone();
-                    let request = request_for_retry.clone();
-                    let reasoning_effort = reasoning_effort.clone();
+                    let body = request_body.clone();
                     let organization_id = organization_id.clone();
                     async move {
-                        let body = build_request_json(&model, &request, &reasoning_effort)?;
-
                         let url = format!("{base_url}/chat/completions");
                         let http_resp =
                             send_request(&http, &url, &api_key, &organization_id, &body, &provider_name)

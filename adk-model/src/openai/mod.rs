@@ -20,6 +20,7 @@ pub(crate) mod convert;
 pub mod pricing;
 mod responses_client;
 mod responses_convert;
+pub mod schema_adapter;
 
 pub use crate::openai_compatible::{OpenAICompatible, OpenAICompatibleConfig};
 pub use client::{AzureOpenAIClient, OpenAIClient};
@@ -27,3 +28,4 @@ pub use config::{
     AzureConfig, OpenAIConfig, OpenAIResponsesConfig, ReasoningEffort, ReasoningSummary,
 };
 pub use responses_client::OpenAIResponsesClient;
+pub use schema_adapter::{OpenAiSchemaAdapter, OpenAiStrictSchemaAdapter};

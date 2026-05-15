@@ -1,0 +1,15 @@
+[package]
+name = "schema-normalization-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-core = { path = "../../adk-core" }
+adk-gemini = { path = "../../adk-gemini" }
+adk-model = { path = "../../adk-model", features = ["openai", "anthropic"] }
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
