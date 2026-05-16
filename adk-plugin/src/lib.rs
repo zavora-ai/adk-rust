@@ -67,9 +67,22 @@
 //! ```
 
 mod callbacks;
+mod context;
+mod enhanced_manager;
+mod enhanced_plugin;
+mod hook_result;
 mod manager;
 mod plugin;
 
+pub mod adapted_plugin;
+
+pub use adapted_plugin::AdaptedPlugin;
 pub use callbacks::*;
+pub use context::PluginContext;
+pub use enhanced_manager::EnhancedPluginManager;
+pub use enhanced_plugin::EnhancedPlugin;
+pub use hook_result::{
+    AfterModelCallResult, AfterToolCallResult, BeforeModelCallResult, BeforeToolCallResult,
+};
 pub use manager::{PluginManager, PluginManagerConfig};
 pub use plugin::{Plugin, PluginBuilder, PluginConfig};

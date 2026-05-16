@@ -12,6 +12,11 @@ use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 use tracing::Instrument;
 
+#[cfg(feature = "enhanced-plugins")]
+use adk_plugin::{
+    BeforeModelCallResult, BeforeToolCallResult, EnhancedPlugin, EnhancedPluginManager,
+};
+
 #[cfg(feature = "skills")]
 use crate::skill_shim::load_skill_index;
 use crate::{
@@ -99,6 +104,10 @@ pub struct LlmAgent {
     tool_execution_strategy: Option<ToolExecutionStrategy>,
     input_guardrails: Arc<GuardrailSet>,
     output_guardrails: Arc<GuardrailSet>,
+    /// Enhanced plugin manager for fine-grained tool/model call interception.
+    /// Only created when enhanced plugins are registered (zero overhead otherwise).
+    #[cfg(feature = "enhanced-plugins")]
+    enhanced_plugin_manager: Option<Arc<EnhancedPluginManager>>,
 }
 
 impl std::fmt::Debug for LlmAgent {
@@ -206,6 +215,9 @@ pub struct LlmAgentBuilder {
     tool_execution_strategy: Option<ToolExecutionStrategy>,
     input_guardrails: GuardrailSet,
     output_guardrails: GuardrailSet,
+    /// Enhanced plugins to register on the built agent.
+    #[cfg(feature = "enhanced-plugins")]
+    enhanced_plugins: Vec<Arc<dyn EnhancedPlugin>>,
 }
 
 impl LlmAgentBuilder {
@@ -248,6 +260,8 @@ impl LlmAgentBuilder {
             tool_execution_strategy: None,
             input_guardrails: GuardrailSet::new(),
             output_guardrails: GuardrailSet::new(),
+            #[cfg(feature = "enhanced-plugins")]
+            enhanced_plugins: Vec::new(),
         }
     }
 
@@ -584,6 +598,58 @@ impl LlmAgentBuilder {
         self
     }
 
+    /// Register a single enhanced plugin for fine-grained tool/model call interception.
+    ///
+    /// Enhanced plugins can inspect and modify tool arguments, tool results,
+    /// model requests, and model responses. They execute in priority order
+    /// (lower priority values execute first).
+    ///
+    /// Requires the `enhanced-plugins` feature.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use adk_plugin::EnhancedPlugin;
+    ///
+    /// let agent = LlmAgentBuilder::new("my-agent")
+    ///     .model(model)
+    ///     .enhanced_plugin(Arc::new(MyPlugin::new()))
+    ///     .build()?;
+    /// ```
+    #[cfg(feature = "enhanced-plugins")]
+    pub fn enhanced_plugin(mut self, plugin: Arc<dyn EnhancedPlugin>) -> Self {
+        self.enhanced_plugins.push(plugin);
+        self
+    }
+
+    /// Register multiple enhanced plugins at once.
+    ///
+    /// Plugins are sorted by priority when the agent is built. Lower priority
+    /// values execute first. Same-priority plugins execute in registration order.
+    ///
+    /// Requires the `enhanced-plugins` feature.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use adk_plugin::EnhancedPlugin;
+    ///
+    /// let agent = LlmAgentBuilder::new("my-agent")
+    ///     .model(model)
+    ///     .enhanced_plugins(vec![
+    ///         Arc::new(SecurityPlugin::new()),  // priority = 10
+    ///         Arc::new(LoggingPlugin::new()),   // priority = 100
+    ///     ])
+    ///     .build()?;
+    /// ```
+    #[cfg(feature = "enhanced-plugins")]
+    pub fn enhanced_plugins(mut self, plugins: Vec<Arc<dyn EnhancedPlugin>>) -> Self {
+        self.enhanced_plugins.extend(plugins);
+        self
+    }
+
     pub fn build(self) -> Result<LlmAgent> {
         let model = self.model.ok_or_else(|| adk_core::AdkError::agent("Model is required"))?;
 
@@ -596,6 +662,14 @@ impl LlmAgentBuilder {
                 )));
             }
         }
+
+        // Construct EnhancedPluginManager only when plugins are registered (zero overhead otherwise)
+        #[cfg(feature = "enhanced-plugins")]
+        let enhanced_plugin_manager = if self.enhanced_plugins.is_empty() {
+            None
+        } else {
+            Some(Arc::new(EnhancedPluginManager::new(self.enhanced_plugins)))
+        };
 
         Ok(LlmAgent {
             name: self.name,
@@ -635,6 +709,8 @@ impl LlmAgentBuilder {
             tool_execution_strategy: self.tool_execution_strategy,
             input_guardrails: Arc::new(self.input_guardrails),
             output_guardrails: Arc::new(self.output_guardrails),
+            #[cfg(feature = "enhanced-plugins")]
+            enhanced_plugin_manager,
         })
     }
 }
@@ -886,6 +962,8 @@ impl Agent for LlmAgent {
         let disallow_transfer_to_peers = self.disallow_transfer_to_peers;
         let output_guardrails = self.output_guardrails.clone();
         let agent_tool_execution_strategy = self.tool_execution_strategy;
+        #[cfg(feature = "enhanced-plugins")]
+        let enhanced_plugin_manager = self.enhanced_plugin_manager.clone();
 
         let s = stream! {
             // ===== BEFORE AGENT CALLBACKS =====
@@ -1230,25 +1308,53 @@ impl Agent for LlmAgent {
                     config,
                 };
 
+                // ===== ENHANCED PLUGIN: BEFORE MODEL CALL =====
+                // Enhanced plugins can modify the request or short-circuit the model call.
+                // They run before legacy before_model_callbacks.
+                #[cfg(feature = "enhanced-plugins")]
+                let (request, model_response_override_from_plugin) = {
+                    if let Some(epm) = &enhanced_plugin_manager {
+                        match epm.run_before_model_call(request, ctx.clone() as Arc<dyn CallbackContext>).await {
+                            Ok(BeforeModelCallResult::Continue(modified_request)) => {
+                                (modified_request, None)
+                            }
+                            Ok(BeforeModelCallResult::ShortCircuit(response)) => {
+                                // Use a default request since we're short-circuiting
+                                (LlmRequest::new("", vec![]), Some(response))
+                            }
+                            Err(e) => {
+                                yield Err(e);
+                                return;
+                            }
+                        }
+                    } else {
+                        (request, None)
+                    }
+                };
+                #[cfg(not(feature = "enhanced-plugins"))]
+                let model_response_override_from_plugin: Option<LlmResponse> = None;
+
                 // ===== BEFORE MODEL CALLBACKS =====
                 // These can modify the request or skip the model call by returning a response
                 let mut current_request = request;
-                let mut model_response_override = None;
-                for callback in before_model_callbacks.as_ref() {
-                    match callback(ctx.clone() as Arc<dyn CallbackContext>, current_request.clone()).await {
-                        Ok(BeforeModelResult::Continue(modified_request)) => {
-                            // Callback may have modified the request, continue with it
-                            current_request = modified_request;
-                        }
-                        Ok(BeforeModelResult::Skip(response)) => {
-                            // Callback returned a response - skip model call
-                            model_response_override = Some(response);
-                            break;
-                        }
-                        Err(e) => {
-                            // Callback failed - propagate error
-                            yield Err(e);
-                            return;
+                let mut model_response_override = model_response_override_from_plugin;
+                if model_response_override.is_none() {
+                    for callback in before_model_callbacks.as_ref() {
+                        match callback(ctx.clone() as Arc<dyn CallbackContext>, current_request.clone()).await {
+                            Ok(BeforeModelResult::Continue(modified_request)) => {
+                                // Callback may have modified the request, continue with it
+                                current_request = modified_request;
+                            }
+                            Ok(BeforeModelResult::Skip(response)) => {
+                                // Callback returned a response - skip model call
+                                model_response_override = Some(response);
+                                break;
+                            }
+                            Err(e) => {
+                                // Callback failed - propagate error
+                                yield Err(e);
+                                return;
+                            }
                         }
                     }
                 }
@@ -1452,6 +1558,32 @@ impl Agent for LlmAgent {
                             ctx.run_config().trace_payload_max_bytes,
                         );
                         llm_span.record("gcp.vertex.agent.llm_response", &response_json);
+                    }
+                }
+
+                // ===== ENHANCED PLUGIN: AFTER MODEL CALL =====
+                // Enhanced plugins can modify the accumulated model response.
+                // They run after the full response is accumulated (not per-chunk).
+                #[cfg(feature = "enhanced-plugins")]
+                if let Some(epm) = &enhanced_plugin_manager {
+                    if let Some(ref content) = accumulated_content {
+                        let response_for_hook = LlmResponse {
+                            content: Some(content.clone()),
+                            provider_metadata: final_provider_metadata.clone(),
+                            ..Default::default()
+                        };
+                        match epm.run_after_model_call(response_for_hook, ctx.clone() as Arc<dyn CallbackContext>).await {
+                            Ok(adk_plugin::AfterModelCallResult::Continue(modified_response)) => {
+                                accumulated_content = modified_response.content;
+                                if modified_response.provider_metadata.is_some() {
+                                    final_provider_metadata = modified_response.provider_metadata;
+                                }
+                            }
+                            Err(e) => {
+                                yield Err(e);
+                                return;
+                            }
+                        }
                     }
                 }
 
@@ -1665,6 +1797,8 @@ impl Agent for LlmAgent {
                         let tool_confirmation_policy = &tool_confirmation_policy;
                         let cb_mutex = &cb_mutex;
                         let invocation_id = &invocation_id;
+                        #[cfg(feature = "enhanced-plugins")]
+                        let enhanced_plugin_manager = &enhanced_plugin_manager;
                         async move {
                             let mut tool_actions = EventActions::default();
                             let mut response_content: Option<Content> = None;
@@ -1716,11 +1850,60 @@ impl Agent for LlmAgent {
                             }
 
                             // Before-tool callbacks
+                            // Track potentially modified args for enhanced plugin after-hook
+                            #[allow(unused_mut)]
+                            let mut final_args = args.clone();
+
+                            // ===== ENHANCED PLUGIN: BEFORE TOOL CALL =====
+                            #[cfg(feature = "enhanced-plugins")]
+                            if response_content.is_none() {
+                                if let Some(epm) = &enhanced_plugin_manager {
+                                    if let Some(tool_ref) = tool_map.get(&name) {
+                                        match epm.run_before_tool_call(
+                                            tool_ref.clone(),
+                                            final_args.clone(),
+                                            ctx.clone() as Arc<dyn CallbackContext>,
+                                        ).await {
+                                            Ok(BeforeToolCallResult::Continue(modified_args)) => {
+                                                final_args = modified_args;
+                                            }
+                                            Ok(BeforeToolCallResult::ShortCircuit(synthetic_result)) => {
+                                                // Short-circuit: use synthetic result, skip tool execution
+                                                response_content = Some(Content {
+                                                    role: "function".to_string(),
+                                                    parts: vec![Part::FunctionResponse {
+                                                        function_response: FunctionResponseData::from_tool_result(
+                                                            name.clone(),
+                                                            synthetic_result,
+                                                        ),
+                                                        id: id.clone(),
+                                                    }],
+                                                });
+                                                executed_tool = Some(tool_ref.clone());
+                                            }
+                                            Err(e) => {
+                                                response_content = Some(Content {
+                                                    role: "function".to_string(),
+                                                    parts: vec![Part::FunctionResponse {
+                                                        function_response: FunctionResponseData::new(
+                                                            name.clone(),
+                                                            serde_json::json!({ "error": e.to_string() }),
+                                                        ),
+                                                        id: id.clone(),
+                                                    }],
+                                                });
+                                                run_after_tool_callbacks = false;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             if response_content.is_none() {
                                 let tool_ctx = Arc::new(ToolCallbackContext::new(
                                     ctx.clone(),
                                     name.clone(),
-                                    args.clone(),
+                                    final_args.clone(),
                                 ));
                                 for callback in before_tool_callbacks.as_ref() {
                                     match callback(tool_ctx.clone() as Arc<dyn CallbackContext>).await {
@@ -1805,12 +1988,12 @@ impl Agent for LlmAgent {
                                         }
                                         match async {
                                             let args_payload = trace_json_payload(
-                                                &args,
+                                                &final_args,
                                                 ctx.run_config().record_payloads,
                                                 ctx.run_config().trace_payload_max_bytes,
                                             );
                                             tracing::debug!(tool.name = %name, tool.args = %args_payload, attempt = attempt, "tool_call");
-                                            let exec_future = tool_clone.execute(tool_ctx.clone(), args.clone());
+                                            let exec_future = tool_clone.execute(tool_ctx.clone(), final_args.clone());
                                             tokio::time::timeout(tool_timeout, exec_future).await
                                         }.instrument(tool_span.clone()).await {
                                             Ok(Ok(value)) => {
@@ -1853,7 +2036,7 @@ impl Agent for LlmAgent {
 
                                     let outcome = ToolOutcome {
                                         tool_name: name.clone(),
-                                        tool_args: args.clone(),
+                                        tool_args: final_args.clone(),
                                         success: tool_success,
                                         duration: tool_duration,
                                         error_message: tool_error_message.clone(),
@@ -1877,7 +2060,7 @@ impl Agent for LlmAgent {
                                             match callback(
                                                 ctx.clone() as Arc<dyn CallbackContext>,
                                                 tool.clone(),
-                                                args.clone(),
+                                                final_args.clone(),
                                                 error_msg.clone(),
                                             ).await {
                                                 Ok(Some(result)) => { fallback_result = Some(result); break; }
@@ -1936,7 +2119,7 @@ impl Agent for LlmAgent {
                                 let cb_ctx: Arc<dyn CallbackContext> = Arc::new(ToolCallbackContext::new(
                                     outcome_ctx,
                                     name.clone(),
-                                    args.clone(),
+                                    final_args.clone(),
                                 ));
                                 for callback in after_tool_callbacks.as_ref() {
                                     match callback(cb_ctx.clone()).await {
@@ -1960,7 +2143,7 @@ impl Agent for LlmAgent {
                                 if let (Some(tool_ref), Some(tool_resp)) = (&executed_tool, executed_tool_response) {
                                     for callback in after_tool_callbacks_full.as_ref() {
                                         match callback(
-                                            cb_ctx.clone(), tool_ref.clone(), args.clone(), tool_resp.clone(),
+                                            cb_ctx.clone(), tool_ref.clone(), final_args.clone(), tool_resp.clone(),
                                         ).await {
                                             Ok(Some(modified_value)) => {
                                                 response_content = Content {
@@ -1988,6 +2171,56 @@ impl Agent for LlmAgent {
                                                     }],
                                                 };
                                                 break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // ===== ENHANCED PLUGIN: AFTER TOOL CALL =====
+                                // Enhanced plugins can modify the tool result after legacy callbacks.
+                                #[cfg(feature = "enhanced-plugins")]
+                                if let Some(epm) = &enhanced_plugin_manager {
+                                    if let Some(tool_ref) = &executed_tool {
+                                        // Extract the result value from the response content
+                                        let result_value = response_content.parts.iter()
+                                            .find_map(|p| {
+                                                if let Part::FunctionResponse { function_response, .. } = p {
+                                                    Some(function_response.response.clone())
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .unwrap_or(serde_json::json!(null));
+
+                                        match epm.run_after_tool_call(
+                                            tool_ref.clone(),
+                                            &final_args,
+                                            result_value,
+                                            ctx.clone() as Arc<dyn CallbackContext>,
+                                        ).await {
+                                            Ok(adk_plugin::AfterToolCallResult::Continue(modified_result)) => {
+                                                response_content = Content {
+                                                    role: "function".to_string(),
+                                                    parts: vec![Part::FunctionResponse {
+                                                        function_response: FunctionResponseData::from_tool_result(
+                                                            name.clone(),
+                                                            modified_result,
+                                                        ),
+                                                        id: id.clone(),
+                                                    }],
+                                                };
+                                            }
+                                            Err(e) => {
+                                                response_content = Content {
+                                                    role: "function".to_string(),
+                                                    parts: vec![Part::FunctionResponse {
+                                                        function_response: FunctionResponseData::new(
+                                                            name.clone(),
+                                                            serde_json::json!({ "error": e.to_string() }),
+                                                        ),
+                                                        id: id.clone(),
+                                                    }],
+                                                };
                                             }
                                         }
                                     }

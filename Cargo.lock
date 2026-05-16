@@ -74,6 +74,7 @@ dependencies = [
  "adk-core",
  "adk-guardrail",
  "adk-model",
+ "adk-plugin",
  "adk-skill",
  "adk-telemetry",
  "adk-tool",
