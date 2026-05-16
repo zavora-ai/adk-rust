@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.2] - 2026-05-15
+## [0.8.2] - 2026-05-16
 
 ### Added
 
@@ -28,6 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **McpToolset returns raw schemas**: `McpToolset::tools()` now returns unmodified `inputSchema` from MCP servers. Schema normalization happens at request time in each model adapter.
 - **Removed `sanitize_schema`**: The monolithic Gemini-specific `sanitize_schema` function has been removed from `adk-tool`. All normalization is now provider-specific.
+
+- **ACP Server** (`adk-acp`, feature `server`): Expose ADK agents as ACP-compatible agents for IDE connections.
+  - `AcpServer::run(config)` → `AcpServerHandle` (programmatic API)
+  - `AcpServerConfig` + builder with validation
+  - `AcpSessionHandler` — session registry, prompt routing via Runner
+  - `ResponseStreamer` — ADK Event → SessionNotification (text, tool calls, thoughts)
+  - `PermissionBridge` — bidirectional ADK ↔ ACP permission flow with timeout
+  - `StdioTransport` — newline-delimited JSON over stdin/stdout for IDE connections
+  - `HttpTransport` — stub for future HTTP/SSE remote deployments
+
+- **YAML Agent Config enhancements** (`adk-server`, feature `yaml-agent`):
+  - Environment variable interpolation (`${VAR}` and `${VAR:-default}`)
+  - Plugin references in YAML definitions
+  - Session/memory backend configuration in YAML
+  - Round-trip serialization (`serialize_definition()`)
+
+- **Examples**: `examples/plugin_system/`, `examples/retry_reflect/`, `examples/acp_server/`, `examples/schema_normalization/`
 
 ### Fixed
 
