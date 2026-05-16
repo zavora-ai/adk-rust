@@ -18,6 +18,12 @@ HTTP server and A2A v1.0.0 protocol for Rust Agent Development Kit (ADK-Rust) ag
 - **Auth Bridge** - Flow authenticated identity from HTTP headers into agent execution
 - **Artifacts** - Binary artifact storage and retrieval per session
 - **Debug/Tracing** - Trace inspection and graph visualization endpoints
+- **YAML Agent Config** (feature: `yaml-agent`) - Declarative agent definitions with:
+  - `AgentConfigLoader` — load agents from YAML files
+  - `HotReloadWatcher` — filesystem watching with debounce
+  - Environment variable interpolation (`${VAR}` and `${VAR:-default}`)
+  - Plugin, session, and memory backend configuration in YAML
+  - Round-trip serialization (`serialize_definition()`)
 
 ## Installation
 

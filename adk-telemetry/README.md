@@ -14,6 +14,13 @@ OpenTelemetry integration for Rust Agent Development Kit (ADK-Rust) agent observ
 - **Logging** - Structured logging with tracing-subscriber
 - **Metrics** - Performance metrics export via OTLP (tonic 0.12 / gRPC)
 - **Span Context** - Propagation across agent boundaries
+- **GenAI Semantic Conventions** (v0.8.2) - Full OTel GenAI semconv v1.41.0 compliance:
+  - `GenAiSpanBuilder` — fluent API for model call spans with `gen_ai.*` attributes
+  - `GenAiResponseRecorder` — records response model, finish reasons, token usage
+  - `GenAiProvider` / `GenAiOperation` enums for all supported providers
+  - `map_finish_reason()` — provider-specific finish reason mapping
+  - `ContentEventEmitter` — opt-in prompt/completion capture
+  - Feature: `genai-semconv` (enabled by default)
 
 ## Installation
 
