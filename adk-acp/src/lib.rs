@@ -34,7 +34,7 @@
 //! ## Features
 //!
 //! - **`default`**: Client-side only (connect to ACP agents)
-//! - **`server`**: Expose ADK agents as ACP-compatible agents (Phase 2)
+//! - **`server`**: Expose ADK agents as ACP-compatible agents
 
 #![warn(missing_docs)]
 
@@ -48,6 +48,12 @@ pub mod tool;
 pub mod toolset;
 pub mod usage;
 
+/// ACP Server: expose ADK agents as ACP-compatible agents for IDE connections.
+///
+/// Enabled with the `server` feature flag. See [`server::AcpServer`] for usage.
+#[cfg(feature = "server")]
+pub mod server;
+
 pub use connection::{AcpAgentConfig, prompt_agent, prompt_agent_with_policy};
 pub use error::{AcpError, Result};
 pub use permissions::{PermissionDecision, PermissionPolicy, PermissionRequest};
@@ -57,6 +63,10 @@ pub use streaming::{OutputChunk, OutputStream, stream_prompt};
 pub use tool::AcpAgentTool;
 pub use toolset::AcpToolset;
 pub use usage::{AcpUsage, AcpUsageStats, UsageTracker};
+
+// Server re-exports (gated behind `server` feature)
+#[cfg(feature = "server")]
+pub use server::{AcpServer, AcpServerConfig, AcpServerConfigBuilder, AcpServerHandle};
 
 // Re-export the SDK for advanced usage
 pub use agent_client_protocol;

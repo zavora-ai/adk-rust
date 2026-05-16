@@ -44,15 +44,20 @@ name = "adk-acp"
 version = "0.8.2"
 dependencies = [
  "adk-core",
+ "adk-runner",
+ "adk-session",
  "agent-client-protocol",
  "agent-client-protocol-tokio",
+ "async-stream",
  "async-trait",
  "futures",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
+ "uuid 1.23.0",
 ]
 
 [[package]]

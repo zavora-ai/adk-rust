@@ -14,7 +14,7 @@ categories = ["development-tools", "asynchronous"]
 
 [features]
 default = []
-server = []  # AcpServer: expose ADK agents as ACP-compatible agents
+server = ["dep:adk-runner", "dep:adk-session", "dep:tokio-util", "dep:uuid", "dep:async-stream"]
 
 [dependencies]
 adk-core = { workspace = true }
@@ -28,5 +28,14 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "process", "io-util"] }
 tracing = { workspace = true }
 
+# Server-specific dependencies (behind `server` feature)
+adk-runner = { workspace = true, optional = true }
+adk-session = { workspace = true, optional = true }
+tokio-util = { version = "0.7", features = ["rt"], optional = true }
+uuid = { workspace = true, optional = true }
+async-stream = { workspace = true, optional = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+adk-session = { workspace = true }
+adk-runner = { workspace = true }
