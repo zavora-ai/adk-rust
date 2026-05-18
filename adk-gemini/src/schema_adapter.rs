@@ -444,6 +444,40 @@ mod tests {
     }
 
     #[test]
+    fn test_removes_items_tuple_validation_on_array() {
+        // Gemini's proto doesn't support tuple validation (items as JSON array).
+        // This caused 400 errors: "Proto field is not repeating, cannot start list"
+        let adapter = GeminiSchemaAdapter::new();
+        let schema = json!({
+            "type": "array",
+            "items": [
+                { "type": "string" },
+                { "type": "number" }
+            ]
+        });
+        let result = adapter.normalize_schema(schema);
+        assert!(result.get("items").is_none(), "tuple validation items should be stripped");
+        assert_eq!(result["type"], "array");
+    }
+
+    #[test]
+    fn test_vertex_ai_removes_items_tuple_validation() {
+        let adapter = GeminiSchemaAdapter::vertex_ai();
+        let schema = json!({
+            "type": "array",
+            "items": [
+                { "type": "integer" },
+                { "type": "boolean" }
+            ]
+        });
+        let result = adapter.normalize_schema(schema);
+        assert!(
+            result.get("items").is_none(),
+            "tuple validation items should be stripped on Vertex AI"
+        );
+    }
+
+    #[test]
     fn test_removes_not_keyword() {
         let adapter = GeminiSchemaAdapter::new();
         let schema = json!({
