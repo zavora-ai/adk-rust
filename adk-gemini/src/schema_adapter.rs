@@ -55,26 +55,84 @@ const GEMINI_ALLOWED_FORMATS: &[&str] =
 
 /// Keywords that Gemini does not support and must be removed from all schema nodes
 /// (standard API surface — removes `additionalProperties` entirely).
+///
+/// Per the official Gemini API docs, the Schema proto for function declarations
+/// only supports: `type`, `description`, `enum`, `items` (single schema for arrays),
+/// `properties`, `required`, `nullable`, and `format` (limited values).
+/// Everything else must be stripped to avoid 400 errors from the proto parser.
+///
+/// Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/function-calling
 const UNSUPPORTED_KEYWORDS: &[&str] = &[
+    "$id",
     "additionalProperties",
-    "exclusiveMinimum",
+    "contains",
+    "contentEncoding",
+    "contentMediaType",
+    "default",
+    "dependentRequired",
+    "dependentSchemas",
+    "deprecated",
+    "examples",
     "exclusiveMaximum",
+    "exclusiveMinimum",
+    "maxItems",
+    "maxLength",
+    "maxProperties",
+    "maximum",
+    "minItems",
+    "minLength",
+    "minProperties",
+    "minimum",
+    "multipleOf",
     "not",
-    "propertyNames",
+    "pattern",
     "patternProperties",
+    "prefixItems",
+    "propertyNames",
+    "readOnly",
+    "title",
     "unevaluatedProperties",
+    "uniqueItems",
+    "writeOnly",
 ];
 
 /// Keywords that Gemini does not support on the Vertex AI surface.
 /// Unlike the standard surface, Vertex AI requires `additionalProperties: false`
 /// on object schemas rather than removing it.
+///
+/// Same comprehensive list as [`UNSUPPORTED_KEYWORDS`] but without
+/// `additionalProperties` (which is handled separately for Vertex AI).
 const UNSUPPORTED_KEYWORDS_VERTEX: &[&str] = &[
-    "exclusiveMinimum",
+    "$id",
+    "contains",
+    "contentEncoding",
+    "contentMediaType",
+    "default",
+    "dependentRequired",
+    "dependentSchemas",
+    "deprecated",
+    "examples",
     "exclusiveMaximum",
+    "exclusiveMinimum",
+    "maxItems",
+    "maxLength",
+    "maxProperties",
+    "maximum",
+    "minItems",
+    "minLength",
+    "minProperties",
+    "minimum",
+    "multipleOf",
     "not",
-    "propertyNames",
+    "pattern",
     "patternProperties",
+    "prefixItems",
+    "propertyNames",
+    "readOnly",
+    "title",
     "unevaluatedProperties",
+    "uniqueItems",
+    "writeOnly",
 ];
 
 /// Schema adapter for the Gemini API surface.
@@ -252,13 +310,13 @@ fn remove_unsupported_keywords(schema: &mut Value) {
         obj.remove(*keyword);
     }
 
-    // Remove `items` only when the schema type is NOT "array".
-    // Also remove `items` if it's a JSON array (tuple validation syntax) —
-    // Gemini doesn't support tuple validation, only single-schema items.
+    // Remove `items` when:
+    // 1. The schema type is NOT "array" (items is meaningless on non-array types), OR
+    // 2. The schema IS "array" but `items` is a JSON array (tuple validation syntax) —
+    //    Gemini only supports single-schema items, not tuple validation.
     let is_array_type = obj.get("type").and_then(|t| t.as_str()).is_some_and(|t| t == "array");
-    if !is_array_type {
-        obj.remove("items");
-    } else if obj.get("items").is_some_and(|v| v.is_array()) {
+    let items_is_tuple = obj.get("items").is_some_and(|v| v.is_array());
+    if !is_array_type || items_is_tuple {
         obj.remove("items");
     }
 
@@ -271,15 +329,11 @@ fn remove_unsupported_keywords(schema: &mut Value) {
         }
     }
 
-    // Recurse into items (only present if type is "array")
-    if let Some(items) = obj.get_mut("items") {
-        if items.is_object() {
-            remove_unsupported_keywords(items);
-        } else if let Some(arr) = items.as_array_mut() {
-            for item in arr.iter_mut() {
-                remove_unsupported_keywords(item);
-            }
-        }
+    // Recurse into items (only present if type is "array" with valid single-schema)
+    if let Some(items) = obj.get_mut("items")
+        && items.is_object()
+    {
+        remove_unsupported_keywords(items);
     }
 
     // Recurse into allOf, anyOf, oneOf (may still exist if not collapsed)
@@ -290,15 +344,6 @@ fn remove_unsupported_keywords(schema: &mut Value) {
             for sub in arr.iter_mut() {
                 remove_unsupported_keywords(sub);
             }
-        }
-    }
-
-    // Recurse into prefixItems
-    if let Some(prefix_items) = obj.get_mut("prefixItems")
-        && let Some(arr) = prefix_items.as_array_mut()
-    {
-        for item in arr.iter_mut() {
-            remove_unsupported_keywords(item);
         }
     }
 }
@@ -328,12 +373,13 @@ fn remove_unsupported_keywords_vertex(schema: &mut Value) {
         obj.remove("additionalProperties");
     }
 
-    // Remove `items` only when the schema type is NOT "array".
-    // Also remove `items` if it's a JSON array (tuple validation syntax).
+    // Remove `items` when:
+    // 1. The schema type is NOT "array" (items is meaningless on non-array types), OR
+    // 2. The schema IS "array" but `items` is a JSON array (tuple validation syntax) —
+    //    Gemini only supports single-schema items, not tuple validation.
     let is_array_type = obj.get("type").and_then(|t| t.as_str()).is_some_and(|t| t == "array");
-    if !is_array_type {
-        obj.remove("items");
-    } else if obj.get("items").is_some_and(|v| v.is_array()) {
+    let items_is_tuple = obj.get("items").is_some_and(|v| v.is_array());
+    if !is_array_type || items_is_tuple {
         obj.remove("items");
     }
 
@@ -346,15 +392,11 @@ fn remove_unsupported_keywords_vertex(schema: &mut Value) {
         }
     }
 
-    // Recurse into items (only present if type is "array")
-    if let Some(items) = obj.get_mut("items") {
-        if items.is_object() {
-            remove_unsupported_keywords_vertex(items);
-        } else if let Some(arr) = items.as_array_mut() {
-            for item in arr.iter_mut() {
-                remove_unsupported_keywords_vertex(item);
-            }
-        }
+    // Recurse into items (only present if type is "array" with valid single-schema)
+    if let Some(items) = obj.get_mut("items")
+        && items.is_object()
+    {
+        remove_unsupported_keywords_vertex(items);
     }
 
     // Recurse into allOf, anyOf, oneOf (may still exist if not collapsed)
@@ -365,15 +407,6 @@ fn remove_unsupported_keywords_vertex(schema: &mut Value) {
             for sub in arr.iter_mut() {
                 remove_unsupported_keywords_vertex(sub);
             }
-        }
-    }
-
-    // Recurse into prefixItems
-    if let Some(prefix_items) = obj.get_mut("prefixItems")
-        && let Some(arr) = prefix_items.as_array_mut()
-    {
-        for item in arr.iter_mut() {
-            remove_unsupported_keywords_vertex(item);
         }
     }
 }
@@ -527,13 +560,13 @@ mod tests {
         let schema = json!({
             "anyOf": [
                 { "type": "null" },
-                { "type": "string", "minLength": 1 }
+                { "type": "string", "description": "A non-empty string" }
             ]
         });
         let result = adapter.normalize_schema(schema);
         assert!(result.get("anyOf").is_none());
         assert_eq!(result["type"], "string");
-        assert_eq!(result["minLength"], 1);
+        assert_eq!(result["description"], "A non-empty string");
     }
 
     #[test]
@@ -1077,5 +1110,138 @@ mod tests {
         let adapter = GeminiSchemaAdapter::vertex_ai();
         let result = adapter.empty_schema();
         assert_eq!(result, json!({"type": "object", "properties": {}}));
+    }
+
+    // --- Comprehensive unsupported keyword stripping tests ---
+    // These validate that ALL keywords not in Gemini's Schema proto are removed.
+
+    #[test]
+    fn test_removes_all_validation_keywords() {
+        let adapter = GeminiSchemaAdapter::new();
+        let schema = json!({
+            "type": "object",
+            "title": "MySchema",
+            "$id": "https://example.com/schema",
+            "default": {},
+            "deprecated": true,
+            "readOnly": true,
+            "writeOnly": false,
+            "examples": [{"name": "test"}],
+            "minProperties": 1,
+            "maxProperties": 10,
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "title": "Name",
+                    "default": "",
+                    "minLength": 1,
+                    "maxLength": 100,
+                    "pattern": "^[a-z]+$"
+                },
+                "age": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 150,
+                    "multipleOf": 1
+                },
+                "tags": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "uniqueItems": true,
+                    "contains": { "type": "string" }
+                }
+            }
+        });
+        let result = adapter.normalize_schema(schema);
+
+        // Top-level annotation/validation keywords removed
+        assert!(result.get("title").is_none());
+        assert!(result.get("$id").is_none());
+        assert!(result.get("default").is_none());
+        assert!(result.get("deprecated").is_none());
+        assert!(result.get("readOnly").is_none());
+        assert!(result.get("writeOnly").is_none());
+        assert!(result.get("examples").is_none());
+        assert!(result.get("minProperties").is_none());
+        assert!(result.get("maxProperties").is_none());
+
+        // String property: validation keywords removed, type/description preserved
+        let name = &result["properties"]["name"];
+        assert!(name.get("title").is_none());
+        assert!(name.get("default").is_none());
+        assert!(name.get("minLength").is_none());
+        assert!(name.get("maxLength").is_none());
+        assert!(name.get("pattern").is_none());
+        assert_eq!(name["type"], "string");
+
+        // Integer property: numeric constraints removed
+        let age = &result["properties"]["age"];
+        assert!(age.get("minimum").is_none());
+        assert!(age.get("maximum").is_none());
+        assert!(age.get("multipleOf").is_none());
+        assert_eq!(age["type"], "integer");
+
+        // Array property: array constraints removed, items preserved
+        let tags = &result["properties"]["tags"];
+        assert!(tags.get("minItems").is_none());
+        assert!(tags.get("maxItems").is_none());
+        assert!(tags.get("uniqueItems").is_none());
+        assert!(tags.get("contains").is_none());
+        assert_eq!(tags["type"], "array");
+        assert_eq!(tags["items"]["type"], "string");
+    }
+
+    #[test]
+    fn test_removes_prefix_items() {
+        let adapter = GeminiSchemaAdapter::new();
+        let schema = json!({
+            "type": "array",
+            "prefixItems": [
+                { "type": "string" },
+                { "type": "integer" }
+            ]
+        });
+        let result = adapter.normalize_schema(schema);
+        assert!(result.get("prefixItems").is_none());
+    }
+
+    #[test]
+    fn test_removes_dependent_keywords() {
+        let adapter = GeminiSchemaAdapter::new();
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" },
+                "credit_card": { "type": "string" }
+            },
+            "dependentRequired": {
+                "credit_card": ["billing_address"]
+            },
+            "dependentSchemas": {
+                "credit_card": {
+                    "properties": {
+                        "billing_address": { "type": "string" }
+                    }
+                }
+            }
+        });
+        let result = adapter.normalize_schema(schema);
+        assert!(result.get("dependentRequired").is_none());
+        assert!(result.get("dependentSchemas").is_none());
+    }
+
+    #[test]
+    fn test_removes_content_keywords() {
+        let adapter = GeminiSchemaAdapter::new();
+        let schema = json!({
+            "type": "string",
+            "contentMediaType": "application/json",
+            "contentEncoding": "base64"
+        });
+        let result = adapter.normalize_schema(schema);
+        assert!(result.get("contentMediaType").is_none());
+        assert!(result.get("contentEncoding").is_none());
     }
 }
