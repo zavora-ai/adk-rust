@@ -252,9 +252,13 @@ fn remove_unsupported_keywords(schema: &mut Value) {
         obj.remove(*keyword);
     }
 
-    // Remove `items` only when the schema type is NOT "array"
+    // Remove `items` only when the schema type is NOT "array".
+    // Also remove `items` if it's a JSON array (tuple validation syntax) —
+    // Gemini doesn't support tuple validation, only single-schema items.
     let is_array_type = obj.get("type").and_then(|t| t.as_str()).is_some_and(|t| t == "array");
     if !is_array_type {
+        obj.remove("items");
+    } else if obj.get("items").is_some_and(|v| v.is_array()) {
         obj.remove("items");
     }
 
@@ -324,9 +328,12 @@ fn remove_unsupported_keywords_vertex(schema: &mut Value) {
         obj.remove("additionalProperties");
     }
 
-    // Remove `items` only when the schema type is NOT "array"
+    // Remove `items` only when the schema type is NOT "array".
+    // Also remove `items` if it's a JSON array (tuple validation syntax).
     let is_array_type = obj.get("type").and_then(|t| t.as_str()).is_some_and(|t| t == "array");
     if !is_array_type {
+        obj.remove("items");
+    } else if obj.get("items").is_some_and(|v| v.is_array()) {
         obj.remove("items");
     }
 
