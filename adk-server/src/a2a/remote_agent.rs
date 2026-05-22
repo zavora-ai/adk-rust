@@ -1,4 +1,6 @@
-use crate::a2a::{A2aClient, Part as A2aPart, Role, UpdateEvent, TaskStatusUpdateEvent, TaskArtifactUpdateEvent};
+use crate::a2a::{
+    A2aClient, Part as A2aPart, Role, TaskArtifactUpdateEvent, TaskStatusUpdateEvent, UpdateEvent,
+};
 use adk_core::{Agent, Content, Event, EventStream, InvocationContext, Part, Result};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -47,7 +49,7 @@ impl Agent for RemoteA2aAgent {
         &[]
     }
 
-                async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
         let url = self.config.agent_url.clone();
         let invocation_id = ctx.invocation_id().to_string();
         let agent_name = self.config.name.clone();
@@ -103,53 +105,7 @@ impl Agent for RemoteA2aAgent {
                             // Non-streaming response returns a Task
                             match serde_json::from_value::<crate::a2a::Task>(result) {
                                 Ok(task) => {
-                                    // Yield events for artifacts first
-                                    if let Some(artifacts) = task.artifacts {
-                                        for artifact in artifacts {
-                                            let update = UpdateEvent::TaskArtifactUpdate(TaskArtifactUpdateEvent {
-                                                task_id: task.id.clone(),
-                                                context_id: task.context_id.clone(),
-                                                artifact,
-                                                append: false,
-                                                last_chunk: true,
-                                            });
-                                            if let Some(event) = convert_update_event(&invocation_id, &agent_name, update) {
-                                                yield Ok(event);
-                                            }
-                                        }
-                                    }
-
-                                    // Yield events for history (new agent messages)
-                                    // We yield these as non-terminal events
-                                    if let Some(history) = task.history {
-                                        for msg in history {
-                                            if msg.role == Role::Agent {
-                                                let parts: Vec<Part> = msg.parts.iter().filter_map(|p| {
-                                                    match p {
-                                                        A2aPart::Text { text, .. } => Some(Part::Text { text: text.clone() }),
-                                                        _ => None,
-                                                    }
-                                                }).collect();
-
-                                                if !parts.is_empty() {
-                                                    let mut event = Event::new(invocation_id.clone());
-                                                    event.author = agent_name.clone();
-                                                    event.llm_response.content = Some(Content { role: "model".to_string(), parts });
-                                                    event.llm_response.turn_complete = false;
-                                                    yield Ok(event);
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Yield final status event
-                                    let update = UpdateEvent::TaskStatusUpdate(TaskStatusUpdateEvent {
-                                        task_id: task.id,
-                                        context_id: task.context_id,
-                                        status: task.status,
-                                        final_update: true,
-                                    });
-                                    if let Some(event) = convert_update_event(&invocation_id, &agent_name, update) {
+                                    for event in convert_task_to_events(&invocation_id, &agent_name, task) {
                                         yield Ok(event);
                                     }
                                 }
@@ -170,9 +126,64 @@ impl Agent for RemoteA2aAgent {
 
         Ok(Box::pin(stream))
     }
+}
 
+/// Helper to convert a non-streaming A2A Task response into a sequence of ADK Events
+fn convert_task_to_events(invocation_id: &str, agent_name: &str, task: crate::a2a::Task) -> Vec<Event> {
+    let mut events = Vec::new();
 
+    // 1. Yield events for artifacts first
+    if let Some(artifacts) = task.artifacts {
+        for artifact in artifacts {
+            let update = UpdateEvent::TaskArtifactUpdate(TaskArtifactUpdateEvent {
+                task_id: task.id.clone(),
+                context_id: task.context_id.clone(),
+                artifact,
+                append: false,
+                last_chunk: true,
+            });
+            if let Some(event) = convert_update_event(invocation_id, agent_name, update) {
+                events.push(event);
+            }
+        }
+    }
 
+    // 2. Yield events for history (new agent messages)
+    if let Some(history) = task.history {
+        for msg in history {
+            if msg.role == Role::Agent {
+                let parts: Vec<Part> = msg
+                    .parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        A2aPart::Text { text, .. } => Some(Part::Text { text: text.clone() }),
+                        _ => None,
+                    })
+                    .collect();
+
+                if !parts.is_empty() {
+                    let mut event = Event::new(invocation_id.to_string());
+                    event.author = agent_name.to_string();
+                    event.llm_response.content = Some(Content { role: "model".to_string(), parts });
+                    event.llm_response.turn_complete = false;
+                    events.push(event);
+                }
+            }
+        }
+    }
+
+    // 3. Yield final status event
+    let update = UpdateEvent::TaskStatusUpdate(TaskStatusUpdateEvent {
+        task_id: task.id,
+        context_id: task.context_id,
+        status: task.status,
+        final_update: true,
+    });
+    if let Some(event) = convert_update_event(invocation_id, agent_name, update) {
+        events.push(event);
+    }
+
+    events
 }
 
 /// Builder for RemoteA2aAgent
@@ -202,7 +213,6 @@ impl RemoteA2aAgentBuilder {
         self.streaming = Some(streaming);
         self
     }
-
 
     pub fn build(self) -> Result<RemoteA2aAgent> {
         let agent_url = self
@@ -310,9 +320,66 @@ mod tests {
     }
 
     #[test]
-    fn test_builder_missing_url() {
-        let result = RemoteA2aAgent::builder("test").build();
-        assert!(result.is_err());
+    fn test_builder_streaming() {
+        let agent = RemoteA2aAgent::builder("test")
+            .agent_url("http://localhost:8080")
+            .streaming(true)
+            .build()
+            .unwrap();
+
+        assert_eq!(agent.config.streaming, Some(true));
+    }
+
+    #[test]
+    fn test_convert_task_to_events() {
+        use crate::a2a::{Artifact, Message, Task, TaskStatus, TaskState};
+
+        let task = Task {
+            id: "task-123".to_string(),
+            context_id: Some("ctx-456".to_string()),
+            status: TaskStatus {
+                state: TaskState::Completed,
+                message: Some("All done!".to_string()),
+            },
+            artifacts: Some(vec![Artifact {
+                artifact_id: "art-1".to_string(),
+                name: Some("artifact-1".to_string()),
+                description: None,
+                parts: vec![A2aPart::text("artifact content".to_string())],
+                metadata: None,
+                extensions: None,
+            }]),
+            history: Some(vec![Message::builder()
+                .role(Role::Agent)
+                .parts(vec![A2aPart::text("Hello from history".to_string())])
+                .build()]),
+        };
+
+        let events = convert_task_to_events("inv-1", "agent-1", task);
+
+        // Should have 3 events: artifact, history message, and final status
+        assert_eq!(events.len(), 3);
+
+        // 1. Artifact event
+        assert_eq!(events[0].author, "agent-1");
+        assert!(events[0].llm_response.content.is_some());
+        assert!(!events[0].llm_response.partial);
+
+        // 2. History message event
+        assert_eq!(events[1].author, "agent-1");
+        assert_eq!(
+            events[1].llm_response.content.as_ref().unwrap().parts[0],
+            Part::Text { text: "Hello from history".to_string() }
+        );
+        assert!(!events[1].llm_response.turn_complete);
+
+        // 3. Final status event
+        assert_eq!(events[2].author, "agent-1");
+        assert!(events[2].llm_response.turn_complete);
+        assert_eq!(
+            events[2].llm_response.content.as_ref().unwrap().parts[0],
+            Part::Text { text: "All done!".to_string() }
+        );
     }
 }
 
@@ -343,6 +410,8 @@ pub mod v1_remote {
         pub description: String,
         /// The v1.0.0 agent card describing the remote agent.
         pub agent_card: AgentCard,
+        /// Whether to use streaming for communication.
+        pub streaming: Option<bool>,
     }
 
     /// An agent that communicates with a remote A2A v1.0.0 agent.
@@ -384,132 +453,166 @@ pub mod v1_remote {
             &[]
         }
 
-                    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
-        let url = self.config.agent_url.clone();
-        let invocation_id = ctx.invocation_id().to_string();
-        let agent_name = self.config.name.clone();
-        let config_streaming = self.config.streaming;
+        async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+            let card = self.config.agent_card.clone();
+            let invocation_id = ctx.invocation_id().to_string();
+            let agent_name = self.config.name.clone();
+            let config_streaming = self.config.streaming;
 
-        // Get user content from context
-        let user_content = get_user_content_from_context(ctx.as_ref());
+            // Get user content from context
+            let user_content = extract_user_text(ctx.as_ref());
 
-        let stream = async_stream::stream! {
-            // Create A2A client
-            let client = match A2aClient::from_url(&url).await {
-                Ok(c) => c,
-                Err(e) => {
-                    yield Ok(create_error_event(&invocation_id, &agent_name, &e.to_string()));
-                    return;
+            let stream = async_stream::stream! {
+                // Verify we have a usable interface
+                let interface = match Self::select_interface(&card) {
+                    Some(i) => i.clone(),
+                    None => {
+                        yield Ok(create_v1_error_event(
+                            &invocation_id,
+                            &agent_name,
+                            "no supported interface found in agent card (need JSONRPC or HTTP+JSON)",
+                        ));
+                        return;
+                    }
+                };
+
+                // Build a card with the selected interface for the client
+                let client = A2aV1Client::new(card.clone());
+
+                // Determine if we should use streaming
+                let use_streaming = config_streaming.unwrap_or(card.capabilities.streaming);
+
+                // Build a v1 Message from user content
+                let message = build_v1_message(user_content);
+
+                if use_streaming {
+                    // Send streaming message and process the SSE response
+                    match client.send_streaming_message(message).await {
+                        Ok(response) => {
+                            use futures::StreamExt;
+
+                            let mut bytes_stream = response.bytes_stream();
+                            let mut buffer = String::new();
+
+                            while let Some(chunk_result) = bytes_stream.next().await {
+                                let chunk = match chunk_result {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        yield Ok(create_v1_error_event(
+                                            &invocation_id,
+                                            &agent_name,
+                                            &format!("stream error: {e}"),
+                                        ));
+                                        break;
+                                    }
+                                };
+
+                                buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                                // Process complete SSE events (delimited by \n\n)
+                                while let Some(event_end) = buffer.find("\n\n") {
+                                    let event_data = buffer[..event_end].to_string();
+                                    buffer = buffer[event_end + 2..].to_string();
+
+                                    if let Some(data) = parse_sse_data_line(&event_data) {
+                                        if data.is_empty() {
+                                            continue;
+                                        }
+
+                                        // Parse as StreamResponse (may be wrapped in JSON-RPC or direct)
+                                        if let Some(event) = parse_stream_response(
+                                            &data,
+                                            &invocation_id,
+                                            &agent_name,
+                                        ) {
+                                            yield Ok(event);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            yield Ok(create_v1_error_event(
+                                &invocation_id,
+                                &agent_name,
+                                &format!("failed to send streaming message: {e}"),
+                            ));
+                        }
+                    }
+                } else {
+                    // Send non-streaming message
+                    match client.send_message(message).await {
+                        Ok(task) => {
+                            // Yield events for artifacts first
+                            if let Some(artifacts) = task.artifacts {
+                                for artifact in artifacts {
+                                    let resp = a2a_protocol_types::events::StreamResponse::ArtifactUpdate(
+                                        a2a_protocol_types::events::TaskArtifactUpdateEvent {
+                                            task_id: task.id.clone(),
+                                            context_id: task.context_id.clone(),
+                                            artifact,
+                                            append: Some(false),
+                                            last_chunk: Some(true),
+                                            metadata: None,
+                                        }
+                                    );
+                                    if let Some(event) = convert_stream_response(&resp, &invocation_id, &agent_name) {
+                                        yield Ok(event);
+                                    }
+                                }
+                            }
+
+                            // Yield events for history (new agent messages)
+                            if let Some(history) = task.history {
+                                for msg in history {
+                                    if msg.role == a2a_protocol_types::MessageRole::Agent {
+                                        use a2a_protocol_types::PartContent;
+                                        let text_parts: Vec<Part> = msg.parts.iter().filter_map(|p| {
+                                            match &p.content {
+                                                PartContent::Text(text) => Some(Part::Text { text: text.clone() }),
+                                                _ => None,
+                                            }
+                                        }).collect();
+
+                                        if !text_parts.is_empty() {
+                                            let mut event = Event::new(invocation_id.clone());
+                                            event.author = agent_name.clone();
+                                            event.llm_response.content = Some(Content { role: "model".to_string(), parts: text_parts });
+                                            event.llm_response.turn_complete = false;
+                                            yield Ok(event);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Yield final status event
+                            let resp = a2a_protocol_types::events::StreamResponse::StatusUpdate(
+                                a2a_protocol_types::events::TaskStatusUpdateEvent {
+                                    task_id: task.id,
+                                    context_id: task.context_id,
+                                    status: task.status,
+                                    metadata: None,
+                                }
+                            );
+                            if let Some(event) = convert_stream_response(&resp, &invocation_id, &agent_name) {
+                                yield Ok(event);
+                            }
+                        }
+                        Err(e) => {
+                            yield Ok(create_v1_error_event(
+                                &invocation_id,
+                                &agent_name,
+                                &format!("failed to send message: {e}"),
+                            ));
+                        }
+                    }
                 }
+
+                let _ = interface;
             };
 
-            // Determine if we should use streaming
-            let use_streaming = config_streaming.unwrap_or(client.agent_card().capabilities.streaming);
-
-            // Build message from user content
-            let message = build_a2a_message(user_content);
-
-            if use_streaming {
-                // Send streaming message
-                match client.send_streaming_message(message).await {
-                    Ok(mut event_stream) => {
-                        use futures::StreamExt;
-                        while let Some(result) = event_stream.next().await {
-                            match result {
-                                Ok(update_event) => {
-                                    if let Some(event) = convert_update_event(&invocation_id, &agent_name, update_event) {
-                                        yield Ok(event);
-                                    }
-                                }
-                                Err(e) => {
-                                    yield Ok(create_error_event(&invocation_id, &agent_name, &e.to_string()));
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        yield Ok(create_error_event(&invocation_id, &agent_name, &e.to_string()));
-                    }
-                }
-            } else {
-                // Send non-streaming message
-                match client.send_message(message).await {
-                    Ok(rpc_response) => {
-                        if let Some(result) = rpc_response.result {
-                            // Non-streaming response returns a Task
-                            match serde_json::from_value::<crate::a2a::Task>(result) {
-                                Ok(task) => {
-                                    // Yield events for artifacts first
-                                    if let Some(artifacts) = task.artifacts {
-                                        for artifact in artifacts {
-                                            let update = UpdateEvent::TaskArtifactUpdate(TaskArtifactUpdateEvent {
-                                                task_id: task.id.clone(),
-                                                context_id: task.context_id.clone(),
-                                                artifact,
-                                                append: false,
-                                                last_chunk: true,
-                                            });
-                                            if let Some(event) = convert_update_event(&invocation_id, &agent_name, update) {
-                                                yield Ok(event);
-                                            }
-                                        }
-                                    }
-
-                                    // Yield events for history (new agent messages)
-                                    // We yield these as non-terminal events
-                                    if let Some(history) = task.history {
-                                        for msg in history {
-                                            if msg.role == Role::Agent {
-                                                let parts: Vec<Part> = msg.parts.iter().filter_map(|p| {
-                                                    match p {
-                                                        A2aPart::Text { text, .. } => Some(Part::Text { text: text.clone() }),
-                                                        _ => None,
-                                                    }
-                                                }).collect();
-
-                                                if !parts.is_empty() {
-                                                    let mut event = Event::new(invocation_id.clone());
-                                                    event.author = agent_name.clone();
-                                                    event.llm_response.content = Some(Content { role: "model".to_string(), parts });
-                                                    event.llm_response.turn_complete = false;
-                                                    yield Ok(event);
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Yield final status event
-                                    let update = UpdateEvent::TaskStatusUpdate(TaskStatusUpdateEvent {
-                                        task_id: task.id,
-                                        context_id: task.context_id,
-                                        status: task.status,
-                                        final_update: true,
-                                    });
-                                    if let Some(event) = convert_update_event(&invocation_id, &agent_name, update) {
-                                        yield Ok(event);
-                                    }
-                                }
-                                Err(e) => {
-                                    yield Ok(create_error_event(&invocation_id, &agent_name, &format!("Failed to parse response: {}", e)));
-                                }
-                            }
-                        } else if let Some(error) = rpc_response.error {
-                            yield Ok(create_error_event(&invocation_id, &agent_name, &format!("RPC error: {} ({})", error.message, error.code)));
-                        }
-                    }
-                    Err(e) => {
-                        yield Ok(create_error_event(&invocation_id, &agent_name, &e.to_string()));
-                    }
-                }
-            }
-        };
-
-        Ok(Box::pin(stream))
-    }
-
-
-
+            Ok(Box::pin(stream))
+        }
     }
 
     /// Extracts user text from the invocation context.
