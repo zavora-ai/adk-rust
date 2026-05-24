@@ -64,6 +64,10 @@ enum AdkCommand {
         #[arg(short, long, default_value = "gemini")]
         provider: String,
 
+        /// Model ID to use (overrides provider default)
+        #[arg(short, long)]
+        model: Option<String>,
+
         /// Output directory (project created at <output-dir>/<name>/)
         #[arg(long)]
         output_dir: Option<PathBuf>,
@@ -246,6 +250,7 @@ fn main() {
             name,
             template,
             provider,
+            model,
             output_dir,
             non_interactive: _,
             json_output,
@@ -257,6 +262,7 @@ fn main() {
                 &name,
                 &template,
                 &provider,
+                model.as_deref(),
                 output_dir.as_deref(),
                 json_output,
                 with_yaml,
@@ -989,7 +995,7 @@ fn get_builtin_templates() -> Vec<TemplateInfo> {
         },
         TemplateInfo {
             name: "openai",
-            description: "OpenAI-powered agent (gpt-5-mini)",
+            description: "OpenAI-powered agent (gpt-5.5)",
             default_provider: "openai",
             features: vec!["agents", "models", "openai", "runner", "sessions"],
         },
@@ -1114,6 +1120,7 @@ fn create_project(
     name: &str,
     template: &str,
     provider: &str,
+    model_override: Option<&str>,
     output_dir: Option<&Path>,
     json_output: bool,
     with_yaml: bool,
@@ -1125,6 +1132,7 @@ fn create_project(
             name,
             template,
             provider,
+            model_override,
             output_dir,
             json_output,
             addons,
@@ -1205,10 +1213,12 @@ fn create_project(
 /// Create a project using the composable system (registry → composition → codegen).
 ///
 /// This handles new templates, enterprise patterns, and legacy templates with addons.
+#[allow(clippy::too_many_arguments)]
 fn create_project_composable(
     name: &str,
     template: &str,
     provider: &str,
+    model_override: Option<&str>,
     output_dir: Option<&Path>,
     json_output: bool,
     addons: &[String],
@@ -1237,8 +1247,13 @@ fn create_project_composable(
     let addon_refs: Vec<&str> = effective_addons.iter().map(|s| s.as_str()).collect();
 
     // Resolve composition
-    let manifest = resolve_composition(&registry, &base_template, &addon_refs, provider)
+    let mut manifest = resolve_composition(&registry, &base_template, &addon_refs, provider)
         .map_err(|e| e.to_string())?;
+
+    // Apply model override if provided
+    if let Some(model_id) = model_override {
+        manifest.model_override = Some(model_id.to_string());
+    }
 
     // Generate project files
     let files = generate_project(&manifest, name);
@@ -1333,9 +1348,15 @@ fn create_project_composable(
 
 fn generate_yaml_definition(name: &str, provider: &str, template: &str) -> String {
     let model_id = match provider {
-        "openai" => "gpt-5-mini",
-        "anthropic" => "claude-sonnet-4-5-20250929",
-        _ => "gemini-2.5-flash",
+        "openai" => "gpt-5.5",
+        "anthropic" => "claude-sonnet-4-6",
+        "deepseek" => "deepseek-v4-flash",
+        "ollama" => "gemma4",
+        "groq" => "llama-3.3-70b-versatile",
+        "openrouter" => "qwen/qwen3.7-max",
+        "bedrock" => "anthropic.claude-opus-4-6-v1",
+        "azure-ai" => "gpt-5.5",
+        _ => "gemini-3.5-flash",
     };
 
     let tools_section = match template {
@@ -1387,20 +1408,20 @@ fn provider_dep(provider: &str) -> (String, &str, &str) {
         "openai" => (
             adk_rust_dep(&provider_features(provider)),
             r#"let model = adk_rust::model::openai::OpenAIClient::new(
-        adk_rust::model::openai::OpenAIConfig::new(&api_key, "gpt-5-mini"),
+        adk_rust::model::openai::OpenAIConfig::new(&api_key, "gpt-5.5"),
     )?;"#,
             "OPENAI_API_KEY",
         ),
         "anthropic" => (
             adk_rust_dep(&provider_features(provider)),
             r#"let model = adk_rust::model::anthropic::AnthropicClient::new(
-        adk_rust::model::anthropic::AnthropicConfig::new(&api_key, "claude-sonnet-4-5-20250929"),
+        adk_rust::model::anthropic::AnthropicConfig::new(&api_key, "claude-sonnet-4-6"),
     )?;"#,
             "ANTHROPIC_API_KEY",
         ),
         _ => (
             adk_rust_dep(&provider_features("gemini")),
-            r#"let model = adk_rust::model::GeminiModel::new(&api_key, "gemini-2.5-flash")?;"#,
+            r#"let model = adk_rust::model::GeminiModel::new(&api_key, "gemini-3.5-flash")?;"#,
             "GOOGLE_API_KEY",
         ),
     }
@@ -1804,8 +1825,17 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 
-        let result =
-            create_project("test-agent", "basic", "gemini", Some(&tmp), false, false, &[], false);
+        let result = create_project(
+            "test-agent",
+            "basic",
+            "gemini",
+            None,
+            Some(&tmp),
+            false,
+            false,
+            &[],
+            false,
+        );
         assert!(result.is_ok());
         assert!(tmp.join("test-agent/Cargo.toml").exists());
         assert!(tmp.join("test-agent/src/main.rs").exists());
@@ -1819,8 +1849,17 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 
-        let result =
-            create_project("yaml-agent", "tools", "gemini", Some(&tmp), false, true, &[], false);
+        let result = create_project(
+            "yaml-agent",
+            "tools",
+            "gemini",
+            None,
+            Some(&tmp),
+            false,
+            true,
+            &[],
+            false,
+        );
         assert!(result.is_ok());
         assert!(tmp.join("yaml-agent/agents/yaml-agent.yaml").exists());
 
@@ -1828,7 +1867,7 @@ mod tests {
             fs::read_to_string(tmp.join("yaml-agent/agents/yaml-agent.yaml")).unwrap();
         assert!(yaml_content.contains("name: yaml-agent"));
         assert!(yaml_content.contains("provider: gemini"));
-        assert!(yaml_content.contains("model_id: gemini-2.5-flash"));
+        assert!(yaml_content.contains("model_id: gemini-3.5-flash"));
         assert!(yaml_content.contains("- name: greet"));
 
         let _ = fs::remove_dir_all(&tmp);
@@ -1841,8 +1880,17 @@ mod tests {
         fs::create_dir_all(&tmp).unwrap();
 
         // json_output just changes what's printed, project is still created
-        let result =
-            create_project("json-agent", "basic", "gemini", Some(&tmp), true, false, &[], false);
+        let result = create_project(
+            "json-agent",
+            "basic",
+            "gemini",
+            None,
+            Some(&tmp),
+            true,
+            false,
+            &[],
+            false,
+        );
         assert!(result.is_ok());
         assert!(tmp.join("json-agent/Cargo.toml").exists());
 
@@ -1864,13 +1912,13 @@ mod tests {
     #[test]
     fn yaml_generation_providers() {
         let gemini_yaml = generate_yaml_definition("test", "gemini", "basic");
-        assert!(gemini_yaml.contains("model_id: gemini-2.5-flash"));
+        assert!(gemini_yaml.contains("model_id: gemini-3.5-flash"));
 
         let openai_yaml = generate_yaml_definition("test", "openai", "basic");
-        assert!(openai_yaml.contains("model_id: gpt-5-mini"));
+        assert!(openai_yaml.contains("model_id: gpt-5.5"));
 
         let anthropic_yaml = generate_yaml_definition("test", "anthropic", "basic");
-        assert!(anthropic_yaml.contains("model_id: claude-sonnet-4-5-20250929"));
+        assert!(anthropic_yaml.contains("model_id: claude-sonnet-4-6"));
     }
 
     #[test]
@@ -1970,7 +2018,7 @@ mod tests {
                 let _ = fs::remove_dir_all(&tmp);
                 fs::create_dir_all(&tmp).unwrap();
 
-                let result = create_project(&name, "a2a", provider, Some(&tmp), false, false, &[], false);
+                let result = create_project(&name, "a2a", provider, None, Some(&tmp), false, false, &[], false);
                 prop_assert!(result.is_ok(), "create_project failed for name={name}, provider={provider}: {:?}", result.err());
 
                 let project_path = tmp.join(&name);

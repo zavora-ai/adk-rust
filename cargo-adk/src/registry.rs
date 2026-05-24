@@ -319,9 +319,10 @@ fn builtin_capability_addons() -> Vec<CapabilityAddon> {
             init_priority: 20,
             incompatible_with: vec![],
             code_fragments: AddonCodeFragments {
-                imports: vec!["use adk_rust::auth::*;"],
-                initialization: r#"let auth_key = std::env::var("AUTH_API_KEY")
-        .expect("AUTH_API_KEY must be set for authentication");"#,
+                imports: vec![],
+                initialization: r#"let _auth_key = std::env::var("AUTH_API_KEY")
+        .expect("AUTH_API_KEY must be set for authentication");
+    tracing::info!("auth key loaded");"#,
                 agent_builder_calls: "",
                 env_vars: vec![("AUTH_API_KEY", "API key for request authentication")],
                 additional_files: vec![],
@@ -336,9 +337,11 @@ fn builtin_capability_addons() -> Vec<CapabilityAddon> {
             incompatible_with: vec![],
             code_fragments: AddonCodeFragments {
                 imports: vec!["use adk_rust::session::InMemorySessionService;"],
-                initialization: r#"let session_service = Arc::new(InMemorySessionService::new());
-    // For PostgreSQL: let session_service = Arc::new(PostgresSessionService::connect(&database_url).await?);
-    // For Redis: let session_service = Arc::new(RedisSessionService::connect(&redis_url).await?);"#,
+                initialization: r#"let _session_service = Arc::new(InMemorySessionService::new());
+    tracing::info!("session service initialized");
+    // Wire into runner: Runner::builder().session_service(_session_service)
+    // For PostgreSQL: PostgresSessionService::connect(&database_url).await?
+    // For Redis: RedisSessionService::connect(&redis_url).await?"#,
                 agent_builder_calls: "",
                 env_vars: vec![(
                     "DATABASE_URL",
@@ -356,8 +359,9 @@ fn builtin_capability_addons() -> Vec<CapabilityAddon> {
             incompatible_with: vec![],
             code_fragments: AddonCodeFragments {
                 imports: vec!["use adk_rust::memory::InMemoryMemoryService;"],
-                initialization: r#"let memory_service = Arc::new(InMemoryMemoryService::new());
-    tracing::info!("memory service initialized");"#,
+                initialization: r#"let _memory_service = Arc::new(InMemoryMemoryService::new());
+    tracing::info!("memory service initialized");
+    // Wire into runner: Runner::builder().memory_service(_memory_service)"#,
                 agent_builder_calls: "",
                 env_vars: vec![],
                 additional_files: vec![],

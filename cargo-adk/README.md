@@ -235,11 +235,11 @@ cargo adk deploy        # push to platform
 
 ## Version
 
-Current version: **0.9.0**
+Current version: **0.9.1**
 
 ```toml
 [dependencies]
-cargo-adk = "0.9.0"
+cargo-adk = "0.9.1"
 ```
 
 ## Part of ADK-Rust

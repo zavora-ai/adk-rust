@@ -41,6 +41,8 @@ pub struct CompositionManifest {
     pub addons: Vec<String>,
     /// The selected provider name.
     pub provider: String,
+    /// Optional model ID override (replaces provider default).
+    pub model_override: Option<String>,
     /// Union of all required Cargo features.
     pub feature_set: BTreeSet<String>,
     /// All resolved crate dependencies.
@@ -252,6 +254,7 @@ pub fn resolve_composition(
         template_name: resolved_template.name.to_string(),
         addons: sorted_addons.iter().map(|a| a.name.to_string()).collect(),
         provider: provider_config.name.to_string(),
+        model_override: None,
         feature_set,
         dependencies,
         files: Vec::new(),

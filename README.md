@@ -8,7 +8,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 [![GitHub Discussions](https://img.shields.io/github/discussions/zavora-ai/adk-rust?style=flat&logo=github&color=5865F2)](https://github.com/zavora-ai/adk-rust/discussions)
 
-> **🚀 v0.9.0 Released!** Composable Template System — 8 base templates, 9 addons, 5 enterprise patterns via `cargo adk new --addon`. Plus: `cargo adk build` (compile without deploying), provider-aware schema normalization, A2A Simple Scaffolding, and security fixes (hickory-proto, openssl, rubato, similar). See [CHANGELOG](CHANGELOG.md) for full details.
+> **🚀 v0.9.1 Released!** Composable Template System — 8 base templates, 9 addons, 5 enterprise patterns via `cargo adk new --addon`. Plus: `cargo adk build` (compile without deploying), provider-aware schema normalization, A2A Simple Scaffolding, and security fixes (hickory-proto, openssl, rubato, similar). See [CHANGELOG](CHANGELOG.md) for full details.
 >
 > **Contributors:** Many thanks to [@mikefaille](https://github.com/mikefaille) — AdkIdentity design, realtime audio, LiveKit bridge, skill system. [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI-compatible providers, xAI, multimodal content. [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [@tomtom215](https://github.com/tomtom215) — A2A Protocol v1.0.0 types crate ([a2a-protocol-types](https://crates.io/crates/a2a-protocol-types)), Foundation-verified wire types powering our A2A v1 layer. [@danielsan](https://github.com/danielsan) — Google deps issue & PR (#181, #203), RAG crash report (#205). [@CodingFlow](https://github.com/CodingFlow) — Gemini 3 thinking level, global endpoint, citationSources (#177, #178, #179). [@ctylx](https://github.com/ctylx) — skill discovery fix (#204). [@poborin](https://github.com/poborin) — project config proposal (#176). [@chillin-capybara](https://github.com/chillin-capybara) — ACP integration, adk-acp crate. [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 >
@@ -220,7 +220,7 @@ cargo adk new my-agent --template a2a     # A2A protocol agent
 cargo adk new my-agent --template graph   # graph workflow agent
 cargo adk new my-agent --template realtime # realtime voice agent
 
-# Compose with addons (v0.9.0+)
+# Compose with addons (v0.9.1+)
 cargo adk new my-agent --template tools --addon telemetry --addon docker
 cargo adk new my-agent --template api --addon ci --addon monitoring
 
@@ -237,13 +237,13 @@ Requires Rust 1.85 or later (Rust 2024 edition). Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-rust = "0.9.0"  # Minimal (default): Gemini + agent runtime + sessions
+adk-rust = "0.9.1"  # Minimal (default): Gemini + agent runtime + sessions
 
 # Need server, auth, graph workflows, eval?
-# adk-rust = { version = "0.9.0", features = ["standard"] }
+# adk-rust = { version = "0.9.1", features = ["standard"] }
 
 # Need everything (realtime, browser, RAG, payments, AWP)?
-# adk-rust = { version = "0.9.0", features = ["enterprise"] }
+# adk-rust = { version = "0.9.1", features = ["enterprise"] }
 ```
 
 **Feature tiers:**
@@ -346,7 +346,7 @@ async fn main() -> AnyhowResult<()> {
 
 ### OpenAI Example
 
-Enable OpenAI with `adk-rust = { version = "0.9.0", features = ["openai"] }`.
+Enable OpenAI with `adk-rust = { version = "0.9.1", features = ["openai"] }`.
 
 ```rust
 use adk_rust::prelude::*;
@@ -396,7 +396,7 @@ async fn main() -> AnyhowResult<()> {
 
 ### Anthropic Example
 
-Enable Anthropic with `adk-rust = { version = "0.9.0", features = ["anthropic"] }`.
+Enable Anthropic with `adk-rust = { version = "0.9.1", features = ["anthropic"] }`.
 
 ```rust
 use adk_rust::prelude::*;
@@ -420,7 +420,7 @@ async fn main() -> AnyhowResult<()> {
 
 ### DeepSeek Example
 
-Enable DeepSeek with `adk-rust = { version = "0.9.0", features = ["deepseek"] }`.
+Enable DeepSeek with `adk-rust = { version = "0.9.1", features = ["deepseek"] }`.
 
 ```rust
 use adk_rust::prelude::*;
@@ -449,7 +449,7 @@ async fn main() -> AnyhowResult<()> {
 
 ### Groq Example (Ultra-Fast)
 
-Enable Groq with `adk-rust = { version = "0.9.0", features = ["groq"] }`.
+Enable Groq with `adk-rust = { version = "0.9.1", features = ["groq"] }`.
 
 ```rust
 use adk_rust::prelude::*;
@@ -473,7 +473,7 @@ async fn main() -> AnyhowResult<()> {
 
 ### Ollama Example (Local)
 
-Enable Ollama with `adk-rust = { version = "0.9.0", features = ["ollama"] }`.
+Enable Ollama with `adk-rust = { version = "0.9.1", features = ["ollama"] }`.
 
 ```rust
 use adk_rust::prelude::*;
@@ -879,26 +879,26 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 # Minimal (default) — Gemini, agents, runner, sessions
-adk-rust = "0.9.0"
+adk-rust = "0.9.1"
 
 # Add a provider explicitly when you need it
-adk-rust = { version = "0.9.0", features = ["openai"] }
+adk-rust = { version = "0.9.1", features = ["openai"] }
 
 # Production tier without CLI provider fan-out
-adk-rust = { version = "0.9.0", features = ["standard"] }
+adk-rust = { version = "0.9.1", features = ["standard"] }
 
 # Full — enterprise plus audio, code execution, sandbox
-adk-rust = { version = "0.9.0", features = ["full"] }
+adk-rust = { version = "0.9.1", features = ["full"] }
 
 # Minimal — just agents + Gemini + runner (fastest build)
-adk-rust = { version = "0.9.0", default-features = false, features = ["minimal"] }
+adk-rust = { version = "0.9.1", default-features = false, features = ["minimal"] }
 
 # Or individual crates for finer control
-adk-core = "0.9.0"
-adk-agent = "0.9.0"
-adk-model = { version = "0.9.0", features = ["openai", "anthropic"] }
-adk-tool = "0.9.0"
-adk-runner = "0.9.0"
+adk-core = "0.9.1"
+adk-agent = "0.9.1"
+adk-model = { version = "0.9.1", features = ["openai", "anthropic"] }
+adk-tool = "0.9.1"
+adk-runner = "0.9.1"
 ```
 
 ## Examples
@@ -984,7 +984,7 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 
 ## Roadmap
 
-**v0.9.0** (current) — composable templates, cargo adk build, security fixes:
+**v0.9.1** (current) — composable templates, cargo adk build, security fixes:
 - **Composable Template System** — 8 base templates, 9 addons, 5 enterprise patterns via `cargo adk new --addon`.
 - **Cargo Adk Build** — compile-without-deploy subcommand for pre-deployment verification.
 - **A2A Simple Scaffolding** — `A2aServer::quick_start`, `A2aServer::builder`, and `cargo adk new --template a2a`.

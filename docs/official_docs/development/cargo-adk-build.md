@@ -60,8 +60,8 @@ cargo adk build --manifest-path /path/to/my-agent/Cargo.toml
 
 ```bash
 $ cargo adk build
-   Compiling adk-core v0.9.0
-   Compiling adk-agent v0.9.0
+   Compiling adk-core v0.9.1
+   Compiling adk-agent v0.9.1
    Compiling my-agent v0.1.0 (/home/user/my-agent)
     Finished `release` profile [optimized] target(s) in 42.3s
 ✅ Build successful
@@ -114,7 +114,7 @@ error[E0432]: unresolved import `adk_tool`
 
 ```toml
 [dependencies]
-adk-tool = { version = "0.9.0", features = ["mcp"] }
+adk-tool = { version = "0.9.1", features = ["mcp"] }
 ```
 
 ### Invalid project structure
@@ -147,7 +147,7 @@ error: the package `my-agent` depends on `adk-realtime`, with features:
 **Symptom:** Version resolution errors after upgrading ADK crates.
 
 ```
-error: failed to select a version for the requirement `adk-core = "^0.9.0"`
+error: failed to select a version for the requirement `adk-core = "^0.9.1"`
 ```
 
 **Resolution:** Update your lock file:

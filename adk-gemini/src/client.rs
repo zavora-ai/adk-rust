@@ -51,7 +51,13 @@ static V1_BASE_URL: LazyLock<Url> = LazyLock::new(|| {
 /// Use [`Model::Custom`] for model IDs not yet represented as variants.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum Model {
-    // ── Gemini 3.1 (newest generation) ────────────────────────────
+    // ── Gemini 3.5 (latest generation) ──────────────────────────
+    /// Gemini 3.5 Flash — latest stable model, default for new projects.
+    #[serde(rename = "models/gemini-3.5-flash")]
+    #[default]
+    Gemini35Flash,
+
+    // ── Gemini 3.1 ────────────────────────────────────────────────
     /// Gemini 3.1 Pro preview — strongest reasoning.
     #[serde(rename = "models/gemini-3.1-pro-preview")]
     Gemini31ProPreview,
@@ -77,8 +83,7 @@ pub enum Model {
     /// Gemini 2.5 Pro preview with TTS support.
     #[serde(rename = "models/gemini-2.5-pro-preview-tts")]
     Gemini25ProPreviewTts,
-    /// Gemini 2.5 Flash — default model.
-    #[default]
+    /// Gemini 2.5 Flash — fast and capable.
     #[serde(rename = "models/gemini-2.5-flash")]
     Gemini25Flash,
     /// Gemini 2.5 Flash preview (September 2025).
@@ -149,6 +154,7 @@ impl Model {
     pub fn as_str(&self) -> &str {
         #[allow(deprecated)]
         match self {
+            Model::Gemini35Flash => "models/gemini-3.5-flash",
             Model::Gemini31ProPreview => "models/gemini-3.1-pro-preview",
             Model::Gemini31FlashLitePreview => "models/gemini-3.1-flash-lite-preview",
             Model::Gemini3ProPreview => "models/gemini-3-pro-preview",
@@ -184,6 +190,7 @@ impl Model {
     pub fn vertex_model_path(&self, project_id: &str, location: &str) -> String {
         #[allow(deprecated)]
         let model_id = match self {
+            Model::Gemini35Flash => "gemini-3.5-flash",
             Model::Gemini31ProPreview => "gemini-3.1-pro-preview",
             Model::Gemini31FlashLitePreview => "gemini-3.1-flash-lite-preview",
             Model::Gemini3ProPreview => "gemini-3-pro-preview",
@@ -227,7 +234,9 @@ impl From<String> for Model {
         // Match known model names (with or without "models/" prefix) to proper variants.
         let bare = model.strip_prefix("models/").unwrap_or(&model);
         match bare {
-            // Gemini 3.1 models (newest generation)
+            // Gemini 3.5 models (latest generation)
+            "gemini-3.5-flash" => Self::Gemini35Flash,
+            // Gemini 3.1 models
             "gemini-3.1-pro-preview" => Self::Gemini31ProPreview,
             // Gemini 3 models
             "gemini-3-pro-preview" => Self::Gemini3ProPreview,
