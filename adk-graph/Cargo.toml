@@ -34,7 +34,7 @@ blake3 = { version = "1", optional = true }
 fred = { version = "10", optional = true }
 
 # Optional delta checkpoint dependency
-similar = { version = "2", optional = true }
+similar = { version = "3", optional = true }
 
 # Optional action node dependencies
 adk-action = { workspace = true, optional = true }
