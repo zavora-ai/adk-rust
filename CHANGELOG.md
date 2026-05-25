@@ -5,11 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.1] - 2026-05-24
+## [0.9.2] - 2026-05-24
 
 ### Fixed
 
-- **Composable template codegen** — New templates (`llm`, `sequential`, `parallel`, `loop`, `conditional`, `graph`, `realtime`, `custom`) and enterprise patterns now generate code that compiles against the published `adk-rust` crate. Previously, generated code referenced non-existent convenience constructors (`Gemini::from_env()`, `OpenAI::from_env()`, etc.). Now uses the correct published API (`GeminiModel::new()`, `OpenAIClient::new()`, etc.) with proper API key loading from environment variables.
+- **Composable template codegen** — Generated code now uses correct published API constructors (`GeminiModel::new`, `OpenAIClient::new`, etc.) instead of non-existent convenience methods. Adds proper `api_key` loading from environment variables.
+- **Dead code warnings** — Scaffolded projects no longer produce unused variable/import warnings for auth, sessions, and memory addons.
+
+### Changed
+
+- **Default models updated to latest** — `gemini-3.5-flash`, `gpt-5.5`, `claude-sonnet-4-6`, `deepseek-v4-flash`, `gemma4` (Ollama), `qwen/qwen3.7-max` (OpenRouter), `anthropic.claude-opus-4-6-v1` (Bedrock), `gpt-5.5` (Azure AI).
+
+### Added
+
+- **`--model` flag** for `cargo adk new` — override the default model for any provider.
+- **`Gemini35Flash` variant** in the `adk-gemini` Model enum — new default model.
 
 ## [0.9.0] - 2026-05-24
 
@@ -42,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Version bump from 0.8.5 to 0.9.1** — All workspace crates updated to version 0.9.1. This release includes new features (composable templates, cargo adk build, A2A scaffolding), security fixes, and documentation improvements.
+- **Version bump from 0.8.5 to 0.9.2** — All workspace crates updated to version 0.9.2. This release includes new features (composable templates, cargo adk build, A2A scaffolding), security fixes, and documentation improvements.
 
 ### Security
 

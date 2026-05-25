@@ -181,7 +181,7 @@ my-agent/
 └── README.md
 ```
 
-**Description:** Generates a production-ready A2A server using the simplified `A2aServer::quick_start` API introduced in v0.9.1. Includes a pre-configured agent card, session management, and streaming task support. The agent is immediately discoverable by other A2A-compatible agents on the network.
+**Description:** Generates a production-ready A2A server using the simplified `A2aServer::quick_start` API introduced in v0.9.2. Includes a pre-configured agent card, session management, and streaming task support. The agent is immediately discoverable by other A2A-compatible agents on the network.
 
 ---
 
