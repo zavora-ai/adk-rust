@@ -374,6 +374,7 @@ impl MistralRsModel {
             error_message: None,
             citation_metadata: None,
             provider_metadata: None,
+            interaction_id: None,
         }
     }
 }
@@ -431,6 +432,7 @@ impl Llm for MistralRsModel {
                                                 error_code: None,
                                                 error_message: None,
                                                 provider_metadata: None,
+                                                interaction_id: None,
                                             };
                                             yield Ok(response);
                                         }
@@ -455,6 +457,7 @@ impl Llm for MistralRsModel {
                                         error_message: None,
                                         citation_metadata: None,
                                         provider_metadata: None,
+                                        interaction_id: None,
                                     };
                                     yield Ok(response);
                                 }

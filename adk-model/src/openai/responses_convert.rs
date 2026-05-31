@@ -432,6 +432,7 @@ pub fn from_response(response: &Response) -> LlmResponse {
         error_code: None,
         error_message: None,
         provider_metadata,
+        interaction_id: None,
     }
 }
 

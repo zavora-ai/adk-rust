@@ -768,6 +768,7 @@ fn chat_response_to_llm_response(response: &OpenRouterChatResponse) -> LlmRespon
         error_message: None,
         provider_metadata: (!provider_metadata.is_empty())
             .then_some(Value::Object(provider_metadata)),
+        interaction_id: None,
     }
 }
 
@@ -850,6 +851,7 @@ fn responses_response_to_llm_response(
         error_message: None,
         provider_metadata: (!provider_metadata.is_empty())
             .then_some(Value::Object(provider_metadata)),
+        interaction_id: None,
     })
 }
 
@@ -982,6 +984,7 @@ fn llm_stream_response(
         error_code: None,
         error_message: None,
         provider_metadata,
+        interaction_id: None,
     })
 }
 

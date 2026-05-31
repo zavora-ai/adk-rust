@@ -115,6 +115,7 @@ pub fn chat_response_to_llm_response(response: &ChatMessageResponse, partial: bo
         error_code: None,
         error_message: None,
         provider_metadata: None,
+        interaction_id: None,
     }
 }
 
@@ -134,6 +135,7 @@ pub fn text_delta_response(text: &str) -> LlmResponse {
         error_code: None,
         error_message: None,
         provider_metadata: None,
+        interaction_id: None,
     }
 }
 /// Create a thinking delta response for streaming.
@@ -152,6 +154,7 @@ pub fn thinking_delta_response(thinking: &str) -> LlmResponse {
         error_code: None,
         error_message: None,
         provider_metadata: None,
+        interaction_id: None,
     }
 }
 

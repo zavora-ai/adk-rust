@@ -258,6 +258,7 @@ pub(crate) fn parse_response(body: &Value) -> LlmResponse {
         error_code: None,
         error_message: None,
         provider_metadata: None,
+        interaction_id: None,
     }
 }
 
@@ -336,6 +337,7 @@ pub(crate) fn parse_sse_chunk(chunk: &Value) -> LlmResponse {
         error_code: None,
         error_message: None,
         provider_metadata: None,
+        interaction_id: None,
     }
 }
 

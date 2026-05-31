@@ -329,6 +329,7 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
         error_code: None,
         error_message: None,
         provider_metadata: None,
+        interaction_id: None,
     }
 }
 
@@ -444,6 +445,7 @@ pub fn from_raw_openai_response(json: &serde_json::Value) -> LlmResponse {
         error_code: None,
         error_message: None,
         provider_metadata: None,
+        interaction_id: None,
     }
 }
 

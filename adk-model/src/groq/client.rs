@@ -316,6 +316,7 @@ impl Llm for GroqClient {
                                                 error_code: None,
                                                 error_message: None,
                                                 provider_metadata: None,
+                                                interaction_id: None,
                                             };
                                         } else {
                                             // Emit partial text content
@@ -338,6 +339,7 @@ impl Llm for GroqClient {
                                                             error_code: None,
                                                             error_message: None,
                                                             provider_metadata: None,
+                                                            interaction_id: None,
                                                         };
                                                     }
                                                 }

@@ -276,6 +276,7 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
             error_code: None,
             error_message: None,
             provider_metadata: None,
+            interaction_id: None,
         },
         cache_meta,
     )
@@ -297,6 +298,7 @@ pub fn from_text_delta(text: &str) -> LlmResponse {
         error_code: None,
         error_message: None,
         provider_metadata: None,
+        interaction_id: None,
     }
 }
 
@@ -326,6 +328,7 @@ pub fn from_stream_error(error_type: &str, message: &str) -> LlmResponse {
         error_code: Some(error_type.to_string()),
         error_message: Some(message.to_string()),
         provider_metadata: None,
+        interaction_id: None,
     }
 }
 

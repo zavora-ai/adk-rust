@@ -342,6 +342,7 @@ pub(crate) fn bedrock_response_to_adk(
         error_code: None,
         error_message: None,
         provider_metadata: None,
+        interaction_id: None,
     }
 }
 
@@ -452,6 +453,7 @@ pub(crate) fn bedrock_stream_content_start_to_adk(
                 error_code: None,
                 error_message: None,
                 provider_metadata: None,
+                interaction_id: None,
             })
         }
         _ => None,
@@ -481,6 +483,7 @@ pub(crate) fn bedrock_stream_delta_to_adk(delta: &ContentBlockDelta) -> Option<L
                     error_code: None,
                     error_message: None,
                     provider_metadata: None,
+                    interaction_id: None,
                 })
             }
         }
@@ -506,6 +509,7 @@ pub(crate) fn bedrock_stream_delta_to_adk(delta: &ContentBlockDelta) -> Option<L
                         error_code: None,
                         error_message: None,
                         provider_metadata: None,
+                        interaction_id: None,
                     })
                 }
             } else {
@@ -530,6 +534,7 @@ pub(crate) fn bedrock_stream_stop_to_adk(stop_reason: &StopReason) -> LlmRespons
         error_code: None,
         error_message: None,
         provider_metadata: None,
+        interaction_id: None,
     }
 }
 

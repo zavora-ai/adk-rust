@@ -302,7 +302,7 @@ impl NodeCache {
                 redis: {
                     // Create a Redis client config from the URL.
                     // Connection is established on first command.
-                    let config = fred::types::Config::from_url(_url).unwrap_or_default();
+                    let config = fred::prelude::Config::from_url(_url).unwrap_or_default();
                     Some(fred::clients::Client::new(config, None, None, None))
                 },
             },

@@ -76,6 +76,9 @@ impl VertexBackend {
         }
     }
 
+    /// Returns `true` if the error message indicates a transient transport-layer
+    /// failure (HTTP/2 stream errors, send-request failures) that is safe to
+    /// retry, as opposed to a deterministic application error.
     pub fn is_transport_error(message: &str) -> bool {
         let normalized = message.to_ascii_lowercase();
         normalized.contains("transport reports an error")
