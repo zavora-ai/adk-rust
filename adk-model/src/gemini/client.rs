@@ -694,9 +694,9 @@ impl GeminiModel {
                     "parameters": normalized_schema,
                 });
 
-                // Preserve response schema if present
+                // Preserve response schema if present (normalized like parameters)
                 if let Some(response) = tool_decl.get("response") {
-                    func_decl_json["response"] = response.clone();
+                    func_decl_json["response"] = cache.get_or_normalize(response, adapter);
                 }
 
                 // Preserve behavior if present
@@ -1599,6 +1599,82 @@ mod native_tool_tests {
                     "longitude": 4.56
                 }
             }))
+        );
+    }
+
+    #[test]
+    fn test_response_schema_is_normalized_like_parameters() {
+        // Regression test: MCP tools provide an output_schema that becomes the
+        // `response` field in the tool declaration. Gemini rejects JSON-Schema
+        // dialect fields ($schema, additionalProperties) in the response schema.
+        // This test verifies that the response schema is normalized the same way
+        // parameters are — stripping unsupported keywords.
+        let mut tools = std::collections::HashMap::new();
+        tools.insert(
+            "read_file".to_string(),
+            serde_json::json!({
+                "name": "read_file",
+                "description": "Read a file from the filesystem",
+                "parameters": {
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "File path" }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                },
+                "response": {
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "type": "object",
+                    "properties": {
+                        "content": { "type": "string", "description": "File contents" }
+                    },
+                    "required": ["content"],
+                    "additionalProperties": false
+                }
+            }),
+        );
+
+        let adapter = test_adapter();
+        let cache = test_cache();
+        let (gemini_tools, _) = GeminiModel::build_gemini_tools(&tools, &adapter, &cache)
+            .expect("tool conversion should succeed");
+
+        // Find the function declaration
+        let func_tool = gemini_tools
+            .iter()
+            .find(|t| matches!(t, adk_gemini::Tool::Function { .. }))
+            .expect("should have function declarations");
+
+        let decls = match func_tool {
+            adk_gemini::Tool::Function { function_declarations } => function_declarations,
+            _ => panic!("expected Function tool"),
+        };
+
+        let decl = &decls[0];
+        let decl_json = serde_json::to_value(decl).unwrap();
+
+        // Parameters should be normalized (no $schema, no additionalProperties)
+        let params = &decl_json["parameters"];
+        assert!(
+            params.get("$schema").is_none(),
+            "parameters.$schema should be stripped"
+        );
+        assert!(
+            params.get("additionalProperties").is_none(),
+            "parameters.additionalProperties should be stripped"
+        );
+
+        // Response should ALSO be normalized (this was the bug)
+        let response = &decl_json["response"];
+        assert!(
+            response.get("$schema").is_none(),
+            "response.$schema should be stripped (was the bug: copied raw)"
+        );
+        assert!(
+            response.get("additionalProperties").is_none(),
+            "response.additionalProperties should be stripped (was the bug: copied raw)"
         );
     }
 }
