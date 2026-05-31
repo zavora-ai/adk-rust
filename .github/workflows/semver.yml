@@ -53,8 +53,12 @@ jobs:
       run: |
         echo "### Stable-tier crates (fail on breakage)" >> "$GITHUB_STEP_SUMMARY"
         FAILED=0
-        # Pre-1.0 crates where new public fields/variants are allowed in minor bumps
-        PRE1_ALLOWED="adk-gemini adk-server"
+        # Pre-1.0 crates where new public fields/variants are allowed in minor bumps.
+        # adk-core is included because, while still 0.9.x, it grows additive
+        # Option<T> fields (with serde defaults) on LlmRequest/LlmResponse per the
+        # STABILITY.md non-breaking field-addition policy. Revisit before 1.0:
+        # these structs should become #[non_exhaustive] for the stable contract.
+        PRE1_ALLOWED="adk-core adk-gemini adk-server"
         for crate in adk-core adk-agent adk-model adk-gemini adk-tool adk-runner adk-session adk-server adk-graph adk-memory adk-anthropic; do
           echo "Checking $crate..."
           if cargo semver-checks check-release -p "$crate" --default-features; then

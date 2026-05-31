@@ -97,6 +97,8 @@ Public structs in Stable-tier crates that are constructed by downstream consumer
 
 4. **`#[non_exhaustive]` applied.** Key configuration structs (`RunnerConfig` and `RunConfig`) now carry `#[non_exhaustive]`, preventing struct literal construction from downstream crates. The builder pattern (`Runner::builder()` and `RunConfig::builder()`) is the only supported construction path. This was completed as part of the 1.0 readiness work.
 
+5. **Pending before 1.0: `LlmRequest` / `LlmResponse`.** These `adk-core` wire structs are constructed by downstream consumers via struct literals and are not yet `#[non_exhaustive]`. Additive `Option<T>` fields (e.g. `LlmRequest.previous_response_id`, `LlmResponse.interaction_id`) are allowed in 0.9.x minor releases under this policy, and `adk-core` is correspondingly listed in the semver-checks `PRE1_ALLOWED` set. Before 1.0, both structs MUST be made `#[non_exhaustive]` (with a builder or `..Default::default()` construction path) so that future field additions are non-breaking, after which `adk-core` is removed from `PRE1_ALLOWED`.
+
 ## 1.0 Milestone
 
 The ADK-Rust 1.0 release represents a commitment to long-term API stability for all Stable-tier crates. Progress is tracked in the [GitHub 1.0 Milestone](https://github.com/zavora-ai/adk-rust/milestone/1).
