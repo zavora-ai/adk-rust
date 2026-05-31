@@ -72,16 +72,17 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?;
 
+    // The runner streams the response as partial events; the final event marks
+    // completion. Print text from each event's content as it arrives.
     print!("<< ");
+    use std::io::Write;
     while let Some(event) = stream.next().await {
         let event = event?;
-        if event.llm_response.partial {
-            continue;
-        }
         if let Some(content) = event.content() {
             for part in &content.parts {
                 if let Part::Text { text } = part {
                     print!("{text}");
+                    let _ = std::io::stdout().flush();
                 }
             }
         }
