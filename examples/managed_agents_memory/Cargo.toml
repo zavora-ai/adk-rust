@@ -1,0 +1,14 @@
+[package]
+name = "managed-agents-memory"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-anthropic = { path = "../../adk-anthropic", features = ["managed-agents"] }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+serde_json = "1"
+dotenvy = "0.15"

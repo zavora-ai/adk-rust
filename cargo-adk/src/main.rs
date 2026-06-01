@@ -1005,6 +1005,12 @@ fn get_builtin_templates() -> Vec<TemplateInfo> {
             default_provider: "gemini",
             features: vec!["standard"],
         },
+        TemplateInfo {
+            name: "managed-agents",
+            description: "Anthropic Managed Agents session with SSE streaming",
+            default_provider: "anthropic",
+            features: vec!["agents", "models", "anthropic"],
+        },
     ]
 }
 
@@ -1155,6 +1161,7 @@ fn create_project(
         "api" => generate_api(name, provider),
         "openai" => generate_basic(name, "openai"),
         "a2a" => generate_a2a(name, provider, with_yaml),
+        "managed-agents" => generate_managed_agents(name, provider),
         _ => {
             return Err(format!(
                 "unknown template '{template}'. Run `cargo adk templates` to see options"
@@ -1787,6 +1794,123 @@ async fn main() -> anyhow::Result<()> {{
     (cargo, main, env)
 }
 
+fn generate_managed_agents(name: &str, provider: &str) -> (String, String, String) {
+    match provider {
+        "anthropic" => generate_managed_agents_anthropic(name),
+        // Future providers:
+        // "adk-rust-enterprise" => generate_managed_agents_enterprise(name),
+        // "google" => generate_managed_agents_google(name),
+        _ => {
+            // Default to anthropic for now; future: adk-rust-enterprise
+            generate_managed_agents_anthropic(name)
+        }
+    }
+}
+
+fn generate_managed_agents_anthropic(name: &str) -> (String, String, String) {
+    let cargo = format!(
+        r#"[package]
+name = "{name}"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+adk-anthropic = {{ version = "{ADK_VERSION}", features = ["managed-agents"] }}
+tokio = {{ version = "1", features = ["full"] }}
+futures = "0.3"
+serde_json = "1"
+dotenvy = "0.15"
+"#
+    );
+
+    let main = format!(
+        r#"//! {name} — Anthropic Managed Agents session
+//!
+//! Creates an agent, environment, session, sends a message, and streams the response.
+
+use adk_anthropic::managed_agents::{{
+    CreateAgentParams, CreateEnvironmentParams, CreateSessionParams,
+    ManagedAgentsClient, SessionEvent, ToolConfig, UserEvent,
+}};
+use futures::StreamExt;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {{
+    dotenvy::dotenv().ok();
+
+    let client = ManagedAgentsClient::from_env()?;
+    println!("✓ Connected to Anthropic Managed Agents API");
+
+    // Create an agent
+    let agent = client
+        .create_agent(CreateAgentParams {{
+            name: "{name}".to_string(),
+            model: serde_json::json!("claude-sonnet-4-6"),
+            system: Some("You are a helpful assistant. Be concise.".to_string()),
+            description: None,
+            tools: vec![ToolConfig::agent_toolset()],
+            mcp_servers: vec![],
+            skills: vec![],
+            multiagent: None,
+            metadata: None,
+        }})
+        .await?;
+    println!("✓ Agent created: {{}}", agent.id);
+
+    // Create a cloud environment
+    let env = client
+        .create_environment(CreateEnvironmentParams::cloud("{name}-env"))
+        .await?;
+    println!("✓ Environment created: {{}}", env.id);
+
+    // Create a session
+    let session = client
+        .create_session(CreateSessionParams::new(&agent.id, &env.id))
+        .await?;
+    println!("✓ Session created: {{}}", session.id);
+
+    // Open stream first, then send message
+    let mut stream = client.stream_events(&session.id).await?;
+
+    client
+        .send_event(&session.id, UserEvent::message("Hello! Tell me a fun fact."))
+        .await?;
+    println!("→ Message sent\\n");
+
+    // Stream the response
+    while let Some(event) = stream.next().await {{
+        match event? {{
+            SessionEvent::AgentMessage {{ content, .. }} => {{
+                if let Some(blocks) = content.as_array() {{
+                    for block in blocks {{
+                        if let Some(text) = block.get("text").and_then(|t| t.as_str()) {{
+                            print!("{{text}}");
+                        }}
+                    }}
+                }}
+            }}
+            SessionEvent::StatusIdle {{ .. }} => {{
+                println!("\\n\\n✓ Done");
+                break;
+            }}
+            _ => {{}}
+        }}
+    }}
+
+    // Cleanup
+    client.archive_session(&session.id).await?;
+    let _ = client.archive_agent(&agent.id).await;
+    let _ = client.archive_environment(&env.id).await;
+
+    Ok(())
+}}
+"#
+    );
+
+    let env = "ANTHROPIC_API_KEY=sk-ant-api03-your-key-here\n".to_string();
+    (cargo, main, env)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1908,13 +2032,14 @@ mod tests {
     #[test]
     fn templates_json_output() {
         let templates = get_builtin_templates();
-        assert_eq!(templates.len(), 6);
+        assert_eq!(templates.len(), 7);
         assert_eq!(templates[0].name, "basic");
         assert_eq!(templates[1].name, "tools");
         assert_eq!(templates[2].name, "rag");
         assert_eq!(templates[3].name, "api");
         assert_eq!(templates[4].name, "openai");
         assert_eq!(templates[5].name, "a2a");
+        assert_eq!(templates[6].name, "managed-agents");
     }
 
     #[test]

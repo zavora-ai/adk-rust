@@ -20,6 +20,12 @@ mod sse;
 mod tool_search;
 mod types;
 
+#[cfg(feature = "managed-agents")]
+pub mod managed_agents;
+
+#[cfg(feature = "files")]
+pub mod files;
+
 pub use accumulating_stream::AccumulatingStream;
 pub use backoff::ExponentialBackoff;
 pub use cache_control::{

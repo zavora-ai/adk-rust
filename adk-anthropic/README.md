@@ -26,6 +26,7 @@ This project is an **unofficial** community-maintained library. It is not affili
 - **Files API** — upload, get, delete, list
 - **Models API** — list and get model metadata with capabilities
 - **Token pricing** — per-model cost calculation from `Usage` data
+- **Managed Agents** — full client for Claude Managed Agents (agents, environments, sessions, SSE streaming, custom tools, vaults, memory stores, dreams, webhooks, multiagent orchestration) — feature-gated behind `managed-agents`
 
 ## Supported Models
 
@@ -91,6 +92,68 @@ Run any example with `cargo run -p adk-anthropic --example <name>`:
 | `pdf_processing` | PDF analysis via URL, base64, and with citations |
 | `vision` | Image understanding via URL |
 | `anthropic_custom_base_url` | Custom endpoints (Ollama, Vercel, MiniMax, proxies) |
+
+### Managed Agents Examples
+
+Run with `cargo run -p adk-anthropic --example <name> --features managed-agents`:
+
+| Example | Description |
+|---------|-------------|
+| `managed_agents_hello` | Minimal session: create agent → send message → stream response |
+| `managed_agents_custom_tools` | Custom tool flow: agent calls your tools, you return results |
+| `managed_agents_files` | Upload CSV, mount in session, agent analyzes data |
+| `managed_agents_memory` | Persistent memory across sessions (agent remembers preferences) |
+| `managed_agents_multiagent` | Coordinator delegates to researcher + writer agents in parallel |
+
+**Hello World output:**
+```
+=== Managed Agents: Hello World ===
+
+✓ Client created
+✓ Agent created: agent_01SnYF9JNJR4c1FB1L8YPovY
+✓ Environment created: env_01Gdwp4bFCZgGbbnQJLCCVmo
+✓ Session created: sesn_01Da6YoDqrgLzkCRVg1DAGjK (status: Idle)
+✓ Stream opened
+
+→ Sent: "Hello! What is 2 + 2?"
+
+← Agent response:
+4! 😊 Is there anything else I can help you with?
+
+✓ Session idle (stop_reason: end_turn)
+```
+
+**Custom Tools output:**
+```
+→ Sent: "What's the weather like in San Francisco and Tokyo?"
+
+← Processing events:
+I'll check the weather in both cities at the same time!
+  🔧 Custom tool call: get_weather({"city":"San Francisco"})
+  📤 Sending result: 🌤️ Weather in San Francisco: 22°C, partly cloudy
+  🔧 Custom tool call: get_weather({"city":"Tokyo"})
+  📤 Sending result: 🌤️ Weather in Tokyo: 22°C, partly cloudy
+```
+
+**Multiagent output:**
+```
+✓ Researcher agent created
+✓ Writer agent created
+✓ Coordinator agent created
+
+→ Sent coordination task
+
+← Processing events:
+  ▶ Session running...
+  I'll dispatch the Researcher to gather key facts first...
+  [Researcher produces structured research]
+  [Writer crafts final article from research]
+
+── Session Threads ──
+  🧵 Content Coordinator — idle (root)
+  🧵 Researcher — idle
+  🧵 Writer — idle
+```
 
 ## Pricing Module
 
