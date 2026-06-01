@@ -42,7 +42,6 @@ use serde::{Deserialize, Serialize};
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-#[non_exhaustive]
 pub enum Environment {
     /// A bare string: either the literal `"remote"` (fresh sandbox) or an
     /// existing environment ID (resume).
@@ -128,7 +127,6 @@ impl Environment {
 ///     .with_network(NetworkConfig::disabled());
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct EnvironmentConfig {
     /// Always `"remote"` for the current API version.
     #[serde(rename = "type")]
@@ -237,7 +235,6 @@ impl Default for EnvironmentConfig {
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
-#[non_exhaustive]
 pub enum EnvironmentSource {
     /// Inline content (max 1 MB per file, 2 MB total).
     Inline {
@@ -297,7 +294,6 @@ pub enum EnvironmentSource {
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-#[non_exhaustive]
 pub enum NetworkConfig {
     /// All outbound traffic is blocked. Serializes as `"disabled"`.
     Disabled(String),
@@ -369,7 +365,6 @@ impl NetworkConfig {
 ///     ])));
 /// ```
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct NetworkRule {
     /// The domain pattern: exact hostname, wildcard (`*.example.com`), or `*`.
     pub domain: String,

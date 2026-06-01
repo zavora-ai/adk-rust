@@ -30,25 +30,26 @@ The table below assigns one stability tier to every public `adk-*` crate in the 
 | `adk-graph` | **Stable** | Graph-based workflow orchestration with checkpoints |
 | `adk-memory` | **Stable** | Semantic memory and RAG search |
 | `adk-anthropic` | **Stable** | Dedicated Anthropic client and tool search |
-| `adk-artifact` | **Beta** | Binary artifact storage for agents |
-| `adk-auth` | **Beta** | Authentication: API keys, JWT, OAuth2, OIDC, SSO |
-| `adk-telemetry` | **Beta** | OpenTelemetry integration for agent observability |
-| `adk-guardrail` | **Beta** | Input/output guardrails: validation, content filtering, PII redaction |
-| `adk-plugin` | **Beta** | Plugin system for agent lifecycle hooks |
-| `adk-skill` | **Beta** | Skill discovery, parsing, and convention-based agent capabilities |
-| `adk-cli` | **Beta** | Command-line launcher for agents |
-| `adk-rag` | **Beta** | Retrieval-augmented generation pipelines |
-| `adk-action` | **Beta** | Action node execution for deterministic workflow operations |
-| `adk-deploy` | **Beta** | Deployment utilities |
-| `adk-payments` | **Beta** | Payment integration for agent services |
-| `adk-rust-macros` | **Beta** | Procedural macros for ADK-Rust |
-| `cargo-adk` | **Beta** | Cargo subcommand for ADK project management |
-| `adk-realtime` | **Experimental** | Real-time bidirectional audio/video streaming |
-| `adk-browser` | **Experimental** | Browser automation tools via WebDriver |
-| `adk-eval` | **Experimental** | Evaluation framework: trajectory, semantic, rubric, LLM-judge |
-| `adk-code` | **Experimental** | Code generation and execution |
-| `adk-sandbox` | **Experimental** | Sandboxed execution environments |
-| `adk-audio` | **Experimental** | Audio processing and STT/TTS providers |
+| `adk-artifact` | **Stable** | Binary artifact storage for agents |
+| `adk-auth` | **Stable** | Authentication: API keys, JWT, OAuth2, OIDC, SSO |
+| `adk-telemetry` | **Stable** | OpenTelemetry integration for agent observability |
+| `adk-guardrail` | **Stable** | Input/output guardrails: validation, content filtering, PII redaction |
+| `adk-plugin` | **Stable** | Plugin system for agent lifecycle hooks |
+| `adk-skill` | **Stable** | Skill discovery, parsing, and convention-based agent capabilities |
+| `adk-cli` | **Stable** | Command-line launcher for agents |
+| `adk-rag` | **Stable** | Retrieval-augmented generation pipelines |
+| `adk-action` | **Stable** | Action node execution for deterministic workflow operations |
+| `adk-deploy` | **Stable** | Deployment utilities |
+| `adk-payments` | **Stable** | Payment integration for agent services |
+| `adk-rust-macros` | **Stable** | Procedural macros for ADK-Rust |
+| `cargo-adk` | **Stable** | Cargo subcommand for ADK project management |
+| `adk-realtime` | **Beta** | Real-time bidirectional audio/video streaming |
+| `adk-browser` | **Beta** | Browser automation tools via WebDriver |
+| `adk-eval` | **Beta** | Evaluation framework: trajectory, semantic, rubric, LLM-judge |
+| `adk-code` | **Beta** | Code generation and execution |
+| `adk-sandbox` | **Beta** | Sandboxed execution environments |
+| `adk-audio` | **Beta** | Audio processing and STT/TTS providers |
+| `adk-mistralrs` | **Beta** | Native local LLM inference via mistral.rs |
 
 ### Excluded from Workspace
 
@@ -56,7 +57,6 @@ The following crates are not part of the main workspace and are not covered by t
 
 | Crate | Reason |
 |-------|--------|
-| `adk-mistralrs` | GPU dependencies — build explicitly. Has its own CI workflow. |
 | `adk-studio` | Extracted to [standalone repo](https://github.com/zavora-ai/adk-studio). |
 | `adk-ui` | Extracted to [standalone repo](https://github.com/zavora-ai/adk-ui). |
 
@@ -95,9 +95,7 @@ Public structs in Stable-tier crates that are constructed by downstream consumer
    - Session service request structs in `adk-session`
    - Any future configuration or request structs added to Stable-tier crates
 
-4. **`#[non_exhaustive]` applied.** Key configuration structs (`RunnerConfig` and `RunConfig`) now carry `#[non_exhaustive]`, preventing struct literal construction from downstream crates. The builder pattern (`Runner::builder()` and `RunConfig::builder()`) is the only supported construction path. This was completed as part of the 1.0 readiness work.
-
-5. **Pending before 1.0: `LlmRequest` / `LlmResponse`.** These `adk-core` wire structs are constructed by downstream consumers via struct literals and are not yet `#[non_exhaustive]`, so adding fields is a breaking change (shipped as the 0.10.0 major bump). Before 1.0, both structs SHOULD be made `#[non_exhaustive]` (with a builder or `..Default::default()` construction path) so that future field additions are non-breaking.
+4. **Struct literal construction.** All public structs support direct struct literal construction with `..Default::default()` for forward compatibility. Builder patterns are provided as a convenience but are not required.
 
 ## 1.0 Milestone
 

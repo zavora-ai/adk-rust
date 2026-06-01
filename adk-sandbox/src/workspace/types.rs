@@ -20,7 +20,6 @@ use std::time::Duration;
 /// assert_eq!(handle.as_str(), "session-abc-123");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct SessionHandle(pub String);
 
 impl SessionHandle {
@@ -50,7 +49,6 @@ impl SessionHandle {
 /// assert_eq!(id.as_str(), "snap-2024-01-15-001");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct SnapshotId(pub String);
 
 impl SnapshotId {
@@ -82,7 +80,6 @@ impl SnapshotId {
 /// assert!(!output.timed_out);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct ExecOutput {
     /// Standard output captured from the command.
     pub stdout: String,
@@ -124,7 +121,6 @@ impl ExecOutput {
 /// assert_eq!(entry.entry_type, EntryType::Directory);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct DirEntry {
     /// Name of the directory entry (file or subdirectory name, not full path).
     pub name: String,
@@ -146,7 +142,6 @@ impl DirEntry {
 /// in workspace directory listings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-#[non_exhaustive]
 pub enum EntryType {
     /// A regular file.
     File,
