@@ -1,50 +1,50 @@
 [package]
 name = "adk-mistralrs"
-version = "0.7.0"
+version = "0.10.0"
 edition = "2024"
-rust-version = "1.85.0"
+rust-version = "1.88.0"
 license = "MIT"
 authors = ["James Karanja Maina <james.karanja@zavora.ai>"]
-description = "mistral.rs integration for ADK-Rust - native local LLM inference (git-only, not published to crates.io)"
+description = "mistral.rs integration for ADK-Rust - native local LLM inference with Gemma 4, Qwen 3.5, Voxtral, and 50+ model architectures"
 repository = "https://github.com/zavora-ai/adk-rust"
 readme = "README.md"
 keywords = ["ai", "agent", "adk", "mistral", "llm", "local-inference"]
 categories = ["api-bindings", "asynchronous"]
-publish = false  # This crate is NOT published to crates.io
+publish = true  # Now publishable! mistralrs is on crates.io as of v0.8.0
 
 [dependencies]
 # ADK core dependencies
-adk-core = { path = "../adk-core" }
-adk-telemetry = { path = "../adk-telemetry" }
+adk-core = { workspace = true }
+adk-telemetry = { workspace = true }
 
 # Async runtime
 async-trait = "0.1"
-tokio = { version = "1", features = ["rt", "sync", "macros"] }
-futures = "0.3"
+tokio = { workspace = true, features = ["rt", "sync", "macros"] }
+futures = { workspace = true }
 async-stream = "0.3"
 
 # Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Error handling and logging
 anyhow = "1.0"
-tracing = "0.1"
+tracing = { workspace = true }
 thiserror = "2.0"
 
 # Utilities
-base64 = "0.21"
 indexmap = { version = "2.0", features = ["serde"] }
 image = "0.25"
 uuid = { version = "1.0", features = ["v4"] }
+base64 = "0.22"
 
-# mistral.rs - native Rust LLM inference engine (git dependency)
-# Note: This is why this crate cannot be published to crates.io
-# Pinned to v0.8.0 tag for Gemma 4, Qwen 3.5, Voxtral, and candle 0.10 support.
-mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", tag = "v0.8.0" }
+# mistral.rs - native Rust LLM inference engine
+# Published on crates.io since v0.8.0 (April 2026)
+# Supports: Gemma 4, Qwen 3.5, Voxtral, 50+ architectures, agentic runtime
+mistralrs = "0.8"
 
 # Optional HTTP client for URL image loading
-reqwest = { version = "0.12", features = ["blocking"], optional = true }
+reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = "1.0"
@@ -69,6 +69,12 @@ accelerate = ["mistralrs/accelerate"]
 # Flash attention variants (requires compatible hardware)
 flash-attn = ["cuda", "mistralrs/flash-attn"]
 cudnn = ["mistralrs/cudnn"]
+
+# Multi-GPU via NCCL
+nccl = ["cuda", "mistralrs/nccl"]
+
+# Ring distributed backend
+ring = ["mistralrs/ring"]
 
 [[bench]]
 name = "inference_benchmark"

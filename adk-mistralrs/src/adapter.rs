@@ -49,8 +49,8 @@ use futures::stream;
 use mistralrs::core::Ordering;
 use mistralrs::{
     AutoDeviceMapParams, DeviceMapSetting, IsqType, LoraModelBuilder, PagedAttentionMetaBuilder,
-    RequestBuilder, Response, TextMessageRole, TextMessages, TextModelBuilder,
-    Topology, XLoraModelBuilder,
+    RequestBuilder, Response, TextMessageRole, TextMessages, TextModelBuilder, Topology,
+    XLoraModelBuilder,
 };
 use tokio::sync::RwLock;
 use tracing::{debug, info, instrument, warn};

@@ -36,9 +36,8 @@ use async_trait::async_trait;
 use futures::stream;
 use image::DynamicImage;
 use mistralrs::{
-    AudioInput, AutoDeviceMapParams, DeviceMapSetting, IsqType, PagedAttentionMetaBuilder,
-    Response, TextMessageRole, Topology, MultimodalMessages,
-    MultimodalModelBuilder,
+    AudioInput, AutoDeviceMapParams, DeviceMapSetting, IsqType, MultimodalMessages,
+    MultimodalModelBuilder, PagedAttentionMetaBuilder, Response, TextMessageRole, Topology,
 };
 use tracing::{debug, info, instrument, warn};
 
@@ -278,8 +277,8 @@ impl MistralRsVisionModel {
         prompt: &str,
         images: Vec<DynamicImage>,
     ) -> Result<String> {
-        let messages = MultimodalMessages::new()
-            .add_image_message(TextMessageRole::User, prompt, images);
+        let messages =
+            MultimodalMessages::new().add_image_message(TextMessageRole::User, prompt, images);
 
         let response = self
             .model
@@ -323,8 +322,13 @@ impl MistralRsVisionModel {
         images: Vec<DynamicImage>,
         audios: Vec<AudioInput>,
     ) -> Result<String> {
-        let messages = MultimodalMessages::new()
-            .add_multimodal_message(TextMessageRole::User, prompt, images, audios, vec![]);
+        let messages = MultimodalMessages::new().add_multimodal_message(
+            TextMessageRole::User,
+            prompt,
+            images,
+            audios,
+            vec![],
+        );
 
         let response = self
             .model
@@ -398,8 +402,7 @@ impl MistralRsVisionModel {
 
             // Add message based on content type
             if !images.is_empty() || !audios.is_empty() {
-                messages = messages
-                    .add_multimodal_message(role, &text, images, audios, vec![]);
+                messages = messages.add_multimodal_message(role, &text, images, audios, vec![]);
             } else if !text.is_empty() {
                 messages = messages.add_message(role, text);
             }

@@ -30,6 +30,7 @@ CRATES=(
   adk-sandbox
   adk-action
   adk-deploy
+  adk-mistralrs    # depends on adk-core + adk-telemetry (now publishable)
   adk-awp          # depends on awp-types + adk-core
 
   # Tier 3: depends on Tier 2

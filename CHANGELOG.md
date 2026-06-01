@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Workspace version bump to 0.10.0.** This is a breaking (0.x major) release.
   All `adk-*` crates move from 0.9.x to 0.10.0 in lockstep.
+- **adk-mistralrs: Now a workspace member.** Previously excluded due to git
+  dependencies; now included since mistral.rs published to crates.io.
+  `rust-version` bumped to 1.88.0 (required by mistralrs 0.8.1).
 - **adk-core: `LlmResponse` and `LlmRequest` gained public fields.** These structs
   are not `#[non_exhaustive]` and are constructed with struct literals downstream,
   so the additions below are breaking changes for external code that builds them
@@ -24,6 +27,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **adk-anthropic: Managed Agents API client** — full implementation of the
+  Anthropic Managed Agents API, feature-gated behind `managed-agents`. Includes:
+  - Agent, Environment, Session CRUD with SSE streaming
+  - Custom tool flow, tool confirmation (allow/deny)
+  - Vaults and credentials for MCP authentication
+  - Memory stores with versioning and optimistic concurrency
+  - Dreams API for memory curation (Research Preview)
+  - Webhook signature verification (HMAC-SHA256)
+  - Multiagent orchestration with session threads
+  - Self-hosted environment work queue management
+  - File upload and session resource mounting
+  - 5 examples: hello, custom_tools, files, memory, multiagent
+  - 47 integration tests passing against live API
+- **adk-anthropic: Files API client** — upload, download, list, get, delete files
+  for use with Messages API. Feature-gated behind `files`. Auto MIME type inference.
+- **adk-mistralrs: Now publishable to crates.io** — switched from git dependency
+  (`mistralrs = { git = "..." }`) to crates.io (`mistralrs = "0.8"`). The crate
+  is now a full workspace member and can be published alongside other ADK crates.
+  Supports 50+ model architectures including Gemma 4, Qwen 3.5, Llama 4, Voxtral,
+  GPT-OSS, and multimodal models with text/image/audio/video input.
+- **cargo-adk: `managed-agents` template** — `cargo adk new my-agent --template managed-agents`
+  scaffolds a complete Anthropic Managed Agents project with `--provider` support
+  for future multi-provider managed agents.
 - **adk-model: Gemini OpenAI-compatible preset** — `OpenAICompatibleConfig::gemini(api_key, model)`
   targets Gemini's OpenAI-compatibility endpoint
   (`https://generativelanguage.googleapis.com/v1beta/openai`), letting callers on

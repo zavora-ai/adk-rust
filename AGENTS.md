@@ -8,7 +8,7 @@ Rust Agent Development Kit — a modular workspace of publishable crates for bui
 - `sccache` is the compilation cache. Set `RUSTC_WRAPPER=sccache` in your shell profile.
 - On Linux, `wild` is the linker (configured in `.cargo/config.toml`). macOS uses the default linker.
 - Copy `.env.example` to `.env` for API keys. Never commit `.env` files or secrets.
-- `adk-mistralrs` is excluded from the workspace (GPU deps). Build it explicitly: `cargo build --manifest-path adk-mistralrs/Cargo.toml`.
+- `adk-mistralrs` is a workspace member but requires Rust 1.88+ (mistralrs 0.8.1 dependency). GPU features (`cuda`, `metal`) are opt-in.
 - `CMAKE_POLICY_VERSION_MINIMUM=3.5` is needed for cmake 4.x compatibility (audiopus).
 - **Performance**: `.cargo/config.toml` sets `incremental = false` globally for `sccache` compatibility, but `Cargo.toml` `[profile.dev]` overrides this with `incremental = true` for local dev builds. CI uses the `ci` profile where the config.toml setting applies.
 
@@ -63,6 +63,10 @@ adk-gemini/      Dedicated Gemini client with GeminiBackend trait (Studio + Vert
 adk-anthropic/   Dedicated Anthropic API client: streaming, adaptive thinking, prompt caching,
                  citations, context management, fast mode, vision, PDF processing, pricing.
                  Supports Claude Opus 4.7, Sonnet 4.6, Haiku 4.5.
+                 Managed Agents API (`managed-agents` feature): agents, environments, sessions,
+                 SSE streaming, custom tools, vaults, memory stores, dreams, webhooks,
+                 multiagent orchestration, file mounting, self-hosted environments.
+                 Files API (`files` feature): upload, download, list, get, delete.
 adk-tool/        Tool system: FunctionTool, StatefulTool, SimpleToolContext, MCP integration
                  (rmcp 1.2), McpServerManager (lifecycle, health, auto-restart), MCP Resource
                  API, MCP Elicitation, Google Search, built-in tool wrappers (Gemini/OpenAI/
@@ -125,8 +129,8 @@ adk-acp/         Agent Client Protocol — connect to external ACP agents (Claud
 ### Excluded from workspace
 
 ```
-adk-mistralrs/   Local LLM inference via mistral.rs v0.8.0 (Gemma 4, Qwen 3.5, Voxtral — GPU deps, build explicitly)
-                 Excluded so `--all-features` works without CUDA toolkit.
+adk-mistralrs/   Local LLM inference via mistral.rs v0.8 (Gemma 4, Qwen 3.5, Voxtral, Llama 4, GPT-OSS — 50+ architectures)
+                 Now a workspace member (mistralrs published to crates.io). GPU features are opt-in.
                  Has its own CI workflow (.github/workflows/mistralrs-tests.yml).
 
 adk-studio/      Visual agent builder — extracted to standalone repo.
@@ -502,7 +506,7 @@ cargo publish -p <crate-name>
 ```
 
 5. Cargo waits for crates.io indexing automatically after upload. If a dependent crate fails with "failed to select a version", wait a minute and retry.
-6. Skip `adk-mistralrs` — it is `publish = false`.
+6. `adk-mistralrs` is now publishable (mistralrs on crates.io). Include it in the publish order after Tier 2.
 
 ### Version checklist
 

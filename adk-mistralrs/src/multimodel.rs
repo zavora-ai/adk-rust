@@ -256,9 +256,7 @@ impl MistralRsMultiModel {
             None => {
                 let default = self.default_model.read().await;
                 default.clone().ok_or_else(|| {
-                    adk_core::AdkError::model(
-                        "No default model set and no model name specified",
-                    )
+                    adk_core::AdkError::model("No default model set and no model name specified")
                 })?
             }
         };

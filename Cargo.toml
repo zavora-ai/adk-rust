@@ -44,12 +44,10 @@ members = [
     # CLI tools
     "cargo-adk",
 
+    # Local LLM inference (now publishable - mistralrs on crates.io)
+    "adk-mistralrs",
 ]
 exclude = [
-    # Git-only packages with GPU dependencies (build explicitly with: cargo build -p adk-mistralrs)
-    # Excluded to prevent --all-features from failing without CUDA toolkit
-    "adk-mistralrs",
-
     # Extracted to standalone repo: https://github.com/zavora-ai/adk-studio
     "adk-studio",
 
@@ -160,6 +158,7 @@ adk-code = { path = "adk-code", version = "0.10.0" }
 adk-sandbox = { path = "adk-sandbox", version = "0.10.0" }
 adk-rag = { path = "adk-rag", version = "0.10.0" }
 adk-audio = { path = "adk-audio", version = "0.10.0" }
+adk-mistralrs = { path = "adk-mistralrs", version = "0.10.0", default-features = false }
 adk-deploy = { path = "adk-deploy", version = "0.10.0" }
 adk-payments = { path = "adk-payments", version = "0.10.0" }
 adk-action = { path = "adk-action", version = "0.10.0" }

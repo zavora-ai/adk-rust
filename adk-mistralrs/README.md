@@ -2,52 +2,34 @@
 
 Native [mistral.rs](https://github.com/EricLBuehler/mistral.rs) integration for ADK-Rust, providing blazingly fast local LLM inference without external dependencies like Ollama.
 
-Pinned to **mistral.rs v0.8.0** with support for **Gemma 4**, Qwen 3.5, Voxtral speech recognition, MXFP4 quantization, and candle 0.10.
+Uses **mistral.rs v0.8** from crates.io with support for **Gemma 4**, **Qwen 3.5**, **Voxtral**, **Llama 4**, **GPT-OSS**, MXFP4 quantization, agentic runtime, and 50+ model architectures.
 
-> **Note:** This crate is NOT published to crates.io because mistral.rs depends on unpublished git dependencies. Add it via git dependency instead.
+## Installation
 
-## Building
+Add to your `Cargo.toml`:
 
-`adk-mistralrs` is excluded from the main workspace to allow `cargo build --all-features` to work without CUDA toolkit. Build it explicitly:
-
-### CPU-Only (Works on All Systems)
-
-```bash
-# Using Make
-make build-mistralrs
-
-# Or directly
-cargo build --manifest-path adk-mistralrs/Cargo.toml
-
-# Run an example
-cargo run --example mistralrs_basic --features mistralrs
+```toml
+[dependencies]
+adk-mistralrs = "0.10"
 ```
 
-### With GPU Acceleration
+### With Hardware Acceleration
 
-GPU features are **opt-in** and require specific hardware/software:
+```toml
+# macOS with Metal
+adk-mistralrs = { version = "0.10", features = ["metal"] }
 
-```bash
-# macOS with Apple Silicon (Metal)
-make build-mistralrs-metal
-# or: cargo build --manifest-path adk-mistralrs/Cargo.toml --features metal
+# NVIDIA GPU with CUDA
+adk-mistralrs = { version = "0.10", features = ["cuda"] }
 
-# NVIDIA GPU (requires CUDA toolkit installed)
-make build-mistralrs-cuda
-# or: cargo build --manifest-path adk-mistralrs/Cargo.toml --features cuda
+# CUDA with Flash Attention
+adk-mistralrs = { version = "0.10", features = ["flash-attn"] }
 
-# NVIDIA with Flash Attention
-cargo build --manifest-path adk-mistralrs/Cargo.toml --features flash-attn
-```
+# Multi-GPU via NCCL
+adk-mistralrs = { version = "0.10", features = ["nccl"] }
 
-### Running Examples with GPU
-
-```bash
-# With Metal (macOS)
-cargo run --example mistralrs_basic --features mistralrs,metal
-
-# With CUDA (NVIDIA)
-cargo run --example mistralrs_basic --features mistralrs,cuda
+# Intel MKL
+adk-mistralrs = { version = "0.10", features = ["mkl"] }
 ```
 
 ## Features
@@ -68,11 +50,9 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-adk-core = "0.10.0"
-adk-agent = "0.10.0"
-
-# mistral.rs support (git dependency - not on crates.io)
-adk-mistralrs = { git = "https://github.com/zavora-ai/adk-rust" }
+adk-core = "0.10"
+adk-agent = "0.10"
+adk-mistralrs = "0.10"
 ```
 
 ### Feature Flags
@@ -85,26 +65,9 @@ adk-mistralrs = { git = "https://github.com/zavora-ai/adk-rust" }
 | `cudnn` | cuDNN acceleration |
 | `mkl` | Intel MKL acceleration |
 | `accelerate` | Apple Accelerate framework |
+| `nccl` | Multi-GPU via NCCL (requires CUDA) |
+| `ring` | Ring distributed backend |
 | `reqwest` | URL-based image loading |
-
-### With Hardware Acceleration
-
-```toml
-# macOS with Metal
-adk-mistralrs = { git = "https://github.com/zavora-ai/adk-rust", features = ["metal"] }
-
-# NVIDIA GPU with CUDA
-adk-mistralrs = { git = "https://github.com/zavora-ai/adk-rust", features = ["cuda"] }
-
-# CUDA with Flash Attention
-adk-mistralrs = { git = "https://github.com/zavora-ai/adk-rust", features = ["flash-attn"] }
-
-# Intel MKL
-adk-mistralrs = { git = "https://github.com/zavora-ai/adk-rust", features = ["mkl"] }
-
-# Apple Accelerate
-adk-mistralrs = { git = "https://github.com/zavora-ai/adk-rust", features = ["accelerate"] }
-```
 
 ## Quick Start
 
@@ -401,33 +364,71 @@ let model = MistralRsModel::new(config).await?;
 
 ## Supported Models
 
-### Text Models
-- Mistral (7B, 8x7B MoE)
-- Llama 2/3 (7B, 13B, 70B)
-- Phi-3/3.5 (mini, small, medium)
-- Qwen 2/2.5
-- Gemma 2/3
-- DeepSeek
-- And many more...
+### Text Models (21 architectures)
+| Architecture | Example Model | Notes |
+|---|---|---|
+| Mistral | mistralai/Mistral-7B-Instruct-v0.3 | |
+| Gemma | google/gemma-7b-it | |
+| Gemma2 | google/gemma-2-9b-it | |
+| Mixtral | mistralai/Mixtral-8x7B-Instruct-v0.1 | MoE |
+| Llama | meta-llama/Llama-3.1-8B-Instruct | Llama 2/3/3.1 |
+| Phi2 | microsoft/phi-2 | |
+| Phi3 | microsoft/Phi-3-medium-4k-instruct | |
+| Phi3_5MoE | microsoft/Phi-3.5-MoE-instruct | MoE |
+| Qwen2 | Qwen/Qwen2-7B-Instruct | |
+| Qwen3 | Qwen/Qwen3-4B | Latest |
+| Qwen3Moe | Qwen/Qwen3-30B-A3B | MoE |
+| Qwen3Next | Qwen/Qwen3-Next-80B-A3B-Instruct | MoE |
+| DeepSeekV2 | deepseek-ai/DeepSeek-V2-Chat | |
+| DeepSeekV3 | deepseek-ai/DeepSeek-V3 | |
+| GLM4 | zai-org/GLM-4-32B-0414 | |
+| GLM4Moe | zai-org/GLM-4.7 | MoE |
+| GLM4MoeLite | zai-org/GLM-4.7-Flash | MoE |
+| SmolLm3 | HuggingFaceTB/SmolLM3-3B | |
+| GraniteMoeHybrid | ibm-granite/granite-4.0-micro | Hybrid |
+| GptOss | openai/gpt-oss-20b | |
+| Starcoder2 | bigcode/starcoder2-7b | Code |
 
-### Vision Models
-- LLaVa (1.5, 1.6, NeXT)
-- Qwen-VL
-- Gemma 3 (with vision)
-- Phi-3 Vision
-- Idefics 2
+### Multimodal Models (20 architectures)
+| Architecture | Example Model | Modalities |
+|---|---|---|
+| **Gemma4** | google/gemma-4-E4B-it | Text, image, audio, video |
+| Gemma3 | google/gemma-3-12b-it | Text, image |
+| Gemma3n | google/gemma-3n-E4B-it | Text, image, audio, video |
+| **Qwen3_5** | Qwen/Qwen3.5-27B | Text, image |
+| Qwen3_5Moe | Qwen/Qwen3.5-35B-A3B | Text, image |
+| Qwen3VL | Qwen/Qwen3-VL-4B-Instruct | Text, image, video |
+| Qwen3VLMoE | Qwen/Qwen3-VL-235B-A22B-Instruct | Text, image, video |
+| Qwen2VL | Qwen/Qwen2-VL-7B-Instruct | Text, image, video |
+| Qwen2_5VL | Qwen/Qwen2.5-VL-7B-Instruct | Text, image, video |
+| **Llama4** | meta-llama/Llama-4-Scout-17B-16E-Instruct | Text, image |
+| **Mistral3** | mistralai/Mistral-Small-3.2-24B-Instruct-2506 | Text, image |
+| **Voxtral** | mistralai/Voxtral-Mini-3B-2507 | Text, audio |
+| VLlama | meta-llama/Llama-3.2-11B-Vision-Instruct | Text, image |
+| Phi3V | microsoft/Phi-3.5-vision-instruct | Text, image |
+| Phi4MM | microsoft/Phi-4-multimodal-instruct | Text, image, audio |
+| MiniCpmO | openbmb/MiniCPM-o-2_6 | Text, image, audio |
+| LLaVANext | llava-hf/llava-v1.6-mistral-7b-hf | Text, image |
+| LLaVA | llava-hf/llava-1.5-7b-hf | Text, image |
+| Idefics2 | HuggingFaceM4/idefics2-8b | Text, image |
+| Idefics3 | HuggingFaceM4/Idefics3-8B-Llama3 | Text, image |
 
 ### Speech Models
-- Dia 1.6b (text-to-speech)
+| Architecture | Example Model | Capability |
+|---|---|---|
+| Dia | nari-labs/Dia-1.6B | Text-to-speech |
 
-### Diffusion Models
-- FLUX.1 (image generation)
+### Image Generation Models
+| Architecture | Example Model | Notes |
+|---|---|---|
+| Flux | black-forest-labs/FLUX.1-schnell | |
+| FluxOffloaded | black-forest-labs/FLUX.1-schnell | CPU offload for low VRAM |
 
 ### Embedding Models
-- EmbeddingGemma
-- Qwen3 Embedding
-- BGE (various sizes)
-- E5 (various sizes)
+| Architecture | Example Model |
+|---|---|
+| EmbeddingGemma | google/embeddinggemma-300m |
+| Qwen3Embedding | Qwen/Qwen3-Embedding-0.6B |
 
 ## Configuration Reference
 
@@ -483,11 +484,9 @@ let model = MistralRsModel::new(config).await?;
 | UQFF Support | Yes | No |
 | MatFormer | Yes | No |
 
-## Why Not crates.io?
+## Publishing
 
-mistral.rs depends on the `candle` ML framework from HuggingFace, which uses git dependencies for its crates. crates.io doesn't allow publishing crates with git dependencies, so this crate must be added via git.
-
-This is a common pattern for ML crates in Rust that depend on rapidly-evolving frameworks.
+As of v0.10.0, `adk-mistralrs` is publishable to crates.io. The blocker (mistral.rs using git dependencies) was resolved when mistral.rs published v0.8.0 to crates.io in April 2026.
 
 ## Examples
 
