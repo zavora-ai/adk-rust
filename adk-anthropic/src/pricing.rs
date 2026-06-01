@@ -31,6 +31,14 @@ pub struct ModelPricing {
 }
 
 impl ModelPricing {
+    /// Claude Opus 4.8 — same pricing as Opus 4.7.
+    pub const OPUS_48: Self = Self {
+        input: 5.0,
+        cache_write_5m: 6.25,
+        cache_write_1h: 10.0,
+        cache_read: 0.50,
+        output: 25.0,
+    };
     /// Claude Opus 4.7 — same pricing as Opus 4.6.
     pub const OPUS_47: Self = Self {
         input: 5.0,

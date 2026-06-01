@@ -392,6 +392,33 @@ match runner.run(uid, sid, message).await {
 
 ---
 
+## Background Mode & Cancellation
+
+For long-running requests, submit with `background: true` and poll for completion:
+
+```rust
+use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig};
+
+let client = OpenAIResponsesClient::new(config)?;
+
+// Submit with background: true via extensions
+let mut gen_config = GenerateContentConfig::default();
+gen_config.extensions.insert("openai".into(), serde_json::json!({ "background": true }));
+
+// ... send request, extract response_id from provider_metadata ...
+
+// Poll until terminal status
+let response = client.poll_response("resp_abc123").await?;
+// Check provider_metadata["openai"]["status"]: "completed", "in_progress", "failed", "cancelled"
+
+// Cancel a running background response
+let cancelled = client.cancel_response("resp_abc123").await?;
+```
+
+Deep research models (`o3-deep-research`, `o4-mini-deep-research`) automatically enable background mode without explicit `background: true`.
+
+---
+
 ## Example
 
 A complete 7-scenario example is available at `examples/openai_responses/`:
@@ -409,6 +436,19 @@ Scenarios covered:
 5. Multi-turn conversation
 6. System instructions
 7. Temperature and generation config
+
+### Additional Examples
+
+Six standalone example crates demonstrate specific Responses API features:
+
+| Example | Run Command | Feature |
+|---------|-------------|---------|
+| WebSocket transport | `cargo run --manifest-path examples/openai_ws_minimal/Cargo.toml` | Low-latency persistent connection |
+| Background mode | `cargo run --manifest-path examples/openai_background/Cargo.toml` | Submit & poll workflow |
+| Conversations API | `cargo run --manifest-path examples/openai_conversations/Cargo.toml` | Server-managed multi-turn |
+| Built-in tools | `cargo run --manifest-path examples/openai_builtin_tools/Cargo.toml` | Image gen, web search |
+| Deep research | `cargo run --manifest-path examples/openai_deep_research/Cargo.toml` | Auto-background research |
+| Open Responses | `cargo run --manifest-path examples/openai_open_responses/Cargo.toml` | Provider-agnostic endpoints |
 
 ---
 

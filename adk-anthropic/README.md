@@ -10,8 +10,8 @@ This project is an **unofficial** community-maintained library. It is not affili
 ## Features
 
 - **Messages API** — non-streaming and SSE streaming with all content block types
-- **Adaptive thinking** — `ThinkingConfig::adaptive()` for Opus 4.7 / Opus 4.6 / Sonnet 4.6
-- **Budget-based thinking** — `ThinkingConfig::enabled(budget)` for older models (rejected on Opus 4.7)
+- **Adaptive thinking** — `ThinkingConfig::adaptive()` for Opus 4.8 / Opus 4.7 / Opus 4.6 / Sonnet 4.6
+- **Budget-based thinking** — `ThinkingConfig::enabled(budget)` for older models (rejected on Opus 4.8 / Opus 4.7)
 - **Effort parameter** — `OutputConfig::with_effort()` with `low`, `medium`, `high`, `xhigh`, `max` levels
 - **Structured outputs** — JSON schema via `OutputConfig` / `OutputFormat`
 - **Tool calling** — custom function tools, server tools (web search, bash, text editor, code execution, memory)
@@ -32,7 +32,8 @@ This project is an **unofficial** community-maintained library. It is not affili
 
 | Model | API ID | Generation |
 |-------|--------|------------|
-| Claude Opus 4.7 | `claude-opus-4-7` | Latest |
+| Claude Opus 4.8 | `claude-opus-4-8` | Latest |
+| Claude Opus 4.7 | `claude-opus-4-7` | Current |
 | Claude Opus 4.6 | `claude-opus-4-6` | Current |
 | Claude Sonnet 4.6 | `claude-sonnet-4-6` | Current |
 | Claude Haiku 4.5 | `claude-haiku-4-5` | Current (fastest) |
@@ -43,9 +44,9 @@ This project is an **unofficial** community-maintained library. It is not affili
 
 Any model string not matching a known variant deserializes as `Model::Custom(String)`.
 
-### Opus 4.7 Breaking Changes
+### Opus 4.8 / Opus 4.7 Breaking Changes
 
-Opus 4.7 introduces API breaking changes versus Opus 4.6:
+Opus 4.8 and Opus 4.7 introduce API breaking changes versus Opus 4.6:
 
 - **Adaptive thinking only** — `thinking: {type: "enabled", budget_tokens: N}` returns 400. Use `ThinkingConfig::adaptive()`.
 - **No custom sampling** — `temperature` and `top_p` parameters are rejected.

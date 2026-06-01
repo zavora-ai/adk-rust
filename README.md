@@ -106,7 +106,7 @@ ADK supports multiple LLM providers with a unified API:
 | Gemini | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-flash-lite-preview`, `gemini-3.1-pro-preview` | (default) |
 | OpenAI | `gpt-5`, `gpt-5-mini`, `gpt-5-nano` | `openai` |
 | OpenAI Responses API | `gpt-4.1`, `o3`, `o4-mini` | `openai` |
-| Anthropic | `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5` | `anthropic` |
+| Anthropic | `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5` | `anthropic` |
 | DeepSeek | `deepseek-chat`, `deepseek-reasoner` | `deepseek` |
 | Groq | `meta-llama/llama-4-scout-17b-16e-instruct`, `llama-3.3-70b-versatile` | `groq` |
 | Ollama | `qwen3.6:35b-a3b`, `qwen3.5`, `llama3.2:3b` | `ollama` |

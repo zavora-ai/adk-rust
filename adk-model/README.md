@@ -14,7 +14,7 @@ LLM model integrations for Rust Agent Development Kit (ADK-Rust) with Gemini, Op
 - **OpenAI** - GPT-5.1, GPT-5, GPT-5 Mini, GPT-4o (legacy)
 - **OpenRouter** - Native chat, responses, routing, discovery, and credits APIs
 - **xAI** - Grok models through the OpenAI-compatible API
-- **Anthropic** - Claude Opus 4.5, Claude Sonnet 4.5, Claude Haiku 4.5, Claude 4
+- **Anthropic** - Claude Opus 4.8, Claude Opus 4.7, Claude Sonnet 4.6, Claude Haiku 4.5
 - **DeepSeek** - DeepSeek R1, DeepSeek V3.1, DeepSeek-Chat with thinking mode
 - **Groq** - Ultra-fast inference (LLaMA 3.3, Mixtral, Gemma)
 - **Ollama** - Local LLMs (LLaMA, Mistral, Qwen, Gemma, etc.)
@@ -208,6 +208,35 @@ let model = OpenAIResponsesClient::new(config)?;
 ```
 
 See the [full Responses API documentation](../docs/official_docs/models/openai-responses.md) and the `examples/openai_responses/` example for a complete 7-scenario demo.
+
+#### Background Mode & Cancellation
+
+For long-running requests (deep research, complex reasoning), use background mode and polling:
+
+```rust
+// Submit with background: true
+let mut gen_config = GenerateContentConfig::default();
+gen_config.extensions.insert("openai".into(), serde_json::json!({ "background": true }));
+
+// Poll for completion
+let response = client.poll_response("resp_abc123").await?;
+
+// Cancel a running background response
+let cancelled = client.cancel_response("resp_abc123").await?;
+```
+
+#### Additional Responses API Examples
+
+Six standalone example crates demonstrate specific features:
+
+| Example | Feature |
+|---------|---------|
+| `examples/openai_ws_minimal/` | WebSocket transport (low-latency) |
+| `examples/openai_background/` | Background mode (submit & poll) |
+| `examples/openai_conversations/` | Conversations API lifecycle |
+| `examples/openai_builtin_tools/` | Built-in tools (image gen, web search) |
+| `examples/openai_deep_research/` | Deep research models (auto-background) |
+| `examples/openai_open_responses/` | Open Responses (provider-agnostic) |
 
 #### OpenAI Reasoning Effort
 
@@ -533,7 +562,9 @@ See [OpenAI models documentation](https://platform.openai.com/docs/models) for t
 
 | Model | Description |
 |-------|-------------|
-| `claude-opus-4-6` | Most capable model for complex autonomous tasks (200K context) |
+| `claude-opus-4-8` | Latest and most capable model for complex autonomous tasks (200K context) |
+| `claude-opus-4-7` | Previous flagship for complex autonomous tasks (200K context) |
+| `claude-opus-4-6` | Capable model for autonomous tasks (200K context) |
 | `claude-sonnet-4-6` | Balanced intelligence and cost for production (1M context) |
 | `claude-haiku-4-5-20251001` | Ultra-efficient for high-volume workloads |
 | `claude-opus-4-5-20251101` | Previous generation hybrid model with extended thinking |

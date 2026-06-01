@@ -62,7 +62,7 @@ adk-gemini/      Dedicated Gemini client with GeminiBackend trait (Studio + Vert
                  toggle that drives the standard LlmAgent/Runner through this endpoint.
 adk-anthropic/   Dedicated Anthropic API client: streaming, adaptive thinking, prompt caching,
                  citations, context management, fast mode, vision, PDF processing, pricing.
-                 Supports Claude Opus 4.7, Sonnet 4.6, Haiku 4.5.
+                 Supports Claude Opus 4.8, Opus 4.7, Sonnet 4.6, Haiku 4.5.
                  Managed Agents API (`managed-agents` feature): agents, environments, sessions,
                  SSE streaming, custom tools, vaults, memory stores, dreams, webhooks,
                  multiagent orchestration, file mounting, self-hosted environments.
@@ -147,7 +147,7 @@ adk-ui/          Dynamic UI generation (forms, cards, tables, charts) — extrac
 ### Examples and docs
 
 ```
-examples/              54 standalone example crates (each with own Cargo.toml) covering all major
+examples/              60 standalone example crates (each with own Cargo.toml) covering all major
                        features. Additional 120+ examples in the adk-playground repo.
 docs/official_docs/    Comprehensive documentation site content
 ```

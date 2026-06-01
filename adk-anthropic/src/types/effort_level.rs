@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 /// Effort parameter controlling response thoroughness.
 /// Passed via `output_config.effort`. GA, no beta header required.
 ///
-/// Supported on Claude Opus 4.7, Opus 4.6, Sonnet 4.6, and Opus 4.5.
+/// Supported on Claude Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 4.6, and Opus 4.5.
 /// `XHigh` is available on Opus 4.7+. `Max` is available on Opus 4.6+.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -14,7 +14,7 @@ pub enum EffortLevel {
     Medium,
     /// High capability (default). Same as omitting the parameter.
     High,
-    /// Very deep reasoning. Opus 4.7+ recommended.
+    /// Very deep reasoning. Opus 4.8 / Opus 4.7+ recommended.
     /// Sits between `High` and `Max` — deeper reasoning than `High`
     /// without the full cost of `Max`.
     XHigh,

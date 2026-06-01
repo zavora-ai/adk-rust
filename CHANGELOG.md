@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **adk-model: `cancel_response()` for OpenAI background responses** — new method
+  on `OpenAIResponsesClient` that calls `POST /v1/responses/{id}/cancel` to cancel
+  a running background response. Returns an `LlmResponse` with cancelled status.
+  Useful for deep research and other long-running background requests.
+- **adk-model: Six new OpenAI Responses API example crates** — standalone examples
+  demonstrating WebSocket transport (`openai_ws_minimal`), background mode
+  (`openai_background`), Conversations API (`openai_conversations`), built-in
+  tools (`openai_builtin_tools`), deep research (`openai_deep_research`), and
+  Open Responses compatibility (`openai_open_responses`).
+- **adk-anthropic: Claude Opus 4.8 support** — added `claude-opus-4-8` as the
+  latest flagship model. Adaptive thinking only (same as Opus 4.7).
 - **adk-anthropic: Managed Agents API client** — full implementation of the
   Anthropic Managed Agents API, feature-gated behind `managed-agents`. Includes:
   - Agent, Environment, Session CRUD with SSE streaming

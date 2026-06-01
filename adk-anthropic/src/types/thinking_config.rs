@@ -17,14 +17,14 @@ pub enum ThinkingDisplay {
 /// # Variants
 ///
 /// - `Enabled` — Budget-based thinking (legacy, deprecated on 4.6 models,
-///   **rejected on Opus 4.7**).
-/// - `Adaptive` — Adaptive thinking for Opus 4.7 / Opus 4.6 / Sonnet 4.6.
+///   **rejected on Opus 4.8 / Opus 4.7**).
+/// - `Adaptive` — Adaptive thinking for Opus 4.8 / Opus 4.7 / Opus 4.6 / Sonnet 4.6.
 ///   Pair with `output_config.effort` to control reasoning depth.
 /// - `Disabled` — Thinking disabled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ThinkingConfig {
-    /// Budget-based thinking (deprecated on 4.6 models, **rejected on Opus 4.7**).
+    /// Budget-based thinking (deprecated on 4.6 models, **rejected on Opus 4.8 / Opus 4.7**).
     Enabled {
         /// Token budget for thinking. Must be ≥1024 and less than `max_tokens`.
         budget_tokens: u32,
@@ -32,7 +32,7 @@ pub enum ThinkingConfig {
         #[serde(skip_serializing_if = "Option::is_none")]
         display: Option<ThinkingDisplay>,
     },
-    /// Adaptive thinking for Opus 4.7 / Opus 4.6 / Sonnet 4.6.
+    /// Adaptive thinking for Opus 4.8 / Opus 4.7 / Opus 4.6 / Sonnet 4.6.
     /// Use `output_config.effort` to control reasoning depth.
     Adaptive {
         /// Optional display control.
