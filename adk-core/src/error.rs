@@ -16,7 +16,6 @@ use std::time::Duration;
 /// - A database write failure in session persistence → [`Session`](Self::Session)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum ErrorComponent {
     /// Error originated in agent logic.
     Agent,
@@ -85,7 +84,6 @@ impl fmt::Display for ErrorComponent {
 /// - [`Unsupported`](Self::Unsupported) — requested feature or operation is not supported
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum ErrorCategory {
     /// Caller provided bad data (config, request body, parameters).
     InvalidInput,

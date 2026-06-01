@@ -36,7 +36,6 @@ use crate::SandboxError;
 ///
 /// let handle = client.provision(&Manifest { entries: vec![] }).await?;
 /// ```
-#[non_exhaustive]
 pub struct LocalUnixClient {
     /// Base directory for workspace temp dirs (defaults to system temp).
     pub base_dir: Option<PathBuf>,
@@ -82,7 +81,6 @@ const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 /// let output = session.exec_command("echo hello", None).await?;
 /// assert_eq!(output.stdout.trim(), "hello");
 /// ```
-#[non_exhaustive]
 pub struct LocalUnixSession {
     /// The root directory of the workspace.
     pub workspace_dir: PathBuf,

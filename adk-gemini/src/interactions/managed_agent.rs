@@ -44,7 +44,6 @@ use crate::interactions::environment::EnvironmentConfig;
 /// assert_eq!(agent.id.as_deref(), Some("my-coding-agent"));
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct SavedAgent {
     /// Server-assigned agent ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -92,7 +91,6 @@ pub struct SavedAgent {
 /// assert!(json.contains("my-coding-agent"));
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct CreateAgentRequest {
     /// Caller-chosen agent ID.
     pub id: String,

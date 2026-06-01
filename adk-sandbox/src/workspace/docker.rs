@@ -47,7 +47,6 @@ const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 /// let client = DockerClient::new().await?;
 /// let client = client.with_resource_limits(Some(512 * 1024 * 1024), Some(1.5));
 /// ```
-#[non_exhaustive]
 pub struct DockerClient {
     /// Docker base image for new containers.
     pub base_image: String,
@@ -508,7 +507,6 @@ impl SandboxClient for DockerClient {
 /// let output = session.exec_command("echo hello", None).await?;
 /// assert_eq!(output.stdout.trim(), "hello");
 /// ```
-#[non_exhaustive]
 pub struct DockerSession {
     /// The Docker container ID for this session.
     pub container_id: String,

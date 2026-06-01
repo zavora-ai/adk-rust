@@ -172,7 +172,6 @@ impl SandboxRunner {
 
 /// Result of a sandbox-managed agent run.
 #[derive(Debug)]
-#[non_exhaustive]
 pub struct SandboxRunResult {
     /// The snapshot ID if snapshot-on-stop was enabled.
     pub snapshot_id: Option<SnapshotId>,
