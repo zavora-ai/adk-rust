@@ -44,7 +44,6 @@ use serde::{Deserialize, Serialize};
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
-#[non_exhaustive]
 pub enum AgentConfig {
     /// Deep Research configuration.
     ///

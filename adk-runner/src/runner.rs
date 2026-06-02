@@ -19,7 +19,6 @@ use tracing::Instrument;
 /// Configuration for constructing a [`Runner`].
 ///
 /// Use [`Runner::builder()`] for a compile-time-safe way to construct this.
-#[non_exhaustive]
 pub struct RunnerConfig {
     /// Application name used for session scoping.
     pub app_name: String,

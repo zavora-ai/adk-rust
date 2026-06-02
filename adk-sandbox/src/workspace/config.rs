@@ -28,7 +28,6 @@ use super::manifest::Manifest;
 /// assert_eq!(caps.len(), 2);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[non_exhaustive]
 pub enum Capability {
     /// Shell command execution (`exec_command` tool).
     Shell,
@@ -59,7 +58,6 @@ pub enum Capability {
 /// };
 /// ```
 #[derive(Debug, Clone)]
-#[non_exhaustive]
 pub struct SandboxConfig {
     /// The sandbox client implementation (runtime-only, not serialized).
     pub client: Arc<dyn SandboxClient>,
@@ -141,7 +139,6 @@ impl SandboxConfig {
 /// assert_eq!(deserialized, spec);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct SandboxConfigSpec {
     /// Workspace manifest defining initial contents.
     pub manifest: Manifest,

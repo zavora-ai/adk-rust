@@ -30,7 +30,6 @@ use std::sync::Mutex;
 /// without forking the crate.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum AuditEventType {
     /// Tool access attempt.
     ToolAccess,
@@ -71,7 +70,6 @@ pub enum AuditEventType {
 /// Covers the full lifecycle of access decisions and resource operations.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum AuditOutcome {
     /// Access was allowed.
     Allowed,

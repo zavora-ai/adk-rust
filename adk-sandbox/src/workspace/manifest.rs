@@ -23,7 +23,6 @@ use serde::{Deserialize, Serialize};
 /// };
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct Manifest {
     /// Ordered list of workspace entries to create during provisioning.
     pub entries: Vec<ManifestEntry>,
@@ -53,7 +52,6 @@ impl Manifest {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum ManifestEntry {
     /// An inline file with content.
     File {
