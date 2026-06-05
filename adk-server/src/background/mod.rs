@@ -65,7 +65,7 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 pub use cron::{
-    ConcurrencyPolicy, CronJob, CronJobResponse, CronJobStatus, CronState, CreateCronJobRequest,
+    ConcurrencyPolicy, CreateCronJobRequest, CronJob, CronJobResponse, CronJobStatus, CronState,
     cron_jobs_router, cron_jobs_router_with_state, start_cron_scheduler, validate_cron_expression,
 };
 
@@ -275,9 +275,7 @@ impl BackgroundRunner {
                     store.update_status(&run_id, RunStatus::Cancelled).await;
                 }
                 RunOutcome::TimedOut => {
-                    store
-                        .set_failed(&run_id, "run timed out".to_string())
-                        .await;
+                    store.set_failed(&run_id, "run timed out".to_string()).await;
                 }
             }
         });
@@ -390,11 +388,8 @@ async fn submit_run(
     // Start execution
     state.runner.execute(run_id.clone());
 
-    let response = SubmitRunResponse {
-        run_id,
-        status: RunStatus::Queued,
-        created_at: now.to_rfc3339(),
-    };
+    let response =
+        SubmitRunResponse { run_id, status: RunStatus::Queued, created_at: now.to_rfc3339() };
 
     (StatusCode::CREATED, Json(response))
 }
@@ -427,10 +422,7 @@ async fn get_run_status(
 
             (StatusCode::OK, Json(response)).into_response()
         }
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "run not found" })),
-        )
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "run not found" })))
             .into_response(),
     }
 }
@@ -452,11 +444,7 @@ async fn cancel_run(
                         updated_at: run.updated_at.to_rfc3339(),
                         result: run.result,
                         error: run.error,
-                        retry_count: if run.max_retries > 0 {
-                            Some(run.retry_count)
-                        } else {
-                            None
-                        },
+                        retry_count: if run.max_retries > 0 { Some(run.retry_count) } else { None },
                         retries_remaining: if run.max_retries > 0 {
                             Some(run.max_retries.saturating_sub(run.retry_count))
                         } else {
@@ -493,10 +481,7 @@ async fn cancel_run(
                 }
             }
         }
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "run not found" })),
-        )
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "run not found" })))
             .into_response(),
     }
 }

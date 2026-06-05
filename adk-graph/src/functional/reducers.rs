@@ -130,9 +130,7 @@ pub struct UntrackedValue<T: Default + Send + Sync> {
 impl<T: Default + Send + Sync> UntrackedValue<T> {
     /// Create a new `UntrackedValue` initialized to `T::default()`.
     pub fn new() -> Self {
-        Self {
-            value: T::default(),
-        }
+        Self { value: T::default() }
     }
 
     /// Create a new `UntrackedValue` with an initial value.

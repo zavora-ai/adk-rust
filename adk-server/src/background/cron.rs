@@ -152,9 +152,7 @@ pub struct CronJobStore {
 impl CronJobStore {
     /// Create a new empty cron job store.
     pub fn new() -> Self {
-        Self {
-            jobs: Arc::new(RwLock::new(HashMap::new())),
-        }
+        Self { jobs: Arc::new(RwLock::new(HashMap::new())) }
     }
 
     /// Insert a new cron job into the store.
@@ -263,10 +261,7 @@ pub struct CronState {
 impl CronState {
     /// Create a new cron state with a fresh store.
     pub fn new(background_state: BackgroundState) -> Self {
-        Self {
-            cron_store: CronJobStore::new(),
-            background_state,
-        }
+        Self { cron_store: CronJobStore::new(), background_state }
     }
 }
 
@@ -331,21 +326,15 @@ async fn patch_cron_job(
 ) -> impl IntoResponse {
     if state.cron_store.update_status(&job_id, request.status).await {
         match state.cron_store.get(&job_id).await {
-            Some(job) => {
-                (StatusCode::OK, Json(serde_json::to_value(job.to_response()).unwrap()))
+            Some(job) => (StatusCode::OK, Json(serde_json::to_value(job.to_response()).unwrap()))
+                .into_response(),
+            None => {
+                (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "cron job not found" })))
                     .into_response()
             }
-            None => (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "cron job not found" })),
-            )
-                .into_response(),
         }
     } else {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "cron job not found" })),
-        )
+        (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "cron job not found" })))
             .into_response()
     }
 }
@@ -358,10 +347,7 @@ async fn delete_cron_job(
     if state.cron_store.remove(&job_id).await {
         (StatusCode::NO_CONTENT, ()).into_response()
     } else {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "cron job not found" })),
-        )
+        (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "cron job not found" })))
             .into_response()
     }
 }
@@ -459,9 +445,7 @@ async fn trigger_run(state: &CronState, job: &CronJob) {
                         // If queue policy, check for queued runs
                         if let Some(job) = cron_store.get(&job_id).await {
                             if job.concurrency_policy == ConcurrencyPolicy::Queue {
-                                if let Some(queued_run_id) =
-                                    cron_store.dequeue_run(&job_id).await
-                                {
+                                if let Some(queued_run_id) = cron_store.dequeue_run(&job_id).await {
                                     // Create and execute the queued run
                                     let now = Utc::now();
                                     let queued_run = super::BackgroundRun {
@@ -517,9 +501,6 @@ pub fn cron_jobs_router(background_state: BackgroundState) -> Router {
 pub fn cron_jobs_router_with_state(state: CronState) -> Router {
     Router::new()
         .route("/cron", post(create_cron_job).get(list_cron_jobs))
-        .route(
-            "/cron/{job_id}",
-            axum::routing::patch(patch_cron_job).delete(delete_cron_job),
-        )
+        .route("/cron/{job_id}", axum::routing::patch(patch_cron_job).delete(delete_cron_job))
         .with_state(state)
 }

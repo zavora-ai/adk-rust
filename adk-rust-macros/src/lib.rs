@@ -363,7 +363,6 @@ impl syn::parse::Parse for ToolAttrs {
     }
 }
 
-
 // ─── Functional API Macros ─────────────────────────────────────────────────────
 
 /// Attribute macro that generates a workflow agent struct from an async function.
@@ -637,12 +636,9 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Validate: must be async
     if input_fn.sig.asyncness.is_none() {
-        return syn::Error::new_spanned(
-            &input_fn.sig.fn_token,
-            "#[task] functions must be async",
-        )
-        .to_compile_error()
-        .into();
+        return syn::Error::new_spanned(&input_fn.sig.fn_token, "#[task] functions must be async")
+            .to_compile_error()
+            .into();
     }
 
     // Validate: first argument must be &mut TaskContext
@@ -687,13 +683,7 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
         .inputs
         .iter()
         .skip(1) // Skip ctx
-        .filter_map(|arg| {
-            if let FnArg::Typed(pat_type) = arg {
-                Some(&pat_type.pat)
-            } else {
-                None
-            }
-        })
+        .filter_map(|arg| if let FnArg::Typed(pat_type) = arg { Some(&pat_type.pat) } else { None })
         .collect();
 
     // Build the call expression
@@ -853,7 +843,10 @@ impl syn::parse::Parse for TaskAttrContent {
         let mut backoff_secs: u64 = 1;
 
         // Parse key = value pairs separated by commas
-        let pairs = syn::punctuated::Punctuated::<syn::MetaNameValue, syn::Token![,]>::parse_terminated(&content)?;
+        let pairs =
+            syn::punctuated::Punctuated::<syn::MetaNameValue, syn::Token![,]>::parse_terminated(
+                &content,
+            )?;
 
         for pair in pairs {
             if pair.path.is_ident("max_attempts") {
@@ -871,9 +864,7 @@ impl syn::parse::Parse for TaskAttrContent {
             }
         }
 
-        Ok(TaskAttrContent {
-            retry: Some(RetryConfig { max_attempts, backoff_secs }),
-        })
+        Ok(TaskAttrContent { retry: Some(RetryConfig { max_attempts, backoff_secs }) })
     }
 }
 

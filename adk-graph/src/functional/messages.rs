@@ -82,10 +82,7 @@ pub struct MessagesValue {
 impl MessagesValue {
     /// Create an empty message collection.
     pub fn new() -> Self {
-        Self {
-            messages: Vec::new(),
-            id_index: HashMap::new(),
-        }
+        Self { messages: Vec::new(), id_index: HashMap::new() }
     }
 
     /// Append a message (replaces existing if same ID — upsert semantics).
@@ -172,12 +169,8 @@ impl<'de> Deserialize<'de> for MessagesValue {
             where
                 V: SeqAccess<'de>,
             {
-                let messages: Vec<ChatMessage> =
-                    seq.next_element()?.unwrap_or_default();
-                let mut value = MessagesValue {
-                    messages,
-                    id_index: HashMap::new(),
-                };
+                let messages: Vec<ChatMessage> = seq.next_element()?.unwrap_or_default();
+                let mut value = MessagesValue { messages, id_index: HashMap::new() };
                 value.rebuild_index();
                 Ok(value)
             }
@@ -198,10 +191,7 @@ impl<'de> Deserialize<'de> for MessagesValue {
                     }
                 }
                 let messages = messages.unwrap_or_default();
-                let mut value = MessagesValue {
-                    messages,
-                    id_index: HashMap::new(),
-                };
+                let mut value = MessagesValue { messages, id_index: HashMap::new() };
                 value.rebuild_index();
                 Ok(value)
             }
@@ -359,10 +349,7 @@ mod tests {
         });
 
         assert_eq!(deserialized.len(), 1);
-        assert_eq!(
-            deserialized.iter().next().unwrap().content,
-            "Updated after deser"
-        );
+        assert_eq!(deserialized.iter().next().unwrap().content, "Updated after deser");
     }
 
     #[test]

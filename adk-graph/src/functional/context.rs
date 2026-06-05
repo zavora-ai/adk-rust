@@ -112,9 +112,7 @@ impl TaskContext {
     /// let count: Option<i64> = ctx.get("counter");
     /// ```
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
-        self.state
-            .get(key)
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        self.state.get(key).and_then(|v| serde_json::from_value(v.clone()).ok())
     }
 
     /// Set a value in state.
@@ -273,10 +271,7 @@ impl TaskContext {
     /// # Errors
     ///
     /// Returns [`FunctionalError::SchemaValidation`] if validation fails.
-    pub fn validate_task_output(
-        &self,
-        output: &State,
-    ) -> std::result::Result<(), FunctionalError> {
+    pub fn validate_task_output(&self, output: &State) -> std::result::Result<(), FunctionalError> {
         if let Some(validator) = &self.schema_validator {
             validator.validate_task_output(output)?;
         }
@@ -365,11 +360,7 @@ impl TaskContext {
     #[allow(dead_code)]
     #[doc(hidden)]
     pub async fn get_cached_result(&self, task_id: &str) -> Option<Value> {
-        self.execution_log
-            .read()
-            .await
-            .get_result(task_id)
-            .cloned()
+        self.execution_log.read().await.get_result(task_id).cloned()
     }
 
     /// Record task completion for checkpoint tracking.
@@ -380,11 +371,7 @@ impl TaskContext {
     /// task status (parallel task independence).
     #[allow(dead_code)]
     #[doc(hidden)]
-    pub async fn record_completion(
-        &self,
-        task_id: &str,
-        result: &Value,
-    ) -> Result<()> {
+    pub async fn record_completion(&self, task_id: &str, result: &Value) -> Result<()> {
         // Update execution log — each task is recorded independently.
         {
             let mut log = self.execution_log.write().await;
@@ -394,24 +381,16 @@ impl TaskContext {
 
         // Persist checkpoint with current state and full execution log.
         let step = self.execution_log.read().await.current_step();
-        let checkpoint = crate::state::Checkpoint::new(
-            &self.thread_id,
-            self.state.clone(),
-            step,
-            vec![],
-        )
-        .with_metadata("completed_task", Value::String(task_id.to_string()))
-        .with_metadata(
-            "execution_log",
-            serde_json::to_value(&*self.execution_log.read().await)
-                .unwrap_or(Value::Null),
-        );
+        let checkpoint =
+            crate::state::Checkpoint::new(&self.thread_id, self.state.clone(), step, vec![])
+                .with_metadata("completed_task", Value::String(task_id.to_string()))
+                .with_metadata(
+                    "execution_log",
+                    serde_json::to_value(&*self.execution_log.read().await).unwrap_or(Value::Null),
+                );
 
         self.checkpointer.save(&checkpoint).await.map_err(|e| {
-            FunctionalError::CheckpointFailed {
-                task: task_id.to_string(),
-                message: e.to_string(),
-            }
+            FunctionalError::CheckpointFailed { task: task_id.to_string(), message: e.to_string() }
         })?;
 
         Ok(())
@@ -424,11 +403,7 @@ impl TaskContext {
     /// is recorded independently (parallel task independence).
     #[allow(dead_code)]
     #[doc(hidden)]
-    pub async fn record_failure(
-        &self,
-        task_id: &str,
-        error: &str,
-    ) -> Result<()> {
+    pub async fn record_failure(&self, task_id: &str, error: &str) -> Result<()> {
         // Update execution log — each task failure is independent.
         {
             let mut log = self.execution_log.write().await;
@@ -437,25 +412,17 @@ impl TaskContext {
 
         // Persist failure checkpoint with error context.
         let step = self.execution_log.read().await.current_step();
-        let checkpoint = crate::state::Checkpoint::new(
-            &self.thread_id,
-            self.state.clone(),
-            step,
-            vec![],
-        )
-        .with_metadata("failed_task", Value::String(task_id.to_string()))
-        .with_metadata("error", Value::String(error.to_string()))
-        .with_metadata(
-            "execution_log",
-            serde_json::to_value(&*self.execution_log.read().await)
-                .unwrap_or(Value::Null),
-        );
+        let checkpoint =
+            crate::state::Checkpoint::new(&self.thread_id, self.state.clone(), step, vec![])
+                .with_metadata("failed_task", Value::String(task_id.to_string()))
+                .with_metadata("error", Value::String(error.to_string()))
+                .with_metadata(
+                    "execution_log",
+                    serde_json::to_value(&*self.execution_log.read().await).unwrap_or(Value::Null),
+                );
 
         self.checkpointer.save(&checkpoint).await.map_err(|e| {
-            FunctionalError::CheckpointFailed {
-                task: task_id.to_string(),
-                message: e.to_string(),
-            }
+            FunctionalError::CheckpointFailed { task: task_id.to_string(), message: e.to_string() }
         })?;
 
         Ok(())

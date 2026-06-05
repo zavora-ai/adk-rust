@@ -144,11 +144,7 @@ impl std::fmt::Debug for StateSchemaValidator {
 impl StateSchemaValidator {
     /// Create a new validator wrapping an existing [`StateSchema`].
     pub fn new(schema: StateSchema) -> Self {
-        Self {
-            schema,
-            type_expectations: HashMap::new(),
-            required_fields: Vec::new(),
-        }
+        Self { schema, type_expectations: HashMap::new(), required_fields: Vec::new() }
     }
 
     /// Declare the expected type for a state field.
@@ -264,10 +260,7 @@ mod tests {
 
     #[test]
     fn test_validate_state_passes_with_correct_types() {
-        let schema = StateSchema::builder()
-            .channel("name")
-            .counter_channel("count")
-            .build();
+        let schema = StateSchema::builder().channel("name").counter_channel("count").build();
 
         let validator = StateSchemaValidator::new(schema)
             .expect_type("name", ExpectedType::String)
@@ -283,8 +276,8 @@ mod tests {
 
     #[test]
     fn test_validate_state_fails_on_missing_required_field() {
-        let validator = StateSchemaValidator::new(StateSchema::default())
-            .require_field("required_field");
+        let validator =
+            StateSchemaValidator::new(StateSchema::default()).require_field("required_field");
 
         let state = State::new();
 

@@ -101,12 +101,12 @@ pub mod functional;
 
 // Functional API re-exports for convenient access
 #[cfg(feature = "functional")]
+pub use functional::schema::{ExpectedType, StateSchemaValidator};
+#[cfg(feature = "functional")]
 pub use functional::{
     AppendReducer, ExecutionLog, FunctionalError, MergeReducer, MessagesValue, ReducedValue,
     ReplaceReducer, TaskContext, TypedReducer, UntrackedValue,
 };
-#[cfg(feature = "functional")]
-pub use functional::schema::{ExpectedType, StateSchemaValidator};
 
 // Re-exports
 pub use agent::{GraphAgent, GraphAgentBuilder};

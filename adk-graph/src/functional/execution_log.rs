@@ -68,10 +68,7 @@ pub enum TaskStatus {
 impl ExecutionLog {
     /// Create a new empty execution log.
     pub fn new() -> Self {
-        Self {
-            tasks: HashMap::new(),
-            current_step: 0,
-        }
+        Self { tasks: HashMap::new(), current_step: 0 }
     }
 
     /// Get the cached result for a completed task.
@@ -80,19 +77,13 @@ impl ExecutionLog {
     /// `None` otherwise.
     pub fn get_result(&self, task_id: &str) -> Option<&Value> {
         self.tasks.get(task_id).and_then(|record| {
-            if record.status == TaskStatus::Completed {
-                record.result.as_ref()
-            } else {
-                None
-            }
+            if record.status == TaskStatus::Completed { record.result.as_ref() } else { None }
         })
     }
 
     /// Check if a task was already completed in a prior run.
     pub fn is_completed(&self, task_id: &str) -> bool {
-        self.tasks
-            .get(task_id)
-            .is_some_and(|record| record.status == TaskStatus::Completed)
+        self.tasks.get(task_id).is_some_and(|record| record.status == TaskStatus::Completed)
     }
 
     /// Mark a task as running, recording the start timestamp.

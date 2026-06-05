@@ -32,8 +32,8 @@
 
 use std::marker::PhantomData;
 
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 /// Trait for defining custom merge strategies for state values.
@@ -86,9 +86,7 @@ pub struct ReplaceReducer<T> {
 impl<T> ReplaceReducer<T> {
     /// Create a new `ReplaceReducer`.
     pub fn new() -> Self {
-        Self {
-            _marker: PhantomData,
-        }
+        Self { _marker: PhantomData }
     }
 }
 
@@ -135,9 +133,7 @@ pub struct AppendReducer<T> {
 impl<T> AppendReducer<T> {
     /// Create a new `AppendReducer`.
     pub fn new() -> Self {
-        Self {
-            _marker: PhantomData,
-        }
+        Self { _marker: PhantomData }
     }
 }
 
