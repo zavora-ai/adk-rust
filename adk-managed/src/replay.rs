@@ -176,6 +176,7 @@ mod tests {
         let event = SessionEvent::StatusIdle {
             seq: 99,
             stop_reason: None,
+            usage: None,
         };
         assert_eq!(get_seq(&event), 99);
     }

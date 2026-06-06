@@ -173,6 +173,7 @@ pub fn map_runner_output(output: RunnerOutput, seq: u64) -> SessionEvent {
         RunnerOutput::TurnComplete { stop_reason } => SessionEvent::StatusIdle {
             seq,
             stop_reason: Some(stop_reason),
+            usage: None,
         },
     }
 }
@@ -308,7 +309,7 @@ mod tests {
         let event = map_runner_output(output, 40);
 
         match event {
-            SessionEvent::StatusIdle { seq, stop_reason } => {
+            SessionEvent::StatusIdle { seq, stop_reason, .. } => {
                 assert_eq!(seq, 40);
                 assert!(matches!(stop_reason, Some(StopReason::EndTurn)));
             }
@@ -326,7 +327,7 @@ mod tests {
         let event = map_runner_output(output, 50);
 
         match event {
-            SessionEvent::StatusIdle { seq, stop_reason } => {
+            SessionEvent::StatusIdle { seq, stop_reason, .. } => {
                 assert_eq!(seq, 50);
                 match stop_reason {
                     Some(StopReason::RequiresAction { event_ids }) => {
@@ -347,7 +348,7 @@ mod tests {
         let event = map_runner_output(output, 60);
 
         match event {
-            SessionEvent::StatusIdle { seq, stop_reason } => {
+            SessionEvent::StatusIdle { seq, stop_reason, .. } => {
                 assert_eq!(seq, 60);
                 assert!(matches!(stop_reason, Some(StopReason::MaxTokens)));
             }

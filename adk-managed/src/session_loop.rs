@@ -212,7 +212,7 @@ impl SessionLoop {
             // Check for interrupt before waiting for the next event.
             if self.cancel_token.is_cancelled() {
                 debug!(session_id = %self.session_id, "interrupt detected, shutting down");
-                self.emit_idle(Some(StopReason::EndTurn)).await;
+                self.emit_idle(Some(StopReason::EndTurn), None).await;
                 break;
             }
 
@@ -224,7 +224,7 @@ impl SessionLoop {
                 biased;
                 _ = self.cancel_token.cancelled() => {
                     debug!(session_id = %self.session_id, "interrupted while waiting for event");
-                    self.emit_idle(Some(StopReason::EndTurn)).await;
+                    self.emit_idle(Some(StopReason::EndTurn), None).await;
                     break;
                 }
                 ev = self.event_rx.recv() => {
@@ -245,7 +245,7 @@ impl SessionLoop {
                 }
                 UserEvent::Interrupt {} => {
                     debug!(session_id = %self.session_id, "user.interrupt received");
-                    self.emit_idle(Some(StopReason::EndTurn)).await;
+                    self.emit_idle(Some(StopReason::EndTurn), None).await;
                     break;
                 }
                 UserEvent::CustomToolResult {
@@ -337,7 +337,7 @@ impl SessionLoop {
 
         // 2. Check interrupt before processing.
         if self.check_interrupt() {
-            self.emit_idle(Some(StopReason::EndTurn)).await;
+            self.emit_idle(Some(StopReason::EndTurn), None).await;
             return Ok(());
         }
 
@@ -361,7 +361,7 @@ impl SessionLoop {
         while let Some(event_result) = event_stream.next().await {
             // Check interrupt between events
             if self.check_interrupt() {
-                self.emit_idle(Some(StopReason::EndTurn)).await;
+                self.emit_idle(Some(StopReason::EndTurn), None).await;
                 return Ok(());
             }
 
@@ -387,9 +387,13 @@ impl SessionLoop {
         }
 
         // 6. Track usage
-        if !turn_usage.is_empty() {
-            self.usage_tracker.record_turn(turn_usage);
-        }
+        // 6. Track usage
+        let turn_usage_report = if !turn_usage.is_empty() {
+            self.usage_tracker.record_turn(turn_usage.clone());
+            Some(turn_usage)
+        } else {
+            None
+        };
 
         // 7. Determine stop reason
         let stop_reason = if custom_tool_ids.is_empty() {
@@ -400,8 +404,8 @@ impl SessionLoop {
             })
         };
 
-        // 8. Emit status.idle with appropriate stop reason
-        self.emit_idle(stop_reason).await;
+        // 8. Emit status.idle with usage from this turn
+        self.emit_idle(stop_reason, turn_usage_report).await;
 
         Ok(())
     }
@@ -591,11 +595,12 @@ impl SessionLoop {
     }
 
     /// Emit a `status.idle` event and update internal status.
-    async fn emit_idle(&mut self, stop_reason: Option<StopReason>) {
+    async fn emit_idle(&mut self, stop_reason: Option<StopReason>, usage: Option<UsageReport>) {
         self.status = SessionStatus::Idle;
         let idle_event = SessionEvent::StatusIdle {
             seq: self.seq.next(),
             stop_reason,
+            usage,
         };
         self.emit_event(idle_event).await;
     }

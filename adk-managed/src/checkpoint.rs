@@ -245,6 +245,7 @@ mod tests {
         let event2 = SessionEvent::StatusIdle {
             seq: 1,
             stop_reason: None,
+            usage: None,
         };
         let state2 = RunState {
             seq: 2,

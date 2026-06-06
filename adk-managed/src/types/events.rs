@@ -180,13 +180,18 @@ pub enum SessionEvent {
     },
 
     /// Turn complete; awaiting next event.
-    /// Includes `stop_reason` to tell the caller WHY the turn ended.
+    /// Includes `stop_reason` to tell the caller WHY the turn ended,
+    /// and `usage` reporting token consumption for billing/metering.
     #[serde(rename = "status.idle")]
     StatusIdle {
         /// Monotonically increasing sequence number.
         seq: u64,
         /// Why the turn ended. Enables the client to decide what to do next.
         stop_reason: Option<StopReason>,
+        /// Token usage for this turn (input/output/total).
+        /// Present when the LLM reports usage metadata; `None` on error turns.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        usage: Option<crate::usage::UsageReport>,
     },
 
     /// Error during execution.
@@ -421,6 +426,7 @@ mod tests {
         let event = SessionEvent::StatusIdle {
             seq: 6,
             stop_reason: None,
+            usage: None,
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["type"], "status.idle");
@@ -433,6 +439,7 @@ mod tests {
         let event = SessionEvent::StatusIdle {
             seq: 7,
             stop_reason: Some(StopReason::EndTurn),
+            usage: None,
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["type"], "status.idle");
@@ -447,6 +454,7 @@ mod tests {
             stop_reason: Some(StopReason::RequiresAction {
                 event_ids: vec!["evt_001".to_string(), "evt_002".to_string()],
             }),
+            usage: None,
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["type"], "status.idle");
@@ -463,6 +471,7 @@ mod tests {
         let event = SessionEvent::StatusIdle {
             seq: 9,
             stop_reason: Some(StopReason::MaxTokens),
+            usage: None,
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["type"], "status.idle");
@@ -516,6 +525,7 @@ mod tests {
             SessionEvent::StatusIdle {
                 seq: 5,
                 stop_reason: Some(StopReason::EndTurn),
+                usage: None,
             },
         ];
 
