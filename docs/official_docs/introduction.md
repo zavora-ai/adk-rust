@@ -45,20 +45,46 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
 ADK-Rust uses a layered architecture designed for modularity and extensibility:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Application Layer                         │
-│              CLI • REST Server • Web UI                      │
-├─────────────────────────────────────────────────────────────┤
-│                      Runner Layer                            │
-│           Agent Execution • Context Management               │
-├─────────────────────────────────────────────────────────────┤
-│                      Agent Layer                             │
-│    LlmAgent • CustomAgent • Workflow Agents                  │
-├─────────────────────────────────────────────────────────────┤
-│                     Service Layer                            │
-│      Models • Tools • Sessions • Artifacts • Memory          │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Application["Application Layer"]
+        CLI["CLI (adk-cli)"]
+        Server["REST + A2A (adk-server)"]
+        Studio["Studio (adk-studio)"]
+    end
+
+    subgraph Execution["Execution Layer"]
+        Runner["Runner (adk-runner)"]
+        Graph["Graph Orchestration (adk-graph)"]
+        Eval["Evaluation (adk-eval)"]
+        Bench["Benchmarking (adk-bench)"]
+    end
+
+    subgraph Agents["Agent Layer"]
+        LLM["LlmAgent"]
+        Workflow["Sequential / Parallel / Loop"]
+        Realtime["RealtimeAgent"]
+        Custom["CustomAgent"]
+    end
+
+    subgraph Services["Service Layer"]
+        Models["Models (adk-model)\nGemini • OpenAI • Anthropic\nDeepSeek • Groq • Ollama"]
+        Tools["Tools (adk-tool)\nFunctionTool • MCP • Browser"]
+        Sessions["Sessions (adk-session)\nSQLite • PostgreSQL • Redis"]
+        Memory["Memory (adk-memory)\nSemantic Search • RAG"]
+    end
+
+    subgraph Foundation["Foundation"]
+        Core["Core Traits (adk-core)\nAgent • Tool • Llm • Session"]
+        Auth["Auth (adk-auth)"]
+        Telemetry["Telemetry (adk-telemetry)"]
+        Plugin["Plugins (adk-plugin)"]
+    end
+
+    Application --> Execution
+    Execution --> Agents
+    Agents --> Services
+    Services --> Foundation
 ```
 
 ## Core Concepts

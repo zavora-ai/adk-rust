@@ -12,6 +12,37 @@ The `Runner` manages the complete lifecycle of agent execution:
 - Event streaming (process and forward events)
 - Agent transfers (handle multi-agent handoffs)
 
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Runner
+    participant Session as SessionService
+    participant Agent as LlmAgent
+    participant LLM as Model Provider
+    participant Tools
+
+    Client->>Runner: run(user_id, session_id, content)
+    Runner->>Session: get(app, user, session)
+    Session-->>Runner: Session (history + state)
+    Runner->>Agent: run(invocation_context)
+    
+    loop Agent Loop (until turn_complete)
+        Agent->>LLM: generate_content(messages + tools)
+        LLM-->>Agent: response (text or tool_calls)
+        
+        opt Tool Calls
+            Agent->>Tools: execute(tool_name, args)
+            Tools-->>Agent: result
+            Agent->>LLM: generate_content(messages + tool_result)
+            LLM-->>Agent: response
+        end
+    end
+
+    Agent-->>Runner: EventStream
+    Runner->>Session: append_event(event)
+    Runner-->>Client: EventStream
+```
+
 ## Installation
 
 ```toml

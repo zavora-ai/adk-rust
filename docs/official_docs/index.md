@@ -12,6 +12,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 
 - [Core Types](core/core.md) - Fundamental types: Content, Part, Agent trait, Tool trait, contexts
 - [Runner](core/runner.md) - Agent execution runtime and configuration
+- [Plugins](core/plugins.md) - Lifecycle hooks for tool/model interception and middleware
 
 ## Models
 
@@ -35,6 +36,10 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 - [Browser Tools](tools/browser-tools.md) - 46 WebDriver tools for web automation
 - [UI Tools](tools/ui-tools.md) - Dynamic UI generation with forms, cards, charts
 - [RAG](tools/rag.md) - Retrieval-Augmented Generation for knowledge base search
+- [ACP Tools](tools/acp-tools.md) - Agent Client Protocol (Claude Code, Codex, Kiro CLI)
+- [Retry & Reflect](tools/retry-reflect.md) - Tool failure recovery with reflection prompts
+- [Action Nodes](tools/action-nodes.md) - 14 deterministic node types for workflow graphs
+- [Benchmarking](tools/benchmarking.md) - Performance measurement with `cargo adk bench`
 
 ## Sessions & State
 
@@ -64,6 +69,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 ## Evaluation
 
 - [Agent Evaluation](evaluation/evaluation.md) - Testing and validating agent behavior
+- [Benchmark Results](evaluation/benchmarks.md) - Published performance comparison data
 
 ## Managed Agents
 
