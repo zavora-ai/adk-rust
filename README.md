@@ -20,11 +20,9 @@
 
 **ADK-Rust v1.0.0 — The Stable Foundation.** A deep-dive into what shipped, who built it, and where it's going. 39 crates. 130K downloads. Semver stable. The vision for composable autonomous agents in Rust.
 
-<video controls src="docs/podcast/adk-rust-episode-2.mp4">
-Your browser does not support the video element. <a href="docs/podcast/adk-rust-episode-2.wav">Download Episode 2 (WAV)</a>
-</video>
+[![Watch Episode 2: v1.0.0 Launch](https://img.youtube.com/vi/tlqaE8qeHac/maxresdefault.jpg)](https://www.youtube.com/watch?v=tlqaE8qeHac)
 
-*10 min 12 sec · Hosts: James (Fenrir) & Ada (Kore) · Video with slides*
+*10 min 12 sec · Hosts: James (Fenrir) & Ada (Kore) · Video with slides · [Watch on YouTube →](https://www.youtube.com/watch?v=tlqaE8qeHac)*
 
 > *"We believe the next generation of software will be built by composing autonomous agents, not by writing every line of logic by hand. And we believe Rust is the right language for the runtime those agents live in."* — James, in the episode
 
