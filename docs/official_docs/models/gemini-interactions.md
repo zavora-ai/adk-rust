@@ -51,11 +51,11 @@ The ADK agent runtime (the `Llm` trait, tool loop, and `Runner`) uses `generateC
 
 ```toml
 # Direct client (adk-gemini)
-adk-gemini = { version = "0.10.0", features = ["interactions"] }
+adk-gemini = { version = "1.0.0", features = ["interactions"] }
 
 # Through the model facade / umbrella
-adk-model = { version = "0.10.0", features = ["gemini-interactions"] }
-adk-rust  = { version = "0.10.0", features = ["gemini-interactions"] }
+adk-model = { version = "1.0.0", features = ["gemini-interactions"] }
+adk-rust  = { version = "1.0.0", features = ["gemini-interactions"] }
 ```
 
 The feature adds **no new dependencies** and is fully additive to the existing `generateContent` API.
@@ -222,8 +222,8 @@ The transport is gated behind the `gemini-interactions` feature (forwarded from
 `adk-rust` → `adk-model` → `adk-gemini/interactions`):
 
 ```toml
-adk-model = { version = "0.10.0", features = ["gemini-interactions"] }
-adk-rust  = { version = "0.10.0", features = ["gemini-interactions"] }
+adk-model = { version = "1.0.0", features = ["gemini-interactions"] }
+adk-rust  = { version = "1.0.0", features = ["gemini-interactions"] }
 ```
 
 Flip the switch on the model and wrap it in a normal `LlmAgent` and `Runner` —

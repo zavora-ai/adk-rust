@@ -17,7 +17,7 @@ All components use the `cpal` crate for cross-platform audio (CoreAudio on macOS
 ```toml
 [dependencies]
 # Cross-platform (macOS, Linux, Windows) via cpal
-adk-audio = { version = "0.10.0", features = ["desktop-audio"] }
+adk-audio = { version = "1.0.0", features = ["desktop-audio"] }
 ```
 
 The `desktop-audio` feature implies `vad` (for `VadProcessor`) and adds `cpal` as a dependency. It is intentionally excluded from the `all` feature to avoid pulling platform-specific audio dependencies into CI builds.
