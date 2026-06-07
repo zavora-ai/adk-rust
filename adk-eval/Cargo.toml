@@ -17,6 +17,7 @@ adk-core.workspace = true
 adk-runner.workspace = true
 adk-session.workspace = true
 adk-model.workspace = true
+adk-memory = { workspace = true, optional = true }
 
 async-trait.workspace = true
 serde.workspace = true
@@ -26,11 +27,19 @@ uuid.workspace = true
 chrono.workspace = true
 futures.workspace = true
 tracing.workspace = true
+quick-xml = { version = "0.37", optional = true }
+statrs = { version = "0.18", optional = true }
 
 [features]
 default = []
 # User personas for evaluation (User_Simulator, Persona_Profile, PersonaRegistry)
 personas = []
+# EmbeddingScorer requires EmbeddingProvider from adk-memory
+embedding = ["dep:adk-memory", "adk-memory/embedding-trait"]
+# JUnit XML generation for CI integration
+ci-helpers = ["dep:quick-xml"]
+# Statistical testing (Wilcoxon signed-rank) for A/B comparison
+statistics = ["dep:statrs"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }

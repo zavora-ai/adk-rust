@@ -18,6 +18,17 @@ Agent evaluation framework for Rust Agent Development Kit (ADK-Rust).
 - **LLM-Judged Evaluation**: Semantic matching, rubric-based scoring, and safety checks
 - **Multiple Criteria**: Ground truth, similarity-based, and configurable thresholds
 - **Detailed Reporting**: Comprehensive results with failure analysis
+- **Structured LLM Judge**: Typed verdicts (pass/fail/partial) with scores and reasoning
+- **Embedding Similarity**: Cosine similarity between embedding vectors (feature: `embedding`)
+- **Cost & Latency Tracking**: Token usage extraction, dollar cost estimation, latency recording
+- **Trace Analysis**: Detect redundant tool calls, execution loops, compute efficiency scores
+- **Regression Baselines**: Save/load metric snapshots, detect quality degradation
+- **JUnit XML Output**: CI-friendly report generation (feature: `ci-helpers`)
+- **Human Annotation**: JSONL export/import workflow for human review
+- **A/B Comparison**: Statistical significance testing with Wilcoxon signed-rank (feature: `statistics`)
+- **Test Case Generation**: LLM-driven or event-based eval case creation
+- **Conversation Metrics**: Multi-turn scoring for context retention, goal completion, coherence, topic drift
+- **CLI Integration**: `cargo adk eval` with baselines, regression checks, and parallel execution
 
 ## Quick Start
 
@@ -240,6 +251,116 @@ async fn test_my_agent() {
 
     assert!(report.all_passed(), "{}", report.format_summary());
 }
+```
+
+## Advanced Features
+
+### Feature Flags
+
+```toml
+[dependencies]
+adk-eval = { version = "0.10", features = ["embedding", "ci-helpers", "statistics"] }
+```
+
+| Feature | Dependency | Capability |
+|---------|-----------|------------|
+| `embedding` | `adk-memory` | Embedding-based semantic similarity |
+| `ci-helpers` | `quick-xml` | JUnit XML report generation |
+| `statistics` | `statrs` | Wilcoxon signed-rank for A/B comparison |
+
+All other features (structured judge, cost tracker, trace analyzer, baselines, annotations, test generator, conversation scorer) work without extra feature flags.
+
+### Structured LLM Judge
+
+```rust
+use adk_eval::StructuredJudge;
+
+let judge = StructuredJudge::new(model);
+let verdict = judge.judge("expected", "actual", "accuracy").await?;
+// → StructuredVerdict { score: 0.85, verdict: Partial, reasoning: "..." }
+```
+
+### Cost and Latency Tracking
+
+```rust
+use adk_eval::CostTracker;
+
+let tracker = CostTracker::new();
+let cost = tracker.compute_cost("gpt-4o", 2000, 800); // → Some($0.013)
+let metrics = tracker.extract_metrics(&events, duration);
+```
+
+### Execution Trace Analysis
+
+```rust
+use adk_eval::TraceAnalyzer;
+
+let analyzer = TraceAnalyzer::new();
+let analysis = analyzer.analyze(&events);
+println!("Efficiency: {:.0}%", analysis.efficiency_score * 100.0);
+```
+
+### Regression Baselines
+
+```rust
+use adk_eval::BaselineStore;
+
+let store = BaselineStore::new(".eval-baseline.json");
+store.save("my_eval", &metrics)?;
+let regressions = store.check_regressions(&new_metrics, 0.05)?;
+```
+
+### JUnit XML (CI Integration)
+
+```rust
+use adk_eval::JunitReporter;  // requires ci-helpers feature
+
+let xml = JunitReporter::generate(&report, "my_suite")?;
+```
+
+### Human Annotation Workflow
+
+```rust
+use adk_eval::AnnotationStore;
+
+AnnotationStore::export(&cases, &results, "review.jsonl")?;
+let (records, warnings) = AnnotationStore::import("review.jsonl", &valid_ids)?;
+```
+
+### A/B Agent Comparison
+
+```rust
+use adk_eval::AbComparator;  // requires statistics feature
+
+let comparator = AbComparator::new(evaluator);
+let report = comparator.compare(agent_a, agent_b, &cases).await?;
+```
+
+### Auto-Generated Test Cases
+
+```rust
+use adk_eval::TestGenerator;
+
+let gen = TestGenerator::new(model);
+let cases = gen.generate_from_description("A weather assistant").await?;
+let cases = gen.generate_from_events(&production_events)?;
+```
+
+### Multi-Turn Conversation Metrics
+
+```rust
+use adk_eval::ConversationScorer;
+
+let scorer = ConversationScorer::new(judge);
+let metrics = scorer.score(&conversation, "goal").await?;
+// → ConversationMetrics { context_retention, goal_completion, coherence, topic_drift }
+```
+
+### CLI
+
+```bash
+cargo adk eval tests/ --save-baseline
+cargo adk eval tests/ --check-regression --format junit --output results.xml
 ```
 
 ## License

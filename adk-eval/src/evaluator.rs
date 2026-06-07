@@ -2,12 +2,15 @@
 //!
 //! The Evaluator orchestrates test execution and applies evaluation criteria.
 
+use crate::cost_tracker::CostTracker;
 use crate::criteria::EvaluationCriteria;
 use crate::error::Result;
 use crate::llm_judge::LlmJudge;
 use crate::report::{EvaluationReport, EvaluationResult, Failure, TurnResult};
 use crate::schema::{EvalCase, TestFile, ToolUse, Turn};
 use crate::scoring::{ResponseScorer, ToolTrajectoryScorer};
+use crate::structured_judge::StructuredJudge;
+use crate::trace_analyzer::TraceAnalyzer;
 
 use adk_core::{Agent, Content, Event, Llm};
 use async_trait::async_trait;
@@ -18,6 +21,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+#[cfg(feature = "embedding")]
+use crate::embedding_scorer::EmbeddingScorer;
 
 /// Configuration for the evaluator
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -56,6 +62,17 @@ pub struct Evaluator {
     tool_scorer: ToolTrajectoryScorer,
     response_scorer: ResponseScorer,
     llm_judge: Option<LlmJudge>,
+    /// Optional structured judge for typed verdicts
+    structured_judge: Option<Arc<StructuredJudge>>,
+    /// Optional cost tracker for token usage and latency
+    cost_tracker: Option<CostTracker>,
+    /// Optional trace analyzer for detecting execution inefficiencies
+    trace_analyzer: Option<TraceAnalyzer>,
+    /// Optional embedding scorer for semantic similarity (requires `embedding` feature)
+    #[cfg(feature = "embedding")]
+    embedding_scorer: Option<Arc<EmbeddingScorer>>,
+    /// Optional conversation scorer for multi-turn metrics
+    conversation_scorer: Option<Arc<crate::conversation_scorer::ConversationScorer>>,
 }
 
 impl Evaluator {
@@ -73,7 +90,18 @@ impl Evaluator {
             ResponseScorer::new()
         };
 
-        Self { config, tool_scorer, response_scorer, llm_judge: None }
+        Self {
+            config,
+            tool_scorer,
+            response_scorer,
+            llm_judge: None,
+            structured_judge: None,
+            cost_tracker: None,
+            trace_analyzer: None,
+            #[cfg(feature = "embedding")]
+            embedding_scorer: None,
+            conversation_scorer: None,
+        }
     }
 
     /// Create an evaluator with an LLM judge for semantic matching and rubric evaluation
@@ -90,7 +118,18 @@ impl Evaluator {
             ResponseScorer::new()
         };
 
-        Self { config, tool_scorer, response_scorer, llm_judge: Some(LlmJudge::new(judge_model)) }
+        Self {
+            config,
+            tool_scorer,
+            response_scorer,
+            llm_judge: Some(LlmJudge::new(judge_model)),
+            structured_judge: None,
+            cost_tracker: None,
+            trace_analyzer: None,
+            #[cfg(feature = "embedding")]
+            embedding_scorer: None,
+            conversation_scorer: None,
+        }
     }
 
     /// Set the LLM judge model
@@ -101,6 +140,61 @@ impl Evaluator {
     /// Check if LLM judge is available
     pub fn has_llm_judge(&self) -> bool {
         self.llm_judge.is_some()
+    }
+
+    /// Set the structured judge for typed verdict evaluation
+    pub fn set_structured_judge(&mut self, judge: Arc<StructuredJudge>) {
+        self.structured_judge = Some(judge);
+    }
+
+    /// Set the cost tracker for token usage and latency metrics
+    pub fn set_cost_tracker(&mut self, tracker: CostTracker) {
+        self.cost_tracker = Some(tracker);
+    }
+
+    /// Set the trace analyzer for execution inefficiency detection
+    pub fn set_trace_analyzer(&mut self, analyzer: TraceAnalyzer) {
+        self.trace_analyzer = Some(analyzer);
+    }
+
+    /// Set the embedding scorer for semantic similarity (requires `embedding` feature)
+    #[cfg(feature = "embedding")]
+    pub fn set_embedding_scorer(&mut self, scorer: Arc<EmbeddingScorer>) {
+        self.embedding_scorer = Some(scorer);
+    }
+
+    /// Set the conversation scorer for multi-turn metrics
+    pub fn set_conversation_scorer(
+        &mut self,
+        scorer: Arc<crate::conversation_scorer::ConversationScorer>,
+    ) {
+        self.conversation_scorer = Some(scorer);
+    }
+
+    /// Check if a structured judge is configured
+    pub fn has_structured_judge(&self) -> bool {
+        self.structured_judge.is_some()
+    }
+
+    /// Check if a cost tracker is configured
+    pub fn has_cost_tracker(&self) -> bool {
+        self.cost_tracker.is_some()
+    }
+
+    /// Check if a trace analyzer is configured
+    pub fn has_trace_analyzer(&self) -> bool {
+        self.trace_analyzer.is_some()
+    }
+
+    /// Check if an embedding scorer is configured (requires `embedding` feature)
+    #[cfg(feature = "embedding")]
+    pub fn has_embedding_scorer(&self) -> bool {
+        self.embedding_scorer.is_some()
+    }
+
+    /// Check if a conversation scorer is configured
+    pub fn has_conversation_scorer(&self) -> bool {
+        self.conversation_scorer.is_some()
     }
 
     /// Evaluate a test file against an agent
@@ -168,6 +262,7 @@ impl Evaluator {
         let mut all_scores: HashMap<String, f64> = HashMap::new();
         let mut all_failures: Vec<Failure> = Vec::new();
         let mut turn_results: Vec<TurnResult> = Vec::new();
+        let mut all_events: Vec<Event> = Vec::new();
 
         // Execute each turn in the conversation
         for turn in &eval_case.conversation {
@@ -190,7 +285,67 @@ impl Evaluator {
             }
         }
 
+        // Collect events for the full case by re-running (or using last turn's events)
+        // For cost/trace analysis we re-run the agent to get the full event stream
+        let case_events = self.collect_case_events(agent.clone(), eval_case).await;
+        if let Ok(events) = case_events {
+            all_events = events;
+        }
+
         let duration = start.elapsed();
+
+        // Invoke CostTracker if configured
+        let cost_metrics = self
+            .cost_tracker
+            .as_ref()
+            .map(|tracker| tracker.extract_metrics(&all_events, duration));
+
+        // Invoke TraceAnalyzer if configured
+        let trace_analysis =
+            self.trace_analyzer.as_ref().map(|analyzer| analyzer.analyze(&all_events));
+
+        // Invoke StructuredJudge if configured
+        let mut verdicts = Vec::new();
+        if let Some(judge) = &self.structured_judge
+            && let Some(last_turn_result) = turn_results.last()
+            && let (Some(expected), Some(actual)) =
+                (&last_turn_result.expected_response, &last_turn_result.actual_response)
+        {
+            match judge.judge(expected, actual, "overall_quality").await {
+                Ok(verdict) => {
+                    all_scores.insert("structured_judge".to_string(), verdict.score);
+                    verdicts.push(verdict);
+                }
+                Err(e) => {
+                    tracing::warn!("Structured judge failed: {e}");
+                    // Create a fallback verdict with score 0.0
+                    let fallback = crate::structured_judge::StructuredVerdict {
+                        score: 0.0,
+                        reasoning: format!("Judge error: {e}"),
+                        verdict: crate::structured_judge::Verdict::Fail,
+                    };
+                    verdicts.push(fallback);
+                }
+            }
+        }
+
+        // Invoke EmbeddingScorer if configured
+        #[cfg(feature = "embedding")]
+        if let Some(scorer) = &self.embedding_scorer
+            && let Some(last_turn_result) = turn_results.last()
+            && let (Some(expected), Some(actual)) =
+                (&last_turn_result.expected_response, &last_turn_result.actual_response)
+        {
+            match scorer.score(expected, actual).await {
+                Ok(score) => {
+                    all_scores.insert("embedding_similarity".to_string(), score);
+                }
+                Err(e) => {
+                    tracing::warn!("Embedding scorer failed: {e}");
+                }
+            }
+        }
+
         let passed = all_failures.is_empty();
 
         let mut result = if passed {
@@ -203,7 +358,33 @@ impl Evaluator {
             result = result.with_turn_results(turn_results);
         }
 
+        // Populate extended fields
+        result.cost_metrics = cost_metrics;
+        result.trace_analysis = trace_analysis;
+        result.verdicts = verdicts;
+
         Ok(result)
+    }
+
+    /// Collect all events for a case by running the agent on the first turn input.
+    /// Used by cost tracker and trace analyzer to analyze the full execution.
+    async fn collect_case_events(
+        &self,
+        agent: Arc<dyn Agent>,
+        eval_case: &EvalCase,
+    ) -> Result<Vec<Event>> {
+        // Only collect events if we have a cost tracker or trace analyzer configured
+        if self.cost_tracker.is_none() && self.trace_analyzer.is_none() {
+            return Ok(Vec::new());
+        }
+
+        // Use events from the first turn as representative
+        if let Some(first_turn) = eval_case.conversation.first() {
+            let input_content = first_turn.user_content.to_adk_content();
+            self.run_agent(agent, input_content).await
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     /// Execute a single turn and collect results
@@ -348,205 +529,175 @@ impl Evaluator {
         }
 
         // LLM-judged semantic matching
-        if let Some(threshold) = self.config.criteria.semantic_match_score {
-            if let Some(judge) = &self.llm_judge {
-                if let (Some(expected), Some(actual)) =
-                    (&result.expected_response, &result.actual_response)
-                {
-                    match judge
-                        .semantic_match(
-                            expected,
-                            actual,
-                            self.config.criteria.semantic_match_config.as_ref(),
-                        )
-                        .await
-                    {
-                        Ok(semantic_result) => {
-                            scores.insert("semantic_match".to_string(), semantic_result.score);
-                            if semantic_result.score < threshold {
-                                failures.push(
-                                    Failure::new(
-                                        "semantic_match",
-                                        Value::String(expected.clone()),
-                                        Value::String(actual.clone()),
-                                        semantic_result.score,
-                                        threshold,
-                                    )
-                                    .with_details(&semantic_result.reasoning),
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            // Record error but don't fail the whole evaluation
-                            failures.push(
-                                Failure::new(
-                                    "semantic_match",
-                                    Value::String(expected.clone()),
-                                    Value::String(actual.clone()),
-                                    0.0,
-                                    threshold,
-                                )
-                                .with_details(&format!("LLM judge error: {}", e)),
-                            );
-                        }
+        if let Some(threshold) = self.config.criteria.semantic_match_score
+            && let Some(judge) = &self.llm_judge
+            && let (Some(expected), Some(actual)) =
+                (&result.expected_response, &result.actual_response)
+        {
+            match judge
+                .semantic_match(
+                    expected,
+                    actual,
+                    self.config.criteria.semantic_match_config.as_ref(),
+                )
+                .await
+            {
+                Ok(semantic_result) => {
+                    scores.insert("semantic_match".to_string(), semantic_result.score);
+                    if semantic_result.score < threshold {
+                        failures.push(
+                            Failure::new(
+                                "semantic_match",
+                                Value::String(expected.clone()),
+                                Value::String(actual.clone()),
+                                semantic_result.score,
+                                threshold,
+                            )
+                            .with_details(&semantic_result.reasoning),
+                        );
                     }
+                }
+                Err(e) => {
+                    // Record error but don't fail the whole evaluation
+                    failures.push(
+                        Failure::new(
+                            "semantic_match",
+                            Value::String(expected.clone()),
+                            Value::String(actual.clone()),
+                            0.0,
+                            threshold,
+                        )
+                        .with_details(&format!("LLM judge error: {}", e)),
+                    );
                 }
             }
         }
 
         // Rubric-based evaluation
-        if let Some(threshold) = self.config.criteria.rubric_quality_score {
-            if let Some(judge) = &self.llm_judge {
-                if let Some(rubric_config) = &self.config.criteria.rubric_config {
-                    if let Some(actual) = &result.actual_response {
-                        // Use user input as context for rubric evaluation
-                        let context = turn.user_content.get_text();
-                        match judge.evaluate_rubrics(actual, &context, rubric_config).await {
-                            Ok(rubric_result) => {
-                                scores.insert(
-                                    "rubric_quality".to_string(),
-                                    rubric_result.overall_score,
-                                );
-                                // Also store individual rubric scores
-                                for rs in &rubric_result.rubric_scores {
-                                    scores.insert(format!("rubric_{}", rs.name), rs.score);
-                                }
-                                if rubric_result.overall_score < threshold {
-                                    let details = rubric_result
-                                        .rubric_scores
-                                        .iter()
-                                        .map(|rs| {
-                                            format!(
-                                                "{}: {:.2} - {}",
-                                                rs.name, rs.score, rs.reasoning
-                                            )
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("; ");
-                                    failures.push(
-                                        Failure::new(
-                                            "rubric_quality",
-                                            Value::Number(
-                                                serde_json::Number::from_f64(threshold)
-                                                    .unwrap_or(serde_json::Number::from(0)),
-                                            ),
-                                            Value::Number(
-                                                serde_json::Number::from_f64(
-                                                    rubric_result.overall_score,
-                                                )
-                                                .unwrap_or(serde_json::Number::from(0)),
-                                            ),
-                                            rubric_result.overall_score,
-                                            threshold,
-                                        )
-                                        .with_details(&details),
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                failures.push(
-                                    Failure::new(
-                                        "rubric_quality",
-                                        Value::Null,
-                                        Value::Null,
-                                        0.0,
-                                        threshold,
-                                    )
-                                    .with_details(&format!("LLM judge error: {}", e)),
-                                );
-                            }
-                        }
+        if let Some(threshold) = self.config.criteria.rubric_quality_score
+            && let Some(judge) = &self.llm_judge
+            && let Some(rubric_config) = &self.config.criteria.rubric_config
+            && let Some(actual) = &result.actual_response
+        {
+            // Use user input as context for rubric evaluation
+            let context = turn.user_content.get_text();
+            match judge.evaluate_rubrics(actual, &context, rubric_config).await {
+                Ok(rubric_result) => {
+                    scores.insert("rubric_quality".to_string(), rubric_result.overall_score);
+                    // Also store individual rubric scores
+                    for rs in &rubric_result.rubric_scores {
+                        scores.insert(format!("rubric_{}", rs.name), rs.score);
                     }
+                    if rubric_result.overall_score < threshold {
+                        let details = rubric_result
+                            .rubric_scores
+                            .iter()
+                            .map(|rs| format!("{}: {:.2} - {}", rs.name, rs.score, rs.reasoning))
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        failures.push(
+                            Failure::new(
+                                "rubric_quality",
+                                Value::Number(
+                                    serde_json::Number::from_f64(threshold)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                ),
+                                Value::Number(
+                                    serde_json::Number::from_f64(rubric_result.overall_score)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                ),
+                                rubric_result.overall_score,
+                                threshold,
+                            )
+                            .with_details(&details),
+                        );
+                    }
+                }
+                Err(e) => {
+                    failures.push(
+                        Failure::new("rubric_quality", Value::Null, Value::Null, 0.0, threshold)
+                            .with_details(&format!("LLM judge error: {}", e)),
+                    );
                 }
             }
         }
 
         // Safety evaluation
-        if let Some(threshold) = self.config.criteria.safety_score {
-            if let Some(judge) = &self.llm_judge {
-                if let Some(actual) = &result.actual_response {
-                    match judge.evaluate_safety(actual).await {
-                        Ok(safety_result) => {
-                            scores.insert("safety".to_string(), safety_result.score);
-                            if safety_result.score < threshold {
-                                failures.push(
-                                    Failure::new(
-                                        "safety",
-                                        Value::Number(
-                                            serde_json::Number::from_f64(threshold)
-                                                .unwrap_or(serde_json::Number::from(0)),
-                                        ),
-                                        Value::Number(
-                                            serde_json::Number::from_f64(safety_result.score)
-                                                .unwrap_or(serde_json::Number::from(0)),
-                                        ),
-                                        safety_result.score,
-                                        threshold,
-                                    )
-                                    .with_details(&format!(
-                                        "Safety issues: {}",
-                                        safety_result.issues.join(", ")
-                                    )),
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            failures.push(
-                                Failure::new("safety", Value::Null, Value::Null, 0.0, threshold)
-                                    .with_details(&format!("LLM judge error: {}", e)),
-                            );
-                        }
+        if let Some(threshold) = self.config.criteria.safety_score
+            && let Some(judge) = &self.llm_judge
+            && let Some(actual) = &result.actual_response
+        {
+            match judge.evaluate_safety(actual).await {
+                Ok(safety_result) => {
+                    scores.insert("safety".to_string(), safety_result.score);
+                    if safety_result.score < threshold {
+                        failures.push(
+                            Failure::new(
+                                "safety",
+                                Value::Number(
+                                    serde_json::Number::from_f64(threshold)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                ),
+                                Value::Number(
+                                    serde_json::Number::from_f64(safety_result.score)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                ),
+                                safety_result.score,
+                                threshold,
+                            )
+                            .with_details(&format!(
+                                "Safety issues: {}",
+                                safety_result.issues.join(", ")
+                            )),
+                        );
                     }
+                }
+                Err(e) => {
+                    failures.push(
+                        Failure::new("safety", Value::Null, Value::Null, 0.0, threshold)
+                            .with_details(&format!("LLM judge error: {}", e)),
+                    );
                 }
             }
         }
 
         // Hallucination detection
-        if let Some(threshold) = self.config.criteria.hallucination_score {
-            if let Some(judge) = &self.llm_judge {
-                if let Some(actual) = &result.actual_response {
-                    let context = turn.user_content.get_text();
-                    let ground_truth = result.expected_response.as_deref();
-                    match judge.detect_hallucinations(actual, &context, ground_truth).await {
-                        Ok(hallucination_result) => {
-                            scores.insert("hallucination".to_string(), hallucination_result.score);
-                            if hallucination_result.score < threshold {
-                                failures.push(
-                                    Failure::new(
-                                        "hallucination",
-                                        Value::Number(
-                                            serde_json::Number::from_f64(threshold)
-                                                .unwrap_or(serde_json::Number::from(0)),
-                                        ),
-                                        Value::Number(
-                                            serde_json::Number::from_f64(
-                                                hallucination_result.score,
-                                            )
-                                            .unwrap_or(serde_json::Number::from(0)),
-                                        ),
-                                        hallucination_result.score,
-                                        threshold,
-                                    )
-                                    .with_details(&format!(
-                                        "Hallucinations detected: {}",
-                                        hallucination_result.issues.join(", ")
-                                    )),
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            failures.push(
-                                Failure::new(
-                                    "hallucination",
-                                    Value::Null,
-                                    Value::Null,
-                                    0.0,
-                                    threshold,
-                                )
-                                .with_details(&format!("LLM judge error: {}", e)),
-                            );
-                        }
+        if let Some(threshold) = self.config.criteria.hallucination_score
+            && let Some(judge) = &self.llm_judge
+            && let Some(actual) = &result.actual_response
+        {
+            let context = turn.user_content.get_text();
+            let ground_truth = result.expected_response.as_deref();
+            match judge.detect_hallucinations(actual, &context, ground_truth).await {
+                Ok(hallucination_result) => {
+                    scores.insert("hallucination".to_string(), hallucination_result.score);
+                    if hallucination_result.score < threshold {
+                        failures.push(
+                            Failure::new(
+                                "hallucination",
+                                Value::Number(
+                                    serde_json::Number::from_f64(threshold)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                ),
+                                Value::Number(
+                                    serde_json::Number::from_f64(hallucination_result.score)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                ),
+                                hallucination_result.score,
+                                threshold,
+                            )
+                            .with_details(&format!(
+                                "Hallucinations detected: {}",
+                                hallucination_result.issues.join(", ")
+                            )),
+                        );
                     }
+                }
+                Err(e) => {
+                    failures.push(
+                        Failure::new("hallucination", Value::Null, Value::Null, 0.0, threshold)
+                            .with_details(&format!("LLM judge error: {}", e)),
+                    );
                 }
             }
         }
@@ -588,13 +739,12 @@ impl Evaluator {
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().is_some_and(|ext| ext == "json") {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.ends_with(".test.json") {
-                        let report = self.evaluate_file(agent.clone(), &path).await?;
-                        reports.push(report);
-                    }
-                }
+            if path.extension().is_some_and(|ext| ext == "json")
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && name.ends_with(".test.json")
+            {
+                let report = self.evaluate_file(agent.clone(), &path).await?;
+                reports.push(report);
             }
         }
 

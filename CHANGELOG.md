@@ -27,6 +27,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **adk-eval: Competitive parity features** — 10 new capabilities bringing the
+  evaluation framework to parity with Braintrust, LangSmith, and Inspect AI:
+  - **StructuredJudge** — typed verdicts (pass/fail/partial) with scores and
+    reasoning via function-calling or JSON fallback. Lenient JSON extractor
+    handles markdown fences, raw JSON, and embedded JSON in prose.
+  - **EmbeddingScorer** (feature: `embedding`) — cosine similarity between
+    embedding vectors using any `EmbeddingProvider` implementation.
+  - **CostTracker** — token usage extraction from event streams, dollar cost
+    estimation with per-model pricing tables (Gemini, OpenAI, Anthropic, DeepSeek).
+  - **TraceAnalyzer** — detects redundant tool calls and execution loops,
+    computes efficiency score (useful_calls / total_calls).
+  - **BaselineStore** — save/load metric snapshots as `.eval-baseline.json`,
+    detect regressions with configurable tolerance.
+  - **JunitReporter** (feature: `ci-helpers`) — JUnit XML generation for native
+    CI integration (GitHub Actions, Jenkins, GitLab CI).
+  - **AnnotationStore** — JSONL export/import for human review workflows with
+    case_id validation and unmatched entry warnings.
+  - **AbComparator** (feature: `statistics`) — A/B agent comparison using Wilcoxon
+    signed-rank test for paired statistical significance.
+  - **TestGenerator** — LLM-driven case generation from descriptions, plus direct
+    extraction from production event logs (no LLM needed).
+  - **ConversationScorer** — multi-turn metrics: context retention, goal completion,
+    coherence, and topic drift (via StructuredJudge or EmbeddingScorer).
+  - **CLI integration** — `cargo adk eval` subcommand with `--save-baseline`,
+    `--check-regression`, `--format` (table/json/junit), `--concurrency`, and
+    non-zero exit on regression detection.
+  - **EvaluationResult extended** — optional `cost_metrics`, `trace_analysis`, and
+    `verdicts` fields (backward-compatible with `#[serde(default)]`).
+  - **EvalCase extended** — optional `metadata` field for generation tracking.
+  - New feature flags: `embedding`, `ci-helpers`, `statistics`.
+  - Example crate: `examples/eval_showcase/` demonstrating all features.
+
 - **adk-enterprise** — Native Rust SDK for the ADK-Rust Enterprise Managed Agent Service. Lightweight HTTP/SSE client with zero adk-* runtime dependencies. Supports any model (Gemini, OpenAI, Anthropic, DeepSeek, Ollama), auto-reconnect SSE streaming, automatic retry with exponential backoff, idempotency keys, and self-hosted deployments. (Experimental)
 
 - **adk-graph: Functional API** (feature: `functional`) — Write agent workflows as

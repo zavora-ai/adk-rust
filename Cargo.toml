@@ -52,14 +52,18 @@ members = [
 
     # Enterprise client SDK
     "adk-enterprise",
+
+    # Benchmarking framework
+    "adk-bench",
 ]
 exclude = [
     # Extracted to standalone repo: https://github.com/zavora-ai/adk-studio
     "adk-studio",
 
     # Standalone example crates (have their own [workspace] key)
-    "examples/enterprise_hello",
     "examples/enterprise_custom_tool",
+    "examples/enterprise_hello",
+    "examples/eval_showcase",
 
     # Reference implementations (not part of workspace)
     "reference/adk-go",
@@ -175,6 +179,7 @@ adk-action = { path = "adk-action", version = "0.10.0" }
 adk-anthropic = { path = "adk-anthropic", version = "0.10.0" }
 adk-managed = { path = "adk-managed", version = "0.10.0", default-features = false }
 adk-enterprise = { path = "adk-enterprise", version = "0.10.0" }
+adk-bench = { path = "adk-bench", version = "0.10.0" }
 awp-types = { path = "awp-types", version = "0.10.0" }
 adk-awp = { path = "adk-awp", version = "0.10.0" }
 adk-acp = { path = "adk-acp", version = "0.10.0" }

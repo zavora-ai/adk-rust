@@ -38,10 +38,10 @@ impl AdkSpanExporter {
         let mut spans = Vec::new();
         for (_event_id, attributes) in trace_dict.iter() {
             // Check if this span belongs to the session
-            if let Some(span_session_id) = attributes.get("gcp.vertex.agent.session_id") {
-                if span_session_id == session_id {
-                    spans.push(attributes.clone());
-                }
+            if let Some(span_session_id) = attributes.get("gcp.vertex.agent.session_id")
+                && span_session_id == session_id
+            {
+                spans.push(attributes.clone());
             }
         }
 
@@ -110,25 +110,25 @@ where
         let mut fields_map = visitor.0;
 
         // Propagate fields from parent span (for context inheritance)
-        if let Some(parent) = span.parent() {
-            if let Some(parent_fields) = parent.extensions().get::<SpanFields>() {
-                let context_keys = [
-                    "gcp.vertex.agent.session_id",
-                    "gcp.vertex.agent.invocation_id",
-                    "gcp.vertex.agent.event_id",
-                    "gen_ai.conversation.id",
-                    #[cfg(feature = "genai-semconv")]
-                    "gen_ai.provider.name",
-                    #[cfg(feature = "genai-semconv")]
-                    "gen_ai.system",
-                ];
+        if let Some(parent) = span.parent()
+            && let Some(parent_fields) = parent.extensions().get::<SpanFields>()
+        {
+            let context_keys = [
+                "gcp.vertex.agent.session_id",
+                "gcp.vertex.agent.invocation_id",
+                "gcp.vertex.agent.event_id",
+                "gen_ai.conversation.id",
+                #[cfg(feature = "genai-semconv")]
+                "gen_ai.provider.name",
+                #[cfg(feature = "genai-semconv")]
+                "gen_ai.system",
+            ];
 
-                for key in context_keys {
-                    if !fields_map.contains_key(key) {
-                        if let Some(val) = parent_fields.0.get(key) {
-                            fields_map.insert(key.to_string(), val.clone());
-                        }
-                    }
+            for key in context_keys {
+                if !fields_map.contains_key(key)
+                    && let Some(val) = parent_fields.0.get(key)
+                {
+                    fields_map.insert(key.to_string(), val.clone());
                 }
             }
         }

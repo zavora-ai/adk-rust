@@ -43,6 +43,30 @@ pub enum EvalError {
     /// LLM judge error
     #[error("LLM judge error: {0}")]
     JudgeError(String),
+
+    /// Structured judge parse error
+    #[error("Structured judge parse error: {0}")]
+    JudgeParseError(String),
+
+    /// Embedding scorer error
+    #[error("Embedding scorer error: {0}")]
+    EmbeddingError(String),
+
+    /// Baseline I/O error
+    #[error("Baseline I/O error: {0}")]
+    BaselineError(String),
+
+    /// Annotation format error
+    #[error("Annotation format error: {0}")]
+    AnnotationError(String),
+
+    /// Test generation error
+    #[error("Test generation error: {0}")]
+    GenerationError(String),
+
+    /// Statistics computation error
+    #[error("Statistics computation error: {0}")]
+    StatisticsError(String),
 }
 
 impl From<adk_core::AdkError> for EvalError {
@@ -64,6 +88,12 @@ impl From<EvalError> for adk_core::AdkError {
             EvalError::JsonError(_) => (ErrorCategory::Internal, "eval.json"),
             EvalError::ScoringError(_) => (ErrorCategory::Internal, "eval.scoring"),
             EvalError::JudgeError(_) => (ErrorCategory::Internal, "eval.judge"),
+            EvalError::JudgeParseError(_) => (ErrorCategory::InvalidInput, "eval.judge_parse"),
+            EvalError::EmbeddingError(_) => (ErrorCategory::Internal, "eval.embedding"),
+            EvalError::BaselineError(_) => (ErrorCategory::Internal, "eval.baseline"),
+            EvalError::AnnotationError(_) => (ErrorCategory::InvalidInput, "eval.annotation"),
+            EvalError::GenerationError(_) => (ErrorCategory::Internal, "eval.generation"),
+            EvalError::StatisticsError(_) => (ErrorCategory::Internal, "eval.statistics"),
         };
         adk_core::AdkError::new(ErrorComponent::Eval, category, code, err.to_string())
             .with_source(err)

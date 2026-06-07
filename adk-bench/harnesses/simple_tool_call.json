@@ -1,0 +1,37 @@
+{
+  "name": "simple_tool_call",
+  "description": "Single tool invocation measuring basic dispatch overhead.",
+  "agent": {
+    "instructions": "You are a helpful weather assistant. When asked about weather, use the get_weather tool to retrieve current conditions.",
+    "tools": {
+      "get_weather": {
+        "description": "Get the current weather for a given city",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string",
+              "description": "The city name to get weather for"
+            },
+            "units": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"],
+              "description": "Temperature units"
+            }
+          },
+          "required": ["city"]
+        },
+        "simulatedLatencyMs": 10,
+        "fixedResponse": {
+          "temperature": 22.5,
+          "condition": "sunny",
+          "humidity": 45
+        }
+      }
+    },
+    "userMessage": "What is the weather in San Francisco?"
+  },
+  "model": "gemini-2.5-flash",
+  "expectedTurns": 2,
+  "schemaVersion": 1
+}

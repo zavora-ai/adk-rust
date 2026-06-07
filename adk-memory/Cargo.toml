@@ -33,6 +33,8 @@ chrono.workspace = true
 
 [features]
 default = []
+# Exposes only the EmbeddingProvider trait without heavy DB dependencies
+embedding-trait = []
 sqlite-memory = ["sqlx/sqlite"]
 database-memory = ["sqlx/postgres", "pgvector"]
 redis-memory = ["fred"]

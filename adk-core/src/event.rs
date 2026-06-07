@@ -205,12 +205,12 @@ impl Event {
     /// Returns true if the event has a trailing code execution result.
     #[allow(clippy::match_like_matches_macro)]
     fn has_trailing_code_execution_result(&self) -> bool {
-        if let Some(content) = &self.llm_response.content {
-            if let Some(last_part) = content.parts.last() {
-                // FunctionResponse as the last part indicates a code execution result
-                // that the model still needs to process.
-                return matches!(last_part, crate::Part::FunctionResponse { .. });
-            }
+        if let Some(content) = &self.llm_response.content
+            && let Some(last_part) = content.parts.last()
+        {
+            // FunctionResponse as the last part indicates a code execution result
+            // that the model still needs to process.
+            return matches!(last_part, crate::Part::FunctionResponse { .. });
         }
         false
     }

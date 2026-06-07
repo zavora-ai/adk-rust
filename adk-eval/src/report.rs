@@ -7,6 +7,10 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::cost_tracker::CostMetrics;
+use crate::structured_judge::StructuredVerdict;
+use crate::trace_analyzer::TraceAnalysis;
+
 /// Complete evaluation report for a test file or eval set
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluationReport {
@@ -147,6 +151,15 @@ pub struct EvaluationResult {
     /// Detailed turn results
     #[serde(default)]
     pub turn_results: Vec<TurnResult>,
+    /// Cost and latency metrics (populated when CostTracker is active)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_metrics: Option<CostMetrics>,
+    /// Trace analysis results (populated when TraceAnalyzer is active)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_analysis: Option<TraceAnalysis>,
+    /// Structured verdicts from the judge
+    #[serde(default)]
+    pub verdicts: Vec<StructuredVerdict>,
 }
 
 impl EvaluationResult {
@@ -159,6 +172,9 @@ impl EvaluationResult {
             failures: vec![],
             duration,
             turn_results: vec![],
+            cost_metrics: None,
+            trace_analysis: None,
+            verdicts: vec![],
         }
     }
 
@@ -176,6 +192,9 @@ impl EvaluationResult {
             failures,
             duration,
             turn_results: vec![],
+            cost_metrics: None,
+            trace_analysis: None,
+            verdicts: vec![],
         }
     }
 

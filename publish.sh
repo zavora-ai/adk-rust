@@ -54,6 +54,8 @@ CRATES=(
   adk-eval         # depends on adk-runner, adk-model
   adk-rag          # depends on adk-core
   adk-server       # depends on adk-runner, adk-agent
+  adk-retry-reflect # depends on adk-runner, adk-plugin
+  adk-bench        # depends on adk-runner, adk-model, adk-eval
 
   # Tier 7: depends on Tier 6
   adk-auth         # depends on adk-server (optional)
@@ -63,6 +65,8 @@ CRATES=(
   # Tier 8: depends on Tier 7
   adk-cli          # depends on adk-server, adk-deploy
   adk-payments     # depends on adk-auth
+  adk-enterprise   # depends on adk-core (experimental)
+  adk-managed      # depends on adk-runner, adk-session (experimental)
 
   # Tier 9: umbrella — always last
   adk-rust

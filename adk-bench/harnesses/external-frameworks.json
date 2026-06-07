@@ -1,0 +1,18 @@
+{
+  "frameworks": [
+    {
+      "name": "gemini-python-sdk",
+      "command": "python3",
+      "args": ["/Users/jameskaranja/Developer/projects/adk-rust/adk-bench/harnesses/bench_gemini_sdk.py"],
+      "env": [],
+      "workingDir": null
+    },
+    {
+      "name": "langgraph",
+      "command": "python3",
+      "args": ["/Users/jameskaranja/Developer/projects/adk-rust/adk-bench/harnesses/bench_langgraph.py"],
+      "env": [],
+      "workingDir": null
+    }
+  ]
+}

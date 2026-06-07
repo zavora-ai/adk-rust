@@ -19,6 +19,8 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
 adk-deploy = { workspace = true }
+adk-eval = { workspace = true, features = ["ci-helpers"] }
+adk-bench = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -30,6 +32,7 @@ tar = { workspace = true }
 hex = { workspace = true }
 syn = { version = "2", features = ["full", "parsing"] }
 serde_yaml_ng = "0.10"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 proptest = "1.4"

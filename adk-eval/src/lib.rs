@@ -59,6 +59,26 @@ pub mod personas;
 
 pub mod optimizer;
 
+// New unconditional modules
+pub mod annotation;
+pub mod baseline;
+pub mod conversation_scorer;
+pub mod cost_tracker;
+pub mod pricing;
+pub mod structured_judge;
+pub mod test_generator;
+pub mod trace_analyzer;
+
+// New feature-gated modules
+#[cfg(feature = "embedding")]
+pub mod embedding_scorer;
+
+#[cfg(feature = "ci-helpers")]
+pub mod junit_reporter;
+
+#[cfg(feature = "statistics")]
+pub mod ab_comparator;
+
 // Re-exports
 pub use criteria::{
     EvaluationCriteria, ResponseMatchConfig, Rubric, RubricConfig, ToolTrajectoryConfig,
@@ -74,6 +94,29 @@ pub use scoring::{ResponseScorer, ToolTrajectoryScorer};
 
 // Optimizer re-exports
 pub use optimizer::{OptimizationResult, OptimizerConfig, PromptOptimizer};
+
+// New module re-exports
+pub use annotation::{AnnotationRecord, AnnotationStore, HumanVerdict};
+pub use baseline::{Baseline, BaselineStore, Regression};
+pub use conversation_scorer::{ConversationMetrics, ConversationScorer, ConversationScorerConfig};
+pub use cost_tracker::{CostMetrics, CostTracker};
+pub use pricing::ModelPricing;
+pub use structured_judge::{
+    JudgeRubric, ScalePoint, StructuredJudge, StructuredJudgeConfig, StructuredVerdict, Verdict,
+};
+pub use test_generator::{EvalCaseMetadata, GeneratorConfig, TestGenerator};
+pub use trace_analyzer::{
+    ToolCallRecord, TraceAnalysis, TraceAnalyzer, TraceDiagnostic, TracePattern,
+};
+
+#[cfg(feature = "embedding")]
+pub use embedding_scorer::EmbeddingScorer;
+
+#[cfg(feature = "ci-helpers")]
+pub use junit_reporter::JunitReporter;
+
+#[cfg(feature = "statistics")]
+pub use ab_comparator::AbComparator;
 
 /// Prelude for convenient imports
 pub mod prelude {

@@ -116,6 +116,7 @@ fn load_eval_set(dir: &str) -> anyhow::Result<EvalSet> {
             }],
             session_input: Default::default(),
             tags: test_case.tags,
+            metadata: None,
         };
 
         eval_cases.push(eval_case);

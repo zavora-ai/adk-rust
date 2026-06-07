@@ -963,12 +963,49 @@ cargo build --release
 
 ## Performance
 
-Optimized for production use:
-- Zero-cost abstractions with Rust's ownership model
-- Efficient async I/O via Tokio runtime
-- Minimal allocations and copying
-- Streaming responses for lower latency
-- Connection pooling and caching support
+### Framework Benchmark Results
+
+Measured with `cargo adk bench` using real LLM API calls to `gemini-2.5-flash`. All frameworks execute the same workload (single tool call) with identical model and prompt.
+
+| Framework | Cold Start | Agent Loop Overhead (mean) | Agent Loop Overhead (P95) | Peak RSS |
+|-----------|-----------|---------------------------|--------------------------|----------|
+| **ADK-Rust** | **109 ms** | **568 μs** | **615 μs** | ~15 MB |
+| Gemini Python SDK | 501 ms | 253 μs | 334 μs | 69.7 MB |
+| LangGraph | 502 ms | 1,228 ms | 1,228 ms | 92.7 MB |
+
+**Key takeaways:**
+- **4.6× faster cold start** than Python frameworks (Rust binary vs Python interpreter)
+- **Sub-millisecond framework overhead** — ADK-Rust adds ~568μs per agent turn on top of LLM latency
+- **4–6× lower memory** than Python agent frameworks
+
+> Cold Start = process launch → first LLM API call. Agent Loop Overhead = total turn time minus LLM round-trip (framework-only cost). Measured on Apple M-series, macOS, June 2026.
+
+### Running Benchmarks
+
+```bash
+# Quick dry-run to see cost estimate
+cargo adk bench --dry-run
+
+# Run all workloads (simple tool call, multi-step reasoning, parallel invocation)
+cargo adk bench --max-cost-usd 5.00 --confirm-cost --runs 5
+
+# Compare against Python frameworks
+cargo adk bench --workload simple_tool_call --runs 3 --external-config adk-bench/harnesses/external-frameworks.json --format markdown --confirm-cost
+
+# Save a baseline for CI regression detection
+cargo adk bench --save-baseline --confirm-cost
+
+# Check for regressions (exit code 2 if regressed)
+cargo adk bench --check-regression --tolerance 0.10 --confirm-cost
+```
+
+### Design Principles
+
+- Real LLM API calls with deterministic config (temperature=0, fixed seed) for reproducibility
+- Framework overhead isolated by subtracting observed LLM latency from total turn time
+- Platform-specific RSS sampling (`/proc/self/statm` on Linux, `mach_task_basic_info` on macOS)
+- External Benchmark Protocol (EBP) for apples-to-apples competitor comparison via subprocess
+- Configurable cost guards (`--dry-run`, `--max-cost-usd`, `--confirm-cost`)
 
 ## License
 

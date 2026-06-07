@@ -94,7 +94,11 @@ adk-realtime/    Real-time bidirectional audio/video streaming (OpenAI, Gemini L
                  video avatar providers (HeyGen, D-ID)
 adk-browser/     Browser automation tools via WebDriver
 adk-eval/        Evaluation framework: trajectory, semantic, rubric, LLM-judge, user personas,
-                 prompt optimizer
+                 prompt optimizer, structured judge (typed verdicts), embedding similarity,
+                 cost/latency tracking, trace analysis (loop/redundancy detection), regression
+                 baselines, JUnit XML CI output, human annotation workflows (JSONL), A/B agent
+                 comparison (Wilcoxon), auto-generated test cases, multi-turn conversation
+                 metrics. Feature-gated: embedding, ci-helpers, statistics.
 adk-telemetry/   OpenTelemetry 0.31 integration for agent observability
 adk-guardrail/   Input/output guardrails: validation, content filtering, PII redaction
 adk-auth/        Authentication: API keys, JWT, OAuth2, OIDC, SSO, cloud secret providers

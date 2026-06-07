@@ -41,9 +41,11 @@ The table below assigns one stability tier to every public `adk-*` crate in the 
 | `adk-action` | **Stable** | Action node execution for deterministic workflow operations |
 | `adk-deploy` | **Stable** | Deployment utilities |
 | `adk-payments` | **Stable** | Payment integration for agent services |
+| `adk-bench` | **Stable** | Benchmarking framework for framework performance measurement |
 | `adk-rust-macros` | **Stable** | Procedural macros for ADK-Rust |
 | `cargo-adk` | **Stable** | Cargo subcommand for ADK project management |
 | `adk-realtime` | **Beta** | Real-time bidirectional audio/video streaming |
+| `adk-retry-reflect` | **Stable** | Retry & Reflect plugin — failure interception, reflection prompts, circuit breaker |
 | `adk-browser` | **Beta** | Browser automation tools via WebDriver |
 | `adk-eval` | **Beta** | Evaluation framework: trajectory, semantic, rubric, LLM-judge |
 | `adk-code` | **Beta** | Code generation and execution |

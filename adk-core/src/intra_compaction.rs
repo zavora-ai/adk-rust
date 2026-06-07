@@ -97,10 +97,10 @@ fn estimate_event_chars(event: &Event) -> usize {
     }
 
     // Count serialized actions (state_delta)
-    if !event.actions.state_delta.is_empty() {
-        if let Ok(json) = serde_json::to_string(&event.actions.state_delta) {
-            chars += json.len();
-        }
+    if !event.actions.state_delta.is_empty()
+        && let Ok(json) = serde_json::to_string(&event.actions.state_delta)
+    {
+        chars += json.len();
     }
 
     chars

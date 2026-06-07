@@ -61,7 +61,12 @@ pub mod migration;
 pub mod service;
 pub mod text;
 
-#[cfg(any(feature = "database-memory", feature = "mongodb-memory", feature = "neo4j-memory"))]
+#[cfg(any(
+    feature = "database-memory",
+    feature = "mongodb-memory",
+    feature = "neo4j-memory",
+    feature = "embedding-trait"
+))]
 pub mod embedding;
 #[cfg(feature = "mongodb-memory")]
 pub mod mongodb;
@@ -78,7 +83,12 @@ pub use adapter::MemoryServiceAdapter;
 pub use inmemory::InMemoryMemoryService;
 pub use service::{MemoryEntry, MemoryService, SearchRequest, SearchResponse, validate_project_id};
 
-#[cfg(any(feature = "database-memory", feature = "mongodb-memory", feature = "neo4j-memory"))]
+#[cfg(any(
+    feature = "database-memory",
+    feature = "mongodb-memory",
+    feature = "neo4j-memory",
+    feature = "embedding-trait"
+))]
 pub use embedding::EmbeddingProvider;
 #[cfg(feature = "mongodb-memory")]
 pub use mongodb::MongoMemoryService;

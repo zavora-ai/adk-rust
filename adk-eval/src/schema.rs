@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::error::{EvalError, Result};
+use crate::test_generator::EvalCaseMetadata;
 
 /// A complete test file containing multiple evaluation cases
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +98,9 @@ pub struct EvalCase {
     /// Optional tags for filtering
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Optional metadata (generation info, etc.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<EvalCaseMetadata>,
 }
 
 /// A single turn in a conversation

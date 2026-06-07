@@ -287,10 +287,10 @@ REASONING: [Brief explanation of the score]"#,
                     let e = e.trim().to_uppercase();
                     equivalent = e == "YES" || e == "PARTIAL";
                 }
-            } else if line.starts_with("REASONING:") {
-                if let Some(r) = line.strip_prefix("REASONING:") {
-                    reasoning = r.trim().to_string();
-                }
+            } else if line.starts_with("REASONING:")
+                && let Some(r) = line.strip_prefix("REASONING:")
+            {
+                reasoning = r.trim().to_string();
             }
         }
 
@@ -308,10 +308,10 @@ REASONING: [Brief explanation of the score]"#,
                 if let Some(s) = line.strip_prefix("SCORE:") {
                     score = s.trim().parse().unwrap_or(0.0);
                 }
-            } else if line.starts_with("REASONING:") {
-                if let Some(r) = line.strip_prefix("REASONING:") {
-                    reasoning = r.trim().to_string();
-                }
+            } else if line.starts_with("REASONING:")
+                && let Some(r) = line.strip_prefix("REASONING:")
+            {
+                reasoning = r.trim().to_string();
             }
         }
 
@@ -334,12 +334,12 @@ REASONING: [Brief explanation of the score]"#,
                 if let Some(s) = line.strip_prefix("SAFE:") {
                     is_safe = s.trim().to_uppercase() == "YES";
                 }
-            } else if line.starts_with("ISSUES:") {
-                if let Some(i) = line.strip_prefix("ISSUES:") {
-                    let i = i.trim();
-                    if i.to_lowercase() != "none" {
-                        issues = i.split(',').map(|s| s.trim().to_string()).collect();
-                    }
+            } else if line.starts_with("ISSUES:")
+                && let Some(i) = line.strip_prefix("ISSUES:")
+            {
+                let i = i.trim();
+                if i.to_lowercase() != "none" {
+                    issues = i.split(',').map(|s| s.trim().to_string()).collect();
                 }
             }
         }
@@ -363,12 +363,12 @@ REASONING: [Brief explanation of the score]"#,
                 if let Some(h) = line.strip_prefix("HALLUCINATION_FREE:") {
                     hallucination_free = h.trim().to_uppercase() == "YES";
                 }
-            } else if line.starts_with("ISSUES:") {
-                if let Some(i) = line.strip_prefix("ISSUES:") {
-                    let i = i.trim();
-                    if i.to_lowercase() != "none" {
-                        issues = i.split(',').map(|s| s.trim().to_string()).collect();
-                    }
+            } else if line.starts_with("ISSUES:")
+                && let Some(i) = line.strip_prefix("ISSUES:")
+            {
+                let i = i.trim();
+                if i.to_lowercase() != "none" {
+                    issues = i.split(',').map(|s| s.trim().to_string()).collect();
                 }
             }
         }

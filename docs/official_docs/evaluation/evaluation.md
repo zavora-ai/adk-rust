@@ -279,6 +279,217 @@ cargo check -p adk-rust --no-default-features --features standard
 
 The runnable evaluation gallery is maintained in [adk-playground](https://github.com/zavora-ai/adk-playground).
 
+## Advanced Features
+
+The following capabilities bring `adk-eval` to parity with frameworks like Braintrust, LangSmith, and Inspect AI. They are additive to the existing API and feature-gated where they introduce new dependencies.
+
+### Structured LLM Judge
+
+Produces typed verdicts (pass/fail/partial) with scores and reasoning via function-calling or JSON fallback:
+
+```rust
+use adk_eval::{StructuredJudge, StructuredJudgeConfig};
+
+let judge = StructuredJudge::new(model.clone());
+
+let verdict = judge.judge(
+    "The capital of France is Paris.",
+    "Paris is the capital of France.",
+    "factual_accuracy"
+).await?;
+
+println!("Score: {:.2}, Verdict: {:?}", verdict.score, verdict.verdict);
+println!("Reasoning: {}", verdict.reasoning);
+```
+
+The judge attempts function-calling (response schema) first, then falls back to prompting for JSON with a lenient parser that handles raw JSON, markdown fences, and embedded JSON in prose.
+
+### Cost and Latency Tracking
+
+Track token usage and compute estimated dollar costs per evaluation:
+
+```rust
+use adk_eval::{CostTracker, CostMetrics};
+
+let tracker = CostTracker::new();  // Uses default pricing tables
+
+// Compute cost for a known model
+let cost = tracker.compute_cost("gpt-4o", 2000, 800);
+// → Some(0.013)
+
+// Extract metrics from event streams
+let metrics = tracker.extract_metrics(&events, duration);
+println!("Tokens: {}, Latency: {}ms", metrics.total_tokens, metrics.latency_ms);
+```
+
+### Execution Trace Analysis
+
+Detect redundant tool calls, execution loops, and compute efficiency scores:
+
+```rust
+use adk_eval::{TraceAnalyzer, TraceAnalysis};
+
+let analyzer = TraceAnalyzer::new();
+let analysis = analyzer.analyze(&events);
+
+println!("Efficiency: {:.1}%", analysis.efficiency_score * 100.0);
+for diag in &analysis.diagnostics {
+    println!("  [{:?}] {}", diag.pattern_type, diag.description);
+}
+```
+
+### Regression Baselines
+
+Save evaluation metrics as baselines and detect quality regressions:
+
+```rust
+use adk_eval::BaselineStore;
+
+let store = BaselineStore::new(".eval-baseline.json");
+
+// Save current metrics
+store.save("my_eval_set", &metrics)?;
+
+// On next run, check for regressions
+let regressions = store.check_regressions(&current_metrics, 0.05)?;
+if !regressions.is_empty() {
+    for reg in &regressions {
+        println!("REGRESSION: {} dropped from {:.3} to {:.3}",
+            reg.metric_name, reg.baseline_value, reg.current_value);
+    }
+}
+```
+
+### CI Output (JUnit XML)
+
+Generate JUnit XML for native CI integration (GitHub Actions, Jenkins, GitLab CI):
+
+```rust
+use adk_eval::JunitReporter;  // requires `ci-helpers` feature
+
+let xml = JunitReporter::generate(&report, "my_eval_suite")?;
+std::fs::write("test-results.xml", xml)?;
+```
+
+### Human Annotation Workflow
+
+Export cases for human review and import verdicts back:
+
+```rust
+use adk_eval::AnnotationStore;
+
+// Export cases for annotation
+AnnotationStore::export(&cases, &results, "review.jsonl")?;
+
+// After human review, import back
+let (records, warnings) = AnnotationStore::import("review.jsonl", &valid_ids)?;
+```
+
+### A/B Agent Comparison
+
+Compare two agents with statistical significance testing:
+
+```rust
+use adk_eval::{AbComparator, ab_comparator::wilcoxon_signed_rank};
+
+// Requires `statistics` feature
+let comparator = AbComparator::new(evaluator);
+let report = comparator.compare(agent_a, agent_b, &eval_cases).await?;
+
+for cmp in &report.criteria_comparisons {
+    println!("{}: A={:.3} B={:.3} p={:.4} significant={}",
+        cmp.criterion, cmp.agent_a_mean, cmp.agent_b_mean,
+        cmp.p_value, cmp.significant);
+}
+```
+
+### Auto-Generated Test Cases
+
+Generate evaluation cases from descriptions (via LLM) or production event logs:
+
+```rust
+use adk_eval::{TestGenerator, GeneratorConfig};
+
+let generator = TestGenerator::with_config(model, GeneratorConfig {
+    cases_per_description: 5,
+    include_tool_expectations: true,
+});
+
+// From natural language
+let cases = generator.generate_from_description(
+    "A weather assistant that looks up forecasts by city"
+).await?;
+
+// From production events (no LLM needed)
+let cases = generator.generate_from_events(&production_events)?;
+```
+
+### Multi-Turn Conversation Metrics
+
+Evaluate extended conversations on four dimensions:
+
+```rust
+use adk_eval::{ConversationScorer, ConversationScorerConfig};
+
+let scorer = ConversationScorer::new(judge);
+let metrics = scorer.score(&conversation, "Help user plan a trip").await?;
+
+println!("Context retention: {:.2}", metrics.context_retention);
+println!("Goal completion:   {:.2}", metrics.goal_completion);
+println!("Coherence:         {:.2}", metrics.coherence);
+println!("Topic drift:       {:.2}", metrics.topic_drift);
+```
+
+### Embedding-Based Semantic Similarity
+
+Measure meaning preservation using vector embeddings (requires `embedding` feature):
+
+```rust
+use adk_eval::EmbeddingScorer;
+
+let scorer = EmbeddingScorer::new(embedding_provider);
+let score = scorer.score("expected text", "actual text").await?;
+// Returns 0.0–1.0 cosine similarity
+```
+
+### Feature Flags
+
+| Feature | Dependency | Capability |
+|---------|-----------|------------|
+| `embedding` | `adk-memory` | Embedding-based semantic similarity |
+| `ci-helpers` | `quick-xml` | JUnit XML report generation |
+| `statistics` | `statrs` | Wilcoxon signed-rank test for A/B comparison |
+
+All other features (structured judge, cost tracker, trace analyzer, baselines, annotations, test generator, conversation scorer) work without any additional feature flags.
+
+## CLI Integration
+
+Run evaluations from the command line via `cargo adk eval`:
+
+```bash
+# Basic evaluation
+cargo adk eval tests/my_agent.test.json
+
+# Save baseline
+cargo adk eval tests/ --save-baseline
+
+# Check for regressions
+cargo adk eval tests/ --check-regression --tolerance 0.05
+
+# JUnit XML output for CI
+cargo adk eval tests/ --format junit --output results.xml
+
+# JSON output
+cargo adk eval tests/ --format json
+
+# Parallel execution
+cargo adk eval tests/ --concurrency 4
+```
+
+Exit codes:
+- `0` — all evaluations passed, no regressions
+- `1` — regressions detected (when `--check-regression` is set)
+
 ## Best Practices
 
 1. **Start Simple**: Begin with trajectory validation before adding semantic checks
@@ -287,6 +498,20 @@ The runnable evaluation gallery is maintained in [adk-playground](https://github
 4. **Combine Criteria**: Use multiple criteria for comprehensive evaluation
 5. **Version Test Files**: Keep test files in version control alongside agent code
 6. **CI/CD Integration**: Run evaluations in CI to catch regressions
+7. **Save Baselines**: Use `--save-baseline` after establishing a quality bar, then `--check-regression` in CI
+8. **Use Structured Judges**: Prefer `StructuredJudge` over plain LLM judge for machine-parseable results
+9. **Track Costs**: Enable `CostTracker` to monitor efficiency regressions alongside quality
+10. **Detect Loops**: Enable `TraceAnalyzer` to catch agents stuck in repetitive patterns
+
+## Example
+
+A complete working example demonstrating all features is available:
+
+```bash
+cargo run --manifest-path examples/eval_showcase/Cargo.toml
+```
+
+See `examples/eval_showcase/` for the source code.
 
 ---
 

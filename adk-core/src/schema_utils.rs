@@ -115,10 +115,11 @@ pub fn strip_conditional_keywords(schema: &mut Value) {
 /// assert_eq!(schema["type"], "object");
 /// ```
 pub fn add_implicit_object_type(schema: &mut Value) {
-    if let Some(obj) = schema.as_object_mut() {
-        if obj.contains_key("properties") && !obj.contains_key("type") {
-            obj.insert("type".to_string(), Value::String("object".to_string()));
-        }
+    if let Some(obj) = schema.as_object_mut()
+        && obj.contains_key("properties")
+        && !obj.contains_key("type")
+    {
+        obj.insert("type".to_string(), Value::String("object".to_string()));
     }
     recurse_into_subschemas(schema, add_implicit_object_type);
 }
@@ -144,10 +145,10 @@ pub fn add_implicit_object_type(schema: &mut Value) {
 /// assert_eq!(schema["enum"], json!(["fixed_value"]));
 /// ```
 pub fn convert_const_to_enum(schema: &mut Value) {
-    if let Some(obj) = schema.as_object_mut() {
-        if let Some(const_val) = obj.remove("const") {
-            obj.insert("enum".to_string(), Value::Array(vec![const_val]));
-        }
+    if let Some(obj) = schema.as_object_mut()
+        && let Some(const_val) = obj.remove("const")
+    {
+        obj.insert("enum".to_string(), Value::Array(vec![const_val]));
     }
     recurse_into_subschemas(schema, convert_const_to_enum);
 }
@@ -246,14 +247,13 @@ pub fn truncate_tool_name(name: &str, max_bytes: usize) -> Cow<'_, str> {
 /// assert_eq!(schema["enum"], json!(["a", "b"]));
 /// ```
 pub fn strip_null_from_enum(schema: &mut Value) {
-    if let Some(obj) = schema.as_object_mut() {
-        if let Some(enum_val) = obj.get_mut("enum") {
-            if let Some(arr) = enum_val.as_array_mut() {
-                arr.retain(|v| !v.is_null());
-                if arr.is_empty() {
-                    obj.remove("enum");
-                }
-            }
+    if let Some(obj) = schema.as_object_mut()
+        && let Some(enum_val) = obj.get_mut("enum")
+        && let Some(arr) = enum_val.as_array_mut()
+    {
+        arr.retain(|v| !v.is_null());
+        if arr.is_empty() {
+            obj.remove("enum");
         }
     }
     recurse_into_subschemas(schema, strip_null_from_enum);
@@ -346,11 +346,11 @@ fn resolve_refs_recurse(schema: &mut Value, definitions: &Map<String, Value>, de
     };
 
     // properties
-    if let Some(props) = obj.get_mut("properties") {
-        if let Some(props_obj) = props.as_object_mut() {
-            for value in props_obj.values_mut() {
-                resolve_refs(value, definitions, depth);
-            }
+    if let Some(props) = obj.get_mut("properties")
+        && let Some(props_obj) = props.as_object_mut()
+    {
+        for value in props_obj.values_mut() {
+            resolve_refs(value, definitions, depth);
         }
     }
 
@@ -366,54 +366,54 @@ fn resolve_refs_recurse(schema: &mut Value, definitions: &Map<String, Value>, de
     }
 
     // additionalProperties (when it's a schema object, not a boolean)
-    if let Some(additional) = obj.get_mut("additionalProperties") {
-        if additional.is_object() {
-            resolve_refs(additional, definitions, depth);
-        }
+    if let Some(additional) = obj.get_mut("additionalProperties")
+        && additional.is_object()
+    {
+        resolve_refs(additional, definitions, depth);
     }
 
     // allOf, anyOf, oneOf
     for keyword in &["allOf", "anyOf", "oneOf"] {
-        if let Some(arr_val) = obj.get_mut(*keyword) {
-            if let Some(arr) = arr_val.as_array_mut() {
-                for sub in arr.iter_mut() {
-                    resolve_refs(sub, definitions, depth);
-                }
+        if let Some(arr_val) = obj.get_mut(*keyword)
+            && let Some(arr) = arr_val.as_array_mut()
+        {
+            for sub in arr.iter_mut() {
+                resolve_refs(sub, definitions, depth);
             }
         }
     }
 
     // not
-    if let Some(not_schema) = obj.get_mut("not") {
-        if not_schema.is_object() {
-            resolve_refs(not_schema, definitions, depth);
-        }
+    if let Some(not_schema) = obj.get_mut("not")
+        && not_schema.is_object()
+    {
+        resolve_refs(not_schema, definitions, depth);
     }
 
     // patternProperties
-    if let Some(pattern_props) = obj.get_mut("patternProperties") {
-        if let Some(pp_obj) = pattern_props.as_object_mut() {
-            for value in pp_obj.values_mut() {
-                resolve_refs(value, definitions, depth);
-            }
+    if let Some(pattern_props) = obj.get_mut("patternProperties")
+        && let Some(pp_obj) = pattern_props.as_object_mut()
+    {
+        for value in pp_obj.values_mut() {
+            resolve_refs(value, definitions, depth);
         }
     }
 
     // prefixItems
-    if let Some(prefix_items) = obj.get_mut("prefixItems") {
-        if let Some(arr) = prefix_items.as_array_mut() {
-            for item in arr.iter_mut() {
-                resolve_refs(item, definitions, depth);
-            }
+    if let Some(prefix_items) = obj.get_mut("prefixItems")
+        && let Some(arr) = prefix_items.as_array_mut()
+    {
+        for item in arr.iter_mut() {
+            resolve_refs(item, definitions, depth);
         }
     }
 
     // if, then, else
     for keyword in &["if", "then", "else"] {
-        if let Some(sub) = obj.get_mut(*keyword) {
-            if sub.is_object() {
-                resolve_refs(sub, definitions, depth);
-            }
+        if let Some(sub) = obj.get_mut(*keyword)
+            && sub.is_object()
+        {
+            resolve_refs(sub, definitions, depth);
         }
     }
 }
@@ -435,11 +435,11 @@ fn recurse_into_subschemas(schema: &mut Value, transform: fn(&mut Value)) {
     };
 
     // properties
-    if let Some(props) = obj.get_mut("properties") {
-        if let Some(props_obj) = props.as_object_mut() {
-            for value in props_obj.values_mut() {
-                transform(value);
-            }
+    if let Some(props) = obj.get_mut("properties")
+        && let Some(props_obj) = props.as_object_mut()
+    {
+        for value in props_obj.values_mut() {
+            transform(value);
         }
     }
 
@@ -455,54 +455,54 @@ fn recurse_into_subschemas(schema: &mut Value, transform: fn(&mut Value)) {
     }
 
     // additionalProperties (when it's a schema object, not a boolean)
-    if let Some(additional) = obj.get_mut("additionalProperties") {
-        if additional.is_object() {
-            transform(additional);
-        }
+    if let Some(additional) = obj.get_mut("additionalProperties")
+        && additional.is_object()
+    {
+        transform(additional);
     }
 
     // allOf, anyOf, oneOf
     for keyword in &["allOf", "anyOf", "oneOf"] {
-        if let Some(arr_val) = obj.get_mut(*keyword) {
-            if let Some(arr) = arr_val.as_array_mut() {
-                for sub in arr.iter_mut() {
-                    transform(sub);
-                }
+        if let Some(arr_val) = obj.get_mut(*keyword)
+            && let Some(arr) = arr_val.as_array_mut()
+        {
+            for sub in arr.iter_mut() {
+                transform(sub);
             }
         }
     }
 
     // not
-    if let Some(not_schema) = obj.get_mut("not") {
-        if not_schema.is_object() {
-            transform(not_schema);
-        }
+    if let Some(not_schema) = obj.get_mut("not")
+        && not_schema.is_object()
+    {
+        transform(not_schema);
     }
 
     // patternProperties
-    if let Some(pattern_props) = obj.get_mut("patternProperties") {
-        if let Some(pp_obj) = pattern_props.as_object_mut() {
-            for value in pp_obj.values_mut() {
-                transform(value);
-            }
+    if let Some(pattern_props) = obj.get_mut("patternProperties")
+        && let Some(pp_obj) = pattern_props.as_object_mut()
+    {
+        for value in pp_obj.values_mut() {
+            transform(value);
         }
     }
 
     // prefixItems
-    if let Some(prefix_items) = obj.get_mut("prefixItems") {
-        if let Some(arr) = prefix_items.as_array_mut() {
-            for item in arr.iter_mut() {
-                transform(item);
-            }
+    if let Some(prefix_items) = obj.get_mut("prefixItems")
+        && let Some(arr) = prefix_items.as_array_mut()
+    {
+        for item in arr.iter_mut() {
+            transform(item);
         }
     }
 
     // if, then, else (for transforms that don't strip them)
     for keyword in &["if", "then", "else"] {
-        if let Some(sub) = obj.get_mut(*keyword) {
-            if sub.is_object() {
-                transform(sub);
-            }
+        if let Some(sub) = obj.get_mut(*keyword)
+            && sub.is_object()
+        {
+            transform(sub);
         }
     }
 }
@@ -520,11 +520,11 @@ fn recurse_into_subschemas_with_context<C: ?Sized>(
     };
 
     // properties
-    if let Some(props) = obj.get_mut("properties") {
-        if let Some(props_obj) = props.as_object_mut() {
-            for value in props_obj.values_mut() {
-                transform(value, ctx);
-            }
+    if let Some(props) = obj.get_mut("properties")
+        && let Some(props_obj) = props.as_object_mut()
+    {
+        for value in props_obj.values_mut() {
+            transform(value, ctx);
         }
     }
 
@@ -540,54 +540,54 @@ fn recurse_into_subschemas_with_context<C: ?Sized>(
     }
 
     // additionalProperties (when it's a schema object, not a boolean)
-    if let Some(additional) = obj.get_mut("additionalProperties") {
-        if additional.is_object() {
-            transform(additional, ctx);
-        }
+    if let Some(additional) = obj.get_mut("additionalProperties")
+        && additional.is_object()
+    {
+        transform(additional, ctx);
     }
 
     // allOf, anyOf, oneOf
     for keyword in &["allOf", "anyOf", "oneOf"] {
-        if let Some(arr_val) = obj.get_mut(*keyword) {
-            if let Some(arr) = arr_val.as_array_mut() {
-                for sub in arr.iter_mut() {
-                    transform(sub, ctx);
-                }
+        if let Some(arr_val) = obj.get_mut(*keyword)
+            && let Some(arr) = arr_val.as_array_mut()
+        {
+            for sub in arr.iter_mut() {
+                transform(sub, ctx);
             }
         }
     }
 
     // not
-    if let Some(not_schema) = obj.get_mut("not") {
-        if not_schema.is_object() {
-            transform(not_schema, ctx);
-        }
+    if let Some(not_schema) = obj.get_mut("not")
+        && not_schema.is_object()
+    {
+        transform(not_schema, ctx);
     }
 
     // patternProperties
-    if let Some(pattern_props) = obj.get_mut("patternProperties") {
-        if let Some(pp_obj) = pattern_props.as_object_mut() {
-            for value in pp_obj.values_mut() {
-                transform(value, ctx);
-            }
+    if let Some(pattern_props) = obj.get_mut("patternProperties")
+        && let Some(pp_obj) = pattern_props.as_object_mut()
+    {
+        for value in pp_obj.values_mut() {
+            transform(value, ctx);
         }
     }
 
     // prefixItems
-    if let Some(prefix_items) = obj.get_mut("prefixItems") {
-        if let Some(arr) = prefix_items.as_array_mut() {
-            for item in arr.iter_mut() {
-                transform(item, ctx);
-            }
+    if let Some(prefix_items) = obj.get_mut("prefixItems")
+        && let Some(arr) = prefix_items.as_array_mut()
+    {
+        for item in arr.iter_mut() {
+            transform(item, ctx);
         }
     }
 
     // if, then, else
     for keyword in &["if", "then", "else"] {
-        if let Some(sub) = obj.get_mut(*keyword) {
-            if sub.is_object() {
-                transform(sub, ctx);
-            }
+        if let Some(sub) = obj.get_mut(*keyword)
+            && sub.is_object()
+        {
+            transform(sub, ctx);
         }
     }
 }
@@ -629,12 +629,12 @@ pub fn collapse_combiners(schema: &mut Value) {
                 // Find the first non-null sub-schema
                 let chosen = arr.iter().find(|sub| !is_null_schema(sub)).or_else(|| arr.first());
 
-                if let Some(chosen_schema) = chosen {
-                    if let Some(chosen_obj) = chosen_schema.as_object() {
-                        // Merge chosen sub-schema fields into parent
-                        for (key, value) in chosen_obj {
-                            obj.insert(key.clone(), value.clone());
-                        }
+                if let Some(chosen_schema) = chosen
+                    && let Some(chosen_obj) = chosen_schema.as_object()
+                {
+                    // Merge chosen sub-schema fields into parent
+                    for (key, value) in chosen_obj {
+                        obj.insert(key.clone(), value.clone());
                     }
                 }
             }
@@ -678,83 +678,83 @@ pub fn merge_all_of(schema: &mut Value) {
         return;
     };
 
-    if let Some(arr_val) = obj.remove("allOf") {
-        if let Some(arr) = arr_val.as_array() {
-            let mut merged_properties = Map::new();
-            let mut merged_required: Vec<Value> = Vec::new();
-            let mut merged_type: Option<Value> = None;
-            let mut other_fields = Map::new();
+    if let Some(arr_val) = obj.remove("allOf")
+        && let Some(arr) = arr_val.as_array()
+    {
+        let mut merged_properties = Map::new();
+        let mut merged_required: Vec<Value> = Vec::new();
+        let mut merged_type: Option<Value> = None;
+        let mut other_fields = Map::new();
 
-            for sub in arr {
-                let Some(sub_obj) = sub.as_object() else {
-                    continue;
-                };
+        for sub in arr {
+            let Some(sub_obj) = sub.as_object() else {
+                continue;
+            };
 
-                for (key, value) in sub_obj {
-                    match key.as_str() {
-                        "properties" => {
-                            if let Some(props) = value.as_object() {
-                                for (pk, pv) in props {
-                                    merged_properties.insert(pk.clone(), pv.clone());
+            for (key, value) in sub_obj {
+                match key.as_str() {
+                    "properties" => {
+                        if let Some(props) = value.as_object() {
+                            for (pk, pv) in props {
+                                merged_properties.insert(pk.clone(), pv.clone());
+                            }
+                        }
+                    }
+                    "required" => {
+                        if let Some(req_arr) = value.as_array() {
+                            for item in req_arr {
+                                if !merged_required.contains(item) {
+                                    merged_required.push(item.clone());
                                 }
                             }
                         }
-                        "required" => {
-                            if let Some(req_arr) = value.as_array() {
-                                for item in req_arr {
-                                    if !merged_required.contains(item) {
-                                        merged_required.push(item.clone());
-                                    }
-                                }
+                    }
+                    "type" => {
+                        if let Some(existing) = &merged_type {
+                            // Conflict: prefer "object"
+                            if existing != value {
+                                merged_type = Some(Value::String("object".to_string()));
                             }
+                        } else {
+                            merged_type = Some(value.clone());
                         }
-                        "type" => {
-                            if let Some(existing) = &merged_type {
-                                // Conflict: prefer "object"
-                                if existing != value {
-                                    merged_type = Some(Value::String("object".to_string()));
-                                }
-                            } else {
-                                merged_type = Some(value.clone());
-                            }
-                        }
-                        _ => {
-                            other_fields.insert(key.clone(), value.clone());
-                        }
+                    }
+                    _ => {
+                        other_fields.insert(key.clone(), value.clone());
                     }
                 }
             }
+        }
 
-            // Merge other fields first (lower priority)
-            for (key, value) in other_fields {
-                obj.entry(key).or_insert(value);
-            }
+        // Merge other fields first (lower priority)
+        for (key, value) in other_fields {
+            obj.entry(key).or_insert(value);
+        }
 
-            // Merge type
-            if let Some(type_val) = merged_type {
-                obj.insert("type".to_string(), type_val);
-            }
+        // Merge type
+        if let Some(type_val) = merged_type {
+            obj.insert("type".to_string(), type_val);
+        }
 
-            // Merge properties
-            if !merged_properties.is_empty() {
-                let existing_props =
-                    obj.entry("properties").or_insert_with(|| Value::Object(Map::new()));
-                if let Some(existing_obj) = existing_props.as_object_mut() {
-                    for (key, value) in merged_properties {
-                        existing_obj.insert(key, value);
-                    }
+        // Merge properties
+        if !merged_properties.is_empty() {
+            let existing_props =
+                obj.entry("properties").or_insert_with(|| Value::Object(Map::new()));
+            if let Some(existing_obj) = existing_props.as_object_mut() {
+                for (key, value) in merged_properties {
+                    existing_obj.insert(key, value);
                 }
             }
+        }
 
-            // Merge required
-            if !merged_required.is_empty() {
-                let existing_required =
-                    obj.entry("required").or_insert_with(|| Value::Array(Vec::new()));
-                if let Some(existing_arr) = existing_required.as_array_mut() {
-                    for item in merged_required {
-                        if !existing_arr.contains(&item) {
-                            existing_arr.push(item);
-                        }
+        // Merge required
+        if !merged_required.is_empty() {
+            let existing_required =
+                obj.entry("required").or_insert_with(|| Value::Array(Vec::new()));
+            if let Some(existing_arr) = existing_required.as_array_mut() {
+                for item in merged_required {
+                    if !existing_arr.contains(&item) {
+                        existing_arr.push(item);
                     }
                 }
             }
@@ -786,16 +786,14 @@ pub fn merge_all_of(schema: &mut Value) {
 /// assert_eq!(schema["type"], "string");
 /// ```
 pub fn collapse_type_arrays(schema: &mut Value) {
-    if let Some(obj) = schema.as_object_mut() {
-        if let Some(type_val) = obj.get("type").cloned() {
-            if let Some(arr) = type_val.as_array() {
-                let chosen =
-                    arr.iter().find(|t| t.as_str() != Some("null")).or_else(|| arr.first());
+    if let Some(obj) = schema.as_object_mut()
+        && let Some(type_val) = obj.get("type").cloned()
+        && let Some(arr) = type_val.as_array()
+    {
+        let chosen = arr.iter().find(|t| t.as_str() != Some("null")).or_else(|| arr.first());
 
-                if let Some(chosen_type) = chosen {
-                    obj.insert("type".to_string(), chosen_type.clone());
-                }
-            }
+        if let Some(chosen_type) = chosen {
+            obj.insert("type".to_string(), chosen_type.clone());
         }
     }
     recurse_into_subschemas(schema, collapse_type_arrays);
@@ -856,11 +854,11 @@ pub fn enforce_nesting_depth(schema: &mut Value, max_depth: usize, current: usiz
     let next_depth = if is_object_schema { current + 1 } else { current };
 
     // Recurse into properties
-    if let Some(props) = obj.get_mut("properties") {
-        if let Some(props_obj) = props.as_object_mut() {
-            for value in props_obj.values_mut() {
-                enforce_nesting_depth(value, max_depth, next_depth);
-            }
+    if let Some(props) = obj.get_mut("properties")
+        && let Some(props_obj) = props.as_object_mut()
+    {
+        for value in props_obj.values_mut() {
+            enforce_nesting_depth(value, max_depth, next_depth);
         }
     }
 
@@ -876,36 +874,36 @@ pub fn enforce_nesting_depth(schema: &mut Value, max_depth: usize, current: usiz
     }
 
     // Recurse into additionalProperties
-    if let Some(additional) = obj.get_mut("additionalProperties") {
-        if additional.is_object() {
-            enforce_nesting_depth(additional, max_depth, next_depth);
-        }
+    if let Some(additional) = obj.get_mut("additionalProperties")
+        && additional.is_object()
+    {
+        enforce_nesting_depth(additional, max_depth, next_depth);
     }
 
     // Recurse into allOf, anyOf, oneOf
     for keyword in &["allOf", "anyOf", "oneOf"] {
-        if let Some(arr_val) = obj.get_mut(*keyword) {
-            if let Some(arr) = arr_val.as_array_mut() {
-                for sub in arr.iter_mut() {
-                    enforce_nesting_depth(sub, max_depth, next_depth);
-                }
+        if let Some(arr_val) = obj.get_mut(*keyword)
+            && let Some(arr) = arr_val.as_array_mut()
+        {
+            for sub in arr.iter_mut() {
+                enforce_nesting_depth(sub, max_depth, next_depth);
             }
         }
     }
 
     // Recurse into not
-    if let Some(not_schema) = obj.get_mut("not") {
-        if not_schema.is_object() {
-            enforce_nesting_depth(not_schema, max_depth, next_depth);
-        }
+    if let Some(not_schema) = obj.get_mut("not")
+        && not_schema.is_object()
+    {
+        enforce_nesting_depth(not_schema, max_depth, next_depth);
     }
 
     // Recurse into patternProperties
-    if let Some(pattern_props) = obj.get_mut("patternProperties") {
-        if let Some(pp_obj) = pattern_props.as_object_mut() {
-            for value in pp_obj.values_mut() {
-                enforce_nesting_depth(value, max_depth, next_depth);
-            }
+    if let Some(pattern_props) = obj.get_mut("patternProperties")
+        && let Some(pp_obj) = pattern_props.as_object_mut()
+    {
+        for value in pp_obj.values_mut() {
+            enforce_nesting_depth(value, max_depth, next_depth);
         }
     }
 }
