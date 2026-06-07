@@ -163,6 +163,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn test_current_rss_bytes_returns_positive() {
         // On supported platforms (Linux/macOS), RSS should be > 0.
         let rss = current_rss_bytes().expect("RSS sampling should succeed on this platform");
@@ -170,6 +171,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn test_current_rss_bytes_reasonable_range() {
         // A running Rust test binary should use at least 1 MB and less than 64 GB.
         let rss = current_rss_bytes().expect("RSS sampling should succeed");
@@ -177,7 +179,15 @@ mod tests {
         assert!(rss < 64 * 1024 * 1024 * 1024, "RSS should be less than 64 GB, got {rss} bytes");
     }
 
+    #[test]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn test_current_rss_bytes_unsupported_platform() {
+        let result = current_rss_bytes();
+        assert!(result.is_err());
+    }
+
     #[tokio::test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     async fn test_spawn_memory_sampler_collects_samples() {
         let interval = Duration::from_millis(10);
         let (handle, samples) = spawn_memory_sampler(interval);
@@ -195,6 +205,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     async fn test_spawn_memory_sampler_abort_stops_collection() {
         let interval = Duration::from_millis(10);
         let (handle, samples) = spawn_memory_sampler(interval);
