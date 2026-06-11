@@ -239,6 +239,16 @@ impl Llm for OpenRouterClient {
         self.model()
     }
 
+    #[tracing::instrument(
+        name = "model.generate_content",
+        skip_all,
+        fields(
+            model.name = %self.name(),
+            stream = %stream,
+            request.contents_count = %request.contents.len(),
+            request.tools_count = %request.tools.len()
+        )
+    )]
     async fn generate_content(
         &self,
         request: LlmRequest,
@@ -413,8 +423,8 @@ async fn build_responses_llm_stream(
                                 }
                             }
                             "response.output_text.delta" => {
-                                if let Some(delta) = event.delta.as_deref() {
-                                    if let Some(response) = llm_stream_response(
+                                if let Some(delta) = event.delta.as_deref()
+                                    && let Some(response) = llm_stream_response(
                                         vec![Part::Text { text: delta.to_string() }],
                                         None,
                                         None,
@@ -424,13 +434,12 @@ async fn build_responses_llm_stream(
                                     ) {
                                         yield response;
                                     }
-                                }
                             }
                             "response.reasoning.delta"
                             | "response.reasoning_text.delta"
                             | "response.reasoning_summary_text.delta" => {
-                                if let Some(delta) = event.delta.as_deref().or(event.text.as_deref()) {
-                                    if let Some(response) = llm_stream_response(
+                                if let Some(delta) = event.delta.as_deref().or(event.text.as_deref())
+                                    && let Some(response) = llm_stream_response(
                                         vec![Part::Thinking {
                                             thinking: delta.to_string(),
                                             signature: None,
@@ -443,7 +452,6 @@ async fn build_responses_llm_stream(
                                     ) {
                                         yield response;
                                     }
-                                }
                             }
                             "response.function_call_arguments.delta" => {
                                 if let (Some(item_id), Some(delta)) =
@@ -453,11 +461,10 @@ async fn build_responses_llm_stream(
                                 }
                             }
                             "response.function_call_arguments.done" => {
-                                if let Some(item_id) = event.item_id.as_deref() {
-                                    if let Some(part) =
+                                if let Some(item_id) = event.item_id.as_deref()
+                                    && let Some(part) =
                                         state.complete_function_call(item_id, event.arguments.as_deref())
-                                    {
-                                        if let Some(response) = llm_stream_response(
+                                        && let Some(response) = llm_stream_response(
                                             vec![part],
                                             None,
                                             Some(FinishReason::Stop),
@@ -467,18 +474,15 @@ async fn build_responses_llm_stream(
                                         ) {
                                             yield response;
                                         }
-                                    }
-                                }
                             }
                             "response.completed" => {
-                                if let Some(response) = event.response.as_ref() {
-                                    if let Some(mapped) = responses_response_to_llm_response(
+                                if let Some(response) = event.response.as_ref()
+                                    && let Some(mapped) = responses_response_to_llm_response(
                                         response,
                                         Some(&state.emitted_function_call_ids),
                                     ) {
                                         yield mapped;
                                     }
-                                }
                             }
                             _ => {}
                         }

@@ -159,11 +159,11 @@ fn set_additional_properties_false(schema: &mut Value) {
     }
 
     // Recurse into properties
-    if let Some(props) = obj.get_mut("properties") {
-        if let Some(props_obj) = props.as_object_mut() {
-            for value in props_obj.values_mut() {
-                set_additional_properties_false(value);
-            }
+    if let Some(props) = obj.get_mut("properties")
+        && let Some(props_obj) = props.as_object_mut()
+    {
+        for value in props_obj.values_mut() {
+            set_additional_properties_false(value);
         }
     }
 
@@ -179,63 +179,63 @@ fn set_additional_properties_false(schema: &mut Value) {
     }
 
     // Recurse into additionalProperties when it's a schema object (not boolean)
-    if let Some(additional) = obj.get_mut("additionalProperties") {
-        if additional.is_object() {
-            set_additional_properties_false(additional);
-        }
+    if let Some(additional) = obj.get_mut("additionalProperties")
+        && additional.is_object()
+    {
+        set_additional_properties_false(additional);
     }
 
     // Recurse into allOf, anyOf, oneOf
     for keyword in &["allOf", "anyOf", "oneOf"] {
-        if let Some(arr_val) = obj.get_mut(*keyword) {
-            if let Some(arr) = arr_val.as_array_mut() {
-                for sub in arr.iter_mut() {
-                    set_additional_properties_false(sub);
-                }
+        if let Some(arr_val) = obj.get_mut(*keyword)
+            && let Some(arr) = arr_val.as_array_mut()
+        {
+            for sub in arr.iter_mut() {
+                set_additional_properties_false(sub);
             }
         }
     }
 
     // Recurse into not
-    if let Some(not_schema) = obj.get_mut("not") {
-        if not_schema.is_object() {
-            set_additional_properties_false(not_schema);
-        }
+    if let Some(not_schema) = obj.get_mut("not")
+        && not_schema.is_object()
+    {
+        set_additional_properties_false(not_schema);
     }
 
     // Recurse into patternProperties
-    if let Some(pattern_props) = obj.get_mut("patternProperties") {
-        if let Some(pp_obj) = pattern_props.as_object_mut() {
-            for value in pp_obj.values_mut() {
-                set_additional_properties_false(value);
-            }
+    if let Some(pattern_props) = obj.get_mut("patternProperties")
+        && let Some(pp_obj) = pattern_props.as_object_mut()
+    {
+        for value in pp_obj.values_mut() {
+            set_additional_properties_false(value);
         }
     }
 
     // Recurse into prefixItems
-    if let Some(prefix_items) = obj.get_mut("prefixItems") {
-        if let Some(arr) = prefix_items.as_array_mut() {
-            for item in arr.iter_mut() {
-                set_additional_properties_false(item);
-            }
+    if let Some(prefix_items) = obj.get_mut("prefixItems")
+        && let Some(arr) = prefix_items.as_array_mut()
+    {
+        for item in arr.iter_mut() {
+            set_additional_properties_false(item);
         }
     }
 
     // Recurse into $defs
-    if let Some(defs) = obj.get_mut("$defs") {
-        if let Some(defs_obj) = defs.as_object_mut() {
-            for value in defs_obj.values_mut() {
-                set_additional_properties_false(value);
-            }
+    if let Some(defs) = obj.get_mut("$defs")
+        && let Some(defs_obj) = defs.as_object_mut()
+    {
+        for value in defs_obj.values_mut() {
+            set_additional_properties_false(value);
         }
     }
 
     // Recurse into definitions (Draft 4-7)
-    if let Some(defs) = obj.get_mut("definitions") {
-        if let Some(defs_obj) = defs.as_object_mut() {
-            for value in defs_obj.values_mut() {
-                set_additional_properties_false(value);
-            }
+    if let Some(defs) = obj.get_mut("definitions")
+        && let Some(defs_obj) = defs.as_object_mut()
+    {
+        for value in defs_obj.values_mut() {
+            set_additional_properties_false(value);
         }
     }
 }

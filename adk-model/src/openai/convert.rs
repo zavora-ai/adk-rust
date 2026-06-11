@@ -266,10 +266,10 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
         let mut parts = Vec::new();
 
         // Add text content (skip empty strings from reasoning models)
-        if let Some(text) = &choice.message.content {
-            if !text.is_empty() {
-                parts.push(Part::Text { text: text.clone() });
-            }
+        if let Some(text) = &choice.message.content
+            && !text.is_empty()
+        {
+            parts.push(Part::Text { text: text.clone() });
         }
 
         // Add tool calls with IDs
@@ -346,22 +346,22 @@ pub fn from_raw_openai_response(json: &serde_json::Value) -> LlmResponse {
         let mut parts = Vec::new();
 
         // Extract reasoning_content (returned by reasoning models like o3, gpt-5-mini)
-        if let Some(reasoning) = message.get("reasoning_content").and_then(|v| v.as_str()) {
-            if !reasoning.is_empty() {
-                parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
-            }
+        if let Some(reasoning) = message.get("reasoning_content").and_then(|v| v.as_str())
+            && !reasoning.is_empty()
+        {
+            parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
         }
 
         // Extract visible text content (skip empty strings)
-        if let Some(text) = message.get("content").and_then(|v| v.as_str()) {
-            if !text.is_empty() {
-                // Check for text-based tool calls (Qwen, Llama, Mistral Nemo format)
-                // before adding as plain text
-                if let Some(parsed_parts) = crate::tool_call_parser::parse_text_tool_calls(text) {
-                    parts.extend(parsed_parts);
-                } else {
-                    parts.push(Part::Text { text: text.to_string() });
-                }
+        if let Some(text) = message.get("content").and_then(|v| v.as_str())
+            && !text.is_empty()
+        {
+            // Check for text-based tool calls (Qwen, Llama, Mistral Nemo format)
+            // before adding as plain text
+            if let Some(parsed_parts) = crate::tool_call_parser::parse_text_tool_calls(text) {
+                parts.extend(parsed_parts);
+            } else {
+                parts.push(Part::Text { text: text.to_string() });
             }
         }
 

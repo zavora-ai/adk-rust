@@ -100,10 +100,10 @@ pub(crate) fn adk_request_to_bedrock(
     }
 
     // Inject CachePoint after system content when prompt caching is enabled.
-    if let Some(cache_config) = prompt_caching {
-        if !system.is_empty() {
-            system.push(SystemContentBlock::CachePoint(build_cache_point_block(cache_config)));
-        }
+    if let Some(cache_config) = prompt_caching
+        && !system.is_empty()
+    {
+        system.push(SystemContentBlock::CachePoint(build_cache_point_block(cache_config)));
     }
 
     let inference_config = config.map(adk_config_to_bedrock);
@@ -273,10 +273,10 @@ fn adk_tools_to_bedrock(
         .collect();
 
     // Inject CachePoint after tool definitions when prompt caching is enabled.
-    if let Some(cache_config) = prompt_caching {
-        if !bedrock_tools.is_empty() {
-            bedrock_tools.push(Tool::CachePoint(build_cache_point_block(cache_config)));
-        }
+    if let Some(cache_config) = prompt_caching
+        && !bedrock_tools.is_empty()
+    {
+        bedrock_tools.push(Tool::CachePoint(build_cache_point_block(cache_config)));
     }
 
     // ToolConfiguration requires at least one tool; caller ensures tools is non-empty.

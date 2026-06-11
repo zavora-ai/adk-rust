@@ -301,17 +301,17 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
             let mut parts = Vec::new();
 
             // Add reasoning content if present (thinking mode)
-            if let Some(reasoning) = &msg.reasoning_content {
-                if !reasoning.is_empty() {
-                    parts.push(Part::Thinking { thinking: reasoning.clone(), signature: None });
-                }
+            if let Some(reasoning) = &msg.reasoning_content
+                && !reasoning.is_empty()
+            {
+                parts.push(Part::Thinking { thinking: reasoning.clone(), signature: None });
             }
 
             // Add main content
-            if let Some(text) = &msg.content {
-                if !text.is_empty() {
-                    parts.push(Part::Text { text: text.clone() });
-                }
+            if let Some(text) = &msg.content
+                && !text.is_empty()
+            {
+                parts.push(Part::Text { text: text.clone() });
             }
 
             // Add tool calls

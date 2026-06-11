@@ -135,6 +135,16 @@ impl Llm for OllamaModel {
         &ADAPTER
     }
 
+    #[tracing::instrument(
+        name = "model.generate_content",
+        skip_all,
+        fields(
+            model.name = %self.name(),
+            stream = %stream,
+            request.contents_count = %request.contents.len(),
+            request.tools_count = %request.tools.len()
+        )
+    )]
     async fn generate_content(
         &self,
         request: LlmRequest,
@@ -181,11 +191,10 @@ impl Llm for OllamaModel {
                     match chunk_result {
                         Ok(response) => {
                             // Yield thinking delta for each chunk
-                            if let Some(thinking) = &response.message.thinking {
-                                if !thinking.is_empty() {
+                            if let Some(thinking) = &response.message.thinking
+                                && !thinking.is_empty() {
                                     yield convert::thinking_delta_response(thinking);
                                 }
-                            }
 
                             // Yield text delta for each chunk
                             if !response.message.content.is_empty() {

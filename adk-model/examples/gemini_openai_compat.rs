@@ -154,12 +154,12 @@ async fn main() -> anyhow::Result<()> {
         Ok(mut stream) => {
             print!("    ");
             while let Some(result) = stream.next().await {
-                if let Ok(response) = result {
-                    if let Some(content) = &response.content {
-                        for part in &content.parts {
-                            if let Part::Text { text } = part {
-                                print!("{text}");
-                            }
+                if let Ok(response) = result
+                    && let Some(content) = &response.content
+                {
+                    for part in &content.parts {
+                        if let Part::Text { text } = part {
+                            print!("{text}");
                         }
                     }
                 }

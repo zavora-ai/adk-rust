@@ -199,12 +199,12 @@ fn find_missing_additional_properties(schema: &Value, path: &str) -> Vec<String>
     }
 
     // Recurse into properties
-    if let Some(props) = obj.get("properties") {
-        if let Some(props_obj) = props.as_object() {
-            for (key, value) in props_obj {
-                let child_path = format!("{path}.properties.{key}");
-                violations.extend(find_missing_additional_properties(value, &child_path));
-            }
+    if let Some(props) = obj.get("properties")
+        && let Some(props_obj) = props.as_object()
+    {
+        for (key, value) in props_obj {
+            let child_path = format!("{path}.properties.{key}");
+            violations.extend(find_missing_additional_properties(value, &child_path));
         }
     }
 
@@ -224,71 +224,68 @@ fn find_missing_additional_properties(schema: &Value, path: &str) -> Vec<String>
 
     // Recurse into allOf, anyOf, oneOf
     for keyword in &["allOf", "anyOf", "oneOf"] {
-        if let Some(arr_val) = obj.get(*keyword) {
-            if let Some(arr) = arr_val.as_array() {
-                for (i, sub) in arr.iter().enumerate() {
-                    violations.extend(find_missing_additional_properties(
-                        sub,
-                        &format!("{path}.{keyword}[{i}]"),
-                    ));
-                }
+        if let Some(arr_val) = obj.get(*keyword)
+            && let Some(arr) = arr_val.as_array()
+        {
+            for (i, sub) in arr.iter().enumerate() {
+                violations.extend(find_missing_additional_properties(
+                    sub,
+                    &format!("{path}.{keyword}[{i}]"),
+                ));
             }
         }
     }
 
     // Recurse into $defs
-    if let Some(defs) = obj.get("$defs") {
-        if let Some(defs_obj) = defs.as_object() {
-            for (key, value) in defs_obj {
-                violations.extend(find_missing_additional_properties(
-                    value,
-                    &format!("{path}.$defs.{key}"),
-                ));
-            }
+    if let Some(defs) = obj.get("$defs")
+        && let Some(defs_obj) = defs.as_object()
+    {
+        for (key, value) in defs_obj {
+            violations
+                .extend(find_missing_additional_properties(value, &format!("{path}.$defs.{key}")));
         }
     }
 
     // Recurse into definitions
-    if let Some(defs) = obj.get("definitions") {
-        if let Some(defs_obj) = defs.as_object() {
-            for (key, value) in defs_obj {
-                violations.extend(find_missing_additional_properties(
-                    value,
-                    &format!("{path}.definitions.{key}"),
-                ));
-            }
+    if let Some(defs) = obj.get("definitions")
+        && let Some(defs_obj) = defs.as_object()
+    {
+        for (key, value) in defs_obj {
+            violations.extend(find_missing_additional_properties(
+                value,
+                &format!("{path}.definitions.{key}"),
+            ));
         }
     }
 
     // Recurse into not
-    if let Some(not_schema) = obj.get("not") {
-        if not_schema.is_object() {
-            violations
-                .extend(find_missing_additional_properties(not_schema, &format!("{path}.not")));
-        }
+    if let Some(not_schema) = obj.get("not")
+        && not_schema.is_object()
+    {
+        violations.extend(find_missing_additional_properties(not_schema, &format!("{path}.not")));
     }
 
     // Recurse into patternProperties
-    if let Some(pattern_props) = obj.get("patternProperties") {
-        if let Some(pp_obj) = pattern_props.as_object() {
-            for (key, value) in pp_obj {
-                violations.extend(find_missing_additional_properties(
-                    value,
-                    &format!("{path}.patternProperties.{key}"),
-                ));
-            }
+    if let Some(pattern_props) = obj.get("patternProperties")
+        && let Some(pp_obj) = pattern_props.as_object()
+    {
+        for (key, value) in pp_obj {
+            violations.extend(find_missing_additional_properties(
+                value,
+                &format!("{path}.patternProperties.{key}"),
+            ));
         }
     }
 
     // Recurse into prefixItems
-    if let Some(prefix_items) = obj.get("prefixItems") {
-        if let Some(arr) = prefix_items.as_array() {
-            for (i, item) in arr.iter().enumerate() {
-                violations.extend(find_missing_additional_properties(
-                    item,
-                    &format!("{path}.prefixItems[{i}]"),
-                ));
-            }
+    if let Some(prefix_items) = obj.get("prefixItems")
+        && let Some(arr) = prefix_items.as_array()
+    {
+        for (i, item) in arr.iter().enumerate() {
+            violations.extend(find_missing_additional_properties(
+                item,
+                &format!("{path}.prefixItems[{i}]"),
+            ));
         }
     }
 

@@ -95,7 +95,7 @@ impl Llm for BedrockClient {
         &self.model_id
     }
 
-    #[instrument(skip_all, fields(model_id = %self.model_id, region = %self.region, stream))]
+    #[instrument(name = "model.generate_content", skip_all, fields(model_id = %self.model_id, region = %self.region, stream))]
     async fn generate_content(
         &self,
         request: LlmRequest,
@@ -241,11 +241,9 @@ impl BedrockClient {
                             if let aws_sdk_bedrockruntime::types::ContentBlockDelta::ReasoningContent(
                                 reasoning_delta,
                             ) = delta
-                            {
-                                if let Ok(sig) = reasoning_delta.as_signature() {
+                                && let Ok(sig) = reasoning_delta.as_signature() {
                                     reasoning_signature = Some(sig.clone());
                                 }
-                            }
 
                             if let Some(response) = bedrock_stream_delta_to_adk(delta) {
                                 yield response;

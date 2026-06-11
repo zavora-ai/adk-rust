@@ -45,10 +45,11 @@ ambient = ["dep:cron", "dep:notify", "dep:axum"]
 [dev-dependencies]
 # Internal dev-deps are path-only (no version) so cargo strips them from the
 # published manifest — they can never block or reorder a crates.io publish.
-adk-model = { path = "../adk-model", features = ["gemini", "gemini-interactions"] }
+adk-model = { path = "../adk-model", features = ["gemini", "gemini-interactions", "openai"] }
 adk-runner = { path = "../adk-runner" }
 adk-session = { path = "../adk-session" }
 adk-tool = { path = "../adk-tool" }
+anyhow = "1"
 dotenvy = "0.15"
 proptest = "1.5"
 tempfile = "3"

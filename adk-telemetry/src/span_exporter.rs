@@ -3,6 +3,18 @@ use std::sync::{Arc, RwLock};
 use tracing::{Id, Subscriber, debug};
 use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 
+/// Destination for spans captured by [`AdkSpanLayer`].
+///
+/// Implemented by [`AdkSpanExporter`] (in-memory, queried by the server debug
+/// routes) and, with the `sqlite` feature, by
+/// [`SqliteSpanExporter`](crate::sqlite::SqliteSpanExporter) (persistent,
+/// zero-infrastructure tracing). Implementations decide which spans to keep —
+/// the layer forwards every closed span.
+pub trait SpanSink: Send + Sync {
+    /// Receive one closed span with its collected attributes.
+    fn export_span(&self, span_name: &str, attributes: HashMap<String, String>);
+}
+
 /// ADK-Go style span exporter that stores spans by event_id
 /// Follows the pattern from APIServerSpanExporter in ADK-Go
 #[derive(Debug, Clone, Default)]
@@ -48,8 +60,11 @@ impl AdkSpanExporter {
         debug!("get_session_trace result for session_id '{}': {} spans", session_id, spans.len());
         spans
     }
+}
 
-    /// Internal method to store span (following ADK-Go ExportSpans pattern)
+impl SpanSink for AdkSpanExporter {
+    /// Store a span in the in-memory trace dict (following ADK-Go ExportSpans
+    /// pattern). Only the agent-loop span names are kept.
     fn export_span(&self, span_name: &str, attributes: HashMap<String, String>) {
         // Only capture specific span names (following ADK-Go pattern)
         if span_name == "agent.execute"
@@ -74,13 +89,14 @@ impl AdkSpanExporter {
     }
 }
 
-/// Tracing layer that captures spans and exports them via AdkSpanExporter
+/// Tracing layer that captures spans and exports them via a [`SpanSink`]
+/// (in-memory [`AdkSpanExporter`], SQLite, or any custom sink).
 pub struct AdkSpanLayer {
-    exporter: Arc<AdkSpanExporter>,
+    exporter: Arc<dyn SpanSink>,
 }
 
 impl AdkSpanLayer {
-    pub fn new(exporter: Arc<AdkSpanExporter>) -> Self {
+    pub fn new<S: SpanSink + 'static>(exporter: Arc<S>) -> Self {
         Self { exporter }
     }
 }

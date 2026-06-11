@@ -57,10 +57,10 @@ pub fn chat_response_to_llm_response(response: &ChatMessageResponse, partial: bo
     let mut parts = Vec::new();
 
     // Extract thinking content if present
-    if let Some(thinking) = &response.message.thinking {
-        if !thinking.is_empty() {
-            parts.push(Part::Thinking { thinking: thinking.clone(), signature: None });
-        }
+    if let Some(thinking) = &response.message.thinking
+        && !thinking.is_empty()
+    {
+        parts.push(Part::Thinking { thinking: thinking.clone(), signature: None });
     }
 
     // Add text content

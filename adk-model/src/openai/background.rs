@@ -190,13 +190,13 @@ fn inject_status_metadata(response: &mut LlmResponse, response_id: &str, status:
     let status_str = status_to_str(status);
 
     if let Some(ref mut metadata) = response.provider_metadata {
-        if let Some(openai) = metadata.get_mut("openai") {
-            if let Some(obj) = openai.as_object_mut() {
-                obj.insert("status".to_string(), serde_json::Value::String(status_str.to_string()));
-                // response_id should already be present from from_response, but ensure it
-                obj.entry("response_id".to_string())
-                    .or_insert_with(|| serde_json::Value::String(response_id.to_string()));
-            }
+        if let Some(openai) = metadata.get_mut("openai")
+            && let Some(obj) = openai.as_object_mut()
+        {
+            obj.insert("status".to_string(), serde_json::Value::String(status_str.to_string()));
+            // response_id should already be present from from_response, but ensure it
+            obj.entry("response_id".to_string())
+                .or_insert_with(|| serde_json::Value::String(response_id.to_string()));
         }
     } else {
         response.provider_metadata = Some(serde_json::json!({

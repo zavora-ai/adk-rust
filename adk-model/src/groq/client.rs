@@ -118,6 +118,16 @@ impl Llm for GroqClient {
         &self.config.model
     }
 
+    #[tracing::instrument(
+        name = "model.generate_content",
+        skip_all,
+        fields(
+            model.name = %self.name(),
+            stream = %stream,
+            request.contents_count = %request.contents.len(),
+            request.tools_count = %request.tools.len()
+        )
+    )]
     async fn generate_content(
         &self,
         request: LlmRequest,
@@ -209,8 +219,8 @@ impl Llm for GroqClient {
                                 Ok(chunk_response) => {
                                     if let Some(choice) = chunk_response.choices.first() {
                                         // Handle tool call accumulation
-                                        if let Some(delta) = &choice.delta {
-                                            if let Some(tool_calls) = &delta.tool_calls {
+                                        if let Some(delta) = &choice.delta
+                                            && let Some(tool_calls) = &delta.tool_calls {
                                                 for tc in tool_calls {
                                                     let index = tc.index;
                                                     let entry = tool_call_accumulators
@@ -236,7 +246,6 @@ impl Llm for GroqClient {
                                                     }
                                                 }
                                             }
-                                        }
 
                                         // Check for finish
                                         if choice.finish_reason.is_some() {
@@ -276,13 +285,11 @@ impl Llm for GroqClient {
                                             // Emit final response
                                             let mut parts = Vec::new();
 
-                                            if let Some(delta) = &choice.delta {
-                                                if let Some(text) = &delta.content {
-                                                    if !text.is_empty() {
+                                            if let Some(delta) = &choice.delta
+                                                && let Some(text) = &delta.content
+                                                    && !text.is_empty() {
                                                         parts.push(Part::Text { text: text.clone() });
                                                     }
-                                                }
-                                            }
 
                                             yield LlmResponse {
                                                 content: if parts.is_empty() {
@@ -320,9 +327,9 @@ impl Llm for GroqClient {
                                             };
                                         } else {
                                             // Emit partial text content
-                                            if let Some(delta) = &choice.delta {
-                                                if let Some(text) = &delta.content {
-                                                    if !text.is_empty() {
+                                            if let Some(delta) = &choice.delta
+                                                && let Some(text) = &delta.content
+                                                    && !text.is_empty() {
                                                         yield LlmResponse {
                                                             content: Some(adk_core::Content {
                                                                 role: "model".to_string(),
@@ -342,8 +349,6 @@ impl Llm for GroqClient {
                                                             interaction_id: None,
                                                         };
                                                     }
-                                                }
-                                            }
                                         }
                                     }
                                 }

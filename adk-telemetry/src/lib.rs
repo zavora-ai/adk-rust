@@ -31,6 +31,10 @@ pub mod init;
 pub mod span_exporter;
 pub mod spans;
 
+// Direct span export to a local SQLite file (feature-gated)
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
+
 // GenAI Semantic Conventions module (feature-gated)
 #[cfg(feature = "genai-semconv")]
 pub mod semconv;
@@ -53,9 +57,13 @@ pub use spans::*;
 pub use span_exporter::*;
 
 // Re-export init functions and error type
+#[cfg(feature = "sqlite")]
+pub use init::init_with_sqlite;
 pub use init::{TelemetryError, init_telemetry, init_with_adk_exporter, shutdown_telemetry};
 #[cfg(feature = "otlp")]
 pub use init::{build_otlp_layer, init_with_otlp};
+#[cfg(feature = "sqlite")]
+pub use sqlite::{SessionSummary, SpanRow, SqliteSpanExporter, SqliteTraceReader};
 
 // Re-export metrics
 #[cfg(feature = "otlp")]

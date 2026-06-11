@@ -164,6 +164,16 @@ impl Llm for DeepSeekClient {
         &ADAPTER
     }
 
+    #[tracing::instrument(
+        name = "model.generate_content",
+        skip_all,
+        fields(
+            model.name = %self.name(),
+            stream = %stream,
+            request.contents_count = %request.contents.len(),
+            request.tools_count = %request.tools.len()
+        )
+    )]
     async fn generate_content(
         &self,
         request: LlmRequest,
@@ -252,8 +262,8 @@ impl Llm for DeepSeekClient {
                                     if let Some(choice) = chunk_response.choices.first() {
                                         if let Some(delta) = &choice.delta {
                                             // Accumulate reasoning content
-                                            if let Some(reasoning) = &delta.reasoning_content {
-                                                if !reasoning.is_empty() {
+                                            if let Some(reasoning) = &delta.reasoning_content
+                                                && !reasoning.is_empty() {
                                                     reasoning_buffer.push_str(reasoning);
                                                     if thinking_enabled {
                                                         yield LlmResponse {
@@ -270,7 +280,6 @@ impl Llm for DeepSeekClient {
                                                         };
                                                     }
                                                 }
-                                            }
 
                                             // Handle tool calls
                                             if let Some(tool_calls) = &delta.tool_calls {
@@ -332,13 +341,11 @@ impl Llm for DeepSeekClient {
                                             }
 
                                             let mut parts = Vec::new();
-                                            if let Some(delta) = &choice.delta {
-                                                if let Some(text) = &delta.content {
-                                                    if !text.is_empty() {
+                                            if let Some(delta) = &choice.delta
+                                                && let Some(text) = &delta.content
+                                                    && !text.is_empty() {
                                                         parts.push(Part::Text { text: text.clone() });
                                                     }
-                                                }
-                                            }
 
                                             yield LlmResponse {
                                                 content: if parts.is_empty() {
@@ -367,9 +374,9 @@ impl Llm for DeepSeekClient {
                                             };
                                         } else {
                                             // Emit partial text content
-                                            if let Some(delta) = &choice.delta {
-                                                if let Some(text) = &delta.content {
-                                                    if !text.is_empty() {
+                                            if let Some(delta) = &choice.delta
+                                                && let Some(text) = &delta.content
+                                                    && !text.is_empty() {
                                                         yield LlmResponse {
                                                             content: Some(adk_core::Content {
                                                                 role: "model".to_string(),
@@ -382,8 +389,6 @@ impl Llm for DeepSeekClient {
                                                             ..Default::default()
                                                         };
                                                     }
-                                                }
-                                            }
                                         }
                                     }
                                 }

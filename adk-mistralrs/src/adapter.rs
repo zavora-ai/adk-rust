@@ -535,7 +535,7 @@ impl Llm for MistralRsAdapterModel {
         &self.name
     }
 
-    #[instrument(skip(self, request), fields(model = %self.name))]
+    #[instrument(name = "model.generate_content", skip(self, request), fields(model = %self.name))]
     async fn generate_content(
         &self,
         request: LlmRequest,

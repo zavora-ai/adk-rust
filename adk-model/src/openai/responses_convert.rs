@@ -307,22 +307,20 @@ pub fn build_create_response(
     let extensions = config.map(|c| &c.extensions);
     let openai_ext = extensions.and_then(|ext| ext.get("openai")).and_then(|v| v.as_object());
 
-    if let Some(built_in_tools) = openai_ext.and_then(|o| o.get("built_in_tools")) {
-        if let Some(arr) = built_in_tools.as_array() {
-            for (index, tool_value) in arr.iter().enumerate() {
-                let tool = serde_json::from_value::<Tool>(tool_value.clone()).map_err(|error| {
-                    AdkError::new(
-                        ErrorComponent::Model,
-                        ErrorCategory::InvalidInput,
-                        "model.openai_responses.invalid_tool",
-                        format!(
-                            "failed to deserialize OpenAI built-in tool at index {index}: {error}"
-                        ),
-                    )
-                    .with_provider("openai-responses")
-                })?;
-                tools_vec.push(tool);
-            }
+    if let Some(built_in_tools) = openai_ext.and_then(|o| o.get("built_in_tools"))
+        && let Some(arr) = built_in_tools.as_array()
+    {
+        for (index, tool_value) in arr.iter().enumerate() {
+            let tool = serde_json::from_value::<Tool>(tool_value.clone()).map_err(|error| {
+                AdkError::new(
+                    ErrorComponent::Model,
+                    ErrorCategory::InvalidInput,
+                    "model.openai_responses.invalid_tool",
+                    format!("failed to deserialize OpenAI built-in tool at index {index}: {error}"),
+                )
+                .with_provider("openai-responses")
+            })?;
+            tools_vec.push(tool);
         }
     }
 
@@ -732,12 +730,11 @@ fn extract_phase_from_output(
     for item in output {
         if let OutputItem::Message(_) = item {
             // Serialize the output item to check for a `phase` field
-            if let Ok(value) = serde_json::to_value(item) {
-                if let Some(phase) = value.get("phase").and_then(|p| p.as_str()) {
-                    openai
-                        .insert("phase".to_string(), serde_json::Value::String(phase.to_string()));
-                    // Use the last phase found (final message's phase takes precedence)
-                }
+            if let Ok(value) = serde_json::to_value(item)
+                && let Some(phase) = value.get("phase").and_then(|p| p.as_str())
+            {
+                openai.insert("phase".to_string(), serde_json::Value::String(phase.to_string()));
+                // Use the last phase found (final message's phase takes precedence)
             }
         }
     }
@@ -819,13 +816,13 @@ fn build_provider_metadata(response: &Response) -> Option<serde_json::Value> {
 
     // Collect encrypted_content from reasoning items
     for item in &response.output {
-        if let OutputItem::Reasoning(reasoning) = item {
-            if let Some(encrypted) = &reasoning.encrypted_content {
-                openai.insert(
-                    "encrypted_content".to_string(),
-                    serde_json::Value::String(encrypted.clone()),
-                );
-            }
+        if let OutputItem::Reasoning(reasoning) = item
+            && let Some(encrypted) = &reasoning.encrypted_content
+        {
+            openai.insert(
+                "encrypted_content".to_string(),
+                serde_json::Value::String(encrypted.clone()),
+            );
         }
     }
 

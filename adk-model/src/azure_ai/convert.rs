@@ -188,17 +188,17 @@ pub(crate) fn parse_response(body: &Value) -> LlmResponse {
         let mut parts = Vec::new();
 
         // Extract reasoning content (for Azure AI reasoning models)
-        if let Some(reasoning) = message.get("reasoning_content").and_then(|r| r.as_str()) {
-            if !reasoning.is_empty() {
-                parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
-            }
+        if let Some(reasoning) = message.get("reasoning_content").and_then(|r| r.as_str())
+            && !reasoning.is_empty()
+        {
+            parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
         }
 
         // Extract text content
-        if let Some(text) = message.get("content").and_then(|c| c.as_str()) {
-            if !text.is_empty() {
-                parts.push(Part::Text { text: text.to_string() });
-            }
+        if let Some(text) = message.get("content").and_then(|c| c.as_str())
+            && !text.is_empty()
+        {
+            parts.push(Part::Text { text: text.to_string() });
         }
 
         // Extract tool calls
@@ -274,17 +274,17 @@ pub(crate) fn parse_sse_chunk(chunk: &Value) -> LlmResponse {
         let mut parts = Vec::new();
 
         // Extract reasoning content delta (for Azure AI reasoning models)
-        if let Some(reasoning) = delta.get("reasoning_content").and_then(|r| r.as_str()) {
-            if !reasoning.is_empty() {
-                parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
-            }
+        if let Some(reasoning) = delta.get("reasoning_content").and_then(|r| r.as_str())
+            && !reasoning.is_empty()
+        {
+            parts.push(Part::Thinking { thinking: reasoning.to_string(), signature: None });
         }
 
         // Extract text delta
-        if let Some(text) = delta.get("content").and_then(|c| c.as_str()) {
-            if !text.is_empty() {
-                parts.push(Part::Text { text: text.to_string() });
-            }
+        if let Some(text) = delta.get("content").and_then(|c| c.as_str())
+            && !text.is_empty()
+        {
+            parts.push(Part::Text { text: text.to_string() });
         }
 
         // Extract tool call deltas
@@ -294,21 +294,21 @@ pub(crate) fn parse_sse_chunk(chunk: &Value) -> LlmResponse {
                     let name = func.get("name").and_then(|n| n.as_str());
                     // Only emit a FunctionCall part if we have a name (start of tool call).
                     // Partial argument chunks without a name are accumulated by the caller.
-                    if let Some(name) = name {
-                        if !name.is_empty() {
-                            let args: Value = func
-                                .get("arguments")
-                                .and_then(|a| a.as_str())
-                                .and_then(|a| serde_json::from_str(a).ok())
-                                .unwrap_or(serde_json::json!({}));
-                            let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
-                            parts.push(Part::FunctionCall {
-                                name: name.to_string(),
-                                args,
-                                id,
-                                thought_signature: None,
-                            });
-                        }
+                    if let Some(name) = name
+                        && !name.is_empty()
+                    {
+                        let args: Value = func
+                            .get("arguments")
+                            .and_then(|a| a.as_str())
+                            .and_then(|a| serde_json::from_str(a).ok())
+                            .unwrap_or(serde_json::json!({}));
+                        let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
+                        parts.push(Part::FunctionCall {
+                            name: name.to_string(),
+                            args,
+                            id,
+                            thought_signature: None,
+                        });
                     }
                 }
             }

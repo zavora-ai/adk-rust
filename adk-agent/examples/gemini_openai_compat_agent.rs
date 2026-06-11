@@ -8,7 +8,7 @@
 //! Uses a `GEMINI_API_KEY` (or `GOOGLE_API_KEY`).
 //!
 //! ```bash
-//! GEMINI_API_KEY=... cargo run -p adk-model --features openai --example gemini_openai_compat_agent
+//! GEMINI_API_KEY=... cargo run -p adk-agent --example gemini_openai_compat_agent
 //! ```
 
 use std::sync::Arc;

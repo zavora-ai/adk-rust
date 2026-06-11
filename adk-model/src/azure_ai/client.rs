@@ -86,6 +86,16 @@ impl Llm for AzureAIClient {
         &self.model
     }
 
+    #[tracing::instrument(
+        name = "model.generate_content",
+        skip_all,
+        fields(
+            model.name = %self.name(),
+            stream = %stream,
+            request.contents_count = %request.contents.len(),
+            request.tools_count = %request.tools.len()
+        )
+    )]
     async fn generate_content(
         &self,
         request: LlmRequest,
@@ -278,17 +288,17 @@ fn accumulate_tool_calls(
             (id, String::new(), String::new())
         });
 
-        if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
-            if !id.is_empty() {
-                entry.0 = id.to_string();
-            }
+        if let Some(id) = tc.get("id").and_then(|i| i.as_str())
+            && !id.is_empty()
+        {
+            entry.0 = id.to_string();
         }
 
         if let Some(func) = tc.get("function") {
-            if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
-                if !name.is_empty() {
-                    entry.1 = name.to_string();
-                }
+            if let Some(name) = func.get("name").and_then(|n| n.as_str())
+                && !name.is_empty()
+            {
+                entry.1 = name.to_string();
             }
             if let Some(args) = func.get("arguments").and_then(|a| a.as_str()) {
                 entry.2.push_str(args);

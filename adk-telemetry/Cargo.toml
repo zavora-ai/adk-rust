@@ -20,6 +20,8 @@ opentelemetry = { version = "0.31", optional = true }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"], optional = true }
 opentelemetry-otlp = { version = "0.31", features = ["metrics", "grpc-tonic"], optional = true }
 tracing-opentelemetry = { version = "0.32", optional = true }
+serde_json = { workspace = true, optional = true }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 
 [features]
 default = ["genai-semconv"]
@@ -27,6 +29,10 @@ genai-semconv = []
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 metrics = ["otlp"]
 json = ["tracing-subscriber/json"]
+# Direct span export to a local SQLite file — zero-infrastructure tracing
+# (no collector or backend to deploy). rusqlite is pinned to the release that
+# shares libsqlite3-sys with the workspace's sqlx crates (`links` allows one).
+sqlite = ["dep:rusqlite", "dep:serde_json"]
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["rt", "macros", "time"] }

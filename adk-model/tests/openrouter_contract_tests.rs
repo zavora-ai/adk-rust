@@ -236,10 +236,9 @@ async fn chat_streaming_contract() {
             adk_model::openrouter::OpenRouterChatStreamItem::Chunk(chunk) => {
                 chunk_count += 1;
                 if let Some(delta) = chunk.choices.first().and_then(|choice| choice.delta.as_ref())
+                    && let Some(text) = chat_message_text(delta)
                 {
-                    if let Some(text) = chat_message_text(delta) {
-                        full_text.push_str(&text);
-                    }
+                    full_text.push_str(&text);
                 }
             }
             adk_model::openrouter::OpenRouterChatStreamItem::Done => break,

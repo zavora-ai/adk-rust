@@ -253,10 +253,10 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
         if let Some(msg) = &choice.message {
             let mut parts = Vec::new();
 
-            if let Some(text) = &msg.content {
-                if !text.is_empty() {
-                    parts.push(Part::Text { text: text.clone() });
-                }
+            if let Some(text) = &msg.content
+                && !text.is_empty()
+            {
+                parts.push(Part::Text { text: text.clone() });
             }
 
             if let Some(tool_calls) = &msg.tool_calls {

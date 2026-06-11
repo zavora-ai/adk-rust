@@ -145,10 +145,10 @@ impl WasmBackend {
         // Instantiate the module.
         let instance = linker.instantiate(&mut store, &module).map_err(|e| {
             let msg = e.to_string();
-            if let Some(limit_mb) = request.memory_limit_mb {
-                if msg.contains("memory minimum size") || msg.contains("allocat") {
-                    return SandboxError::MemoryExceeded { limit_mb };
-                }
+            if let Some(limit_mb) = request.memory_limit_mb
+                && (msg.contains("memory minimum size") || msg.contains("allocat"))
+            {
+                return SandboxError::MemoryExceeded { limit_mb };
             }
             SandboxError::ExecutionFailed(format!("failed to instantiate WASM module: {e}"))
         })?;
@@ -167,19 +167,19 @@ impl WasmBackend {
             Ok(()) => Ok(ExecResult { stdout, stderr, exit_code: 0, duration }),
             Err(trap) => {
                 // Check for epoch interruption (timeout) using the Trap enum.
-                if let Some(t) = trap.downcast_ref::<Trap>() {
-                    if *t == Trap::Interrupt {
-                        return Err(SandboxError::Timeout { timeout });
-                    }
+                if let Some(t) = trap.downcast_ref::<Trap>()
+                    && *t == Trap::Interrupt
+                {
+                    return Err(SandboxError::Timeout { timeout });
                 }
 
                 let msg = trap.to_string();
 
                 // Memory limit exceeded.
-                if let Some(limit_mb) = request.memory_limit_mb {
-                    if msg.contains("memory minimum size") || msg.contains("allocat") {
-                        return Err(SandboxError::MemoryExceeded { limit_mb });
-                    }
+                if let Some(limit_mb) = request.memory_limit_mb
+                    && (msg.contains("memory minimum size") || msg.contains("allocat"))
+                {
+                    return Err(SandboxError::MemoryExceeded { limit_mb });
                 }
 
                 // WASI proc_exit → normal exit with code.
@@ -300,12 +300,63 @@ mod tests {
         )
     "#;
 
+    /// A WASI module that busy-loops long enough (~hundreds of ms) to outlive
+    /// another execution's timeout timer before exiting cleanly.
+    const BUSY_LOOP_WAT: &str = r#"
+        (module
+            (import "wasi_snapshot_preview1" "proc_exit"
+                (func $proc_exit (param i32)))
+            (memory (export "memory") 1)
+            (func (export "_start")
+                (local $i i32)
+                (local.set $i (i32.const 300000000))
+                (block $done
+                    (loop $l
+                        (br_if $done (i32.eqz (local.get $i)))
+                        (local.set $i (i32.sub (local.get $i) (i32.const 1)))
+                        (br $l)
+                    )
+                )
+                (call $proc_exit (i32.const 0))
+            )
+        )
+    "#;
+
     #[tokio::test]
     async fn test_basic_wasm_execution() {
         let backend = WasmBackend::new();
         let result = backend.execute(make_wasm_request(HELLO_WAT)).await.unwrap();
         assert_eq!(result.stdout, "hello\n");
         assert_eq!(result.exit_code, 0);
+    }
+
+    /// Regression test: a finished execution's timeout timer must not trip the
+    /// epoch deadline of a later execution. With a shared engine (the old
+    /// implementation), execution A's detached timer fired ~50ms after A
+    /// completed and incremented the engine-global epoch, spuriously timing
+    /// out whatever execution was in flight. Per-execution engines isolate it.
+    #[tokio::test]
+    async fn stale_timeout_timer_does_not_kill_later_executions() {
+        let backend = WasmBackend::new();
+
+        // Execution A: completes in microseconds but arms a 50ms timeout timer.
+        let mut fast = make_wasm_request(HELLO_WAT);
+        fast.timeout = Duration::from_millis(50);
+        backend.execute(fast).await.unwrap();
+
+        // Execution B starts before A's timer fires and runs well past it.
+        let result = backend
+            .execute(make_wasm_request(BUSY_LOOP_WAT))
+            .await
+            .expect("execution must not be killed by a stale timer from a previous run");
+        assert_eq!(result.exit_code, 0);
+        // The loop must genuinely outlive A's 50ms timer for the test to
+        // prove isolation; 300M iterations take far longer on any hardware.
+        assert!(
+            result.duration >= Duration::from_millis(50),
+            "busy loop finished in {:?} — too fast to overlap the stale timer",
+            result.duration
+        );
     }
 
     #[tokio::test]
@@ -492,7 +543,7 @@ mod tests {
 
     #[test]
     fn test_default() {
-        let backend = WasmBackend::default();
+        let backend = WasmBackend;
         assert_eq!(backend.name(), "wasm");
     }
 }

@@ -151,10 +151,10 @@ impl AnthropicClient {
                     let instruction_messages: Vec<_> =
                         messages.drain(..instruction_boundary).collect();
                     for msg in &instruction_messages {
-                        if let Some(text) = extract_text_from_message(msg) {
-                            if !text.is_empty() {
-                                system_parts.push(text);
-                            }
+                        if let Some(text) = extract_text_from_message(msg)
+                            && !text.is_empty()
+                        {
+                            system_parts.push(text);
                         }
                     }
                 }
@@ -195,10 +195,11 @@ impl AnthropicClient {
         let config = request.config.as_ref();
         let anthropic_ext =
             config.and_then(|c| c.extensions.get("anthropic")).and_then(|v| v.as_object());
-        if let Some(built_in_tools) = anthropic_ext.and_then(|o| o.get("built_in_tools")) {
-            if let Some(arr) = built_in_tools.as_array() {
-                for (index, tool_value) in arr.iter().enumerate() {
-                    let tool = serde_json::from_value::<adk_anthropic::ToolUnionParam>(
+        if let Some(built_in_tools) = anthropic_ext.and_then(|o| o.get("built_in_tools"))
+            && let Some(arr) = built_in_tools.as_array()
+        {
+            for (index, tool_value) in arr.iter().enumerate() {
+                let tool = serde_json::from_value::<adk_anthropic::ToolUnionParam>(
                         tool_value.clone(),
                     )
                     .map_err(|error| {
@@ -212,8 +213,7 @@ impl AnthropicClient {
                         )
                         .with_provider("anthropic")
                     })?;
-                    tools.push(tool);
-                }
+                tools.push(tool);
             }
         }
 
@@ -482,6 +482,7 @@ impl Llm for AnthropicClient {
     }
 
     #[tracing::instrument(
+        name = "model.generate_content",
         skip_all,
         fields(
             anthropic.model = %self.model,

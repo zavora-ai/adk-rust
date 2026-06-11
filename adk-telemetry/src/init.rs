@@ -286,3 +286,61 @@ pub fn init_with_adk_exporter(service_name: &str) -> Result<Arc<AdkSpanExporter>
 
     Ok(exporter)
 }
+
+/// Initialize telemetry with direct SQLite span export — zero-infrastructure
+/// tracing with no collector or backend to deploy.
+///
+/// Spans are persisted to the database file at `db_path` (created if needed)
+/// by a background writer thread; the traced code path never blocks on I/O.
+/// Read them back with [`SqliteTraceReader`](crate::sqlite::SqliteTraceReader)
+/// or any SQLite client.
+///
+/// Returns the exporter so callers can [`flush`](crate::sqlite::SqliteSpanExporter::flush)
+/// before exiting (the subscriber keeps it alive for the process lifetime, so
+/// drop-based flushing never fires for globally installed subscribers).
+///
+/// # Example
+/// ```no_run
+/// use adk_telemetry::init_with_sqlite;
+///
+/// let exporter = init_with_sqlite("my-agent", "traces.db")
+///     .expect("Failed to initialize telemetry");
+/// // ... run the agent ...
+/// exporter.flush().ok();
+/// ```
+#[cfg(feature = "sqlite")]
+pub fn init_with_sqlite(
+    service_name: &str,
+    db_path: impl AsRef<std::path::Path>,
+) -> Result<Arc<crate::sqlite::SqliteSpanExporter>, TelemetryError> {
+    // Create the exporter (and surface db errors) before the irreversible
+    // global subscriber installation.
+    let exporter = Arc::new(crate::sqlite::SqliteSpanExporter::new(db_path)?);
+    let exporter_clone = exporter.clone();
+
+    INIT.call_once(|| {
+        let filter = EnvFilter::try_from_default_env()
+            .or_else(|_| EnvFilter::try_new("info"))
+            .unwrap_or_else(|_| EnvFilter::new("info"));
+
+        let adk_layer = AdkSpanLayer::new(exporter_clone);
+
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .with_line_number(true),
+            )
+            .with(adk_layer)
+            .init();
+
+        tracing::info!(
+            service.name = service_name,
+            "telemetry initialized with SQLite span exporter"
+        );
+    });
+
+    Ok(exporter)
+}

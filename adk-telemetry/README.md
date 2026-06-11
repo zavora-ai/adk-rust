@@ -77,6 +77,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## SQLite Export (zero infrastructure)
+
+Persist spans directly to a local SQLite file — no collector or backend to
+deploy. Enable the `sqlite` feature (`adk-rust` forwards it as
+`telemetry-sqlite`):
+
+```toml
+adk-telemetry = { version = "1.0.1", features = ["sqlite"] }
+```
+
+```rust
+use adk_telemetry::init_with_sqlite;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let exporter = init_with_sqlite("my-agent", "traces.db")?;
+
+    // Your agent code here...
+
+    exporter.flush()?; // ensure everything is committed before exit
+    Ok(())
+}
+```
+
+Spans are written by a background thread (batched transactions, WAL mode), so
+the traced code path never blocks on I/O. By default only agent-loop spans are
+stored (`agent.execute`, `call_llm`, `send_data`, `execute_tool*`);
+`SqliteSpanExporter::new(path)?.record_all_spans(true)` keeps everything the
+`RUST_LOG` filter lets through.
+
+Read traces back with `SqliteTraceReader` (or any SQLite client — the schema
+is one `spans` table with an `attributes` JSON column):
+
+```rust
+use adk_telemetry::sqlite::SqliteTraceReader;
+
+let reader = SqliteTraceReader::open("traces.db")?;
+for session in reader.sessions()? {
+    println!("{}: {} spans", session.session_id, session.span_count);
+    for span in reader.session_trace(&session.session_id)? {
+        println!("  {} ({} ms)", span.span_name, span.duration_nanos() / 1_000_000);
+    }
+}
+```
+
 ## Available Functions
 
 | Function | Description |
@@ -84,6 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `init_telemetry(service_name)` | Basic console logging |
 | `init_with_otlp(service_name, endpoint)` | OTLP export to collectors |
 | `init_with_adk_exporter(service_name)` | ADK-style span exporter |
+| `init_with_sqlite(service_name, db_path)` | Direct SQLite span export (`sqlite` feature) |
 | `shutdown_telemetry()` | Flush and shutdown |
 
 ## Span Helpers
@@ -134,6 +179,7 @@ use adk_telemetry::{info, debug, warn, error, trace, instrument, Span};
 - Zero-config defaults with sensible logging
 - OpenTelemetry 0.31 compatible span export
 - OTLP export via `tonic 0.12` (gRPC), aligned with `adk-server`'s `hyper 1.x` / `http 1.x` stack
+- Direct SQLite span export with query API (`sqlite` feature) — no collector needed
 - Automatic context propagation
 - JSON or pretty-print log formats
 

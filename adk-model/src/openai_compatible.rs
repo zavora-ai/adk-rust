@@ -329,14 +329,12 @@ pub(crate) fn build_request_json(
     // the request body.  This allows users to pass provider-specific fields
     // that the typed builder doesn't cover (e.g. provider-specific parameters
     // for OpenAI-compatible APIs like DeepSeek, Together, etc.).
-    if let Some(config) = &request.config {
-        if let Some(openai_ext) = config.extensions.get("openai") {
-            if let (Some(body_obj), Some(ext_obj)) = (body.as_object_mut(), openai_ext.as_object())
-            {
-                for (key, value) in ext_obj {
-                    body_obj.insert(key.clone(), value.clone());
-                }
-            }
+    if let Some(config) = &request.config
+        && let Some(openai_ext) = config.extensions.get("openai")
+        && let (Some(body_obj), Some(ext_obj)) = (body.as_object_mut(), openai_ext.as_object())
+    {
+        for (key, value) in ext_obj {
+            body_obj.insert(key.clone(), value.clone());
         }
     }
 
@@ -451,6 +449,16 @@ impl Llm for OpenAICompatible {
         &self.model
     }
 
+    #[tracing::instrument(
+        name = "model.generate_content",
+        skip_all,
+        fields(
+            model.name = %self.name(),
+            stream = %stream,
+            request.contents_count = %request.contents.len(),
+            request.tools_count = %request.tools.len()
+        )
+    )]
     async fn generate_content(
         &self,
         request: LlmRequest,
@@ -566,11 +574,10 @@ impl Llm for OpenAICompatible {
                                             (call_id, String::new(), String::new())
                                         });
 
-                                    if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
-                                        if !id.is_empty() {
+                                    if let Some(id) = tc.get("id").and_then(|v| v.as_str())
+                                        && !id.is_empty() {
                                             entry.0 = id.to_string();
                                         }
-                                    }
 
                                     if let Some(func) = tc.get("function") {
                                         if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
@@ -632,11 +639,10 @@ impl Llm for OpenAICompatible {
 
                                 // Final response without tool calls.
                                 let mut parts = Vec::new();
-                                if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
-                                    if !text.is_empty() {
+                                if let Some(text) = delta.get("content").and_then(|v| v.as_str())
+                                    && !text.is_empty() {
                                         parts.push(Part::Text { text: text.to_string() });
                                     }
-                                }
 
                                 yield LlmResponse {
                                     content: if parts.is_empty() { None } else {
@@ -662,8 +668,7 @@ impl Llm for OpenAICompatible {
                             // Emit partial reasoning_content as Part::Thinking.
                             if let Some(reasoning) =
                                 delta.get("reasoning_content").and_then(|v| v.as_str())
-                            {
-                                if !reasoning.is_empty() {
+                                && !reasoning.is_empty() {
                                     yield LlmResponse {
                                         content: Some(Content {
                                             role: "model".to_string(),
@@ -684,13 +689,12 @@ impl Llm for OpenAICompatible {
                                         interaction_id: None,
                                     };
                                 }
-                            }
 
                             // Emit partial text content via tool call buffer.
                             // The buffer detects <tool_call> tags split across chunks
                             // and converts them to Part::FunctionCall.
-                            if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
-                                if !text.is_empty() {
+                            if let Some(text) = delta.get("content").and_then(|v| v.as_str())
+                                && !text.is_empty() {
                                     match text_tool_buffer.push(text) {
                                         crate::tool_call_parser::BufferAction::Emit(parts) => {
                                             for part in parts {
@@ -718,7 +722,6 @@ impl Llm for OpenAICompatible {
                                         }
                                     }
                                 }
-                            }
                         }
                     }
                 }

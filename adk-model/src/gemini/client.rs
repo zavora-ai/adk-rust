@@ -1411,8 +1411,12 @@ impl Llm for GeminiModel {
         self.transport == GeminiTransport::Interactions
     }
 
+    // Named distinctly from the agent layer's `call_llm` span (which carries
+    // the gcp.vertex.agent.* attributes and is what trace exporters capture):
+    // this is the model-transport layer, so traces show one `call_llm` per
+    // LLM call instead of an identical nested pair.
     #[adk_telemetry::instrument(
-        name = "call_llm",
+        name = "model.generate_content",
         skip(self, req),
         fields(
             model.name = %self.model_name,

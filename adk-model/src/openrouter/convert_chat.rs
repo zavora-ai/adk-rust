@@ -330,12 +330,12 @@ fn audio_format(mime_type: &str) -> String {
 }
 
 fn default_filename(mime_type: &str, file_uri: Option<&str>) -> String {
-    if let Some(file_uri) = file_uri {
-        if let Some(candidate) = file_uri.rsplit('/').next() {
-            if !candidate.is_empty() && !candidate.contains(':') {
-                return candidate.to_string();
-            }
-        }
+    if let Some(file_uri) = file_uri
+        && let Some(candidate) = file_uri.rsplit('/').next()
+        && !candidate.is_empty()
+        && !candidate.contains(':')
+    {
+        return candidate.to_string();
     }
 
     let extension = match mime_type {

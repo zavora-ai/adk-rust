@@ -25,7 +25,7 @@ tempfile = "3.10"
 
 # Optional dependencies for wasm feature
 wasmtime = { version = "45", optional = true }
-wasmtime-wasi = { version = "44", optional = true }
+wasmtime-wasi = { version = "45", optional = true }
 
 # Optional dependencies for workspace feature
 tar = { version = "0.4", optional = true }
