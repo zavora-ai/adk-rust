@@ -6,6 +6,9 @@ TMPDIR="$(mktemp -d)"
 CHECK_TARGET_DIR="$TMPDIR/target"
 trap 'rm -rf "$TMPDIR"' EXIT
 
+# Entries are "template:provider[:addon1,addon2]".
+# An empty provider means "omit --provider" (exercises the template's
+# default provider, e.g. openai for the openai template).
 templates=(
   "basic:gemini"
   "basic:openai"
@@ -14,18 +17,33 @@ templates=(
   "tools:anthropic"
   "rag:gemini"
   "api:gemini"
-  "openai:gemini"
+  "openai:"
+  "a2a:gemini"
+  "tools:gemini:telemetry,sessions"
+  "llm:gemini:server,sessions"
 )
 
 for entry in "${templates[@]}"; do
-  template="${entry%%:*}"
-  provider="${entry##*:}"
-  name="adk_${template}_${provider}_check"
+  IFS=':' read -r template provider addons <<<"$entry"
+  name="adk_${template}_${provider:-default}_check"
+  if [[ -n "$addons" ]]; then
+    name="${name}_addons"
+  fi
+
+  args=(adk new "$name" --template "$template")
+  if [[ -n "$provider" ]]; then
+    args+=(--provider "$provider")
+  fi
+  if [[ -n "$addons" ]]; then
+    IFS=',' read -ra addon_list <<<"$addons"
+    for addon in "${addon_list[@]}"; do
+      args+=(--addon "$addon")
+    done
+  fi
 
   (
     cd "$TMPDIR"
-    cargo run --manifest-path "$ROOT/Cargo.toml" -p cargo-adk -- \
-      adk new "$name" --template "$template" --provider "$provider"
+    cargo run --manifest-path "$ROOT/Cargo.toml" -p cargo-adk -- "${args[@]}"
 
     cat >> "$name/Cargo.toml" <<PATCH
 

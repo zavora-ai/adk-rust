@@ -24,7 +24,7 @@ use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use cargo_adk::codegen::generate_project;
+use cargo_adk::codegen::generate_project_with_registry;
 use cargo_adk::composition::{DryRunFile, DryRunOutput, resolve_composition};
 use cargo_adk::registry::TemplateRegistry;
 
@@ -60,9 +60,10 @@ enum AdkCommand {
         #[arg(short, long, default_value = "basic")]
         template: String,
 
-        /// LLM provider to use
-        #[arg(short, long, default_value = "gemini")]
-        provider: String,
+        /// LLM provider to use (defaults to the template's default provider,
+        /// which is gemini for most templates)
+        #[arg(short, long)]
+        provider: Option<String>,
 
         /// Model ID to use (overrides provider default)
         #[arg(short, long)]
@@ -87,6 +88,10 @@ enum AdkCommand {
         /// Capability addons to include (repeatable)
         #[arg(long, action = clap::ArgAction::Append)]
         addon: Vec<String>,
+
+        /// Directory of custom template manifests (*.toml) to include
+        #[arg(long)]
+        template_dir: Option<PathBuf>,
 
         /// Preview what would be generated without writing files
         #[arg(long)]
@@ -365,8 +370,11 @@ fn main() {
             json_output,
             with_yaml,
             addon,
+            template_dir,
             dry_run,
         } => {
+            let provider = provider
+                .unwrap_or_else(|| default_provider_for(&template, template_dir.as_deref()));
             if let Err(e) = create_project(
                 &name,
                 &template,
@@ -376,6 +384,7 @@ fn main() {
                 json_output,
                 with_yaml,
                 &addon,
+                template_dir.as_deref(),
                 dry_run,
             ) {
                 if json_output {
@@ -1629,7 +1638,7 @@ fn get_builtin_templates() -> Vec<TemplateInfo> {
         },
         TemplateInfo {
             name: "api",
-            description: "REST API server with health check and A2A protocol",
+            description: "REST API server with /chat and /health endpoints",
             default_provider: "gemini",
             features: vec!["minimal", "server"],
         },
@@ -1654,30 +1663,32 @@ fn get_builtin_templates() -> Vec<TemplateInfo> {
     ]
 }
 
-fn print_templates(_template_dir: Option<&Path>) {
+fn print_templates(template_dir: Option<&Path>) {
+    let mut registry = TemplateRegistry::builtin();
+    if let Some(dir) = template_dir
+        && let Err(e) = registry.load_custom_dir(dir)
+    {
+        eprintln!("warning: {e}");
+    }
+
     println!("Available templates:\n");
 
     println!("  Agent Types:");
-    println!("    {:<14} Single LLM agent with tool calling support", "llm");
-    println!("    {:<14} Sequential multi-agent pipeline", "sequential");
-    println!("    {:<14} Parallel multi-agent execution", "parallel");
-    println!("    {:<14} Loop agent with termination condition", "loop");
-    println!("    {:<14} Conditional routing agent", "conditional");
-    println!("    {:<14} Graph-based workflow with checkpoints", "graph");
-    println!("    {:<14} Real-time voice/audio streaming agent", "realtime");
-    println!("    {:<14} Custom agent with manual trait implementation", "custom");
-
-    println!("\n  Enterprise Patterns:");
-    println!("    {:<14} LLM + server, auth, sessions, telemetry", "production");
-    println!("    {:<14} Supervisor orchestrating sub-agents", "multi-agent");
-    println!("    {:<14} Sequential pipeline with state passing", "pipeline");
-    println!("    {:<14} Conversational agent with memory + server", "chatbot");
-    println!("    {:<14} A2A protocol server with sessions", "a2a-server");
-
-    println!("\n  Legacy (backward-compatible):");
-    for t in get_builtin_templates() {
+    for t in &registry.agent_templates {
         println!("    {:<14} {}", t.name, t.description);
     }
+
+    println!("\n  Enterprise Patterns:");
+    for p in &registry.enterprise_patterns {
+        println!("    {:<14} {}", p.name, p.description);
+    }
+
+    println!("\n  Aliases:");
+    println!("    {:<14} Alias for llm", "basic");
+    println!("    {:<14} Alias for a2a-server", "a2a");
+
+    println!("\n  Other:");
+    println!("    {:<14} Anthropic Managed Agents session with SSE streaming", "managed-agents");
 
     println!("\n  Addons (composable with any template):");
     println!("    --addon {:<12} OpenTelemetry tracing", "telemetry");
@@ -1699,6 +1710,33 @@ fn print_templates(_template_dir: Option<&Path>) {
 
 fn print_templates_json(template_dir: Option<&Path>) {
     let mut templates = get_builtin_templates();
+
+    // Include composable registry templates and patterns not already listed.
+    let registry = TemplateRegistry::builtin();
+    for t in &registry.agent_templates {
+        if !templates.iter().any(|info| info.name == t.name) {
+            templates.push(TemplateInfo {
+                name: t.name,
+                description: t.description,
+                default_provider: t.default_provider,
+                features: t.required_features.clone(),
+            });
+        }
+    }
+    for p in &registry.enterprise_patterns {
+        if !templates.iter().any(|info| info.name == p.name) {
+            let default_provider = registry
+                .resolve_template(p.base_template)
+                .map(|t| t.default_provider)
+                .unwrap_or("gemini");
+            templates.push(TemplateInfo {
+                name: p.name,
+                description: p.description,
+                default_provider,
+                features: vec![],
+            });
+        }
+    }
 
     // Load custom templates from directory if provided
     if let Some(dir) = template_dir
@@ -1733,30 +1771,43 @@ fn print_templates_json(template_dir: Option<&Path>) {
 
 // ── Scaffolding commands ────────────────────────────────────────
 
-/// New composable template names.
-const COMPOSABLE_TEMPLATES: &[&str] =
-    &["llm", "sequential", "parallel", "loop", "conditional", "graph", "realtime", "custom"];
+/// Templates that still use the legacy generators in this binary instead of
+/// the composable registry (template + addon composition).
+const LEGACY_ONLY_TEMPLATES: &[&str] = &["managed-agents"];
 
-/// Enterprise pattern names.
-const ENTERPRISE_PATTERNS: &[&str] =
-    &["multi-agent", "production", "pipeline", "chatbot", "a2a-server"];
+/// Determine whether to use the composable system for a given template.
+///
+/// Everything routes through the composable registry except the few
+/// `LEGACY_ONLY_TEMPLATES` that have no composable equivalent yet. Unknown
+/// template names also go composable so the registry produces the
+/// canonical "unknown template" error.
+fn should_use_composable(template: &str, _addons: &[String]) -> bool {
+    !LEGACY_ONLY_TEMPLATES.contains(&template)
+}
 
-/// Determine whether to use the composable system for a given template + addons.
-fn should_use_composable(template: &str, addons: &[String]) -> bool {
-    // If addons are specified, always use the composable system
-    if !addons.is_empty() {
-        return true;
+/// The default provider for a template when `--provider` is not given.
+///
+/// Looks up the template (or pattern base template) in the registry;
+/// falls back to "gemini" for legacy-only and unknown names.
+fn default_provider_for(template: &str, template_dir: Option<&Path>) -> String {
+    let mut registry = TemplateRegistry::builtin();
+    if let Some(dir) = template_dir {
+        // Errors surface later during project creation; default resolution
+        // just falls back to the built-ins.
+        let _ = registry.load_custom_dir(dir);
     }
-    // If template is a new composable template name, use composable
-    if COMPOSABLE_TEMPLATES.contains(&template) {
-        return true;
+    if let Some(tmpl) = registry.resolve_template(template) {
+        return tmpl.default_provider.to_string();
     }
-    // If template is an enterprise pattern, use composable
-    if ENTERPRISE_PATTERNS.contains(&template) {
-        return true;
+    if let Some(pattern) = registry.resolve_pattern(template)
+        && let Some(base) = registry.resolve_template(pattern.base_template)
+    {
+        return base.default_provider.to_string();
     }
-    // Otherwise (legacy template with no addons), use legacy
-    false
+    if template == "managed-agents" {
+        return "anthropic".to_string();
+    }
+    "gemini".to_string()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1769,6 +1820,7 @@ fn create_project(
     json_output: bool,
     with_yaml: bool,
     addons: &[String],
+    template_dir: Option<&Path>,
     dry_run: bool,
 ) -> Result<(), String> {
     if should_use_composable(template, addons) {
@@ -1779,7 +1831,9 @@ fn create_project(
             model_override,
             output_dir,
             json_output,
+            with_yaml,
             addons,
+            template_dir,
             dry_run,
         );
     }
@@ -1866,10 +1920,15 @@ fn create_project_composable(
     model_override: Option<&str>,
     output_dir: Option<&Path>,
     json_output: bool,
+    with_yaml: bool,
     addons: &[String],
+    template_dir: Option<&Path>,
     dry_run: bool,
 ) -> Result<(), String> {
-    let registry = TemplateRegistry::builtin();
+    let mut registry = TemplateRegistry::builtin();
+    if let Some(dir) = template_dir {
+        registry.load_custom_dir(dir)?;
+    }
 
     // Determine the base template and effective addons
     let (base_template, effective_addons) =
@@ -1901,7 +1960,15 @@ fn create_project_composable(
     }
 
     // Generate project files
-    let files = generate_project(&manifest, name);
+    let mut files = generate_project_with_registry(&registry, &manifest, name);
+
+    // Optionally include a YAML agent definition
+    if with_yaml {
+        files.push(cargo_adk::composition::GeneratedFile {
+            path: format!("agents/{name}.yaml"),
+            content: generate_yaml_definition(name, provider, &manifest.template_name),
+        });
+    }
 
     // Handle dry-run mode
     if dry_run {
@@ -2604,6 +2671,7 @@ mod tests {
             false,
             false,
             &[],
+            None,
             false,
         );
         assert!(result.is_ok());
@@ -2628,6 +2696,7 @@ mod tests {
             false,
             true,
             &[],
+            None,
             false,
         );
         assert!(result.is_ok());
@@ -2659,6 +2728,7 @@ mod tests {
             true,
             false,
             &[],
+            None,
             false,
         );
         assert!(result.is_ok());
@@ -2775,7 +2845,8 @@ mod tests {
         // *For any* valid project name (alphanumeric with hyphens, 1-64 chars) and
         // supported provider (gemini, openai, anthropic), the `a2a` template SHALL
         // generate a project containing Cargo.toml, src/main.rs, .env.example, and
-        // .gitignore files, and the Cargo.toml SHALL contain the `standard` feature.
+        // .gitignore files, and the Cargo.toml SHALL enable the `server` and
+        // `sessions` features (the a2a-server composition).
         // **Validates: Requirements 1.1, 1.2, 1.4**
         proptest! {
             #![proptest_config(ProptestConfig::with_cases(100))]
@@ -2789,7 +2860,7 @@ mod tests {
                 let _ = fs::remove_dir_all(&tmp);
                 fs::create_dir_all(&tmp).unwrap();
 
-                let result = create_project(&name, "a2a", provider, None, Some(&tmp), false, false, &[], false);
+                let result = create_project(&name, "a2a", provider, None, Some(&tmp), false, false, &[], None, false);
                 prop_assert!(result.is_ok(), "create_project failed for name={name}, provider={provider}: {:?}", result.err());
 
                 let project_path = tmp.join(&name);
@@ -2812,11 +2883,11 @@ mod tests {
                     ".gitignore missing for name={name}"
                 );
 
-                // Cargo.toml must contain the standard feature
+                // Cargo.toml must enable the server + sessions features
                 let cargo_content = fs::read_to_string(project_path.join("Cargo.toml")).unwrap();
                 prop_assert!(
-                    cargo_content.contains(r#"features = ["standard"]"#),
-                    "Cargo.toml missing standard feature for name={name}"
+                    cargo_content.contains(r#""server""#) && cargo_content.contains(r#""sessions""#),
+                    "Cargo.toml missing server/sessions features for name={name}"
                 );
 
                 // Cargo.toml must contain the current version

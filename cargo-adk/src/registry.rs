@@ -6,9 +6,10 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::addon::{AddonCodeFragments, CapabilityAddon};
+use crate::addon::{AddonCodeFragments, CapabilityAddon, DependencySpec};
+use crate::codegen::ADK_VERSION;
 use crate::pattern::EnterprisePattern;
-use crate::template::{AgentCodeFragments, AgentTemplate, TemplateCategory};
+use crate::template::{AgentCodeFragments, AgentTemplate, FileFragment, TemplateCategory};
 
 /// Central registry of all available templates, addons, and patterns.
 #[derive(Debug, Clone)]
@@ -26,8 +27,8 @@ pub struct TemplateRegistry {
 impl TemplateRegistry {
     /// Build the default registry with all built-in templates.
     ///
-    /// Populates 8 agent templates, 9 capability addons, 5 enterprise patterns,
-    /// and 6 legacy aliases.
+    /// Populates 12 agent templates, 9 capability addons, 5 enterprise patterns,
+    /// and 2 legacy aliases.
     pub fn builtin() -> Self {
         Self {
             agent_templates: builtin_agent_templates(),
@@ -37,9 +38,49 @@ impl TemplateRegistry {
         }
     }
 
-    /// Load additional templates from a directory.
-    pub fn load_custom_dir(&mut self, _dir: &Path) -> Result<(), String> {
-        // Will be implemented in a later task
+    /// Load additional templates from a directory of TOML manifests.
+    ///
+    /// Each `*.toml` file describes one template:
+    ///
+    /// ```toml
+    /// name = "my-template"                   # required
+    /// description = "My custom agent"        # optional
+    /// provider = "gemini"                    # optional, default provider
+    /// features = ["minimal", "tools"]        # optional, adk-rust features
+    /// imports = ["use std::sync::Arc;"]      # optional, main.rs imports
+    /// # optional; falls back to a basic LLM agent when omitted
+    /// agent_construction = '''
+    /// let agent: Arc<dyn Agent> = Arc::new(
+    ///     LlmAgentBuilder::new("{name}").model(Arc::new(model)).build()?,
+    /// );
+    /// '''
+    /// ```
+    ///
+    /// A custom template with the same name as a built-in replaces it.
+    pub fn load_custom_dir(&mut self, dir: &Path) -> Result<(), String> {
+        let entries = std::fs::read_dir(dir)
+            .map_err(|e| format!("failed to read template directory '{}': {e}", dir.display()))?;
+
+        let mut loaded = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "toml") {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| format!("failed to read '{}': {e}", path.display()))?;
+            let template = parse_custom_template(&content)
+                .map_err(|e| format!("invalid template manifest '{}': {e}", path.display()))?;
+
+            // Same-name custom templates replace built-ins.
+            self.agent_templates.retain(|t| t.name != template.name);
+            self.agent_templates.push(template);
+            loaded += 1;
+        }
+
+        if loaded == 0 {
+            return Err(format!("no .toml template manifests found in '{}'", dir.display()));
+        }
         Ok(())
     }
 
@@ -68,17 +109,67 @@ impl TemplateRegistry {
             .collect()
     }
 
-    /// Resolve an enterprise pattern into its definition.
+    /// Resolve an enterprise pattern into its definition (handling aliases).
     pub fn resolve_pattern(&self, name: &str) -> Option<&EnterprisePattern> {
-        self.enterprise_patterns.iter().find(|p| p.name == name)
+        let resolved_name = self.aliases.get(name).copied().unwrap_or(name);
+        self.enterprise_patterns.iter().find(|p| p.name == resolved_name)
     }
+}
+
+/// Parse a custom template TOML manifest into an [`AgentTemplate`].
+///
+/// Strings are leaked to satisfy the `&'static str` fields; the CLI is a
+/// short-lived process, so this is bounded and acceptable (the JSON template
+/// listing uses the same approach).
+fn parse_custom_template(content: &str) -> Result<AgentTemplate, String> {
+    fn leak(s: &str) -> &'static str {
+        Box::leak(s.to_string().into_boxed_str())
+    }
+
+    let value: toml::Value = content.parse().map_err(|e| format!("TOML parse error: {e}"))?;
+
+    let name = value.get("name").and_then(|v| v.as_str()).ok_or("missing required 'name' field")?;
+    let description =
+        value.get("description").and_then(|v| v.as_str()).unwrap_or("Custom agent template");
+    let default_provider = value.get("provider").and_then(|v| v.as_str()).unwrap_or("gemini");
+
+    let required_features: Vec<&'static str> = value
+        .get("features")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|f| f.as_str()).map(leak).collect())
+        .unwrap_or_else(|| vec!["minimal"]);
+
+    let imports: Vec<&'static str> = value
+        .get("imports")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|f| f.as_str()).map(leak).collect())
+        .unwrap_or_else(|| vec!["use std::sync::Arc;"]);
+
+    // Empty construction falls back to the basic LLM agent in codegen.
+    let agent_construction =
+        value.get("agent_construction").and_then(|v| v.as_str()).map(leak).unwrap_or("");
+
+    Ok(AgentTemplate {
+        name: leak(name),
+        description: leak(description),
+        category: TemplateCategory::AgentType,
+        default_provider: leak(default_provider),
+        required_features,
+        incompatible_addons: vec![],
+        additional_deps: vec![],
+        code_fragments: AgentCodeFragments {
+            imports,
+            agent_construction,
+            additional_files: vec![],
+        },
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Built-in data population
 // ---------------------------------------------------------------------------
 
-/// All 8 built-in agent templates.
+/// All 12 built-in agent templates.
 fn builtin_agent_templates() -> Vec<AgentTemplate> {
     vec![
         AgentTemplate {
@@ -88,6 +179,7 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
             default_provider: "gemini",
             required_features: vec!["minimal"],
             incompatible_addons: vec![],
+            additional_deps: vec![],
             code_fragments: AgentCodeFragments {
                 imports: vec!["use std::sync::Arc;"],
                 agent_construction: r#"let agent: Arc<dyn Agent> = Arc::new(
@@ -107,6 +199,7 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
             default_provider: "gemini",
             required_features: vec!["minimal"],
             incompatible_addons: vec![],
+            additional_deps: vec![],
             code_fragments: AgentCodeFragments {
                 imports: vec!["use std::sync::Arc;", "use adk_rust::agents::SequentialAgent;"],
                 agent_construction: r#"let researcher = Arc::new(
@@ -138,6 +231,7 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
             default_provider: "gemini",
             required_features: vec!["minimal"],
             incompatible_addons: vec![],
+            additional_deps: vec![],
             code_fragments: AgentCodeFragments {
                 imports: vec!["use std::sync::Arc;", "use adk_rust::agents::ParallelAgent;"],
                 agent_construction: r#"let analyst = Arc::new(
@@ -169,6 +263,7 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
             default_provider: "gemini",
             required_features: vec!["minimal"],
             incompatible_addons: vec![],
+            additional_deps: vec![],
             code_fragments: AgentCodeFragments {
                 imports: vec!["use std::sync::Arc;", "use adk_rust::agents::LoopAgent;"],
                 agent_construction: r#"let worker = Arc::new(
@@ -196,6 +291,7 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
             default_provider: "gemini",
             required_features: vec!["minimal"],
             incompatible_addons: vec![],
+            additional_deps: vec![],
             code_fragments: AgentCodeFragments {
                 imports: vec!["use std::sync::Arc;", "use adk_rust::agents::ConditionalAgent;"],
                 agent_construction: r#"let technical = Arc::new(
@@ -227,6 +323,7 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
             default_provider: "gemini",
             required_features: vec!["minimal", "graph"],
             incompatible_addons: vec![],
+            additional_deps: vec![],
             code_fragments: AgentCodeFragments {
                 imports: vec!["use std::sync::Arc;", "use adk_rust::graph::*;"],
                 agent_construction: r#"// Graph-based workflow with checkpoints
@@ -247,6 +344,7 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
             default_provider: "gemini",
             required_features: vec!["minimal", "realtime"],
             incompatible_addons: vec![],
+            additional_deps: vec![],
             code_fragments: AgentCodeFragments {
                 imports: vec!["use std::sync::Arc;", "use adk_rust::realtime::*;"],
                 agent_construction: r#"// Real-time voice agent with bidirectional audio
@@ -267,6 +365,7 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
             default_provider: "gemini",
             required_features: vec!["minimal"],
             incompatible_addons: vec![],
+            additional_deps: vec![],
             code_fragments: AgentCodeFragments {
                 imports: vec!["use std::sync::Arc;", "use async_trait::async_trait;"],
                 agent_construction: r#"// Custom agent implementing the Agent trait directly
@@ -284,6 +383,177 @@ fn builtin_agent_templates() -> Vec<AgentTemplate> {
     }
 
     let agent: Arc<dyn Agent> = Arc::new(MyAgent);"#,
+                additional_files: vec![],
+            },
+        },
+        AgentTemplate {
+            name: "tools",
+            description: "LLM agent with #[tool] custom tools",
+            category: TemplateCategory::AgentType,
+            default_provider: "gemini",
+            required_features: vec!["minimal", "tools"],
+            incompatible_addons: vec![],
+            additional_deps: vec![
+                DependencySpec { crate_name: "adk-tool", version: ADK_VERSION, features: vec![] },
+                DependencySpec { crate_name: "serde", version: "1", features: vec!["derive"] },
+                DependencySpec { crate_name: "serde_json", version: "1", features: vec![] },
+                DependencySpec { crate_name: "schemars", version: "1", features: vec![] },
+            ],
+            code_fragments: AgentCodeFragments {
+                imports: vec!["use std::sync::Arc;", "mod tools;", "use tools::Greet;"],
+                agent_construction: r#"let agent: Arc<dyn Agent> = Arc::new(
+        LlmAgentBuilder::new("{name}")
+            .description("Assistant with custom tools")
+            .instruction("You are a helpful assistant. Use the greet tool when asked to greet someone.")
+            .model(Arc::new(model))
+            .tool(Arc::new(Greet))
+            .build()?,
+    );"#,
+                additional_files: vec![FileFragment {
+                    path: "src/tools.rs",
+                    content: r#"//! Custom tools exposed to the agent via the `#[tool]` macro.
+
+use adk_tool::{AdkError, tool};
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::{Value, json};
+
+#[derive(Deserialize, JsonSchema)]
+pub struct GreetArgs {
+    /// Name of the person to greet
+    pub name: String,
+    /// Greeting style: formal or casual
+    pub style: Option<String>,
+}
+
+/// Greet a person by name.
+#[tool]
+pub async fn greet(args: GreetArgs) -> std::result::Result<Value, AdkError> {
+    let greeting = match args.style.as_deref() {
+        Some("formal") => format!("Good day, {}. How may I assist you?", args.name),
+        _ => format!("Hey {}! What's up?", args.name),
+    };
+    Ok(json!({ "greeting": greeting }))
+}
+"#,
+                }],
+            },
+        },
+        AgentTemplate {
+            name: "rag",
+            description: "RAG agent with vector search over a knowledge base",
+            category: TemplateCategory::AgentType,
+            default_provider: "gemini",
+            required_features: vec!["minimal"],
+            incompatible_addons: vec![],
+            additional_deps: vec![DependencySpec {
+                crate_name: "adk-rag",
+                version: ADK_VERSION,
+                features: vec!["gemini"],
+            }],
+            code_fragments: AgentCodeFragments {
+                imports: vec![
+                    "use std::sync::Arc;",
+                    "use adk_rag::{Document, FixedSizeChunker, GeminiEmbeddingProvider, InMemoryVectorStore, RagConfig, RagPipeline, RagTool};",
+                ],
+                agent_construction: r#"// Embeddings use Gemini; set GOOGLE_API_KEY for the embedding provider.
+    let gemini_key = std::env::var("GOOGLE_API_KEY")
+        .map_err(|_| anyhow::anyhow!("GOOGLE_API_KEY is required for Gemini embeddings — copy .env.example to .env and add your key"))?;
+
+    let pipeline = Arc::new(
+        RagPipeline::builder()
+            .config(RagConfig::default())
+            .embedding_provider(Arc::new(GeminiEmbeddingProvider::new(&gemini_key)?))
+            .vector_store(Arc::new(InMemoryVectorStore::new()))
+            .chunker(Arc::new(FixedSizeChunker::new(256, 50)))
+            .build()?,
+    );
+
+    pipeline.create_collection("docs").await?;
+    pipeline.ingest("docs", &Document {
+        id: "example".into(),
+        text: "ADK-Rust is a framework for building AI agents in Rust. \
+               It supports multiple LLM providers, tool calling, RAG, and more.".into(),
+        metadata: Default::default(),
+        source_uri: None,
+    }).await?;
+
+    tracing::info!("ingested example document into the 'docs' collection");
+
+    let agent: Arc<dyn Agent> = Arc::new(
+        LlmAgentBuilder::new("{name}")
+            .description("RAG-powered knowledge assistant")
+            .instruction("Use the rag_search tool to find relevant documents before answering.")
+            .model(Arc::new(model))
+            .tool(Arc::new(RagTool::new(pipeline, "docs")))
+            .build()?,
+    );"#,
+                additional_files: vec![],
+            },
+        },
+        AgentTemplate {
+            name: "api",
+            description: "REST API server exposing the agent over HTTP",
+            category: TemplateCategory::AgentType,
+            default_provider: "gemini",
+            required_features: vec!["minimal", "server"],
+            incompatible_addons: vec!["server"],
+            additional_deps: vec![DependencySpec {
+                crate_name: "axum",
+                version: "0.8",
+                features: vec![],
+            }],
+            code_fragments: AgentCodeFragments {
+                imports: vec![
+                    "use std::sync::Arc;",
+                    "use adk_rust::server::{ServerConfig, create_app};",
+                    "use adk_rust::session::InMemorySessionService;",
+                ],
+                agent_construction: r#"let agent: Arc<dyn Agent> = Arc::new(
+        LlmAgentBuilder::new("{name}")
+            .description("REST API agent")
+            .instruction("You are a helpful assistant accessible via REST API.")
+            .model(Arc::new(model))
+            .build()?,
+    );
+
+    let session_service = Arc::new(InMemorySessionService::new());
+
+    let config = ServerConfig::new(
+        Arc::new(adk_rust::SingleAgentLoader::new(agent)),
+        session_service,
+    );
+    let app = create_app(config);
+
+    let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
+    let addr = format!("0.0.0.0:{port}");
+    tracing::info!("ADK agent server running on http://{addr}");
+    tracing::info!("  GET  /api/health                                — health check");
+    tracing::info!("  POST /api/sessions                              — create a session (appName, userId)");
+    tracing::info!("  POST /api/run/{name}/<user_id>/<session_id>     — send a message, SSE response");
+
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    axum::serve(listener, app).await?;"#,
+                additional_files: vec![],
+            },
+        },
+        AgentTemplate {
+            name: "openai",
+            description: "OpenAI-powered LLM agent",
+            category: TemplateCategory::AgentType,
+            default_provider: "openai",
+            required_features: vec!["minimal", "openai"],
+            incompatible_addons: vec![],
+            additional_deps: vec![],
+            code_fragments: AgentCodeFragments {
+                imports: vec!["use std::sync::Arc;"],
+                agent_construction: r#"let agent: Arc<dyn Agent> = Arc::new(
+        LlmAgentBuilder::new("{name}")
+            .description("An AI assistant")
+            .instruction("You are a helpful assistant.")
+            .model(Arc::new(model))
+            .build()?,
+    );"#,
                 additional_files: vec![],
             },
         },
@@ -508,14 +778,79 @@ fn builtin_enterprise_patterns() -> Vec<EnterprisePattern> {
     ]
 }
 
-/// Legacy alias mappings (6 total).
+/// Legacy alias mappings.
+///
+/// `tools`, `rag`, and `openai` are real templates and `api` is a real
+/// pattern (they previously aliased to plain `llm`, silently dropping the
+/// capability the name promised). `a2a` resolves to the `a2a-server` pattern.
 fn builtin_aliases() -> HashMap<&'static str, &'static str> {
     let mut aliases = HashMap::new();
     aliases.insert("basic", "llm");
-    aliases.insert("tools", "llm");
-    aliases.insert("rag", "llm");
-    aliases.insert("api", "llm");
-    aliases.insert("openai", "llm");
-    aliases.insert("a2a", "llm");
+    aliases.insert("a2a", "a2a-server");
     aliases
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_registry_has_advertised_templates() {
+        let registry = TemplateRegistry::builtin();
+        for name in ["llm", "tools", "rag", "api", "openai", "graph", "realtime"] {
+            assert!(
+                registry.resolve_template(name).is_some(),
+                "advertised template '{name}' missing from registry"
+            );
+        }
+        // Aliases resolve to real targets.
+        assert_eq!(registry.resolve_template("basic").unwrap().name, "llm");
+        assert_eq!(registry.resolve_pattern("a2a").unwrap().name, "a2a-server");
+    }
+
+    #[test]
+    fn openai_template_defaults_to_openai_provider() {
+        let registry = TemplateRegistry::builtin();
+        assert_eq!(registry.resolve_template("openai").unwrap().default_provider, "openai");
+    }
+
+    #[test]
+    fn load_custom_dir_parses_toml_manifest() {
+        let dir = std::env::temp_dir().join("cargo-adk-custom-templates-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("greeter.toml"),
+            r#"
+name = "greeter"
+description = "A custom greeter agent"
+provider = "gemini"
+features = ["minimal"]
+"#,
+        )
+        .unwrap();
+
+        let mut registry = TemplateRegistry::builtin();
+        registry.load_custom_dir(&dir).unwrap();
+
+        let tmpl = registry.resolve_template("greeter").expect("custom template loaded");
+        assert_eq!(tmpl.description, "A custom greeter agent");
+        assert_eq!(tmpl.default_provider, "gemini");
+        // Empty construction means codegen falls back to the basic LLM agent.
+        assert!(tmpl.code_fragments.agent_construction.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_custom_dir_rejects_empty_dir() {
+        let dir = std::env::temp_dir().join("cargo-adk-custom-templates-empty");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut registry = TemplateRegistry::builtin();
+        assert!(registry.load_custom_dir(&dir).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

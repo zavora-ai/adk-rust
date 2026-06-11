@@ -2,6 +2,8 @@
 //!
 //! Templates define the *agent structure* — the core agent type and its construction code.
 
+use crate::addon::DependencySpec;
+
 /// Category of a template in the registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TemplateCategory {
@@ -48,6 +50,9 @@ pub struct AgentTemplate {
     pub required_features: Vec<&'static str>,
     /// Addons that are incompatible with this template.
     pub incompatible_addons: Vec<&'static str>,
+    /// Additional crate dependencies beyond `adk-rust` (e.g., `adk-tool`,
+    /// `schemars` for the `tools` template).
+    pub additional_deps: Vec<DependencySpec>,
     /// Code fragments for generating the agent.
     pub code_fragments: AgentCodeFragments,
 }

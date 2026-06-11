@@ -218,8 +218,16 @@ pub fn resolve_composition(
     }
     feature_set.insert(provider_config.feature_flag.to_string());
 
-    // 6. Collect dependencies from all addons
+    // 6. Collect dependencies from the template and all addons
     let mut dependencies = Vec::new();
+    for dep in &resolved_template.additional_deps {
+        dependencies.push(ResolvedDependency {
+            crate_name: dep.crate_name.to_string(),
+            version: dep.version.to_string(),
+            features: dep.features.iter().map(|f| f.to_string()).collect(),
+            default_features: true,
+        });
+    }
     for addon in &resolved_addons {
         for dep in &addon.additional_deps {
             dependencies.push(ResolvedDependency {

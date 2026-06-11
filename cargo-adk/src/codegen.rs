@@ -11,7 +11,7 @@ use crate::provider::get_provider_config;
 use crate::registry::TemplateRegistry;
 
 /// Current ADK-Rust version, read from this crate's own version at compile time.
-const ADK_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const ADK_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Generate all project files from a composition manifest.
 ///
@@ -31,14 +31,24 @@ const ADK_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// }
 /// ```
 pub fn generate_project(manifest: &CompositionManifest, project_name: &str) -> Vec<GeneratedFile> {
-    vec![
+    generate_project_with_registry(&TemplateRegistry::builtin(), manifest, project_name)
+}
+
+/// Like [`generate_project`], but uses the given registry so custom templates
+/// (loaded via `--template-dir`) contribute their code fragments.
+pub fn generate_project_with_registry(
+    registry: &TemplateRegistry,
+    manifest: &CompositionManifest,
+    project_name: &str,
+) -> Vec<GeneratedFile> {
+    let mut files = vec![
         GeneratedFile {
             path: "Cargo.toml".to_string(),
             content: generate_cargo_toml(manifest, project_name),
         },
         GeneratedFile {
             path: "src/main.rs".to_string(),
-            content: generate_main_rs(manifest, project_name),
+            content: generate_main_rs_with_registry(registry, manifest, project_name),
         },
         GeneratedFile { path: ".env.example".to_string(), content: generate_env_example(manifest) },
         GeneratedFile {
@@ -46,7 +56,29 @@ pub fn generate_project(manifest: &CompositionManifest, project_name: &str) -> V
             content: generate_readme(manifest, project_name),
         },
         GeneratedFile { path: ".gitignore".to_string(), content: generate_gitignore() },
-    ]
+    ];
+
+    // Append additional files contributed by the template and addons.
+    if let Some(template) = registry.resolve_template(&manifest.template_name) {
+        for fragment in &template.code_fragments.additional_files {
+            files.push(GeneratedFile {
+                path: fragment.path.to_string(),
+                content: fragment.content.to_string(),
+            });
+        }
+    }
+    for addon_name in &manifest.addons {
+        if let Some(addon) = registry.capability_addons.iter().find(|a| a.name == *addon_name) {
+            for fragment in &addon.code_fragments.additional_files {
+                files.push(GeneratedFile {
+                    path: fragment.path.to_string(),
+                    content: fragment.content.to_string(),
+                });
+            }
+        }
+    }
+
+    files
 }
 
 /// Generate `Cargo.toml` with minimal dependencies from the composition manifest.
@@ -90,6 +122,21 @@ anyhow = "1"
     output
 }
 
+/// Fallback agent construction used when a template has no (or placeholder)
+/// `agent_construction` fragment. Uses fully qualified `Arc` because the
+/// fallback path cannot rely on template-provided imports.
+fn placeholder_agent_construction(project_name: &str) -> String {
+    format!(
+        r#"    let agent: std::sync::Arc<dyn Agent> = std::sync::Arc::new(
+        LlmAgentBuilder::new("{project_name}")
+            .description("An AI assistant")
+            .instruction("You are a helpful assistant.")
+            .model(std::sync::Arc::new(model))
+            .build()?,
+    );"#,
+    )
+}
+
 /// Generate `src/main.rs` with proper composition of template and addons.
 ///
 /// The generated code merges:
@@ -101,8 +148,16 @@ anyhow = "1"
 ///
 /// The server addon uses `std::env::var("PORT")` for port binding.
 pub fn generate_main_rs(manifest: &CompositionManifest, project_name: &str) -> String {
-    let registry = TemplateRegistry::builtin();
+    generate_main_rs_with_registry(&TemplateRegistry::builtin(), manifest, project_name)
+}
 
+/// Like [`generate_main_rs`], but uses the given registry so custom templates
+/// (loaded via `--template-dir`) contribute their code fragments.
+pub fn generate_main_rs_with_registry(
+    registry: &TemplateRegistry,
+    manifest: &CompositionManifest,
+    project_name: &str,
+) -> String {
     // Resolve provider config for model init code
     let provider_config = get_provider_config(&manifest.provider).ok();
 
@@ -139,6 +194,17 @@ pub fn generate_main_rs(manifest: &CompositionManifest, project_name: &str) -> S
         }
     }
 
+    // When nothing serves (no server addon, template doesn't start its own
+    // server), run the agent in the interactive console so `cargo run` does
+    // something useful out of the box.
+    const SELF_SERVING_TEMPLATES: &[&str] = &["api"];
+    let has_server_addon = manifest.addons.iter().any(|a| a == "server");
+    let interactive =
+        !has_server_addon && !SELF_SERVING_TEMPLATES.contains(&manifest.template_name.as_str());
+    if interactive {
+        imports.push("use adk_rust::Launcher;".to_string());
+    }
+
     let imports_section = imports.join("\n");
 
     // Build model initialization (includes api_key loading from env)
@@ -151,7 +217,7 @@ pub fn generate_main_rs(manifest: &CompositionManifest, project_name: &str) -> S
         };
         if pc.requires_api_key {
             format!(
-                "    let api_key = std::env::var(\"{}\").expect(\"{} must be set\");\n    let model = {};",
+                "    let api_key = std::env::var(\"{}\")\n        .map_err(|_| anyhow::anyhow!(\"{} is not set — copy .env.example to .env and add your key\"))?;\n    let model = {};",
                 pc.env_var, pc.env_var, init_code
             )
         } else {
@@ -160,7 +226,7 @@ pub fn generate_main_rs(manifest: &CompositionManifest, project_name: &str) -> S
     } else {
         let model_id = manifest.model_override.as_deref().unwrap_or("gemini-3.5-flash");
         format!(
-            "    let api_key = std::env::var(\"GOOGLE_API_KEY\").expect(\"GOOGLE_API_KEY must be set\");\n    let model = adk_rust::model::GeminiModel::new(&api_key, \"{model_id}\")?;"
+            "    let api_key = std::env::var(\"GOOGLE_API_KEY\")\n        .map_err(|_| anyhow::anyhow!(\"GOOGLE_API_KEY is not set — copy .env.example to .env and add your key\"))?;\n    let model = adk_rust::model::GeminiModel::new(&api_key, \"{model_id}\")?;"
         )
     };
 
@@ -169,26 +235,14 @@ pub fn generate_main_rs(manifest: &CompositionManifest, project_name: &str) -> S
         let code = tmpl.code_fragments.agent_construction;
         if code.is_empty() || code.starts_with("// TODO") {
             // Placeholder agent construction
-            format!(
-                r#"    let agent = LlmAgent::builder()
-        .name("{project_name}")
-        .model(model)
-        .instruction("You are a helpful assistant.")
-        .build();"#,
-            )
+            placeholder_agent_construction(project_name)
         } else {
             // Replace {name} placeholder with actual project name
             let resolved = code.replace("{name}", project_name);
             format!("    {resolved}")
         }
     } else {
-        format!(
-            r#"    let agent = LlmAgent::builder()
-        .name("{project_name}")
-        .model(model)
-        .instruction("You are a helpful assistant.")
-        .build();"#,
-        )
+        placeholder_agent_construction(project_name)
     };
 
     // Build addon initialization (sorted by priority)
@@ -218,7 +272,6 @@ pub fn generate_main_rs(manifest: &CompositionManifest, project_name: &str) -> S
 
     // Check if telemetry addon is present for tracing init
     let has_telemetry = manifest.addons.iter().any(|a| a == "telemetry");
-    let has_server = manifest.addons.iter().any(|a| a == "server");
 
     // Build tracing subscriber init
     let tracing_init = if has_telemetry {
@@ -235,14 +288,15 @@ pub fn generate_main_rs(manifest: &CompositionManifest, project_name: &str) -> S
             .to_string()
     };
 
-    // Build server binding (if server addon present)
-    let server_section = if has_server {
+    // Run the interactive console when nothing else drives the agent.
+    // (When the server addon is present, its initialization binds and serves;
+    // self-serving templates like `api` serve inside their construction code.)
+    let launcher_section = if interactive {
         r#"
-    // Server binding
-    let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
-    let addr = format!("0.0.0.0:{port}");
-    tracing::info!("starting server on {}", addr);"#
-            .to_string()
+    // Interactive console
+    Launcher::new(agent).run().await?;
+"#
+        .to_string()
     } else {
         String::new()
     };
@@ -277,7 +331,7 @@ async fn main() -> anyhow::Result<()> {{
 
     // Agent construction
 {agent_construction}
-{addon_init_section}{builder_calls_section}{server_section}
+{addon_init_section}{builder_calls_section}{launcher_section}
     Ok(())
 }}
 "#
