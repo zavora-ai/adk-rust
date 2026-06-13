@@ -15,7 +15,8 @@ happen server-side. The browser is a thin audio device.
 | **Audio playback** | Gapless Web Audio playback of the assistant's PCM stream, with barge-in |
 | **Session persistence** | Completed turns persisted to a `SessionService` |
 | **Knowledge-graph memory** | A file-backed `GraphMemoryService` (bi-temporal KG) is Mia's long-term memory: her profile card is injected into the system prompt at session start, and every turn is logged to the graph's episodic store |
-| **Live memory panel** | The "User Memory Insights" panel reads and writes the **same** graph over `/api/memory` — add a fact, reset to baseline, all server-side |
+| **Agent self-curation** | Mia can write durable facts back into the graph mid-conversation via the `remember`/`relate` tools (`adk-tool`'s `graph-memory-tools`, auto-bridged to realtime) — so what she learns this session becomes her profile next session |
+| **Live memory panel** | The "User Memory Insights" panel reads and writes the **same** graph over `/api/memory` — add a fact, reset to baseline, all server-side; it refreshes after each turn, so facts Mia saves appear live |
 | **Tool calling** | `get_weather` executed **server-side**; the result is fed back to the model |
 | **VAD** | Server-side voice activity detection for natural turn-taking |
 | **Coaching persona** | "Mia" mindfulness coach with guidelines and preferences |
@@ -59,20 +60,24 @@ agent and the "User Memory Insights" panel are looking at the *same* memory:
   he relocated to the Bay Area and prefers to be addressed by name. (Nothing on
   the Insights panel is mocked; it's rendered from the graph.)
 - **During the session**, every completed turn is appended to the graph's
-  episodic log via the integration layer's `store_to_memory`.
+  episodic log via the integration layer's `store_to_memory`. And when Shai
+  shares something durable, Mia calls the `remember`/`relate` tools to promote
+  it into structured graph nodes — these are `adk-tool`'s `graph-memory-tools`
+  built-ins, auto-bridged to the realtime tool interface and scoped to
+  `(app_name, user_id)` by the integration layer (`.adk_tool(...)`).
 - **The panel** reads `GET /api/memory` and writes `POST /api/memory`
   (add an observation under a category/entity) and `POST /api/memory/reset`
-  (wipe and re-seed the baseline profile).
+  (wipe and re-seed the baseline profile). It also re-fetches after each turn,
+  so a fact Mia just saved appears without a refresh.
 
 The graph is file-backed (`mia_memory.db` by default, override with
 `MIA_MEMORY_DB`), so Mia remembers Shai across restarts. On first run an empty
 graph is seeded with Shai's baseline profile.
 
-> Heavy fact-extraction (distilling raw turns into new entities/relations) is
-> intentionally left to an out-of-band consolidation pass rather than the hot
-> path — see the `GraphMemoryService` docs. This example seeds the profile and
-> lets you curate it from the panel; it does not yet auto-extract facts from the
-> conversation.
+> The agent curates the graph *explicitly* (it decides to call `remember`).
+> *Automatic* distillation of raw turns into entities/relations — an out-of-band
+> consolidation pass, off the hot path — is intentionally deferred; see the
+> `GraphMemoryService` docs.
 
 ## Providers
 
@@ -124,8 +129,8 @@ cargo run --manifest-path examples/realtime_voice/Cargo.toml -- probe gemini
 1. Click **START VOICE SESSION** — the browser opens a WebSocket to the server.
 2. The server builds an `IntegratedRealtimeRunner` (the chosen model + an
    in-memory `SessionService` + the shared `GraphMemoryService` + the
-   `get_weather` tool), injects the graph's profile card into Mia's
-   instruction, and connects.
+   `get_weather` tool + the `remember`/`relate` KG tools), injects the graph's
+   profile card into Mia's instruction, and connects.
 3. The browser captures microphone audio as 24 kHz PCM16 and streams base64
    frames up the WebSocket.
 4. Server VAD detects turn boundaries; the model responds automatically.
@@ -150,4 +155,5 @@ cargo run --manifest-path examples/realtime_voice/Cargo.toml -- probe gemini
 ```toml
 adk-realtime = { version = "1.1.0", features = ["openai", "gemini", "integration"] }
 adk-memory   = { version = "1.1.0", features = ["graph-memory"] }
+adk-tool     = { version = "1.1.0", features = ["graph-memory-tools"] }
 ```

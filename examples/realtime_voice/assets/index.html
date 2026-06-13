@@ -906,6 +906,7 @@
             case 'response_done':
                 document.getElementById('miaStatus').textContent = 'idle';
                 endAssistantTurn();      // finalize the current bubble
+                loadMemory();            // pick up any facts Mia just saved (remember/relate)
                 break;
             case 'tool':
                 addDecision(`Tool ${msg.name}(${msg.args}) → ${msg.result}`);

@@ -57,6 +57,7 @@ use adk_realtime::model::BoxedModel;
 use adk_realtime::openai::OpenAIRealtimeModel;
 use adk_realtime::runner::FnToolHandler;
 use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+use adk_tool::{RelateTool, RememberTool};
 
 use crate::tools::get_weather_tool_def;
 
@@ -68,7 +69,12 @@ You guide users through breathing exercises, meditation, and emotional awareness
 Speak slowly, calmly, and thoughtfully. Address the user as Shai. \
 Avoid somatic grounding exercises unless explicitly requested; favor breath \
 awareness and cognitive reframing. Keep responses concise and soothing. \
-If the user asks about the weather, use the get_weather tool.";
+If the user asks about the weather, use the get_weather tool. \
+When the user shares a durable fact about themselves — their name, a stable \
+preference, a goal, a relationship, or a significant life event — quietly save \
+it with the `remember` tool (and use `relate` to connect entities, e.g. Shai \
+located_in 'Bay Area') so you recall it in future sessions. Save facts silently: \
+never announce that you are saving, and do not store small talk or passing moods.";
 
 /// The realtime provider for a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -400,14 +406,15 @@ fn build_model(provider: Provider) -> anyhow::Result<(BoxedModel, &'static str)>
 
 /// Build an [`IntegratedRealtimeRunner`] for one browser session, wiring the
 /// chosen provider to an in-memory session service, the **shared** knowledge
-/// graph, and the weather tool.
+/// graph, the weather tool, and the KG curation tools (`remember`/`relate`).
 ///
 /// The graph's profile card is read here and baked into Mia's system
 /// instruction, so she greets Shai already knowing him. (The integration layer
 /// queries memory at connect but does not yet inject it into the instruction
 /// itself, so we do that explicitly and leave `inject_memory_context` off.)
 /// Completed turns are still appended to the graph's episodic log via
-/// `store_to_memory`.
+/// `store_to_memory`, and Mia can promote durable facts into structured graph
+/// nodes herself via the `remember`/`relate` tools.
 async fn build_runner(
     provider: Provider,
     session_id: &str,
@@ -453,8 +460,14 @@ async fn build_runner(
         .config(config)
         .identity(APP_NAME, USER_ID, session_id)
         .session_service(session_service)
-        .memory_service(kg)
+        .memory_service(kg.clone())
         .integration_config(integration_config)
+        // Self-curation: Mia can write durable facts back into the *same* graph.
+        // These adk-tool built-ins are auto-bridged to the realtime ToolHandler
+        // interface and scoped to (APP_NAME, USER_ID) by the integration layer —
+        // so what she learns this session becomes her profile card next session.
+        .adk_tool(Arc::new(RememberTool::new(kg.clone())))
+        .adk_tool(Arc::new(RelateTool::new(kg)))
         .tool(get_weather_tool_def(), weather_tool())
         .build()?;
 

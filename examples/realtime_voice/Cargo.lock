@@ -98,6 +98,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-rust-macros"
+version = "1.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "adk-session"
 version = "1.1.0"
 dependencies = [
@@ -106,6 +115,36 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "adk-telemetry"
+version = "1.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "adk-tool"
+version = "1.1.0"
+dependencies = [
+ "adk-core",
+ "adk-memory",
+ "adk-rust-macros",
+ "adk-telemetry",
+ "async-trait",
+ "base64",
+ "chrono",
+ "futures",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -1796,6 +1835,7 @@ dependencies = [
  "adk-memory",
  "adk-realtime",
  "adk-session",
+ "adk-tool",
  "anyhow",
  "axum",
  "base64",
@@ -2773,6 +2813,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
