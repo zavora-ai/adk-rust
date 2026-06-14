@@ -1,0 +1,37 @@
+[package]
+name = "realtime-tools-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Demonstrates tool calling in realtime voice sessions using IntegratedRealtimeRunner with session/memory persistence"
+
+[workspace]
+
+[dependencies]
+# ADK crates
+adk-realtime = { path = "../../adk-realtime", features = ["openai", "integration"] }
+adk-core = { path = "../../adk-core" }
+adk-session = { path = "../../adk-session" }
+adk-memory = { path = "../../adk-memory" }
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+
+# Error handling
+anyhow = "1.0"
+
+# Environment
+dotenvy = "0.15"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Serialization
+serde_json = "1.0"
+
+# TLS
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
+
+# UUID
+uuid = { version = "1.23", features = ["v4"] }
