@@ -658,7 +658,7 @@ dependencies = [
  "adk-core",
  "adk-gemini",
  "arrow-array 58.3.0",
- "arrow-schema 58.3.0",
+ "arrow-schema 59.0.0",
  "async-trait",
  "futures",
  "lancedb",
@@ -1607,6 +1607,12 @@ name = "arrow-schema"
 version = "58.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f633dbfdf39c039ada1bf9e34c694816eb71fbb7dc78f613993b7245e078a1ed"
+
+[[package]]
+name = "arrow-schema"
+version = "59.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80b3e786a0dd9103acd583a6fb486dbf2f3268466cc0bd571dcf34cef231c1f1"
 
 [[package]]
 name = "arrow-select"
