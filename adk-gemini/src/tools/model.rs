@@ -10,6 +10,7 @@ pub enum Tool {
     /// Function-based tool
     Function {
         /// The function declaration for the tool
+        #[serde(rename = "functionDeclarations")]
         function_declarations: Vec<FunctionDeclaration>,
     },
     /// Google Search tool
@@ -463,6 +464,17 @@ pub enum FunctionCallingMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_function_declarations_uses_camel_case() {
+        let tool = Tool::Function {
+            function_declarations: vec![FunctionDeclaration::new("test_func", "desc", None)],
+        };
+
+        let json = serde_json::to_value(&tool).unwrap();
+        assert!(json.get("functionDeclarations").is_some());
+        assert!(json.get("function_declarations").is_none());
+    }
 
     #[test]
     fn tool_config_include_server_side_tool_invocations_serde_round_trip() {

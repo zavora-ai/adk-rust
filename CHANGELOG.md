@@ -57,6 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-gemini: fix tool definition for Gemini 3 compatibility** — renamed
+  `function_declarations` field to `functionDeclarations` to match the
+  `camelCase` requirement of the Gemini 3 / 2.5 REST API.
 - **adk-sandbox: WASM timeout isolation.** Each execution gets its own
   wasmtime engine; previously the engine was shared and any execution's
   timeout timer (including stale timers from finished runs) tripped the epoch
