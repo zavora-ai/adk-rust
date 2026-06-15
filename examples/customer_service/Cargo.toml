@@ -1,0 +1,43 @@
+[package]
+name = "customer-service-agent-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Next-gen multimodal customer-service voice agent (OpenAI or Gemini realtime): sees what you show the camera, reads your tone, and takes real actions (refunds, human handoff)"
+
+[workspace]
+
+[dependencies]
+# ADK crates
+adk-realtime = { path = "../../adk-realtime", features = ["openai", "gemini", "integration"] }
+adk-core = { path = "../../adk-core" }
+adk-session = { path = "../../adk-session" }
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+
+# Web server (serves the UI, bridges browser audio/video over a WebSocket)
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors"] }
+
+# Errors / env / logging
+anyhow = "1.0"
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# TLS provider for the realtime WebSocket
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
+
+# Base64 for audio frames
+base64 = "0.22"
+
+# Session IDs
+uuid = { version = "1.23", features = ["v4"] }
+
+# Sync primitives
+futures = "0.3"

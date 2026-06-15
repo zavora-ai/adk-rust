@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en" data-theme="system">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#070b15" media="(prefers-color-scheme: dark)" />
+<title>Customer Service Agent</title>
+<style>
+  :root {
+    --page: #eef1f7; --bg-grad: #e1e8f5;
+    --panel: #ffffff; --panel-2: #f3f6fc; --panel-3: #e9eefa;
+    --line: #e3e8f1; --line-strong: #d0d8e6;
+    --fg: #1b2538; --muted: #5d6b86; --faint: #9aa6be;
+    --brand: #3b6cf6; --brand-strong: #2f59d6; --brand-ink: #ffffff; --brand-soft: #e7eefe;
+    --accent: #0c9f6e; --accent-soft: #e6f7f0;
+    --danger: #e5484d;
+    --ring: rgba(59,108,246,.35);
+    --shadow-sm: 0 1px 2px rgba(16,24,40,.06);
+    --shadow: 0 1px 3px rgba(16,24,40,.07), 0 12px 30px rgba(16,24,40,.07);
+    --radius: 16px;
+  }
+  :root[data-theme="dark"] {
+    --page: #070b15; --bg-grad: #14213c;
+    --panel: #161f33; --panel-2: #0f1728; --panel-3: #1d2740;
+    --line: #283450; --line-strong: #3a496c;
+    --fg: #e9eefc; --muted: #9aabcc; --faint: #6b7d9f;
+    --brand: #6b97ff; --brand-strong: #5b86f0; --brand-ink: #06122c; --brand-soft: #16213c;
+    --accent: #2fdca0; --accent-soft: #133225;
+    --danger: #ff6b6b;
+    --ring: rgba(107,151,255,.4);
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.5);
+    --shadow: 0 2px 6px rgba(0,0,0,.5), 0 18px 44px rgba(0,0,0,.5);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root[data-theme="system"] {
+      --page: #070b15; --bg-grad: #14213c;
+      --panel: #161f33; --panel-2: #0f1728; --panel-3: #1d2740;
+      --line: #283450; --line-strong: #3a496c;
+      --fg: #e9eefc; --muted: #9aabcc; --faint: #6b7d9f;
+      --brand: #6b97ff; --brand-strong: #5b86f0; --brand-ink: #06122c; --brand-soft: #16213c;
+      --accent: #2fdca0; --accent-soft: #133225;
+      --danger: #ff6b6b;
+      --ring: rgba(107,151,255,.4);
+      --shadow-sm: 0 1px 2px rgba(0,0,0,.5);
+      --shadow: 0 2px 6px rgba(0,0,0,.5), 0 18px 44px rgba(0,0,0,.5);
+    }
+  }
+  :root[data-theme="dark"] .card { box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.05); }
+  @media (prefers-color-scheme: dark) { :root[data-theme="system"] .card { box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.05); } }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; color: var(--fg);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: radial-gradient(1100px 540px at 50% -10%, var(--bg-grad) 0%, transparent 60%), var(--page);
+    -webkit-font-smoothing: antialiased;
+    transition: background-color .3s, color .3s;
+    display: flex; flex-direction: column; min-height: 100vh;
+  }
+  .icon { width: 1.1em; height: 1.1em; stroke: currentColor; fill: none; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* ── Top bar ─────────────────────────────────────────────── */
+  header { display: flex; align-items: center; gap: 14px; padding: 12px clamp(14px, 4vw, 28px);
+    background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+  .brand .mark { width: 38px; height: 38px; border-radius: 11px; flex: none; display: grid; place-items: center;
+    color: #fff; background: linear-gradient(135deg, var(--brand), var(--accent)); box-shadow: var(--shadow-sm); }
+  .brand .mark .icon { width: 20px; height: 20px; stroke-width: 2.1; }
+  .brand h1 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
+  .brand p { margin: 1px 0 0; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+  .grow { flex: 1; }
+  .control { display: flex; align-items: center; gap: 10px; }
+  .select { position: relative; display: flex; align-items: center; }
+  .select::after { content: ""; position: absolute; right: 11px; width: 8px; height: 8px; pointer-events: none;
+    border-right: 2px solid var(--faint); border-bottom: 2px solid var(--faint); transform: translateY(-2px) rotate(45deg); }
+  select { appearance: none; -webkit-appearance: none; background: var(--panel-2); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 9px; padding: 9px 30px 9px 12px; font-size: 13.5px; font-weight: 500; cursor: pointer; }
+  select:focus-visible { outline: none; border-color: var(--brand); box-shadow: 0 0 0 4px var(--ring); }
+  select:disabled { opacity: .6; }
+  .theme { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); }
+  .theme button { background: none; border: 0; color: var(--muted); width: 30px; height: 28px; border-radius: 7px; cursor: pointer; display: grid; place-items: center; }
+  .theme button .icon { width: 16px; height: 16px; }
+  .theme button:hover { color: var(--fg); }
+  .theme button[aria-pressed="true"] { color: var(--brand); background: var(--panel); box-shadow: var(--shadow-sm); }
+
+  button.btn { border: 1px solid transparent; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 600;
+    padding: 10px 18px; display: inline-flex; align-items: center; gap: 8px; transition: filter .15s, background .15s, border-color .15s; }
+  button.btn:active { transform: translateY(1px); }
+  button.btn:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--ring); }
+  .btn-primary { background: var(--brand); color: var(--brand-ink); box-shadow: var(--shadow-sm); }
+  .btn-primary:hover { filter: brightness(1.06); }
+  .btn-ghost { background: var(--panel); color: var(--fg); border-color: var(--line-strong); }
+  .btn-ghost:hover { border-color: var(--brand); }
+  .btn-ghost.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+  .btn-danger { background: transparent; color: var(--danger); border-color: var(--line-strong); }
+  .btn-danger:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  button.btn:disabled { opacity: .55; cursor: default; }
+
+  /* ── Layout ──────────────────────────────────────────────── */
+  main { flex: 1; display: grid; grid-template-columns: 320px 1fr 360px; gap: 18px;
+    max-width: 1320px; width: 100%; margin: 0 auto; padding: 20px clamp(14px, 4vw, 28px) 28px; align-items: stretch; }
+  @media (max-width: 1080px) { main { grid-template-columns: 1fr 1fr; } .col-info { grid-column: 1 / -1; } }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+
+  /* Info column */
+  .col-info { padding: 20px; overflow-y: auto; }
+  .col-info h2 { margin: 0 0 8px; font-size: 16px; }
+  .col-info p.lead { margin: 0 0 18px; font-size: 13.5px; color: var(--muted); line-height: 1.6; }
+  .feat { display: flex; gap: 11px; margin: 14px 0; }
+  .feat .ic { width: 30px; height: 30px; border-radius: 9px; flex: none; display: grid; place-items: center;
+    background: var(--brand-soft); color: var(--brand); }
+  .feat .ic .icon { width: 16px; height: 16px; }
+  .feat h3 { margin: 1px 0 3px; font-size: 13px; }
+  .feat p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .try { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 16px; }
+  .try .label { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .try ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+  .try li { font-size: 12.5px; color: var(--fg); background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 9px; padding: 8px 11px; line-height: 1.4; }
+  .try li span { color: var(--faint); }
+
+  /* Conversation column */
+  .col-chat { display: flex; flex-direction: column; min-height: 440px; overflow: hidden; }
+  .chat-status { display: flex; align-items: center; gap: 9px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+  .chat-status .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none; }
+  .chat-status.live .dot { background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); animation: pulse 1.7s infinite; }
+  .chat-status.err { color: var(--danger); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+  .messages { flex: 1; overflow-y: auto; padding: 18px 16px; display: flex; flex-direction: column; gap: 12px; }
+  .connect-cta { margin: auto; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 16px; color: var(--muted); }
+  .connect-cta p { margin: 0; font-size: 14px; }
+  .msg { max-width: 84%; padding: 10px 13px; border-radius: 14px; font-size: 14.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: var(--brand); color: var(--brand-ink); border-bottom-right-radius: 5px; }
+  .msg.agent { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--line); border-bottom-left-radius: 5px; }
+  .msg .who { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; opacity: .7; margin-bottom: 3px; }
+  .tool-event { align-self: center; max-width: 92%; display: flex; align-items: center; gap: 9px; font-size: 12.5px;
+    color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 7px 14px; font-weight: 600; }
+  .tool-event.handoff { color: var(--brand); background: var(--brand-soft); }
+  .tool-event .icon { width: 15px; height: 15px; }
+  .composer { display: flex; gap: 9px; padding: 12px 14px; border-top: 1px solid var(--line); }
+  .composer input { flex: 1; background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px;
+    padding: 12px 14px; font-size: 14px; color: var(--fg); outline: none; }
+  .composer input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px var(--ring); }
+  .composer input::placeholder { color: var(--faint); }
+  .composer input:disabled { opacity: .6; }
+
+  /* Media column */
+  .col-media { display: flex; flex-direction: column; gap: 14px; }
+  .camera { position: relative; aspect-ratio: 4/3; border-radius: var(--radius); overflow: hidden;
+    background: #0c1018; border: 1px solid var(--line); display: grid; place-items: center; }
+  .camera video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: none; }
+  .camera.on video { display: block; }
+  .camera .off { color: #8a93a6; font-size: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .camera.on .off { display: none; }
+  .camera .live-badge { position: absolute; top: 10px; left: 10px; display: none; align-items: center; gap: 6px;
+    background: rgba(0,0,0,.55); color: #fff; font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 999px; }
+  .camera.on .live-badge { display: flex; }
+  .camera .live-badge .d { width: 7px; height: 7px; border-radius: 50%; background: #ff5a5a; animation: pulse 1.4s infinite; }
+  .media-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .media-controls .btn { justify-content: center; }
+  .level { display: flex; align-items: flex-end; gap: 3px; height: 22px; justify-content: center; }
+  .level i { width: 3px; background: var(--accent); border-radius: 2px; height: 15%; opacity: .85; }
+  .mic-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); padding: 0 2px; }
+
+  @media (prefers-reduced-motion: reduce) { *, ::before, ::after { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
+</style>
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-headset" viewBox="0 0 24 24"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><path d="M4 14a2 2 0 0 0 2 2h1v-5H6a2 2 0 0 0-2 2Z"/><path d="M20 14a2 2 0 0 1-2 2h-1v-5h1a2 2 0 0 1 2 2Z"/><path d="M18 16v1a4 4 0 0 1-4 4h-2"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></symbol>
+    <symbol id="i-mic-off" viewBox="0 0 24 24"><path d="m2 2 20 20"/><path d="M18.9 13.2A7 7 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.3V5a3 3 0 0 0-5.7-1.3"/><path d="M9 9v3a3 3 0 0 0 5.1 2.1"/><path d="M12 19v3"/></symbol>
+    <symbol id="i-cam" viewBox="0 0 24 24"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></symbol>
+    <symbol id="i-cam-off" viewBox="0 0 24 24"><path d="m2 2 20 20"/><path d="M10.66 6H14a2 2 0 0 1 2 2v3.34l1 1L22 8v8"/><path d="M16 16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+    <symbol id="i-desktop" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M19 14c1.5-1.5 3-3.4 3-5.5A4.5 4.5 0 0 0 12 5 4.5 4.5 0 0 0 2 8.5c0 2.1 1.5 4 3 5.5l7 7Z"/></symbol>
+    <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3 7v5l9 9 7-7-9-9H3Z"/><circle cx="7.5" cy="7.5" r="1.2"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></symbol>
+    <symbol id="i-handoff" viewBox="0 0 24 24"><path d="M16 3a4 4 0 0 1 0 8M3 21v-2a4 4 0 0 1 4-4h3a4 4 0 0 1 4 4v2"/><circle cx="8.5" cy="7" r="4"/></symbol>
+  </svg>
+
+  <header>
+    <div class="brand">
+      <span class="mark"><svg class="icon"><use href="#i-headset"/></svg></span>
+      <div>
+        <h1>Customer Service Agent</h1>
+        <p>Multimodal realtime support · OpenAI or Gemini</p>
+      </div>
+    </div>
+    <span class="grow"></span>
+    <div class="control">
+      <div class="select" title="Backend">
+        <select id="provider">
+          <option value="openai">OpenAI · gpt-realtime</option>
+          <option value="gemini">Gemini · Live</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" id="connectBtn" onclick="toggleConnect()">
+        <svg class="icon"><use href="#i-bolt"/></svg><span id="connectLabel">Connect</span>
+      </button>
+      <div class="theme" role="group" aria-label="Color theme">
+        <button id="th-system" aria-pressed="true" title="System" aria-label="System theme"><svg class="icon"><use href="#i-desktop"/></svg></button>
+        <button id="th-light" aria-pressed="false" title="Light" aria-label="Light theme"><svg class="icon"><use href="#i-sun"/></svg></button>
+        <button id="th-dark" aria-pressed="false" title="Dark" aria-label="Dark theme"><svg class="icon"><use href="#i-moon"/></svg></button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Info -->
+    <section class="card col-info">
+      <h2>Next-gen support, live</h2>
+      <p class="lead">A support agent that can <strong>see</strong> what you show the camera, <strong>hear</strong> your tone, and take <strong>real actions</strong> to resolve issues instantly.</p>
+      <div class="feat">
+        <span class="ic"><svg class="icon"><use href="#i-eye"/></svg></span>
+        <div><h3>Multimodal</h3><p>Show a damaged item to the camera — the agent sees it and helps you return it.</p></div>
+      </div>
+      <div class="feat">
+        <span class="ic"><svg class="icon"><use href="#i-heart"/></svg></span>
+        <div><h3>Affective dialogue</h3><p>Reads your emotional tone and responds with genuine empathy.</p></div>
+      </div>
+      <div class="feat">
+        <span class="ic"><svg class="icon"><use href="#i-tag"/></svg></span>
+        <div><h3>Real actions</h3><p>Processes refunds and hands off to a human — server-side tools, not just talk.</p></div>
+      </div>
+      <div class="try">
+        <div class="label">Try saying</div>
+        <ul>
+          <li>“I want to return this item, can you see it?” <span>(show it to the camera)</span></li>
+          <li>“I'm really frustrated with this service!” <span>(tone detection)</span></li>
+          <li>“Can I get a refund for order A-10293?” <span>(refund tool)</span></li>
+          <li>“I need to speak to a real person.” <span>(human handoff)</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Conversation -->
+    <section class="card col-chat">
+      <div class="chat-status" id="chatStatus"><span class="dot"></span><span id="statusText">Not connected</span></div>
+      <div class="messages" id="messages">
+        <div class="connect-cta" id="cta">
+          <svg class="icon" style="width:34px;height:34px;color:var(--faint)"><use href="#i-headset"/></svg>
+          <p>Connect to start chatting with support.</p>
+          <button class="btn btn-primary" onclick="toggleConnect()"><svg class="icon"><use href="#i-bolt"/></svg> Connect now</button>
+        </div>
+      </div>
+      <div class="composer">
+        <input id="chatInput" type="text" placeholder="Type a message…" disabled
+               onkeydown="if(event.key==='Enter')sendText()" />
+        <button class="btn btn-primary" id="sendBtn" onclick="sendText()" disabled aria-label="Send">
+          <svg class="icon"><use href="#i-send"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <!-- Media -->
+    <section class="col-media">
+      <div class="camera" id="camera">
+        <video id="video" autoplay playsinline muted></video>
+        <div class="off"><svg class="icon" style="width:26px;height:26px"><use href="#i-cam-off"/></svg> Camera off</div>
+        <div class="live-badge"><span class="d"></span> LIVE</div>
+      </div>
+      <div class="media-controls">
+        <button class="btn btn-ghost" id="micBtn" onclick="toggleMic()" disabled>
+          <svg class="icon"><use href="#i-mic"/></svg><span id="micLabel">Start mic</span>
+        </button>
+        <button class="btn btn-ghost" id="camBtn" onclick="toggleCamera()" disabled>
+          <svg class="icon"><use href="#i-cam"/></svg><span id="camLabel">Start camera</span>
+        </button>
+      </div>
+      <div class="mic-row" id="micRow" style="display:none">
+        <span class="level" id="level"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+        <span id="micHint">Listening — speak naturally</span>
+      </div>
+      <button class="btn btn-danger" id="endBtn" onclick="toggleConnect()" style="display:none">End session</button>
+    </section>
+  </main>
+
+<script>
+  // ── Theme ────────────────────────────────────────────────────────────────
+  (function () {
+    const root = document.documentElement, ids = { system:'th-system', light:'th-light', dark:'th-dark' };
+    const apply = (m) => { root.setAttribute('data-theme', m); localStorage.setItem('cs-theme', m);
+      for (const [k,id] of Object.entries(ids)) document.getElementById(id).setAttribute('aria-pressed', String(k===m)); };
+    document.addEventListener('DOMContentLoaded', () => {
+      apply(localStorage.getItem('cs-theme') || 'system');
+      for (const [k,id] of Object.entries(ids)) document.getElementById(id).addEventListener('click', () => apply(k));
+    });
+  })();
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  let ws = null, connected = false;
+  let micStream = null, captureCtx = null, captureNode = null;
+  let playbackCtx = null, nextPlayTime = 0, liveSources = [];
+  let camStream = null, frameTimer = null, rafId = null, micLevel = 0;
+  let inputRate = 24000, outputRate = 24000, provider = 'openai';
+  let agentEl = null, userEl = null;
+
+  function setStatus(text, kind) {
+    document.getElementById('statusText').textContent = text;
+    const s = document.getElementById('chatStatus');
+    s.classList.toggle('live', kind === 'live'); s.classList.toggle('err', kind === 'err');
+  }
+
+  // ── Connect / disconnect ─────────────────────────────────────────────────
+  function toggleConnect() { connected ? disconnect() : connect(); }
+
+  function connect() {
+    provider = document.getElementById('provider').value;
+    document.getElementById('provider').disabled = true;
+    setConnectLabel('Connecting…', true);
+    setStatus('Connecting…');
+    ws = new WebSocket(`ws://${location.host}/ws?provider=${encodeURIComponent(provider)}`);
+    ws.binaryType = 'arraybuffer';
+    ws.onmessage = (e) => handle(JSON.parse(e.data));
+    ws.onclose = () => { if (connected) teardown(); };
+    ws.onerror = () => setStatus('Connection error', 'err');
+  }
+
+  function disconnect() {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'hangup' }));
+    teardown();
+  }
+
+  function onReady(msg) {
+    connected = true;
+    inputRate = msg.input_rate || 24000; outputRate = msg.output_rate || 24000;
+    playbackCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: outputRate });
+    nextPlayTime = 0;
+    const cta = document.getElementById('cta'); if (cta) cta.style.display = 'none';
+    document.getElementById('connectBtn').style.display = 'none';
+    document.getElementById('endBtn').style.display = '';
+    document.getElementById('micBtn').disabled = false;
+    document.getElementById('camBtn').disabled = false;
+    document.getElementById('chatInput').disabled = false;
+    document.getElementById('sendBtn').disabled = false;
+    setStatus(`Connected · ${msg.provider} — start your mic or just type`, 'live');
+  }
+
+  function teardown() {
+    connected = false;
+    try { ws && ws.close(); } catch (_) {}
+    ws = null;
+    stopMic(); stopCamera();
+    if (playbackCtx) { try { playbackCtx.close(); } catch (_) {} playbackCtx = null; }
+    liveSources = []; nextPlayTime = 0; agentEl = userEl = null;
+    document.getElementById('provider').disabled = false;
+    document.getElementById('connectBtn').style.display = '';
+    setConnectLabel('Connect', false);
+    document.getElementById('endBtn').style.display = 'none';
+    document.getElementById('micBtn').disabled = true;
+    document.getElementById('camBtn').disabled = true;
+    document.getElementById('chatInput').disabled = true;
+    document.getElementById('sendBtn').disabled = true;
+    const cta = document.getElementById('cta'); if (cta) cta.style.display = '';
+    setStatus('Not connected');
+  }
+  function setConnectLabel(t, busy) {
+    document.getElementById('connectLabel').textContent = t;
+    document.getElementById('connectBtn').disabled = busy;
+  }
+
+  // ── Mic ────────────────────────────────────────────────────────────────────
+  async function toggleMic() { micStream ? stopMic() : startMic(); }
+  async function startMic() {
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    } catch (e) { setStatus('Mic denied: ' + e.message, 'err'); return; }
+    captureCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: inputRate });
+    const src = captureCtx.createMediaStreamSource(micStream);
+    captureNode = captureCtx.createScriptProcessor(2048, 1, 1);
+    captureNode.onaudioprocess = (e) => {
+      const input = e.inputBuffer.getChannelData(0);
+      let sum = 0; for (let i = 0; i < input.length; i++) sum += input[i]*input[i];
+      micLevel = Math.max(Math.sqrt(sum/input.length), micLevel*0.8);
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type:'input_audio', audio: bytesToBase64(floatTo16BitPCM(input)) }));
+    };
+    src.connect(captureNode); captureNode.connect(captureCtx.destination);
+    setBtn('micBtn','micLabel', true, 'Stop mic', '#i-mic-off');
+    document.getElementById('micRow').style.display = 'flex';
+    animateLevel();
+  }
+  function stopMic() {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    if (captureNode) { try { captureNode.disconnect(); } catch(_){} captureNode = null; }
+    if (captureCtx) { try { captureCtx.close(); } catch(_){} captureCtx = null; }
+    if (micStream) { micStream.getTracks().forEach(t=>t.stop()); micStream = null; }
+    micLevel = 0;
+    setBtn('micBtn','micLabel', false, 'Start mic', '#i-mic');
+    document.getElementById('micRow').style.display = 'none';
+  }
+  function animateLevel() {
+    const bars = document.querySelectorAll('#level i'), t = performance.now()/300;
+    bars.forEach((b,i) => { const lvl = Math.min(1, micLevel*5);
+      const h = Math.max(0.12, lvl*(0.5+0.5*Math.sin(t*1.6+i))); b.style.height = (12+h*88)+'%'; });
+    rafId = requestAnimationFrame(animateLevel);
+  }
+
+  // ── Camera ───────────────────────────────────────────────────────────────
+  async function toggleCamera() { camStream ? stopCamera() : startCamera(); }
+  async function startCamera() {
+    try { camStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } }); }
+    catch (e) { setStatus('Camera denied: ' + e.message, 'err'); return; }
+    const video = document.getElementById('video');
+    video.srcObject = camStream;
+    document.getElementById('camera').classList.add('on');
+    setBtn('camBtn','camLabel', true, 'Stop camera', '#i-cam-off');
+    // Frame cadence: Gemini streams video; OpenAI gets periodic snapshots.
+    const intervalMs = provider === 'gemini' ? 700 : 2500;
+    const canvas = document.createElement('canvas');
+    frameTimer = setInterval(() => {
+      if (!camStream || !ws || ws.readyState !== WebSocket.OPEN) return;
+      canvas.width = 640; canvas.height = 480;
+      canvas.getContext('2d').drawImage(video, 0, 0, 640, 480);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+      const data = dataUrl.split(',')[1];
+      if (data) ws.send(JSON.stringify({ type:'video_frame', mime:'image/jpeg', data }));
+    }, intervalMs);
+  }
+  function stopCamera() {
+    if (frameTimer) { clearInterval(frameTimer); frameTimer = null; }
+    if (camStream) { camStream.getTracks().forEach(t=>t.stop()); camStream = null; }
+    document.getElementById('video').srcObject = null;
+    document.getElementById('camera').classList.remove('on');
+    setBtn('camBtn','camLabel', false, 'Start camera', '#i-cam');
+  }
+
+  function setBtn(btnId, labelId, on, label, iconHref) {
+    const b = document.getElementById(btnId); b.classList.toggle('on', on);
+    document.getElementById(labelId).textContent = label;
+    b.querySelector('use').setAttribute('href', iconHref);
+  }
+
+  // ── Chat / events ──────────────────────────────────────────────────────────
+  function sendText() {
+    const input = document.getElementById('chatInput');
+    const text = input.value.trim();
+    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+    addUserMessage(text); input.value = '';
+    ws.send(JSON.stringify({ type:'text', text }));
+  }
+
+  function handle(msg) {
+    switch (msg.type) {
+      case 'ready': onReady(msg); break;
+      case 'audio': playPcmChunk(msg.audio); break;
+      case 'agent_transcript': appendAgent(msg.delta); break;
+      case 'user_transcript': addUserMessage(msg.text); break;
+      case 'user_transcript_delta': appendUser(msg.delta); break;
+      case 'user_speaking': endAgent(); flushPlayback(); break;
+      case 'user_stopped': endUser(); break;
+      case 'response_done': endAgent(); break;
+      case 'tool': addToolEvent(msg); break;
+      case 'error': setStatus('Error: ' + msg.message, 'err'); break;
+    }
+  }
+
+  function bubble(role) {
+    const m = document.getElementById('messages');
+    const el = document.createElement('div'); el.className = 'msg ' + role;
+    const who = document.createElement('div'); who.className = 'who'; who.textContent = role === 'user' ? 'You' : 'Aria';
+    const txt = document.createElement('span'); txt.className = 'txt';
+    el.appendChild(who); el.appendChild(txt); m.appendChild(el); m.scrollTop = m.scrollHeight;
+    return txt;
+  }
+  function appendAgent(d) { if (!d) return; endUser(); if (!agentEl) agentEl = bubble('agent'); agentEl.textContent += d; scroll(); }
+  function endAgent() { agentEl = null; }
+  function appendUser(d) { if (!d) return; endAgent(); if (!userEl) userEl = bubble('user'); userEl.textContent += d; scroll(); }
+  function endUser() { userEl = null; }
+  function addUserMessage(text) { endUser(); endAgent(); if (text) bubble('user').textContent = text; scroll(); }
+  function scroll() { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; }
+
+  function addToolEvent(msg) {
+    endAgent();
+    let args = {}; try { args = JSON.parse(msg.args || '{}'); } catch (_) {}
+    const m = document.getElementById('messages');
+    const el = document.createElement('div');
+    if (msg.name === 'process_refund') {
+      el.className = 'tool-event';
+      el.innerHTML = `<svg class="icon"><use href="#i-tag"/></svg> Processing refund for order ${escapeHtml(args.order_id || '')}…`;
+    } else if (msg.name === 'connect_to_human') {
+      el.className = 'tool-event handoff';
+      el.innerHTML = `<svg class="icon"><use href="#i-handoff"/></svg> Connecting you to a human specialist…`;
+    } else {
+      el.className = 'tool-event';
+      el.innerHTML = `<svg class="icon"><use href="#i-bolt"/></svg> ${escapeHtml(msg.name)}`;
+    }
+    m.appendChild(el); scroll();
+  }
+  function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+  // ── PCM helpers ─────────────────────────────────────────────────────────────
+  function floatTo16BitPCM(f){const o=new Int16Array(f.length);for(let i=0;i<f.length;i++){const s=Math.max(-1,Math.min(1,f[i]));o[i]=s<0?s*0x8000:s*0x7fff;}return new Uint8Array(o.buffer);}
+  function bytesToBase64(b){let s='';for(let i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s);}
+  function base64ToInt16(b){const bin=atob(b);const buf=new ArrayBuffer(bin.length);const v=new Uint8Array(buf);for(let i=0;i<bin.length;i++)v[i]=bin.charCodeAt(i);return new Int16Array(buf);}
+  function playPcmChunk(b64) {
+    if (!playbackCtx) return;
+    const pcm = base64ToInt16(b64); if (!pcm.length) return;
+    const buf = playbackCtx.createBuffer(1, pcm.length, outputRate);
+    const ch = buf.getChannelData(0); for (let i=0;i<pcm.length;i++) ch[i]=pcm[i]/0x8000;
+    const src = playbackCtx.createBufferSource(); src.buffer = buf; src.connect(playbackCtx.destination);
+    const now = playbackCtx.currentTime; if (nextPlayTime < now) nextPlayTime = now;
+    src.start(nextPlayTime); nextPlayTime += buf.duration; liveSources.push(src);
+    src.onended = () => { liveSources = liveSources.filter(s => s !== src); };
+  }
+  function flushPlayback(){ liveSources.forEach(s=>{try{s.stop();}catch(_){}}); liveSources=[]; nextPlayTime=0; }
+</script>
+</body>
+</html>
