@@ -15,7 +15,7 @@ themed UI.
 | Capability | How |
 |-----------|-----|
 | **Multimodal** | The browser streams mic PCM **and** camera JPEG frames; the agent sees what you show it (`send_video_frame`). |
-| **Affective dialogue** | The persona detects the customer's emotional tone and responds with empathy — prompt-driven, so it works on both backends. |
+| **Affective dialogue** | Empathetic, tone-aware persona on both backends. Set `CS_AFFECTIVE=1` to additionally enable **Gemini's native affective-dialogue** (`enableAffectiveDialog`) — this switches Gemini to a native-audio model that adapts its tone to your emotion. |
 | **Real actions (tools)** | `process_refund` (order id + reason → refund id) and `connect_to_human` (handoff) run **server-side**; results are spoken back. |
 | **Either backend** | OpenAI or Gemini, chosen per session; audio rates negotiated to the browser (OpenAI 24 kHz in/out; Gemini 16 kHz in / 24 kHz out). |
 | **Themed UI** | System / Light / Dark, persisted; responsive 3-column layout (highlights · conversation · camera). |
@@ -80,7 +80,8 @@ Then **Connect**, press **Start mic** and/or **Start camera**, and try:
 | `OPENAI_API_KEY` | For OpenAI | OpenAI API key |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | For Gemini | Google AI Studio key |
 | `OPENAI_REALTIME_MODEL` | No | Default `gpt-realtime` |
-| `GEMINI_REALTIME_MODEL` | No | Default `models/gemini-3.1-flash-live-preview` |
+| `GEMINI_REALTIME_MODEL` | No | Default `models/gemini-3.1-flash-live-preview` (or a native-audio model when `CS_AFFECTIVE=1`) |
+| `CS_AFFECTIVE` | No | `1` to enable Gemini native affective dialogue (uses a native-audio model; trades some tool-calling reliability) |
 | `PORT` | No | Server port (default `3066`) |
 
 ## Feature flags

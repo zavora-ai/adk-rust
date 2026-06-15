@@ -202,6 +202,13 @@ fn connect_to_human_tool()
 
 // ─── Model + runner ────────────────────────────────────────────────────────
 
+/// Affective (emotion-aware) dialogue is opt-in via `CS_AFFECTIVE=1`. It needs a
+/// Gemini **native-audio** model, which trades some tool-calling reliability —
+/// so it's off by default (the half-cascade model keeps tools sharp).
+fn affective_dialog() -> bool {
+    matches!(std::env::var("CS_AFFECTIVE").as_deref(), Ok("1") | Ok("true"))
+}
+
 fn build_model(provider: Provider) -> anyhow::Result<(BoxedModel, &'static str)> {
     match provider {
         Provider::OpenAI => {
@@ -216,9 +223,15 @@ fn build_model(provider: Provider) -> anyhow::Result<(BoxedModel, &'static str)>
             let api_key = std::env::var("GEMINI_API_KEY")
                 .or_else(|_| std::env::var("GOOGLE_API_KEY"))
                 .map_err(|_| anyhow::anyhow!("GEMINI_API_KEY / GOOGLE_API_KEY is not set"))?;
-            // Half-cascade live model: calls tools reliably and accepts video frames.
+            // Half-cascade live model calls tools reliably and accepts video
+            // frames; affective dialogue needs a native-audio model instead.
+            let default_model = if affective_dialog() {
+                "models/gemini-2.5-flash-native-audio-preview-12-2025"
+            } else {
+                "models/gemini-3.1-flash-live-preview"
+            };
             let model_id = std::env::var("GEMINI_REALTIME_MODEL")
-                .unwrap_or_else(|_| "models/gemini-3.1-flash-live-preview".to_string());
+                .unwrap_or_else(|_| default_model.to_string());
             let model: BoxedModel =
                 Arc::new(GeminiRealtimeModel::new(GeminiLiveBackend::studio(api_key), model_id));
             Ok((model, "Kore"))
@@ -237,7 +250,9 @@ async fn build_runner(
         .with_voice(voice)
         .with_audio_only()
         .with_vad(VadConfig::server_vad())
-        .with_transcription();
+        .with_transcription()
+        // Honored only by Gemini native-audio models; a no-op elsewhere.
+        .with_affective_dialog(affective_dialog());
 
     let session_service = Arc::new(InMemorySessionService::new());
     session_service
