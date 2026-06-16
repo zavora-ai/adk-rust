@@ -22,7 +22,8 @@ path = "src/main.rs"
 
 [dependencies]
 adk-core.workspace = true
-adk-agent.workspace = true
+adk-agent = { workspace = true, features = ["coding"] }
+adk-devtools.workspace = true
 adk-model.workspace = true
 adk-runner = { workspace = true, features = ["artifacts", "plugins"] }
 adk-server.workspace = true

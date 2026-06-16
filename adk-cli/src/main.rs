@@ -5,13 +5,18 @@ mod setup;
 mod skills;
 
 use adk_agent::LlmAgentBuilder;
+use adk_agent::coding::CodingAgent;
 use adk_cli::{Launcher, launcher::ThinkingDisplayMode};
-use adk_core::Llm;
+use adk_core::{Content, Llm, Part, SessionId, UserId};
+use adk_devtools::Workspace;
 use adk_model::ModelProvider;
+use adk_runner::Runner;
+use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use adk_tool::GoogleSearchTool;
 use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Commands, ThinkingMode};
+use futures::StreamExt;
 use std::sync::Arc;
 
 #[tokio::main]
@@ -48,10 +53,131 @@ async fn main() -> Result<()> {
                 .await
                 .map_err(Into::into)
         }
+        Some(Commands::Code { task, dir, read_only }) => {
+            run_code(
+                cli.provider,
+                cli.model,
+                cli.api_key,
+                cli.thinking_budget,
+                dir,
+                read_only,
+                task,
+            )
+            .await
+        }
         Some(Commands::Skills { command }) => skills::run(command),
         Some(Commands::Deploy { command }) => deploy::run(command).await,
         Some(Commands::Graph { command }) => graph::run(command).await,
     }
+}
+
+/// Run the coding agent on a single task in a workspace directory.
+#[allow(clippy::too_many_arguments)]
+async fn run_code(
+    cli_provider: Option<ModelProvider>,
+    cli_model: Option<String>,
+    cli_api_key: Option<String>,
+    thinking_budget: Option<u32>,
+    dir: String,
+    read_only: bool,
+    task: String,
+) -> Result<()> {
+    // Resolve provider/model/key non-interactively (no setup prompt): default to
+    // a Gemini 3 model, and read the key from --api-key or the environment.
+    let provider = cli_provider.unwrap_or(ModelProvider::Gemini);
+    let model_id = cli_model.unwrap_or_else(|| match provider {
+        ModelProvider::Gemini => "gemini-3.1-flash-lite".to_string(),
+        _ => provider.default_model().to_string(),
+    });
+    let api_key = cli_api_key.or_else(|| env_api_key(provider));
+    let model = create_model(provider, &model_id, api_key.as_deref(), thinking_budget)?;
+
+    let workspace = if read_only { Workspace::read_only(&dir) } else { Workspace::new(&dir) };
+    let coding = CodingAgent::builder().model(model).workspace(workspace).build()?;
+
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "adk-rust".into(),
+            user_id: "user".into(),
+            session_id: Some("code".into()),
+            state: Default::default(),
+        })
+        .await?;
+
+    let runner = Runner::builder()
+        .app_name("adk-rust")
+        .agent(coding.agent())
+        .session_service(sessions)
+        .build()?;
+
+    println!("coding agent ({model_id}) on {dir}\ntask: {task}\n");
+
+    let mut stream = runner
+        .run(UserId::new("user")?, SessionId::new("code")?, Content::new("user").with_text(task))
+        .await?;
+
+    let mut pending = String::new();
+    while let Some(event) = stream.next().await {
+        let event = event?;
+        if let Some(content) = &event.llm_response.content {
+            for part in &content.parts {
+                match part {
+                    Part::FunctionCall { name, args, .. } => {
+                        flush_text(&mut pending);
+                        println!("  🔧 {name}({})", first_line(&args.to_string()));
+                    }
+                    Part::FunctionResponse { function_response, .. } => {
+                        flush_text(&mut pending);
+                        println!("  ↩  {}", first_line(&function_response.response.to_string()));
+                    }
+                    Part::Text { text } if !text.is_empty() => pending.push_str(text),
+                    _ => {}
+                }
+            }
+        }
+    }
+    flush_text(&mut pending);
+
+    let todos = coding.todos();
+    if !todos.is_empty() {
+        println!("\nplan:");
+        for t in todos {
+            let mark = match t.status.as_str() {
+                "completed" => "✓",
+                "in_progress" => "▶",
+                _ => "·",
+            };
+            println!("  {mark} {}", t.content);
+        }
+    }
+    Ok(())
+}
+
+/// Read the API key for a provider from its conventional environment variable.
+fn env_api_key(provider: ModelProvider) -> Option<String> {
+    let try_vars: &[&str] = match provider {
+        ModelProvider::Gemini => &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        ModelProvider::Openai => &["OPENAI_API_KEY"],
+        ModelProvider::Anthropic => &["ANTHROPIC_API_KEY"],
+        ModelProvider::Deepseek => &["DEEPSEEK_API_KEY"],
+        ModelProvider::Groq => &["GROQ_API_KEY"],
+        ModelProvider::Ollama => &[],
+    };
+    try_vars.iter().find_map(|v| std::env::var(v).ok())
+}
+
+fn flush_text(pending: &mut String) {
+    let trimmed = pending.trim();
+    if !trimmed.is_empty() {
+        println!("  🤖 {trimmed}");
+    }
+    pending.clear();
+}
+
+fn first_line(s: &str) -> String {
+    let line = s.lines().next().unwrap_or("").trim();
+    if line.len() > 160 { format!("{}…", &line[..160]) } else { line.to_string() }
 }
 
 fn build_agent(

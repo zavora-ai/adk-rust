@@ -62,6 +62,23 @@ pub enum Commands {
         port: u16,
     },
 
+    /// Run the coding agent on a task in a workspace directory.
+    ///
+    /// The agent can read/edit files and run commands, sandboxed to the
+    /// directory. Example: `adk-rust code "make the failing test pass"`
+    Code {
+        /// The task / instruction for the agent.
+        task: String,
+
+        /// Workspace directory the agent operates in (sandboxed).
+        #[arg(short, long, default_value = ".")]
+        dir: String,
+
+        /// Explore/plan only: no file writes, no shell.
+        #[arg(long)]
+        read_only: bool,
+    },
+
     /// Skills tooling (list/validate/match)
     Skills {
         #[command(subcommand)]

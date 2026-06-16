@@ -302,6 +302,7 @@ dependencies = [
  "adk-artifact",
  "adk-core",
  "adk-deploy",
+ "adk-devtools",
  "adk-graph",
  "adk-model",
  "adk-runner",
