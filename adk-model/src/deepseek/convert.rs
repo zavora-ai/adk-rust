@@ -372,16 +372,25 @@ pub fn from_response(response: &ChatCompletionResponse) -> LlmResponse {
 pub fn create_tool_call_response(
     tool_calls: Vec<(String, String, Value)>, // (id, name, args)
     finish_reason: Option<FinishReason>,
+    reasoning: Option<String>,
 ) -> LlmResponse {
-    let parts: Vec<Part> = tool_calls
-        .into_iter()
-        .map(|(id, name, args)| Part::FunctionCall {
-            name,
-            args,
-            id: Some(id),
-            thought_signature: None,
-        })
-        .collect();
+    let mut parts: Vec<Part> = Vec::new();
+
+    if let Some(ref text) = reasoning
+        && !text.is_empty()
+    {
+        parts.push(Part::Thinking {
+            thinking: text.clone(),
+            signature: None,
+        });
+    }
+
+    parts.extend(tool_calls.into_iter().map(|(id, name, args)| Part::FunctionCall {
+        name,
+        args,
+        id: Some(id),
+        thought_signature: None,
+    }));
 
     LlmResponse {
         content: Some(Content { role: "model".to_string(), parts }),

@@ -241,6 +241,7 @@ impl Llm for DeepSeekClient {
                 let mut tool_call_accumulators: std::collections::HashMap<u32, (String, String, String)> =
                     std::collections::HashMap::new();
                 let mut reasoning_buffer = String::new();
+                let mut text_buffer = String::new();
 
                 while let Some(chunk_result) = byte_stream.next().await {
                     let chunk = chunk_result
@@ -333,19 +334,31 @@ impl Llm for DeepSeekClient {
                                                         (id, name, args)
                                                     })
                                                     .collect();
+                                                let tool_reasoning = if thinking_enabled {
+                                                    Some(std::mem::take(&mut reasoning_buffer))
+                                                } else {
+                                                    None
+                                                };
                                                 yield convert::create_tool_call_response(
                                                     tool_calls,
                                                     finish_reason,
+                                                    tool_reasoning,
                                                 );
                                                 continue;
                                             }
 
                                             let mut parts = Vec::new();
-                                            if let Some(delta) = &choice.delta
-                                                && let Some(text) = &delta.content
-                                                    && !text.is_empty() {
-                                                        parts.push(Part::Text { text: text.clone() });
-                                                    }
+                                            if !reasoning_buffer.is_empty() {
+                                                parts.push(Part::Thinking {
+                                                    thinking: std::mem::take(&mut reasoning_buffer),
+                                                    signature: None,
+                                                });
+                                            }
+                                            if !text_buffer.is_empty() {
+                                                parts.push(Part::Text {
+                                                    text: std::mem::take(&mut text_buffer),
+                                                });
+                                            }
 
                                             yield LlmResponse {
                                                 content: if parts.is_empty() {
@@ -373,10 +386,11 @@ impl Llm for DeepSeekClient {
                                                 ..Default::default()
                                             };
                                         } else {
-                                            // Emit partial text content
+                                            // Emit partial text content and accumulate
                                             if let Some(delta) = &choice.delta
                                                 && let Some(text) = &delta.content
                                                     && !text.is_empty() {
+                                                        text_buffer.push_str(text);
                                                         yield LlmResponse {
                                                             content: Some(adk_core::Content {
                                                                 role: "model".to_string(),
