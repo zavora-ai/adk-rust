@@ -133,7 +133,7 @@ impl DeepSeekConfig {
             model: "deepseek-v4-pro".to_string(),
             thinking: Some(ThinkingMode::Enabled),
             reasoning_effort: Some(ReasoningEffort::High),
-            max_tokens: Some(8192),
+            max_tokens: Some(393_216),
             ..Default::default()
         }
     }
@@ -143,6 +143,7 @@ impl DeepSeekConfig {
         Self {
             api_key: api_key.into(),
             model: "deepseek-v4-flash".to_string(),
+            max_tokens: Some(393_216),
             ..Default::default()
         }
     }
@@ -263,6 +264,7 @@ mod tests {
         assert_eq!(config.model, "deepseek-v4-pro");
         assert_eq!(config.thinking, Some(ThinkingMode::Enabled));
         assert_eq!(config.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(config.max_tokens, Some(393_216));
         assert!(config.is_thinking_enabled());
     }
 
@@ -270,6 +272,7 @@ mod tests {
     fn test_v4_flash_constructor() {
         let config = DeepSeekConfig::v4_flash("key");
         assert_eq!(config.model, "deepseek-v4-flash");
+        assert_eq!(config.max_tokens, Some(393_216));
         assert!(config.thinking.is_none());
     }
 

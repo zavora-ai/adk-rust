@@ -379,10 +379,7 @@ pub fn create_tool_call_response(
     if let Some(ref text) = reasoning
         && !text.is_empty()
     {
-        parts.push(Part::Thinking {
-            thinking: text.clone(),
-            signature: None,
-        });
+        parts.push(Part::Thinking { thinking: text.clone(), signature: None });
     }
 
     parts.extend(tool_calls.into_iter().map(|(id, name, args)| Part::FunctionCall {
