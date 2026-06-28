@@ -273,6 +273,32 @@ pub enum Part {
 }
 
 impl Content {
+    /// Returns `true` if any part of this content is a function (tool) call.
+    ///
+    /// Useful for deciding response semantics — e.g. a model turn that emits
+    /// tool calls is **not** complete, since tool results must still be
+    /// processed and sent back.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_core::{Content, Part};
+    ///
+    /// let mut content = Content::new("model").with_text("calling a tool");
+    /// assert!(!content.has_function_calls());
+    ///
+    /// content.parts.push(Part::FunctionCall {
+    ///     name: "get_weather".to_string(),
+    ///     args: serde_json::json!({}),
+    ///     id: None,
+    ///     thought_signature: None,
+    /// });
+    /// assert!(content.has_function_calls());
+    /// ```
+    pub fn has_function_calls(&self) -> bool {
+        self.parts.iter().any(|p| matches!(p, Part::FunctionCall { .. }))
+    }
+
     /// Creates a new empty content with the given role.
     pub fn new(role: impl Into<String>) -> Self {
         Self { role: role.into(), parts: Vec::new() }

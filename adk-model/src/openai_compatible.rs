@@ -643,7 +643,9 @@ impl Llm for OpenAICompatible {
                                         finish_reason,
                                         citation_metadata: None,
                                         partial: false,
-                                        turn_complete: true,
+                                        // Tool-call turns are not complete — tool
+                                        // results must still be processed (issue #401).
+                                        turn_complete: false,
                                         interrupted: false,
                                         error_code: None,
                                         error_message: None,

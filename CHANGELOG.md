@@ -40,6 +40,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that renders live `bash` output and one-shot tool results (`read_file`, `grep`,
   `glob`) from a single event feed. Also runs as a console demo (`-- cli`).
 
+### Fixed
+
+- **adk-model: `turn_complete` on tool-call responses** (#401) — `deepseek` and
+  `openai_compatible` providers no longer set `turn_complete: true` when a
+  response carries tool calls; the turn continues until tool results are
+  processed. Adds `Content::has_function_calls()` to `adk-core`. Direct
+  `LlmResponseStream` consumers can now rely on `turn_complete` instead of
+  scanning for `Part::FunctionCall`.
+- **adk-model: DeepSeek V4 default output tokens** (#406) — `DeepSeekConfig::v4_pro`
+  no longer caps output at 8192, and `v4_flash` now sets a default; both default
+  to 64K (`65_536`) — generous for long output while preserving most of the 384K
+  context window for input (per discussion on the issue, the full 384K is a poor
+  default). Override with `with_max_tokens`.
+
 ### Added
 
 - **adk-realtime: GA realtime providers + integration tool dispatch** — OpenAI

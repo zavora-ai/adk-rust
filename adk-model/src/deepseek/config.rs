@@ -127,22 +127,30 @@ impl DeepSeekConfig {
     // --- V4 model constructors ---
 
     /// Create a config for `deepseek-v4-pro` (strongest reasoning, thinking enabled).
+    ///
+    /// Defaults `max_tokens` to 64K — generous for long reasoning/output while
+    /// leaving the bulk of the 384K context window for input. Override with
+    /// [`with_max_tokens`](Self::with_max_tokens) if you need more output.
     pub fn v4_pro(api_key: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
             model: "deepseek-v4-pro".to_string(),
             thinking: Some(ThinkingMode::Enabled),
             reasoning_effort: Some(ReasoningEffort::High),
-            max_tokens: Some(8192),
+            max_tokens: Some(65_536),
             ..Default::default()
         }
     }
 
     /// Create a config for `deepseek-v4-flash` (fast, cost-efficient).
+    ///
+    /// Defaults `max_tokens` to 64K (see [`v4_pro`](Self::v4_pro) for the
+    /// rationale on not defaulting to the full 384K window).
     pub fn v4_flash(api_key: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
             model: "deepseek-v4-flash".to_string(),
+            max_tokens: Some(65_536),
             ..Default::default()
         }
     }
@@ -264,6 +272,7 @@ mod tests {
         assert_eq!(config.thinking, Some(ThinkingMode::Enabled));
         assert_eq!(config.reasoning_effort, Some(ReasoningEffort::High));
         assert!(config.is_thinking_enabled());
+        assert_eq!(config.max_tokens, Some(65_536));
     }
 
     #[test]
@@ -271,6 +280,7 @@ mod tests {
         let config = DeepSeekConfig::v4_flash("key");
         assert_eq!(config.model, "deepseek-v4-flash");
         assert!(config.thinking.is_none());
+        assert_eq!(config.max_tokens, Some(65_536));
     }
 
     #[test]

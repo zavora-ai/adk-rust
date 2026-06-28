@@ -312,8 +312,9 @@ mod streaming_exploration {
         let final_resp = responses.last().unwrap();
         assert!(!final_resp.partial, "final response with tool calls should have partial=false");
         assert!(
-            final_resp.turn_complete,
-            "final response with tool calls should have turn_complete=true"
+            !final_resp.turn_complete,
+            "final response carrying tool calls must have turn_complete=false — the turn \
+             continues until tool results are processed (issue #401)"
         );
     }
 
