@@ -32,7 +32,7 @@ jobs:
         tool: cargo-semver-checks
 
     - name: Cache cargo artifacts
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cargo/registry
