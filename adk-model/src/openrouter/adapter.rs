@@ -1006,8 +1006,12 @@ struct PendingChatToolCall {
 
 impl ChatStreamState {
     fn capture_chat_tool_calls(&mut self, tool_calls: &[OpenRouterChatToolCall]) {
-        for (index, tool_call) in tool_calls.iter().enumerate() {
-            let pending = self.pending_tool_calls.entry(index).or_default();
+        for (pos, tool_call) in tool_calls.iter().enumerate() {
+            // Key by the protocol `index` so fragments of distinct parallel tool
+            // calls land in distinct buckets; fall back to stream position for
+            // payloads that omit it (e.g. non-streaming, single-call deltas).
+            let key = tool_call.index.unwrap_or(pos);
+            let pending = self.pending_tool_calls.entry(key).or_default();
             if let Some(id) = tool_call.id.as_ref() {
                 pending.id = Some(id.clone());
             }
@@ -1503,5 +1507,62 @@ mod tests {
         assert!(response.turn_complete);
         assert!(!response.partial);
         assert!(stream.next().await.is_none());
+    }
+
+    /// Regression: parallel tool-call fragments must be bucketed by their
+    /// streaming `index`, not by position within each delta. OpenRouter streams
+    /// each fragment in a single-element array, so position is always 0; keying
+    /// by position merged every parallel call into one bucket whose concatenated
+    /// arguments were invalid JSON and got silently dropped.
+    #[test]
+    fn streaming_keeps_parallel_tool_calls_separate_by_index() {
+        use super::ChatStreamState;
+        use crate::openrouter::chat::{OpenRouterChatToolCall, OpenRouterChatToolFunction};
+
+        fn frag(
+            index: usize,
+            id: Option<&str>,
+            name: Option<&str>,
+            args: &str,
+        ) -> OpenRouterChatToolCall {
+            OpenRouterChatToolCall {
+                index: Some(index),
+                id: id.map(str::to_string),
+                kind: String::new(),
+                function: Some(OpenRouterChatToolFunction {
+                    name: name.map(str::to_string),
+                    arguments: Some(args.to_string()),
+                    output: None,
+                    extra: Default::default(),
+                }),
+                extra: Default::default(),
+            }
+        }
+
+        // Two parallel calls, fragments interleaved as OpenRouter streams them:
+        // each delta is a single-element array whose `index` (not its position)
+        // identifies the call.
+        let mut state = ChatStreamState::default();
+        state.capture_chat_tool_calls(&[frag(0, Some("call_a"), Some("bash"), "{\"command\": ")]);
+        state.capture_chat_tool_calls(&[frag(1, Some("call_b"), Some("bash"), "{\"command\": ")]);
+        state.capture_chat_tool_calls(&[frag(0, None, None, "\"whoami\"}")]);
+        state.capture_chat_tool_calls(&[frag(1, None, None, "\"pwd\"}")]);
+
+        let mut calls: Vec<(Option<String>, String, serde_json::Value)> = state
+            .drain_chat_tool_calls()
+            .into_iter()
+            .map(|p| match p {
+                Part::FunctionCall { id, name, args, .. } => (id, name, args),
+                other => panic!("expected a function call, got {other:?}"),
+            })
+            .collect();
+        calls.sort_by(|a, b| a.0.cmp(&b.0));
+
+        assert_eq!(calls.len(), 2, "both parallel calls survive (was 0 before the index fix)");
+        assert_eq!(calls[0].0.as_deref(), Some("call_a"));
+        assert_eq!(calls[0].1, "bash");
+        assert_eq!(calls[0].2, serde_json::json!({ "command": "whoami" }));
+        assert_eq!(calls[1].0.as_deref(), Some("call_b"));
+        assert_eq!(calls[1].2, serde_json::json!({ "command": "pwd" }));
     }
 }

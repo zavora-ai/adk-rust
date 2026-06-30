@@ -341,6 +341,12 @@ pub struct OpenRouterChatUsage {
 /// One tool call attached to an assistant chat message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct OpenRouterChatToolCall {
+    /// Streaming index identifying which parallel tool call this fragment
+    /// belongs to (OpenAI/OpenRouter delta protocol); absent in non-streaming
+    /// responses. Previously swallowed by `extra`, which made the streaming
+    /// accumulator merge every parallel call's fragments into one bucket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     #[serde(rename = "type")]
