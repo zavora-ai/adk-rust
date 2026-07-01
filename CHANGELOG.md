@@ -17,6 +17,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **adk-agent: `CodeAgent` — a CodeAct agent** (`codeact` feature) — a peer to
+  `LlmAgent` that acts by writing and executing one code script per turn instead
+  of emitting tool calls one at a time. Tools are exposed as callable functions;
+  the script returns a tagged `ScriptOutput` (`Observation` / `Error` /
+  `FinalResult` / `TransferToAgent`). Language-agnostic via the `CodeRuntime`
+  step-wise interpreter seam (the intended adapter wraps Pydantic's Monty). The
+  agent is stateless across invocations: HITL confirmation and long-running
+  tools **suspend** by serializing the live interpreter continuation into a
+  `CodeActCheckpoint` in session state and **resume** on the next `run()`, the
+  same save-rebuild-continue model as `LlmAgent`. Tool state/artifact deltas and
+  `escalate` propagate, so an `AgentTool`-wrapped sub-agent works as a callable.
+  Tool dispatch is sequential by design (single-call seam) to keep the
+  durability model sound.
+- **adk-agent: `CodeAgent` configuration parity with `LlmAgent`** — generation
+  config (+ `temperature`/`top_p`/`top_k`/`max_output_tokens`), `tool_timeout`,
+  `output_key`, agent/global instructions (static + dynamic providers, with
+  `{state.key}` injection), `include_contents` conversation history,
+  per-invocation `toolset`s, retry budgets, circuit breaker, `on_tool_error`
+  fallbacks, `output_schema`/`output_type` validation with a correction-retry
+  loop, sub-agent transfer with
+  `disallow_transfer_to_parent`/`disallow_transfer_to_peers`, and feature-gated
+  guardrails (`guardrails`), skills (`skills`), and an `EnhancedPlugin` pipeline
+  intercepting tool and model calls (`enhanced-plugins`).
+- **adk-agent: `CodeAgent` callback surface, tool-context, and robustness** —
+  full lifecycle/interception callbacks matching `LlmAgent`
+  (`before_callback`/`after_callback`, `before_model_callback`/
+  `after_model_callback`, `before_tool_callback`/`after_tool_callback`/
+  `after_tool_callback_full`, the last with `ToolOutcome` exposed via
+  `CallbackContext::tool_outcome()`); a fresh per-call `ToolContext` that carries
+  the interpreter call id and delegates artifacts, memory, shared state, user
+  scopes, and secrets to the live invocation; full tool `EventActions`
+  propagation (`state_delta`/`artifact_delta`/`route`) with `escalate`/
+  `skip_summarization`/tool-set `transfer_to_agent` treated as terminal on the
+  inline, resume/recovery, confirmation-approval, and long-running paths; output
+  guardrails that redact the value stored under `output_key`; a SAVE-AFTER
+  checkpoint persisted before resuming an executed tool (so once it is persisted
+  recovery never re-runs the tool — an at-least-once boundary in the narrow
+  window before it lands, like `LlmAgent`); long-running completion matched by
+  call id; tool-panic capture; duplicate sub-agent-name validation;
+  max-iterations now an error; and confirmation suspends marked
+  `interrupted`/`turn_complete`. New `examples/codeact_agent` demonstrates the
+  loop end-to-end with a self-contained `CodeRuntime`.
+- **adk-codeact-monty: Python `CodeRuntime` backed by Pydantic Monty** — a
+  reusable, stateless `CodeRuntime` that runs LLM-authored Python in-process via
+  the [Monty](https://github.com/pydantic/monty) interpreter, with
+  snapshot-at-call-boundary suspend/resume, per-step `stdout` capture, and a
+  tool catalog the model invokes through a single built-in function,
+  `call_tool("name", {"arg": value})`. `MontyRuntime::new()` ships with
+  conservative default resource limits (per-advance time and memory caps) for
+  untrusted code; `MontyRuntime::builder().unlimited()` removes them for trusted
+  scripts. `call_tool` is the only way to call a tool — the tool name is a string
+  literal embedded in the call (so it survives suspend/resume with no host-side
+  name table) and every argument is a string-keyed entry in one dict, so any tool
+  name and any argument name is valid (hyphens, Python keywords, even
+  `"call_tool"`) and arguments bind by name exactly with no positional inference.
+  Any other form — a bare call, keyword arguments to `call_tool`, a non-dict
+  argument, or a non-string argument key — is refused with a corrective error
+  rather than silently dispatched. Kept outside the workspace (Monty is a git
+  dependency, not yet on crates.io); a runnable `examples/codeact_monty_agent`
+  drives it offline. **Configurable OS access:** filesystem, environment, and
+  clock OS calls are serviced *in place* (never tools, never pausing the agent
+  loop) against a host-controlled `OsAccess` policy. `MontyRuntimeBuilder`
+  exposes `allow_path(virtual, host, PathAccess::ReadOnly|ReadWrite)` to mount
+  host directories (boundary-enforced by Monty), `environ`/`environ_var` to
+  expose an explicit environment map to `os.getenv`/`os.environ`, and
+  `system_clock(bool)` to gate `date.today()`/`datetime.now()`. The default is
+  fully sandboxed (no filesystem access, empty environment, host clock enabled),
+  and the granted access is described to the model in the system prompt —
+  including the exact subset of `pathlib.Path` Monty implements (read/query,
+  write, and pure path ops) whenever paths are mounted, since Monty does not
+  support the full `pathlib.Path` API.
+- **adk-agent: `CodeRuntime` interpreter seam** — the language-agnostic contract
+  a CodeAct runtime implements. `PendingCall` exposes a call's arguments the way
+  an interpreter produces them — `positional_args()` and `keyword_args()`
+  separately — and the driver binds them onto a tool's parameters centrally via
+  `adk_agent::codeact::bind_call_args`, so a runtime never needs a tool schema at
+  the call boundary. `RunStep::{Call,Complete,Raised}` are struct variants that
+  each carry the `stdout` the script printed since the previous step (constructed
+  with `RunStep::{call,complete,raised}` + `with_stdout`); the agent surfaces
+  captured output back to the model and persists it into checkpoints so it
+  survives suspend/resume and crash recovery. Script-visible failures — including
+  syntax/parse errors — flow through `RunStep::Raised`, while `RuntimeError` is
+  strictly host failure (snapshot/internal). `render_tools` is a pure function of
+  the tool slice (no schema caching required).
+
 - **adk-core: streaming tool progress as events** — `ToolContext::emit_progress(stream, chunk)`
   lets a tool push intermediate stdout/stderr (or any labelled channel) to the UI
   *while it is still running*. The framework forwards each chunk as a partial

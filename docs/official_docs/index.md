@@ -23,6 +23,7 @@ Welcome to the official documentation for ADK-Rust (Agent Development Kit for Ru
 ## Agents
 
 - [LlmAgent](agents/llm-agent.md) - The core agent type using Large Language Models
+- [CodeAgent (CodeAct)](agents/code-agent.md) - Acts by writing and running code via a `CodeRuntime`
 - [Workflow Agents](agents/workflow-agents.md) - Deterministic agents: Sequential, Parallel, Loop
 - [Multi-Agent Systems](agents/multi-agent.md) - Building agent hierarchies with sub-agents
 - [Graph Agents](agents/graph-agents.md) - LangGraph-style workflow orchestration

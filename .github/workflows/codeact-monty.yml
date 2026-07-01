@@ -1,0 +1,92 @@
+name: CodeAct Monty
+
+# `adk-codeact-monty` is intentionally OUTSIDE the main workspace: it depends on
+# the Monty interpreter via a git dependency (not yet on crates.io) and requires
+# rustc 1.95+, while the workspace is pinned to 1.94. The main CI workflow does
+# not build it, so this job exercises it (and the CodeAct feature in adk-agent)
+# separately.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'adk-codeact-monty/**'
+      - 'adk-agent/src/codeact/**'
+      - 'examples/codeact_monty_agent/**'
+      - '.github/workflows/codeact-monty.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'adk-codeact-monty/**'
+      - 'adk-agent/src/codeact/**'
+      - 'examples/codeact_monty_agent/**'
+      - '.github/workflows/codeact-monty.yml'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+concurrency:
+  group: codeact-monty-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── adk-agent CodeAct feature (in-workspace, uses the ScriptedRuntime double) ──
+  codeact-feature:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust 1.94 (workspace toolchain)
+      uses: dtolnay/rust-toolchain@1.94.0
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-nextest
+    - name: Cache cargo artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: codeact-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: codeact-${{ runner.os }}-
+    - name: Clippy (codeact feature)
+      run: cargo clippy -p adk-agent --features codeact --all-targets -- -D warnings
+    - name: Test (codeact feature)
+      run: cargo nextest run -p adk-agent --features codeact
+
+  # ── adk-codeact-monty (out-of-workspace: rustc 1.95 + Monty git dep) ──
+  monty-runtime:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust 1.95 (Monty requires 1.95+)
+      uses: dtolnay/rust-toolchain@1.95.0
+      with:
+        components: rustfmt, clippy
+    - name: Cache cargo artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          adk-codeact-monty/target
+          examples/codeact_monty_agent/target
+        key: monty-${{ runner.os }}-${{ hashFiles('adk-codeact-monty/Cargo.toml') }}
+        restore-keys: monty-${{ runner.os }}-
+    - name: Format check
+      working-directory: adk-codeact-monty
+      run: cargo fmt --all -- --check
+    - name: Clippy
+      working-directory: adk-codeact-monty
+      run: cargo clippy --all-targets -- -D warnings
+    - name: Test (builds Monty from the pinned git rev)
+      working-directory: adk-codeact-monty
+      run: cargo test
+    - name: Build the Monty example
+      working-directory: examples/codeact_monty_agent
+      run: cargo build

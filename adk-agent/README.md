@@ -22,6 +22,11 @@ Agent implementations for ADK-Rust (LLM, Custom, Workflow agents).
   [Coding Agent guide](https://github.com/zavora-ai/adk-rust/blob/main/docs/official_docs/coding-agent/index.md).
 - `LlmConditionalAgent` — LLM-powered multi-way routing to sub-agents
 - `LlmEventSummarizer` — LLM-based context compaction for long conversations
+- `CodeActAgent` — (feature `codeact`) a peer to `LlmAgent` that **acts by writing
+  and running code** (the CodeAct loop): the model emits one script per turn,
+  tools are exposed as callable functions, and the script returns a tagged
+  result. Language-agnostic via the `CodeRuntime` interpreter seam. See the
+  [CodeAct Agent section](#codeact-agent-feature-codeact).
 
 ## Installation
 
@@ -353,6 +358,56 @@ let custom = CustomAgentBuilder::new("processor")
     .build()?;
 ```
 
+## CodeAct Agent (feature `codeact`)
+
+`CodeActAgent` is a peer to `LlmAgent` that **acts by writing and running code**
+instead of emitting one tool call at a time. Each turn the model produces a
+single script; tools are exposed as callable functions the script composes, and
+the script returns a tagged `ScriptOutput` (`observation` / `error` /
+`final_result` / `transfer_to_agent`).
+
+It is **language-agnostic**: the `CodeRuntime` trait is the step-wise interpreter
+seam, so the language (Python via Monty, a shell, a DSL, ...) is the runtime's
+choice. A runtime that can snapshot a paused call enables HITL confirmation and
+long-running tool deferral, which **suspend** into session state and **resume**
+on the next `run()` — the same save-rebuild-continue model as `LlmAgent`.
+
+```rust,ignore
+use adk_agent::codeact::CodeActAgent;
+use std::sync::Arc;
+
+// `model` implements `adk_core::Llm`; `runtime` implements `CodeRuntime`.
+let agent = CodeActAgent::builder()
+    .name("analyst")
+    .model(model)
+    .runtime(runtime)
+    .instruction("Prefer concise, composable steps.")
+    .tool(Arc::new(load_csv_tool))
+    .output_key("report")
+    .build()?;
+```
+
+The configuration surface mirrors `LlmAgentBuilder`: instructions (static +
+providers, with `{state.key}` injection), `include_contents`, static tools and
+per-invocation `toolset`s, `generate_content_config` (+ `temperature`/`top_p`/
+`top_k`/`max_output_tokens`), `tool_timeout`, retry budgets, circuit breaker,
+`on_tool_error`, `output_schema`/`output_type` with a correction-retry loop,
+`output_key`, tool confirmation, sub-agent transfer with the `disallow_*` flags,
+and feature-gated guardrails (`guardrails`), skills (`skills`), and the
+`EnhancedPlugin` pipeline (`enhanced-plugins`).
+
+The full agent/model/tool callback surface is supported too:
+`before_callback`/`after_callback`, `before_model_callback`/`after_model_callback`
+(rewrite or short-circuit the model call), and
+`before_tool_callback`/`after_tool_callback`/`after_tool_callback_full` (rewrite
+or short-circuit a tool call). Each tool call gets a fresh per-call `ToolContext`
+that carries the interpreter call id and delegates artifacts, memory, shared
+state, user scopes, and secrets to the live invocation.
+
+A runnable, dependency-free end-to-end demo (a self-contained `CodeRuntime` and a
+deterministic model) lives in
+[`examples/codeact_agent`](https://github.com/zavora-ai/adk-rust/tree/main/examples/codeact_agent).
+
 ## Tool Call Markup Normalization
 
 The `tool_call_markup` module handles LLMs that emit tool calls as text markup (e.g., `<tool_call>...</tool_call>`) instead of structured function calls. `normalize_content` parses these text blocks into proper `Part::FunctionCall` parts so the tool execution loop can handle them:
@@ -393,6 +448,9 @@ Pass `compaction_config` to `RunnerConfig` to enable automatic compaction.
 |---------|-------------|
 | (default) | All agent types, callbacks, skills, toolsets, retry/circuit breaker |
 | `guardrails` | Input/output guardrails via `adk-guardrail` |
+| `codeact` | `CodeActAgent` — the CodeAct loop (acts by writing/running code) |
+| `coding` | `CodingAgent` harness over `LlmAgent` via `adk-devtools` |
+| `enhanced-plugins` | `EnhancedPlugin` pipeline intercepting tool/model calls |
 
 ## Related Crates
 

@@ -64,6 +64,10 @@ exclude = [
     # Extracted to standalone repo: https://github.com/zavora-ai/adk-studio
     "adk-studio",
 
+    # Python CodeRuntime for the CodeAgent — its own workspace because it depends
+    # on `monty` via git (not yet on crates.io).
+    "adk-codeact-monty",
+
     # Standalone example crates (have their own [workspace] key)
     "examples/enterprise_custom_tool",
     "examples/enterprise_hello",

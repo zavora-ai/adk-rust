@@ -1,0 +1,32 @@
+[package]
+name = "adk-codeact-monty"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Python CodeRuntime for the ADK-Rust CodeActAgent, backed by the Pydantic Monty interpreter"
+license = "MIT OR Apache-2.0"
+
+# This crate is intentionally OUTSIDE the adk-rust workspace: it depends on
+# `monty` via git (Monty is not yet on crates.io), and a git dependency cannot
+# live in a workspace that is published to crates.io. The empty `[workspace]`
+# table makes this directory its own workspace root; path dependencies still
+# point back into the adk-rust crates next door.
+[workspace]
+
+[dependencies]
+adk-core = { path = "../adk-core" }
+adk-agent = { path = "../adk-agent", features = ["codeact"] }
+# Pydantic Monty — a minimal, secure, Rust-native Python interpreter for AI.
+# Pinned to the v0.0.18 release commit (the tag is not on crates.io).
+monty = { git = "https://github.com/pydantic/monty", rev = "45a3b2d57e6ce723fed4166fb032242ece74a663" }
+serde_json = "1.0"
+# `date.today()` / `datetime.now()` OS calls are serviced from the host clock
+# (see `os_access`). `clock` pulls in the local-timezone lookup.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[dev-dependencies]
+# Only needed by the unit test that defines a sample `Tool`. The runnable
+# example lives in `examples/codeact_monty_agent` as a standalone crate.
+async-trait = "0.1"
+# Temp directories for the filesystem-access integration tests.
+tempfile = "3"
