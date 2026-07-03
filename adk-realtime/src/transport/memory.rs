@@ -81,7 +81,12 @@ impl RealtimeMediaTransport for InMemoryTransport {
     }
 
     fn events(&self) -> Pin<Box<dyn Stream<Item = Result<TransportEvent>> + Send + '_>> {
-        let rx = self.event_rx.blocking_lock().take().expect("events() called multiple times");
+        let rx = self
+            .event_rx
+            .try_lock()
+            .expect("Could not try_lock event_rx")
+            .take()
+            .expect("events() called multiple times");
         Box::pin(ReceiverStream::new(rx))
     }
 

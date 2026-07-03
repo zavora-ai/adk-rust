@@ -172,7 +172,7 @@ dependencies = [
  "espeak-rs",
  "futures",
  "hf-hub 0.5.0",
- "livekit-api 0.4.24",
+ "livekit-api",
  "ndarray 0.17.2",
  "ndarray-npy",
  "ort",
@@ -720,7 +720,7 @@ dependencies = [
  "getrandom 0.3.4",
  "google-cloud-auth 1.12.0",
  "livekit",
- "livekit-api 0.4.24",
+ "livekit-api",
  "parking_lot",
  "proptest",
  "reqwest 0.12.28",
@@ -11045,7 +11045,7 @@ dependencies = [
  "lazy_static",
  "libloading 0.8.9",
  "libwebrtc",
- "livekit-api 0.5.1",
+ "livekit-api",
  "livekit-datatrack",
  "livekit-protocol",
  "livekit-runtime",
@@ -11058,36 +11058,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
-]
-
-[[package]]
-name = "livekit-api"
-version = "0.4.24"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2611299f65786fa733f38ef9aab9d796679e6f2f77572b84170949769ca9a25"
-dependencies = [
- "base64 0.21.7",
- "bytes",
- "device-info",
- "futures-util",
- "http 1.4.1",
- "jsonwebtoken 10.4.0",
- "livekit-protocol",
- "livekit-runtime",
- "log",
- "os_info",
- "parking_lot",
- "pbjson-types",
- "prost 0.12.6",
- "rand 0.9.4",
- "reqwest 0.12.28",
- "scopeguard",
- "serde",
- "sha2 0.10.9",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite 0.29.0",
- "url",
 ]
 
 [[package]]
