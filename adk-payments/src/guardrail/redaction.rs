@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::LazyLock};
 
 use adk_core::{Content, Part};
 use adk_guardrail::{Guardrail, GuardrailResult, PiiRedactor, PiiType};
@@ -246,19 +246,19 @@ impl Guardrail for SensitivePaymentDataGuardrail {
 /// Redacts sensitive payment material from plain text.
 #[must_use]
 pub fn redact_payment_text(text: &str) -> String {
-    SensitivePaymentDataGuardrail::new().redact_text(text)
+    SHARED_PAYMENT_DATA_GUARDRAIL.redact_text(text)
 }
 
 /// Redacts sensitive payment material from ADK content.
 #[must_use]
 pub fn redact_payment_content(content: &Content) -> Content {
-    SensitivePaymentDataGuardrail::new().redact_content(content)
+    SHARED_PAYMENT_DATA_GUARDRAIL.redact_content(content)
 }
 
 /// Redacts sensitive payment material from JSON payloads.
 #[must_use]
 pub fn redact_payment_value(value: &Value) -> Value {
-    SensitivePaymentDataGuardrail::new().redact_json(value)
+    SHARED_PAYMENT_DATA_GUARDRAIL.redact_json(value)
 }
 
 /// Redacts sensitive payment material from tool JSON outputs.
@@ -270,8 +270,12 @@ pub fn redact_tool_output(value: &Value) -> Value {
 /// Redacts sensitive payment material from telemetry span fields.
 #[must_use]
 pub fn redact_telemetry_fields(fields: &HashMap<String, String>) -> HashMap<String, String> {
-    SensitivePaymentDataGuardrail::new().redact_telemetry_fields(fields)
+    SHARED_PAYMENT_DATA_GUARDRAIL.redact_telemetry_fields(fields)
 }
+
+// Compile the payment and PII patterns once for the stateless convenience helpers.
+static SHARED_PAYMENT_DATA_GUARDRAIL: LazyLock<SensitivePaymentDataGuardrail> =
+    LazyLock::new(SensitivePaymentDataGuardrail::new);
 
 fn redact_card_value(value: &Value) -> Value {
     match value {
@@ -414,6 +418,13 @@ mod tests {
         assert!(redacted.contains("[CARD ****1111]"));
         assert!(redacted.contains("[EMAIL REDACTED]"));
         assert!(redacted.contains("[REDACTED sha256:"));
+    }
+
+    #[test]
+    fn shared_redactor_preserves_redaction_across_calls() {
+        let input = "card 4111-1111-1111-1111 email payer@example.com";
+
+        assert_eq!(redact_payment_text(input), redact_payment_text(input));
     }
 
     #[test]
