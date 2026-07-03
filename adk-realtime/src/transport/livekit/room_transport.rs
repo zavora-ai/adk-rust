@@ -1,6 +1,6 @@
 use crate::{
     audio::{AudioChunk, AudioFormat},
-    error::{RealtimeError, Result},
+    error::Result,
     transport::{
         RealtimeMediaTransport,
         event::{TransportControl, TransportEvent},

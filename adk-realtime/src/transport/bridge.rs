@@ -1,5 +1,7 @@
 use crate::{
+    audio::AudioChunk,
     error::Result,
+    events::ServerEvent,
     runner::RealtimeRunner,
     transport::{RealtimeMediaTransport, event::TransportEvent},
 };
@@ -22,17 +24,18 @@ impl RealtimeTransportBridge {
     /// Spawns background tasks to pump data between transport and model.
     /// Does not block. Returns the join handles for both tasks.
     pub fn spawn_pump_tasks(&self) -> (JoinHandle<Result<()>>, JoinHandle<Result<()>>) {
-        let runner_for_transport = self.runner.clone();
-        let transport_for_model = self.transport.clone();
+        let runner_for_t2m = self.runner.clone();
+        let transport_for_t2m = self.transport.clone();
 
         let t2m_handle = tokio::spawn(async move {
-            Self::pump_transport_to_model(transport_for_model, runner_for_transport).await
+            Self::pump_transport_to_model(transport_for_t2m, runner_for_t2m).await
         });
 
-        // The model to transport side is more complex as it would need to hook into the runner's event stream,
-        // which isn't cleanly exposed for multiple consumers right now without `run()`.
-        // Leaving as a placeholder for the future full implementation.
-        let m2t_handle = tokio::spawn(async move { Ok(()) });
+        let runner_for_m2t = self.runner.clone();
+        let transport_for_m2t = self.transport.clone();
+        let m2t_handle = tokio::spawn(async move {
+            Self::pump_model_to_transport(transport_for_m2t, runner_for_m2t).await
+        });
 
         (t2m_handle, m2t_handle)
     }
@@ -57,6 +60,29 @@ impl RealtimeTransportBridge {
                 }
                 TransportEvent::Stopped { .. } | TransportEvent::Error { .. } => {
                     break;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn pump_model_to_transport(
+        transport: Arc<dyn RealtimeMediaTransport>,
+        runner: Arc<RealtimeRunner>,
+    ) -> Result<()> {
+        while let Some(event_result) = runner.next_event().await {
+            let event = event_result?;
+            match event {
+                ServerEvent::AudioDelta { delta, .. } => {
+                    let chunk = AudioChunk::new(delta, transport.output_format());
+                    transport.send_audio(chunk).await?;
+                }
+                ServerEvent::ResponseDone { .. } => {
+                    // Could send marks or flush here
+                }
+                ServerEvent::Error { error, .. } => {
+                    tracing::error!("Model error received in pump: {:?}", error);
                 }
                 _ => {}
             }
