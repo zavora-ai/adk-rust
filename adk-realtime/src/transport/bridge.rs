@@ -75,7 +75,25 @@ impl RealtimeTransportBridge {
             let event = event_result?;
             match event {
                 ServerEvent::AudioDelta { delta, .. } => {
-                    let chunk = AudioChunk::new(delta, transport.output_format());
+                    // # Format contract
+                    //
+                    // Both Gemini Live and OpenAI Realtime emit audio deltas as raw
+                    // PCM16 @ 24 kHz, regardless of what the downstream transport
+                    // expects.  The `AudioChunk` label must therefore always reflect
+                    // the *model's* native output format — not `transport.output_format()`.
+                    //
+                    // The transport implementation is responsible for resampling and/or
+                    // transcoding to its own output format.  If we labelled the chunk
+                    // with the transport's format the transport would skip resampling
+                    // (assuming no conversion is needed), producing garbled audio.
+                    //
+                    // # Supporting additional providers
+                    //
+                    // When integrating a provider whose native format differs from
+                    // PCM16 @ 24 kHz, expose a `native_audio_output_format()` method
+                    // on `RealtimeRunner` (or the underlying session) and replace the
+                    // hardcoded `pcm16_24khz()` constant with that value here.
+                    let chunk = AudioChunk::new(delta, crate::audio::AudioFormat::pcm16_24khz());
                     transport.send_audio(chunk).await?;
                 }
                 ServerEvent::ResponseDone { .. } => {
@@ -83,6 +101,12 @@ impl RealtimeTransportBridge {
                 }
                 ServerEvent::Error { error, .. } => {
                     tracing::error!("Model error received in pump: {:?}", error);
+                    // `ErrorInfo` has no blanket `Into<RealtimeError>` impl.
+                    // Use the explicit two-argument constructor (same pattern as runner.rs).
+                    return Err(crate::error::RealtimeError::server(
+                        error.code.unwrap_or_default(),
+                        error.message,
+                    ));
                 }
                 _ => {}
             }
