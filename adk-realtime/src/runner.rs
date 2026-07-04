@@ -369,6 +369,18 @@ impl RealtimeRunner {
         guard.as_ref().map(|s| s.session_id().to_string())
     }
 
+    /// The connected provider's native audio output format (see
+    /// [`RealtimeSession::native_audio_output_format`](crate::session::RealtimeSession::native_audio_output_format)).
+    /// Returns an error if not connected — callers that need this are about to
+    /// label live `AudioDelta` bytes and must not fall back to a guessed format.
+    pub async fn native_audio_output_format(&self) -> Result<crate::audio::AudioFormat> {
+        let guard = self.session.read().await;
+        guard
+            .as_ref()
+            .map(|s| s.native_audio_output_format())
+            .ok_or_else(|| RealtimeError::connection("Not connected"))
+    }
+
     /// Send a client event directly to the session.
     ///
     /// This method intercepts internal control-plane events (like `UpdateSession`) to route
