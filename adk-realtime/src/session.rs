@@ -53,6 +53,19 @@ pub trait RealtimeSession: Send + Sync {
     /// Check if the session is currently connected.
     fn is_connected(&self) -> bool;
 
+    /// The audio format this provider emits in `ServerEvent::AudioDelta`.
+    ///
+    /// Callers that relabel or forward model audio (e.g. a transport bridge)
+    /// MUST tag the raw bytes with this format, not a hardcoded literal or the
+    /// destination's target format — the model always emits its own native
+    /// format regardless of what a downstream transport ultimately wants.
+    /// The default matches every provider implemented today (Gemini Live and
+    /// OpenAI Realtime both emit PCM16 @ 24 kHz); override it for a provider
+    /// whose native output differs.
+    fn native_audio_output_format(&self) -> crate::audio::AudioFormat {
+        crate::audio::AudioFormat::pcm16_24khz()
+    }
+
     /// Send raw audio data to the server.
     ///
     /// The audio should be in the format specified in the session configuration.

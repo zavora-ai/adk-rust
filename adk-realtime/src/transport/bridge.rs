@@ -77,23 +77,16 @@ impl RealtimeTransportBridge {
                 ServerEvent::AudioDelta { delta, .. } => {
                     // # Format contract
                     //
-                    // Both Gemini Live and OpenAI Realtime emit audio deltas as raw
-                    // PCM16 @ 24 kHz, regardless of what the downstream transport
-                    // expects.  The `AudioChunk` label must therefore always reflect
-                    // the *model's* native output format — not `transport.output_format()`.
-                    //
-                    // The transport implementation is responsible for resampling and/or
-                    // transcoding to its own output format.  If we labelled the chunk
-                    // with the transport's format the transport would skip resampling
-                    // (assuming no conversion is needed), producing garbled audio.
-                    //
-                    // # Supporting additional providers
-                    //
-                    // When integrating a provider whose native format differs from
-                    // PCM16 @ 24 kHz, expose a `native_audio_output_format()` method
-                    // on `RealtimeRunner` (or the underlying session) and replace the
-                    // hardcoded `pcm16_24khz()` constant with that value here.
-                    let chunk = AudioChunk::new(delta, crate::audio::AudioFormat::pcm16_24khz());
+                    // `AudioDelta` bytes are always in the model's own native
+                    // output format, never the transport's — `RealtimeSession::
+                    // native_audio_output_format()` (defaulted to PCM16 @ 24 kHz,
+                    // overridden per-provider as needed) is the source of truth.
+                    // The transport is responsible for resampling/transcoding to
+                    // its own output format; labelling the chunk with the
+                    // transport's format instead would make it skip that
+                    // conversion, producing garbled audio.
+                    let format = runner.native_audio_output_format().await?;
+                    let chunk = AudioChunk::new(delta, format);
                     transport.send_audio(chunk).await?;
                 }
                 ServerEvent::ResponseDone { .. } => {
