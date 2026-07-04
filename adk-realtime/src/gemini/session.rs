@@ -619,21 +619,29 @@ impl GeminiRealtimeSession {
         // Check for tool calls
         if let Some(tool_call) = value.get("toolCall")
             && let Some(calls) = tool_call.get("functionCalls").and_then(|c| c.as_array())
-            && let Some(call) = calls.first()
+            && !calls.is_empty()
         {
-            let name = call.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            let id = call.get("id").and_then(|i| i.as_str()).unwrap_or("");
-            let args = call.get("args").cloned().unwrap_or(json!({}));
-
-            return Ok(vec![ServerEvent::FunctionCallDone {
-                event_id: uuid::Uuid::new_v4().to_string(),
-                response_id: String::new(),
-                item_id: String::new(),
-                output_index: 0,
-                call_id: id.to_string(),
-                name: name.to_string(),
-                arguments: serde_json::to_string(&args).unwrap_or_default(),
-            }]);
+            // Gemini batches parallel function calls in one frame; emit one
+            // event per call — dropping any leaves the model waiting forever
+            // for the missing function response.
+            return Ok(calls
+                .iter()
+                .enumerate()
+                .map(|(idx, call)| {
+                    let name = call.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let id = call.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                    let args = call.get("args").cloned().unwrap_or(json!({}));
+                    ServerEvent::FunctionCallDone {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        response_id: String::new(),
+                        item_id: String::new(),
+                        output_index: idx as u32,
+                        call_id: id.to_string(),
+                        name: name.to_string(),
+                        arguments: serde_json::to_string(&args).unwrap_or_default(),
+                    }
+                })
+                .collect());
         }
 
         Ok(vec![ServerEvent::Unknown])
