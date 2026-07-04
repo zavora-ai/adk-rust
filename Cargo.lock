@@ -2990,7 +2990,7 @@ dependencies = [
  "bitflags 2.13.0",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools 0.11.0",
  "lazy_static",
  "lazycell",
  "log",
@@ -3979,16 +3979,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6fac387a98bb7c37292057cffc56d62ecb629900026402633ae9160df93a8766"
 dependencies = [
  "nom 7.1.3",
-]
-
-[[package]]
-name = "cfg-expr"
-version = "0.20.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb693542bcafa528e198be0ebd9d3632ca5b7c93dbe7237460e199910835997c"
-dependencies = [
- "smallvec 1.15.1",
- "target-lexicon",
 ]
 
 [[package]]
@@ -6258,8 +6248,7 @@ checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
 [[package]]
 name = "device-info"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2ca8e71544c1b67dcdbc2699ab258828aff985e5bc8d5f6b486d90d7df2f848"
+source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
 dependencies = [
  "core-foundation 0.10.1",
  "jni 0.21.1",
@@ -8091,63 +8080,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gio-sys"
-version = "0.21.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0071fe88dba8e40086c8ff9bbb62622999f49628344b1d1bf490a48a29d80f22"
-dependencies = [
- "glib-sys",
- "gobject-sys",
- "libc",
- "system-deps",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "glib"
-version = "0.21.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16de123c2e6c90ce3b573b7330de19be649080ec612033d397d72da265f1bd8b"
-dependencies = [
- "bitflags 2.13.0",
- "futures-channel",
- "futures-core",
- "futures-executor",
- "futures-task",
- "futures-util",
- "gio-sys",
- "glib-macros",
- "glib-sys",
- "gobject-sys",
- "libc",
- "memchr",
- "smallvec 1.15.1",
-]
-
-[[package]]
-name = "glib-macros"
-version = "0.21.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf59b675301228a696fe01c3073974643365080a76cc3ed5bc2cbc466ad87f17"
-dependencies = [
- "heck 0.5.0",
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "glib-sys"
-version = "0.21.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d95e1a3a19ae464a7286e14af9a90683c64d70c02532d88d87ce95056af3e6c"
-dependencies = [
- "libc",
- "system-deps",
-]
-
-[[package]]
 name = "glob"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8163,17 +8095,6 @@ dependencies = [
  "futures-core",
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "gobject-sys"
-version = "0.21.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2dca35da0d19a18f4575f3cb99fe1c9e029a2941af5662f326f738a21edaf294"
-dependencies = [
- "glib-sys",
- "libc",
- "system-deps",
 ]
 
 [[package]]
@@ -9852,15 +9773,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
@@ -10958,12 +10870,10 @@ dependencies = [
 
 [[package]]
 name = "libwebrtc"
-version = "0.3.35"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8846c56e48f24cb0d6e4f34bbe8e775fcfef9f77024f4f11e6ad8a040b9412c"
+version = "0.3.39"
+source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
 dependencies = [
  "cxx",
- "glib",
  "jni 0.21.1",
  "js-sys",
  "lazy_static",
@@ -11033,9 +10943,8 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "livekit"
-version = "0.7.44"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a01b18ffc2e55a75f03eb3559c65cb1b6afb362d4186897258fd9c46cc109253"
+version = "0.7.50"
+source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
 dependencies = [
  "base64 0.22.1",
  "bmrng",
@@ -11062,9 +10971,8 @@ dependencies = [
 
 [[package]]
 name = "livekit-api"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8f76e6ea32cb42105951721efc633644d2733aeadf023e862c5a294f652330e"
+version = "0.5.4"
+source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
 dependencies = [
  "async-tungstenite",
  "base64 0.21.7",
@@ -11072,6 +10980,7 @@ dependencies = [
  "device-info",
  "flate2",
  "futures-util",
+ "hmac 0.12.1",
  "http 1.4.1",
  "jsonwebtoken 10.4.0",
  "livekit-protocol",
@@ -11083,21 +10992,23 @@ dependencies = [
  "prost 0.12.6",
  "rand 0.9.4",
  "reqwest 0.12.28",
+ "rustls-native-certs 0.8.4",
  "scopeguard",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "signature",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-rustls 0.26.4",
  "tokio-tungstenite 0.29.0",
  "url",
 ]
 
 [[package]]
 name = "livekit-datatrack"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6618b1fe027f45b2ddd42794f3a263e07a69949fec0ed5f8d0a13e394d19525f"
+version = "0.1.9"
+source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
 dependencies = [
  "anyhow",
  "bytes",
@@ -11116,9 +11027,8 @@ dependencies = [
 
 [[package]]
 name = "livekit-protocol"
-version = "0.7.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "565d83442aa99684dba5d0841fa342eb572fbd916ba2aa5e92801ecf76620026"
+version = "0.7.10"
+source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
 dependencies = [
  "pbjson",
  "pbjson-types",
@@ -11129,8 +11039,7 @@ dependencies = [
 [[package]]
 name = "livekit-runtime"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "532e84c6cdc5fe774f2b5d9912597b5f3bea561927a48296d03e24549d21c3f6"
+source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
 dependencies = [
  "tokio",
  "tokio-stream",
@@ -13937,7 +13846,7 @@ checksum = "22505a5c94da8e3b7c2996394d1c933236c4d743e81a410bcca4e6989fc066a4"
 dependencies = [
  "bytes",
  "heck 0.5.0",
- "itertools 0.12.1",
+ "itertools 0.11.0",
  "log",
  "multimap",
  "once_cell",
@@ -13978,7 +13887,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81bddcdb20abf9501610992b6759a4c888aef7d1a7247ef75e2404275ac24af1"
 dependencies = [
  "anyhow",
- "itertools 0.12.1",
+ "itertools 0.11.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -17728,19 +17637,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "system-deps"
-version = "7.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "396a35feb67335377e0251fcbc1092fc85c484bd4e3a7a54319399da127796e7"
-dependencies = [
- "cfg-expr",
- "heck 0.5.0",
- "pkg-config",
- "toml 1.1.2+spec-1.1.0",
- "version-compare",
-]
-
-[[package]]
 name = "tagptr"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -18397,8 +18293,12 @@ dependencies = [
  "futures-util",
  "log",
  "native-tls",
+ "rustls 0.23.40",
+ "rustls-native-certs 0.8.4",
+ "rustls-pki-types",
  "tokio",
  "tokio-native-tls",
+ "tokio-rustls 0.26.4",
  "tungstenite 0.29.0",
 ]
 
@@ -18971,6 +18871,8 @@ dependencies = [
  "log",
  "native-tls",
  "rand 0.9.4",
+ "rustls 0.23.40",
+ "rustls-pki-types",
  "sha1",
  "thiserror 2.0.18",
  "url",
@@ -19480,12 +19382,6 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
-
-[[package]]
-name = "version-compare"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03c2856837ef78f57382f06b2b8563a2f512f7185d732608fd9176cb3b8edf0e"
 
 [[package]]
 name = "version_check"
@@ -20200,9 +20096,8 @@ dependencies = [
 
 [[package]]
 name = "webrtc-sys"
-version = "0.3.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7428e4bf6894a737d9f75555706e51b39cf207d53ad869d4f870cd953b96c2c"
+version = "0.3.36"
+source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
 dependencies = [
  "cc",
  "cxx",
@@ -20216,8 +20111,7 @@ dependencies = [
 [[package]]
 name = "webrtc-sys-build"
 version = "0.3.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d46da6b5a5cbd091fae0400f77189f4ca4807c0d9442b85838a584f28720570"
+source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
 dependencies = [
  "anyhow",
  "fs2",
@@ -21640,3 +21534,8 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[patch.unused]]
+name = "livekit-ffi"
+version = "0.12.68"
+source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
