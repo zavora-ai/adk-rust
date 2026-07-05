@@ -109,7 +109,8 @@ pub struct SessionResumptionConfig {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GeminiSetup {
-    model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     system_instruction: Option<GeminiContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -409,7 +410,7 @@ impl GeminiRealtimeSession {
 
         let setup = GeminiClientMessage {
             setup: Some(GeminiSetup {
-                model: model.to_string(),
+                model: Some(model.to_string()),
                 system_instruction,
                 generation_config: Some(generation_config),
                 tools,
@@ -814,11 +815,68 @@ impl RealtimeSession for GeminiRealtimeSession {
                 );
                 Ok(())
             }
-            ClientEvent::SessionUpdate { .. } => {
-                tracing::warn!(
-                    "Raw SessionUpdate is an OpenAI construct. Use RealtimeRunner's `update_session` for provider-agnostic Context Mutation. Dropping event."
-                );
-                Ok(())
+            ClientEvent::SessionUpdate { session } => {
+                tracing::info!("Translating ClientEvent::SessionUpdate into Gemini Setup frame");
+                let config: RealtimeConfig = serde_json::from_value(session).map_err(|e| {
+                    RealtimeError::protocol(format!("Failed to parse SessionUpdate config: {e}"))
+                })?;
+
+                let mut generation_config = json!({});
+                if let Some(modalities) = &config.modalities {
+                    generation_config["responseModalities"] = json!(modalities);
+                }
+
+                if let Some(voice) = &config.voice {
+                    generation_config["speechConfig"] = json!({
+                        "voiceConfig": {
+                            "prebuiltVoiceConfig": {
+                                "voiceName": voice
+                            }
+                        }
+                    });
+                }
+
+                if let Some(temp) = config.temperature {
+                    generation_config["temperature"] = json!(temp);
+                }
+
+                let system_instruction = config.instruction.map(|text| GeminiContent {
+                    parts: vec![GeminiPart { text: Some(text), inline_data: None }],
+                });
+
+                let tools = convert_tools(config.tools);
+
+                let handle = config
+                    .extra
+                    .as_ref()
+                    .and_then(|ext| ext.get("resumeToken"))
+                    .and_then(|val| val.as_str())
+                    .map(|s| s.to_string());
+
+                let session_resumption =
+                    if handle.is_some() { Some(SessionResumptionConfig { handle }) } else { None };
+
+                let setup = GeminiClientMessage {
+                    setup: Some(GeminiSetup {
+                        model: config.model,
+                        system_instruction,
+                        generation_config: if generation_config.as_object().unwrap().is_empty() {
+                            None
+                        } else {
+                            Some(generation_config)
+                        },
+                        tools,
+                        cached_content: config.cached_content,
+                        session_resumption,
+                        input_audio_transcription: None,
+                        output_audio_transcription: None,
+                    }),
+                    realtime_input: None,
+                    tool_response: None,
+                    client_content: None,
+                };
+
+                self.send_raw(&setup).await
             }
             ClientEvent::UpdateSession { .. } => {
                 tracing::error!(
@@ -1127,7 +1185,7 @@ mod tests {
     #[test]
     fn test_gemini_setup_serialization_includes_model() {
         let setup = GeminiSetup {
-            model: "models/gemini-2.5-flash-native-audio-latest".to_string(),
+            model: Some("models/gemini-2.5-flash-native-audio-latest".to_string()),
             system_instruction: None,
             generation_config: None,
             tools: None,
