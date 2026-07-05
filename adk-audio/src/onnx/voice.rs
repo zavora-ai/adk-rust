@@ -52,6 +52,11 @@ pub fn load_voice_embedding(model_path: &Path, voice_id: &str) -> AudioResult<Op
         provider: "ONNX".into(),
         message: format!("failed to read voice embedding: {e}"),
     })?;
+
+    #[cfg(target_endian = "big")]
+    compile_error!(
+        "adk-realtime zero-copy audio transmutations require a little-endian target architecture."
+    );
     let embedding: Vec<f32> = bytemuck::cast_slice(&bytes).to_vec();
     Ok(Some(embedding))
 }
