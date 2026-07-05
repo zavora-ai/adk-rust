@@ -48,7 +48,7 @@ jobs:
         sed -i '/\[target\.aarch64-unknown-linux-gnu\]/,/^$/d' .cargo/config.toml
         sed -i "/\[target\.'cfg(all(target_os/,/^$/d" .cargo/config.toml
     - name: Install Rust 1.94 (workspace toolchain)
-      uses: dtolnay/rust-toolchain@1.94.0
+      uses: dtolnay/rust-toolchain@1.100.0
       with:
         components: clippy
     - name: Install cargo-nextest
@@ -82,7 +82,7 @@ jobs:
         sed -i '/\[target\.aarch64-unknown-linux-gnu\]/,/^$/d' .cargo/config.toml
         sed -i "/\[target\.'cfg(all(target_os/,/^$/d" .cargo/config.toml
     - name: Install Rust 1.95 (Monty requires 1.95+)
-      uses: dtolnay/rust-toolchain@1.95.0
+      uses: dtolnay/rust-toolchain@1.100.0
       with:
         components: rustfmt, clippy
     - name: Cache cargo artifacts
