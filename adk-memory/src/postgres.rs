@@ -782,6 +782,71 @@ impl MemoryService for PostgresMemoryService {
         Ok(())
     }
 
+    /// Add a single global entry (`project_id = NULL`).
+    ///
+    /// Without this override the trait default returns "not implemented",
+    /// making direct global writes impossible on the Postgres backend even
+    /// though project-scoped writes work.
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
+    async fn add_entry(&self, app_name: &str, user_id: &str, entry: MemoryEntry) -> Result<()> {
+        let text = crate::text::extract_text(&entry.content);
+        let content_json = serde_json::to_value(&entry.content)
+            .map_err(|e| adk_core::AdkError::memory(format!("serialization failed: {e}")))?;
+
+        if let Some(provider) = &self.embedding_provider {
+            let embed_text = if text.is_empty() { " ".to_string() } else { text.clone() };
+            let embeddings = provider.embed(&[embed_text]).await.map_err(|e| {
+                adk_core::AdkError::memory(format!("embedding generation failed: {e}"))
+            })?;
+            let embedding =
+                pgvector::Vector::from(embeddings.into_iter().next().ok_or_else(|| {
+                    adk_core::AdkError::memory(
+                        "embedding provider returned empty result".to_string(),
+                    )
+                })?);
+            sqlx::query(
+                r#"
+                INSERT INTO memory_entries
+                    (app_name, user_id, session_id, content, author, timestamp, embedding, search_text, project_id)
+                VALUES
+                    ($1, $2, $3, $4, $5, $6, $7, to_tsvector('simple', $8), NULL)
+                "#,
+            )
+            .bind(app_name)
+            .bind(user_id)
+            .bind("")
+            .bind(&content_json)
+            .bind(&entry.author)
+            .bind(entry.timestamp)
+            .bind(embedding)
+            .bind(&text)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
+        } else {
+            sqlx::query(
+                r#"
+                INSERT INTO memory_entries
+                    (app_name, user_id, session_id, content, author, timestamp, search_text, project_id)
+                VALUES
+                    ($1, $2, $3, $4, $5, $6, to_tsvector('simple', $7), NULL)
+                "#,
+            )
+            .bind(app_name)
+            .bind(user_id)
+            .bind("")
+            .bind(&content_json)
+            .bind(&entry.author)
+            .bind(entry.timestamp)
+            .bind(&text)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| adk_core::AdkError::memory(format!("insert failed: {e}")))?;
+        }
+
+        Ok(())
+    }
+
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, project_id = %project_id))]
     async fn add_entry_to_project(
         &self,
