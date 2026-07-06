@@ -18,7 +18,7 @@ pub struct InMemoryTransport {
     id: String,
     input_format: AudioFormat,
     output_format: AudioFormat,
-    event_rx: Arc<Mutex<Option<mpsc::Receiver<Result<TransportEvent>>>>>,
+    event_rx: Arc<std::sync::Mutex<Option<mpsc::Receiver<Result<TransportEvent>>>>>,
     event_tx: mpsc::Sender<Result<TransportEvent>>,
     sent_audio: Arc<Mutex<Vec<AudioChunk>>>,
     sent_controls: Arc<Mutex<Vec<TransportControl>>>,
@@ -32,7 +32,7 @@ impl InMemoryTransport {
             id: id.into(),
             input_format: AudioFormat::pcm16_24khz(),
             output_format: AudioFormat::pcm16_24khz(),
-            event_rx: Arc::new(Mutex::new(Some(rx))),
+            event_rx: Arc::new(std::sync::Mutex::new(Some(rx))),
             event_tx: tx,
             sent_audio: Arc::new(Mutex::new(Vec::new())),
             sent_controls: Arc::new(Mutex::new(Vec::new())),
@@ -83,8 +83,8 @@ impl RealtimeMediaTransport for InMemoryTransport {
     fn events(&self) -> Pin<Box<dyn Stream<Item = Result<TransportEvent>> + Send + '_>> {
         let rx = self
             .event_rx
-            .try_lock()
-            .expect("Could not try_lock event_rx")
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take()
             .expect("events() called multiple times");
         Box::pin(ReceiverStream::new(rx))
