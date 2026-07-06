@@ -51,7 +51,9 @@ pub struct Event {
     pub llm_request: Option<String>,
     /// Provider-specific metadata (e.g., GCP Vertex, Azure OpenAI).
     /// Keeps the core Event struct provider-agnostic.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    /// Serialized as `"event_metadata"` to avoid collision with
+    /// [`LlmResponse::provider_metadata`](crate::LlmResponse) when flattened.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty", rename = "event_metadata")]
     pub provider_metadata: HashMap<String, String>,
 }
 
@@ -635,6 +637,33 @@ mod tests {
         });
         // Trailing function response -> NOT final
         assert!(!event.is_final_response());
+    }
+
+    #[test]
+    fn test_event_roundtrip_with_both_provider_metadata() {
+        let mut event = Event::new("inv-1");
+        event.provider_metadata.insert("adk.tool_progress.stream".into(), "stdout".into());
+        event.provider_metadata.insert("adk.tool_progress.call_id".into(), "call-7".into());
+        event.llm_response.provider_metadata = Some(serde_json::json!({"response_id": "resp-xyz"}));
+
+        let json = serde_json::to_string(&event).expect("serialize");
+        // Round-trip must succeed — regression test for the duplicate
+        // `provider_metadata` flatten collision with LlmResponse.
+        let back: Event = serde_json::from_str(&json)
+            .expect("round-trip must succeed without duplicate field error");
+
+        assert_eq!(
+            back.provider_metadata.get("adk.tool_progress.stream").map(String::as_str),
+            Some("stdout"),
+        );
+        assert_eq!(
+            back.provider_metadata.get("adk.tool_progress.call_id").map(String::as_str),
+            Some("call-7"),
+        );
+        assert_eq!(
+            back.llm_response.provider_metadata,
+            Some(serde_json::json!({"response_id": "resp-xyz"})),
+        );
     }
 
     #[test]

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **adk-core: Event serialization no longer produces duplicate `"provider_metadata"` keys.**
+  `Event.provider_metadata` is now serialized as `"event_metadata"` to avoid collision
+  with `LlmResponse.provider_metadata` (which is flattened into the same JSON object).
+  Regression test added. (`#414`)
+
 ## [2.0.0] - 2026-06-28
 
 ### Changed
