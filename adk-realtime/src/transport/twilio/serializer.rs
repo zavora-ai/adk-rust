@@ -6,9 +6,8 @@ use crate::{
 use serde_json::Value;
 
 /// Serializer for converting between Twilio Media Streams JSON and TransportEvents.
-pub struct TwilioMediaSerializer {
-    format: AudioFormat,
-}
+pub struct TwilioMediaSerializer;
+
 impl Default for TwilioMediaSerializer {
     fn default() -> Self {
         Self::new()
@@ -17,7 +16,7 @@ impl Default for TwilioMediaSerializer {
 
 impl TwilioMediaSerializer {
     pub fn new() -> Self {
-        Self { format: AudioFormat::g711_ulaw() }
+        Self
     }
 
     /// Parse a Twilio WebSocket message into a TransportEvent.
@@ -46,13 +45,28 @@ impl TwilioMediaSerializer {
                 if let Some(payload) =
                     msg.get("media").and_then(|m| m.get("payload")).and_then(|p| p.as_str())
                 {
-                    let chunk =
-                        AudioChunk::from_base64(payload, self.format.clone()).map_err(|e| {
+                    use base64::Engine;
+                    let data =
+                        base64::engine::general_purpose::STANDARD.decode(payload).map_err(|e| {
                             crate::error::RealtimeError::provider(format!(
                                 "Invalid base64 payload: {}",
                                 e
                             ))
                         })?;
+
+                    // Decode μ-law to PCM16 samples (8kHz)
+                    let samples_8khz = crate::audio::g711::decode_ulaw_frame(&data);
+
+                    // Upsample PCM16 from 8kHz to 16kHz for Gemini input by duplicating each sample
+                    let mut samples_16khz = Vec::with_capacity(samples_8khz.len() * 2);
+                    for &sample in &samples_8khz {
+                        samples_16khz.push(sample);
+                        samples_16khz.push(sample);
+                    }
+
+                    let chunk =
+                        AudioChunk::from_i16_samples(&samples_16khz, AudioFormat::pcm16_16khz());
+
                     Ok(Some(TransportEvent::Audio {
                         chunk,
                         timestamp_ms: None,
@@ -79,7 +93,36 @@ impl TwilioMediaSerializer {
 
     /// Serialize a TransportEvent or Control into a Twilio WebSocket message.
     pub fn serialize_audio(&self, stream_id: &str, audio: &AudioChunk) -> String {
-        let payload = audio.to_base64();
+        // Extract samples from the input PCM16 chunk (Gemini Live outputs 24kHz)
+        let samples = audio.to_i16_samples().unwrap_or_default();
+
+        // Downsample to 8kHz for Twilio
+        let samples_8khz = match audio.format.sample_rate {
+            24000 => {
+                let mut downsampled = Vec::with_capacity(samples.len() / 3);
+                for chunk in samples.chunks_exact(3) {
+                    let avg = ((chunk[0] as i32 + chunk[1] as i32 + chunk[2] as i32) / 3) as i16;
+                    downsampled.push(avg);
+                }
+                downsampled
+            }
+            16000 => {
+                let mut downsampled = Vec::with_capacity(samples.len() / 2);
+                for chunk in samples.chunks_exact(2) {
+                    let avg = ((chunk[0] as i32 + chunk[1] as i32) / 2) as i16;
+                    downsampled.push(avg);
+                }
+                downsampled
+            }
+            _ => samples,
+        };
+
+        // Encode 8kHz PCM16 samples to μ-law bytes
+        let ulaw_bytes = crate::audio::g711::encode_ulaw_frame(&samples_8khz);
+
+        use base64::Engine;
+        let payload = base64::engine::general_purpose::STANDARD.encode(&ulaw_bytes);
+
         serde_json::json!({
             "event": "media",
             "streamSid": stream_id,
