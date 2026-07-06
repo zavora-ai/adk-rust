@@ -28,10 +28,7 @@ impl TwilioMediaSerializer {
             crate::error::RealtimeError::provider(format!("Invalid Twilio JSON: {}", e))
         })?;
 
-        let event_type = raw
-            .get("event")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+        let event_type = raw.get("event").and_then(|v| v.as_str()).unwrap_or("unknown");
 
         // Match against supported event types before full deserialization
         match event_type {
@@ -67,8 +64,10 @@ impl TwilioMediaSerializer {
                             samples_16khz.push(sample);
                         }
 
-                        let chunk =
-                            AudioChunk::from_i16_samples(&samples_16khz, AudioFormat::pcm16_16khz());
+                        let chunk = AudioChunk::from_i16_samples(
+                            &samples_16khz,
+                            AudioFormat::pcm16_16khz(),
+                        );
 
                         Ok(Some(TransportEvent::Audio {
                             chunk,
@@ -77,10 +76,9 @@ impl TwilioMediaSerializer {
                             source: None,
                         }))
                     }
-                    TwilioMessage::Dtmf(dtmf) => Ok(Some(TransportEvent::Dtmf {
-                        digit: dtmf.dtmf.digit,
-                        source: None,
-                    })),
+                    TwilioMessage::Dtmf(dtmf) => {
+                        Ok(Some(TransportEvent::Dtmf { digit: dtmf.dtmf.digit, source: None }))
+                    }
                     TwilioMessage::Stop(_) => Ok(Some(TransportEvent::Stopped { reason: None })),
                     _ => Ok(None),
                 }
@@ -128,12 +126,7 @@ impl TwilioMediaSerializer {
         let msg = TwilioMessage::Media(MediaMessage {
             sequence_number: None,
             stream_sid: stream_id.to_string(),
-            media: MediaData {
-                track: None,
-                chunk: None,
-                timestamp: None,
-                payload,
-            },
+            media: MediaData { track: None, chunk: None, timestamp: None, payload },
         });
 
         serde_json::to_string(&msg).unwrap_or_default()
@@ -142,17 +135,13 @@ impl TwilioMediaSerializer {
     pub fn serialize_control(&self, stream_id: &str, control: &TransportControl) -> Option<String> {
         match control {
             TransportControl::ClearQueue => {
-                let msg = TwilioMessage::Clear(ClearMessage {
-                    stream_sid: stream_id.to_string(),
-                });
+                let msg = TwilioMessage::Clear(ClearMessage { stream_sid: stream_id.to_string() });
                 Some(serde_json::to_string(&msg).unwrap_or_default())
             }
             TransportControl::Mark { name } => {
                 let msg = TwilioMessage::Mark(MarkMessage {
                     stream_sid: stream_id.to_string(),
-                    mark: MarkData {
-                        name: name.to_string(),
-                    },
+                    mark: MarkData { name: name.to_string() },
                 });
                 Some(serde_json::to_string(&msg).unwrap_or_default())
             }
@@ -188,11 +177,7 @@ mod tests {
 
         let event = serializer.parse(json).unwrap().unwrap();
         match event {
-            TransportEvent::Started {
-                call_id,
-                stream_id,
-                ..
-            } => {
+            TransportEvent::Started { call_id, stream_id, .. } => {
                 assert_eq!(call_id.unwrap(), "CA123");
                 assert_eq!(stream_id.unwrap(), "MZ123");
             }
@@ -274,9 +259,7 @@ mod tests {
     #[test]
     fn test_serialize_control_mark() {
         let serializer = TwilioMediaSerializer::new();
-        let control = TransportControl::Mark {
-            name: "test_mark".to_string(),
-        };
+        let control = TransportControl::Mark { name: "test_mark".to_string() };
 
         let json = serializer.serialize_control("MZ123", &control).unwrap();
         let msg: serde_json::Value = serde_json::from_str(&json).unwrap();
