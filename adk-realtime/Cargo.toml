@@ -144,8 +144,8 @@ openai = ["dep:async-openai", "dep:tokio-tungstenite", "dep:getrandom"]
 gemini = ["dep:tokio-tungstenite", "dep:adk-gemini"]
 # Enable Vertex AI Live API support (requires gemini + OAuth2/ADC auth)
 vertex-live = ["gemini", "dep:google-cloud-auth"]
-# Enable Twilio Media Streams
-twilio = []
+# Enable Twilio Media Streams and Call Control
+twilio = ["dep:reqwest", "tokio/sync", "tokio-stream/sync"]
 
 # Enable LiveKit WebRTC bridge
 livekit = ["dep:livekit", "dep:livekit-api", "dep:tokio-tungstenite"]

@@ -1,5 +1,7 @@
 //! Audio format definitions and utilities.
 
+pub mod g711;
+
 use serde::{Deserialize, Serialize};
 
 /// Audio encoding formats supported by realtime APIs.

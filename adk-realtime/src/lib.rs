@@ -81,6 +81,7 @@
 pub mod agent;
 pub mod audio;
 pub mod config;
+pub mod dispatch;
 pub mod error;
 pub mod events;
 pub mod model;
