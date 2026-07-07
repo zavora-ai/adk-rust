@@ -378,17 +378,30 @@ pub struct PromptFeedback {
 }
 
 impl GenerationResponse {
-    /// Get the text of the first candidate
+    /// Get the visible answer text of the first candidate.
+    ///
+    /// Concatenates every non-thought text part, in order. This is deliberately
+    /// not "the first part": responses that use thinking or built-in tools
+    /// (Google Search, URL context, code execution) commonly lead with thought
+    /// or tool parts and place the answer text in a later part — so reading only
+    /// the first part would return an empty string. Thought parts are excluded;
+    /// use [`text_with_thoughts`](Self::text_with_thoughts) to inspect them.
     pub fn text(&self) -> String {
         self.candidates
             .first()
-            .and_then(|c| {
-                c.content.parts.as_ref().and_then(|parts| {
-                    parts.first().and_then(|p| match p {
-                        Part::Text { text, thought: _, thought_signature: _ } => Some(text.clone()),
+            .and_then(|c| c.content.parts.as_ref())
+            .map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        Part::Text { text, thought, thought_signature: _ }
+                            if !thought.unwrap_or(false) =>
+                        {
+                            Some(text.as_str())
+                        }
                         _ => None,
                     })
-                })
+                    .collect::<String>()
             })
             .unwrap_or_default()
     }
