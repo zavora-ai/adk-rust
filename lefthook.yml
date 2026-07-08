@@ -2,7 +2,10 @@
 # See CONTRIBUTING.md "3. Develop with Quality Gates".
 #
 # pre-commit: fast format + lint checks (zero warnings).
-# pre-push:   full test suite before code leaves your machine.
+# pre-push:   workspace compilation check before code leaves your machine.
+#             This is a fast `cargo check` gate — CI runs the full test suite
+#             as the safety net, so pushes stay quick while regressions are
+#             still caught before merge.
 #
 # The gates run `cargo <tool> --workspace`, which only builds the workspace
 # members — the `adk-*`, `awp-*`, and `cargo-adk` crates plus the root manifest.
@@ -20,7 +23,8 @@
 #                --severity=warning so info-level notes (e.g. SC1091 about
 #                sourced files that can't be followed) don't block commits;
 #                real warnings and errors still fail.
-#   - nextest    mirrors clippy's compile inputs plus .config/nextest.toml.
+#   - check      mirrors clippy's compile inputs — a workspace compilation
+#                check without running the tests.
 #
 # Glob notes (lefthook's matcher): `*` crosses `/`, so `adk-*/*.rs` matches
 # Rust files at any depth under an `adk-*` crate, and patterns are anchored at
@@ -69,8 +73,8 @@ pre-commit:
 
 pre-push:
   commands:
-    nextest:
-      tags: test
+    check:
+      tags: check
       glob:
         - "adk-*/*.rs"
         - "xtask/*.rs"
@@ -84,6 +88,5 @@ pre-push:
         - "Cargo.lock"
         - ".cargo/config.toml"
         - "rust-toolchain.toml"
-        - ".config/nextest.toml"
-      run: cargo nextest run --workspace
-      fail_text: "Tests failed. Fix regressions before pushing."
+      run: cargo check --workspace
+      fail_text: "Workspace failed to compile. Fix build errors before pushing."

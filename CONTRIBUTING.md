@@ -48,7 +48,7 @@ Branch naming conventions:
 CI enforces three gates: format, lint, and test. The easiest way to catch failures before they reach CI is to let [lefthook](https://github.com/evilmartians/lefthook) run them automatically as git hooks (see [Git Hooks with Lefthook](#git-hooks-with-lefthook)):
 
 - **pre-commit** runs `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`, plus `shellcheck --severity=warning` on any staged shell scripts
-- **pre-push** runs `cargo nextest run --workspace`
+- **pre-push** runs `cargo check --workspace` (a fast compilation check — CI runs the full test suite)
 
 Once installed, these run on every `git commit` and `git push` — no extra steps required.
 
@@ -153,7 +153,7 @@ cp .env.example .env
 The repo ships a `lefthook.yml` that wires the [Quality Gates](#quality-gates) into git hooks, so they run automatically:
 
 - **pre-commit** — format check (`cargo fmt --all -- --check`), lint (`cargo clippy --workspace --all-targets -- -D warnings`), and shell-script lint (`shellcheck --severity=warning` on staged `*.sh`, mirroring the shellcheck hook in `devenv.nix`)
-- **pre-push** — the full test suite (`cargo nextest run --workspace`)
+- **pre-push** — a fast compilation check (`cargo check --workspace`), not the full test suite. CI is the full-suite safety net, so the local push gate stays quick (see [Quality Gates](#quality-gates) for the CI tier design)
 
 The shellcheck gate only runs when shell scripts are staged, and runs at `--severity=warning` so informational notes (e.g. SC1091 about sourced files that can't be followed) don't block commits. `publish.sh` is skipped because it's a zsh script, which shellcheck doesn't support. Install shellcheck with `brew install shellcheck` (macOS) or `apt install shellcheck` (Debian/Ubuntu); `scripts/setup-dev.sh` installs it for you.
 
@@ -173,7 +173,7 @@ Then register the hooks in your local clone (run once, from the repo root):
 lefthook install
 ```
 
-From now on, commits run fmt + clippy (and shellcheck on staged shell scripts) and pushes run the test suite. If a gate fails, the commit or push is blocked with guidance on how to fix it.
+From now on, commits run fmt + clippy (and shellcheck on staged shell scripts) and pushes run a `cargo check --workspace` compilation check. If a gate fails, the commit or push is blocked with guidance on how to fix it.
 
 Need to bypass a hook in an emergency? Use `LEFTHOOK=0 git commit ...` or `git commit --no-verify` — but CI will still enforce the gates, so prefer fixing the issue.
 
@@ -244,8 +244,10 @@ Complex examples are standalone crates added to the root `[workspace.members]`.
 ### Documentation
 
 ```
-docs/official_docs/           Comprehensive documentation site content
-docs/official_docs_examples/  Compilable code snippets validating every doc page
+docs/official_docs/  Comprehensive documentation site content. Cargo snippets,
+                     feature names, and package/example references in these pages
+                     are validated against `cargo metadata` by
+                     scripts/check-doc-examples.sh.
 ```
 
 ## Quality Gates
@@ -281,6 +283,114 @@ Clippy runs with `-D warnings` — every warning is a compile error. This includ
 - Unnecessary clones, redundant closures, etc.
 
 Fix warnings before pushing. Don't suppress them with `#[allow(...)]` unless there's a documented reason.
+
+### CI Cost Tiers
+
+CI is organized into cost tiers so per-PR feedback stays fast while full coverage is
+preserved (see the `ci-pipeline-restructure` spec). No coverage is dropped —
+expensive axes just move to a later tier.
+
+| Tier | Trigger | Checks | Blocks merge? |
+|------|---------|--------|---------------|
+| **PR** | pull request (`ci.yml` + `semver.yml`) | `fmt` (prerequisite gate), `clippy --workspace -D warnings`, `nextest --workspace` on Linux (at most once), `feature-coverage` (feature-gated modules like `adk-agent --features codeact`), `docs` (single `cargo doc --workspace --no-deps`), `templates`, compile-only `macos`/`windows` builds, `semver` (stable strict, beta warn-only) | Yes — this is the required-check set |
+| **Merge** | `push: main` (`ci-merge.yml`) | cross-platform `nextest --workspace` on macOS/Windows, out-of-workspace Monty build, doc-example compilation | No — runs post-merge |
+| **Nightly** | `schedule` (`ci-nightly.yml`) | feature-combination matrix, `cargo-audit`/`cargo-deny` supply-chain, `#[ignore]` integration tests gated on secrets | No — runs on a schedule |
+
+Only the **PR tier** gates merges. The merge and nightly tiers run after a change
+lands (or on a schedule) and are informational. The three local gates above map to
+the PR tier; locally, `pre-push` runs the lighter `cargo check --workspace` because
+CI is the full-suite safety net. The authoritative required-check set is enumerated
+in [Branch Protection — Required Status Checks](#branch-protection--required-status-checks).
+
+## Branch Protection — Required Status Checks
+
+CI is organized into cost tiers (see the `ci-pipeline-restructure` spec). Only the
+**PR tier** (Tier 1) gates merges. The merge tier and nightly tier run *after* a
+change lands (or on a schedule) and are informational — they MUST NOT be marked
+branch-protection-required, because requiring a check that doesn't run on a PR
+would block every PR waiting for a status that never arrives.
+
+Branch protection for `main` is configured through the GitHub API / repo settings
+(there is no committed config file). The authoritative required-check set is the
+list below. When updating branch protection, use exactly these status-check
+contexts.
+
+### Required on PRs (branch-protection-required)
+
+These are the Tier-1 jobs from `ci.yml` and `semver.yml`. The status-check context
+name is the job name (matrix jobs include the matrix value in parentheses):
+
+| Check context | Workflow | Job |
+|---------------|----------|-----|
+| `fmt` | `ci.yml` | `fmt` |
+| `clippy` | `ci.yml` | `clippy` |
+| `test` | `ci.yml` | `test` |
+| `feature-coverage (adk-agent, codeact)` | `ci.yml` | `feature-coverage` (matrix) |
+| `docs` | `ci.yml` | `docs` |
+| `templates` | `ci.yml` | `templates` |
+| `macos` | `ci.yml` | `macos` (compile-only build) |
+| `windows` | `ci.yml` | `windows` (compile-only build) |
+| `semver` | `semver.yml` | `semver` (stable-tier strict; beta is warn-only within the same job) |
+
+Notes:
+- `feature-coverage` is a matrix job; its context includes the matrix value, so
+  add each entry that exists. Today the only entry is `adk-agent, codeact`. If you
+  append matrix entries, add their contexts here and to branch protection.
+- `semver` is a single job that runs the strict stable-crate check (which can fail
+  the job) and a warn-only beta/experimental check (which never fails). Requiring
+  the `semver` job therefore requires only the stable-tier semver gate, keeping the
+  beta check advisory (Requirement 5.3).
+- `codeact-feature` (from `codeact-monty.yml`) is **path-filtered** to CodeAct
+  paths and does **not** run on most PRs, so it MUST NOT be required — the
+  always-on `feature-coverage (adk-agent, codeact)` job is the merge-blocking
+  CodeAct signal instead.
+
+### NOT required (informational tiers)
+
+These run post-merge or on a schedule and MUST NOT be branch-protection-required:
+
+- **Merge tier** (`ci-merge.yml`, `on: push: branches:[main]`):
+  `cross-platform-test (macos-latest)`, `cross-platform-test (windows-latest)`,
+  `out-of-workspace-monty`, `doc-examples`.
+- **Nightly tier** (`ci-nightly.yml`, `on: schedule`): the `features (…)`
+  feature-combination matrix jobs, `supply-chain`, `integration-tests`.
+- **Weekly out-of-workspace** (`codeact-monty.yml` cron): `monty-runtime`; and the
+  path-filtered `codeact-feature` PR job (see note above).
+
+### Applying the required-check set
+
+A maintainer with admin rights can apply the set above with the GitHub CLI. This
+requires new PR-tier job names to be stable and green first (spec tasks 6 and 10),
+since branch protection waits on a context that must actually report:
+
+```bash
+gh api -X PUT repos/zavora-ai/adk-rust/branches/main/protection \
+  --input - <<'JSON'
+{
+  "required_status_checks": {
+    "strict": true,
+    "checks": [
+      { "context": "fmt" },
+      { "context": "clippy" },
+      { "context": "test" },
+      { "context": "feature-coverage (adk-agent, codeact)" },
+      { "context": "docs" },
+      { "context": "templates" },
+      { "context": "macos" },
+      { "context": "windows" },
+      { "context": "semver" }
+    ]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": { "required_approving_review_count": 1 },
+  "restrictions": null
+}
+JSON
+```
+
+Adjust `required_pull_request_reviews`, `enforce_admins`, and `restrictions` to
+match the project's review policy; the merge-blocking contract for this spec is the
+`checks` list above.
 
 ## Build Commands
 
@@ -364,7 +474,7 @@ cargo test --workspace --doc
 - Unit tests: `#[cfg(test)]` modules in source files
 - Integration tests: `tests/*.rs` in each crate
 - Property tests: `tests/*_property_tests.rs` using `proptest` (100+ iterations)
-- Doc examples: validated via `docs/official_docs_examples/` workspace members
+- Doc examples: Cargo snippets, feature names, and package/example references in `README.md` and `docs/official_docs/` are validated against `cargo metadata` by `scripts/check-doc-examples.sh`. Compile coverage comes from the workspace example crates and cargo-adk templates.
 
 ### Writing Tests for New Code
 

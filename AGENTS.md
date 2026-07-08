@@ -22,6 +22,35 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace
 ```
 
+### CI cost tiers
+
+CI is organized into cost tiers so per-PR feedback stays fast while full coverage
+is preserved (see the `ci-pipeline-restructure` spec). No coverage is dropped —
+expensive axes move to a later tier.
+
+- **PR tier** (`ci.yml` + `semver.yml`, on pull requests) — the merge-blocking
+  set: `fmt` (prerequisite gate), `clippy --workspace -D warnings`,
+  `nextest --workspace` (Linux, runs at most once), `feature-coverage` for
+  feature-gated modules default builds skip (e.g. `adk-agent --features codeact`),
+  `docs` (single `cargo doc --workspace --no-deps`), `templates`, compile-only
+  `macos`/`windows` builds, and `semver` (stable strict, beta warn-only).
+- **Merge tier** (`ci-merge.yml`, on `push: main`) — cross-platform
+  `nextest --workspace` on macOS/Windows, the out-of-workspace Monty build, and
+  doc-example compilation. Runs post-merge; not branch-protection-required.
+- **Nightly tier** (`ci-nightly.yml`, on `schedule`) — the feature-combination
+  matrix, `cargo-audit`/`cargo-deny` supply-chain checks, and `#[ignore]`
+  integration tests gated on available secrets. Not branch-protection-required.
+
+Only the PR tier gates merges. See CONTRIBUTING.md ("Branch Protection — Required
+Status Checks") for the authoritative required-check set.
+
+### Local git hooks (lefthook)
+
+- **pre-commit** — `cargo fmt --all -- --check`, `cargo clippy --workspace
+  --all-targets -- -D warnings`, and `shellcheck` on staged shell scripts.
+- **pre-push** — `cargo check --workspace` (a fast compilation check, not the full
+  test suite). CI is the full-suite safety net, so the local gate stays quick.
+
 ### AI Agent Workflow (`devenv`)
 
 Use these shorthand scripts instead of raw `cargo` to ensure `sccache` wrap and workspace coverage:
@@ -409,7 +438,7 @@ cargo nextest run -p adk-realtime --features full            # with features
 - Unit tests: `#[cfg(test)]` modules in source files.
 - Integration tests: `tests/*.rs` in each crate.
 - Property tests: `tests/*_property_tests.rs` using `proptest` with 100+ iterations.
-- Doc examples: validated via `docs/official_docs_examples/` workspace members.
+- Doc examples: Cargo snippets, feature names, and package/example references in `README.md` and `docs/official_docs/` are validated against `cargo metadata` by `scripts/check-doc-examples.sh`.
 - When writing tests, prefer comparing equality of entire objects over fields one by one.
 - Tests that require API keys or external services should be `#[ignore]`.
 - Run the test for the specific crate you changed first (`cargo test -p adk-<crate>`), then run the full workspace if you changed shared crates like `adk-core`.
@@ -418,7 +447,7 @@ cargo nextest run -p adk-realtime --features full            # with features
 ## Documentation
 
 - When making a change that adds or changes an API, ensure that `docs/official_docs/` is up to date.
-- Doc examples in `docs/official_docs_examples/` are compiled as workspace members in CI. If you change a public API, the corresponding doc example must still compile.
+- Documented examples (Cargo snippets, feature names, and package/example references in `README.md` and `docs/official_docs/`) are validated in CI by `scripts/check-doc-examples.sh` against `cargo metadata`. Compile coverage comes from the workspace example crates and cargo-adk templates, so if you change a public API, keep those in sync.
 - Update the crate's `README.md` if capabilities changed.
 - Update `CHANGELOG.md` for user-facing changes.
 

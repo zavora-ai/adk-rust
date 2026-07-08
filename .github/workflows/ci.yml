@@ -121,6 +121,45 @@ jobs:
           echo "### 🧪 $SUMMARY" >> "$GITHUB_STEP_SUMMARY"
         fi
 
+  # ── Feature coverage: feature-gated modules default CI skips ───
+  # Default clippy/test builds never compile feature-gated modules (e.g.
+  # `adk-agent`'s `codeact`), so a regression there is invisible on the normal
+  # PR path. This job compiles + tests each such module under its feature on a
+  # plain runner via the shared setup-rust action (components + wild-linker
+  # strip + cache come from there — no per-job setup drift).
+  #
+  # To cover another feature-gated module, add ONE line to the matrix below:
+  #   - { package: <crate>, features: <feature> }
+  feature-coverage:
+    needs: fmt
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { package: adk-agent, features: codeact }
+    steps:
+    - uses: actions/checkout@v4
+
+    # Toolchain (with clippy) + wild-linker strip + build cache from the shared
+    # action. neutralize-wild defaults to true, correct for this plain runner.
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        components: clippy
+        cache-key: feature-coverage-${{ matrix.package }}-${{ matrix.features }}
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-nextest
+
+    - name: Clippy (${{ matrix.package }} --features ${{ matrix.features }})
+      run: cargo clippy -p ${{ matrix.package }} --features ${{ matrix.features }} --all-targets -- -D warnings
+
+    - name: Test (${{ matrix.package }} --features ${{ matrix.features }})
+      run: cargo nextest run -p ${{ matrix.package }} --features ${{ matrix.features }}
+
   # ── Docs: documentation coverage for Stable-tier crates ──────
   docs:
     needs: fmt
@@ -148,21 +187,15 @@ jobs:
         restore-keys: docs-${{ runner.os }}-
 
     - name: Check documentation coverage
+      env:
+        RUSTDOCFLAGS: "-D warnings"
       run: |
-        FAILED=0
         echo "### 📚 Documentation Coverage" >> "$GITHUB_STEP_SUMMARY"
         echo "" >> "$GITHUB_STEP_SUMMARY"
-        for crate in adk-core adk-agent adk-model adk-gemini adk-tool adk-runner adk-session adk-server adk-graph adk-memory adk-anthropic adk-rust; do
-          echo "Checking $crate..."
-          OUTPUT=$(CI=true devenv shell cargo doc -p "$crate" --no-deps 2>&1)
-          if echo "$OUTPUT" | grep -q "missing documentation"; then
-            echo "❌ $crate — missing docs" >> "$GITHUB_STEP_SUMMARY"
-            FAILED=1
-          else
-            echo "✅ $crate" >> "$GITHUB_STEP_SUMMARY"
-          fi
-        done
-        if [ "$FAILED" -ne 0 ]; then
+        if CI=true devenv shell cargo doc --workspace --no-deps; then
+          echo "✅ Workspace documentation built with no warnings" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "❌ Workspace documentation build failed (missing or broken docs)" >> "$GITHUB_STEP_SUMMARY"
           echo "::error::Documentation coverage check failed"
           exit 1
         fi
@@ -209,58 +242,47 @@ jobs:
         # default-provider resolution — and cargo-check the generated projects.
         CI=true devenv shell bash scripts/check-cargo-adk-templates.sh
 
-  # ── Cross-platform: macOS build + test ─────────────────────────
+  # ── Cross-platform: macOS compile-only build ───────────────────
+  # PR tier is compile-only; the full nextest run moves to the merge tier
+  # (ci-merge.yml). setup-rust supplies the toolchain + build cache;
+  # neutralize-wild is false because the wild-linker strip is Linux-only.
   macos:
     needs: fmt
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install stable Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Install cargo-nextest
-      uses: taiki-e/install-action@v2
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
       with:
-        tool: cargo-nextest
+        neutralize-wild: 'false'
+        cache-key: macos
 
     - name: Install system dependencies
       run: brew install cmake protobuf
 
-    - name: Cache cargo artifacts
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: macos-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: macos-${{ runner.os }}-
-
     - name: Build workspace
       run: cargo build --workspace
 
-    - name: Run tests
-      run: cargo nextest run --workspace
-
-    - name: Test summary
+    - name: Build summary
       if: always()
-      run: echo "### 🍎 macOS build + test passed" >> "$GITHUB_STEP_SUMMARY"
+      run: echo "### 🍎 macOS compile-only build passed" >> "$GITHUB_STEP_SUMMARY"
 
-  # ── Cross-platform: Windows build + check ──────────────────────
+  # ── Cross-platform: Windows compile-only build ─────────────────
+  # PR tier is compile-only; the full nextest run moves to the merge tier
+  # (ci-merge.yml). setup-rust supplies the toolchain + build cache;
+  # neutralize-wild is false because the wild-linker strip is Linux-only.
   windows:
     needs: fmt
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install stable Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Install cargo-nextest
-      uses: taiki-e/install-action@v2
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
       with:
-        tool: cargo-nextest
+        neutralize-wild: 'false'
+        cache-key: windows
 
     - name: Install cmake
       uses: lukka/get-cmake@latest
@@ -270,22 +292,9 @@ jobs:
       with:
         repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Cache cargo artifacts
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~\.cargo\registry
-          ~\.cargo\git
-          target
-        key: windows-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: windows-${{ runner.os }}-
-
     - name: Build workspace
       run: cargo build --workspace
 
-    - name: Run tests
-      run: cargo nextest run --workspace
-
-    - name: Test summary
+    - name: Build summary
       if: always()
-      run: echo "### 🪟 Windows build + test passed" >> $env:GITHUB_STEP_SUMMARY
+      run: echo "### 🪟 Windows compile-only build passed" >> $env:GITHUB_STEP_SUMMARY

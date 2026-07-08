@@ -23,30 +23,16 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Install stable Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+    # Toolchain install + wild linker strip + build cache, from the shared action.
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: semver
 
     - name: Install cargo-semver-checks
       uses: taiki-e/install-action@v2
       with:
         tool: cargo-semver-checks
-
-    - name: Cache cargo artifacts
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: semver-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: semver-${{ runner.os }}-
-
-    # Strip Linux-only wild linker from .cargo/config.toml
-    - name: Neutralize wild linker config
-      run: |
-        sed -i '/\[target\.x86_64-unknown-linux-gnu\]/,/^$/d' .cargo/config.toml
-        sed -i '/\[target\.aarch64-unknown-linux-gnu\]/,/^$/d' .cargo/config.toml
-        sed -i "/\[target\.'cfg(all(target_os/,/^$/d" .cargo/config.toml
 
     # Stable-tier leaf crates only (skip adk-rust umbrella — it just re-exports)
     - name: Semver checks — Stable crates (strict)

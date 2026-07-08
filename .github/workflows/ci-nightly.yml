@@ -1,0 +1,211 @@
+name: CI Nightly
+
+# Nightly tier (see ci-pipeline-restructure spec, design.md §5 + Requirement 2.3).
+# Runs on a schedule — carrying the most expensive coverage that is deliberately
+# kept off both the per-PR and per-merge paths because it is broad, slow, or
+# needs credentials that are not available on ordinary runs:
+#   • feature-combinations — compile the notable feature combos that default CI
+#     (ci.yml) never builds (realtime `full`, audio ONNX backends, GPU features).
+#   • supply-chain — `cargo audit` (enforcing) + `cargo deny` (advisory) over the
+#     workspace dependency graph.
+#   • integration-tests — the `#[ignore]`d integration tests that hit real
+#     provider APIs, gated on the relevant secrets being configured.
+#
+# This is an INFORMATIONAL tier: per the spec's required-check policy these jobs
+# are NOT branch-protection-required. A nightly failure is a signal to triage,
+# not a merge blocker.
+#
+# All Rust runner preparation goes through the shared setup-rust composite action
+# so toolchain/components/linker/cache can never drift per-workflow.
+
+on:
+  schedule:
+    # 03:00 UTC every day — quiet period, off the merge-tier path.
+    - cron: '0 3 * * *'
+  # Allow maintainers to trigger a nightly run on demand from the Actions tab.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+  PROTOC: protoc
+
+# Nightly runs are not latency-sensitive; let an in-progress run complete rather
+# than cancelling it when the schedule fires again.
+concurrency:
+  group: ci-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ── Feature-combination matrix ─────────────────────────────────
+  # Requirement 2.3 (full feature-combination checks on a scheduled trigger) and
+  # design.md §5 (audio ONNX, realtime `full`, GPU compile-checks). Default CI
+  # (ci.yml clippy/test) only ever builds default features, so a regression in a
+  # non-default feature combination is invisible on the PR and merge tiers. This
+  # job compiles each notable combo on the appropriate runner.
+  #
+  # GPU features cannot RUN on GitHub runners (no GPU), so they are compile-only
+  # via `cargo check`; the Metal combo runs on macOS where the Metal toolchain is
+  # available even without a discrete GPU. Feature names below were verified
+  # against the real Cargo.toml manifests:
+  #   • adk-realtime  `full`  = openai + gemini + vertex-live + livekit
+  #   • adk-audio     `whisper-onnx`, `moonshine` = ONNX STT backends (imply `onnx`)
+  #   • adk-mistralrs `metal` = mistralrs/metal (macOS GPU acceleration)
+  #
+  # EXTENSION POINT: to cover another feature combination, append one matrix
+  # entry with { name, os, neutralize-wild, command }. Keep GPU/hardware combos
+  # compile-only (`cargo check`) and on a runner whose toolchain supports them.
+  feature-combinations:
+    name: features (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # realtime with all providers/transports (no WebRTC — that needs cmake
+          # + the openai-webrtc feature; `full` deliberately excludes it).
+          - name: realtime-full
+            os: ubuntu-latest
+            neutralize-wild: 'true'
+            command: cargo check -p adk-realtime --features full --all-targets
+          # audio ONNX speech-to-text backends (whisper + moonshine). Both imply
+          # the `onnx` feature; neither pulls the espeak-ng system dep that
+          # `kokoro` requires, so this compiles on a plain runner.
+          - name: audio-onnx-stt
+            os: ubuntu-latest
+            neutralize-wild: 'true'
+            command: cargo check -p adk-audio --features whisper-onnx,moonshine --all-targets
+          # GPU compile-check: Metal acceleration for adk-mistralrs. Compile-only
+          # (`cargo check`) on macOS, where the Metal toolchain is present even
+          # though the runner has no discrete GPU to execute against.
+          - name: mistralrs-metal
+            os: macos-latest
+            neutralize-wild: 'false'
+            command: cargo check -p adk-mistralrs --features metal
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: features-${{ matrix.name }}
+        neutralize-wild: ${{ matrix.neutralize-wild }}
+
+    - name: Install system dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake protobuf-compiler
+
+    - name: Install system dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: brew install cmake protobuf
+
+    - name: Compile feature combination
+      run: ${{ matrix.command }}
+
+    - name: Feature-combination summary
+      if: always()
+      shell: bash
+      run: echo "### 🧩 feature combo '${{ matrix.name }}' compiled" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Supply-chain: advisory + policy checks ─────────────────────
+  # Requirement 2.3 (supply-chain checks on a scheduled trigger). Two tools:
+  #   • cargo-audit — scans the workspace Cargo.lock against the RustSec advisory
+  #     DB. It honours the repo's .cargo/audit.toml, so advisories reviewed and
+  #     accepted there (see docs/security/DEPENDENCY-ADVISORIES.md) are skipped
+  #     while NEW advisories surface as failures. This is the ENFORCING gate.
+  #   • cargo-deny — broader supply-chain policy (bans, sources, licenses,
+  #     advisories). The repo has NO root deny.toml today, so cargo-deny runs with
+  #     built-in defaults and is ADVISORY (continue-on-error) to avoid spurious
+  #     nightly failures on advisories already accepted in .cargo/audit.toml
+  #     (which cargo-deny does not read) and on the default license policy.
+  #     Add a root deny.toml to make this an enforcing gate.
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: supply-chain
+        neutralize-wild: 'true'
+
+    - name: Install cargo-audit and cargo-deny
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-audit,cargo-deny
+
+    # Enforcing: reads .cargo/audit.toml + workspace Cargo.lock.
+    - name: cargo audit
+      run: cargo audit
+
+    # Advisory until a root deny.toml exists (see job comment above).
+    - name: cargo deny check
+      continue-on-error: true
+      run: cargo deny check
+
+    - name: Supply-chain summary
+      if: always()
+      shell: bash
+      run: echo "### 🔐 supply-chain checks (cargo audit + cargo deny) completed" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Integration tests: #[ignore]d tests gated on secrets ───────
+  # Requirement 2.3 (scheduled integration coverage). The workspace marks tests
+  # that hit real provider APIs / external services with `#[ignore]` (see
+  # AGENTS.md "Testing"); those never run on the PR or merge tiers. Here we run
+  # ONLY the ignored tests (`--run-ignored ignored-only`).
+  #
+  # Secret gating: GitHub does NOT allow `secrets.*` in a job-level `if:`
+  # reliably, so we map the provider secrets into job ENV and gate the actual
+  # test step on `env.* != ''`. When no provider secret is configured (e.g. on a
+  # fork, or before secrets are added) the tests are skipped with a notice rather
+  # than failing. Secrets are passed through env so the tests can authenticate.
+  integration-tests:
+    runs-on: ubuntu-latest
+    env:
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: integration-tests
+        neutralize-wild: 'true'
+
+    - name: Install system dependencies (Linux)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake protobuf-compiler
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-nextest
+
+    # Runs only when at least one provider secret is present. env context is
+    # allowed in a step `if:` (secrets context is not), so the mapped env vars
+    # above are what we test against.
+    - name: Run ignored integration tests
+      if: ${{ env.GOOGLE_API_KEY != '' || env.OPENAI_API_KEY != '' || env.ANTHROPIC_API_KEY != '' }}
+      run: cargo nextest run --workspace --run-ignored ignored-only
+
+    - name: Skip notice (no provider secrets configured)
+      if: ${{ env.GOOGLE_API_KEY == '' && env.OPENAI_API_KEY == '' && env.ANTHROPIC_API_KEY == '' }}
+      shell: bash
+      run: |
+        echo "### ⏭️ integration tests skipped" >> "$GITHUB_STEP_SUMMARY"
+        echo "No provider secrets (GOOGLE_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY) configured." >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Integration-tests summary
+      if: ${{ always() && (env.GOOGLE_API_KEY != '' || env.OPENAI_API_KEY != '' || env.ANTHROPIC_API_KEY != '') }}
+      shell: bash
+      run: echo "### 🌐 ignored integration tests completed" >> "$GITHUB_STEP_SUMMARY"

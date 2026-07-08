@@ -1,0 +1,58 @@
+name: 'Setup Rust'
+description: >-
+  Single source of Rust runner preparation for plain (non-nix) runners.
+  Installs a pinned toolchain with the requested components, neutralizes the
+  Linux `wild` linker config that plain runners do not provide, and configures
+  a persistent build cache.
+
+inputs:
+  toolchain:
+    description: 'Rust toolchain version to install.'
+    required: false
+    default: '1.94.0'
+  components:
+    description: 'Comma-separated list of toolchain components (e.g. clippy,rustfmt).'
+    required: false
+    default: ''
+  cache-key:
+    description: 'Prefix for the build cache.'
+    required: false
+    default: ${{ github.job }}
+  neutralize-wild:
+    description: >-
+      Strip the Linux `wild` linker sections from .cargo/config.toml. Set to
+      "true" on plain Linux runners; set to "false" on macOS/Windows and on
+      nix/devenv runners that provide the linker themselves.
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    # 1. Install the toolchain + components. Because this action is pinned by
+    #    SHA (not by a toolchain tag), the version is passed via the input.
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: ${{ inputs.components }}
+
+    # 2. The workspace .cargo/config.toml pins the `wild` linker for Linux
+    #    targets (provided only by the devenv/nix shell). Plain runners don't
+    #    have it, so strip those three target sections. This is the exact `sed`
+    #    used by semver.yml today.
+    - name: Neutralize wild linker config
+      if: inputs.neutralize-wild == 'true'
+      shell: bash
+      run: |
+        sed -i '/\[target\.x86_64-unknown-linux-gnu\]/,/^$/d' .cargo/config.toml
+        sed -i '/\[target\.aarch64-unknown-linux-gnu\]/,/^$/d' .cargo/config.toml
+        sed -i "/\[target\.'cfg(all(target_os/,/^$/d" .cargo/config.toml
+
+    # 3. Persist dependency + target artifacts across runs. Keyed on the
+    #    caller-supplied prefix; rust-cache appends the Cargo.lock hash itself,
+    #    so a dependency change cannot be masked by a stale cache.
+    - name: Configure Rust build cache
+      uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      with:
+        prefix-key: ${{ inputs.cache-key }}
