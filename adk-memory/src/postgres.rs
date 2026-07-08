@@ -654,6 +654,45 @@ impl MemoryService for PostgresMemoryService {
         Ok(SearchResponse { memories })
     }
 
+    #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, limit = %limit))]
+    async fn list_recent(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT content, author, timestamp
+            FROM memory_entries
+            WHERE app_name = $1 AND user_id = $2
+            ORDER BY timestamp DESC
+            LIMIT $3
+            "#,
+        )
+        .bind(app_name)
+        .bind(user_id)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| adk_core::AdkError::memory(format!("list_recent failed: {e}")))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let content_json: serde_json::Value = row.get("content");
+                let content: adk_core::Content = serde_json::from_value(content_json)
+                    .unwrap_or_else(|_| adk_core::Content {
+                        role: "user".to_string(),
+                        parts: vec![],
+                    });
+                let author: String = row.get("author");
+                let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
+                MemoryEntry { content, author, timestamp }
+            })
+            .collect())
+    }
+
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id))]
     async fn delete_user(&self, app_name: &str, user_id: &str) -> Result<()> {
         sqlx::query("DELETE FROM memory_entries WHERE app_name = $1 AND user_id = $2")

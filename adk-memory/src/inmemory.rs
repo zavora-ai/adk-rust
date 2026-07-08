@@ -164,6 +164,25 @@ impl MemoryService for InMemoryMemoryService {
         Ok(removed)
     }
 
+    async fn list_recent(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>> {
+        let key = MemoryKey { app_name: app_name.to_string(), user_id: user_id.to_string() };
+        let store = self.store.read().unwrap();
+        let mut entries: Vec<MemoryEntry> = store
+            .get(&key)
+            .map(|sessions| {
+                sessions.values().flatten().map(|stored| stored.entry.clone()).collect()
+            })
+            .unwrap_or_default();
+        entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        entries.truncate(limit);
+        Ok(entries)
+    }
+
     async fn delete_entries_in_project(
         &self,
         app_name: &str,

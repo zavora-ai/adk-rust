@@ -85,6 +85,20 @@ pub trait MemoryService: Send + Sync {
         Err(adk_core::AdkError::memory("delete_entries not implemented"))
     }
 
+    /// List the most recent entries for a user (global + project-scoped),
+    /// newest first. Unlike `search`, this is a pure recency listing — no
+    /// query, no similarity ranking — suitable for "what does the agent
+    /// remember?" UIs and latest-item lookups.
+    async fn list_recent(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>> {
+        let _ = (app_name, user_id, limit);
+        Err(adk_core::AdkError::memory("list_recent not implemented"))
+    }
+
     /// Verify backend connectivity.
     ///
     /// Returns `Ok(())` if the backend is reachable and responsive.
