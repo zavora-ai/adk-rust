@@ -57,7 +57,7 @@ jobs:
     - run: nix profile install nixpkgs#devenv
 
     - name: Cache cargo artifacts
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cache/sccache
@@ -100,7 +100,7 @@ jobs:
     - run: nix profile install nixpkgs#devenv
 
     - name: Cache cargo artifacts
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cache/sccache
@@ -176,7 +176,7 @@ jobs:
     - run: nix profile install nixpkgs#devenv
 
     - name: Cache cargo artifacts
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cache/sccache
@@ -216,7 +216,7 @@ jobs:
     - run: nix profile install nixpkgs#devenv
 
     - name: Cache cargo artifacts
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cache/sccache
