@@ -87,7 +87,7 @@ jobs:
             neutralize-wild: 'false'
             command: cargo check -p adk-mistralrs --features metal
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
@@ -128,7 +128,7 @@ jobs:
   supply-chain:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
@@ -173,7 +173,7 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust

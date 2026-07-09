@@ -25,7 +25,7 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: cachix/install-nix-action@v30
       with:
         nix_path: nixpkgs=channel:nixos-unstable
@@ -41,7 +41,7 @@ jobs:
     needs: fmt
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Free disk space
       run: |
@@ -84,7 +84,7 @@ jobs:
     needs: fmt
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Free disk space
       run: |
@@ -139,7 +139,7 @@ jobs:
         include:
           - { package: adk-agent, features: codeact }
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     # Toolchain (with clippy) + wild-linker strip + build cache from the shared
     # action. neutralize-wild defaults to true, correct for this plain runner.
@@ -165,7 +165,7 @@ jobs:
     needs: fmt
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - uses: cachix/install-nix-action@v30
       with:
@@ -205,7 +205,7 @@ jobs:
     needs: fmt
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - uses: cachix/install-nix-action@v30
       with:
@@ -250,7 +250,7 @@ jobs:
     needs: fmt
     runs-on: macos-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
@@ -276,7 +276,7 @@ jobs:
     needs: fmt
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust

@@ -45,7 +45,7 @@ jobs:
       matrix:
         os: [ macos-latest, windows-latest ]
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
@@ -107,7 +107,7 @@ jobs:
   out-of-workspace-monty:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
@@ -181,7 +181,7 @@ jobs:
   doc-examples:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup Rust
       uses: ./.github/actions/setup-rust

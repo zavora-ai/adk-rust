@@ -53,7 +53,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     # Toolchain (with clippy) + wild-linker strip + build cache from the shared
     # action. Passing `components: clippy` fixes the #411-class missing-component
     # bug structurally.
@@ -79,7 +79,7 @@ jobs:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     # Monty needs rustc 1.95 + rustfmt + clippy. The cache is keyed on the Monty
     # crate's own lockfile so a dependency change there cannot be masked by a
     # stale workspace cache.
