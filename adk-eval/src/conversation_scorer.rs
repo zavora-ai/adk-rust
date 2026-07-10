@@ -2,8 +2,8 @@
 //!
 //! The [`ConversationScorer`] evaluates multi-turn conversations using a
 //! [`StructuredJudge`] for semantic metrics (context retention, goal completion,
-//! coherence) and optionally an [`EmbeddingScorer`](crate::EmbeddingScorer) for
-//! topic drift measurement.
+//! coherence) and optionally an `EmbeddingScorer` (with the `embedding` feature)
+//! for topic drift measurement.
 //!
 //! # Example
 //!
@@ -87,7 +87,7 @@ impl Default for ConversationScorerConfig {
 /// Scores multi-turn conversations on quality metrics.
 ///
 /// Uses a [`StructuredJudge`] for context retention, goal completion, and
-/// coherence metrics. For topic drift, uses an [`EmbeddingScorer`] if available,
+/// coherence metrics. For topic drift, uses an `EmbeddingScorer` if available,
 /// otherwise falls back to the structured judge.
 pub struct ConversationScorer {
     judge: StructuredJudge,

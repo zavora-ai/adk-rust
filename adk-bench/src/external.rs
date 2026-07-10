@@ -154,8 +154,8 @@ impl ExternalRunner {
     ///
     /// # Errors
     ///
-    /// - [`BenchError::ExternalTimeout`] if the subprocess exceeds the configured timeout
-    /// - [`BenchError::ExternalRunner`] if the subprocess exits with non-zero status or emits invalid JSON
+    /// - [`BenchError::ExternalTimeout`](crate::BenchError::ExternalTimeout) if the subprocess exceeds the configured timeout
+    /// - [`BenchError::ExternalRunner`](crate::BenchError::ExternalRunner) if the subprocess exits with non-zero status or emits invalid JSON
     pub async fn run(
         &self,
         config: &ExternalFrameworkConfig,
@@ -313,8 +313,8 @@ pub struct ExternalConfigFile {
 ///
 /// # Errors
 ///
-/// Returns [`BenchError::Io`] if the file cannot be read, or
-/// [`BenchError::Serialization`] if the JSON is invalid.
+/// Returns [`BenchError::Io`](crate::BenchError::Io) if the file cannot be read, or
+/// [`BenchError::Serialization`](crate::BenchError::Serialization) if the JSON is invalid.
 ///
 /// # Example
 ///

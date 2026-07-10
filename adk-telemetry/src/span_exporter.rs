@@ -7,7 +7,7 @@ use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 ///
 /// Implemented by [`AdkSpanExporter`] (in-memory, queried by the server debug
 /// routes) and, with the `sqlite` feature, by
-/// [`SqliteSpanExporter`](crate::sqlite::SqliteSpanExporter) (persistent,
+/// `SqliteSpanExporter` (persistent,
 /// zero-infrastructure tracing). Implementations decide which spans to keep —
 /// the layer forwards every closed span.
 pub trait SpanSink: Send + Sync {

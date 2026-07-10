@@ -1,7 +1,7 @@
 //! Benchmark configuration types mapped from CLI flags.
 //!
 //! This module defines [`BenchConfig`], the top-level configuration struct
-//! that maps CLI parameters to structured settings for the [`BenchRunner`].
+//! that maps CLI parameters to structured settings for the [`BenchRunner`](crate::BenchRunner).
 //! It also defines supporting types like [`OutputFormat`], [`TaskSuite`],
 //! and [`ExternalFrameworkConfig`].
 

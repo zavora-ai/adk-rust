@@ -2,7 +2,7 @@
 //!
 //! Generates evaluation test cases from natural language descriptions (via LLM)
 //! or from production event logs (direct extraction). Produced cases follow
-//! the standard [`TestFile`] JSON format and include generation metadata.
+//! the standard [`TestFile`](crate::TestFile) JSON format and include generation metadata.
 //!
 //! # Example
 //!

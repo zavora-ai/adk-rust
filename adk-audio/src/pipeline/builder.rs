@@ -211,7 +211,7 @@ impl AudioPipelineBuilder {
     /// When the `desktop-audio` feature is enabled and both `capture` and `playback`
     /// are configured, the caller should use the returned [`PipelineHandle`] to wire
     /// the capture stream into `input_tx` and route `output_rx` audio frames to
-    /// playback. Starting capture requires a device ID and [`CaptureConfig`](crate::desktop::CaptureConfig),
+    /// playback. Starting capture requires a device ID and a `CaptureConfig` (with the `desktop-audio` feature),
     /// and playback requires a device ID, so the builder stores the instances and
     /// the caller completes the wiring at runtime.
     pub fn build_voice_agent(self) -> AudioResult<PipelineHandle> {

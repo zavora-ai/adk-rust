@@ -1,4 +1,4 @@
-//! A coding-agent harness built on [`LlmAgent`](crate::LlmAgent).
+//! A coding-agent harness built on [`LlmAgent`].
 //!
 //! [`CodingAgent`] wires the [`adk_devtools`] developer toolset, a planning
 //! [`TodoTool`], and a minimal coding system prompt into a ready-to-run agent —

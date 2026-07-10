@@ -100,7 +100,7 @@ pub enum Commands {
         #[arg(long, default_value_t = 8)]
         max_iters: u32,
 
-        /// Path to the durable goal-state file (default: <dir>/.adk/goal.json).
+        /// Path to the durable goal-state file (default: `<dir>/.adk/goal.json`).
         #[arg(long)]
         state: Option<String>,
 

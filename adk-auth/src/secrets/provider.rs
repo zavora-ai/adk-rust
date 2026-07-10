@@ -38,7 +38,7 @@ pub trait SecretProvider: Send + Sync {
 
 /// Adapter that wraps a [`SecretProvider`] as a
 /// [`SecretService`](adk_core::SecretService) for use with the runner's
-/// [`InvocationContext`].
+/// [`InvocationContext`](adk_core::InvocationContext).
 ///
 /// # Example
 ///

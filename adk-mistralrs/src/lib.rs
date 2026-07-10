@@ -127,17 +127,17 @@
 //!
 //! ## Module Overview
 //!
-//! - [`client`] - Main [`MistralRsModel`] implementing the ADK [`Llm`] trait
-//! - [`config`] - Configuration types: [`MistralRsConfig`], [`ModelSource`], [`QuantizationLevel`]
-//! - [`adapter`] - LoRA/X-LoRA adapter support via [`MistralRsAdapterModel`]
-//! - [`vision`] - Vision model support via [`MistralRsVisionModel`]
-//! - [`embedding`] - Embedding model support via [`MistralRsEmbeddingModel`]
-//! - [`speech`] - Speech synthesis via [`MistralRsSpeechModel`]
-//! - [`diffusion`] - Image generation via [`MistralRsDiffusionModel`]
-//! - [`multimodel`] - Multi-model serving via [`MistralRsMultiModel`]
-//! - [`mcp`] - MCP client configuration via [`McpClientConfig`]
-//! - [`convert`] - Type conversion utilities between ADK and mistral.rs
-//! - [`error`] - Error types via [`MistralRsError`]
+//! - `client` - Main [`MistralRsModel`] implementing the ADK [`Llm`] trait
+//! - `config` - Configuration types: [`MistralRsConfig`], [`ModelSource`], [`QuantizationLevel`]
+//! - `adapter` - LoRA/X-LoRA adapter support via [`MistralRsAdapterModel`]
+//! - `vision` - Vision model support via [`MistralRsVisionModel`]
+//! - `embedding` - Embedding model support via [`MistralRsEmbeddingModel`]
+//! - `speech` - Speech synthesis via [`MistralRsSpeechModel`]
+//! - `diffusion` - Image generation via [`MistralRsDiffusionModel`]
+//! - `multimodel` - Multi-model serving via [`MistralRsMultiModel`]
+//! - `mcp` - MCP client configuration via [`McpClientConfig`]
+//! - `convert` - Type conversion utilities between ADK and mistral.rs
+//! - `error` - Error types via [`MistralRsError`]
 //!
 //! ## Feature Flags
 //!

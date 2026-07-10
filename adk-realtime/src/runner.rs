@@ -696,7 +696,7 @@ impl RealtimeRunner {
     /// This is the same dispatch the [`run`](Self::run) loop performs for a
     /// `response.function_call_arguments.done` event, exposed so that callers
     /// driving the session manually via [`next_event`](Self::next_event) — such
-    /// as [`IntegratedRealtimeRunner`](crate::integration::IntegratedRealtimeRunner) —
+    /// as `IntegratedRealtimeRunner` (available with the `integration` feature) —
     /// can execute tools without re-implementing the lookup/respond logic.
     pub async fn dispatch_tool_call(
         &self,
