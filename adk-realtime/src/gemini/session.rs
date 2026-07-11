@@ -10,7 +10,7 @@ use crate::events::{ClientEvent, ServerEvent, ToolResponse};
 use crate::session::{ContextMutationOutcome, RealtimeSession};
 use async_trait::async_trait;
 use base64::Engine;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 use futures::stream::Stream;
 use futures::{SinkExt, StreamExt};
 use parking_lot::Mutex as ParkingMutex;
@@ -340,7 +340,7 @@ impl GeminiRealtimeSession {
         let audio_base64 = {
             let mut buffer = self.audio_buffer.lock();
             if !buffer.is_empty() {
-                let encoded = base64::engine::general_purpose::STANDARD.encode(&buffer);
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&*buffer);
                 buffer.clear();
                 Some(encoded)
             } else {
@@ -701,7 +701,7 @@ impl RealtimeSession for GeminiRealtimeSession {
             buffer.put_slice(&pcm_data);
 
             if buffer.len() >= flush_threshold_bytes {
-                let encoded = base64::engine::general_purpose::STANDARD.encode(&buffer);
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&*buffer);
                 buffer.clear();
                 Some(encoded)
             } else {
