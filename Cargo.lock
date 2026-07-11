@@ -6248,7 +6248,8 @@ checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
 [[package]]
 name = "device-info"
 version = "0.1.1"
-source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2ca8e71544c1b67dcdbc2699ab258828aff985e5bc8d5f6b486d90d7df2f848"
 dependencies = [
  "core-foundation 0.10.1",
  "jni 0.21.1",
@@ -10870,8 +10871,9 @@ dependencies = [
 
 [[package]]
 name = "libwebrtc"
-version = "0.3.39"
-source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
+version = "0.3.40"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9265d8a465a1e59a06ca04b264a8b97b26ceed9098b1ca90afea65bb35183fa"
 dependencies = [
  "cxx",
  "jni 0.21.1",
@@ -10943,8 +10945,9 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "livekit"
-version = "0.7.50"
-source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
+version = "0.7.51"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68db4cdb8d8de80f4297b4b152d827c0690933e703f86bbf4789c5f010a0a8f7"
 dependencies = [
  "base64 0.22.1",
  "bmrng",
@@ -10971,8 +10974,9 @@ dependencies = [
 
 [[package]]
 name = "livekit-api"
-version = "0.5.4"
-source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1006f7c009369fe5f16f2eb6e93d6d0dcb2b427306a2f61b26ff5d2e440ec282"
 dependencies = [
  "async-tungstenite",
  "base64 0.21.7",
@@ -11007,8 +11011,9 @@ dependencies = [
 
 [[package]]
 name = "livekit-datatrack"
-version = "0.1.9"
-source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96b5f3fd5cc6f6f05bf96d233ad23f8a6ec48517598bed8c566a643e888b278e"
 dependencies = [
  "anyhow",
  "bytes",
@@ -11028,7 +11033,8 @@ dependencies = [
 [[package]]
 name = "livekit-protocol"
 version = "0.7.10"
-source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d26880e94e2f9bab298445e7d86a3794453d211a12ddbd051bd9991a343f9ff"
 dependencies = [
  "pbjson",
  "pbjson-types",
@@ -11039,7 +11045,8 @@ dependencies = [
 [[package]]
 name = "livekit-runtime"
 version = "0.4.0"
-source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "532e84c6cdc5fe774f2b5d9912597b5f3bea561927a48296d03e24549d21c3f6"
 dependencies = [
  "tokio",
  "tokio-stream",
@@ -20096,8 +20103,9 @@ dependencies = [
 
 [[package]]
 name = "webrtc-sys"
-version = "0.3.36"
-source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
+version = "0.3.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2c1d27e825bb62ff2ceb97b2726a849de43cf7cf9bc5dc83204b43161286912"
 dependencies = [
  "cc",
  "cxx",
@@ -20111,7 +20119,8 @@ dependencies = [
 [[package]]
 name = "webrtc-sys-build"
 version = "0.3.18"
-source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d46da6b5a5cbd091fae0400f77189f4ca4807c0d9442b85838a584f28720570"
 dependencies = [
  "anyhow",
  "fs2",
@@ -21534,8 +21543,3 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
-
-[[patch.unused]]
-name = "livekit-ffi"
-version = "0.12.68"
-source = "git+https://github.com/livekit/rust-sdks.git?tag=livekit%2Fv0.7.50#dad794d414fda9e8c1de83af1c0f190506a15f8f"

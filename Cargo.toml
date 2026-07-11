@@ -151,8 +151,8 @@ sha2 = "0.10"
 hex = "0.4"
 flate2 = "1.0"
 tar = "0.4"
-livekit = { version = "0.7.49", default-features = false, features = ["tokio", "native-tls"] }
-livekit-api = { version = "=0.5.4", default-features = false, features = ["signal-client-tokio", "services-tokio", "access-token"] }
+livekit = { version = "0.7.51", default-features = false, features = ["tokio", "native-tls"] }
+livekit-api = { version = "=0.5.5", default-features = false, features = ["signal-client-tokio", "services-tokio", "access-token"] }
 
 # ADK internal crates (use { workspace = true } in member crates)
 adk-core = { path = "adk-core", version = "2.0.0" }
@@ -192,18 +192,3 @@ adk-bench = { path = "adk-bench", version = "2.0.0" }
 awp-types = { path = "awp-types", version = "2.0.0" }
 adk-awp = { path = "adk-awp", version = "2.0.0" }
 adk-acp = { path = "adk-acp", version = "2.0.0" }
-
-# Pin the whole livekit/webrtc-sys family to one coherent build. crates.io
-# publishes these crates independently, and their release cadence can drift
-# out of lockstep (e.g. libwebrtc 0.3.38 calling a webrtc-sys 0.3.36 FFI
-# signature that no longer matches) - patching all of them to the same git
-# tag avoids that transitive version skew. Mirrors the same patch in
-# voice_gateway's zenith/data_plane/Cargo.toml; keep both in sync.
-[patch.crates-io]
-livekit = { git = "https://github.com/livekit/rust-sdks.git", tag = "livekit/v0.7.50" }
-livekit-api = { git = "https://github.com/livekit/rust-sdks.git", tag = "livekit/v0.7.50" }
-livekit-protocol = { git = "https://github.com/livekit/rust-sdks.git", tag = "livekit/v0.7.50" }
-webrtc-sys = { git = "https://github.com/livekit/rust-sdks.git", tag = "livekit/v0.7.50" }
-webrtc-sys-build = { git = "https://github.com/livekit/rust-sdks.git", tag = "livekit/v0.7.50" }
-livekit-ffi = { git = "https://github.com/livekit/rust-sdks.git", tag = "livekit/v0.7.50" }
-libwebrtc = { git = "https://github.com/livekit/rust-sdks.git", tag = "livekit/v0.7.50" }
