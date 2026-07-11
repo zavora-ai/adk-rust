@@ -97,11 +97,13 @@ impl RealtimeModel for OpenAIRealtimeModel {
     }
 
     fn supported_input_formats(&self) -> Vec<AudioFormat> {
-        vec![AudioFormat::pcm16_24khz(), AudioFormat::g711_ulaw(), AudioFormat::g711_alaw()]
+        // OpenAI Realtime GA currently supports only mono PCM16 at 24kHz.
+        // Telephony formats (G.711) require server-side configuration not yet exposed by the default adapter.
+        vec![AudioFormat::pcm16_24khz()]
     }
 
     fn supported_output_formats(&self) -> Vec<AudioFormat> {
-        vec![AudioFormat::pcm16_24khz(), AudioFormat::g711_ulaw(), AudioFormat::g711_alaw()]
+        vec![AudioFormat::pcm16_24khz()]
     }
 
     fn available_voices(&self) -> Vec<&str> {

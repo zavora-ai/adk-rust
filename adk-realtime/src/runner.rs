@@ -626,8 +626,14 @@ impl RealtimeRunner {
     /// This compatibility entry point is useful when the caller already has a
     /// base64 payload. Raw-audio callers should use
     /// [`send_audio_chunk`](Self::send_audio_chunk) to avoid forcing an encoding
-    /// decision at the provider-neutral runner boundary.
+    /// decision at the provider-neutral runner boundary. This method forwards
+    /// to [`send_audio_base64`](Self::send_audio_base64).
     pub async fn send_audio(&self, audio_base64: &str) -> Result<()> {
+        self.send_audio_base64(audio_base64).await
+    }
+
+    /// Send base64-encoded audio to the session.
+    pub async fn send_audio_base64(&self, audio_base64: &str) -> Result<()> {
         let session = self.session_handle().await?;
         session.send_audio_base64(audio_base64).await
     }

@@ -227,6 +227,29 @@ impl SmartAudioBuffer {
     pub fn flush_remaining(&mut self) -> Option<Vec<i16>> {
         if self.buffer.is_empty() { None } else { Some(std::mem::take(&mut self.buffer)) }
     }
+
+    /// Returns the current capacity of the underlying buffer.
+    pub fn capacity(&self) -> usize {
+        self.buffer.capacity()
+    }
+
+    /// Process the buffered samples with a closure and then clear the buffer while retaining capacity.
+    ///
+    /// This is a more efficient alternative to `flush()` when the samples don't need
+    /// to be owned by the caller after the closure returns (e.g., they are immediately
+    /// encoded to base64 or copied).
+    pub fn process_and_clear<F, R>(&mut self, f: F) -> Option<R>
+    where
+        F: FnOnce(&[i16]) -> R,
+    {
+        if self.should_flush() {
+            let result = f(&self.buffer);
+            self.buffer.clear();
+            Some(result)
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -324,5 +347,27 @@ mod tests {
     fn test_i16_samples_odd_bytes_error() {
         let chunk = AudioChunk::pcm16_24khz(vec![0, 1, 2]); // 3 bytes = invalid PCM16
         assert!(chunk.to_i16_samples().is_err());
+    }
+
+    #[test]
+    fn test_smart_audio_buffer_capacity_retention() {
+        let mut buffer = SmartAudioBuffer::new(1000, 10); // 10ms target
+        buffer.push(&[0; 100]); // 100ms
+        let initial_cap = buffer.capacity();
+        assert!(initial_cap >= 100);
+
+        // process_and_clear should retain capacity
+        let processed = buffer.process_and_clear(|samples| {
+            assert_eq!(samples.len(), 100);
+            true
+        });
+        assert!(processed.is_some());
+        assert_eq!(buffer.capacity(), initial_cap);
+        assert!(buffer.buffer.is_empty());
+
+        // flush should LOSE capacity (due to mem::take)
+        buffer.push(&[0; 100]);
+        let _ = buffer.flush();
+        assert_eq!(buffer.capacity(), 0);
     }
 }

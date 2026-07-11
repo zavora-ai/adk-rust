@@ -35,9 +35,10 @@ pub async fn bridge_input(track: RemoteAudioTrack, runner: &RealtimeRunner) -> R
 
     while let Some(frame) = stream.next().await {
         buffer.push(&frame.data);
-        if let Some(samples) = buffer.flush() {
+        if let Some(chunk) = buffer.process_and_clear(|samples| {
             // Convert i16 samples to little-endian PCM16 bytes
-            let chunk = AudioChunk::from_i16_samples(&samples, AudioFormat::pcm16_24khz());
+            AudioChunk::from_i16_samples(samples, AudioFormat::pcm16_24khz())
+        }) {
             runner.send_audio_chunk(&chunk).await?;
         }
     }
@@ -69,8 +70,9 @@ pub async fn bridge_gemini_input(track: RemoteAudioTrack, runner: &RealtimeRunne
 
     while let Some(frame) = stream.next().await {
         buffer.push(&frame.data);
-        if let Some(samples) = buffer.flush() {
-            let chunk = AudioChunk::from_i16_samples(&samples, AudioFormat::pcm16_16khz());
+        if let Some(chunk) = buffer.process_and_clear(|samples| {
+            AudioChunk::from_i16_samples(samples, AudioFormat::pcm16_16khz())
+        }) {
             runner.send_audio_chunk(&chunk).await?;
         }
     }
