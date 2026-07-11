@@ -50,7 +50,7 @@ impl RealtimeTransportBridge {
             let event = event_result?;
             match event {
                 TransportEvent::Audio { chunk, .. } => {
-                    runner.send_audio(&chunk.to_base64()).await?;
+                    runner.send_audio_chunk(&chunk).await?;
                 }
                 TransportEvent::Dtmf { .. } => {
                     // Application event, not model text unless explicitly mapped

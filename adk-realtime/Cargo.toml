@@ -134,6 +134,10 @@ required-features = ["openai-webrtc"]
 name = "livekit_pcm_bench"
 harness = false
 
+[[bench]]
+name = "audio_boundary_bench"
+harness = false
+
 [features]
 default = []
 # Enable ADK services integration (sessions, memory, plugins)

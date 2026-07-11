@@ -54,20 +54,8 @@ impl TwilioMediaSerializer {
                                 ))
                             })?;
 
-                        // Decode μ-law to PCM16 samples (8kHz)
-                        let samples_8khz = crate::audio::g711::decode_ulaw_frame(&data);
-
-                        // Upsample PCM16 from 8kHz to 16kHz for Gemini input by duplicating each sample
-                        let mut samples_16khz = Vec::with_capacity(samples_8khz.len() * 2);
-                        for &sample in &samples_8khz {
-                            samples_16khz.push(sample);
-                            samples_16khz.push(sample);
-                        }
-
-                        let chunk = AudioChunk::from_i16_samples(
-                            &samples_16khz,
-                            AudioFormat::pcm16_16khz(),
-                        );
+                        // Emit raw μ-law bytes (8kHz) to preserve framing and allow provider-specific conversion.
+                        let chunk = AudioChunk::new(data, AudioFormat::g711_ulaw());
 
                         Ok(Some(TransportEvent::Audio {
                             chunk,
@@ -188,7 +176,7 @@ mod tests {
     #[test]
     fn test_parse_media() {
         let serializer = TwilioMediaSerializer::new();
-        // Base64 for a single 0x00 byte (which is -32124 in μ-law)
+        // Base64 for a single 0x00 byte
         let json = r#"{
             "event": "media",
             "streamSid": "MZ123",
@@ -200,12 +188,9 @@ mod tests {
         let event = serializer.parse(json).unwrap().unwrap();
         match event {
             TransportEvent::Audio { chunk, .. } => {
-                assert_eq!(chunk.format.sample_rate, 16000);
-                let samples = chunk.to_i16_samples().unwrap();
-                // 1 byte of μ-law @ 8kHz -> 1 sample @ 8kHz -> 2 samples @ 16kHz
-                assert_eq!(samples.len(), 2);
-                assert_eq!(samples[0], -32124);
-                assert_eq!(samples[1], -32124);
+                assert_eq!(chunk.format, AudioFormat::g711_ulaw());
+                assert_eq!(chunk.data.len(), 1);
+                assert_eq!(chunk.data[0], 0x00);
             }
             _ => panic!("Expected Audio event"),
         }

@@ -652,6 +652,14 @@ impl OpenAITransportLink for OpenAIWebRTCSession {
             return Err(RealtimeError::NotConnected);
         }
 
+        // OpenAI WebRTC currently supports only mono PCM16 at 24kHz.
+        if audio.format != crate::audio::AudioFormat::pcm16_24khz() {
+            return Err(RealtimeError::config(format!(
+                "this OpenAI WebRTC adapter currently supports only pcm16 at 24kHz mono, received: {:?}",
+                audio.format
+            )));
+        }
+
         let pcm_samples = audio
             .to_i16_samples()
             .map_err(|e| RealtimeError::opus(format!("Invalid PCM16 audio data: {e}")))?;

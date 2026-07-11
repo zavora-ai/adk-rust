@@ -63,9 +63,8 @@ impl RealtimeMediaTransport for TwilioMediaStreamsTransport {
     }
 
     fn input_format(&self) -> AudioFormat {
-        // Transport advertises PCM16 @ 16kHz so the bridge and model runner feed
-        // compatible decoded frames directly to the model.
-        AudioFormat::pcm16_16khz()
+        // Twilio Media Streams ingress is raw mono G.711 μ-law at 8kHz.
+        AudioFormat::g711_ulaw()
     }
 
     fn output_format(&self) -> AudioFormat {
@@ -112,5 +111,36 @@ impl RealtimeMediaTransport for TwilioMediaStreamsTransport {
 
     async fn close(&self) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advertised_input_format_matches_parsed_media() {
+        let (tx, _rx) = mpsc::channel(1);
+        let (_events_tx, events_rx) = mpsc::channel(1);
+        let transport =
+            TwilioMediaStreamsTransport::new("twilio-test", "MZ123", "CA123", tx, events_rx);
+
+        let message = r#"{
+            "event": "media",
+            "streamSid": "MZ123",
+            "media": {
+                "payload": "AA=="
+            }
+        }"#;
+
+        let event = TwilioMediaSerializer::new().parse(message).unwrap().unwrap();
+        let chunk = match event {
+            TransportEvent::Audio { chunk, .. } => chunk,
+            _ => panic!("expected Twilio media audio event"),
+        };
+
+        assert_eq!(transport.input_format(), AudioFormat::g711_ulaw());
+        assert_eq!(transport.input_format(), chunk.format);
+        assert_eq!(chunk.data.as_ref(), &[0x00]);
     }
 }

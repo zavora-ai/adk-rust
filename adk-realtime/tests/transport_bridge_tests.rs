@@ -29,6 +29,8 @@ impl EventHandler for MockEventHandler {
 
 struct TrackingSession {
     audio_count: Arc<AtomicUsize>,
+    raw_audio_count: Arc<AtomicUsize>,
+    last_chunk: Arc<Mutex<Option<AudioChunk>>>,
 }
 #[async_trait]
 impl RealtimeSession for TrackingSession {
@@ -38,7 +40,10 @@ impl RealtimeSession for TrackingSession {
     fn session_id(&self) -> &str {
         "tracker"
     }
-    async fn send_audio(&self, _audio: &AudioChunk) -> adk_realtime::error::Result<()> {
+    async fn send_audio(&self, audio: &AudioChunk) -> adk_realtime::error::Result<()> {
+        self.raw_audio_count.fetch_add(1, Ordering::SeqCst);
+        let mut guard = self.last_chunk.lock().await;
+        *guard = Some(audio.clone());
         Ok(())
     }
     async fn interrupt(&self) -> adk_realtime::error::Result<()> {
@@ -189,7 +194,13 @@ impl RealtimeSession for DummySessionWrapT2M {
 async fn test_transport_to_model() {
     let transport = Arc::new(InMemoryTransport::new("test"));
     let audio_count = Arc::new(AtomicUsize::new(0));
-    let session = Arc::new(TrackingSession { audio_count: audio_count.clone() });
+    let raw_audio_count = Arc::new(AtomicUsize::new(0));
+    let last_chunk = Arc::new(Mutex::new(None));
+    let session = Arc::new(TrackingSession {
+        audio_count: audio_count.clone(),
+        raw_audio_count: raw_audio_count.clone(),
+        last_chunk: last_chunk.clone(),
+    });
     let model = Arc::new(DummyModelT2M { session });
 
     let runner =
@@ -199,9 +210,11 @@ async fn test_transport_to_model() {
     let bridge = RealtimeTransportBridge::new(transport.clone(), Arc::new(runner));
     let (t2m_handle, _m2t_handle) = bridge.spawn_pump_tasks();
 
+    let original_data = vec![1, 2, 3, 4];
+    let original_format = AudioFormat::pcm16_24khz();
     transport
         .push_event(TransportEvent::Audio {
-            chunk: AudioChunk::pcm16_24khz(vec![1, 2, 3, 4]),
+            chunk: AudioChunk::new(original_data.clone(), original_format.clone()),
             timestamp_ms: None,
             sequence: None,
             source: None,
@@ -212,7 +225,18 @@ async fn test_transport_to_model() {
     transport.push_event(TransportEvent::Stopped { reason: None }).await.unwrap();
 
     let _: () = t2m_handle.await.unwrap().unwrap();
-    assert_eq!(audio_count.load(Ordering::SeqCst), 1);
+
+    // raw path invoked once
+    assert_eq!(raw_audio_count.load(Ordering::SeqCst), 1);
+    // base64 path invoked zero times
+    assert_eq!(audio_count.load(Ordering::SeqCst), 0);
+
+    let chunk = last_chunk.lock().await;
+    let chunk = chunk.as_ref().unwrap();
+    // chunk bytes preserved
+    assert_eq!(chunk.data.as_ref(), &original_data);
+    // AudioFormat preserved
+    assert_eq!(chunk.format, original_format);
 }
 
 struct TriggerSession {

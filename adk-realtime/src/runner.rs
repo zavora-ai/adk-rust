@@ -611,8 +611,21 @@ impl RealtimeRunner {
         session.send_event(event).await
     }
 
+    /// Send raw audio to the session.
+    pub async fn send_audio_chunk(&self, audio: &crate::audio::AudioChunk) -> Result<()> {
+        let session = self.session_handle().await?;
+        session.send_audio(audio).await
+    }
+
     /// Send audio to the session.
+    ///
+    /// This is an alias for [`send_audio_base64`](Self::send_audio_base64).
     pub async fn send_audio(&self, audio_base64: &str) -> Result<()> {
+        self.send_audio_base64(audio_base64).await
+    }
+
+    /// Send base64-encoded audio to the session.
+    pub async fn send_audio_base64(&self, audio_base64: &str) -> Result<()> {
         let session = self.session_handle().await?;
         session.send_audio_base64(audio_base64).await
     }

@@ -337,21 +337,21 @@ impl GeminiRealtimeSession {
 
     /// Flush any buffered audio to the server.
     async fn flush_audio(&self) -> Result<()> {
-        let data = {
+        let audio_base64 = {
             let mut buffer = self.audio_buffer.lock();
-            if !buffer.is_empty() { Some(std::mem::take(&mut *buffer).freeze()) } else { None }
+            if !buffer.is_empty() {
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&buffer);
+                buffer.clear();
+                Some(encoded)
+            } else {
+                None
+            }
         };
 
-        if let Some(data) = data {
-            self.send_audio_bytes(data).await?;
+        if let Some(b64) = audio_base64 {
+            self.send_audio_base64(&b64).await?;
         }
         Ok(())
-    }
-
-    /// Send a raw PCM audio payload by encoding it to base64 for Gemini wire format.
-    async fn send_audio_bytes(&self, audio_bytes: Bytes) -> Result<()> {
-        let audio_base64 = base64::engine::general_purpose::STANDARD.encode(audio_bytes);
-        self.send_audio_base64(&audio_base64).await
     }
 
     /// Send initial setup message.
@@ -652,23 +652,57 @@ impl RealtimeSession for GeminiRealtimeSession {
     }
 
     async fn send_audio(&self, audio: &AudioChunk) -> Result<()> {
-        // Format-aware threshold (sample rate/channels/bit depth), avoids hardcoded 16k assumptions.
-        let flush_threshold_bytes = Self::flush_threshold_bytes(&audio.format);
+        // Support both native PCM16/16kHz and G.711 μ-law (telephony) formats.
+        let (pcm_data, format) = match &audio.format {
+            f if f == &AudioFormat::pcm16_16khz() => (audio.data.clone(), f.clone()),
+            f if f.encoding == crate::audio::AudioEncoding::G711Ulaw && f.sample_rate == 8000 => {
+                // Upsample G.711 μ-law (8kHz) to PCM16 (16kHz) for the adapter's current contract.
+                let samples_8khz = crate::audio::g711::decode_ulaw_frame(&audio.data);
+                let mut samples_16khz = Vec::with_capacity(samples_8khz.len() * 2);
+                for &sample in &samples_8khz {
+                    samples_16khz.push(sample);
+                    samples_16khz.push(sample);
+                }
+                let chunk =
+                    AudioChunk::from_i16_samples(&samples_16khz, AudioFormat::pcm16_16khz());
+                (chunk.data, AudioFormat::pcm16_16khz())
+            }
+            _ => {
+                return Err(RealtimeError::config(format!(
+                    "this Gemini adapter currently supports only pcm16 at 16kHz mono or g711_ulaw at 8kHz, received: {:?}",
+                    audio.format
+                )));
+            }
+        };
 
-        // Smart Audio Buffering: buffer small chunks to avoid overhead
-        let data = {
+        // Format-aware threshold (sample rate/channels/bit depth), avoids hardcoded 16k assumptions.
+        let flush_threshold_bytes = Self::flush_threshold_bytes(&format);
+
+        // Path A: The incoming chunk already meets the batching threshold.
+        // Send it immediately (after flushing any existing buffer) to avoid extra copies.
+        if pcm_data.len() >= flush_threshold_bytes {
+            self.flush_audio().await?;
+            // Encode to base64 synchronously *before* awaiting to minimize lock/hold time.
+            let audio_base64 = base64::engine::general_purpose::STANDARD.encode(&pcm_data);
+            return self.send_audio_base64(&audio_base64).await;
+        }
+
+        // Path B: Smart Audio Buffering for small chunks.
+        let audio_base64 = {
             let mut buffer = self.audio_buffer.lock();
-            buffer.put_slice(&audio.data);
+            buffer.put_slice(&pcm_data);
 
             if buffer.len() >= flush_threshold_bytes {
-                Some(std::mem::take(&mut *buffer).freeze())
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&buffer);
+                buffer.clear();
+                Some(encoded)
             } else {
                 None
             }
         };
 
-        if let Some(data) = data {
-            self.send_audio_bytes(data).await?;
+        if let Some(b64) = audio_base64 {
+            self.send_audio_base64(&b64).await?;
         }
         Ok(())
     }
@@ -948,9 +982,7 @@ pub fn build_vertex_live_url(region: &str, project_id: &str) -> Result<String> {
         return Err(RealtimeError::config("Vertex AI Live requires a non-empty project_id"));
     }
     Ok(format!(
-        "wss://{region}-aiplatform.googleapis.com/ws/\
-         google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent\
-         ?project_id={project_id}",
+        "wss://{region}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent?project_id={project_id}",
     ))
 }
 
@@ -1219,5 +1251,15 @@ mod tests {
     fn test_flush_threshold_bytes_pcm16_16khz_40ms() {
         let threshold = GeminiRealtimeSession::flush_threshold_bytes(&AudioFormat::pcm16_16khz());
         assert_eq!(threshold, 1280);
+    }
+
+    #[cfg(feature = "vertex-live")]
+    #[test]
+    fn test_build_vertex_live_url() {
+        let url = build_vertex_live_url("us-central1", "my-project").unwrap();
+        assert_eq!(
+            url,
+            "wss://us-central1-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent?project_id=my-project"
+        );
     }
 }

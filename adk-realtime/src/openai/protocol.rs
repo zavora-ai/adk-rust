@@ -29,6 +29,13 @@ pub trait OpenAITransportLink: Send + Sync {
     /// Send PCM16 audio. For WebSocket, defaults to base64 encoding over `send_raw`.
     /// For WebRTC, this is MUST be overridden to directly write to the media track.
     async fn send_audio(&self, audio: &crate::audio::AudioChunk) -> Result<()> {
+        // OpenAI Realtime GA currently supports only mono PCM16 at 24kHz.
+        if audio.format != crate::audio::AudioFormat::pcm16_24khz() {
+            return Err(RealtimeError::config(format!(
+                "this OpenAI adapter currently supports only pcm16 at 24kHz mono, received: {:?}",
+                audio.format
+            )));
+        }
         self.send_audio_base64(&audio.to_base64()).await
     }
 
