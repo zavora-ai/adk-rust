@@ -79,57 +79,6 @@ impl TwilioCallControlProvider {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[tokio::test]
-    async fn test_twilio_event_translation() {
-        let provider = TwilioCallControlProvider::new("AC123", "token", "+1234567890");
-        let handle = CallHandle { provider_call_id: "CA123".to_string(), room_name: None };
-
-        let mut events = provider.events(&handle);
-
-        // Inject an event
-        provider.handle_webhook("CA123", "answered", &json!({})).unwrap();
-
-        let event = events.next().await.unwrap().unwrap();
-        match event {
-            CallControlEvent::Answered => {}
-            _ => panic!("Expected Answered event"),
-        }
-
-        // Inject another event
-        provider.handle_webhook("CA123", "completed", &json!({"CallStatus": "busy"})).unwrap();
-
-        let event = events.next().await.unwrap().unwrap();
-        match event {
-            CallControlEvent::Ended { reason } => assert_eq!(reason, "busy"),
-            _ => panic!("Expected Ended event"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_twilio_event_filtering() {
-        let provider = TwilioCallControlProvider::new("AC123", "token", "+1234567890");
-        let handle1 = CallHandle { provider_call_id: "CA1".to_string(), room_name: None };
-        let handle2 = CallHandle { provider_call_id: "CA2".to_string(), room_name: None };
-
-        let mut events1 = provider.events(&handle1);
-        let mut events2 = provider.events(&handle2);
-
-        provider.handle_webhook("CA1", "ringing", &json!({})).unwrap();
-        provider.handle_webhook("CA2", "answered", &json!({})).unwrap();
-
-        let e1 = events1.next().await.unwrap().unwrap();
-        assert!(matches!(e1, CallControlEvent::Ringing));
-
-        let e2 = events2.next().await.unwrap().unwrap();
-        assert!(matches!(e2, CallControlEvent::Answered));
-    }
-}
-
 #[async_trait]
 impl CallControlProvider for TwilioCallControlProvider {
     async fn originate(&self, phone_number: &str, context: OriginateContext) -> Result<CallHandle> {
@@ -240,5 +189,56 @@ impl CallControlProvider for TwilioCallControlProvider {
         Self::check_success(response).await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn test_twilio_event_translation() {
+        let provider = TwilioCallControlProvider::new("AC123", "token", "+1234567890");
+        let handle = CallHandle { provider_call_id: "CA123".to_string(), room_name: None };
+
+        let mut events = provider.events(&handle);
+
+        // Inject an event
+        provider.handle_webhook("CA123", "answered", &json!({})).unwrap();
+
+        let event = events.next().await.unwrap().unwrap();
+        match event {
+            CallControlEvent::Answered => {}
+            _ => panic!("Expected Answered event"),
+        }
+
+        // Inject another event
+        provider.handle_webhook("CA123", "completed", &json!({"CallStatus": "busy"})).unwrap();
+
+        let event = events.next().await.unwrap().unwrap();
+        match event {
+            CallControlEvent::Ended { reason } => assert_eq!(reason, "busy"),
+            _ => panic!("Expected Ended event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_twilio_event_filtering() {
+        let provider = TwilioCallControlProvider::new("AC123", "token", "+1234567890");
+        let handle1 = CallHandle { provider_call_id: "CA1".to_string(), room_name: None };
+        let handle2 = CallHandle { provider_call_id: "CA2".to_string(), room_name: None };
+
+        let mut events1 = provider.events(&handle1);
+        let mut events2 = provider.events(&handle2);
+
+        provider.handle_webhook("CA1", "ringing", &json!({})).unwrap();
+        provider.handle_webhook("CA2", "answered", &json!({})).unwrap();
+
+        let e1 = events1.next().await.unwrap().unwrap();
+        assert!(matches!(e1, CallControlEvent::Ringing));
+
+        let e2 = events2.next().await.unwrap().unwrap();
+        assert!(matches!(e2, CallControlEvent::Answered));
     }
 }
