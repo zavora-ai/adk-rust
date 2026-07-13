@@ -1,0 +1,9 @@
+{
+  "sessionId": "session-0001",
+  "deleted": true,
+  "deletedEvents": 14,
+  "deletedReceipts": 2,
+  "revokedGrants": 1,
+  "retainedEvents": 8,
+  "retentionMarkerId": "event-retention-0001"
+}

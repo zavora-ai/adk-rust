@@ -1,0 +1,30 @@
+[package]
+name = "adk-computer-use"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "ADK-Rust graph, auth, and wire contracts for computer-use-mcp v8"
+homepage.workspace = true
+repository.workspace = true
+keywords = ["ai", "agent", "computer-use", "mcp", "automation"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
+
+[dependencies]
+adk-graph.workspace = true
+adk-auth.workspace = true
+adk-tool = { workspace = true, features = ["mcp"] }
+adk-eval.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+rmcp = { version = "2.2", features = ["client"] }
+uuid.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "sync", "time"] }

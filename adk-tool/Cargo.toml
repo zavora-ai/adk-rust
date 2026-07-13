@@ -21,7 +21,12 @@ graph-memory-tools = ["memory-tools", "adk-memory/graph-memory"]
 # Enable Model Context Protocol clients and local child-process transport.
 mcp = ["dep:rmcp"]
 # Enable HTTP transport for remote MCP servers (streamable HTTP)
-http-transport = ["mcp", "rmcp/transport-streamable-http-client-reqwest", "reqwest"]
+http-transport = [
+    "mcp",
+    "rmcp/transport-streamable-http-client-reqwest",
+    "reqwest",
+    "dep:reqwest-mcp",
+]
 # Enable code execution tools (CodeTool, etc.)
 code = ["dep:adk-code", "dep:adk-sandbox"]
 # Enable embedded JavaScript execution (requires boa_engine)
@@ -46,7 +51,7 @@ tokio = { workspace = true, features = ["fs", "process", "sync", "time"] }
 serde.workspace = true
 serde_json.workspace = true
 schemars = "1.0"
-rmcp = { version = "1.6", features = ["client", "transport-child-process"], optional = true }
+rmcp = { version = "2.2", features = ["client", "transport-child-process", "elicitation"], optional = true }
 tracing.workspace = true
 base64 = "0.22"
 uuid.workspace = true
@@ -60,6 +65,10 @@ adk-code = { workspace = true, optional = true }
 adk-sandbox = { workspace = true, optional = true }
 # Optional: HTTP client for remote MCP servers and Slack toolset
 reqwest = { workspace = true, optional = true }
+# rmcp 2.x uses reqwest 0.13 for its Streamable HTTP transport. Keep this
+# transport-specific client separate from the workspace's provider-facing
+# reqwest version until the wider workspace migration is complete.
+reqwest-mcp = { package = "reqwest", version = "0.13", default-features = false, features = ["rustls", "json"], optional = true }
 # Optional: BigQuery toolset
 gcp-bigquery-client = { version = "0.28", optional = true }
 # Optional: Spanner toolset

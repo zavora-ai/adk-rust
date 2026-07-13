@@ -14,9 +14,10 @@ dependencies = [
 
 [[package]]
 name = "adk-agent"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-core",
+ "adk-devtools",
  "adk-skill",
  "adk-telemetry",
  "async-stream",
@@ -27,13 +28,14 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]
 
 [[package]]
 name = "adk-anthropic"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "base64",
  "bytes",
@@ -53,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "adk-artifact"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -63,7 +65,7 @@ dependencies = [
 
 [[package]]
 name = "adk-auth"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -79,12 +81,13 @@ dependencies = [
 
 [[package]]
 name = "adk-cli"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-agent",
  "adk-artifact",
  "adk-core",
  "adk-deploy",
+ "adk-devtools",
  "adk-graph",
  "adk-model",
  "adk-runner",
@@ -109,8 +112,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-computer-use"
+version = "2.0.0"
+dependencies = [
+ "adk-auth",
+ "adk-eval",
+ "adk-graph",
+ "adk-tool",
+ "async-trait",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "adk-core"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -125,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "adk-deploy"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -145,8 +166,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-devtools"
+version = "2.0.0"
+dependencies = [
+ "adk-core",
+ "async-trait",
+ "glob",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
 name = "adk-eval"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-core",
  "adk-model",
@@ -164,7 +201,7 @@ dependencies = [
 
 [[package]]
 name = "adk-gemini"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-core",
  "async-stream",
@@ -190,7 +227,7 @@ dependencies = [
 
 [[package]]
 name = "adk-graph"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-core",
  "async-stream",
@@ -207,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "adk-guardrail"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -222,7 +259,7 @@ dependencies = [
 
 [[package]]
 name = "adk-memory"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -234,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "adk-model"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-anthropic",
  "adk-core",
@@ -256,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "adk-plugin"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-core",
  "serde_json",
@@ -266,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "adk-runner"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-artifact",
  "adk-core",
@@ -287,12 +324,13 @@ dependencies = [
 
 [[package]]
 name = "adk-rust"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-agent",
  "adk-anthropic",
  "adk-artifact",
  "adk-auth",
+ "adk-computer-use",
  "adk-core",
  "adk-eval",
  "adk-graph",
@@ -316,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "adk-rust-macros"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -325,7 +363,7 @@ dependencies = [
 
 [[package]]
 name = "adk-server"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "a2a-protocol-types",
  "adk-agent",
@@ -358,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "adk-session"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -371,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "adk-skill"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-core",
  "adk-plugin",
@@ -385,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "adk-telemetry"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "thiserror 2.0.18",
  "tracing",
@@ -394,7 +432,7 @@ dependencies = [
 
 [[package]]
 name = "adk-tool"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "adk-core",
  "adk-rust-macros",
@@ -1634,6 +1672,12 @@ dependencies = [
  "wasip2",
  "wasip3",
 ]
+
+[[package]]
+name = "glob"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "h2"
@@ -2952,9 +2996,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "1.6.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e12ca9067b5ebfbd5b3fcdc4acfceb81aa7d5ab2a879dff7cb75d22434276aad"
+checksum = "14db48ee17a9ba61810ab1a9c1beb7d06d8136ae39ac25a1137f10d357af01af"
 dependencies = [
  "async-trait",
  "base64",
@@ -2972,13 +3016,14 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
+ "url",
 ]
 
 [[package]]
 name = "rmcp-macros"
-version = "1.6.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7caa6743cc0888e433105fe1bc551a7f607940b126a37bc97b478e86064627eb"
+checksum = "783d787bf21813b285f13019adc49e11af501c658890c1e519f31f937c68b7e3"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",

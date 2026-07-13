@@ -21,7 +21,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 type ElicitResult = std::result::Result<
-    rmcp::model::CreateElicitationResult,
+    rmcp::model::ElicitResult,
     Box<dyn std::error::Error + Send + Sync>,
 >;
 
@@ -68,7 +68,7 @@ impl ElicitationHandler for StdinElicitationHandler {
 
         println!("--- End of input ---\n");
         Ok(
-            rmcp::model::CreateElicitationResult::new(ElicitationAction::Accept)
+            rmcp::model::ElicitResult::new(ElicitationAction::Accept)
                 .with_content(Value::Object(response)),
         )
     }
@@ -92,7 +92,7 @@ impl ElicitationHandler for StdinElicitationHandler {
             .read_line(&mut buf)
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
-        Ok(rmcp::model::CreateElicitationResult::new(
+        Ok(rmcp::model::ElicitResult::new(
             ElicitationAction::Accept,
         ))
     }

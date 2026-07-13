@@ -86,12 +86,14 @@ Or pick a template: `--template tools` | `rag` | `api` | `openai` | `a2a` | `gra
 
 ADK-Rust provides a comprehensive framework for building AI agents in Rust, featuring:
 
-- **Composable Template System**: 8 base templates, 9 addons, and 5 enterprise patterns via `cargo adk new --addon` for rapid project scaffolding
+- **Composable Template System**: 12 templates, 9 add-ons, and 5 enterprise patterns via `cargo adk new --addon` for rapid project scaffolding
 - **`cargo adk build`**: Compile and verify your agent project without deploying — fast feedback loop for CI and local development
 - **Type-safe agent abstractions** with async execution and event streaming
 - **Multiple agent types**: LLM agents, workflow agents (sequential, parallel, loop), and custom agents
 - **Realtime voice agents**: Bidirectional audio streaming with OpenAI Realtime API and Gemini Live API
-- **Tool ecosystem**: Function tools, Google Search, MCP (Model Context Protocol) integration
+- **Tool ecosystem**: Typed Rust tools, hosted-provider tools, toolset composition,
+  and MCP clients and servers with tools, resources, prompts, completion,
+  subscriptions, elicitation, tasks, and dynamic local-server management
 - **Provider-aware schema normalization**: MCP tools work across all providers — schemas normalized per-provider at request time
 - **RAG pipeline**: Document chunking, vector embeddings, semantic search with 6 vector store backends
 - **Security**: Role-based access control, declarative scope-based tool security, SSO/OAuth, audit logging
@@ -185,7 +187,11 @@ Built-in tools:
 - Artifact loading
 - Loop termination
 
-**MCP Integration**: Connect to Model Context Protocol servers for extended capabilities. Supports [MCP Elicitation](docs/official_docs/tools/mcp-tools.md#elicitation) — servers can request additional user input at runtime via structured forms or URLs.
+**MCP Integration**: Connect agents to MCP tools, resources, prompts, completion,
+subscriptions, elicitation, and negotiated long-running tasks through the
+official `rmcp 2.2` SDK. Use the dynamic local-server registry to add, update,
+enable, disable, persist, monitor, and restart stdio servers while an application
+is running. See the [MCP guide](docs/official_docs/tools/mcp-tools.md).
 
 ### Production Features
 
@@ -196,6 +202,7 @@ Built-in tools:
 - **Guardrails**: PII redaction, content filtering, JSON schema validation
 - **Tool Authorization**: Human-in-the-loop confirmation, before-tool callbacks, RBAC, graph interrupts
 - **Payments**: ACP and AP2 commerce support through `adk-payments`
+- **Coding-agent interoperability**: Use external ACP coding agents as tools or expose an ADK-Rust agent to an editor through stable ACP v1
 - **Observability**: OpenTelemetry tracing, structured logging
 
 ## Core Crates
@@ -209,7 +216,7 @@ Built-in tools:
 | `adk-gemini` | Gemini client | Google Gemini API client with streaming and multimodal support |
 | `adk-anthropic` | Anthropic client | Dedicated Anthropic API client with streaming, thinking, caching, citations, vision, PDF, pricing |
 | `adk-mistralrs` | Native local inference | mistral.rs v0.8 — **Gemma 4**, Qwen 3.5, Voxtral, ISQ/MXFP4 quantization, LoRA adapters |
-| `adk-tool` | Tool system and extensibility | `FunctionTool`, Google Search, MCP protocol with elicitation, schema validation |
+| `adk-tool` | Tool system and extensibility | Typed Rust tools, provider-native tools, composable toolsets, MCP clients and server SDK, dynamic local-server management |
 | `adk-devtools` | Coding-agent dev tools | `read_file`/`write_file`/`edit_file`/`glob`/`grep`/`bash` as a `DevToolset`, scoped to a sandboxed `Workspace` |
 | `adk-session` | Session and state management | SQLite/in-memory backends, conversation history, state persistence |
 | `adk-artifact` | Artifact storage system | File-based storage, MIME type handling, image/PDF/video support |
@@ -217,7 +224,7 @@ Built-in tools:
 | `adk-payments` | Agentic commerce orchestration | ACP/AP2 adapters, canonical transaction kernel, durable journals, evidence-backed payment flows |
 | `awp-types` | AWP protocol types | Trust levels, requester types, discovery documents, capability manifests, payment intents, typed A2A messages — zero `adk-*` deps |
 | `adk-awp` | Agentic Web Protocol implementation | Business context loading, discovery/manifest generation, rate limiting, consent, events, health state machine, AWP routes |
-| `adk-acp` | Agent Client Protocol integration | Connect to ACP agents (Claude Code, Codex, Kiro CLI) as tools, `AcpAgentTool`, `AcpToolset`, auto-approve permissions |
+| `adk-acp` | Agent Client Protocol integration | Official stable v1 client and server, one-shot and persistent sessions, streaming, cancellation, async permissions, client files and terminals, per-session MCP, and editor-facing ADK agents |
 | `adk-rag` | RAG pipeline | Document chunking, embeddings, vector search, reranking, 6 backends |
 | `adk-runner` | Agent execution runtime | Context management, event streaming, session lifecycle, callbacks |
 | `adk-server` | Production API servers | REST API, A2A v1.0.0 protocol (all 11 operations), middleware, health checks |
@@ -1028,6 +1035,8 @@ cargo build --release
 
 - **Wiki**: [GitHub Wiki](https://github.com/zavora-ai/adk-rust/wiki) - Comprehensive guides and tutorials
 - **API Reference**: [docs.rs/adk-rust](https://docs.rs/adk-rust) - Full API documentation
+- **Official ACP docs**: [Agent Client Protocol](docs/official_docs/acp/index.md) - Architecture, client/host APIs, ADK-Rust server, security boundaries, examples, and verified support
+- **Official MCP docs**: [Model Context Protocol](docs/official_docs/mcp/index.md) - Architecture, client APIs, dynamic server management, server authoring, security, and deterministic verification
 - **Official payments docs**: [Payments and Commerce](docs/official_docs/security/payments.md) - ACP/AP2 support, agentic commerce journeys, and validation paths
 - **Examples**: [examples/README.md](examples/README.md) - 75+ working examples with detailed explanations
 
@@ -1093,8 +1102,8 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 
 ## Roadmap
 
-**v1.0.0** (current) — first stable release:
-- **Composable Template System** — 8 base templates, 9 addons, 5 enterprise patterns via `cargo adk new --addon`.
+**v2.0.0** (current) — production agent framework:
+- **Composable Template System** — 12 templates, 9 add-ons, 5 enterprise patterns via `cargo adk new --addon`.
 - **Cargo Adk Build** — compile-without-deploy subcommand for pre-deployment verification.
 - **A2A Simple Scaffolding** — `A2aServer::quick_start`, `A2aServer::builder`, and `cargo adk new --template a2a-server`.
 - **Security** — hickory-proto 0.26.1, openssl 0.10.80, rubato 3.0, similar 3.

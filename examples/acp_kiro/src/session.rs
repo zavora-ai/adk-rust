@@ -17,8 +17,7 @@ use std::sync::Arc;
 async fn main() -> anyhow::Result<()> {
     println!("=== ADK-ACP: Persistent Session with Kiro CLI ===\n");
 
-    let config =
-        AcpAgentConfig::new("kiro-cli acp --trust-all-tools").working_dir(std::env::current_dir()?);
+    let config = AcpAgentConfig::new("kiro-cli acp").working_dir(std::env::current_dir()?);
 
     let policy = Arc::new(PermissionPolicy::AutoApprove);
 

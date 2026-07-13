@@ -7,8 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Current MCP client surface.** `McpToolset` now exposes `list_prompts`,
+  `get_prompt`, prompt and resource argument completion, resource subscribe and
+  unsubscribe, and the negotiated MCP task lifecycle. Public MCP catalog types
+  and the exact `rmcp` SDK version used internally are available through
+  `adk_tool::mcp`.
+- **Dynamic local MCP server registry.** `McpServerManager` can add, start,
+  update with rollback, enable, disable, remove, export, and atomically persist
+  local stdio server definitions while the application is running. Tool names
+  are prefixed with the server ID only when two servers publish the same name.
+- **Deterministic MCP manager example.** `examples/mcp_manager` now starts a
+  real Rust MCP child process and verifies discovery, tool execution, runtime
+  registry changes, persistence, and shutdown without Node.js, a model API key,
+  or network access.
+- **Official MCP documentation.** Added dedicated architecture, client,
+  dynamic-manager, server-authoring, security, and testing guides. The crate
+  README now uses versioned local binaries and deployment-owned remote URLs
+  instead of mutable package tags and unverified public endpoints.
+- **adk-acp: complete stable ACP v1 client/host surface.** Applications can now
+  supply opt-in `AcpFileSystem` and `AcpTerminal` callbacks, attach typed MCP
+  server configuration to new sessions, await asynchronous human permission
+  policy, and cancel an in-flight persistent prompt through a cloneable
+  `AcpCancellationHandle`.
+- **adk-acp server: per-session stdio MCP tools.** Client-supplied MCP servers
+  are validated, started in the session workspace with a bounded handshake,
+  exposed to `LlmAgent` and `CodeActAgent` through invocation-scoped toolsets,
+  and cancelled on close, delete, failed startup, or server shutdown.
+- **ACP examples and official documentation.** Added the vendor-neutral
+  `examples/acp_client_host` crate with deterministic workspace-boundary tests;
+  expanded the Kiro and server examples; and added dedicated architecture,
+  client, server, testing, security, and support-matrix documentation.
+
+### Changed
+
+- **MCP now uses official `rmcp 2.2` and MCP `2025-11-25` protocol types.**
+  ADK-Rust re-exports its aligned SDK for advanced transports and server
+  authoring. Sampling remains an opt-in deprecated-compatibility feature under
+  upstream SEP-2577. Downstream code that names `rmcp 1.x` content, elicitation,
+  or service types directly must migrate those annotations or import aligned
+  types through `adk_tool::mcp::rmcp`.
+- **MCP HTTP configuration is now effective.** Request timeouts, custom headers,
+  custom API-key headers, bearer or fixed client-credentials tokens, and bounded
+  expired-session recovery are applied to the Streamable HTTP client.
+- **MCP approval semantics are documented precisely.** `autoApprove` remains a
+  round-tripped configuration-compatibility field; it is not interpreted as
+  ADK-Rust authorization or human approval policy.
+- **adk-acp now uses the official `agent-client-protocol` 1.2 SDK while
+  negotiating stable wire protocol v1.** The client and server share the SDK's
+  typed JSON-RPC connection rather than maintaining a parallel wire model.
+- **ACP capability publication is now exact.** Unsupported media, remote
+  transports, and optional protocol features remain unadvertised. Stdio MCP is
+  accepted as required by stable v1; optional HTTP and SSE MCP are sent by the
+  client only when the external agent advertises them.
+- **ADK agent tool confirmation can be resolved live.** `RunConfig` accepts an
+  asynchronous `ToolConfirmationHandler`, and allow-once decisions are keyed by
+  exact function-call ID rather than tool name.
+
 ### Fixed
 
+- **MCP tasks now use the official request flow.** Tool calls send task metadata,
+  receive `CreateTaskResult`, poll `tasks/get`, fetch `tasks/result`, and cancel
+  the remote task when local bounds are exceeded. Required and optional task
+  behavior follows negotiated server and tool capabilities.
+- **MCP manager supervision and locking.** Failed restart attempts remain eligible
+  until the configured limit, duplicate monitors are prevented, monitoring can
+  restart after being stopped, disabled servers cannot be started directly, and
+  tool discovery no longer holds the registry lock during network calls.
+- **MCP HTTP authentication and session handling.** API-key headers and caller
+  headers now reach the wire, OAuth client-credentials tokens are attached as
+  bearer credentials, configured request timeouts are honored, and one bounded
+  reinitialization can recover an expired Streamable HTTP session.
+- **adk-acp permission decisions no longer trust menu order or fabricated
+  option IDs.** Allow and reject choices are matched by protocol semantics and
+  the original opaque ID is returned; invalid selections cancel the request.
+- **ACP cancellation now cleans up the active turn without poisoning the next
+  prompt.** Both `session/cancel` and JSON-RPC request cancellation are covered
+  by official-SDK interoperability tests.
 - **adk-core: Event serialization no longer produces duplicate `"provider_metadata"` keys.**
   `Event.provider_metadata` is now serialized as `"event_metadata"` to avoid collision
   with `LlmResponse.provider_metadata` (which is flattened into the same JSON object).

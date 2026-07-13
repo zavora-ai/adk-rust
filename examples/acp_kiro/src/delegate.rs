@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     }));
 
     // Wrap Kiro CLI as an ACP tool with permissions and tracking
-    let kiro_tool = AcpAgentTool::new("kiro-cli acp --trust-all-tools")
+    let kiro_tool = AcpAgentTool::new("kiro-cli acp")
         .name("kiro")
         .description(
             "Delegate coding tasks to Kiro CLI. Use this for tasks that require \

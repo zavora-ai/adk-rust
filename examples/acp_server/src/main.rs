@@ -15,7 +15,7 @@
 //! ## Message Flow
 //!
 //! 1. Client sends `initialize` → Server responds with capabilities
-//! 2. Client sends `session/create` → Server creates a session
+//! 2. Client sends `session/new` → Server creates a session
 //! 3. Client sends `session/prompt` → Server runs the agent, returns notifications
 //! 4. Client sends `session/close` → Server cleans up the session
 //!
@@ -27,7 +27,8 @@
 //! cargo run
 //! ```
 //!
-//! Then pipe JSON messages to stdin (see README.md for examples).
+//! Configure an ACP-compatible editor or SDK client to start the binary. See
+//! the README for tested client configuration and protocol verification.
 
 use std::sync::Arc;
 
@@ -45,9 +46,25 @@ use tracing_subscriber::EnvFilter;
 
 /// A tool that reads file contents from the local filesystem.
 ///
-/// In a real IDE integration, this would read from the workspace.
-/// Here we return a placeholder to demonstrate the tool-calling flow.
-struct ReadFileTool;
+struct ReadFileTool {
+    workspace: Arc<std::path::PathBuf>,
+}
+
+async fn resolve_workspace_path(
+    workspace: &std::path::Path,
+    requested: &str,
+) -> adk_core::Result<std::path::PathBuf> {
+    let requested = std::path::Path::new(requested);
+    let candidate =
+        if requested.is_absolute() { requested.to_path_buf() } else { workspace.join(requested) };
+    let resolved = tokio::fs::canonicalize(candidate).await.map_err(|error| {
+        adk_core::AdkError::tool(format!("cannot resolve requested path: {error}"))
+    })?;
+    if !resolved.starts_with(workspace) {
+        return Err(adk_core::AdkError::tool("requested path is outside the server workspace"));
+    }
+    Ok(resolved)
+}
 
 #[async_trait]
 impl Tool for ReadFileTool {
@@ -72,17 +89,22 @@ impl Tool for ReadFileTool {
         }))
     }
 
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
         let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("unknown");
-
-        // In a real implementation, this would read the actual file.
-        // For this demo, we return a placeholder showing the tool was called.
         tracing::info!(path = %path, "read_file tool called");
+        let resolved = resolve_workspace_path(&self.workspace, path).await?;
 
-        // Attempt to read the actual file for demonstration
-        match tokio::fs::read_to_string(path).await {
+        match tokio::fs::read_to_string(&resolved).await {
             Ok(content) => Ok(json!({
-                "path": path,
+                "path": resolved,
                 "content": content,
                 "size_bytes": content.len()
             })),
@@ -96,7 +118,9 @@ impl Tool for ReadFileTool {
 }
 
 /// A tool that lists directory contents.
-struct ListDirectoryTool;
+struct ListDirectoryTool {
+    workspace: Arc<std::path::PathBuf>,
+}
 
 #[async_trait]
 impl Tool for ListDirectoryTool {
@@ -121,13 +145,21 @@ impl Tool for ListDirectoryTool {
         }))
     }
 
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
         let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
         tracing::info!(path = %path, "list_directory tool called");
+        let resolved = resolve_workspace_path(&self.workspace, path).await?;
 
-        // Attempt to list the actual directory
-        match tokio::fs::read_dir(path).await {
+        match tokio::fs::read_dir(&resolved).await {
             Ok(mut entries) => {
                 let mut items = Vec::new();
                 while let Ok(Some(entry)) = entries.next_entry().await {
@@ -139,7 +171,7 @@ impl Tool for ListDirectoryTool {
                     }));
                 }
                 Ok(json!({
-                    "path": path,
+                    "path": resolved,
                     "entries": items,
                     "count": items.len()
                 }))
@@ -179,8 +211,9 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(model = %model.name(), "model initialized");
 
     // ── Step 3: Create tools ─────────────────────────────────────────────────
-    let read_file_tool: Arc<dyn Tool> = Arc::new(ReadFileTool);
-    let list_dir_tool: Arc<dyn Tool> = Arc::new(ListDirectoryTool);
+    let workspace = Arc::new(std::env::current_dir()?.canonicalize()?);
+    let read_file_tool: Arc<dyn Tool> = Arc::new(ReadFileTool { workspace: workspace.clone() });
+    let list_dir_tool: Arc<dyn Tool> = Arc::new(ListDirectoryTool { workspace });
 
     // ── Step 4: Build the agent ──────────────────────────────────────────────
     // This is the agent that will handle prompts from the IDE.
@@ -213,9 +246,6 @@ async fn main() -> anyhow::Result<()> {
         .agent_description(
             "ADK-Rust coding assistant with file reading and directory listing tools",
         )
-        .streaming(true)
-        .tool_use(true)
-        .tool_names(vec!["read_file".to_string(), "list_directory".to_string()])
         .transport(TransportConfig::Stdio)
         .build()?;
 
@@ -233,14 +263,11 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("  Send JSON messages (one per line) to interact.");
     eprintln!();
     eprintln!("  Protocol flow:");
-    eprintln!(
-        "    1. {{\"method\": \"initialize\", \"params\": {{\"protocol_version\": \"1.0\"}}}}"
-    );
-    eprintln!("    2. {{\"method\": \"session/create\", \"params\": {{}}}}");
-    eprintln!(
-        "    3. {{\"method\": \"session/prompt\", \"params\": {{\"session_id\": \"<id>\", \"text\": \"...\"}}}}"
-    );
-    eprintln!("    4. {{\"method\": \"session/close\", \"params\": {{\"session_id\": \"<id>\"}}}}");
+    eprintln!("    1. initialize (protocolVersion: 1)");
+    eprintln!("    2. session/new (absolute cwd, MCP server list)");
+    eprintln!("    3. session/prompt (typed content blocks)");
+    eprintln!("       ← live session/update notifications");
+    eprintln!("    4. session/cancel or session/close");
     eprintln!();
     eprintln!("  Press Ctrl+C or close stdin (Ctrl+D) to stop.");
     eprintln!("──────────────────────────────────────────────────────────────────");
@@ -257,4 +284,25 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("ACP server shut down cleanly");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn resolves_a_file_inside_the_server_workspace() {
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).canonicalize().unwrap();
+
+        let resolved = resolve_workspace_path(&workspace, "Cargo.toml").await.unwrap();
+
+        assert_eq!(resolved, workspace.join("Cargo.toml"));
+    }
+
+    #[tokio::test]
+    async fn rejects_a_file_outside_the_server_workspace() {
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).canonicalize().unwrap();
+
+        assert!(resolve_workspace_path(&workspace, "/etc/hosts").await.is_err());
+    }
 }

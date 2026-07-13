@@ -1,60 +1,80 @@
-# ACP + Kiro CLI Example
+# ACP coding-agent client examples
 
-Demonstrates using `adk-acp` to connect to Kiro CLI as an ACP agent.
+This crate demonstrates four ways an ADK-Rust application can use an external
+ACP coding agent. The binaries currently use Kiro CLI, but the `adk-acp` APIs
+are vendor-neutral and accept any compatible stdio command.
 
 ## Prerequisites
 
-- `kiro-cli` installed and logged in (`kiro-cli login`)
-- `GOOGLE_API_KEY` set (for the delegate example)
+- `kiro-cli` installed, authenticated, and able to start in ACP mode;
+- `GOOGLE_API_KEY` only for the orchestrator example.
 
-## Examples
+The examples deliberately keep approval policy in ADK-Rust. They do not pass a
+command-line flag that bypasses the ACP permission conversation.
 
-### Direct Connection
+## Direct one-shot prompt
 
-Send a prompt directly to Kiro CLI — no LLM orchestrator, just ACP:
+Starts a fresh coding-agent process, negotiates stable ACP v1, opens one
+session, sends one prompt, and returns the collected text:
 
 ```bash
-cargo run --bin acp-kiro-direct
+cargo run --manifest-path examples/acp_kiro/Cargo.toml \
+  --bin acp-kiro-direct
 ```
 
-### Orchestrator Delegation
+This binary uses semantic auto-approval and should only be used in a trusted
+local workspace.
 
-An ADK agent (Gemini) that delegates coding tasks to Kiro CLI:
+## ADK agent delegation
+
+Makes the coding agent a named tool of an ADK-Rust LLM coordinator:
 
 ```bash
 export GOOGLE_API_KEY=your-key
-cargo run --bin acp-kiro-delegate
+cargo run --manifest-path examples/acp_kiro/Cargo.toml \
+  --bin acp-kiro-delegate
 ```
 
-The orchestrator decides when to use Kiro CLI based on the task. General questions are answered directly; coding tasks are delegated via ACP.
+The coordinator decides whether a request requires repository work. The custom
+permission policy allows ordinary operations once and rejects titles containing
+destructive terms such as delete, drop, or sudo.
 
-## How It Works
+## Persistent multi-turn session
 
-```
-┌──────────────────────┐
-│  You (terminal)      │
-└──────────┬───────────┘
-           │ chat
-┌──────────▼───────────┐
-│  ADK Orchestrator    │
-│  (Gemini 2.5 Flash)  │
-└──────────┬───────────┘
-           │ tool call: kiro(prompt="...")
-┌──────────▼───────────┐
-│  AcpAgentTool        │
-│  spawns kiro-cli acp │
-└──────────┬───────────┘
-           │ ACP protocol (stdio)
-┌──────────▼───────────┐
-│  Kiro CLI            │
-│  (reads files, runs  │
-│   commands, writes   │
-│   code)              │
-└──────────────────────┘
+Keeps one process and ACP session alive while later prompts build on earlier
+context:
+
+```bash
+cargo run --manifest-path examples/acp_kiro/Cargo.toml \
+  --bin acp-kiro-session
 ```
 
-## Notes
+Use `AcpSession` for a chat, editor pane, or workflow where several turns refer
+to the same project and prior discussion.
 
-- `--trust-all-tools` auto-approves all permission requests from Kiro CLI
-- Each tool invocation spawns a fresh Kiro CLI process (stateless between calls)
-- The working directory is passed to Kiro CLI so it operates on your project
+## Environment and concurrent cancellation
+
+Passes named environment values to the child process without logging their
+contents, starts a long turn, and uses `AcpCancellationHandle` to send
+`session/cancel` while the prompt is still being awaited:
+
+```bash
+cargo run --manifest-path examples/acp_kiro/Cargo.toml \
+  --bin acp-kiro-env-cancel
+```
+
+After the cancelled turn closes, the binary sends another prompt through the
+same session to prove the connection remains usable.
+
+## Which example should I start with?
+
+| Product shape | API | Binary |
+|---|---|---|
+| One isolated repository task | `prompt_agent` or `AcpAgentTool` | `acp-kiro-direct` |
+| An LLM coordinator that delegates coding | `AcpAgentTool` | `acp-kiro-delegate` |
+| A continuing project conversation | `AcpSession` | `acp-kiro-session` |
+| UI timeout, shutdown, or stop button | `AcpCancellationHandle` | `acp-kiro-env-cancel` |
+
+For streamed UI events and a client-controlled filesystem, see
+[`examples/acp_client_host`](../acp_client_host). To make an ADK-Rust agent
+available to an editor, see [`examples/acp_server`](../acp_server).

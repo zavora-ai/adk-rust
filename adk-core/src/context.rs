@@ -1,5 +1,5 @@
 use crate::identity::{AdkIdentity, AppName, ExecutionIdentity, InvocationId, SessionId, UserId};
-use crate::{AdkError, Agent, Result, types::Content};
+use crate::{AdkError, Agent, Result, Toolset, types::Content};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -716,6 +716,46 @@ pub struct ToolConfirmationRequest {
     pub args: Value,
 }
 
+/// Asynchronous decision source for tool calls that require confirmation.
+///
+/// Front ends and protocol adapters can implement this trait to pause an
+/// invocation while a person or an external policy service reviews the exact
+/// tool call. When no handler is configured, agents preserve the existing
+/// behavior and emit an interrupted confirmation event for a later run.
+#[async_trait]
+pub trait ToolConfirmationHandler: std::fmt::Debug + Send + Sync {
+    /// Approve or deny one pending tool call.
+    async fn decide(&self, request: &ToolConfirmationRequest) -> Result<ToolConfirmationDecision>;
+}
+
+/// A toolset attached to one runner invocation rather than compiled into the
+/// agent definition.
+///
+/// Protocol adapters use this wrapper for session-scoped capabilities such as
+/// MCP servers supplied by an ACP client. The wrapper keeps [`RunConfig`]
+/// debuggable without requiring every toolset implementation to implement
+/// [`std::fmt::Debug`].
+#[derive(Clone)]
+pub struct RuntimeToolset(Arc<dyn Toolset>);
+
+impl RuntimeToolset {
+    /// Wrap a toolset for use during one runner invocation.
+    pub fn new(toolset: Arc<dyn Toolset>) -> Self {
+        Self(toolset)
+    }
+
+    /// Borrow the wrapped toolset.
+    pub fn toolset(&self) -> &Arc<dyn Toolset> {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for RuntimeToolset {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_tuple("RuntimeToolset").field(&self.0.name()).finish()
+    }
+}
+
 /// Configuration for a single agent run.
 ///
 /// Controls streaming behavior, tool confirmation, caching, transfer targets,
@@ -727,6 +767,11 @@ pub struct RunConfig {
     /// Optional per-tool confirmation decisions for the current run.
     /// Keys are tool names.
     pub tool_confirmation_decisions: HashMap<String, ToolConfirmationDecision>,
+    /// Optional live decision source for confirmations that have no static
+    /// entry in [`tool_confirmation_decisions`](Self::tool_confirmation_decisions).
+    pub tool_confirmation_handler: Option<Arc<dyn ToolConfirmationHandler>>,
+    /// Toolsets made available only for this invocation.
+    pub runtime_toolsets: Vec<RuntimeToolset>,
     /// Optional cached content name for automatic prompt caching.
     /// When set by the runner's cache lifecycle manager, agents should attach
     /// this name to their `GenerateContentConfig` so the LLM provider can
@@ -778,6 +823,8 @@ impl Default for RunConfig {
         Self {
             streaming_mode: StreamingMode::SSE,
             tool_confirmation_decisions: HashMap::new(),
+            tool_confirmation_handler: None,
+            runtime_toolsets: Vec::new(),
             cached_content: None,
             transfer_targets: Vec::new(),
             parent_agent: None,
@@ -847,6 +894,27 @@ impl RunConfigBuilder {
         decisions: HashMap<String, ToolConfirmationDecision>,
     ) -> Self {
         self.config.tool_confirmation_decisions = decisions;
+        self
+    }
+
+    /// Sets an asynchronous tool confirmation handler for the current run.
+    pub fn tool_confirmation_handler(mut self, handler: Arc<dyn ToolConfirmationHandler>) -> Self {
+        self.config.tool_confirmation_handler = Some(handler);
+        self
+    }
+
+    /// Adds a toolset that is resolved only for this runner invocation.
+    pub fn runtime_toolset(mut self, toolset: Arc<dyn Toolset>) -> Self {
+        self.config.runtime_toolsets.push(RuntimeToolset::new(toolset));
+        self
+    }
+
+    /// Adds several toolsets that are resolved only for this runner invocation.
+    pub fn runtime_toolsets(
+        mut self,
+        toolsets: impl IntoIterator<Item = Arc<dyn Toolset>>,
+    ) -> Self {
+        self.config.runtime_toolsets.extend(toolsets.into_iter().map(RuntimeToolset::new));
         self
     }
 

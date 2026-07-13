@@ -7,7 +7,7 @@
 //! # Architecture
 //!
 //! ```text
-//! ACP Client (IDE) ──► Transport (Stdio/HTTP) ──► AcpSessionHandler ──► Runner ──► Agent
+//! ACP Client (IDE) ──► Official SDK stdio ──► AcpSessionHandler ──► Runner ──► Agent
 //!                  ◄── SessionNotifications ◄──── ResponseStreamer ◄──── EventStream
 //! ```
 //!
@@ -35,7 +35,6 @@ pub mod capabilities;
 pub mod config;
 pub mod error;
 pub mod handler;
-pub mod permission;
 pub mod streamer;
 pub mod transport;
 
@@ -47,13 +46,13 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+pub use agent_client_protocol::schema::v1::SessionNotification;
 pub use capabilities::{AgentCapabilities, CapabilitiesBuilder};
 pub use config::{AcpServerConfig, AcpServerConfigBuilder, TransportConfig};
 pub use error::{AcpServerError, ErrorResponse};
 pub use handler::AcpSessionHandler;
-pub use permission::{PermissionBridge, PermissionOutcome};
-pub use streamer::{ResponseStreamer, SessionNotification};
-pub use transport::{HttpTransport, StdioTransport, Transport};
+pub use streamer::ResponseStreamer;
+pub use transport::{StdioTransport, Transport};
 
 /// Handle returned by [`AcpServer::run()`] for lifecycle control.
 ///
@@ -125,9 +124,6 @@ impl AcpServer {
 
         let transport: Box<dyn Transport> = match &config.transport {
             TransportConfig::Stdio => Box::new(StdioTransport::new(&config)),
-            TransportConfig::Http { bind_address, port } => {
-                Box::new(HttpTransport::new(bind_address.clone(), *port))
-            }
         };
 
         let shutdown_timeout = config.shutdown_timeout;
