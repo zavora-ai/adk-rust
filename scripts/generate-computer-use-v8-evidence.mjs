@@ -32,6 +32,7 @@ const required = {
   'mcp.multimodal_image': 'mcp_result_preserves_structured_text_and_image_content',
   'wire.postcondition_roundtrip': 'types_round_trip_canonical_v8_fixtures',
   'wire.sensitivity_roundtrip': 'sensitivity_contract_rejects_unrecognized_or_raw_value_fields',
+  'wire.approval_scope_roundtrip': 'approval_scope_contract_rejects_raw_or_broadened_authority',
 }
 for (const [assertion, testName] of Object.entries(required)) {
   if (!output.includes(testName)) throw new Error(`required evaluation test did not run: ${assertion} (${testName})`)
@@ -41,6 +42,8 @@ const sourcePaths = [
   'adk-computer-use/fixtures/v8/adk-evaluation-receipt.schema.json',
   'adk-computer-use/fixtures/v8/action-preview.json',
   'adk-computer-use/fixtures/v8/action-postcondition.schema.json',
+  'adk-computer-use/fixtures/v8/approval-grant.json',
+  'adk-computer-use/fixtures/v8/approval-grant.schema.json',
   'adk-computer-use/fixtures/v8/target-sensitivity.schema.json',
   'adk-computer-use/fixtures/v8/session-deletion.json',
   'adk-computer-use/src/auth.rs', 'adk-computer-use/src/eval.rs', 'adk-computer-use/src/graph.rs',

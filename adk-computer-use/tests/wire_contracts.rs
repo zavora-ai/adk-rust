@@ -1,8 +1,8 @@
 use adk_computer_use::{
-    ActionPostcondition, ActionPreview, AdkEvaluationReceipt, ControlLease, ExecutionReceipt,
-    RuntimeSession, SafetyCorpus, SessionDeletionResult, SessionEvent, SessionFollowUp,
-    TargetReservation, TargetSensitivityAssessment, TargetSensitivityEvidence,
-    TargetSensitivitySignal, TargetSensitivitySource,
+    ActionPostcondition, ActionPreview, AdkEvaluationReceipt, ApprovalGrant, ApprovalGrantScope,
+    ControlLease, ExecutionReceipt, RuntimeSession, SafetyCorpus, SessionDeletionResult,
+    SessionEvent, SessionFollowUp, TargetReservation, TargetSensitivityAssessment,
+    TargetSensitivityEvidence, TargetSensitivitySignal, TargetSensitivitySource,
 };
 
 #[test]
@@ -28,6 +28,8 @@ fn types_round_trip_canonical_v8_fixtures() {
     let evaluation: AdkEvaluationReceipt =
         serde_json::from_str(include_str!("../fixtures/v8/adk-evaluation-receipt-7.0.0.json"))
             .unwrap();
+    let approval: ApprovalGrant =
+        serde_json::from_str(include_str!("../fixtures/v8/approval-grant.json")).unwrap();
 
     assert_eq!(preview.envelope.action_id, receipt.action_id);
     assert!(matches!(
@@ -53,6 +55,9 @@ fn types_round_trip_canonical_v8_fixtures() {
     assert_eq!(safety.schema_version, 1);
     assert_eq!(safety.scenarios.len(), 4);
     assert!(evaluation.verify());
+    assert_eq!(approval.scope(), ApprovalGrantScope::SessionOperation);
+    assert_eq!(approval.grant_id(), "grant-0001");
+    assert_eq!(approval.remaining_uses(), 10);
     assert_eq!(evaluation.claims.crash_points_covered, 2);
     assert_eq!(evaluation.claims.duplicate_mutations, 0);
     assert!(safety.scenarios.iter().any(|scenario| {
@@ -67,6 +72,28 @@ fn types_round_trip_canonical_v8_fixtures() {
             .action_id,
         "action-0001"
     );
+}
+
+#[test]
+fn approval_scope_contract_rejects_raw_or_broadened_authority() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/v8/approval-grant.json")).unwrap();
+    let valid: ApprovalGrant = serde_json::from_value(fixture.clone()).unwrap();
+    assert!(valid.scope_digest().bytes().all(|byte| byte == b'b'));
+
+    let mut raw = fixture.clone();
+    raw["value"] = serde_json::json!("must-not-cross");
+    assert!(serde_json::from_value::<ApprovalGrant>(raw).is_err());
+
+    let mut dangerous = fixture.clone();
+    dangerous["tool"] = serde_json::json!("notification");
+    dangerous["actionClass"] = serde_json::json!("communicate_external");
+    assert!(serde_json::from_value::<ApprovalGrant>(dangerous).is_err());
+
+    let mut exact = fixture;
+    exact["scope"] = serde_json::json!("exact_action");
+    exact["remainingUses"] = serde_json::json!(1);
+    assert!(serde_json::from_value::<ApprovalGrant>(exact).is_err());
 }
 
 #[test]

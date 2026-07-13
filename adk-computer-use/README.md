@@ -7,7 +7,7 @@ The crate deliberately does not implement desktop actuation. It supplies:
 - camelCase wire types for v8 capabilities, action previews, leases, receipts, and events;
 - operation-aware auth context and the `computer:*` scope model;
 - a deterministic `adk-graph` workflow with parallel capability/visual/semantic observation, fan-in, preview routing, human interrupt, action-and-policy-digest-bound resume, planner target reservation, exactly one executor node, reservation release, and independent verification;
-- typed digest-only UI/filesystem/registry/process/window postconditions plus value-free AX/UIA target-sensitivity evidence that survive Rust/TypeScript wire round-trip and remain part of the exact action/approval digest;
+- typed digest-only UI/filesystem/registry/process/window postconditions, value-free AX/UIA target-sensitivity evidence, and exact/session-operation approval scopes that survive Rust/TypeScript wire round-trip and remain digest-bound;
 - a runtime trait that can be backed by MCP, in-process TypeScript, or a deterministic fake.
 - principal-checked monotonic follow-up consumption for remote supervisor steering; instruction text stays outside the redacted event stream;
 
