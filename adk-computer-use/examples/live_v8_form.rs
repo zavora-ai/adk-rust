@@ -223,14 +223,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .env("COMPUTER_USE_V8", "true")
         .env("COMPUTER_USE_ACTIVE_PROFILE", "v8-safe")
         .env("COMPUTER_USE_PRINCIPAL_ID", &principal)
-        .env("COMPUTER_USE_REQUIRE_APPROVAL_FOR", "fill_form")
+        .env("COMPUTER_USE_V8_CONFIRM_TOOLS", "fill_form")
         .env("COMPUTER_USE_RUNTIME_DEBUG", "true")
         .env("COMPUTER_USE_SUPERVISOR_SOCKET", &socket)
         .env("COMPUTER_USE_SUPERVISOR_TOKEN", &supervisor_token)
         .env("COMPUTER_USE_SUPERVISOR_FRAMES", "true");
     let client = ().serve(TokioChildProcess::new(server)?).await?;
     let toolset = Arc::new(McpToolset::new(client).with_name("computer-use-v8-form"));
-    let started = toolset.call_tool_value("start_session", Map::new()).await?;
+    let started =
+        toolset.call_tool_value("start_session", object(json!({ "objective": prompt }))?).await?;
     let session_id = output(&started)
         .get("session")
         .and_then(|value| value.get("sessionId"))

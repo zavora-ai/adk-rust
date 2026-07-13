@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "protocol": "adk-rust-computer-use-v8-evaluation",
   "subjectVersion": "7.0.0",
-  "generatedAt": "2026-07-13T17:14:39.948Z",
+  "generatedAt": "2026-07-13T17:43:42.682Z",
   "commands": [
     "cargo test -p adk-computer-use",
     "cargo test -p adk-tool --features mcp --lib mcp_result_preserves_structured_text_and_image_content"
@@ -36,7 +36,7 @@
     },
     {
       "path": "adk-computer-use/examples/live_v8_form.rs",
-      "digest": "sha256:b64d0d2835b765f8947ffadaaac919b00e71332ca95e9064b32958cbcaf9ce5c"
+      "digest": "sha256:b4b95abbbbf7fe8cc1153484c85f2b23bf53b60ae7b7f02bf058a743fe545ac7"
     },
     {
       "path": "adk-computer-use/examples/macos_form_showcase.swift",
@@ -115,7 +115,7 @@
       "digest": "sha256:856bd4a5bb87103937defcda8895bfdd6924d6c2219bc765c98e494646ac6a69"
     }
   ],
-  "sourceDigest": "sha256:1d63287c6440fe2d9901b476cac62ff1fe88622842d068ae564fdd9c12d3585b",
-  "outputDigest": "sha256:142de6660863c267cb73691bb5bc95c56ae2990615a42eb1b76bc3adfbdb7fe0",
-  "receiptDigest": "sha256:25c58a68fbadc476bab7815c82249a81c77e1d79fb50c6ff89e5e3f46ba81280"
+  "sourceDigest": "sha256:8f82c4f9e86a74fec78e8bb4297b7e1ebf23d1c0cc063e792cb99633d8faacb2",
+  "outputDigest": "sha256:2d061610d89031d91bdfeeac68b074dd9a76fb5b16a3ae9092ab84a4fd185a30",
+  "receiptDigest": "sha256:91faf0b587a399f3f6b1957c3c62d83cc90bbf2ba4d6747c76fae983b6f42de3"
 }
