@@ -3,6 +3,7 @@
   "deleted": true,
   "deletedEvents": 14,
   "deletedReceipts": 2,
+  "deletedEvidenceFrames": 4,
   "revokedGrants": 1,
   "retainedEvents": 8,
   "retentionMarkerId": "event-retention-0001"

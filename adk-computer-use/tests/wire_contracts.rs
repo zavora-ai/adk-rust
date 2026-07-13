@@ -1,6 +1,7 @@
 use adk_computer_use::{
-    ActionPreview, AdkEvaluationReceipt, ControlLease, ExecutionReceipt, RuntimeSession,
-    SafetyCorpus, SessionDeletionResult, SessionEvent, SessionFollowUp, TargetReservation,
+    ActionPostcondition, ActionPreview, AdkEvaluationReceipt, ControlLease, ExecutionReceipt,
+    RuntimeSession, SafetyCorpus, SessionDeletionResult, SessionEvent, SessionFollowUp,
+    TargetReservation,
 };
 
 #[test]
@@ -28,6 +29,10 @@ fn types_round_trip_canonical_v8_fixtures() {
             .unwrap();
 
     assert_eq!(preview.envelope.action_id, receipt.action_id);
+    assert!(matches!(
+        preview.envelope.postcondition,
+        Some(ActionPostcondition::UiElement { exists: true, .. })
+    ));
     assert_eq!(preview.envelope.session_id, event.session_id);
     assert_eq!(follow_up.session_id, event.session_id);
     assert_eq!(follow_up.principal_id, event.principal_id.clone().unwrap());
@@ -37,6 +42,7 @@ fn types_round_trip_canonical_v8_fixtures() {
     assert_eq!(completed.session_id, event.session_id);
     assert_eq!(deletion.session_id, event.session_id);
     assert_eq!(deletion.deleted_events, 14);
+    assert_eq!(deletion.deleted_evidence_frames, 4);
     assert!(deletion.retention_marker_id.is_some());
     assert!(completed.completion.unwrap().postconditions[0].satisfied);
     assert_eq!(safety.schema_version, 1);
@@ -56,4 +62,17 @@ fn types_round_trip_canonical_v8_fixtures() {
             .action_id,
         "action-0001"
     );
+}
+
+#[test]
+fn process_postcondition_rejects_running_true_on_both_wire_directions() {
+    assert!(
+        serde_json::from_value::<ActionPostcondition>(serde_json::json!({
+            "kind": "process",
+            "pid": 42,
+            "running": true
+        }))
+        .is_err()
+    );
+    assert!(serde_json::to_value(ActionPostcondition::Process { pid: 42, running: true }).is_err());
 }

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "protocol": "adk-rust-computer-use-v8-evaluation",
   "subjectVersion": "7.0.0",
-  "generatedAt": "2026-07-13T14:01:50.152Z",
+  "generatedAt": "2026-07-13T15:16:46.171Z",
   "commands": [
     "cargo test -p adk-computer-use",
     "cargo test -p adk-tool --features mcp --lib mcp_result_preserves_structured_text_and_image_content"
@@ -15,7 +15,8 @@
     "graph.post_commit_crash",
     "auth.verified_identity",
     "eval.no_duplicate_mutation",
-    "mcp.multimodal_image"
+    "mcp.multimodal_image",
+    "wire.postcondition_roundtrip"
   ],
   "claims": {
     "testsPassed": true,
@@ -23,7 +24,7 @@
     "multimodalEvidence": true,
     "duplicateMutations": 0,
     "crashPointsCovered": 2,
-    "testCount": 15
+    "testCount": 16
   },
   "sources": [
     {
@@ -31,12 +32,28 @@
       "digest": "sha256:2760da4e6183dd1129e6ec86f9c2220d9e7728c8cd188a9d2e17ba1d32f77720"
     },
     {
+      "path": "adk-computer-use/fixtures/v8/action-postcondition.schema.json",
+      "digest": "sha256:0baff1b1646b21be1ddcf382804ff0b587554fabe7def975699f95545e2c7bd9"
+    },
+    {
+      "path": "adk-computer-use/fixtures/v8/action-preview.json",
+      "digest": "sha256:f25dd5230c2ae7a2b3e6780c5c57527d03c12a5d4e5671075ef233a084848c19"
+    },
+    {
       "path": "adk-computer-use/fixtures/v8/adk-evaluation-receipt.schema.json",
       "digest": "sha256:8f2965d4739b82a58ca7721eb79afb9a60023d6128bd612b2ce37969e3440606"
     },
     {
+      "path": "adk-computer-use/fixtures/v8/session-deletion.json",
+      "digest": "sha256:78242ad882c651433be27e2344df5243efd2fbecd4cc0e0406ba8bf198e66785"
+    },
+    {
       "path": "adk-computer-use/src/auth.rs",
       "digest": "sha256:d1fbfe7a83ab7d01f66b4a27a735302c2ad89708262ba4ae5c5d9b1335403053"
+    },
+    {
+      "path": "adk-computer-use/src/contracts.rs",
+      "digest": "sha256:36f2172062b725a9fdfb791f739b85444ed516439f15817fdcfdba129ab87bb8"
     },
     {
       "path": "adk-computer-use/src/eval.rs",
@@ -60,11 +77,11 @@
     },
     {
       "path": "adk-computer-use/tests/reference_graph.rs",
-      "digest": "sha256:4abd1a512df29a4f4b7b787f093dbf54a5e794d0971e4316e9b8ac0b287aa94b"
+      "digest": "sha256:6cc3a910b145c3b5aa39b2dcd63638996eb1573908ba5714c672e6832eb30e20"
     },
     {
       "path": "adk-computer-use/tests/wire_contracts.rs",
-      "digest": "sha256:44581955a5c71b6c580564d1114bf18bbab79f24dc12445bf449d2c635ff36ed"
+      "digest": "sha256:445b39f2db3e6f69c4f257814722e4984353f0200708c67382ba8ec0f175a0c9"
     },
     {
       "path": "adk-tool/src/mcp/toolset.rs",
@@ -72,10 +89,10 @@
     },
     {
       "path": "scripts/generate-computer-use-v8-evidence.mjs",
-      "digest": "sha256:2892031f701597d2b613cf9b0a6bf533e48578a6835873531b55e492389502da"
+      "digest": "sha256:14a5d393867c637789a339e4b4ed91e78e02732ff9cc7b733806e91598a260d9"
     }
   ],
-  "sourceDigest": "sha256:d9ded7334b0152eaf0d6dae2d094022a430d419893ba1a5f16d62158c5659bc9",
-  "outputDigest": "sha256:88c5a703229e1b321dd8dd868a73b07f806cc9aefccb2e2a4cbb020eaa409db8",
-  "receiptDigest": "sha256:caab085ed90304351c25a4571784439ef72ffe0d70dfd54f384ae05b93a55a14"
+  "sourceDigest": "sha256:f3883e0647b2c61919e9c84a66bc8edcc8c4e1084c987100a3255815615676a9",
+  "outputDigest": "sha256:4a663788e80795a0df1ced2259a4a9ad1e23f579f00e23e3c33516b103152798",
+  "receiptDigest": "sha256:0751241e6c55da36df58a7a43e74ce2d2bbf4f318e92501e5a495c2a17a56eac"
 }

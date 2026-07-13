@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -97,6 +97,74 @@ pub struct ActionProvenance {
     pub crosses_data_boundary: Option<bool>,
 }
 
+fn deserialize_false<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = bool::deserialize(deserializer)?;
+    if value {
+        return Err(de::Error::custom(
+            "process postcondition can only prove a non-running process",
+        ));
+    }
+    Ok(false)
+}
+
+fn serialize_false<S>(value: &bool, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    if *value {
+        return Err(serde::ser::Error::custom(
+            "process postcondition can only prove a non-running process",
+        ));
+    }
+    serializer.serialize_bool(false)
+}
+
+/// Digest-only expected state independently verified by computer-use-mcp.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum ActionPostcondition {
+    #[serde(rename = "ui_element")]
+    UiElement {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        exists: bool,
+        #[serde(rename = "valueDigest", skip_serializing_if = "Option::is_none")]
+        value_digest: Option<String>,
+    },
+    #[serde(rename = "filesystem")]
+    Filesystem {
+        path: String,
+        exists: bool,
+        #[serde(rename = "contentDigest", skip_serializing_if = "Option::is_none")]
+        content_digest: Option<String>,
+    },
+    #[serde(rename = "registry")]
+    Registry {
+        path: String,
+        name: String,
+        exists: bool,
+        #[serde(rename = "valueDigest", skip_serializing_if = "Option::is_none")]
+        value_digest: Option<String>,
+    },
+    #[serde(rename = "process")]
+    Process {
+        pid: u32,
+        #[serde(deserialize_with = "deserialize_false", serialize_with = "serialize_false")]
+        running: bool,
+    },
+    #[serde(rename = "window")]
+    Window {
+        #[serde(rename = "windowId")]
+        window_id: u64,
+        exists: bool,
+    },
+}
+
 /// Immutable action proposed by the graph and enforced by v8.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,6 +187,8 @@ pub struct ActionEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provenance: Option<ActionProvenance>,
     pub data_labels: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub postcondition: Option<ActionPostcondition>,
     pub reversible: bool,
     pub external_side_effect: bool,
     pub proposed_at: String,
@@ -345,6 +415,7 @@ pub struct SessionDeletionResult {
     pub deleted: bool,
     pub deleted_events: u64,
     pub deleted_receipts: u64,
+    pub deleted_evidence_frames: u64,
     pub revoked_grants: u64,
     pub retained_events: u64,
     #[serde(skip_serializing_if = "Option::is_none")]

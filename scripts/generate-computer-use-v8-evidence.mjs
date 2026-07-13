@@ -30,6 +30,7 @@ const required = {
   'auth.verified_identity': 'verified_identity_must_match_v8_principal_and_tenant',
   'eval.no_duplicate_mutation': 'evaluator_rejects_duplicate_unleased_unverified_mutation',
   'mcp.multimodal_image': 'mcp_result_preserves_structured_text_and_image_content',
+  'wire.postcondition_roundtrip': 'types_round_trip_canonical_v8_fixtures',
 }
 for (const [assertion, testName] of Object.entries(required)) {
   if (!output.includes(testName)) throw new Error(`required evaluation test did not run: ${assertion} (${testName})`)
@@ -37,8 +38,11 @@ for (const [assertion, testName] of Object.entries(required)) {
 const sourcePaths = [
   'adk-computer-use/Cargo.toml',
   'adk-computer-use/fixtures/v8/adk-evaluation-receipt.schema.json',
+  'adk-computer-use/fixtures/v8/action-preview.json',
+  'adk-computer-use/fixtures/v8/action-postcondition.schema.json',
+  'adk-computer-use/fixtures/v8/session-deletion.json',
   'adk-computer-use/src/auth.rs', 'adk-computer-use/src/eval.rs', 'adk-computer-use/src/graph.rs',
-  'adk-computer-use/src/lib.rs', 'adk-computer-use/src/mcp_runtime.rs',
+  'adk-computer-use/src/contracts.rs', 'adk-computer-use/src/lib.rs', 'adk-computer-use/src/mcp_runtime.rs',
   'adk-computer-use/tests/evaluation.rs', 'adk-computer-use/tests/reference_graph.rs',
   'adk-computer-use/tests/wire_contracts.rs', 'adk-tool/src/mcp/toolset.rs',
   'scripts/generate-computer-use-v8-evidence.mjs',
@@ -62,9 +66,15 @@ const receipt = {
   sources, sourceDigest: `sha256:${sourceHash.digest('hex')}`, outputDigest: digest(output), receiptDigest: '',
 }
 receipt.receiptDigest = digest(canonical(receipt))
+const rendered = `${JSON.stringify(receipt, null, 2)}\n`
 const outputPath = valueFlag('--output')
 if (outputPath) {
   const path = resolve(process.cwd(), outputPath); const temporary = `${path}.${process.pid}.tmp`
-  await writeFile(temporary, `${JSON.stringify(receipt, null, 2)}\n`); await rename(temporary, path)
+  await writeFile(temporary, rendered); await rename(temporary, path)
+}
+const mirrorOutputPath = valueFlag('--mirror-output')
+if (mirrorOutputPath) {
+  const path = resolve(process.cwd(), mirrorOutputPath); const temporary = `${path}.${process.pid}.tmp`
+  await writeFile(temporary, rendered); await rename(temporary, path)
 }
 console.log(JSON.stringify(receipt, null, process.argv.includes('--compact') ? 0 : 2))

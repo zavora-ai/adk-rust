@@ -68,6 +68,7 @@ impl FakeRuntime {
                 resource: None,
                 provenance: None,
                 data_labels: vec!["private".into()],
+                postcondition: None,
                 reversible: true,
                 external_side_effect: false,
                 proposed_at: "2026-07-13T10:00:00Z".into(),
