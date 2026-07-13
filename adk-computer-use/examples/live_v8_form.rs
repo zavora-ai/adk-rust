@@ -363,6 +363,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(Value::as_str)
         .ok_or("preview policy digest missing")?
         .to_string();
+    println!(
+        "PRE_LEASE_INTERRUPT_PROOF: {}",
+        serde_json::to_string(&json!({
+            "checkpoint_id": interrupted.checkpoint_id,
+            "route": interrupted.state.get("route"),
+            "action_digest": action_digest,
+            "policy_digest": policy_digest,
+            "reservation_acquired": interrupted.state.contains_key("reservation"),
+            "lease_acquired": interrupted.state.contains_key("lease"),
+            "receipt_created": interrupted.state.contains_key("receipt")
+        }))?
+    );
     println!("APPROVAL_INTERRUPT: review the action in the PiP window");
     println!("APPROVAL_OPTIONS: exact action or same fields (10 uses / 2 minutes)");
 
@@ -427,6 +439,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "route": result.get("route"),
             "receipt_status": result.get("receipt").and_then(|value| value.get("status")),
             "receipt_id": result.get("receipt").and_then(|value| value.get("receiptId")),
+            "resumed_checkpoint_id": interrupted.checkpoint_id,
+            "original_action_id": action_id,
+            "receipt_action_id": result.get("receipt").and_then(|value| value.get("actionId")),
             "verified": result.get("verified"),
             "runtime_held_approval": true
         }))?
