@@ -1,7 +1,8 @@
 use adk_computer_use::{
     ActionPostcondition, ActionPreview, AdkEvaluationReceipt, ControlLease, ExecutionReceipt,
     RuntimeSession, SafetyCorpus, SessionDeletionResult, SessionEvent, SessionFollowUp,
-    TargetReservation,
+    TargetReservation, TargetSensitivityAssessment, TargetSensitivityEvidence,
+    TargetSensitivitySignal, TargetSensitivitySource,
 };
 
 #[test]
@@ -33,6 +34,10 @@ fn types_round_trip_canonical_v8_fixtures() {
         preview.envelope.postcondition,
         Some(ActionPostcondition::UiElement { exists: true, .. })
     ));
+    let sensitivity = preview.envelope.target_sensitivity.as_ref().unwrap();
+    assert_eq!(sensitivity.assessment(), TargetSensitivityAssessment::NonSensitive);
+    assert_eq!(sensitivity.source(), TargetSensitivitySource::Accessibility);
+    assert_eq!(sensitivity.fields_checked(), 1);
     assert_eq!(preview.envelope.session_id, event.session_id);
     assert_eq!(follow_up.session_id, event.session_id);
     assert_eq!(follow_up.principal_id, event.principal_id.clone().unwrap());
@@ -75,4 +80,48 @@ fn process_postcondition_rejects_running_true_on_both_wire_directions() {
         .is_err()
     );
     assert!(serde_json::to_value(ActionPostcondition::Process { pid: 42, running: true }).is_err());
+}
+
+#[test]
+fn sensitivity_contract_rejects_unrecognized_or_raw_value_fields() {
+    let valid: TargetSensitivityEvidence = serde_json::from_value(serde_json::json!({
+        "assessment": "sensitive",
+        "source": "accessibility",
+        "signals": ["uia_is_password"],
+        "fieldsChecked": 1,
+        "observedAt": "2026-07-13T12:00:00.000Z"
+    }))
+    .unwrap();
+    assert_eq!(valid.signals(), &[TargetSensitivitySignal::UiaIsPassword]);
+    assert!(
+        serde_json::from_value::<TargetSensitivityEvidence>(serde_json::json!({
+            "assessment": "sensitive",
+            "source": "accessibility",
+            "signals": ["model_supplied_secret"],
+            "fieldsChecked": 1,
+            "observedAt": "2026-07-13T12:00:00.000Z"
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<TargetSensitivityEvidence>(serde_json::json!({
+            "assessment": "sensitive",
+            "source": "accessibility",
+            "signals": ["uia_is_password"],
+            "fieldsChecked": 1,
+            "observedAt": "2026-07-13T12:00:00.000Z",
+            "value": "must-not-cross"
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<TargetSensitivityEvidence>(serde_json::json!({
+            "assessment": "non_sensitive",
+            "source": "unavailable",
+            "signals": [],
+            "fieldsChecked": 0,
+            "observedAt": "2026-07-13T12:00:00.000Z"
+        }))
+        .is_err()
+    );
 }

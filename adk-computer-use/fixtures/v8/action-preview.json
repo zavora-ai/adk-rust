@@ -18,6 +18,13 @@
       "confidence": 1,
       "capturedAt": "2026-07-13T10:00:00.000Z"
     },
+    "targetSensitivity": {
+      "assessment": "non_sensitive",
+      "source": "accessibility",
+      "signals": [],
+      "fieldsChecked": 1,
+      "observedAt": "2026-07-13T10:00:00.000Z"
+    },
     "dataLabels": ["private"],
     "postcondition": {
       "kind": "ui_element",

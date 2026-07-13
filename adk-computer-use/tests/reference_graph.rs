@@ -65,6 +65,7 @@ impl FakeRuntime {
                 action_class: ActionClass::EditReversible,
                 requested_mode: ExecutionMode::Background,
                 target: None,
+                target_sensitivity: None,
                 resource: None,
                 provenance: None,
                 data_labels: vec!["private".into()],

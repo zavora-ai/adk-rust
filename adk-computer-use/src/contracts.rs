@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 /// Enforced execution mode selected for an action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +97,147 @@ pub struct ActionProvenance {
     pub crosses_data_boundary: Option<bool>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetSensitivityAssessment {
+    Sensitive,
+    NonSensitive,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetSensitivitySource {
+    Accessibility,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetSensitivitySignal {
+    SecureRole,
+    SecureSubrole,
+    ProtectedContent,
+    UiaIsPassword,
+    SensitiveLabel,
+    AmbiguousMatch,
+    ElementNotFound,
+    InspectionError,
+    InvalidField,
+    NativeSignalUnavailable,
+}
+
+/// Value-free native accessibility evidence used for action risk and revalidation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "RawTargetSensitivityEvidence", into = "RawTargetSensitivityEvidence")]
+pub struct TargetSensitivityEvidence {
+    assessment: TargetSensitivityAssessment,
+    source: TargetSensitivitySource,
+    signals: Vec<TargetSensitivitySignal>,
+    fields_checked: u32,
+    observed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawTargetSensitivityEvidence {
+    assessment: TargetSensitivityAssessment,
+    source: TargetSensitivitySource,
+    signals: Vec<TargetSensitivitySignal>,
+    fields_checked: u32,
+    observed_at: String,
+}
+
+impl TargetSensitivityEvidence {
+    pub fn try_new(
+        assessment: TargetSensitivityAssessment,
+        source: TargetSensitivitySource,
+        signals: Vec<TargetSensitivitySignal>,
+        fields_checked: u32,
+        observed_at: impl Into<String>,
+    ) -> Result<Self, String> {
+        RawTargetSensitivityEvidence {
+            assessment,
+            source,
+            signals,
+            fields_checked,
+            observed_at: observed_at.into(),
+        }
+        .try_into()
+    }
+
+    pub fn assessment(&self) -> TargetSensitivityAssessment {
+        self.assessment
+    }
+
+    pub fn source(&self) -> TargetSensitivitySource {
+        self.source
+    }
+
+    pub fn signals(&self) -> &[TargetSensitivitySignal] {
+        &self.signals
+    }
+
+    pub fn fields_checked(&self) -> u32 {
+        self.fields_checked
+    }
+
+    pub fn observed_at(&self) -> &str {
+        &self.observed_at
+    }
+}
+
+impl TryFrom<RawTargetSensitivityEvidence> for TargetSensitivityEvidence {
+    type Error = String;
+
+    fn try_from(raw: RawTargetSensitivityEvidence) -> Result<Self, Self::Error> {
+        if raw.signals.len() > 10 {
+            return Err("target sensitivity supports at most 10 signals".into());
+        }
+        if raw.signals.iter().copied().collect::<HashSet<_>>().len() != raw.signals.len() {
+            return Err("target sensitivity signals must be unique".into());
+        }
+        if raw.fields_checked > 100 {
+            return Err("target sensitivity supports at most 100 checked fields".into());
+        }
+        if matches!(
+            raw.assessment,
+            TargetSensitivityAssessment::Sensitive | TargetSensitivityAssessment::NonSensitive
+        ) && (raw.source != TargetSensitivitySource::Accessibility || raw.fields_checked == 0)
+        {
+            return Err(
+                "conclusive target sensitivity requires accessibility evidence for a checked field"
+                    .into(),
+            );
+        }
+        if raw.assessment == TargetSensitivityAssessment::Sensitive && raw.signals.is_empty() {
+            return Err("sensitive target evidence requires at least one signal".into());
+        }
+        if raw.observed_at.trim().is_empty() {
+            return Err("target sensitivity observedAt must not be empty".into());
+        }
+        Ok(Self {
+            assessment: raw.assessment,
+            source: raw.source,
+            signals: raw.signals,
+            fields_checked: raw.fields_checked,
+            observed_at: raw.observed_at,
+        })
+    }
+}
+
+impl From<TargetSensitivityEvidence> for RawTargetSensitivityEvidence {
+    fn from(value: TargetSensitivityEvidence) -> Self {
+        Self {
+            assessment: value.assessment,
+            source: value.source,
+            signals: value.signals,
+            fields_checked: value.fields_checked,
+            observed_at: value.observed_at,
+        }
+    }
+}
+
 fn deserialize_false<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
     D: Deserializer<'de>,
@@ -182,6 +323,8 @@ pub struct ActionEnvelope {
     pub requested_mode: ExecutionMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_sensitivity: Option<TargetSensitivityEvidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource: Option<ActionResourceContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
