@@ -354,14 +354,21 @@ dependencies = [
 name = "adk-computer-use"
 version = "2.0.0"
 dependencies = [
+ "adk-agent",
  "adk-auth",
+ "adk-core",
  "adk-eval",
  "adk-graph",
+ "adk-model",
+ "adk-runner",
+ "adk-session",
  "adk-tool",
  "async-trait",
+ "futures",
  "rmcp",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

@@ -272,6 +272,26 @@ pub struct SessionEvent {
     pub payload: Value,
 }
 
+/// Principal-owned, monotonic steering instruction consumed by an ADK graph.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionFollowUp {
+    pub follow_up_id: String,
+    pub sequence: u64,
+    pub session_id: String,
+    pub principal_id: String,
+    pub instruction: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionFollowUpPage {
+    #[serde(rename = "follow_ups")]
+    pub follow_ups: Vec<SessionFollowUp>,
+    #[serde(rename = "next_sequence")]
+    pub next_sequence: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSession {

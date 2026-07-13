@@ -1,11 +1,18 @@
+use adk_agent::LlmAgentBuilder;
 use adk_computer_use::{
     ComputerUseMcpConfig, ComputerUseMcpRuntime, ScopeAuthorizer, TraceCorrelation,
     build_reference_graph,
 };
+use adk_core::{Agent, Content, Part};
 use adk_graph::{ExecutionConfig, State};
+use adk_model::GeminiModel;
+use adk_runner::Runner;
+use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use adk_tool::McpToolset;
+use futures::StreamExt;
 use rmcp::{ServiceExt, transport::TokioChildProcess};
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::process::Command;
 
@@ -17,15 +24,111 @@ fn output(value: &Value) -> &Value {
         .unwrap_or(value)
 }
 
+async fn plan_prompt(prompt: &str) -> Result<Value, Box<dyn std::error::Error>> {
+    let api_key = std::env::var("GOOGLE_API_KEY")
+        .or_else(|_| std::env::var("GEMINI_API_KEY"))
+        .map_err(|_| "GOOGLE_API_KEY or GEMINI_API_KEY is required for the live prompt planner")?;
+    let model_name =
+        std::env::var("COMPUTER_USE_PLANNER_MODEL").unwrap_or_else(|_| "gemini-2.5-flash".into());
+    let model = Arc::new(GeminiModel::new(&api_key, &model_name)?);
+    let schema = json!({
+        "type": "object",
+        "required": ["tool", "arguments", "mode", "data_labels"],
+        "properties": {
+            "tool": { "type": "string", "enum": ["write_clipboard"] },
+            "arguments": {
+                "type": "object",
+                "required": ["text"],
+                "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 4096 } }
+            },
+            "mode": { "type": "string", "enum": ["background"] },
+            "data_labels": {
+                "type": "array", "minItems": 1, "maxItems": 1,
+                "items": { "type": "string", "enum": ["public"] }
+            }
+        }
+    });
+    let agent: Arc<dyn Agent> = Arc::new(
+        LlmAgentBuilder::new("computer-use-v8-planner")
+            .description("Constrained natural-language planner for the governed v8 showcase")
+            .instruction(
+                "Convert the user's request into the one permitted public demonstration action. \
+                 Preserve the exact text the user asks to place on the clipboard. Do not invent \
+                 another tool, target, mode, or data label. Return only schema-valid JSON. The \
+                 downstream governed graph, not this planner, owns authorization and execution.",
+            )
+            .model(model)
+            .output_schema(schema)
+            .output_max_retries(2)
+            .temperature(0.0)
+            .build()?,
+    );
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "computer-use-v8-live".into(),
+            user_id: "local-operator".into(),
+            session_id: Some("prompt-planner".into()),
+            state: HashMap::new(),
+        })
+        .await?;
+    let runner = Runner::builder()
+        .app_name("computer-use-v8-live")
+        .agent(agent)
+        .session_service(sessions)
+        .build()?;
+    let content = Content::new("user").with_text(prompt);
+    let mut stream = runner.run_str("local-operator", "prompt-planner", content).await?;
+    let mut response = String::new();
+    while let Some(event) = stream.next().await {
+        let event = event?;
+        if let Some(content) = event.llm_response.content {
+            for part in content.parts {
+                if let Part::Text { text } = part {
+                    response.push_str(&text);
+                }
+            }
+        }
+    }
+    let planned: Value = serde_json::from_str(response.trim())?;
+    if planned.get("tool").and_then(Value::as_str) != Some("write_clipboard")
+        || planned.pointer("/arguments/text").and_then(Value::as_str).is_none()
+        || planned.get("mode").and_then(Value::as_str) != Some("background")
+        || planned.get("data_labels") != Some(&json!(["public"]))
+    {
+        return Err("planner output escaped the constrained showcase schema".into());
+    }
+    Ok(planned)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let prompt = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
+    let prompt = if prompt.is_empty() {
+        "Place the exact public text 'ADK-Rust v8 live prompt completed' on my macOS clipboard."
+            .to_string()
+    } else {
+        prompt
+    };
+    println!("PROMPT: {prompt}");
+    let mut proposed_action = plan_prompt(&prompt).await?;
+    proposed_action["action_id"] = Value::String(uuid::Uuid::new_v4().to_string());
+    println!("PLANNED_ACTION: {}", serde_json::to_string(&proposed_action)?);
+
     let principal =
         std::env::var("COMPUTER_USE_PRINCIPAL_ID").unwrap_or_else(|_| "adk-local-operator".into());
-    let package = std::env::var("COMPUTER_USE_MCP_PACKAGE")
-        .unwrap_or_else(|_| "@zavora-ai/computer-use-mcp".into());
-    let mut command = Command::new("npx");
+    let mut command = if let Ok(entrypoint) = std::env::var("COMPUTER_USE_MCP_ENTRYPOINT") {
+        let mut command = Command::new(std::env::var("NODE").unwrap_or_else(|_| "node".into()));
+        command.arg(entrypoint);
+        command
+    } else {
+        let package = std::env::var("COMPUTER_USE_MCP_PACKAGE")
+            .unwrap_or_else(|_| "@zavora-ai/computer-use-mcp".into());
+        let mut command = Command::new("npx");
+        command.args(["--yes", "--prefer-offline", &package]);
+        command
+    };
     command
-        .args(["--yes", "--prefer-offline", &package])
         .env("COMPUTER_USE_V8", "true")
         .env("COMPUTER_USE_ACTIVE_PROFILE", "v8-safe")
         .env("COMPUTER_USE_PRINCIPAL_ID", &principal);
@@ -64,18 +167,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )),
     )?;
     let mut input = State::new();
-    input.insert(
-        "proposed_action".into(),
-        json!({
-            "action_id": uuid::Uuid::new_v4().to_string(),
-            "tool": "write_clipboard",
-            "arguments": { "text": "ADK-Rust v8 live graph completed" },
-            "mode": "background",
-            "data_labels": ["public"]
-        }),
-    );
+    input.insert("proposed_action".into(), proposed_action.clone());
     let result = graph.invoke(input, ExecutionConfig::new("adk-live-v8")).await?;
-    println!("{}", serde_json::to_string_pretty(&result)?);
+    let safe_result = json!({
+        "observations_joined": result.get("observations_joined") == Some(&Value::Bool(true)),
+        "route": result.get("route").and_then(Value::as_str),
+        "lease_id": result.get("lease").and_then(|value| value.get("leaseId")).and_then(Value::as_str),
+        "lease_mode": result.get("lease").and_then(|value| value.get("executionMode")).and_then(Value::as_str),
+        "receipt_id": result.get("receipt").and_then(|value| value.get("receiptId")).and_then(Value::as_str),
+        "receipt_status": result.get("receipt").and_then(|value| value.get("status")).and_then(Value::as_str),
+        "action_digest": result.get("receipt").and_then(|value| value.get("actionDigest")).and_then(Value::as_str),
+        "verified": result.get("verified").and_then(Value::as_bool),
+        "result": result.get("result"),
+    });
+    println!("GRAPH_RESULT: {}", serde_json::to_string(&safe_result)?);
+    let expected = proposed_action
+        .pointer("/arguments/text")
+        .and_then(Value::as_str)
+        .ok_or("planned action lost clipboard text")?;
+    let clipboard = Command::new("pbpaste").output().await?;
+    let actual = String::from_utf8(clipboard.stdout)?;
+    if actual != expected {
+        return Err(format!(
+            "clipboard verification failed: expected {expected:?}, got {actual:?}"
+        )
+        .into());
+    }
+    println!("MACOS_VERIFICATION: clipboard matched planned text exactly");
     toolset.cancellation_token().await.cancel();
     Ok(())
 }

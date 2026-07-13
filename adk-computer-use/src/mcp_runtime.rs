@@ -1,6 +1,6 @@
 use crate::{
     ActionEnvelope, ActionPreview, ComputerUseRuntime, ControlLease, ExecutionReceipt,
-    SessionDeletionResult, TargetReservation,
+    SessionDeletionResult, SessionFollowUp, SessionFollowUpPage, TargetReservation,
 };
 use adk_tool::McpToolset;
 use async_trait::async_trait;
@@ -84,6 +84,62 @@ where
         );
         serde_json::from_value(value.get("deletions").cloned().unwrap_or_else(|| json!([])))
             .map_err(|error| error.to_string())
+    }
+
+    /// Consume remote/local steering with a monotonic cursor. The server binds
+    /// both the session and returned instructions to the authenticated principal.
+    pub async fn get_follow_ups(
+        &self,
+        after_sequence: u64,
+        limit: u32,
+    ) -> Result<SessionFollowUpPage, String> {
+        if limit == 0 || limit > 1000 {
+            return Err("follow-up limit must be between 1 and 1000".into());
+        }
+        let value = output(
+            self.call(
+                "get_follow_ups",
+                object(json!({
+                    "session_id": self.config.session_id,
+                    "after_sequence": after_sequence,
+                    "limit": limit,
+                }))?,
+            )
+            .await?,
+        );
+        let page: SessionFollowUpPage =
+            serde_json::from_value(value).map_err(|error| error.to_string())?;
+        if page.follow_ups.iter().any(|item| {
+            item.session_id != self.config.session_id
+                || item.principal_id != self.config.expected_principal_id
+        }) {
+            return Err("v8 follow-up identity does not match authenticated ADK context".into());
+        }
+        Ok(page)
+    }
+
+    /// Submit steering through the same principal-bound MCP boundary. Hosts
+    /// normally call this; exposing it here supports supervisor/graph tests.
+    pub async fn submit_follow_up(&self, instruction: &str) -> Result<SessionFollowUp, String> {
+        let value = output(
+            self.call(
+                "submit_follow_up",
+                object(json!({
+                    "session_id": self.config.session_id,
+                    "instruction": instruction,
+                }))?,
+            )
+            .await?,
+        );
+        let follow_up: SessionFollowUp =
+            serde_json::from_value(value.get("follow_up").cloned().unwrap_or(value))
+                .map_err(|error| error.to_string())?;
+        if follow_up.session_id != self.config.session_id
+            || follow_up.principal_id != self.config.expected_principal_id
+        {
+            return Err("v8 follow-up identity does not match authenticated ADK context".into());
+        }
+        Ok(follow_up)
     }
 
     async fn call(&self, name: &str, arguments: Map<String, Value>) -> Result<Value, String> {

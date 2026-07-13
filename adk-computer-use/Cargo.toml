@@ -20,6 +20,7 @@ adk-eval.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 rmcp = { version = "2.2", features = ["client"] }
@@ -27,4 +28,10 @@ uuid.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+adk-agent.workspace = true
+adk-core.workspace = true
+adk-model = { workspace = true, features = ["gemini"] }
+adk-runner.workspace = true
+adk-session.workspace = true
+futures.workspace = true
 tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "sync", "time"] }

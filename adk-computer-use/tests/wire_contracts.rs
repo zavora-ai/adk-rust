@@ -1,6 +1,6 @@
 use adk_computer_use::{
-    ActionPreview, ControlLease, ExecutionReceipt, RuntimeSession, SafetyCorpus,
-    SessionDeletionResult, SessionEvent, TargetReservation,
+    ActionPreview, AdkEvaluationReceipt, ControlLease, ExecutionReceipt, RuntimeSession,
+    SafetyCorpus, SessionDeletionResult, SessionEvent, SessionFollowUp, TargetReservation,
 };
 
 #[test]
@@ -11,6 +11,8 @@ fn types_round_trip_canonical_v8_fixtures() {
         serde_json::from_str(include_str!("../fixtures/v8/execution-receipt.json")).unwrap();
     let event: SessionEvent =
         serde_json::from_str(include_str!("../fixtures/v8/session-event.json")).unwrap();
+    let follow_up: SessionFollowUp =
+        serde_json::from_str(include_str!("../fixtures/v8/session-follow-up.json")).unwrap();
     let lease: ControlLease =
         serde_json::from_str(include_str!("../fixtures/v8/control-lease.json")).unwrap();
     let reservation: TargetReservation =
@@ -21,9 +23,14 @@ fn types_round_trip_canonical_v8_fixtures() {
         serde_json::from_str(include_str!("../fixtures/v8/session-deletion.json")).unwrap();
     let safety: SafetyCorpus =
         serde_json::from_str(include_str!("../fixtures/v8/safety-corpus.json")).unwrap();
+    let evaluation: AdkEvaluationReceipt =
+        serde_json::from_str(include_str!("../fixtures/v8/adk-evaluation-receipt-7.0.0.json"))
+            .unwrap();
 
     assert_eq!(preview.envelope.action_id, receipt.action_id);
     assert_eq!(preview.envelope.session_id, event.session_id);
+    assert_eq!(follow_up.session_id, event.session_id);
+    assert_eq!(follow_up.principal_id, event.principal_id.clone().unwrap());
     assert_eq!(lease.session_id, event.session_id);
     assert_eq!(reservation.execution_group_id.as_deref(), Some("group-0001"));
     assert_eq!(reservation.scope.window_id, Some(serde_json::json!(42)));
@@ -34,6 +41,9 @@ fn types_round_trip_canonical_v8_fixtures() {
     assert!(completed.completion.unwrap().postconditions[0].satisfied);
     assert_eq!(safety.schema_version, 1);
     assert_eq!(safety.scenarios.len(), 4);
+    assert!(evaluation.verify());
+    assert_eq!(evaluation.claims.crash_points_covered, 2);
+    assert_eq!(evaluation.claims.duplicate_mutations, 0);
     assert!(safety.scenarios.iter().any(|scenario| {
         scenario.id == "crash-after-effect-no-replay"
             && scenario.expected.error.as_deref() == Some("indeterminate")

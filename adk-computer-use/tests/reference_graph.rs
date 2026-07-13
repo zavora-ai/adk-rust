@@ -19,6 +19,7 @@ struct FakeRuntime {
     observation_concurrency: AtomicUsize,
     max_observation_concurrency: AtomicUsize,
     fail_after_first_commit: AtomicBool,
+    fail_before_first_effect: AtomicBool,
     receipts: Mutex<HashMap<String, ExecutionReceipt>>,
     last_approval_grant: Mutex<Option<String>>,
     cancellation_log: Mutex<Vec<String>>,
@@ -34,6 +35,7 @@ impl FakeRuntime {
             observation_concurrency: AtomicUsize::new(0),
             max_observation_concurrency: AtomicUsize::new(0),
             fail_after_first_commit: AtomicBool::new(false),
+            fail_before_first_effect: AtomicBool::new(false),
             receipts: Mutex::new(HashMap::new()),
             last_approval_grant: Mutex::new(None),
             cancellation_log: Mutex::new(Vec::new()),
@@ -170,6 +172,9 @@ impl ComputerUseRuntime for FakeRuntime {
         let mut receipts = self.receipts.lock().await;
         if let Some(receipt) = receipts.get(&envelope.action_id) {
             return Ok(receipt.clone());
+        }
+        if self.fail_before_first_effect.swap(false, Ordering::SeqCst) {
+            return Err("injected crash before v8 effect".into());
         }
         self.physical_mutations.fetch_add(1, Ordering::SeqCst);
         let receipt = ExecutionReceipt {
@@ -367,6 +372,20 @@ async fn graph_retry_after_post_commit_crash_does_not_duplicate_mutation() {
 
     assert!(graph.invoke(input(), ExecutionConfig::new("thread-crash-1")).await.is_err());
     let output = graph.invoke(input(), ExecutionConfig::new("thread-crash-2")).await.unwrap();
+
+    assert_eq!(output.get("verified"), Some(&json!(true)));
+    assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn graph_retry_after_pre_effect_crash_executes_exactly_once() {
+    let runtime = Arc::new(FakeRuntime::new(None));
+    runtime.fail_before_first_effect.store(true, Ordering::SeqCst);
+    let graph = build_reference_graph(runtime.clone(), authorizer()).unwrap();
+
+    assert!(graph.invoke(input(), ExecutionConfig::new("thread-pre-effect-1")).await.is_err());
+    assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 0);
+    let output = graph.invoke(input(), ExecutionConfig::new("thread-pre-effect-2")).await.unwrap();
 
     assert_eq!(output.get("verified"), Some(&json!(true)));
     assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 1);

@@ -10,7 +10,10 @@ mod mcp_runtime;
 pub use auth::{ComputerUseAuthContext, ScopeAuthorizer};
 pub use cancellation::{AgentInterrupter, CancellationBridge, CancellationError};
 pub use contracts::*;
-pub use eval::{ComputerUseEvaluation, ComputerUseEvaluator};
+pub use eval::{
+    AdkEvaluationClaims, AdkEvaluationReceipt, AdkEvaluationSource, ComputerUseEvaluation,
+    ComputerUseEvaluator,
+};
 pub use graph::{
     ComputerUseRuntime, build_reference_graph, build_reference_graph_with_checkpointer,
 };
