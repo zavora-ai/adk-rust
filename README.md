@@ -1157,4 +1157,12 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=zavora-ai/adk-rust&type=date&legend=top-left)](https://www.star-history.com/#zavora-ai/adk-rust&type=date&legend=top-left)
+## Star History
+
+<a href="https://www.star-history.com/?repos=zavora-ai%2Fadk-rust&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=zavora-ai/adk-rust&type=date&theme=dark&legend=top-left&sealed_token=6AOetBtcoajNSDMBcnL6e2WKdvDT5NhmcnWTFkbCxSxNUpeTftTDJCnRVRZ3e_V2NpUvpnu6Uc-xchE6feVfXQmq25R-PE22UAyBKbp4S9BrjB71dnXsQg" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=zavora-ai/adk-rust&type=date&legend=top-left&sealed_token=6AOetBtcoajNSDMBcnL6e2WKdvDT5NhmcnWTFkbCxSxNUpeTftTDJCnRVRZ3e_V2NpUvpnu6Uc-xchE6feVfXQmq25R-PE22UAyBKbp4S9BrjB71dnXsQg" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=zavora-ai/adk-rust&type=date&legend=top-left&sealed_token=6AOetBtcoajNSDMBcnL6e2WKdvDT5NhmcnWTFkbCxSxNUpeTftTDJCnRVRZ3e_V2NpUvpnu6Uc-xchE6feVfXQmq25R-PE22UAyBKbp4S9BrjB71dnXsQg" />
+ </picture>
+</a>
