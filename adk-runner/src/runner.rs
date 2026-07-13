@@ -398,6 +398,11 @@ impl Runner {
                 invocation_ctx = invocation_ctx.with_request_context(rc);
             }
 
+            // Expose cooperative cancellation to the agent/tools.
+            if let Some(token) = cancellation_token.as_ref() {
+                invocation_ctx = invocation_ctx.with_cancellation_token(token.clone());
+            }
+
             let mut ctx = Arc::new(invocation_ctx);
 
             #[cfg(feature = "plugins")]
@@ -471,6 +476,9 @@ impl Runner {
                         refreshed_ctx = refreshed_ctx.with_run_config(run_config.clone());
                         if let Some(rc) = request_context.clone() {
                             refreshed_ctx = refreshed_ctx.with_request_context(rc);
+                        }
+                        if let Some(token) = cancellation_token.as_ref() {
+                            refreshed_ctx = refreshed_ctx.with_cancellation_token(token.clone());
                         }
                         ctx = Arc::new(refreshed_ctx);
                     }
@@ -593,6 +601,9 @@ impl Runner {
                     if let Some(rc) = request_context.clone() {
                         refreshed_ctx = refreshed_ctx.with_request_context(rc);
                     }
+                    if let Some(token) = cancellation_token.as_ref() {
+                        refreshed_ctx = refreshed_ctx.with_cancellation_token(token.clone());
+                    }
                     ctx = Arc::new(refreshed_ctx);
                 }
             }
@@ -710,15 +721,27 @@ impl Runner {
             let mut transfer_target: Option<String> = None;
 
             while let Some(result) = {
-                if let Some(token) = cancellation_token.as_ref()
-                    && token.is_cancelled() {
-                        #[cfg(feature = "plugins")]
-                        if let Some(manager) = plugin_manager.as_ref() {
-                            manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                // Race the next event against cancellation so an in-flight
+                // await (LLM streaming, tool I/O) is interrupted promptly
+                // rather than only at poll boundaries. Dropping the stream on
+                // cancellation releases the underlying provider connection.
+                match cancellation_token.as_ref() {
+                    Some(token) => {
+                        tokio::select! {
+                            biased;
+                            _ = token.cancelled() => {
+                                tracing::info!("cancellation fired during agent stream await");
+                                #[cfg(feature = "plugins")]
+                                if let Some(manager) = plugin_manager.as_ref() {
+                                    manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                                }
+                                return;
+                            }
+                            result = agent_stream.next() => result,
                         }
-                        return;
                     }
-                agent_stream.next().await
+                    None => agent_stream.next().await,
+                }
             } {
                 match result {
                     Ok(event) => {
@@ -871,6 +894,9 @@ impl Runner {
                 if let Some(rc) = request_context.clone() {
                     transfer_ctx = transfer_ctx.with_request_context(rc);
                 }
+                if let Some(token) = cancellation_token.as_ref() {
+                    transfer_ctx = transfer_ctx.with_cancellation_token(token.clone());
+                }
 
                 let transfer_ctx = Arc::new(transfer_ctx);
 
@@ -889,15 +915,25 @@ impl Runner {
 
                 // Stream events from the transferred agent, capturing any further transfer
                 while let Some(result) = {
-                    if let Some(token) = cancellation_token.as_ref()
-                        && token.is_cancelled() {
-                            #[cfg(feature = "plugins")]
-                            if let Some(manager) = plugin_manager.as_ref() {
-                                manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                    // Race the next event against cancellation for prompt
+                    // mid-await interruption of the transferred agent.
+                    match cancellation_token.as_ref() {
+                        Some(token) => {
+                            tokio::select! {
+                                biased;
+                                _ = token.cancelled() => {
+                                    tracing::info!("cancellation fired during transferred agent stream await");
+                                    #[cfg(feature = "plugins")]
+                                    if let Some(manager) = plugin_manager.as_ref() {
+                                        manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
+                                    }
+                                    return;
+                                }
+                                result = transfer_stream.next() => result,
                             }
-                            return;
                         }
-                    transfer_stream.next().await
+                        None => transfer_stream.next().await,
+                    }
                 } {
                     match result {
                         Ok(event) => {

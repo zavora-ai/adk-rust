@@ -42,5 +42,6 @@ context-compaction = []
 chrono = "0.4"
 proptest = "1.5"
 tempfile = "3"
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 tokio-test = "0.4"
+tokio-util = { version = "0.7", features = ["rt"] }

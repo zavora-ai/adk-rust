@@ -498,6 +498,21 @@ pub trait InvocationContext: CallbackContext {
     /// Returns whether the invocation has been ended.
     fn ended(&self) -> bool;
 
+    /// Returns `true` if this invocation has been cancelled.
+    ///
+    /// Agents and tools can poll this during long-running work (LLM streaming,
+    /// HTTP I/O, tool execution) to detect an external cancellation request —
+    /// for example, a user pressing "Stop" or a call to
+    /// [`Runner::interrupt`](https://docs.rs/adk-runner). Checking it at chunk
+    /// or tool boundaries lets an agent exit promptly and perform any graceful
+    /// cleanup instead of running to natural completion.
+    ///
+    /// The default returns `false`. The runtime sets the underlying token when
+    /// `Runner::interrupt()` is called or `RunConfig::cancellation_token` fires.
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+
     /// Returns the scopes granted to the current user for this invocation.
     ///
     /// When a [`RequestContext`](crate::RequestContext) is present (set by the

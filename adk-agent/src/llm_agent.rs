@@ -1551,6 +1551,12 @@ impl Agent for LlmAgent {
             let mut schema_retry_count: usize = 0;
 
             loop {
+                // Cooperative cancellation: exit before starting another turn
+                // if the invocation was cancelled (e.g. Runner::interrupt()).
+                if ctx.is_cancelled() {
+                    tracing::info!(agent.name = %agent_name, "invocation cancelled — stopping agent loop");
+                    return;
+                }
                 iteration += 1;
                 if iteration > max_iterations {
                     yield Err(adk_core::AdkError::agent(
@@ -1741,6 +1747,13 @@ impl Agent for LlmAgent {
 
                     // Stream and process chunks with AfterModel callbacks
                     while let Some(chunk_result) = response_stream.next().await {
+                        // Cooperative cancellation: stop consuming the model
+                        // stream promptly when the invocation is cancelled. This
+                        // drops `response_stream`, releasing the provider connection.
+                        if ctx.is_cancelled() {
+                            tracing::info!(agent.name = %agent_name, "invocation cancelled during LLM streaming");
+                            return;
+                        }
                         let mut chunk = match chunk_result {
                             Ok(c) => c,
                             Err(e) => {
@@ -2630,6 +2643,13 @@ impl Agent for LlmAgent {
                             (idx, response_content, tool_actions, escalate_or_skip)
                         }
                     };
+
+                    // Cooperative cancellation: skip tool execution if the
+                    // invocation was cancelled while the model was streaming.
+                    if ctx.is_cancelled() {
+                        tracing::info!(agent.name = %agent_name, "invocation cancelled before tool dispatch");
+                        return;
+                    }
 
                     // ===== DISPATCH BASED ON STRATEGY =====
                     // Scoped so the dispatch future (which borrows the tool
