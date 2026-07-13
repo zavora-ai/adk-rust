@@ -47,6 +47,12 @@ where
         Self { toolset, config, proposed: Mutex::new(HashMap::new()) }
     }
 
+    /// Run a read-only desktop tool through the governed v8 shadow facade.
+    /// Useful for bootstrapping exact target evidence before graph execution.
+    pub async fn observe_tool(&self, tool: &str, arguments: Value) -> Result<Value, String> {
+        self.observe_through_v8(tool, arguments).await
+    }
+
     /// Permanently remove this adapter's terminal v8 session through the
     /// authenticated MCP principal. The server, not graph state, owns identity.
     pub async fn delete_terminal_session(&self) -> Result<SessionDeletionResult, String> {

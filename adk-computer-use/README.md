@@ -66,3 +66,22 @@ not bypass v8 policy, identity, lease, or receipt enforcement. It launches the
 server with `COMPUTER_USE_ACTIVE_PROFILE=v8-safe`; even visual and semantic
 observations traverse `execute_action` in shadow mode, so no raw MCP actuator or
 observer is available to the graph.
+
+### Governed native form + PiP approval
+
+On macOS, the enhanced showcase builds a temporary native AppKit form, uses a
+schema-constrained ADK planner to extract only the requested public Name and
+Project fields, and runs the deterministic graph through parallel observation,
+preview, PiP approval, one executor, and independent value verification:
+
+```bash
+COMPUTER_USE_PRINCIPAL_ID=adk-local-operator \
+COMPUTER_USE_MCP_ENTRYPOINT=/absolute/path/to/computer-use-mcp/dist/server.js \
+cargo run -p adk-computer-use --example live_v8_form -- \
+  "Use the public demo Name 'James' and Project 'ADK-Rust v8 showcase'."
+```
+
+The approval bearer never enters ADK/model state. The v8 runtime retains it,
+and the graph resumes only with matching action and policy digests after the
+PiP emits `action.approved`. Set `COMPUTER_USE_FORM_APPROVAL_TIMEOUT_SECONDS`
+between 30 and 300 to adjust the human review window.

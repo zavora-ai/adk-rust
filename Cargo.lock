@@ -364,6 +364,7 @@ dependencies = [
  "adk-session",
  "adk-tool",
  "async-trait",
+ "chrono",
  "futures",
  "rmcp",
  "serde",

@@ -185,16 +185,26 @@ pub fn build_reference_graph_with_checkpointer(
         let approved_policy = approval
             .and_then(|value| value.get("policyDigest"))
             .and_then(Value::as_str);
-        match (approved_digest, approved_policy, grant_id) {
-            (None, None, None) => Ok(NodeOutput::interrupt_with_data(
+        let runtime_approved = approval
+            .and_then(|value| value.get("runtimeApproved"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        match (approved_digest, approved_policy, grant_id, runtime_approved) {
+            (None, None, None, false) => Ok(NodeOutput::interrupt_with_data(
                 "computer-use action requires scoped approval",
                 serde_json::to_value(&preview)?,
             )),
-            (Some(digest), Some(policy), Some(grant_id))
+            (Some(digest), Some(policy), Some(grant_id), _)
                 if digest == preview.envelope.args_digest
                     && policy == preview.policy.policy_digest =>
             {
                 Ok(NodeOutput::new().with_update("approval_grant_id", json!(grant_id)))
+            }
+            (Some(digest), Some(policy), None, true)
+                if digest == preview.envelope.args_digest
+                    && policy == preview.policy.policy_digest =>
+            {
+                Ok(NodeOutput::new())
             }
             _ => Err(node_error(
                 "request_approval",

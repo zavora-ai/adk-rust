@@ -286,6 +286,45 @@ async fn approval_resume_executes_only_the_original_digest_with_the_exact_grant(
 }
 
 #[tokio::test]
+async fn approval_resume_can_delegate_bearer_handling_to_the_v8_runtime() {
+    let runtime = Arc::new(FakeRuntime::new(Some("approval_required")));
+    let graph = build_reference_graph_with_checkpointer(
+        runtime.clone(),
+        authorizer(),
+        Some(Arc::new(MemoryCheckpointer::new())),
+    )
+    .unwrap();
+    let checkpoint_id = match graph
+        .invoke(input(), ExecutionConfig::new("thread-runtime-approval"))
+        .await
+        .unwrap_err()
+    {
+        GraphError::Interrupted(value) => value.checkpoint_id,
+        other => panic!("expected interrupt, got {other:?}"),
+    };
+
+    let mut resumed_input = State::new();
+    resumed_input.insert(
+        "approval".into(),
+        json!({
+            "actionDigest": "digest-1",
+            "policyDigest": "policy-1",
+            "runtimeApproved": true
+        }),
+    );
+    let output = graph
+        .invoke(
+            resumed_input,
+            ExecutionConfig::new("thread-runtime-approval").with_resume_from(&checkpoint_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(output.get("verified"), Some(&json!(true)));
+    assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 1);
+    assert_eq!(*runtime.last_approval_grant.lock().await, None);
+}
+
+#[tokio::test]
 async fn approval_resume_rejects_a_changed_action_digest_before_mutation() {
     let runtime = Arc::new(FakeRuntime::new(Some("approval_required")));
     let graph = build_reference_graph_with_checkpointer(
