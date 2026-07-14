@@ -12,8 +12,8 @@ use async_openai::types::chat::{
     ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
     ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
     ChatCompletionTool, ChatCompletionTools, CreateChatCompletionResponse,
-    FinishReason as OaiFinishReason, FunctionCall, FunctionObject, ImageUrl, InputAudio,
-    InputAudioFormat,
+    FinishReason as OaiFinishReason, FunctionCall, FunctionObject, ImageDetail, ImageUrl,
+    InputAudio, InputAudioFormat,
 };
 use std::collections::HashMap;
 
@@ -49,7 +49,15 @@ pub fn content_to_message(content: &Content) -> ChatCompletionRequestMessage {
                             if mime_type.starts_with("image/") {
                                 Some(ChatCompletionRequestUserMessageContentPart::ImageUrl(
                                     ChatCompletionRequestMessageContentPartImage {
-                                        image_url: ImageUrl { url: file_uri.clone(), detail: None },
+                                        // Emit an explicit "auto" (the API default) rather than
+                                        // leaving `detail` as `None`. async-openai 0.33's `ImageUrl`
+                                        // has no `skip_serializing_if`, so `None` serializes as an
+                                        // explicit `"detail": null`, which strict OpenAI-compatible
+                                        // gateways reject with HTTP 400. See issue #395.
+                                        image_url: ImageUrl {
+                                            url: file_uri.clone(),
+                                            detail: Some(ImageDetail::Auto),
+                                        },
                                     },
                                 ))
                             } else {
@@ -154,7 +162,9 @@ fn inline_data_part_to_openai(
         let data_uri = format!("data:{mime_type};base64,{}", attachment::encode_base64(data));
         return ChatCompletionRequestUserMessageContentPart::ImageUrl(
             ChatCompletionRequestMessageContentPartImage {
-                image_url: ImageUrl { url: data_uri, detail: None },
+                // Explicit "auto" (API default) instead of `None`; see issue #395 — a
+                // serialized `"detail": null` is rejected by strict gateways.
+                image_url: ImageUrl { url: data_uri, detail: Some(ImageDetail::Auto) },
             },
         );
     }
@@ -494,6 +504,9 @@ mod tests {
                     // Second part should be image URL with data URI
                     if let ChatCompletionRequestUserMessageContentPart::ImageUrl(img) = &parts[1] {
                         assert!(img.image_url.url.starts_with("data:image/png;base64,"));
+                        // Regression (issue #395): detail must be an explicit level,
+                        // never `None` (which serializes as invalid `"detail": null`).
+                        assert_eq!(img.image_url.detail, Some(ImageDetail::Auto));
                     } else {
                         panic!("Expected ImageUrl part");
                     }
@@ -632,6 +645,8 @@ mod tests {
                 assert_eq!(parts.len(), 2);
                 if let ChatCompletionRequestUserMessageContentPart::ImageUrl(img) = &parts[1] {
                     assert_eq!(img.image_url.url, "https://example.com/photo.jpg");
+                    // Regression (issue #395): explicit detail level, never `None`.
+                    assert_eq!(img.image_url.detail, Some(ImageDetail::Auto));
                 } else {
                     panic!("Expected ImageUrl part for image FileData");
                 }
@@ -793,6 +808,43 @@ mod tests {
             assert_eq!(tool.function.name, "get_weather");
         } else {
             panic!("Expected Function variant");
+        }
+    }
+
+    /// Regression test for issue #395.
+    ///
+    /// A serialized image request must never carry `"detail": null` — strict
+    /// OpenAI-compatible gateways validate `detail` against the literal set
+    /// `{auto, low, high}` and reject `null` with HTTP 400. We emit the API
+    /// default `"auto"` instead. This test serializes both the inline-data and
+    /// file-URI image paths and asserts the wire format is valid.
+    #[test]
+    fn test_image_detail_serializes_as_auto_not_null() {
+        for part in [
+            Part::InlineData {
+                mime_type: "image/png".to_string(),
+                data: vec![0x89, 0x50, 0x4E, 0x47],
+            },
+            Part::FileData {
+                mime_type: "image/jpeg".to_string(),
+                file_uri: "https://example.com/photo.jpg".to_string(),
+            },
+        ] {
+            let content = Content {
+                role: "user".to_string(),
+                parts: vec![Part::Text { text: "describe".to_string() }, part],
+            };
+            let msg = content_to_message(&content);
+            let json = serde_json::to_string(&msg).expect("message serializes");
+
+            assert!(
+                !json.contains("\"detail\":null"),
+                "serialized request must not contain `\"detail\":null`: {json}"
+            );
+            assert!(
+                json.contains("\"detail\":\"auto\""),
+                "serialized request should carry `\"detail\":\"auto\"`: {json}"
+            );
         }
     }
 }

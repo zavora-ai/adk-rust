@@ -13,7 +13,7 @@ use std::time::Duration;
 /// Builder for HTTP-based MCP connections.
 ///
 /// This builder creates connections to remote MCP servers using the
-/// streamable HTTP transport (SEP-1686 compliant).
+/// current MCP Streamable HTTP transport.
 ///
 /// # Example
 ///
@@ -48,6 +48,8 @@ pub struct McpHttpClientBuilder {
     headers: HashMap<String, String>,
     /// Optional elicitation handler
     elicitation_handler: Option<Arc<dyn ElicitationHandler>>,
+    /// Recreate the MCP session once when a remote HTTP session expires.
+    reinit_on_expired_session: bool,
 }
 
 impl McpHttpClientBuilder {
@@ -63,6 +65,7 @@ impl McpHttpClientBuilder {
             timeout: Duration::from_secs(30),
             headers: HashMap::new(),
             elicitation_handler: None,
+            reinit_on_expired_session: true,
         }
     }
 
@@ -91,6 +94,76 @@ impl McpHttpClientBuilder {
     pub fn header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.insert(key.into(), value.into());
         self
+    }
+
+    /// Configure bounded automatic recovery when the server reports an expired session.
+    ///
+    /// Enabled by default. rmcp performs at most one re-initialization attempt.
+    pub fn reinit_on_expired_session(mut self, enabled: bool) -> Self {
+        self.reinit_on_expired_session = enabled;
+        self
+    }
+
+    #[cfg(feature = "http-transport")]
+    async fn build_transport(
+        &self,
+    ) -> Result<
+        rmcp::transport::streamable_http_client::StreamableHttpClientTransport<reqwest_mcp::Client>,
+    > {
+        use adk_core::{ErrorCategory, ErrorComponent};
+        use reqwest_mcp::header::{HeaderName, HeaderValue};
+        use rmcp::transport::streamable_http_client::{
+            StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
+        };
+
+        let mut custom_headers = HashMap::new();
+        for (name, value) in &self.headers {
+            let name = HeaderName::from_bytes(name.as_bytes()).map_err(|error| {
+                AdkError::tool(format!("invalid MCP HTTP header '{name}': {error}"))
+            })?;
+            let value = HeaderValue::from_str(value).map_err(|error| {
+                AdkError::tool(format!("invalid value for MCP HTTP header '{name}': {error}"))
+            })?;
+            custom_headers.insert(name, value);
+        }
+
+        let token = match &self.auth {
+            McpAuth::Bearer(token) => Some(token.clone()),
+            McpAuth::OAuth2(config) => {
+                Some(config.get_or_refresh_token().await.map_err(|error| {
+                    AdkError::new(
+                        ErrorComponent::Tool,
+                        ErrorCategory::Unauthorized,
+                        "mcp.oauth.token_fetch",
+                        format!("OAuth2 client-credentials authentication failed: {error}"),
+                    )
+                })?)
+            }
+            McpAuth::ApiKey { header, key } => {
+                let name = HeaderName::from_bytes(header.as_bytes()).map_err(|error| {
+                    AdkError::tool(format!("invalid MCP API-key header '{header}': {error}"))
+                })?;
+                let value = HeaderValue::from_str(key).map_err(|error| {
+                    AdkError::tool(format!("invalid MCP API-key value for '{header}': {error}"))
+                })?;
+                custom_headers.insert(name, value);
+                None
+            }
+            McpAuth::None => None,
+        };
+
+        let mut config = StreamableHttpClientTransportConfig::with_uri(self.endpoint.as_str())
+            .custom_headers(custom_headers)
+            .reinit_on_expired_session(self.reinit_on_expired_session);
+        if let Some(token) = token {
+            config = config.auth_header(token);
+        }
+
+        let client = reqwest_mcp::Client::builder()
+            .timeout(self.timeout)
+            .build()
+            .map_err(|error| AdkError::tool(format!("failed to build MCP HTTP client: {error}")))?;
+        Ok(StreamableHttpClientTransport::with_client(client, config))
     }
 
     /// Configure an elicitation handler for the HTTP connection.
@@ -132,46 +205,8 @@ impl McpHttpClientBuilder {
     pub async fn connect(
         self,
     ) -> Result<super::McpToolset<impl rmcp::service::Service<rmcp::RoleClient>>> {
-        use adk_core::{ErrorCategory, ErrorComponent};
         use rmcp::ServiceExt;
-        use rmcp::transport::streamable_http_client::{
-            StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
-        };
-
-        // Extract the raw token from auth config
-        // rmcp's bearer_auth() adds "Bearer " prefix automatically
-        let token = match &self.auth {
-            McpAuth::Bearer(token) => Some(token.clone()),
-            McpAuth::OAuth2(config) => {
-                // Get token from OAuth2 flow
-                let token = config.get_or_refresh_token().await.map_err(|e| {
-                    AdkError::new(
-                        ErrorComponent::Tool,
-                        ErrorCategory::Unauthorized,
-                        "mcp.oauth.token_fetch",
-                        format!("OAuth2 authentication failed: {e}"),
-                    )
-                })?;
-                Some(token)
-            }
-            McpAuth::ApiKey { .. } => {
-                // API key auth not supported via rmcp's auth_header (uses different header)
-                // Would need custom client implementation
-                None
-            }
-            McpAuth::None => None,
-        };
-
-        // Build transport config with authentication
-        let mut config = StreamableHttpClientTransportConfig::with_uri(self.endpoint.as_str());
-
-        // Set auth header if we have a token (rmcp adds "Bearer " prefix via bearer_auth)
-        if let Some(token) = token {
-            config = config.auth_header(token);
-        }
-
-        // Create transport with config
-        let transport = StreamableHttpClientTransport::from_config(config);
+        let transport = self.build_transport().await?;
 
         // Connect using the service extension
         let client = ()
@@ -215,42 +250,15 @@ impl McpHttpClientBuilder {
     pub async fn connect_with_elicitation(
         self,
     ) -> Result<super::McpToolset<impl rmcp::service::Service<rmcp::RoleClient>>> {
-        use adk_core::{ErrorCategory, ErrorComponent};
         use rmcp::ServiceExt;
-        use rmcp::transport::streamable_http_client::{
-            StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
-        };
 
-        let handler = self.elicitation_handler.ok_or_else(|| {
+        let handler = self.elicitation_handler.clone().ok_or_else(|| {
             AdkError::tool(
                 "connect_with_elicitation requires with_elicitation_handler to be called first",
             )
         })?;
 
-        // Extract the raw token from auth config
-        let token = match &self.auth {
-            McpAuth::Bearer(token) => Some(token.clone()),
-            McpAuth::OAuth2(config) => {
-                let token = config.get_or_refresh_token().await.map_err(|e| {
-                    AdkError::new(
-                        ErrorComponent::Tool,
-                        ErrorCategory::Unauthorized,
-                        "mcp.oauth.token_fetch",
-                        format!("OAuth2 authentication failed: {e}"),
-                    )
-                })?;
-                Some(token)
-            }
-            McpAuth::ApiKey { .. } => None,
-            McpAuth::None => None,
-        };
-
-        let mut config = StreamableHttpClientTransportConfig::with_uri(self.endpoint.as_str());
-        if let Some(token) = token {
-            config = config.auth_header(token);
-        }
-
-        let transport = StreamableHttpClientTransport::from_config(config);
+        let transport = self.build_transport().await?;
         let adk_handler = super::elicitation::AdkClientHandler::new(handler);
         let client = adk_handler
             .serve(transport)

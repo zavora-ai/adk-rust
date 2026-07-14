@@ -4,12 +4,18 @@
 //! requests from servers, an [`AutoDeclineElicitationHandler`] that declines all
 //! requests, and the internal [`AdkClientHandler`] bridge to rmcp's `ClientHandler`.
 
+// Sampling remains available only as a compatibility feature. rmcp marks the
+// protocol surface deprecated under SEP-2577, so deprecation warnings are
+// intentionally contained in this bridge while existing users migrate.
+#![cfg_attr(feature = "mcp-sampling", allow(deprecated))]
+
 use std::sync::Arc;
 
 use futures::FutureExt;
 use rmcp::model::{
-    ClientInfo, CreateElicitationRequestParams, CreateElicitationResult, ElicitationAction,
-    ElicitationResponseNotificationParam, ElicitationSchema,
+    ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationCapability,
+    ElicitationResponseNotificationParam, ElicitationSchema, FormElicitationCapability,
+    UrlElicitationCapability,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleClient};
 use serde_json::Value;
@@ -23,7 +29,7 @@ use serde_json::Value;
 ///
 /// ```rust,ignore
 /// use adk_tool::ElicitationHandler;
-/// use rmcp::model::{CreateElicitationResult, ElicitationAction, ElicitationSchema};
+/// use rmcp::model::{ElicitResult, ElicitationAction, ElicitationSchema};
 ///
 /// struct MyHandler;
 ///
@@ -34,9 +40,9 @@ use serde_json::Value;
 ///         message: &str,
 ///         schema: &ElicitationSchema,
 ///         metadata: Option<&serde_json::Value>,
-///     ) -> Result<CreateElicitationResult, Box<dyn std::error::Error + Send + Sync>> {
+///     ) -> Result<ElicitResult, Box<dyn std::error::Error + Send + Sync>> {
 ///         println!("Server asks: {message}");
-///         Ok(CreateElicitationResult::new(ElicitationAction::Accept))
+///         Ok(ElicitResult::new(ElicitationAction::Accept))
 ///     }
 ///
 ///     async fn handle_url_elicitation(
@@ -45,9 +51,9 @@ use serde_json::Value;
 ///         url: &str,
 ///         elicitation_id: &str,
 ///         metadata: Option<&serde_json::Value>,
-///     ) -> Result<CreateElicitationResult, Box<dyn std::error::Error + Send + Sync>> {
+///     ) -> Result<ElicitResult, Box<dyn std::error::Error + Send + Sync>> {
 ///         println!("Server asks to visit: {url}");
-///         Ok(CreateElicitationResult::new(ElicitationAction::Accept))
+///         Ok(ElicitResult::new(ElicitationAction::Accept))
 ///     }
 /// }
 /// ```
@@ -63,7 +69,7 @@ pub trait ElicitationHandler: Send + Sync {
         message: &str,
         schema: &ElicitationSchema,
         metadata: Option<&Value>,
-    ) -> Result<CreateElicitationResult, Box<dyn std::error::Error + Send + Sync>>;
+    ) -> Result<ElicitResult, Box<dyn std::error::Error + Send + Sync>>;
 
     /// Handle a URL-based elicitation request.
     ///
@@ -76,7 +82,7 @@ pub trait ElicitationHandler: Send + Sync {
         url: &str,
         elicitation_id: &str,
         metadata: Option<&Value>,
-    ) -> Result<CreateElicitationResult, Box<dyn std::error::Error + Send + Sync>>;
+    ) -> Result<ElicitResult, Box<dyn std::error::Error + Send + Sync>>;
 }
 
 /// Default handler that declines all elicitation requests.
@@ -93,8 +99,8 @@ impl ElicitationHandler for AutoDeclineElicitationHandler {
         _message: &str,
         _schema: &ElicitationSchema,
         _metadata: Option<&Value>,
-    ) -> Result<CreateElicitationResult, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(CreateElicitationResult::new(ElicitationAction::Decline))
+    ) -> Result<ElicitResult, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(ElicitResult::new(ElicitationAction::Decline))
     }
 
     async fn handle_url_elicitation(
@@ -103,8 +109,8 @@ impl ElicitationHandler for AutoDeclineElicitationHandler {
         _url: &str,
         _elicitation_id: &str,
         _metadata: Option<&Value>,
-    ) -> Result<CreateElicitationResult, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(CreateElicitationResult::new(ElicitationAction::Decline))
+    ) -> Result<ElicitResult, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(ElicitResult::new(ElicitationAction::Decline))
     }
 }
 
@@ -148,24 +154,29 @@ impl AdkClientHandler {
 impl rmcp::handler::client::ClientHandler for AdkClientHandler {
     fn get_info(&self) -> ClientInfo {
         let mut info = ClientInfo::default();
+        let elicitation = ElicitationCapability::new()
+            .with_form(FormElicitationCapability::new())
+            .with_url(UrlElicitationCapability::new());
 
         #[cfg(feature = "mcp-sampling")]
         {
             if self.sampling_handler.is_some() {
                 info.capabilities = rmcp::model::ClientCapabilities::builder()
-                    .enable_elicitation()
+                    .enable_elicitation_with(elicitation)
                     .enable_sampling()
                     .build();
             } else {
-                info.capabilities =
-                    rmcp::model::ClientCapabilities::builder().enable_elicitation().build();
+                info.capabilities = rmcp::model::ClientCapabilities::builder()
+                    .enable_elicitation_with(elicitation)
+                    .build();
             }
         }
 
         #[cfg(not(feature = "mcp-sampling"))]
         {
-            info.capabilities =
-                rmcp::model::ClientCapabilities::builder().enable_elicitation().build();
+            info.capabilities = rmcp::model::ClientCapabilities::builder()
+                .enable_elicitation_with(elicitation)
+                .build();
         }
 
         info
@@ -258,12 +269,12 @@ impl rmcp::handler::client::ClientHandler for AdkClientHandler {
 
     async fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParams,
+        request: ElicitRequestParams,
         _context: RequestContext<RoleClient>,
-    ) -> Result<CreateElicitationResult, rmcp::ErrorData> {
+    ) -> Result<ElicitResult, rmcp::ErrorData> {
         {
             let result = match &request {
-                CreateElicitationRequestParams::FormElicitationParams {
+                ElicitRequestParams::FormElicitationParams {
                     message,
                     requested_schema,
                     meta,
@@ -278,7 +289,7 @@ impl rmcp::handler::client::ClientHandler for AdkClientHandler {
                     .catch_unwind()
                     .await
                 }
-                CreateElicitationRequestParams::UrlElicitationParams {
+                ElicitRequestParams::UrlElicitationParams {
                     message,
                     url,
                     elicitation_id,
@@ -295,17 +306,18 @@ impl rmcp::handler::client::ClientHandler for AdkClientHandler {
                     .catch_unwind()
                     .await
                 }
+                _ => return Ok(ElicitResult::new(ElicitationAction::Decline)),
             };
 
             match result {
                 Ok(Ok(elicitation_result)) => Ok(elicitation_result),
                 Ok(Err(e)) => {
                     tracing::warn!(error = %e, "elicitation handler returned error, declining");
-                    Ok(CreateElicitationResult::new(ElicitationAction::Decline))
+                    Ok(ElicitResult::new(ElicitationAction::Decline))
                 }
                 Err(_panic) => {
                     tracing::warn!("elicitation handler panicked, declining");
-                    Ok(CreateElicitationResult::new(ElicitationAction::Decline))
+                    Ok(ElicitResult::new(ElicitationAction::Decline))
                 }
             }
         }

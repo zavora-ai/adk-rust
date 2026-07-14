@@ -44,6 +44,7 @@ standard = [
     "tools",
     "memory",
     "telemetry",
+    "computer-use",
 ]
 
 # Enterprise — standard + all production specialist crates.
@@ -101,6 +102,7 @@ rag = ["dep:adk-rag"]
 payments = ["dep:adk-payments"]
 awp = ["dep:adk-awp"]
 acp = ["dep:adk-acp"]
+computer-use = ["dep:adk-computer-use", "graph", "auth", "mcp"]
 
 # Managed agent runtime (feature-gated, experimental)
 managed-runtime = ["dep:adk-managed"]
@@ -233,6 +235,7 @@ adk-code = { workspace = true, optional = true }
 adk-sandbox = { workspace = true, optional = true }
 adk-realtime = { workspace = true, optional = true }
 adk-browser = { workspace = true, optional = true }
+adk-computer-use = { workspace = true, optional = true }
 adk-eval = { workspace = true, optional = true }
 adk-guardrail = { workspace = true, optional = true }
 adk-auth = { workspace = true, optional = true }

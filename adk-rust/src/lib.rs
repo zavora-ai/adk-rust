@@ -648,6 +648,15 @@ pub mod graph {
     pub use adk_graph::*;
 }
 
+/// Graph, auth, and v8 wire contracts for safe computer-use orchestration.
+///
+/// Available with feature: `computer-use` (included in `standard`).
+#[cfg(feature = "computer-use")]
+#[cfg_attr(docsrs, doc(cfg(feature = "computer-use")))]
+pub mod computer_use {
+    pub use adk_computer_use::*;
+}
+
 /// Code execution substrate (experimental — `full` preset).
 ///
 /// First-class code execution for agents, Studio, and generated projects:

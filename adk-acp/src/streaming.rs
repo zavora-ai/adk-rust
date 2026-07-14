@@ -4,24 +4,22 @@
 //! yields chunks as they arrive from the agent — enabling real-time display
 //! and lower time-to-first-token.
 
-use std::str::FromStr;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::{
-    ContentBlock, InitializeRequest, ProtocolVersion, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::schema::v1::{
+    ContentBlock, InitializeRequest, NewSessionRequest, PermissionOptionKind,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SessionNotification, SessionUpdate,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo};
-use agent_client_protocol_tokio::AcpAgent;
+use agent_client_protocol::{Agent, Client, ConnectionTo, Responder};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::connection::AcpAgentConfig;
-use crate::error::{AcpError, Result};
-use crate::permissions::{
-    PermissionDecision, PermissionOption, PermissionPolicy, PermissionRequest,
-};
+use crate::error::Result;
+use crate::host::{AcpHostHandler, capabilities};
+use crate::permissions::{PermissionPolicy, PermissionRequest, outcome_for};
 use crate::status::{AgentStatus, StatusTracker};
 
 /// A chunk of output from the ACP agent.
@@ -87,15 +85,15 @@ pub async fn stream_prompt(
 ) -> Result<OutputStream> {
     info!(command = %config.command, "starting streaming ACP prompt");
 
-    let command_with_env = crate::connection::build_command_with_env(&config.command, &config.env);
-
-    let agent = AcpAgent::from_str(&command_with_env).map_err(|e| {
-        AcpError::InvalidConfig(format!("invalid command '{}': {e}", config.command))
-    })?;
+    let agent = crate::connection::build_agent(config)?;
 
     let (chunk_tx, chunk_rx) = mpsc::channel::<OutputChunk>(64);
     let prompt_text = prompt.to_string();
     let working_dir = config.working_dir.clone();
+    let mcp_servers = config.mcp_servers.clone();
+    let filesystem = config.filesystem.clone();
+    let terminal = config.terminal.clone();
+    let client_capabilities = capabilities(filesystem.as_ref(), terminal.as_ref());
 
     status.set(AgentStatus::Starting);
 
@@ -143,70 +141,76 @@ pub async fn stream_prompt(
             .on_receive_request(
                 {
                     let status = status_inner.clone();
-                    async move |request: RequestPermissionRequest,
-                                responder,
-                                _cx: ConnectionTo<Agent>| {
-                        status.set(AgentStatus::WaitingPermission);
+                    move |request: RequestPermissionRequest,
+                          responder: Responder<RequestPermissionResponse>,
+                          cx: ConnectionTo<Agent>| {
+                        let status = status.clone();
+                        let policy = policy_clone.clone();
+                        let permission_tx = chunk_tx_perm.clone();
+                        async move {
+                            status.set(AgentStatus::WaitingPermission);
+                            cx.spawn(async move {
+                            let cancellation = responder.cancellation();
+                            let perm_request = PermissionRequest::from_acp(&request);
+                            let outcome = tokio::select! {
+                                decision = policy.decide(&perm_request) => {
+                                    outcome_for(&perm_request, &decision)
+                                }
+                                _ = cancellation.cancelled() => RequestPermissionOutcome::Cancelled,
+                            };
+                            let approved = match &outcome {
+                                RequestPermissionOutcome::Selected(selected) => perm_request
+                                    .options
+                                    .iter()
+                                    .find(|option| option.id == selected.option_id.to_string())
+                                    .is_some_and(|option| {
+                                        matches!(
+                                            option.kind,
+                                            PermissionOptionKind::AllowOnce
+                                                | PermissionOptionKind::AllowAlways
+                                        )
+                                    }),
+                                RequestPermissionOutcome::Cancelled => false,
+                                _ => false,
+                            };
 
-                        let title = request
-                            .options
-                            .first()
-                            .map(|o| o.name.to_string())
-                            .unwrap_or_else(|| "Unknown".to_string());
-
-                        let perm_request = PermissionRequest {
-                            title: title.clone(),
-                            options: request
-                                .options
-                                .iter()
-                                .map(|o| PermissionOption {
-                                    id: o.option_id.to_string(),
-                                    name: o.name.to_string(),
+                            let _ = permission_tx
+                                .send(OutputChunk::PermissionRequested {
+                                    title: perm_request.title.clone(),
+                                    approved,
                                 })
-                                .collect(),
-                        };
-
-                        let decision = policy_clone.decide(&perm_request);
-                        let approved = matches!(decision, PermissionDecision::Allow(_));
-
-                        let _ = chunk_tx_perm
-                            .send(OutputChunk::PermissionRequested {
-                                title: title.clone(),
-                                approved,
-                            })
-                            .await;
-
-                        status.set(AgentStatus::Running);
-
-                        match decision {
-                            PermissionDecision::Allow(id) => responder.respond(
-                                RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
-                                    SelectedPermissionOutcome::new(id),
-                                )),
-                            ),
-                            PermissionDecision::Deny => responder.respond(
-                                RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled),
-                            ),
+                                .await;
+                            status.set(AgentStatus::Running);
+                            responder.respond(RequestPermissionResponse::new(outcome))
+                        })?;
+                            Ok(())
                         }
                     }
                 },
                 agent_client_protocol::on_receive_request!(),
             )
+            .with_handler(AcpHostHandler::new(filesystem, terminal))
             .connect_with(agent, {
                 let status = status_inner.clone();
                 let tx = chunk_tx.clone();
                 |connection: ConnectionTo<Agent>| async move {
                     status.set(AgentStatus::Starting);
 
-                    connection
-                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                    let initialization = connection
+                        .send_request(
+                            InitializeRequest::new(ProtocolVersion::V1)
+                                .client_capabilities(client_capabilities),
+                        )
                         .block_task()
                         .await?;
+                    crate::connection::validate_initialization(&initialization, &mcp_servers)?;
 
                     status.set(AgentStatus::Running);
 
                     connection
-                        .build_session(&working_dir)
+                        .build_session_from(
+                            NewSessionRequest::new(&working_dir).mcp_servers(mcp_servers),
+                        )
                         .block_task()
                         .run_until(async |mut session| {
                             session.send_prompt(&prompt_text)?;

@@ -6,12 +6,15 @@
 //! and error codes.
 
 #![cfg(feature = "mcp")]
+// Preserve round-trip coverage for MCP logging while rmcp keeps the deprecated
+// SEP-2577 compatibility types available.
+#![allow(deprecated)]
 
 use proptest::prelude::*;
 use rmcp::model::{
-    CallToolResult, Content, ErrorCode, ErrorData, JsonRpcError, JsonRpcMessage, JsonRpcVersion2_0,
-    LoggingLevel, LoggingMessageNotificationParam, NumberOrString, ProgressNotificationParam,
-    ProgressToken, RequestId,
+    CallToolResult, ContentBlock, ErrorCode, ErrorData, JsonRpcError, JsonRpcMessage, LoggingLevel,
+    LoggingMessageNotificationParam, NumberOrString, ProgressNotificationParam, ProgressToken,
+    RequestId,
 };
 use serde_json::Value;
 
@@ -206,11 +209,7 @@ proptest! {
             data: data.clone(),
         };
 
-        let error_msg = JsonRpcError {
-            jsonrpc: JsonRpcVersion2_0,
-            id: id.clone(),
-            error: error.clone(),
-        };
+        let error_msg = JsonRpcError::new(Some(id.clone()), error.clone());
 
         // Serialize
         let serialized = serde_json::to_value(&error_msg)
@@ -225,7 +224,7 @@ proptest! {
         let deserialized: JsonRpcError = serde_json::from_value(serialized)
             .expect("Should deserialize back to JsonRpcError");
 
-        prop_assert_eq!(&deserialized.id, &id);
+        prop_assert_eq!(&deserialized.id, &Some(id));
         prop_assert_eq!(&deserialized.error.code, &code);
         prop_assert_eq!(deserialized.error.message.as_ref(), message.as_str());
         prop_assert_eq!(&deserialized.error.data, &data);
@@ -280,7 +279,7 @@ proptest! {
         text in "[a-zA-Z0-9 .,!?]{0,100}",
         is_error in any::<bool>(),
     ) {
-        let content = vec![Content::text(&text)];
+        let content = vec![ContentBlock::text(&text)];
         let result = if is_error {
             CallToolResult::error(content.clone())
         } else {
@@ -317,11 +316,13 @@ proptest! {
         logger in prop::option::of("[a-z][a-z0-9.]{2,20}"),
         data_str in "[a-zA-Z0-9 ]{0,50}",
     ) {
-        let param = LoggingMessageNotificationParam {
+        let mut param = LoggingMessageNotificationParam::new(
             level,
-            logger: logger.clone(),
-            data: Value::String(data_str.clone()),
-        };
+            Value::String(data_str.clone()),
+        );
+        if let Some(logger) = &logger {
+            param = param.with_logger(logger);
+        }
 
         // Serialize
         let serialized = serde_json::to_value(&param)
@@ -349,12 +350,16 @@ proptest! {
         total in prop::option::of(1.0f64..=100.0f64),
         message in prop::option::of("[a-zA-Z0-9 ]{1,30}"),
     ) {
-        let param = ProgressNotificationParam {
-            progress_token: ProgressToken(NumberOrString::Number(token_id)),
+        let mut param = ProgressNotificationParam::new(
+            ProgressToken(NumberOrString::Number(token_id)),
             progress,
-            total,
-            message: message.clone(),
-        };
+        );
+        if let Some(total) = total {
+            param = param.with_total(total);
+        }
+        if let Some(message) = &message {
+            param = param.with_message(message);
+        }
 
         // Serialize
         let serialized = serde_json::to_value(&param)

@@ -1232,6 +1232,12 @@ impl Agent for LlmAgent {
         let enhanced_plugin_manager = self.enhanced_plugin_manager.clone();
 
         let s = stream! {
+            let confirmation_decisions =
+                ctx.run_config().tool_confirmation_decisions.clone();
+            let mut live_confirmation_decisions =
+                std::collections::HashMap::<String, ToolConfirmationDecision>::new();
+            let confirmation_handler = ctx.run_config().tool_confirmation_handler.clone();
+
             // ===== BEFORE AGENT CALLBACKS =====
             // Execute before the agent starts running
             // If any returns content, skip agent execution
@@ -1407,7 +1413,16 @@ impl Agent for LlmAgent {
             let mut toolset_source: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
 
-            for toolset in &toolsets {
+            let mut active_toolsets: Vec<&dyn Toolset> =
+                toolsets.iter().map(AsRef::as_ref).collect();
+            active_toolsets.extend(
+                ctx.run_config()
+                    .runtime_toolsets
+                    .iter()
+                    .map(|runtime| runtime.toolset().as_ref()),
+            );
+
+            for toolset in active_toolsets {
                 let toolset_tools = match toolset
                     .tools(ctx.clone() as Arc<dyn ReadonlyContext>)
                     .await
@@ -2118,8 +2133,31 @@ impl Agent for LlmAgent {
                     let mut confirmation_interrupted = false;
                     for (_, fc_name, fc_args, _, fc_call_id) in &fc_parts {
                         if tool_confirmation_policy.requires_confirmation(fc_name)
-                            && ctx.run_config().tool_confirmation_decisions.get(fc_name).copied().is_none()
+                            && confirmation_decisions.get(fc_name).copied().is_none()
+                            && live_confirmation_decisions
+                                .get(fc_call_id)
+                                .copied()
+                                .is_none()
                         {
+                            let request = ToolConfirmationRequest {
+                                tool_name: fc_name.clone(),
+                                function_call_id: Some(fc_call_id.clone()),
+                                args: fc_args.clone(),
+                            };
+                            if let Some(handler) = confirmation_handler.as_ref() {
+                                match handler.decide(&request).await {
+                                    Ok(decision) => {
+                                        live_confirmation_decisions
+                                            .insert(fc_call_id.clone(), decision);
+                                        continue;
+                                    }
+                                    Err(error) => {
+                                        yield Err(error);
+                                        return;
+                                    }
+                                }
+                            }
+
                                 let mut ce = Event::new(&invocation_id);
                                 ce.author = agent_name.clone();
                                 ce.llm_response.interrupted = true;
@@ -2133,11 +2171,7 @@ impl Agent for LlmAgent {
                                         ),
                                     }],
                                 });
-                                ce.actions.tool_confirmation = Some(ToolConfirmationRequest {
-                                    tool_name: fc_name.clone(),
-                                    function_call_id: Some(fc_call_id.clone()),
-                                    args: fc_args.clone(),
-                                });
+                                ce.actions.tool_confirmation = Some(request);
                                 yield Ok(ce);
                                 confirmation_interrupted = true;
                                 break;
@@ -2184,6 +2218,8 @@ impl Agent for LlmAgent {
                         let progress_tx = progress_tx.clone();
                         #[cfg(feature = "enhanced-plugins")]
                         let enhanced_plugin_manager = &enhanced_plugin_manager;
+                        let confirmation_decisions = &confirmation_decisions;
+                        let live_confirmation_decisions = &live_confirmation_decisions;
                         async move {
                             let mut tool_actions = EventActions::default();
                             let mut response_content: Option<Content> = None;
@@ -2215,7 +2251,11 @@ impl Agent for LlmAgent {
 
                             // Tool confirmation (deny case; None handled by pre-check)
                             if tool_confirmation_policy.requires_confirmation(&name) {
-                                match ctx.run_config().tool_confirmation_decisions.get(&name).copied() {
+                                match live_confirmation_decisions
+                                    .get(&function_call_id)
+                                    .copied()
+                                    .or_else(|| confirmation_decisions.get(&name).copied())
+                                {
                                     Some(ToolConfirmationDecision::Approve) => {
                                         tool_actions.tool_confirmation_decision =
                                             Some(ToolConfirmationDecision::Approve);

@@ -1,10 +1,11 @@
 //! Transport layer for ACP protocol messages.
 //!
-//! Defines the [`Transport`] trait and provides two implementations:
-//! - [`StdioTransport`] — newline-delimited JSON over stdin/stdout
-//! - [`HttpTransport`] — HTTP with Server-Sent Events (stub)
+//! Defines the [`Transport`] trait and provides [`StdioTransport`] for the
+//! official ACP JSON-RPC stream over stdin/stdout.
+//!
+//! ACP v1's stable local transport is stdio. Remote HTTP/WebSocket transport
+//! remains under specification work and is not advertised here.
 
-pub mod http;
 pub mod stdio;
 
 use std::sync::Arc;
@@ -33,5 +34,4 @@ pub trait Transport: Send + Sync {
     ) -> Result<(), AcpServerError>;
 }
 
-pub use http::HttpTransport;
 pub use stdio::StdioTransport;

@@ -1,785 +1,335 @@
-# MCP Tools
+# Model Context Protocol (MCP)
 
-Model Context Protocol (MCP) is an open standard that enables LLMs to communicate with external applications, data sources, and tools. ADK-Rust provides full MCP support through the `McpToolset`, allowing you to connect to any MCP-compliant server and expose its tools to your agents.
+> **Documentation map:** [Overview and architecture](../mcp/index.md) ·
+> [Client](../mcp/client.md) · [Dynamic manager](../mcp/manager.md) ·
+> [Server authoring](../mcp/server.md) · [Security](../mcp/security.md) ·
+> [Testing](../mcp/testing.md)
 
-## Overview
+MCP gives an AI application a standard way to discover and use capabilities
+owned by another process or service. A server can publish:
 
-MCP follows a client-server architecture:
-- **MCP Servers** expose tools, resources, and prompts
-- **MCP Clients** (like ADK agents) connect to servers and use their capabilities
+- **tools** that perform actions;
+- **resources** that return readable context;
+- **prompts** that provide reusable message templates; and
+- **completion** suggestions that help a client fill prompt or resource
+  arguments.
 
-ADK-Rust supports the full MCP specification including the **Resource API** — servers can expose structured data (files, database records, API responses) as named resources that agents can read alongside tool calls.
+ADK-Rust is usually the MCP **client**. `McpToolset` turns discovered MCP tools
+into normal ADK-Rust `Tool` values, so an `LlmAgent` can select and call them.
+The framework also exposes resources, prompts, completion, subscriptions,
+elicitation, and the negotiated task lifecycle. For MCP server authoring and
+advanced protocol work, ADK-Rust re-exports the exact `rmcp` SDK version it
+uses.
 
-Benefits of MCP integration:
-- **Universal connectivity** - Connect to any MCP-compliant server
-- **Automatic discovery** - Tools are discovered dynamically from the server
-- **Language agnostic** - Use tools written in any language
-- **Growing ecosystem** - Access thousands of existing MCP servers
+ADK-Rust 2 currently uses `rmcp 2.2`, the official Rust SDK aligned with the
+MCP `2025-11-25` specification.
 
-## Prerequisites
+## Architecture
 
-MCP servers are typically distributed as npm packages. You'll need:
-- Node.js and npm installed
-- An LLM API key (Gemini, OpenAI, etc.)
+```mermaid
+flowchart LR
+    U[User or product event] --> A[ADK-Rust agent]
+    A --> T[McpToolset]
+    A --> M[McpServerManager]
+    M --> L1[Local stdio server]
+    M --> L2[Local stdio server]
+    T --> H[Remote Streamable HTTP server]
+    L1 --> S1[Files, browser, database]
+    L2 --> S2[Internal service or specialist tool]
+    H --> S3[Remote business API]
 
-## Quick Start
+    T -. resources, prompts, completion .-> A
+    L1 -. elicitation .-> T
+    H -. task status and result .-> T
+```
 
-Connect to an MCP server and use its tools:
+There are two separate layers:
+
+1. `McpToolset` owns one initialized MCP client connection. It discovers the
+   server's capabilities and adapts them to ADK-Rust.
+2. `McpServerManager` owns a changing registry of local stdio servers. It
+   starts, monitors, restarts, updates, enables, disables, persists, and
+   aggregates those connections.
+
+The manager does not grant tool approval. It preserves `autoApprove` when
+reading compatible configuration, but the application must apply its normal
+ADK-Rust authorization and approval policy.
+
+## Install
+
+Local stdio MCP support is opt-in:
+
+```toml
+[dependencies]
+adk-tool = { version = "2.0.0", features = ["mcp"] }
+```
+
+Add Streamable HTTP when connecting to remote services:
+
+```toml
+adk-tool = { version = "2.0.0", features = ["mcp", "http-transport"] }
+```
+
+Legacy sampling callbacks require the separate `mcp-sampling` feature. The MCP
+project has deprecated sampling, roots, and logging through SEP-2577; use those
+APIs only when maintaining a compatible deployment.
+
+## Connect one local server
 
 ```rust
-use adk_agent::LlmAgentBuilder;
-use adk_core::{Content, Part, ReadonlyContext, Toolset};
-use adk_model::GeminiModel;
-use adk_tool::McpToolset;
-use rmcp::{ServiceExt, transport::TokioChildProcess};
-use tokio::process::Command;
+use adk_tool::{
+    McpToolset,
+    mcp::rmcp::{ServiceExt, transport::TokioChildProcess},
+};
 use std::sync::Arc;
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv().ok();
-    let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
-
-    // 1. Start MCP server and connect
-    let mut cmd = Command::new("npx");
-    cmd.arg("-y").arg("@modelcontextprotocol/server-everything");
-
-    let client = ().serve(TokioChildProcess::new(cmd)?).await?;
-
-    // 2. Create toolset from the client
-    let toolset = McpToolset::new(client)
-        .with_tools(&["echo", "add"]);  // Only expose these tools
-
-    // 3. Get cancellation token for cleanup
-    let cancel_token = toolset.cancellation_token().await;
-
-    // 4. Discover tools and add to agent
-    let ctx: Arc<dyn ReadonlyContext> = Arc::new(SimpleContext);
-    let tools = toolset.tools(ctx).await?;
-
-    let mut builder = LlmAgentBuilder::new("mcp_agent")
-        .model(model)
-        .instruction("You have MCP tools. Use 'echo' to repeat messages, 'add' to sum numbers.");
-
-    for tool in tools {
-        builder = builder.tool(tool);
-    }
-
-    let agent = builder.build()?;
-
-    // 5. Run interactive console
-    adk_cli::console::run_console(
-        Arc::new(agent),
-        "mcp_demo".to_string(),
-        "user".to_string(),
-    ).await?;
-
-    // 6. Cleanup: shutdown MCP server
-    cancel_token.cancel();
-
-    Ok(())
-}
-
-// Minimal context for tool discovery
-struct SimpleContext;
-
-#[async_trait::async_trait]
-impl ReadonlyContext for SimpleContext {
-    fn invocation_id(&self) -> &str { "init" }
-    fn agent_name(&self) -> &str { "init" }
-    fn user_id(&self) -> &str { "user" }
-    fn app_name(&self) -> &str { "mcp" }
-    fn session_id(&self) -> &str { "init" }
-    fn branch(&self) -> &str { "main" }
-    fn user_content(&self) -> &Content {
-        static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
-        CONTENT.get_or_init(|| Content::new("user").with_text("init"))
-    }
-}
-```
-
-Run with:
-```bash
-GOOGLE_API_KEY=your_key cargo run --bin basic
-```
-
-## McpToolset API
-
-### Creating a Toolset
-
-```rust
-use adk_tool::McpToolset;
-
-// Basic creation
-let toolset = McpToolset::new(client);
-
-// With custom name
-let toolset = McpToolset::new(client)
-    .with_name("filesystem-tools");
-```
-
-### Tool Filtering
-
-Filter which tools to expose:
-
-```rust
-// Filter by predicate function
-let toolset = McpToolset::new(client)
-    .with_filter(|name| {
-        matches!(name, "read_file" | "write_file" | "list_directory")
-    });
-
-// Filter by exact names (convenience method)
-let toolset = McpToolset::new(client)
-    .with_tools(&["echo", "add", "get_time"]);
-```
-
-### Cleanup with Cancellation Token
-
-Always get a cancellation token to cleanly shutdown the MCP server:
-
-```rust
-let toolset = McpToolset::new(client);
-let cancel_token = toolset.cancellation_token().await;
-
-// ... use the toolset ...
-
-// Before exiting, shutdown the MCP server
-cancel_token.cancel();
-```
-
-This prevents EPIPE errors and ensures clean process termination.
-
-## Connecting to MCP Servers
-
-### Local Servers (Stdio)
-
-Connect to a local MCP server via standard input/output:
-
-```rust
-use rmcp::{ServiceExt, transport::TokioChildProcess};
 use tokio::process::Command;
 
-// NPM package server
-let mut cmd = Command::new("npx");
-cmd.arg("-y")
-    .arg("@modelcontextprotocol/server-filesystem")
-    .arg("/path/to/allowed/directory");
-let client = ().serve(TokioChildProcess::new(cmd)?).await?;
+let command = Command::new("./target/release/company-mcp");
+let client = ().serve(TokioChildProcess::new(command)?).await?;
 
-// Local binary server
-let mut cmd = Command::new("./my-mcp-server");
-cmd.arg("--config").arg("config.json");
-let client = ().serve(TokioChildProcess::new(cmd)?).await?;
-```
+let toolset = McpToolset::new(client)
+    .with_name("company_tools")
+    .with_tools(&["find_customer", "read_order", "request_refund"]);
 
-### Remote Servers (SSE)
-
-Connect to a remote MCP server via Server-Sent Events:
-
-```rust
-use rmcp::{ServiceExt, transport::SseClient};
-
-let client = ().serve(
-    SseClient::new("http://localhost:8080/sse")?
-).await?;
-```
-
-## Tool Discovery
-
-The `McpToolset` automatically discovers tools from the connected server:
-
-```rust
-use adk_core::{ReadonlyContext, Toolset};
-
-// Get discovered tools
-let tools = toolset.tools(ctx).await?;
-
-println!("Discovered {} tools:", tools.len());
-for tool in &tools {
-    println!("  - {}: {}", tool.name(), tool.description());
-}
-```
-
-Each discovered tool:
-- Has its name and description from the MCP server
-- Includes raw parameter schemas (unmodified from the MCP server)
-- Executes via the MCP protocol when called
-- Has its schema automatically normalized for the target LLM provider at request time
-
-> **Note**: `McpToolset` returns raw schemas verbatim. Schema normalization (removing unsupported keywords, resolving `$ref`, etc.) happens automatically when the model builds its API request. This means the same MCP tool works correctly with Gemini, OpenAI, Anthropic, and any other provider. See [Schema Normalization](schema-normalization.md) for details.
-
-## Adding Tools to Agent
-
-There are two patterns for adding MCP tools to an agent:
-
-### Pattern 1: Add as Toolset
-
-```rust
-let toolset = McpToolset::new(client);
-
-let agent = LlmAgentBuilder::new("agent")
+let agent = LlmAgentBuilder::new("support")
     .model(model)
-    .toolset(Arc::new(toolset))
+    .toolset(Arc::new(toolset.clone()))
+    .build()?;
+
+// Keep the token when the application owns the process lifecycle.
+let shutdown = toolset.cancellation_token().await;
+// ... run the agent ...
+shutdown.cancel();
+```
+
+`McpToolset` keeps the server's input and output schemas intact. Each model
+adapter normalizes a copy for its provider when it builds the model request.
+That lets the same MCP server work with Gemini, OpenAI, Anthropic, and other
+providers without damaging the source schema.
+
+## Use the protocol beyond tools
+
+```rust
+use serde_json::json;
+
+let resources = toolset.list_resources().await?;
+let templates = toolset.list_resource_templates().await?;
+let contents = toolset.read_resource("company://policy/refunds").await?;
+
+let prompts = toolset.list_prompts().await?;
+let prompt = toolset
+    .get_prompt(
+        "investigate_order",
+        Some(serde_json::Map::from_iter([
+            ("order_id".to_string(), json!("ORD-1042")),
+        ])),
+    )
+    .await?;
+
+let suggestions = toolset
+    .complete_prompt_argument("investigate_order", "order_id", "ORD-", None)
+    .await?;
+
+toolset.subscribe_resource("company://inventory/sku-42").await?;
+// ... receive notifications in a custom ClientHandler ...
+toolset.unsubscribe_resource("company://inventory/sku-42").await?;
+```
+
+The convenience methods return an empty list when an older server does not
+implement resource or prompt listing. Operations against a declared resource
+or prompt return an error when the remote call fails.
+
+## Dynamic server management
+
+Use `McpServerManager` when the application needs a fleet of local MCP child
+processes rather than one static connection.
+
+```rust
+use adk_tool::mcp::manager::{McpServerConfig, McpServerManager};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+let manager = Arc::new(McpServerManager::from_json_file("mcp.json")?
+    .with_name("product_mcp_servers")
+    .with_health_check_interval(Duration::from_secs(15))
+    .with_grace_period(Duration::from_secs(2)));
+
+let outcomes = manager.start_all().await;
+for (server_id, outcome) in outcomes {
+    if let Err(error) = outcome {
+        eprintln!("{server_id} did not start: {error}");
+    }
+}
+manager.start_monitoring();
+
+let agent = LlmAgentBuilder::new("operator")
+    .model(model)
+    .toolset(manager.clone())
     .build()?;
 ```
 
-### Pattern 2: Add Individual Tools
-
-This gives you more control over which tools are added:
+The runtime registry supports:
 
 ```rust
-let toolset = McpToolset::new(client)
-    .with_tools(&["echo", "add"]);
+manager.add_server("billing".into(), billing_config).await?;
+manager.start_server("billing").await?;
 
-let tools = toolset.tools(ctx).await?;
+manager.update_server("billing", replacement_config).await?;
+manager.disable_server("billing").await?;
+manager.enable_server("billing").await?;
 
-let mut builder = LlmAgentBuilder::new("agent")
-    .model(model);
-
-for tool in tools {
-    builder = builder.tool(tool);
-}
-
-let agent = builder.build()?;
+manager.save_json_file("mcp.json").await?;
+manager.remove_server("billing").await?;
+manager.shutdown().await?;
 ```
 
-## Popular MCP Servers
+When two servers publish the same tool name, the aggregated toolset prefixes
+both names as `{server_id}__{tool_name}`. Unique names remain unchanged.
 
-Here are some commonly used MCP servers you can integrate:
+The health monitor detects a closed MCP connection. A configured
+`RestartPolicy` controls bounded retry with exponential backoff. This is
+connection supervision, not an application-level health check: use a domain
+tool or a separate service probe when you need to verify the server's backing
+database or external API.
 
-### Everything Server (Testing)
+Run the deterministic example:
+
 ```bash
-npx -y @modelcontextprotocol/server-everything
+cargo run --manifest-path examples/mcp_manager/Cargo.toml
 ```
-Tools: `echo`, `add`, `longRunningOperation`, `sampleLLM`, `getAlerts`, `printEnv`
 
-### Filesystem Server
-```bash
-npx -y @modelcontextprotocol/server-filesystem /path/to/directory
-```
-Tools: `read_file`, `write_file`, `list_directory`, `search_files`
+It starts a real Rust MCP child server and exercises discovery, a tool call,
+runtime add/enable/update/disable/remove, config persistence, and shutdown. It
+does not download packages or require an API key.
 
-### GitHub Server
-```bash
-npx -y @modelcontextprotocol/server-github
-```
-Tools: `search_repositories`, `get_file_contents`, `create_issue`
-
-### Slack Server
-```bash
-npx -y @modelcontextprotocol/server-slack
-```
-Tools: `send_message`, `list_channels`, `search_messages`
-
-### Memory Server
-```bash
-npx -y @modelcontextprotocol/server-memory
-```
-Tools: `store`, `retrieve`, `search`
-
-Find more servers at the [MCP Server Registry](https://github.com/modelcontextprotocol/servers).
-
-## Error Handling
-
-Handle MCP connection and execution errors using structured checks:
+## Remote Streamable HTTP
 
 ```rust
-use adk_core::AdkError;
-
-match toolset.tools(ctx).await {
-    Ok(tools) => {
-        println!("Discovered {} tools", tools.len());
-    }
-    Err(err) if err.is_tool() => {
-        eprintln!("MCP error: {}", err.message);
-    }
-    Err(err) => {
-        eprintln!("Other error: {}", err);
-    }
-}
-```
-
-Common errors:
-- **Connection failed** - Server not running or wrong address
-- **Tool execution failed** - MCP server returned an error
-- **Invalid parameters** - Tool received incorrect arguments
-
-## Best Practices
-
-1. **Filter tools** - Only expose tools the agent needs to reduce confusion
-2. **Use cancellation tokens** - Always call `cancel()` before exiting to cleanup
-3. **Handle errors** - MCP servers may fail; implement appropriate error handling
-4. **Use local servers** - For development, stdio transport is simpler than remote
-5. **Check server status** - Verify MCP server is running before creating toolset
-
-## Complete Example
-
-Here's a full working example with proper cleanup:
-
-```rust
-use adk_agent::LlmAgentBuilder;
-use adk_core::{Content, Part, ReadonlyContext, Toolset};
-use adk_model::GeminiModel;
-use adk_tool::McpToolset;
-use rmcp::{ServiceExt, transport::TokioChildProcess};
-use std::sync::Arc;
-use tokio::process::Command;
-
-struct SimpleContext;
-
-#[async_trait::async_trait]
-impl ReadonlyContext for SimpleContext {
-    fn invocation_id(&self) -> &str { "init" }
-    fn agent_name(&self) -> &str { "init" }
-    fn user_id(&self) -> &str { "user" }
-    fn app_name(&self) -> &str { "mcp" }
-    fn session_id(&self) -> &str { "init" }
-    fn branch(&self) -> &str { "main" }
-    fn user_content(&self) -> &Content {
-        static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
-        CONTENT.get_or_init(|| Content::new("user").with_text("init"))
-    }
-}
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv().ok();
-
-    let api_key = std::env::var("GOOGLE_API_KEY")?;
-    let model = Arc::new(GeminiModel::new(&api_key, "gemini-2.5-flash")?);
-
-    println!("Starting MCP server...");
-    let mut cmd = Command::new("npx");
-    cmd.arg("-y").arg("@modelcontextprotocol/server-everything");
-
-    let client = ().serve(TokioChildProcess::new(cmd)?).await?;
-    println!("MCP server connected!");
-
-    // Create filtered toolset
-    let toolset = McpToolset::new(client)
-        .with_name("everything-tools")
-        .with_filter(|name| matches!(name, "echo" | "add" | "printEnv"));
-
-    // Get cancellation token for cleanup
-    let cancel_token = toolset.cancellation_token().await;
-
-    // Discover tools
-    let ctx = Arc::new(SimpleContext) as Arc<dyn ReadonlyContext>;
-    let tools = toolset.tools(ctx).await?;
-
-    println!("Discovered {} tools:", tools.len());
-    for tool in &tools {
-        println!("  - {}: {}", tool.name(), tool.description());
-    }
-
-    // Build agent with tools
-    let mut builder = LlmAgentBuilder::new("mcp_demo")
-        .model(model)
-        .instruction(
-            "You have access to MCP tools:\n\
-             - echo: Repeat a message back\n\
-             - add: Add two numbers (a + b)\n\
-             - printEnv: Print environment variables"
-        );
-
-    for tool in tools {
-        builder = builder.tool(tool);
-    }
-
-    let agent = builder.build()?;
-
-    // Run interactive console
-    let result = adk_cli::console::run_console(
-        Arc::new(agent),
-        "mcp_demo".to_string(),
-        "user".to_string(),
-    ).await;
-
-    // Cleanup
-    println!("\nShutting down MCP server...");
-    cancel_token.cancel();
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    result?;
-    Ok(())
-}
-```
-
-## Advanced: Custom MCP Server
-
-You can create your own MCP server in Rust using the `rmcp` SDK:
-
-```rust
-use rmcp::{tool, tool_router, handler::server::tool::ToolRouter, model::*};
-
-#[derive(Clone)]
-pub struct MyServer {
-    tool_router: ToolRouter<Self>,
-}
-
-#[tool_router]
-impl MyServer {
-    fn new() -> Self {
-        Self { tool_router: Self::tool_router() }
-    }
-
-    #[tool(description = "Add two numbers")]
-    async fn add(&self, a: i32, b: i32) -> Result<CallToolResult, ErrorData> {
-        Ok(CallToolResult::success(vec![Content::text((a + b).to_string())]))
-    }
-
-    #[tool(description = "Multiply two numbers")]
-    async fn multiply(&self, a: i32, b: i32) -> Result<CallToolResult, ErrorData> {
-        Ok(CallToolResult::success(vec![Content::text((a * b).to_string())]))
-    }
-}
-```
-
-See the [rmcp documentation](https://github.com/modelcontextprotocol/rust-sdk) for complete server implementation details.
-
-## Resource API
-
-MCP servers can expose structured data as named resources. `McpToolset` provides access to the resource API alongside tools:
-
-```rust
-use adk_tool::McpToolset;
-
-let toolset = McpToolset::new(client);
-
-// List available resources
-let resources = toolset.list_resources().await?;
-for resource in &resources {
-    println!("Resource: {} ({})", resource.name, resource.uri);
-}
-
-// Read a specific resource
-let content = toolset.read_resource("file:///config.json").await?;
-println!("Content: {}", content);
-```
-
-Resources are useful for exposing configuration, documentation, or data that agents can reference without making a tool call. The resource API supports URI-based addressing and MIME type metadata.
-
-## Elicitation
-
-MCP Elicitation allows MCP servers to request additional information from users during tool execution — for example, asking for a name and email before creating an account, or requesting confirmation before a destructive action.
-
-ADK-Rust provides full elicitation support through the `ElicitationHandler` trait.
-
-### How It Works
-
-```
-User ──→ Agent ──→ MCP Tool Call ──→ Server
-                                       │
-                                       │ peer.elicit::<UserProfile>(message)
-                                       │
-                              ←── ElicitationHandler called
-                              (your code handles the request)
-                              ──→ Accept { name, email }
-                                       │
-                              ←── Tool Result: "User created!"
-```
-
-When an MCP server calls `peer.elicit::<T>(message)` during tool execution, ADK's `AdkClientHandler` intercepts the request and delegates to your `ElicitationHandler`. The agent doesn't know about elicitation — it just calls the tool normally.
-
-### Connecting with Elicitation
-
-The key difference from a standard MCP connection:
-
-```rust
-use adk_tool::{McpToolset, ElicitationHandler};
-use rmcp::model::{CreateElicitationResult, ElicitationAction, ElicitationSchema};
-use std::sync::Arc;
-
-// Without elicitation (standard — server can't request user input)
-let client = ().serve(TokioChildProcess::new(cmd)?).await?;
-let toolset = McpToolset::new(client);
-
-// With elicitation (server can request user input at runtime)
-let handler = Arc::new(MyElicitationHandler);
-let toolset = McpToolset::with_elicitation_handler(transport, handler).await?;
-```
-
-### Implementing ElicitationHandler
-
-```rust
-use adk_tool::ElicitationHandler;
-use rmcp::model::{CreateElicitationResult, ElicitationAction, ElicitationSchema};
-use serde_json::Value;
-
-struct StdinElicitationHandler;
-
-#[async_trait::async_trait]
-impl ElicitationHandler for StdinElicitationHandler {
-    async fn handle_form_elicitation(
-        &self,
-        message: &str,
-        schema: &ElicitationSchema,
-        _metadata: Option<&Value>,
-    ) -> Result<CreateElicitationResult, Box<dyn std::error::Error + Send + Sync>> {
-        println!("Server asks: {message}");
-
-        // Collect user input for each field in the schema
-        let mut response = serde_json::Map::new();
-        for (field_name, _) in &schema.properties {
-            print!("  {field_name}: ");
-            std::io::Write::flush(&mut std::io::stdout())?;
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input)?;
-            response.insert(field_name.clone(), Value::String(input.trim().to_string()));
-        }
-
-        Ok(CreateElicitationResult::new(ElicitationAction::Accept)
-            .with_content(Value::Object(response)))
-    }
-
-    async fn handle_url_elicitation(
-        &self,
-        message: &str,
-        url: &str,
-        _elicitation_id: &str,
-        _metadata: Option<&Value>,
-    ) -> Result<CreateElicitationResult, Box<dyn std::error::Error + Send + Sync>> {
-        println!("Server asks you to visit: {url}");
-        println!("{message}");
-        Ok(CreateElicitationResult::new(ElicitationAction::Accept))
-    }
-}
-```
-
-### Built-in Handlers
-
-ADK provides `AutoDeclineElicitationHandler` which declines all elicitation requests. This is the default behavior when using `McpToolset::new()` with `()`:
-
-```rust
-use adk_tool::AutoDeclineElicitationHandler;
-
-// Explicitly decline all elicitation (same as using () handler)
-let handler = Arc::new(AutoDeclineElicitationHandler);
-let toolset = McpToolset::with_elicitation_handler(transport, handler).await?;
-```
-
-### Elicitation Actions
-
-Your handler can return three actions:
-
-| Action | Meaning |
-|--------|---------|
-| `ElicitationAction::Accept` | User provided the requested data (include `content`) |
-| `ElicitationAction::Decline` | User explicitly refused to provide data |
-| `ElicitationAction::Cancel` | User dismissed the request without choosing |
-
-### Error Handling
-
-If your `ElicitationHandler` returns an error or panics, `AdkClientHandler` catches it gracefully and returns `Decline` to the server. The MCP connection is never disrupted.
-
-### HTTP Connections with Elicitation
-
-For remote MCP servers over HTTP:
-
-```rust
-use adk_tool::McpHttpClientBuilder;
-
-let toolset = McpHttpClientBuilder::new("https://my-mcp-server.example.com")
-    .with_elicitation_handler(Arc::new(MyHandler))
-    .connect_with_elicitation()
+use adk_tool::{McpAuth, McpHttpClientBuilder};
+use std::time::Duration;
+
+let toolset = McpHttpClientBuilder::new("https://mcp.example.com/mcp")
+    .with_auth(McpAuth::bearer(std::env::var("MCP_TOKEN")?))
+    .header("X-Tenant-ID", "tenant-42")
+    .timeout(Duration::from_secs(30))
+    .reinit_on_expired_session(true)
+    .connect()
     .await?;
 ```
 
-### Complete Example
+The builder applies request timeouts, custom headers, bearer tokens, custom
+API-key headers, and bounded recovery when an HTTP session expires.
 
-See `examples/mcp_elicitation/` for a full working example with:
-- A real MCP server that uses `peer.elicit::<T>()` to collect user input
-- An LLM-powered agent client with interactive stdin-based elicitation
-- Run: `cargo run --manifest-path examples/mcp_elicitation/Cargo.toml --bin elicitation-client`
+`OAuth2Config` implements a fixed OAuth 2.0 client-credentials token request.
+It is useful for a server with a known token endpoint. It is not the complete
+MCP authorization flow: it does not perform protected-resource metadata
+discovery, authorization-server discovery, browser authorization, PKCE, or
+resource-indicator negotiation. Use `rmcp`'s authorization APIs or an external
+identity component when the deployment requires that flow.
 
-## McpServerManager — Multi-Server Lifecycle Management
+## Elicitation
 
-For applications that need to manage multiple MCP servers simultaneously, `McpServerManager` provides a higher-level API that handles process spawning, health monitoring, auto-restart with exponential backoff, and tool aggregation across all managed servers.
-
-### Overview
-
-`McpServerManager`:
-- **Spawns and manages** multiple MCP server child processes
-- **Monitors health** via periodic checks, detecting crashed servers
-- **Auto-restarts** crashed servers with configurable exponential backoff
-- **Aggregates tools** from all running servers behind the `Toolset` trait
-- **Resolves name collisions** by prefixing duplicate tool names with `{server_id}__`
-- **Loads config** from Kiro's `mcp.json` format
-
-### Quick Start
+An MCP server may need information that the tool arguments did not include. In
+that case it can send an elicitation request back to the client. The application
+decides how to show the request to a person and whether to accept, decline, or
+cancel it.
 
 ```rust
-use adk_tool::mcp::manager::McpServerManager;
+let toolset = McpToolset::with_elicitation_handler(
+    transport,
+    Arc::new(MyElicitationHandler),
+).await?;
+```
+
+ADK-Rust advertises both form and URL elicitation. A handler error or panic is
+converted into a decline so the MCP connection remains usable. Validate the
+returned values and apply consent rules in the application before accepting a
+consequential request.
+
+See `examples/mcp_elicitation` for a complete server and interactive client.
+
+## Long-running MCP tasks
+
+MCP `2025-11-25` can move a tool call into a protocol task. ADK-Rust uses the
+task flow only when the server negotiated `tasks.requests.tools.call` and the
+tool declares required or optional task support.
+
+```rust
+use adk_tool::McpTaskConfig;
 use std::time::Duration;
 
-// Load from Kiro mcp.json format
-let manager = McpServerManager::from_json(r#"{
-    "mcpServers": {
-        "playwright": {
-            "command": "npx",
-            "args": ["--yes", "@playwright/mcp@latest"],
-            "autoApprove": ["browser_click"]
-        },
-        "filesystem": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-        }
-    }
-}"#)?
-    .with_health_check_interval(Duration::from_secs(30))
-    .with_grace_period(Duration::from_secs(5))
-    .with_name("my_servers");
-
-// Start all non-disabled servers concurrently
-let results = manager.start_all().await;
-for (id, result) in &results {
-    match result {
-        Ok(()) => println!("{id}: started"),
-        Err(e) => eprintln!("{id}: failed: {e}"),
-    }
-}
+let toolset = McpToolset::new(client).with_task_support(
+    McpTaskConfig::enabled()
+        .poll_interval(Duration::from_secs(1))
+        .timeout(Duration::from_secs(120))
+        .max_attempts(120),
+);
 ```
 
-### Using as a Toolset
+For task mode, ADK-Rust:
 
-`McpServerManager` implements the `Toolset` trait, so you can pass it directly to an agent:
+1. sends `tools/call` with official task metadata;
+2. receives the created task;
+3. polls `tasks/get` using the server's suggested interval;
+4. reads the final payload through `tasks/result`; and
+5. calls `tasks/cancel` when its local timeout or poll limit is reached.
 
-```rust
-use adk_core::Toolset;
+`input_required` is returned as a typed error because an ordinary ADK tool call
+does not yet have a protocol-neutral resume channel for supplying that missing
+input. Design that interaction explicitly in the owning workflow.
 
-let agent = LlmAgentBuilder::new("multi_mcp_agent")
-    .model(model)
-    .toolset(Arc::new(manager))
-    .build()?;
-```
+## Capability map
 
-Tools from all running servers are aggregated. If two servers expose a tool with the same name (e.g., both have `read_file`), the manager prefixes them: `playwright__read_file`, `filesystem__read_file`. Unique names are left unchanged.
+| MCP capability | ADK-Rust 2 surface | Notes |
+|---|---|---|
+| Tool discovery and calls | `McpToolset`, `Toolset` | Raw schemas; multimodal and structured results preserved |
+| Tool filtering | `with_filter`, `with_tools` | Filter before exposure to the model |
+| Resources and templates | list/read methods | Method-not-found handled for older servers |
+| Prompts | list/get methods | Typed argument maps |
+| Completion | prompt/resource completion methods | Returns official `CompletionInfo` |
+| Resource subscriptions | subscribe/unsubscribe methods | Notifications require an appropriate client handler |
+| Elicitation | `ElicitationHandler` | Form and URL modes |
+| Tasks | `McpTaskConfig` | Negotiated tool-call task lifecycle |
+| Local stdio | `TokioChildProcess` | Direct or manager-owned |
+| Streamable HTTP | `McpHttpClientBuilder` | Timeouts, headers, auth injection, session recovery |
+| Dynamic local registry | `McpServerManager` | Add/update/enable/disable/remove/save/monitor/restart |
+| Server authoring and extensions | `adk_tool::mcp::rmcp` | Exact SDK re-export for advanced use |
+| Sampling, roots, logging | compatibility feature / `rmcp` | Deprecated upstream through SEP-2577 |
 
-### Builder Pattern
+## Choosing the boundary
 
-```rust
-use adk_tool::mcp::manager::McpServerManager;
-use adk_tool::AutoDeclineElicitationHandler;
-use std::sync::Arc;
+Use a Rust `FunctionTool` when the capability belongs to the same process and
+release. Use MCP when another program, team, language, security boundary, or
+deployment owns the capability and should publish its own contract.
 
-let manager = McpServerManager::new(configs)
-    .with_elicitation_handler(Arc::new(AutoDeclineElicitationHandler))
-    .with_health_check_interval(Duration::from_secs(15))
-    .with_grace_period(Duration::from_secs(3))
-    .with_name("my_manager");
-```
+For production deployments:
 
-### Individual Server Control
+- expose the smallest useful tool set;
+- separate read-only and consequential actions;
+- keep secrets out of command-line arguments and committed `mcp.json` files;
+- authenticate remote HTTP servers and scope credentials narrowly;
+- treat tool descriptions and server-returned content as untrusted input;
+- retain ADK-Rust authorization and approval around tool execution;
+- bound connection, tool, and task timeouts; and
+- record tool calls, approvals, errors, and server lifecycle changes.
 
-```rust
-// Start/stop/restart individual servers
-manager.start_server("playwright").await?;
-manager.stop_server("playwright").await?;
-manager.restart_server("playwright").await?;
+## Current limits
 
-// Query status
-let status = manager.server_status("playwright").await?;
-let all = manager.all_statuses().await;
-let count = manager.running_server_count().await;
-```
+- `McpServerManager` manages local stdio child processes. Remote HTTP services
+  use `McpHttpClientBuilder` and application-owned configuration.
+- Manager health checks detect closed MCP connections; they do not call a
+  business-level health tool.
+- Registry mutations are serialized while a child completes its MCP handshake.
+- `autoApprove` is configuration compatibility, not authorization enforcement.
+- The built-in OAuth helper is client credentials, not the complete MCP OAuth
+  discovery and user-authorization flow.
 
-### Dynamic Server Management
+These limits are stated so that deployment decisions remain explicit.
 
-Add and remove servers at runtime without restarting the manager:
+## References
 
-```rust
-use adk_tool::mcp::manager::McpServerConfig;
-
-// Add a new server
-manager.add_server("github".into(), McpServerConfig {
-    command: "npx".into(),
-    args: vec!["--yes".into(), "@modelcontextprotocol/server-github".into()],
-    env: HashMap::new(),
-    disabled: false,
-    auto_approve: vec![],
-    restart_policy: None,
-}).await?;
-
-manager.start_server("github").await?;
-
-// Remove (stops if running, then removes config)
-manager.remove_server("github").await?;
-```
-
-### Health Monitoring and Auto-Restart
-
-Enable background health monitoring with auto-restart on crash:
-
-```rust
-use adk_tool::mcp::manager::RestartPolicy;
-
-let config = McpServerConfig {
-    command: "npx".into(),
-    args: vec!["--yes".into(), "my-server".into()],
-    restart_policy: Some(RestartPolicy {
-        initial_delay_ms: 1000,     // First retry after 1s
-        max_delay_ms: 30000,        // Cap at 30s
-        backoff_multiplier: 2.0,    // Double each time
-        max_restart_attempts: 10,   // Give up after 10 failures
-    }),
-    ..Default::default()
-};
-
-// Start monitoring — checks each server periodically
-manager.start_monitoring();
-
-// Stop monitoring
-manager.stop_monitoring();
-```
-
-The backoff formula: `delay = min(initial_delay_ms × backoff_multiplier^attempt, max_delay_ms)`
-
-### Graceful Shutdown
-
-Always call `shutdown()` before dropping the manager:
-
-```rust
-manager.shutdown().await?;
-// All servers stopped, safe to drop
-```
-
-If you drop without calling `shutdown()`, a warning is logged but no async cleanup is attempted.
-
-### Loading from File
-
-```rust
-let manager = McpServerManager::from_json_file("~/.kiro/settings/mcp.json")?;
-```
-
-### Server Status Lifecycle
-
-```
-Stopped → Running (start)
-Running → Stopped (stop/shutdown)
-Running → Crashed (health check failure)
-Running → Restarting (restart)
-Crashed → Restarting (auto-restart)
-Restarting → Running (restart success)
-Restarting → FailedToStart (restart failure)
-Disabled (config.disabled = true, no transitions)
-```
-
-### Complete Example
-
-See `examples/mcp_manager/` for a full working example demonstrating JSON config loading, start/stop, tool aggregation, dynamic add/remove, and graceful shutdown.
-
-## Related
-
-- [Schema Normalization](schema-normalization.md) - How schemas are normalized per-provider
-- [Function Tools](function-tools.md) - Creating custom tools in Rust
-- [Built-in Tools](built-in-tools.md) - Pre-built tools included with ADK
-- [LlmAgent](../agents/llm-agent.md) - Adding tools to agents
-- [rmcp SDK](https://github.com/modelcontextprotocol/rust-sdk) - Official Rust MCP SDK
-- [MCP Specification](https://modelcontextprotocol.io/) - Protocol documentation
-
-
----
-
-**Previous**: [← UI Tools](ui-tools.md) | **Next**: [Sessions →](../sessions/sessions.md)
+- [MCP specification 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25)
+- [Official Rust SDK (`rmcp`)](https://github.com/modelcontextprotocol/rust-sdk)
+- [`rmcp 2.2` API documentation](https://docs.rs/rmcp/2.2.0/rmcp/)
+- [Provider-aware schema normalization](schema-normalization.md)

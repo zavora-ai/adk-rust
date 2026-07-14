@@ -8,29 +8,30 @@ authors.workspace = true
 repository.workspace = true
 documentation = "https://docs.rs/adk-acp"
 readme = "README.md"
-description = "Agent Client Protocol (ACP) integration for ADK-Rust — connect to Claude Code, Codex, and other ACP agents"
+description = "Agent Client Protocol integration for ADK-Rust — use ACP coding agents or expose an ADK agent to editors"
 keywords = ["adk", "acp", "agent", "protocol", "ai"]
 categories = ["development-tools", "asynchronous"]
 
 [features]
 default = []
-server = ["dep:adk-runner", "dep:adk-session", "dep:tokio-util", "dep:uuid", "dep:async-stream"]
+server = ["dep:adk-runner", "dep:adk-session", "dep:adk-tool", "dep:rmcp", "dep:tokio-util", "dep:uuid", "dep:async-stream"]
 
 [dependencies]
 adk-core = { workspace = true }
-agent-client-protocol = "0.11"
-agent-client-protocol-tokio = "0.11"
+agent-client-protocol = "1.2.0"
 async-trait = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["sync", "process", "io-util"] }
+tokio = { workspace = true, features = ["sync", "process", "io-util", "io-std", "macros", "rt"] }
 tracing = { workspace = true }
 
 # Server-specific dependencies (behind `server` feature)
 adk-runner = { workspace = true, optional = true }
 adk-session = { workspace = true, optional = true }
+adk-tool = { workspace = true, features = ["mcp"], optional = true }
+rmcp = { version = "2.2", features = ["client", "transport-child-process"], optional = true }
 tokio-util = { version = "0.7", features = ["rt"], optional = true }
 uuid = { workspace = true, optional = true }
 async-stream = { workspace = true, optional = true }

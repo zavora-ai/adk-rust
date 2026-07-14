@@ -123,22 +123,22 @@ impl Toolset for McpServerManager {
     }
 
     async fn tools(&self, ctx: Arc<dyn ReadonlyContext>) -> Result<Vec<Arc<dyn Tool>>> {
-        // Acquire read lock to iterate over servers
-        let servers = self.servers.read().await;
+        // Snapshot running toolsets so slow network discovery does not hold the
+        // manager map lock and block lifecycle changes.
+        let running = {
+            let servers = self.servers.read().await;
+            servers
+                .iter()
+                .filter_map(|(server_id, entry)| {
+                    (entry.status == ServerStatus::Running)
+                        .then(|| entry.toolset.clone().map(|toolset| (server_id.clone(), toolset)))
+                        .flatten()
+                })
+                .collect::<Vec<_>>()
+        };
 
-        // Collect tools from each Running server
         let mut server_tools: ServerToolMap = HashMap::new();
-
-        for (server_id, entry) in servers.iter() {
-            if entry.status != ServerStatus::Running {
-                continue;
-            }
-
-            let toolset = match &entry.toolset {
-                Some(ts) => ts,
-                None => continue,
-            };
-
+        for (server_id, toolset) in running {
             match toolset.tools(ctx.clone()).await {
                 Ok(tools) => {
                     let named_tools: Vec<(String, Arc<dyn Tool>)> =

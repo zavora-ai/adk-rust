@@ -1,41 +1,42 @@
-# MCP Server Manager Example
+# Dynamic MCP server manager
 
-Demonstrates `McpServerManager` from the `adk-tool` crate — managing the full lifecycle of multiple MCP server child processes.
+This example runs without Node.js, a model API key, or network access. The
+executable starts a real Rust MCP server as its child process, then proves the
+manager lifecycle against that server.
 
-## What it shows
+It demonstrates:
 
-1. **JSON config loading** — Parse Kiro `mcp.json` format
-2. **Start all servers** — Concurrent startup of non-disabled servers
-3. **Tool aggregation** — Query tools from all running servers via the `Toolset` trait
-4. **Status reporting** — `server_status()`, `all_statuses()`, `running_server_count()`
-5. **Dynamic management** — Add and remove servers at runtime
-6. **Graceful shutdown** — Stop all servers cleanly
+- loading `mcp.json`-compatible configuration;
+- starting and monitoring a local stdio MCP server;
+- discovering and calling a real MCP tool;
+- adding, enabling, updating, disabling, and removing servers at runtime;
+- resolving tool-name collisions across servers;
+- saving the current registry; and
+- closing all managed MCP sessions.
 
-## Prerequisites
-
-- `npx` must be installed (comes with Node.js)
-- The example uses `@playwright/mcp` and `@zavora-ai/computer-use-mcp` servers
-
-## Running
+Run it from the repository root:
 
 ```bash
 cargo run --manifest-path examples/mcp_manager/Cargo.toml
 ```
 
-## Configuration
+Expected output includes:
 
-The example uses inline JSON config. In production, load from a file:
+```text
+ADK-Rust dynamic MCP server manager
 
-```rust
-let manager = McpServerManager::from_json_file("mcp.json")?;
+1. Loaded local-tools from mcp.json-compatible configuration
+   status: Running
+2. Discovered 1 tool: echo
+3. Called the real child server
+   response: {"output":"MCP server replied: dynamic MCP is running"}
+4. Added standby-tools at runtime: Disabled
+   enabled and started: Running
+5. Reconfigured the running server and restarted it safely
+6. Saved the live registry to .../adk-rust-mcp-manager-example.json
+7. Disabled, removed, and shut down every child server
 ```
 
-## Builder pattern
-
-```rust
-let manager = McpServerManager::new(configs)
-    .with_elicitation_handler(handler)
-    .with_health_check_interval(Duration::from_secs(15))
-    .with_grace_period(Duration::from_secs(3))
-    .with_name("my_manager");
-```
+`autoApprove` is preserved when reading and writing compatible configuration,
+but it does not bypass ADK-Rust tool authorization. Apply approval policy in
+the agent or application that owns the tool call.

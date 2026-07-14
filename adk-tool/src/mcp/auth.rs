@@ -123,10 +123,10 @@ impl OAuth2Config {
         // Check cache first
         {
             let cache = self.token_cache.read().await;
-            if let Some(ref cached) = *cache {
-                if !cached.is_expired() {
-                    return Ok(cached.access_token.clone());
-                }
+            if let Some(ref cached) = *cache
+                && !cached.is_expired()
+            {
+                return Ok(cached.access_token.clone());
             }
         }
 
