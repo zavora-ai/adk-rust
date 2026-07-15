@@ -114,6 +114,16 @@ impl VadConfig {
     }
 }
 
+impl From<adk_core::ToolContract> for ToolDefinition {
+    fn from(contract: adk_core::ToolContract) -> Self {
+        Self {
+            name: contract.name,
+            description: Some(contract.description),
+            parameters: contract.schema.parameters,
+        }
+    }
+}
+
 /// Tool/function definition for realtime sessions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolDefinition {

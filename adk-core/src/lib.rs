@@ -152,8 +152,8 @@ pub use schema_adapter::{GenericSchemaAdapter, SchemaAdapter, SchemaCompileError
 pub use schema_cache::SchemaCache;
 pub use shared_state::{SharedState, SharedStateError};
 pub use tool::{
-    RetryBudget, Tool, ToolContext, ToolExecutionStrategy, ToolPredicate, ToolRegistry, Toolset,
-    ValidationMode,
+    RetryBudget, Tool, ToolContext, ToolContract, ToolExecutionStrategy, ToolPredicate,
+    ToolRegistry, ToolSchema, Toolset, ValidationMode,
 };
 pub use tool_concurrency::{ConcurrencyPermit, ToolConcurrencyManager};
 pub use types::{

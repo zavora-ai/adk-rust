@@ -62,6 +62,10 @@ const OPENAI_ALLOWED_FORMATS: &[&str] =
 pub struct OpenAiStrictSchemaAdapter;
 
 impl SchemaAdapter for OpenAiStrictSchemaAdapter {
+    fn identifier(&self) -> &str {
+        "openai-strict"
+    }
+
     fn normalize_schema(&self, mut schema: Value) -> Value {
         schema_utils::strip_schema_keyword(&mut schema);
         schema_utils::strip_conditional_keywords(&mut schema);
@@ -129,6 +133,10 @@ impl SchemaAdapter for OpenAiStrictSchemaAdapter {
 pub struct OpenAiSchemaAdapter;
 
 impl SchemaAdapter for OpenAiSchemaAdapter {
+    fn identifier(&self) -> &str {
+        "openai"
+    }
+
     fn normalize_schema(&self, mut schema: Value) -> Value {
         schema_utils::strip_schema_keyword(&mut schema);
         schema_utils::strip_conditional_keywords(&mut schema);

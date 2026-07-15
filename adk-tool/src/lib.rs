@@ -109,7 +109,7 @@ pub use builtin::{
     OpenAIFileSearchTool, OpenAIImageGenerationTool, OpenAILocalShellTool, OpenAIMcpTool,
     OpenAIShellTool, OpenAIWebSearchTool, UrlContextTool, WebSearchTool, WebSearchUserLocation,
 };
-pub use function_tool::FunctionTool;
+pub use function_tool::{FunctionTool, schema_for};
 #[cfg(feature = "mcp")]
 pub use mcp::{
     AutoDeclineElicitationHandler, ElicitationHandler, McpAuth, McpHttpClientBuilder,

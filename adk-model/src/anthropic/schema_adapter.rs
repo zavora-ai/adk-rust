@@ -76,6 +76,10 @@ use serde_json::Value;
 pub struct AnthropicSchemaAdapter;
 
 impl SchemaAdapter for AnthropicSchemaAdapter {
+    fn identifier(&self) -> &str {
+        "anthropic"
+    }
+
     fn normalize_schema(&self, mut schema: Value) -> Value {
         schema_utils::strip_schema_keyword(&mut schema);
         schema_utils::strip_conditional_keywords(&mut schema);

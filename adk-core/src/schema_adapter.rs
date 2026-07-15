@@ -28,12 +28,36 @@ impl SchemaCompileError {
 
 /// Normalizes JSON Schema for a specific LLM provider's function-calling API.
 pub trait SchemaAdapter: Send + Sync + std::fmt::Debug {
+    /// Returns a unique identifier for this adapter (e.g., "gemini", "openai").
+    fn identifier(&self) -> &str {
+        "generic"
+    }
+
+    /// Returns the version of this adapter (e.g., "1.0.0").
+    fn version(&self) -> &str {
+        "1.0.0"
+    }
+
+    /// Returns the target surface (e.g., "studio", "vertex") if applicable.
+    fn surface(&self) -> Option<&str> {
+        None
+    }
+
     /// Normalize a raw JSON Schema for this provider (infallible).
     fn normalize_schema(&self, schema: Value) -> Value;
 
     /// Compiles a raw JSON Schema for this provider, returning an error if unsupported.
     fn compile_schema(&self, schema: &Value) -> Result<Value, SchemaCompileError> {
         Ok(self.normalize_schema(schema.clone()))
+    }
+
+    /// Validates a tool name for this provider's limits.
+    ///
+    /// The default implementation accepts all names. Providers with specific
+    /// byte limits (e.g., Gemini's 64-byte limit) should override this to return
+    /// a `SchemaCompileError`.
+    fn validate_tool_name(&self, _name: &str) -> Result<(), SchemaCompileError> {
+        Ok(())
     }
 
     /// Normalize a tool name for this provider's limits.
