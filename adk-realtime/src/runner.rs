@@ -727,7 +727,7 @@ impl RealtimeRunner {
         &self,
         call_id: &str,
         name: &str,
-        arguments: &str,
+        arguments: &serde_json::Value,
     ) -> Result<()> {
         self.execute_tool_call(call_id, name, arguments).await
     }
@@ -895,15 +895,20 @@ impl RealtimeRunner {
     }
 
     /// Execute a tool call and optionally send the response.
-    async fn execute_tool_call(&self, call_id: &str, name: &str, arguments: &str) -> Result<()> {
+    async fn execute_tool_call(
+        &self,
+        call_id: &str,
+        name: &str,
+        arguments: &serde_json::Value,
+    ) -> Result<()> {
         let handler = self.tools.get(name).map(|(_, h)| h.clone());
 
         let result = if let Some(handler) = handler {
-            let args: serde_json::Value = serde_json::from_str(arguments)
-                .unwrap_or(serde_json::Value::Object(Default::default()));
-
-            let call =
-                ToolCall { call_id: call_id.to_string(), name: name.to_string(), arguments: args };
+            let call = ToolCall {
+                call_id: call_id.to_string(),
+                name: name.to_string(),
+                arguments: arguments.clone(),
+            };
 
             match handler.execute(&call).await {
                 Ok(value) => value,
@@ -1080,7 +1085,7 @@ mod tool_response_tests {
             output_index: 0,
             call_id: call_id.into(),
             name: name.into(),
-            arguments: "{}".into(),
+            arguments: serde_json::json!({}),
         }
     }
 

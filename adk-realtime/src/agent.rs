@@ -577,15 +577,13 @@ impl RealtimeAgent {
         ctx: &Arc<dyn InvocationContext>,
         call_id: &str,
         name: &str,
-        arguments: &str,
+        arguments: &serde_json::Value,
     ) -> (serde_json::Value, EventActions) {
         // Find the tool
         let tool = self.tools.iter().find(|t| t.name() == name);
 
         if let Some(tool) = tool {
-            let args: serde_json::Value =
-                serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
-
+            let args = arguments;
             // Create tool context
             let tool_ctx: Arc<dyn ToolContext> =
                 Arc::new(RealtimeToolContext::new(ctx.clone(), call_id.to_string()));
@@ -888,8 +886,7 @@ impl Agent for RealtimeAgent {
                             } => {
                                 // Handle transfer_to_agent
                                 if name == "transfer_to_agent" {
-                                    let args: serde_json::Value = serde_json::from_str(&arguments)
-                                        .unwrap_or(serde_json::json!({}));
+                                    let args = arguments;
                                     let target = args.get("agent_name")
                                         .and_then(|v| v.as_str())
                                         .unwrap_or_default()
@@ -908,8 +905,7 @@ impl Agent for RealtimeAgent {
                                 let tool = resolved_tools.iter().find(|t| t.name() == name);
 
                                 let (result, actions) = if let Some(tool) = tool {
-                                    let args: serde_json::Value = serde_json::from_str(&arguments)
-                                        .unwrap_or(serde_json::json!({}));
+                                    let args = arguments;
 
                                     let tool_ctx: Arc<dyn ToolContext> = Arc::new(
                                         RealtimeToolContext::new(ctx.clone(), call_id.clone())

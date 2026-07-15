@@ -71,6 +71,15 @@
 //! - `user:` - User preferences (persists across sessions)
 //! - `app:` - Application state (application-wide)
 //! - `temp:` - Temporary data (cleared each turn)
+//!
+//! ## Tool Contract Ownership
+//!
+//! ADK-Rust maintains a strict separation of concerns for tool contracts:
+//! - **adk-core**: Owns provider-neutral contracts (`ToolContract`) and schema adapter interfaces (`SchemaAdapter`).
+//! - **adk-tool**: Generates static contracts from Rust DTOs using `schemars`.
+//! - **provider crates**: Compile canonical contracts into provider-specific wire declarations.
+//! - **adk-realtime**: Transports provider calls and preserves parsed argument values.
+//! - **applications**: Own semantic validation, authorization, side effects, and durable proof.
 
 /// Core agent trait and event stream type.
 pub mod agent;
@@ -139,7 +148,7 @@ pub use model::{
     GenerateContentConfig, Llm, LlmRequest, LlmResponse, LlmResponseStream, UsageMetadata,
 };
 pub use request_context::RequestContext;
-pub use schema_adapter::{GenericSchemaAdapter, SchemaAdapter};
+pub use schema_adapter::{GenericSchemaAdapter, SchemaAdapter, SchemaCompileError};
 pub use schema_cache::SchemaCache;
 pub use shared_state::{SharedState, SharedStateError};
 pub use tool::{

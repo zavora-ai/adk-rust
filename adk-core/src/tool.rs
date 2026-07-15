@@ -3,6 +3,51 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
+///
+/// This type establishes the provider-neutral boundary for tool contracts.
+/// It preserves the original JSON Schema documents before provider-specific
+/// transformations are applied.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolSchema {
+    /// JSON Schema for this tool's parameters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<Value>,
+    /// JSON Schema for this tool's response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response: Option<Value>,
+}
+
+impl ToolSchema {
+    /// Create a new tool schema with optional parameters and response.
+    pub fn new(parameters: Option<Value>, response: Option<Value>) -> Self {
+        Self { parameters, response }
+    }
+}
+
+/// A provider-neutral tool contract.
+///
+/// Encapsulates all metadata required by an LLM provider to declare a tool,
+/// including name, model-facing description, and optional schemas.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolContract {
+    /// Unique name of the tool.
+    pub name: String,
+    /// Model-facing description of what the tool does.
+    pub description: String,
+    /// Input and output schemas for the tool.
+    pub schema: ToolSchema,
+}
+
+impl ToolContract {
+    /// Create a new tool contract.
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        schema: ToolSchema,
+    ) -> Self {
+        Self { name: name.into(), description: description.into(), schema }
+    }
+}
 
 /// The core trait for all tools that agents can invoke.
 ///
@@ -14,6 +59,18 @@ pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     /// Returns a human-readable description of what this tool does.
     fn description(&self) -> &str;
+
+    /// Returns a provider-neutral contract for this tool.
+    ///
+    /// The contract contains the tool name, enhanced description, and schemas.
+    /// Providers consume this contract to build their wire-format declarations.
+    fn contract(&self) -> ToolContract {
+        ToolContract::new(
+            self.name(),
+            self.enhanced_description(),
+            ToolSchema::new(self.parameters_schema(), self.response_schema()),
+        )
+    }
 
     /// Returns the tool declaration that should be exposed to model providers.
     ///
@@ -371,6 +428,16 @@ mod tests {
         assert_eq!(tool.name(), "test");
         assert_eq!(tool.description(), "test tool");
         assert!(!tool.is_long_running());
+    }
+
+    #[test]
+    fn test_tool_contract() {
+        let tool = TestTool { name: "test".to_string() };
+        let contract = tool.contract();
+        assert_eq!(contract.name, "test");
+        assert_eq!(contract.description, "test tool");
+        assert_eq!(contract.schema.parameters, None);
+        assert_eq!(contract.schema.response, None);
     }
 
     #[tokio::test]
