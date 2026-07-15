@@ -509,6 +509,10 @@ impl GeminiRealtimeSession {
 
     /// Translate Gemini-specific events to unified format.
     fn translate_gemini_event(&self, raw: &str) -> Result<Vec<ServerEvent>> {
+        Self::translate_event_static(raw)
+    }
+
+    pub(crate) fn translate_event_static(raw: &str) -> Result<Vec<ServerEvent>> {
         tracing::debug!(%raw, "Translating Gemini event");
         let value: Value = serde_json::from_str(raw)
             .map_err(|e| RealtimeError::protocol(format!("Parse error: {}, raw: {}", e, raw)))?;
@@ -625,9 +629,25 @@ impl GeminiRealtimeSession {
             && let Some(calls) = tool_call.get("functionCalls").and_then(|c| c.as_array())
             && let Some(call) = calls.first()
         {
-            let name = call.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            let id = call.get("id").and_then(|i| i.as_str()).unwrap_or("");
-            let args = call.get("args").cloned().unwrap_or(json!({}));
+            let name = call
+                .get("name")
+                .and_then(|n| n.as_str())
+                .ok_or_else(|| RealtimeError::protocol("Gemini tool call missing 'name'"))?;
+            let id = call
+                .get("id")
+                .and_then(|i| i.as_str())
+                .ok_or_else(|| RealtimeError::protocol("Gemini tool call missing 'id'"))?;
+            let args = call
+                .get("args")
+                .cloned()
+                .ok_or_else(|| RealtimeError::protocol("Gemini tool call missing 'args'"))?;
+
+            if !args.is_object() {
+                return Err(RealtimeError::protocol(format!(
+                    "Gemini tool call 'args' must be an object, got: {:?}",
+                    args
+                )));
+            }
 
             return Ok(vec![ServerEvent::FunctionCallDone {
                 event_id: uuid::Uuid::new_v4().to_string(),
@@ -1235,6 +1255,89 @@ mod tests {
         assert_eq!(gemini_parts[0].text.as_deref(), Some("First"));
         assert_eq!(gemini_parts[1].text.as_deref(), Some("Last"));
     }
+    #[test]
+    fn test_translate_gemini_event_strict_validation() {
+        // 1. Missing name
+        let raw = json!({
+            "toolCall": {
+                "functionCalls": [{
+                    "id": "call_1",
+                    "args": {}
+                }]
+            }
+        })
+        .to_string();
+        let result = GeminiRealtimeSession::translate_event_static(&raw);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Gemini tool call missing 'name'"));
+
+        // 2. Missing id
+        let raw = json!({
+            "toolCall": {
+                "functionCalls": [{
+                    "name": "test",
+                    "args": {}
+                }]
+            }
+        })
+        .to_string();
+        let result = GeminiRealtimeSession::translate_event_static(&raw);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Gemini tool call missing 'id'"));
+
+        // 3. Missing args
+        let raw = json!({
+            "toolCall": {
+                "functionCalls": [{
+                    "name": "test",
+                    "id": "call_1"
+                }]
+            }
+        })
+        .to_string();
+        let result = GeminiRealtimeSession::translate_event_static(&raw);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Gemini tool call missing 'args'"));
+
+        // 4. Args not an object
+        let raw = json!({
+            "toolCall": {
+                "functionCalls": [{
+                    "name": "test",
+                    "id": "call_1",
+                    "args": "not_an_object"
+                }]
+            }
+        })
+        .to_string();
+        let result = GeminiRealtimeSession::translate_event_static(&raw);
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("Gemini tool call 'args' must be an object")
+        );
+
+        // 5. Valid call
+        let raw = json!({
+            "toolCall": {
+                "functionCalls": [{
+                    "name": "test",
+                    "id": "call_1",
+                    "args": {"key": "value"}
+                }]
+            }
+        })
+        .to_string();
+        let events = GeminiRealtimeSession::translate_event_static(&raw).unwrap();
+        assert_eq!(events.len(), 1);
+        if let ServerEvent::FunctionCallDone { name, call_id, arguments, .. } = &events[0] {
+            assert_eq!(name, "test");
+            assert_eq!(call_id, "call_1");
+            assert_eq!(arguments, &json!({"key": "value"}));
+        } else {
+            panic!("Expected FunctionCallDone");
+        }
+    }
+
     #[test]
     fn test_gemini_setup_serialization_includes_model() {
         let setup = GeminiSetup {
