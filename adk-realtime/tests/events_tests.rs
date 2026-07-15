@@ -146,7 +146,7 @@ fn test_server_event_function_call_done_deserialization() {
         "output_index": 0,
         "call_id": "call_abc",
         "name": "get_weather",
-        "arguments": {"location":"NYC"}
+        "arguments": "{\"location\":\"NYC\"}"
     }"#;
 
     let event: ServerEvent = serde_json::from_str(json).unwrap();
@@ -154,7 +154,9 @@ fn test_server_event_function_call_done_deserialization() {
         ServerEvent::FunctionCallDone { call_id, name, arguments, .. } => {
             assert_eq!(call_id, "call_abc");
             assert_eq!(name, "get_weather");
-            assert_eq!(arguments["location"], "NYC");
+            // In raw deserialization, it's still a string.
+            // The normalization happens in the session's receive_raw.
+            assert_eq!(arguments, "{\"location\":\"NYC\"}");
         }
         _ => panic!("Expected FunctionCallDone event"),
     }

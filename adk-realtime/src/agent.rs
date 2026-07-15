@@ -887,10 +887,23 @@ impl Agent for RealtimeAgent {
                                 // Handle transfer_to_agent
                                 if name == "transfer_to_agent" {
                                     let args = arguments;
-                                    let target = args.get("agent_name")
+                                    let target = args
+                                        .get("agent_name")
                                         .and_then(|v| v.as_str())
-                                        .unwrap_or_default()
-                                        .to_string();
+                                        .filter(|s| !s.is_empty())
+                                        .map(|s| s.to_string());
+
+                                    let target = match target {
+                                        Some(t) => t,
+                                        None => {
+                                            yield Err(adk_core::AdkError::agent(format!(
+                                                "transfer_to_agent called with missing or empty 'agent_name': {:?}",
+                                                args
+                                            )));
+                                            let _ = session.close().await;
+                                            return;
+                                        }
+                                    };
 
                                     let mut transfer_event = Event::new(&invocation_id);
                                     transfer_event.author = agent_name.clone();
