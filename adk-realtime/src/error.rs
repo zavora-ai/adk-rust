@@ -16,6 +16,10 @@ pub enum RealtimeError {
     #[error("WebSocket message error: {0}")]
     MessageError(String),
 
+    /// Protocol error (malformed provider payloads).
+    #[error("Protocol error: {0}")]
+    Protocol(String),
+
     /// Authentication error.
     #[error("Authentication error: {0}")]
     AuthError(String),
@@ -123,7 +127,7 @@ impl RealtimeError {
 
     /// Create a new protocol error.
     pub fn protocol<S: Into<String>>(msg: S) -> Self {
-        Self::MessageError(msg.into())
+        Self::Protocol(msg.into())
     }
 
     /// Create a new audio format error.

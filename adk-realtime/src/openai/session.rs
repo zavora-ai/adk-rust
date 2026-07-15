@@ -123,7 +123,30 @@ impl OpenAITransportLink for OpenAIRealtimeSession {
                         );
                         Some(Ok(ServerEvent::Unknown))
                     }
-                    Ok(event) => Some(Ok(event)),
+                    Ok(mut event) => {
+                        // Normalize FunctionCallDone arguments: OpenAI sends them as a JSON-encoded string.
+                        if let ServerEvent::FunctionCallDone { arguments, name, .. } = &mut event {
+                            if let serde_json::Value::String(s) = arguments {
+                                match serde_json::from_str::<serde_json::Value>(s) {
+                                    Ok(parsed) => {
+                                        *arguments = parsed;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            name = %name,
+                                            error = %e,
+                                            "failed to parse OpenAI function arguments as JSON"
+                                        );
+                                        return Some(Err(RealtimeError::protocol(format!(
+                                            "malformed function arguments for {}: {}",
+                                            name, e
+                                        ))));
+                                    }
+                                }
+                            }
+                        }
+                        Some(Ok(event))
+                    }
                     Err(e) => {
                         // The type IS one we model but the fields didn't match —
                         // genuine schema drift worth surfacing.
