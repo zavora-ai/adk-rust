@@ -452,7 +452,7 @@ pub enum ServerEvent {
         /// Function name.
         name: String,
         /// Complete arguments.
-        arguments: String,
+        arguments: Value,
     },
 
     /// Rate limit information.

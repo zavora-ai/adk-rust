@@ -207,6 +207,7 @@ pub struct GeminiRealtimeSession {
     receiver: Arc<Mutex<WsSource>>,
     audio_buffer: Arc<ParkingMutex<BytesMut>>,
     event_queue: Arc<Mutex<std::collections::VecDeque<ServerEvent>>>,
+    schema_cache: Arc<adk_core::SchemaCache>,
 }
 
 impl GeminiRealtimeSession {
@@ -329,6 +330,7 @@ impl GeminiRealtimeSession {
             receiver: Arc::new(Mutex::new(source)),
             audio_buffer: Arc::new(ParkingMutex::new(BytesMut::new())),
             event_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            schema_cache: Arc::new(adk_core::SchemaCache::new()),
         };
 
         session.send_setup(model, config).await?;
@@ -391,7 +393,8 @@ impl GeminiRealtimeSession {
             parts: vec![GeminiPart { text: Some(text), inline_data: None }],
         });
 
-        let tools = convert_tools(config.tools);
+        let adapter = adk_gemini::schema_adapter::GeminiSchemaAdapter::new();
+        let tools = convert_tools(config.tools, &self.schema_cache, &adapter)?;
 
         // Functionally extract the token if it exists in the prior state map
         let handle = config
@@ -639,7 +642,7 @@ impl GeminiRealtimeSession {
                         output_index: idx as u32,
                         call_id: id.to_string(),
                         name: name.to_string(),
-                        arguments: serde_json::to_string(&args).unwrap_or_default(),
+                        arguments: args,
                     }
                 })
                 .collect());
@@ -886,7 +889,8 @@ impl RealtimeSession for GeminiRealtimeSession {
                     parts: vec![GeminiPart { text: Some(text), inline_data: None }],
                 });
 
-                let tools = convert_tools(config.tools);
+                let adapter = adk_gemini::schema_adapter::GeminiSchemaAdapter::new();
+                let tools = convert_tools(config.tools, &self.schema_cache, &adapter)?;
 
                 let handle = config
                     .extra
@@ -1096,21 +1100,38 @@ pub(crate) fn translate_client_message(
 }
 
 /// Convert ADK tool definitions to Gemini format.
-fn convert_tools(tools: Option<Vec<ToolDefinition>>) -> Option<Vec<Value>> {
-    tools.map(|tools| {
-        vec![json!({
-            "functionDeclarations": tools.iter().map(|t| {
-                let mut decl = json!({ "name": t.name });
-                if let Some(desc) = &t.description {
-                    decl["description"] = json!(desc);
-                }
-                if let Some(params) = &t.parameters {
-                    decl["parameters"] = params.clone();
-                }
-                decl
-            }).collect::<Vec<_>>()
-        })]
-    })
+fn convert_tools(
+    tools: Option<Vec<ToolDefinition>>,
+    cache: &adk_core::SchemaCache,
+    adapter: &dyn adk_core::SchemaAdapter,
+) -> Result<Option<Vec<Value>>> {
+    let Some(tools) = tools else {
+        return Ok(None);
+    };
+
+    let mut declarations = Vec::new();
+    for t in tools {
+        let mut decl = json!({ "name": adapter.normalize_tool_name(&t.name) });
+        if let Some(desc) = &t.description {
+            decl["description"] = json!(desc);
+        }
+        if let Some(params) = &t.parameters {
+            let compiled = cache.get_or_compile(params, adapter).map_err(|e| {
+                RealtimeError::protocol(format!(
+                    "Failed to compile schema for tool {}: {}",
+                    t.name, e
+                ))
+            })?;
+            decl["parameters"] = compiled;
+        } else {
+            decl["parameters"] = adapter.empty_schema();
+        }
+        declarations.push(decl);
+    }
+
+    Ok(Some(vec![json!({
+        "functionDeclarations": declarations
+    })]))
 }
 
 #[cfg(test)]
