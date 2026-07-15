@@ -20,7 +20,7 @@ impl SchemaCache {
 
     /// Returns the normalized schema for the given input, using the cache if available.
     pub fn get_or_normalize(&self, schema: &Value, adapter: &dyn SchemaAdapter) -> Value {
-        let hash = Self::hash_schema(schema);
+        let hash = Self::hash_schema_with_adapter(schema, adapter, "normalize");
         let mut cache = self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         cache.entry(hash).or_insert_with(|| adapter.normalize_schema(schema.clone())).clone()
     }
@@ -31,7 +31,7 @@ impl SchemaCache {
         schema: &Value,
         adapter: &dyn SchemaAdapter,
     ) -> Result<Value, SchemaCompileError> {
-        let hash = Self::hash_schema(schema);
+        let hash = Self::hash_schema_with_adapter(schema, adapter, "compile");
         let mut cache = self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
         if let Some(cached) = cache.get(&hash) {
@@ -60,10 +60,90 @@ impl SchemaCache {
         self.len() == 0
     }
 
-    fn hash_schema(schema: &Value) -> u64 {
-        let bytes = serde_json::to_vec(schema).unwrap_or_default();
+    fn hash_schema_with_adapter(
+        schema: &Value,
+        adapter: &dyn SchemaAdapter,
+        operation: &str,
+    ) -> u64 {
+        // Use a robust, collision-resistant identity for the cache key.
         let mut hasher = DefaultHasher::new();
-        bytes.hash(&mut hasher);
+
+        // 1. Identity of the schema content itself.
+        // We use the JSON string representation as a stable, canonical identity.
+        // If serialization fails (pathological), we hash a fallback sentinel.
+        match serde_json::to_vec(schema) {
+            Ok(bytes) => bytes.hash(&mut hasher),
+            Err(_) => "serialization-failure-sentinel".hash(&mut hasher),
+        }
+
+        // 2. Identity of the compiler/adapter.
+        adapter.identifier().hash(&mut hasher);
+        adapter.version().hash(&mut hasher);
+        adapter.surface().hash(&mut hasher);
+
+        // 3. Identity of the operation type.
+        operation.hash(&mut hasher);
+
         hasher.finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::GenericSchemaAdapter;
+    use serde_json::json;
+
+    #[derive(Debug)]
+    struct MockAdapter(&'static str);
+    impl crate::SchemaAdapter for MockAdapter {
+        fn identifier(&self) -> &str {
+            self.0
+        }
+        fn normalize_schema(&self, schema: Value) -> Value {
+            schema
+        }
+    }
+
+    #[test]
+    fn test_cache_separation_by_adapter() {
+        let cache = SchemaCache::new();
+        let schema = json!({"type": "string"});
+
+        let adapter1 = MockAdapter("a1");
+        let adapter2 = MockAdapter("a2");
+
+        // Use get_or_normalize to insert into cache
+        cache.get_or_normalize(&schema, &adapter1);
+        assert_eq!(cache.len(), 1);
+
+        cache.get_or_normalize(&schema, &adapter2);
+        assert_eq!(cache.len(), 2, "Cache should have separate entries for different adapters");
+    }
+
+    #[test]
+    fn test_cache_separation_by_operation() {
+        let cache = SchemaCache::new();
+        let schema = json!({"type": "string"});
+        let adapter = GenericSchemaAdapter;
+
+        cache.get_or_normalize(&schema, &adapter);
+        assert_eq!(cache.len(), 1);
+
+        cache.get_or_compile(&schema, &adapter).unwrap();
+        assert_eq!(cache.len(), 2, "Cache should have separate entries for normalize vs compile");
+    }
+
+    #[test]
+    fn test_cache_hit() {
+        let cache = SchemaCache::new();
+        let schema = json!({"type": "string"});
+        let adapter = GenericSchemaAdapter;
+
+        cache.get_or_normalize(&schema, &adapter);
+        assert_eq!(cache.len(), 1);
+
+        cache.get_or_normalize(&schema, &adapter);
+        assert_eq!(cache.len(), 1, "Cache should hit for same schema and adapter");
     }
 }

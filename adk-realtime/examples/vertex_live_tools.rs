@@ -193,10 +193,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match event {
             ServerEvent::FunctionCallDone { name, arguments, call_id, .. } => {
-                println!("🔧 Tool call: {name}({arguments})");
+                let arguments_str = serde_json::to_string(&arguments).unwrap_or_default();
+                println!("🔧 Tool call: {name}({arguments_str})");
 
                 // Execute the tool
-                let result = execute_tool(&name, &arguments);
+                let result = execute_tool(&name, &arguments_str);
                 println!("   → Result: {result}");
 
                 // Send the result back to the model

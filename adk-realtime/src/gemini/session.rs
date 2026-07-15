@@ -208,6 +208,7 @@ pub struct GeminiRealtimeSession {
     audio_buffer: Arc<ParkingMutex<BytesMut>>,
     event_queue: Arc<Mutex<std::collections::VecDeque<ServerEvent>>>,
     schema_cache: Arc<adk_core::SchemaCache>,
+    adapter: Arc<dyn adk_core::SchemaAdapter>,
 }
 
 impl GeminiRealtimeSession {
@@ -224,6 +225,21 @@ impl GeminiRealtimeSession {
         model: &str,
         config: RealtimeConfig,
     ) -> Result<Self> {
+        let schema_cache = Arc::new(adk_core::SchemaCache::new());
+        let adapter: Arc<dyn adk_core::SchemaAdapter> = match &backend {
+            GeminiLiveBackend::Studio { .. } => {
+                Arc::new(adk_gemini::schema_adapter::GeminiSchemaAdapter::new())
+            }
+            #[cfg(feature = "vertex-live")]
+            GeminiLiveBackend::Vertex { .. } => {
+                Arc::new(adk_gemini::schema_adapter::GeminiSchemaAdapter::vertex_ai())
+            }
+        };
+
+        // 1. Compile tools BEFORE establishing the WebSocket connection.
+        // If any tool fails to compile (semantic loss), we abort early.
+        let tools = convert_tools(config.tools.clone(), &schema_cache, adapter.as_ref())?;
+
         let ws_stream = match &backend {
             GeminiLiveBackend::Studio { api_key } => {
                 let url = format!(
@@ -330,10 +346,11 @@ impl GeminiRealtimeSession {
             receiver: Arc::new(Mutex::new(source)),
             audio_buffer: Arc::new(ParkingMutex::new(BytesMut::new())),
             event_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
-            schema_cache: Arc::new(adk_core::SchemaCache::new()),
+            schema_cache,
+            adapter,
         };
 
-        session.send_setup(model, config).await?;
+        session.send_setup_with_compiled_tools(model, config, tools).await?;
         Ok(session)
     }
 
@@ -356,8 +373,13 @@ impl GeminiRealtimeSession {
         Ok(())
     }
 
-    /// Send initial setup message.
-    async fn send_setup(&self, model: &str, config: RealtimeConfig) -> Result<()> {
+    /// Send initial setup message with pre-compiled tools.
+    async fn send_setup_with_compiled_tools(
+        &self,
+        model: &str,
+        config: RealtimeConfig,
+        compiled_tools: Option<Vec<Value>>,
+    ) -> Result<()> {
         let mut generation_config = json!({
             "responseModalities": config.modalities.unwrap_or_else(|| vec!["AUDIO".to_string()]),
         });
@@ -393,9 +415,6 @@ impl GeminiRealtimeSession {
             parts: vec![GeminiPart { text: Some(text), inline_data: None }],
         });
 
-        let adapter = adk_gemini::schema_adapter::GeminiSchemaAdapter::new();
-        let tools = convert_tools(config.tools, &self.schema_cache, &adapter)?;
-
         // Functionally extract the token if it exists in the prior state map
         let handle = config
             .extra
@@ -416,7 +435,7 @@ impl GeminiRealtimeSession {
                 model: Some(model.to_string()),
                 system_instruction,
                 generation_config: Some(generation_config),
-                tools,
+                tools: compiled_tools,
                 cached_content: config.cached_content,
                 session_resumption,
                 input_audio_transcription: transcription.clone(),
@@ -909,8 +928,8 @@ impl RealtimeSession for GeminiRealtimeSession {
                     parts: vec![GeminiPart { text: Some(text), inline_data: None }],
                 });
 
-                let adapter = adk_gemini::schema_adapter::GeminiSchemaAdapter::new();
-                let tools = convert_tools(config.tools, &self.schema_cache, &adapter)?;
+                // RE-USE the same retained compiler target for updates/resumption
+                let tools = convert_tools(config.tools, &self.schema_cache, self.adapter.as_ref())?;
 
                 let handle = config
                     .extra
@@ -1131,7 +1150,11 @@ fn convert_tools(
 
     let mut declarations = Vec::new();
     for t in tools {
-        let mut decl = json!({ "name": adapter.normalize_tool_name(&t.name) });
+        adapter
+            .validate_tool_name(&t.name)
+            .map_err(|e| RealtimeError::protocol(format!("Invalid tool name {}: {}", t.name, e)))?;
+
+        let mut decl = json!({ "name": t.name });
         if let Some(desc) = &t.description {
             decl["description"] = json!(desc);
         }
@@ -1393,5 +1416,38 @@ mod tests {
             url,
             "wss://us-central1-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent?project_id=my-project"
         );
+    }
+
+    #[tokio::test]
+    async fn test_connect_fail_closed_on_invalid_schema() {
+        let backend = GeminiLiveBackend::studio("fake-key");
+        let config = RealtimeConfig {
+            tools: Some(vec![ToolDefinition {
+                name: "invalid_tool".to_string(),
+                description: Some("description".to_string()),
+                parameters: Some(json!({
+                    "type": "object",
+                    "properties": {
+                        "polymorphic": {
+                            "anyOf": [{"type": "string"}, {"type": "number"}]
+                        }
+                    }
+                })),
+            }]),
+            ..Default::default()
+        };
+
+        let result = GeminiRealtimeSession::connect(backend, "models/gemini-live", config).await;
+
+        match result {
+            Err(RealtimeError::Protocol(msg)) => {
+                assert!(msg.contains("Failed to compile schema"));
+                assert!(msg.contains("polymorphic unions"));
+            }
+            other => panic!(
+                "Expected Protocol Error (via RealtimeError::protocol) due to schema compilation failure, got {:?}",
+                other
+            ),
+        }
     }
 }

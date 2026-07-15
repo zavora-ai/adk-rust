@@ -513,14 +513,8 @@ impl RealtimeAgent {
         config.modalities = Some(self.modalities.clone());
 
         // Convert ADK tools to realtime tool definitions
-        let tool_defs: Vec<ToolDefinition> = resolved_tools
-            .iter()
-            .map(|t| ToolDefinition {
-                name: t.name().to_string(),
-                description: Some(t.enhanced_description().to_string()),
-                parameters: t.parameters_schema(),
-            })
-            .collect();
+        let tool_defs: Vec<ToolDefinition> =
+            resolved_tools.iter().map(|t| ToolDefinition::from(t.contract())).collect();
 
         if !tool_defs.is_empty() {
             config.tools = Some(tool_defs);
