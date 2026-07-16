@@ -1,3 +1,27 @@
+//! Cross-platform live showcase: a natural-language prompt that ends up on the
+//! real system clipboard, driven through the governed computer-use graph and
+//! independently verified.
+//!
+//! This runs on **macOS, Linux, and Windows** — the `computer-use-mcp` server
+//! performs the actual clipboard write, and this example verifies it by reading
+//! the clipboard back with the platform's own tool (see
+//! [`support::read_clipboard`]).
+//!
+//! ## Prerequisites
+//!
+//! - A running `computer-use-mcp` build. Point `COMPUTER_USE_MCP_ENTRYPOINT` at
+//!   a local `dist/server.js`, or set `COMPUTER_USE_MCP_PACKAGE` to an npm
+//!   specifier (defaults to `@zavora-ai/computer-use-mcp` via `npx`).
+//! - **Node.js** (override the binary with `NODE`).
+//! - A Gemini API key (`GOOGLE_API_KEY` or `GEMINI_API_KEY`) for the planner.
+//! - Clipboard read-back tooling: nothing extra on macOS (`pbpaste`) or Windows
+//!   (`Get-Clipboard`); on Linux install `wl-clipboard`, `xclip`, or `xsel`.
+//!
+//! ```bash
+//! cargo run -p adk-computer-use --example live_clipboard -- \
+//!   "Place the exact public text 'ADK-Rust live prompt completed' on my clipboard."
+//! ```
+
 use adk_agent::LlmAgentBuilder;
 use adk_computer_use::{
     ComputerUseMcpConfig, ComputerUseMcpRuntime, ScopeAuthorizer, TraceCorrelation,
@@ -16,13 +40,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::process::Command;
 
-fn output(value: &Value) -> &Value {
-    value
-        .get("response")
-        .and_then(|value| value.get("output"))
-        .or_else(|| value.get("output"))
-        .unwrap_or(value)
-}
+#[path = "support/mod.rs"]
+mod support;
+use support::{output, read_clipboard};
 
 async fn plan_prompt(prompt: &str) -> Result<Value, Box<dyn std::error::Error>> {
     let api_key = std::env::var("GOOGLE_API_KEY")
@@ -49,8 +69,8 @@ async fn plan_prompt(prompt: &str) -> Result<Value, Box<dyn std::error::Error>> 
         }
     });
     let agent: Arc<dyn Agent> = Arc::new(
-        LlmAgentBuilder::new("computer-use-v8-planner")
-            .description("Constrained natural-language planner for the governed v8 showcase")
+        LlmAgentBuilder::new("computer-use-planner")
+            .description("Constrained natural-language planner for the governed showcase")
             .instruction(
                 "Convert the user's request into the one permitted public demonstration action. \
                  Preserve the exact text the user asks to place on the clipboard. Do not invent \
@@ -66,14 +86,14 @@ async fn plan_prompt(prompt: &str) -> Result<Value, Box<dyn std::error::Error>> 
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
     sessions
         .create(CreateRequest {
-            app_name: "computer-use-v8-live".into(),
+            app_name: "computer-use-live".into(),
             user_id: "local-operator".into(),
             session_id: Some("prompt-planner".into()),
             state: HashMap::new(),
         })
         .await?;
     let runner = Runner::builder()
-        .app_name("computer-use-v8-live")
+        .app_name("computer-use-live")
         .agent(agent)
         .session_service(sessions)
         .build()?;
@@ -105,8 +125,7 @@ async fn plan_prompt(prompt: &str) -> Result<Value, Box<dyn std::error::Error>> 
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prompt = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
     let prompt = if prompt.is_empty() {
-        "Place the exact public text 'ADK-Rust v8 live prompt completed' on my macOS clipboard."
-            .to_string()
+        "Place the exact public text 'ADK-Rust live prompt completed' on my clipboard.".to_string()
     } else {
         prompt
     };
@@ -133,7 +152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .env("COMPUTER_USE_ACTIVE_PROFILE", "v8-safe")
         .env("COMPUTER_USE_PRINCIPAL_ID", &principal);
     let client = ().serve(TokioChildProcess::new(command)?).await?;
-    let toolset = Arc::new(McpToolset::new(client).with_name("computer-use-v8"));
+    let toolset = Arc::new(McpToolset::new(client).with_name("computer-use"));
 
     let started = toolset.call_tool_value("start_session", Map::new()).await?;
     let session_id = output(&started)
@@ -153,7 +172,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             correlation: TraceCorrelation {
                 adk_session_id: Some("adk-live-session".into()),
                 adk_invocation_id: Some("adk-live-invocation".into()),
-                adk_graph_thread_id: Some("adk-live-v8".into()),
+                adk_graph_thread_id: Some("adk-live".into()),
                 trace_id: None,
             },
         },
@@ -168,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let mut input = State::new();
     input.insert("proposed_action".into(), proposed_action.clone());
-    let result = graph.invoke(input, ExecutionConfig::new("adk-live-v8")).await?;
+    let result = graph.invoke(input, ExecutionConfig::new("adk-live")).await?;
     let safe_result = json!({
         "observations_joined": result.get("observations_joined") == Some(&Value::Bool(true)),
         "route": result.get("route").and_then(Value::as_str),
@@ -185,15 +204,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .pointer("/arguments/text")
         .and_then(Value::as_str)
         .ok_or("planned action lost clipboard text")?;
-    let clipboard = Command::new("pbpaste").output().await?;
-    let actual = String::from_utf8(clipboard.stdout)?;
+    let actual = read_clipboard().await?;
     if actual != expected {
         return Err(format!(
             "clipboard verification failed: expected {expected:?}, got {actual:?}"
         )
         .into());
     }
-    println!("MACOS_VERIFICATION: clipboard matched planned text exactly");
+    println!("CLIPBOARD_VERIFICATION: clipboard matched planned text exactly");
     toolset.cancellation_token().await.cancel();
     Ok(())
 }

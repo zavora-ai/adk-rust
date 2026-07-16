@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "ADK-Rust graph, auth, and wire contracts for computer-use-mcp v8"
+description = "ADK-Rust graph, auth, and wire contracts for computer-use-mcp"
 homepage.workspace = true
 repository.workspace = true
 keywords = ["ai", "agent", "computer-use", "mcp", "automation"]
@@ -13,6 +13,7 @@ categories = ["api-bindings", "asynchronous"]
 readme = "README.md"
 
 [dependencies]
+adk-core.workspace = true
 adk-graph.workspace = true
 adk-auth.workspace = true
 adk-tool = { workspace = true, features = ["mcp"] }
@@ -28,11 +29,32 @@ uuid.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+proptest = "1.5"
 chrono.workspace = true
 adk-agent.workspace = true
-adk-core.workspace = true
 adk-model = { workspace = true, features = ["gemini"] }
 adk-runner.workspace = true
 adk-session.workspace = true
 futures.workspace = true
 tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
+
+# Portable, dependency-free graph showcase (runs on any platform, no server).
+[[example]]
+name = "minimal_graph"
+path = "examples/minimal_graph.rs"
+
+# Cross-platform live showcase (macOS, Linux, Windows). Requires a running
+# computer-use-mcp server; verifies the result via the platform clipboard tool.
+[[example]]
+name = "live_clipboard"
+path = "examples/live_clipboard.rs"
+
+# Native-UI macOS showcases. These require a running computer-use-mcp server and
+# macOS-only tooling (osascript, swiftc, Electron); see examples/macos/README.md.
+[[example]]
+name = "live_form"
+path = "examples/macos/live_form.rs"
+
+[[example]]
+name = "live_background_finder"
+path = "examples/macos/live_background_finder.rs"

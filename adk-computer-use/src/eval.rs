@@ -1,3 +1,13 @@
+//! Deterministic release evaluation for computer-use sessions.
+//!
+//! [`ComputerUseEvaluator`] scores an observed [`SessionEvent`] trajectory
+//! against an expected tool sequence and flags safety violations (unleased
+//! mutations, commits without verification, duplicate mutations). The
+//! [`AdkEvaluationReceipt`] is a tamper-evident, canonically-hashed evidence
+//! artifact published for release review — CI produces it, but only an external
+//! release authority signs the matching statement, so CI output cannot
+//! self-promote a release.
+
 use crate::SessionEvent;
 use adk_eval::{ToolTrajectoryScorer, ToolUse};
 use serde::{Deserialize, Serialize};
@@ -5,46 +15,77 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
+/// Outcome of scoring one session's event trajectory.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputerUseEvaluation {
+    /// Whether the trajectory scored perfectly and had no violations.
     pub passed: bool,
+    /// Trajectory similarity score in `0.0..=1.0` against the expected tools.
     pub trajectory_score: f64,
+    /// Number of `action.started` events observed.
     pub mutations: usize,
+    /// Number of `action.committed` events observed.
     pub committed: usize,
+    /// Human-readable safety violations detected during scoring.
     pub violations: Vec<String>,
 }
 
+/// A source file digest included in an [`AdkEvaluationReceipt`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdkEvaluationSource {
+    /// Path of the source file.
     pub path: String,
+    /// `sha256:`-prefixed digest of the file contents.
     pub digest: String,
 }
 
+/// Claims asserted by an [`AdkEvaluationReceipt`] and re-checked on verify.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdkEvaluationClaims {
+    /// Whether the full test suite passed.
     pub tests_passed: bool,
+    /// Whether auth principal/tenant binding was verified.
     pub auth_bound: bool,
+    /// Whether multimodal (image) evidence delivery was verified.
     pub multimodal_evidence: bool,
+    /// Number of duplicate mutations observed (must be zero to verify).
     pub duplicate_mutations: u64,
+    /// Number of crash points covered (must be at least two to verify).
     pub crash_points_covered: u64,
+    /// Total number of tests executed (must be non-zero to verify).
     pub test_count: u64,
 }
 
+/// Tamper-evident release-evaluation receipt for a computer-use subject.
+///
+/// Seal a populated receipt with [`AdkEvaluationReceipt::seal`] to compute its
+/// canonical digest, and validate one with [`AdkEvaluationReceipt::verify`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdkEvaluationReceipt {
+    /// Receipt schema version (must be `1`).
     pub schema_version: u32,
+    /// Protocol identifier (`adk-rust-computer-use-v8-evaluation`).
     pub protocol: String,
+    /// Version of the evaluated subject.
     pub subject_version: String,
+    /// RFC 3339 timestamp the receipt was generated.
     pub generated_at: String,
+    /// Commands executed to produce the evidence.
     pub commands: Vec<String>,
+    /// Distinct assertions the evidence proves.
     pub assertions: Vec<String>,
+    /// Claims re-checked on verification.
     pub claims: AdkEvaluationClaims,
+    /// Source file digests backing the evidence.
     pub sources: Vec<AdkEvaluationSource>,
+    /// `sha256:`-prefixed digest over the sources.
     pub source_digest: String,
+    /// `sha256:`-prefixed digest over the captured output.
     pub output_digest: String,
+    /// Canonical digest over the whole receipt; empty until sealed.
     pub receipt_digest: String,
 }
 
@@ -78,12 +119,23 @@ fn sha256(value: &str) -> String {
 }
 
 impl AdkEvaluationReceipt {
+    /// Compute and set the canonical `receipt_digest` over the whole receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`serde_json::Error`] if the receipt cannot be serialized to
+    /// JSON for canonicalization.
     pub fn seal(mut self) -> Result<Self, serde_json::Error> {
         self.receipt_digest.clear();
         self.receipt_digest = sha256(&canonical_json(&serde_json::to_value(&self)?));
         Ok(self)
     }
 
+    /// Validate schema, protocol, claims, and the canonical digest.
+    ///
+    /// Returns `true` only when every claim holds (tests passed, auth bound,
+    /// multimodal evidence present, no duplicate mutations, at least two crash
+    /// points, non-empty sources) and the receipt digest matches a fresh seal.
     pub fn verify(&self) -> bool {
         if self.schema_version != 1
             || self.protocol != "adk-rust-computer-use-v8-evaluation"
@@ -119,6 +171,12 @@ impl Default for ComputerUseEvaluator {
 }
 
 impl ComputerUseEvaluator {
+    /// Score an observed event trajectory against an expected tool sequence.
+    ///
+    /// Flags unleased mutations, verification/commit ordering violations,
+    /// duplicate receipts, and duplicate mutations. The result
+    /// [`ComputerUseEvaluation::passed`] is `true` only when there are no
+    /// violations and the trajectory score is perfect.
     pub fn evaluate(
         &self,
         expected_trajectory: &[ToolUse],
@@ -185,6 +243,7 @@ impl ComputerUseEvaluator {
         }
     }
 
+    /// Extract the tool-use trajectory from `action.started` events.
     pub fn trajectory(events: &[SessionEvent]) -> Vec<ToolUse> {
         events
             .iter()

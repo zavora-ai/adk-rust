@@ -1,22 +1,38 @@
+//! Coarse `computer:*` scope authorization bound to an adk-auth identity.
+//!
+//! [`ScopeAuthorizer`] is a *gate*, not an approval: it confirms the caller
+//! holds the entitlement for the requested [`ExecutionMode`] and that the
+//! action's principal/tenant match the identity already verified by adk-auth.
+//! The runtime policy engine still evaluates the exact action independently.
+
 use crate::{ActionClass, ExecutionMode};
 use adk_auth::check_scopes;
 use thiserror::Error;
 
-/// Authenticated identity and exact operation context forwarded to v8.
+/// Authenticated identity and exact operation context forwarded to the runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComputerUseAuthContext {
+    /// Authenticated principal proposing the action.
     pub principal_id: String,
+    /// Authenticated tenant, when multi-tenant.
     pub tenant_id: Option<String>,
+    /// The session the action belongs to.
     pub session_id: String,
+    /// Execution group for multi-agent coordination.
     pub execution_group_id: String,
+    /// The execution mode being requested.
     pub requested_mode: ExecutionMode,
+    /// The operation-aware action class.
     pub action_class: ActionClass,
+    /// Target application/bundle identifier, when applicable.
     pub target_app: Option<String>,
+    /// Target window identifier, when applicable.
     pub target_window: Option<String>,
+    /// Digest of the policy under which the action is proposed.
     pub policy_digest: String,
 }
 
-/// Coarse ADK scope gate. The v8 policy engine still evaluates the exact action.
+/// Coarse ADK scope gate. The runtime policy engine still evaluates the exact action.
 #[derive(Debug, Clone, Default)]
 pub struct ScopeAuthorizer {
     scopes: Vec<String>,
@@ -24,13 +40,17 @@ pub struct ScopeAuthorizer {
     tenant_id: Option<String>,
 }
 
+/// Reason a [`ScopeAuthorizer`] rejected a [`ComputerUseAuthContext`].
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AuthorizationError {
+    /// The caller lacks the scope required for the requested mode.
     #[error("missing required computer-use scope: {0}")]
     MissingScope(&'static str),
-    #[error("v8 principal does not match the verified ADK identity")]
+    /// The action's principal does not match the verified ADK identity.
+    #[error("principal does not match the verified ADK identity")]
     PrincipalMismatch,
-    #[error("v8 tenant does not match the verified ADK identity")]
+    /// The action's tenant does not match the verified ADK identity.
+    #[error("tenant does not match the verified ADK identity")]
     TenantMismatch,
 }
 
@@ -63,7 +83,14 @@ impl ScopeAuthorizer {
         self.tenant_id.as_deref()
     }
 
-    /// Verify coarse entitlement without treating it as v8 action approval.
+    /// Verify coarse entitlement without treating it as runtime action approval.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthorizationError::PrincipalMismatch`] or
+    /// [`AuthorizationError::TenantMismatch`] when the context identity differs
+    /// from the verified identity, or [`AuthorizationError::MissingScope`] when
+    /// the required `computer:*` scope for the requested mode is absent.
     pub fn authorize(&self, context: &ComputerUseAuthContext) -> Result<(), AuthorizationError> {
         if self.principal_id.as_deref().is_some_and(|id| id != context.principal_id) {
             return Err(AuthorizationError::PrincipalMismatch);
@@ -106,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn verified_identity_must_match_v8_principal_and_tenant() {
+    fn verified_identity_must_match_runtime_principal_and_tenant() {
         let authorizer = ScopeAuthorizer::from_verified_identity(
             "verified",
             Some("tenant-a".into()),

@@ -1,52 +1,13 @@
 use crate::{
-    ActionClass, ActionEnvelope, ActionPreview, ComputerUseAuthContext, ControlLease,
+    ActionClass, ActionPreview, ComputerUseAuthContext, ComputerUseRuntime, ControlLease,
     ExecutionMode, ExecutionReceipt, ScopeAuthorizer, TargetReservation,
 };
 use adk_graph::{
     Checkpointer, CompiledGraph, DeferredNodeConfig, END, GraphError, MergeStrategy, NodeOutput,
     START, StateGraph,
 };
-use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
-
-/// Runtime boundary implemented by the computer-use v8 MCP or in-process adapter.
-#[async_trait]
-pub trait ComputerUseRuntime: Send + Sync {
-    async fn discover_capabilities(&self) -> Result<Value, String>;
-    async fn observe_visual(&self) -> Result<Value, String>;
-    async fn observe_semantic(&self) -> Result<Value, String>;
-    async fn preview_action(&self, proposed_action: Value) -> Result<ActionPreview, String>;
-    async fn reserve_target(
-        &self,
-        _envelope: &ActionEnvelope,
-    ) -> Result<Option<TargetReservation>, String> {
-        Ok(None)
-    }
-    async fn release_target(&self, _reservation: &TargetReservation) -> Result<(), String> {
-        Ok(())
-    }
-    async fn acquire_lease(&self, envelope: &ActionEnvelope) -> Result<ControlLease, String>;
-    async fn execute_action(
-        &self,
-        envelope: &ActionEnvelope,
-        lease: &ControlLease,
-        approval_grant_id: Option<&str>,
-    ) -> Result<ExecutionReceipt, String>;
-    async fn verify(&self, receipt: &ExecutionReceipt) -> Result<bool, String>;
-
-    async fn pause_session(&self, _session_id: &str, _reason: &str) -> Result<(), String> {
-        Err("pause_session is not implemented by this runtime adapter".into())
-    }
-
-    async fn stop_session(&self, _session_id: &str, _reason: &str) -> Result<(), String> {
-        Err("stop_session is not implemented by this runtime adapter".into())
-    }
-
-    async fn emergency_stop(&self, _reason: &str) -> Result<(), String> {
-        Err("emergency_stop is not implemented by this runtime adapter".into())
-    }
-}
 
 fn node_error(node: &str, message: impl Into<String>) -> GraphError {
     GraphError::NodeExecutionFailed { node: node.to_string(), message: message.into() }
@@ -101,7 +62,7 @@ pub fn build_reference_graph_with_checkpointer(
             let value = runtime
                 .discover_capabilities()
                 .await
-                .map_err(|error| node_error("discover", error))?;
+                .map_err(|error| node_error("discover", error.to_string()))?;
             Ok(NodeOutput::new().with_update("capabilities", value))
         }
     })
@@ -111,7 +72,7 @@ pub fn build_reference_graph_with_checkpointer(
             let value = runtime
                 .observe_visual()
                 .await
-                .map_err(|error| node_error("observe_visual", error))?;
+                .map_err(|error| node_error("observe_visual", error.to_string()))?;
             Ok(NodeOutput::new().with_update("visual_evidence", value))
         }
     })
@@ -121,7 +82,7 @@ pub fn build_reference_graph_with_checkpointer(
             let value = runtime
                 .observe_semantic()
                 .await
-                .map_err(|error| node_error("observe_semantic", error))?;
+                .map_err(|error| node_error("observe_semantic", error.to_string()))?;
             Ok(NodeOutput::new().with_update("semantic_evidence", value))
         }
     })
@@ -155,7 +116,7 @@ pub fn build_reference_graph_with_checkpointer(
             let preview = runtime
                 .preview_action(proposed)
                 .await
-                .map_err(|error| node_error("preview", error))?;
+                .map_err(|error| node_error("preview", error.to_string()))?;
             let route = if preview.executable {
                 "allowed"
             } else if preview.blocker.as_deref() == Some("approval_required") {
@@ -231,7 +192,7 @@ pub fn build_reference_graph_with_checkpointer(
             let reservation = runtime
                 .reserve_target(&preview.envelope)
                 .await
-                .map_err(|error| node_error("reserve_target", error))?;
+                .map_err(|error| node_error("reserve_target", error.to_string()))?;
             Ok(NodeOutput::new().with_update("reservation", serde_json::to_value(reservation)?))
         }
     })
@@ -246,7 +207,7 @@ pub fn build_reference_graph_with_checkpointer(
             let lease = runtime
                 .acquire_lease(&preview.envelope)
                 .await
-                .map_err(|error| node_error("acquire_lease", error))?;
+                .map_err(|error| node_error("acquire_lease", error.to_string()))?;
             Ok(NodeOutput::new().with_update("lease", serde_json::to_value(lease)?))
         }
     })
@@ -293,7 +254,7 @@ pub fn build_reference_graph_with_checkpointer(
                     ctx.get("approval_grant_id").and_then(Value::as_str),
                 )
                 .await
-                .map_err(|error| node_error("execute", error))?;
+                .map_err(|error| node_error("execute", error.to_string()))?;
             Ok(NodeOutput::new().with_update("receipt", serde_json::to_value(receipt)?))
         }
     })
@@ -308,7 +269,7 @@ pub fn build_reference_graph_with_checkpointer(
             let verified = runtime
                 .verify(&receipt)
                 .await
-                .map_err(|error| node_error("verify", error))?;
+                .map_err(|error| node_error("verify", error.to_string()))?;
             if let Some(reservation) = ctx.get("reservation")
                 && !reservation.is_null()
             {
@@ -316,7 +277,7 @@ pub fn build_reference_graph_with_checkpointer(
                 runtime
                     .release_target(&reservation)
                     .await
-                    .map_err(|error| node_error("verify", error))?;
+                    .map_err(|error| node_error("verify", error.to_string()))?;
             }
             Ok(NodeOutput::new()
                 .with_update("verified", json!(verified))

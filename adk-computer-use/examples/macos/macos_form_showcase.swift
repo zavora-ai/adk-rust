@@ -26,7 +26,7 @@ final class ShowcaseDelegate: NSObject, NSApplicationDelegate {
         content.addSubview(heading)
 
         let explanation = NSTextField(wrappingLabelWithString:
-            "ADK observes this window, requests approval in PiP, and only then fills these public demonstration fields through the v8 safety runtime.")
+            "ADK observes this window, requests approval in PiP, and only then fills these public demonstration fields through the safety runtime.")
         explanation.frame = NSRect(x: 36, y: 205, width: 448, height: 48)
         explanation.textColor = .secondaryLabelColor
         content.addSubview(explanation)

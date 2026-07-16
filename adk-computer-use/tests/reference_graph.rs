@@ -1,8 +1,8 @@
 use adk_computer_use::{
-    ActionClass, ActionEnvelope, ActionPreview, CancellationBridge, ComputerUseRuntime,
-    ControlLease, ExecutionCapability, ExecutionMode, ExecutionReceipt, LeaseBoundaries,
-    PolicyDecision, ReceiptStatus, ScopeAuthorizer, TargetReservation, TargetReservationScope,
-    build_reference_graph, build_reference_graph_with_checkpointer,
+    ActionClass, ActionEnvelope, ActionPreview, CancellationBridge, ComputerUseError,
+    ComputerUseRuntime, ControlLease, ExecutionCapability, ExecutionMode, ExecutionReceipt,
+    LeaseBoundaries, PolicyDecision, ReceiptStatus, ScopeAuthorizer, TargetReservation,
+    TargetReservationScope, build_reference_graph, build_reference_graph_with_checkpointer,
 };
 use adk_graph::{ExecutionConfig, GraphError, MemoryCheckpointer, State};
 use async_trait::async_trait;
@@ -104,23 +104,29 @@ impl FakeRuntime {
 
 #[async_trait]
 impl ComputerUseRuntime for FakeRuntime {
-    async fn discover_capabilities(&self) -> Result<Value, String> {
+    async fn discover_capabilities(&self) -> Result<Value, ComputerUseError> {
         Ok(self.observe("capability").await)
     }
 
-    async fn observe_visual(&self) -> Result<Value, String> {
+    async fn observe_visual(&self) -> Result<Value, ComputerUseError> {
         Ok(self.observe("visual").await)
     }
 
-    async fn observe_semantic(&self) -> Result<Value, String> {
+    async fn observe_semantic(&self) -> Result<Value, ComputerUseError> {
         Ok(self.observe("semantic").await)
     }
 
-    async fn preview_action(&self, _proposed_action: Value) -> Result<ActionPreview, String> {
+    async fn preview_action(
+        &self,
+        _proposed_action: Value,
+    ) -> Result<ActionPreview, ComputerUseError> {
         Ok(self.preview())
     }
 
-    async fn acquire_lease(&self, envelope: &ActionEnvelope) -> Result<ControlLease, String> {
+    async fn acquire_lease(
+        &self,
+        envelope: &ActionEnvelope,
+    ) -> Result<ControlLease, ComputerUseError> {
         Ok(ControlLease {
             lease_id: "lease-1".into(),
             revision: 1,
@@ -141,7 +147,7 @@ impl ComputerUseRuntime for FakeRuntime {
     async fn reserve_target(
         &self,
         envelope: &ActionEnvelope,
-    ) -> Result<Option<TargetReservation>, String> {
+    ) -> Result<Option<TargetReservation>, ComputerUseError> {
         self.reservations.fetch_add(1, Ordering::SeqCst);
         Ok(Some(TargetReservation {
             reservation_id: "reservation-1".into(),
@@ -159,7 +165,10 @@ impl ComputerUseRuntime for FakeRuntime {
         }))
     }
 
-    async fn release_target(&self, _reservation: &TargetReservation) -> Result<(), String> {
+    async fn release_target(
+        &self,
+        _reservation: &TargetReservation,
+    ) -> Result<(), ComputerUseError> {
         self.releases.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -169,14 +178,14 @@ impl ComputerUseRuntime for FakeRuntime {
         envelope: &ActionEnvelope,
         _lease: &ControlLease,
         approval_grant_id: Option<&str>,
-    ) -> Result<ExecutionReceipt, String> {
+    ) -> Result<ExecutionReceipt, ComputerUseError> {
         *self.last_approval_grant.lock().await = approval_grant_id.map(str::to_string);
         let mut receipts = self.receipts.lock().await;
         if let Some(receipt) = receipts.get(&envelope.action_id) {
             return Ok(receipt.clone());
         }
         if self.fail_before_first_effect.swap(false, Ordering::SeqCst) {
-            return Err("injected crash before v8 effect".into());
+            return Err(ComputerUseError::Runtime("injected crash before runtime effect".into()));
         }
         self.physical_mutations.fetch_add(1, Ordering::SeqCst);
         let receipt = ExecutionReceipt {
@@ -193,26 +202,26 @@ impl ComputerUseRuntime for FakeRuntime {
         };
         receipts.insert(envelope.action_id.clone(), receipt.clone());
         if self.fail_after_first_commit.swap(false, Ordering::SeqCst) {
-            return Err("injected crash after v8 commit".into());
+            return Err(ComputerUseError::Runtime("injected crash after runtime commit".into()));
         }
         Ok(receipt)
     }
 
-    async fn verify(&self, receipt: &ExecutionReceipt) -> Result<bool, String> {
+    async fn verify(&self, receipt: &ExecutionReceipt) -> Result<bool, ComputerUseError> {
         Ok(receipt.status == ReceiptStatus::Committed)
     }
 
-    async fn pause_session(&self, session_id: &str, reason: &str) -> Result<(), String> {
+    async fn pause_session(&self, session_id: &str, reason: &str) -> Result<(), ComputerUseError> {
         self.cancellation_log.lock().await.push(format!("pause:{session_id}:{reason}"));
         Ok(())
     }
 
-    async fn stop_session(&self, session_id: &str, reason: &str) -> Result<(), String> {
+    async fn stop_session(&self, session_id: &str, reason: &str) -> Result<(), ComputerUseError> {
         self.cancellation_log.lock().await.push(format!("stop:{session_id}:{reason}"));
         Ok(())
     }
 
-    async fn emergency_stop(&self, reason: &str) -> Result<(), String> {
+    async fn emergency_stop(&self, reason: &str) -> Result<(), ComputerUseError> {
         self.cancellation_log.lock().await.push(format!("emergency:{reason}"));
         Ok(())
     }
@@ -286,7 +295,7 @@ async fn approval_resume_executes_only_the_original_digest_with_the_exact_grant(
 }
 
 #[tokio::test]
-async fn approval_resume_can_delegate_bearer_handling_to_the_v8_runtime() {
+async fn approval_resume_can_delegate_bearer_handling_to_the_runtime() {
     let runtime = Arc::new(FakeRuntime::new(Some("approval_required")));
     let graph = build_reference_graph_with_checkpointer(
         runtime.clone(),
@@ -388,13 +397,13 @@ async fn approval_resume_rejects_a_changed_policy_digest_before_mutation() {
 }
 
 #[tokio::test]
-async fn cancellation_bridge_revokes_v8_before_interrupting_adk() {
+async fn cancellation_bridge_revokes_runtime_before_interrupting_adk() {
     let runtime = Arc::new(FakeRuntime::new(None));
     let runtime_for_interrupt = runtime.clone();
     let bridge = CancellationBridge::new(
         runtime,
         Arc::new(move |_session: &str| {
-            // try_lock succeeds only after the awaited v8 pause released the mutex.
+            // try_lock succeeds only after the awaited runtime pause released the mutex.
             runtime_for_interrupt
                 .cancellation_log
                 .try_lock()
@@ -402,7 +411,7 @@ async fn cancellation_bridge_revokes_v8_before_interrupting_adk() {
                 .unwrap_or(false)
         }),
     );
-    assert!(bridge.pause("v8-session", "adk-session", "user_takeover").await.unwrap());
+    assert!(bridge.pause("runtime-session", "adk-session", "user_takeover").await.unwrap());
 }
 
 #[tokio::test]

@@ -1,87 +1,168 @@
 # adk-computer-use
 
-First-party ADK-Rust reference orchestration for `computer-use-mcp` v8.
+Give an ADK agent safe, governed control of a real desktop.
 
-The crate deliberately does not implement desktop actuation. It supplies:
+This crate is the ADK-Rust orchestration layer for
+[`computer-use-mcp`](https://github.com/zavora-ai/computer-use-mcp). It does not
+perform any desktop actuation itself. The actual clicking, typing, and
+screen-reading happens in `computer-use-mcp`, which remains authoritative for
+policy, target validation, control leases, physical-user interruption, and
+idempotent (run-once) effects. What lives here is everything you need on the ADK
+side to drive that server without becoming the component that decides what is
+safe: a deterministic workflow, strongly-typed wire contracts, an authorization
+gate wired to your identity, and tamper-evident evaluation receipts.
 
-- camelCase wire types for v8 capabilities, action previews, leases, receipts, and events;
-- operation-aware auth context and the `computer:*` scope model;
-- a deterministic `adk-graph` workflow with parallel capability/visual/semantic observation, fan-in, preview routing, human interrupt, action-and-policy-digest-bound resume, planner target reservation, exactly one executor node, reservation release, and independent verification;
-- typed digest-only UI/filesystem/registry/process/window postconditions, value-free AX/UIA target-sensitivity evidence, and exact/session-operation approval scopes that survive Rust/TypeScript wire round-trip and remain digest-bound;
-- a runtime trait that can be backed by MCP, in-process TypeScript, or a deterministic fake.
-- principal-checked monotonic follow-up consumption for remote supervisor steering; instruction text stays outside the redacted event stream;
+## The problem it solves
 
-Desktop policy, target validation, lease ownership, physical-user interruption, and idempotent effects remain authoritative in `computer-use-mcp`.
+Letting an LLM drive a live desktop is high-risk: one wrong action can send an
+email, delete a file, or approve a payment. This crate makes that risk manageable
+by wrapping every action in the same fixed, predictable control flow:
 
-The graph constructs authorization context from the v8 action envelope plus the
-tenant identity already verified by `adk-auth`; model/graph state cannot supply
-or replace the authenticated principal or tenant.
+- **Observe widely, mutate narrowly.** Observation (capabilities, screenshot,
+  accessibility tree) runs in parallel, but only **one** node in the entire graph
+  is ever allowed to mutate anything.
+- **Preview before acting.** Every action is previewed first. Anything that
+  requires human approval pauses the graph at a durable checkpoint rather than
+  proceeding.
+- **Approval is bound to the action.** When you resume after approval, the action
+  is pinned to the exact action and policy digests it was approved for. An
+  approval for one action cannot authorize a different action.
+- **Identity cannot be forged.** The principal and tenant come from `adk-auth`,
+  not from model output or graph state, so a prompt cannot change who you are
+  mid-run.
 
-The crate also consumes the same versioned `fixtures/v8/safety-corpus.json` as
-the TypeScript fake-desktop harness. This keeps graph/evaluation contracts tied
-to the runtime's commit, stale-target, crash, revocation, and replay invariants.
+## How it fits together
 
-## Release evaluation evidence
+The core of the crate is a deterministic [`adk-graph`](../adk-graph) workflow you
+build with `build_reference_graph`. It interacts with the outside world through a
+single trait, `ComputerUseRuntime`. In production that trait is backed by a live
+MCP server; in tests and the portable example it is a plain Rust struct you write
+yourself, with no server, network, or OS dependency.
 
-The crate exposes `AdkEvaluationReceipt` and publishes a canonical receipt
-fixture. Its generator runs the complete `adk-computer-use` suite plus the real
-`adk-tool` MCP structured-text/image preservation test. It requires exact tests
-for parallel observation with one executor, action/policy digest approval
-binding, verified auth principal/tenant binding, pre-effect crash retry,
-post-commit receipt replay, duplicate-mutation rejection, and multimodal image
-delivery:
-
-```bash
-node scripts/generate-computer-use-v8-evidence.mjs \
-  --subject-version 7.0.0 \
-  --output adk-computer-use-v8-evidence.json
+```mermaid
+flowchart TD
+    START --> discover[discover capabilities]
+    START --> visual[observe visual]
+    START --> semantic[observe semantic]
+    discover --> join[join observations]
+    visual --> join
+    semantic --> join
+    join --> plan
+    plan --> preview
+    preview -->|allowed| reserve[reserve target]
+    preview -->|approval| approval[request approval - interrupt]
+    preview -->|blocked| blocked
+    approval --> reserve
+    reserve --> lease[acquire lease]
+    lease --> execute[execute - single mutation]
+    execute --> verify
+    verify --> END
+    blocked --> END
 ```
 
-The receipt contains source/output digests and a canonical receipt digest. It
-is deliberately unsigned: ADK CI uploads it, then a release authority reviews
-and signs the matching `adk_graph` evidence statement using a key trusted by
-the computer-use v8 readiness evaluator. CI output alone cannot self-promote a
-release stage.
+Read top to bottom: observe in parallel, join the results, preview, branch to
+approval when required, acquire the one-writer lease, perform the single mutation,
+then verify it happened.
 
-## Live graph showcase
+## What's included
 
-The compiled example sends a natural-language prompt through an ADK `LlmAgent`
-with schema-constrained output, then launches the real MCP server, starts an
-authenticated v8 session, runs capability/visual/semantic observation
-concurrently, previews the planned background clipboard write, acquires the
-one-writer lease, executes once, verifies the receipt, and confirms the real
-macOS clipboard value:
+| Module | What it provides |
+| --- | --- |
+| [`contracts`](src/contracts) | The `computer-use-mcp` MCP server wire types (`action`, `target`, `approval`, `receipt`, `lease`, `session`, `safety`), each validated so they cannot carry unsafe or disclosing data. |
+| [`runtime`](src/runtime) | The `ComputerUseRuntime` trait plus its live MCP adapter, `ComputerUseMcpRuntime`. |
+| `graph` | `build_reference_graph` and its checkpointer-aware variant. |
+| `auth` | `ScopeAuthorizer` and `ComputerUseAuthContext` — the `computer:*` scope gate tied to your adk-auth identity. |
+| `cancellation` | `CancellationBridge` — revokes desktop authority first, then stops the agent. |
+| `eval` | `ComputerUseEvaluator` and the tamper-evident `AdkEvaluationReceipt`. |
+| `error` | `ComputerUseError`, which converts cleanly into `adk_core::AdkError`. |
 
-```bash
-COMPUTER_USE_PRINCIPAL_ID=adk-local-operator \
-cargo run -p adk-computer-use --example live_v8_graph
-```
+## Run the portable example
 
-Set `COMPUTER_USE_MCP_PACKAGE` to a local/package specifier when testing an
-unpublished preview, or set `COMPUTER_USE_MCP_ENTRYPOINT` to a built local
-`dist/server.js`. Pass the desired task as command-line text. The planner is
-deliberately restricted to one public `write_clipboard` showcase action; the
-v8 graph remains the sole executor. The example intentionally changes the clipboard and does
-not bypass v8 policy, identity, lease, or receipt enforcement. It launches the
-server with `COMPUTER_USE_ACTIVE_PROFILE=v8-safe`; even visual and semantic
-observations traverse `execute_action` in shadow mode, so no raw MCP actuator or
-observer is available to the graph.
-
-### Governed native form + PiP approval
-
-On macOS, the enhanced showcase builds a temporary native AppKit form, uses a
-schema-constrained ADK planner to extract only the requested public Name and
-Project fields, and runs the deterministic graph through parallel observation,
-preview, PiP approval, one executor, and independent value verification:
+Because everything runs through the `ComputerUseRuntime` trait, you can run the
+whole graph with no server, no desktop, and no specific OS:
 
 ```bash
-COMPUTER_USE_PRINCIPAL_ID=adk-local-operator \
-COMPUTER_USE_MCP_ENTRYPOINT=/absolute/path/to/computer-use-mcp/dist/server.js \
-cargo run -p adk-computer-use --example live_v8_form -- \
-  "Use the public demo Name 'James' and Project 'ADK-Rust v8 showcase'."
+cargo run -p adk-computer-use --example minimal_graph
 ```
 
-The approval bearer never enters ADK/model state. The v8 runtime retains it,
-and the graph resumes only with matching action and policy digests after the
-PiP emits `action.approved`. Set `COMPUTER_USE_FORM_APPROVAL_TIMEOUT_SECONDS`
-between 30 and 300 to adjust the human review window.
+You'll see the observations join, the action take the "allowed" route, a committed
+receipt, and `verified: true`. In code:
+
+```rust,no_run
+use std::sync::Arc;
+use adk_computer_use::{build_reference_graph, ScopeAuthorizer, ComputerUseRuntime};
+use adk_graph::{ExecutionConfig, State};
+use serde_json::json;
+
+# async fn run(runtime: Arc<dyn ComputerUseRuntime>) -> Result<(), Box<dyn std::error::Error>> {
+// Pass the graph a runtime (yours, or the MCP one) and the scopes you hold.
+let authorizer = Arc::new(ScopeAuthorizer::new(["computer:plan", "computer:execute:background"]));
+let graph = build_reference_graph(runtime, authorizer)?;
+
+// Provide the action you want; the graph decides how, and whether, to run it.
+let mut input = State::new();
+input.insert("proposed_action".into(), json!({ "tool": "write_clipboard" }));
+
+let result = graph.invoke(input, ExecutionConfig::new("demo")).await?;
+assert_eq!(result.get("verified"), Some(&json!(true)));
+# Ok(())
+# }
+```
+
+The full in-process runtime is in
+[`examples/minimal_graph.rs`](examples/minimal_graph.rs), which is a good starting
+point for writing your own.
+
+## Driving a real desktop
+
+To drive a live desktop, use `ComputerUseMcpRuntime` pointed at a running
+`computer-use-mcp` server. The ADK code is identical on every OS; only the demo
+scaffolding (reading the clipboard, building a native window) is platform-specific.
+
+The cross-platform live demo runs on **macOS, Linux, and Windows**:
+
+```bash
+cargo run -p adk-computer-use --example live_clipboard -- \
+  "Place the exact public text 'ADK-Rust live prompt completed' on my clipboard."
+```
+
+- `live_clipboard` — a plain-English request that ends up on the real clipboard,
+  then verified by reading it back with the platform's own tool (`pbpaste` on
+  macOS, `Get-Clipboard` on Windows, `wl-paste`/`xclip`/`xsel` on Linux).
+
+The native-UI showcases are macOS-specific (they build an AppKit window and drive
+Finder), and live under [`examples/macos/`](examples/macos/README.md):
+
+- `live_form` — a native AppKit form, picture-in-picture approval, and an
+  independent read-back to confirm the result.
+- `live_background_finder` — updates a Finder comment in the background, then
+  rolls it back, without taking focus.
+
+## Approvals and resuming
+
+When a preview requires sign-off, the graph does not block a thread. It interrupts
+and hands you the preview as durable checkpoint data. To continue, insert an
+`approval` object back into the graph state that echoes the digests from the
+action you are approving:
+
+```json
+{ "actionDigest": "<envelope.argsDigest>", "policyDigest": "<policy.policyDigest>", "grantId": "<grant id>" }
+```
+
+If either digest does not match the interrupted action, the resume is rejected, so
+an approval cannot authorize a different action. The bearer token never enters ADK
+or model state: set `"runtimeApproved": true` to let the runtime hold it
+instead of passing a `grantId`.
+
+## Evaluation
+
+`ComputerUseEvaluator` replays a session's event trajectory and flags safety
+violations: mutations without a lease, commits that were never verified, and the
+same mutation running more than once. `AdkEvaluationReceipt` wraps the evidence in
+a canonically-hashed, tamper-evident artifact. CI can produce a receipt, but
+signing the matching statement is a release authority's responsibility, so CI
+output alone cannot promote a release.
+
+## License
+
+Same terms as the ADK-Rust workspace — see the repository root.

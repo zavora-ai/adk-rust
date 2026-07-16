@@ -6,7 +6,7 @@ use adk_computer_use::{
 };
 
 #[test]
-fn types_round_trip_canonical_v8_fixtures() {
+fn types_round_trip_canonical_fixtures() {
     let preview: ActionPreview =
         serde_json::from_str(include_str!("../fixtures/v8/action-preview.json")).unwrap();
     let receipt: ExecutionReceipt =

@@ -12,14 +12,13 @@ use adk_tool::McpToolset;
 use chrono::Utc;
 use futures::StreamExt;
 use rmcp::{ServiceExt, transport::TokioChildProcess};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::time::{sleep, timeout};
 
 struct DemoPathCleanup(Vec<PathBuf>);
@@ -36,20 +35,12 @@ impl Drop for DemoPathCleanup {
     }
 }
 
-fn output(value: &Value) -> &Value {
-    value
-        .get("response")
-        .and_then(|value| value.get("output"))
-        .or_else(|| value.get("output"))
-        .unwrap_or(value)
-}
+#[path = "../support/mod.rs"]
+mod support;
+use support::{object, output, spawn_pip, supervisor_dir};
 
 fn nested<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     output(value).get(key).or_else(|| output(value).get("output").and_then(|value| value.get(key)))
-}
-
-fn object(value: Value) -> Result<Map<String, Value>, Box<dyn std::error::Error>> {
-    value.as_object().cloned().ok_or_else(|| "expected an object".into())
 }
 
 async fn plan_fields(prompt: &str) -> Result<Value, Box<dyn std::error::Error>> {
@@ -67,12 +58,12 @@ async fn plan_fields(prompt: &str) -> Result<Value, Box<dyn std::error::Error>> 
         }
     });
     let agent: Arc<dyn Agent> = Arc::new(
-        LlmAgentBuilder::new("computer-use-v8-form-planner")
+        LlmAgentBuilder::new("computer-use-form-planner")
             .description("Schema-constrained planner for the governed form showcase")
             .instruction(
                 "Extract the exact public demonstration Name and Project requested by the user. \
                  Return only schema-valid JSON. Do not add fields, tools, targets, or secrets. \
-                 The downstream ADK graph and v8 runtime own approval and execution.",
+                 The downstream ADK graph and runtime own approval and execution.",
             )
             .model(Arc::new(GeminiModel::new(&api_key, &model_name)?))
             .output_schema(schema)
@@ -83,14 +74,14 @@ async fn plan_fields(prompt: &str) -> Result<Value, Box<dyn std::error::Error>> 
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
     sessions
         .create(CreateRequest {
-            app_name: "computer-use-v8-form".into(),
+            app_name: "computer-use-form".into(),
             user_id: "local-operator".into(),
             session_id: Some("form-planner".into()),
             state: HashMap::new(),
         })
         .await?;
     let runner = Runner::builder()
-        .app_name("computer-use-v8-form")
+        .app_name("computer-use-form")
         .agent(agent)
         .session_service(sessions)
         .build()?;
@@ -133,8 +124,10 @@ fn build_form_app(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 </dict></plist>"#,
     )?;
-    let source =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("examples").join("macos_form_showcase.swift");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("macos")
+        .join("macos_form_showcase.swift");
     let executable = executable_dir.join("ADKFormShowcase");
     let result = std::process::Command::new("swiftc")
         .arg(source)
@@ -148,45 +141,6 @@ fn build_form_app(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     Ok(app)
 }
 
-fn supervisor_dir(entrypoint: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    if let Ok(value) = std::env::var("COMPUTER_USE_SUPERVISOR_DIR") {
-        return Ok(PathBuf::from(value));
-    }
-    let root = Path::new(entrypoint)
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("cannot derive computer-use-mcp root from entrypoint")?;
-    Ok(root.join("packages/computer-use-supervisor"))
-}
-
-fn spawn_pip(
-    directory: &Path,
-    socket: &Path,
-    token: &str,
-    principal: &str,
-    session_id: &str,
-) -> Result<Child, Box<dyn std::error::Error>> {
-    let mut command = if let Ok(electron) = std::env::var("COMPUTER_USE_ELECTRON") {
-        let mut command = Command::new(electron);
-        command.arg(".");
-        command
-    } else {
-        let mut command = Command::new("npx");
-        command.args(["--yes", "--package=electron@43.1.0", "electron", "."]);
-        command
-    };
-    Ok(command
-        .current_dir(directory)
-        .env("COMPUTER_USE_SUPERVISOR_SOCKET", socket)
-        .env("COMPUTER_USE_SUPERVISOR_TOKEN", token)
-        .env("COMPUTER_USE_PRINCIPAL_ID", principal)
-        .env("COMPUTER_USE_SESSION_ID", session_id)
-        .env("COMPUTER_USE_SUPERVISOR_DEBUG", "true")
-        .stdout(Stdio::inherit())
-        .kill_on_drop(true)
-        .spawn()?)
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if cfg!(not(target_os = "macos")) {
@@ -194,7 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let prompt = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
     let prompt = if prompt.is_empty() {
-        "Use the public demo Name 'James' and Project 'computer-use v8 showcase'.".to_string()
+        "Use the public demo Name 'James' and Project 'computer-use showcase'.".to_string()
     } else {
         prompt
     };
@@ -202,10 +156,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fields = plan_fields(&prompt).await?;
     println!("PLANNED_PUBLIC_FIELDS: {}", serde_json::to_string(&fields)?);
 
-    let run_root = std::env::temp_dir().join(format!("adk-v8-form-{}", uuid::Uuid::new_v4()));
+    let run_root = std::env::temp_dir().join(format!("adk-form-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&run_root)?;
     let app = build_form_app(&run_root)?;
-    let socket = PathBuf::from(format!("/tmp/adk-v8-{}.sock", uuid::Uuid::new_v4().simple()));
+    let socket = PathBuf::from(format!("/tmp/adk-{}.sock", uuid::Uuid::new_v4().simple()));
     let _path_cleanup = DemoPathCleanup(vec![socket.clone(), run_root.clone()]);
     let mut form = Command::new(app.join("Contents/MacOS/ADKFormShowcase"));
     let mut form = form.kill_on_drop(true).spawn()?;
@@ -229,7 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .env("COMPUTER_USE_SUPERVISOR_TOKEN", &supervisor_token)
         .env("COMPUTER_USE_SUPERVISOR_FRAMES", "true");
     let client = ().serve(TokioChildProcess::new(server)?).await?;
-    let toolset = Arc::new(McpToolset::new(client).with_name("computer-use-v8-form"));
+    let toolset = Arc::new(McpToolset::new(client).with_name("computer-use-form"));
     let started =
         toolset.call_tool_value("start_session", object(json!({ "objective": prompt }))?).await?;
     let session_id = output(&started)
@@ -252,7 +206,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     let target_window = timeout(Duration::from_secs(20), async {
         loop {
-            let observed = bootstrap.observe_tool("list_windows", json!({})).await?;
+            let observed = bootstrap
+                .observe_tool("list_windows", json!({}))
+                .await
+                .map_err(|e| e.to_string())?;
             if let Some(window) =
                 nested(&observed, "windows").and_then(Value::as_array).and_then(|windows| {
                     windows.iter().find(|window| {
@@ -414,7 +371,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let approved_preview = runtime.preview_action(proposed_action.clone()).await?;
     if !approved_preview.executable {
-        return Err("v8 did not recognize the runtime-held PiP approval".into());
+        return Err("the runtime did not recognize the runtime-held PiP approval".into());
     }
     let mut resume = State::new();
     resume.insert(
@@ -446,7 +403,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "runtime_held_approval": true
         }))?
     );
-    println!("MACOS_VERIFICATION: v8 independently read back both form fields");
+    println!("MACOS_VERIFICATION: the runtime independently read back both form fields");
     sleep(Duration::from_secs(3)).await;
     let _ = pip.kill().await;
     let _ = form.kill().await;
