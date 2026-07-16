@@ -19,6 +19,7 @@ The table below assigns one stability tier to every public `adk-*` crate in the 
 | Crate | Tier | Notes |
 |-------|------|-------|
 | `adk-core` | **Stable** | Core traits: Agent, Tool, Llm, Session, Event, Content, State |
+| `adk-schema` | **Beta** | Canonical JSON Schema documents and typed input/output models |
 | `adk-agent` | **Stable** | Agent implementations: LlmAgent, workflows |
 | `adk-model` | **Stable** | LLM provider facade (Gemini, OpenAI, Anthropic, etc.) |
 | `adk-gemini` | **Stable** | Dedicated Gemini client with Studio + Vertex AI backends |
@@ -61,6 +62,7 @@ These crates are fully functional but remain Beta at 1.0 because their APIs depe
 
 | Crate | Reason for Beta | Path to Stable |
 |-------|----------------|----------------|
+| `adk-schema` | Typed model, tool, structured-output, and provider-projection APIs are still converging | Promote after typed tools, structured agent output, and provider projection stabilize |
 | `adk-realtime` | WebRTC and Live API specs are evolving (OpenAI, Gemini, LiveKit) | Stabilize after upstream APIs settle |
 | `adk-browser` | WebDriver protocol and browser automation patterns still changing | Stabilize when WebDriver BiDi adoption matures |
 | `adk-eval` | Evaluation methodology is an active research area; API surface may expand | Promote after 1-2 release cycles without breaking changes |
@@ -126,7 +128,7 @@ ADK-Rust 1.0.0 was released on June 7, 2026. All Stable-tier crates commit to lo
 | **Semver compliance** | ✅ Met | `cargo semver-checks` passes for Stable-tier crates. The 0.10.0 → 1.0.0 bump is a major version change under pre-1.0 semver rules. |
 | **Test coverage** | ✅ Met | All Stable-tier crates have unit tests, integration tests, and/or property-based tests. CI runs 3000+ tests. |
 | **Deprecation cleanup** | ✅ Met | Only active deprecations remain (Gemini model variants with shutdown dates). No legacy items pending removal. |
-| **Beta documentation** | ✅ Met | All 7 Beta crates have documented rationale for remaining Beta with path-to-Stable criteria. |
+| **Beta documentation** | ✅ Met | All 8 Beta crates have documented rationale for remaining Beta with path-to-Stable criteria. |
 | **CI enforcement** | ✅ Met | `cargo fmt`, `cargo clippy -D warnings`, `cargo nextest run`, and doc-example validation run on every PR. `cargo semver-checks` to be added as a CI gate. |
 | **Documentation coverage** | 🔲 In progress | Public API coverage is high; formal 90% audit pending tooling automation. |
 

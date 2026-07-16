@@ -76,7 +76,7 @@ jobs:
     - name: Semver checks — Beta/Experimental (warn only)
       run: |
         echo "### Beta/Experimental crates (warn only)" >> "$GITHUB_STEP_SUMMARY"
-        for crate in adk-artifact adk-auth \
+        for crate in adk-schema adk-artifact adk-auth \
           adk-telemetry adk-guardrail adk-plugin adk-skill \
           adk-cli adk-realtime adk-browser adk-eval adk-audio; do
           echo "Checking $crate..."

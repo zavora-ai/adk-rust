@@ -203,6 +203,7 @@ Built-in tools:
 | Crate | Purpose | Key Features |
 |-------|---------|--------------|
 | `adk-core` | Foundational traits and types | `Agent` trait, `Content`, `Part`, error types, streaming primitives |
+| `adk-schema` | Canonical JSON Schema models (Beta) | Directional dynamic schemas, `InputModel<T>`, `OutputModel<T>`, compiled validation |
 | `adk-agent` | Agent implementations | `LlmAgent`, `SequentialAgent`, `ParallelAgent`, `LoopAgent`, builder patterns |
 | `adk-skill` | AgentSkills parsing and selection | Skill markdown parser, `.skills` discovery/indexing, lexical matching, prompt injection helpers |
 | `adk-model` | LLM integrations | Gemini, OpenAI, Anthropic, DeepSeek, Groq, Ollama, Bedrock, Azure AI + OpenAI-compatible presets (Fireworks, Together, Mistral, Perplexity, Cerebras, SambaNova, xAI) |
@@ -967,6 +968,7 @@ adk-rust = { version = "2.0.0", default-features = false, features = ["minimal"]
 
 # Or individual crates for finer control
 adk-core = "2.0.0"
+adk-schema = "2.0.0"
 adk-agent = "2.0.0"
 adk-model = { version = "2.0.0", features = ["openai", "anthropic"] }
 adk-tool = "2.0.0"

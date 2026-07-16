@@ -46,6 +46,7 @@ Crate names are prefixed with `adk-`. The Rust module name uses underscores (`ad
 ```
 adk-core/        Core traits and types: Agent, Tool, Llm, Session, Event, Content, State,
                  SchemaAdapter, SchemaCache, SharedState, ToolExecutionStrategy, RequestContext
+adk-schema/      Canonical Draft 2020-12 schemas, typed input/output models, runtime validation
 adk-agent/       Agent implementations: LlmAgent, CustomAgent, SequentialAgent, ParallelAgent,
                  LoopAgent, ConditionalAgent, LlmConditionalAgent. Parallel tool dispatch,
                  SharedState coordination, skill shims.
@@ -218,7 +219,7 @@ All opt-in, no defaults:
 Four tiered presets control which crates are compiled:
 
 - `minimal` **(default)** — agents, models, gemini, runner, sessions. Fastest possible build for a single Gemini-powered agent.
-- `standard` — minimal + openai, anthropic, tools, memory, telemetry, skills, graph, auth, server, eval, guardrail, plugin, artifacts. Production deployment with server and auth.
+- `standard` — minimal + schema, openai, anthropic, tools, memory, telemetry, skills, graph, auth, server, eval, guardrail, plugin, artifacts. Production deployment with server and auth.
 - `enterprise` — standard + realtime, browser, rag, payments, awp. Full-featured production.
 - `full` — enterprise + audio, code, sandbox. Everything.
 
@@ -503,7 +504,7 @@ Always verify builds during publish — never use `--no-verify`. Verification en
 Crates must be published in dependency order. Wait for each crate to be indexed before publishing dependents.
 
 ```
-Tier 1: adk-core
+Tier 1: adk-core, adk-schema
 Tier 2: adk-telemetry, adk-memory, adk-artifact, adk-plugin, adk-skill, adk-auth, adk-guardrail,
         adk-gemini, adk-anthropic, adk-rust-macros, awp-types
 Tier 3: adk-session, adk-action

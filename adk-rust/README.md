@@ -276,6 +276,49 @@ Features:
 - SSO/OAuth integration (Auth0, Okta, Azure AD, Google OIDC)
 - Audit logging for all access decisions
 
+## Typed JSON Schemas
+
+The `schema` feature binds Rust input and output types to canonical Draft
+2020-12 schemas with one reusable validator. It is included in the `standard`
+preset and can be enabled independently without the `minimal` agent stack.
+
+```toml
+[dependencies]
+adk-rust = { version = "2.0.0", default-features = false, features = ["schema"] }
+schemars = "1.2"
+serde = { version = "1", features = ["derive"] }
+```
+
+```rust
+use adk_rust::prelude::{InputModel, ModelError, OutputModel};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize, JsonSchema)]
+struct Request {
+    message: String,
+}
+
+#[derive(JsonSchema, Serialize)]
+struct Response {
+    accepted: bool,
+}
+
+# fn example() -> Result<(), ModelError> {
+let input = InputModel::<Request>::new()?;
+let request = input.parse_str(r#"{"message":"hello"}"#)?;
+
+let output = OutputModel::<Response>::new()?;
+let value = output.encode_value(&Response { accepted: !request.message.is_empty() })?;
+assert_eq!(value, serde_json::json!({"accepted": true}));
+# Ok(())
+# }
+```
+
+Use `adk_rust::schema::InputSchema` or `OutputSchema` when no Rust type exists.
+Provider adapters project clones of `json_schema()`; the model retains the
+provider-neutral canonical document.
+
 ## Deployment
 
 ```bash
@@ -292,8 +335,8 @@ cargo run -- serve --port 8080
 # Minimal (default) — agents, Gemini, runner, sessions (fastest build)
 adk-rust = "2.0.0"
 
-# Standard — minimal + tools, memory, OpenAI, Anthropic, server, auth,
-# graph, eval, guardrails, skills, plugins, artifacts, telemetry
+# Standard — minimal + schema, tools, memory, OpenAI, Anthropic, server,
+# auth, graph, eval, guardrails, skills, plugins, artifacts, telemetry
 adk-rust = { version = "2.0.0", features = ["standard"] }
 
 # Enterprise — standard + realtime, browser, rag, payments, awp

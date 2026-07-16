@@ -410,6 +410,7 @@
 //! | `gemini` | Gemini model support | minimal (default) |
 //! | `runner` | Execution runtime | minimal (default) |
 //! | `sessions` | Session management | minimal (default) |
+//! | `schema` | Typed canonical JSON Schema models | standard |
 //! | `tools` | Tool system | standard |
 //! | `skills` | Skill discovery | standard |
 //! | `artifacts` | Artifact storage | standard |
@@ -451,6 +452,7 @@
 //! - [`adk-core`](https://docs.rs/adk-core) - Core traits and types
 //! - [`adk-agent`](https://docs.rs/adk-agent) - Agent implementations
 //! - [`adk-model`](https://docs.rs/adk-model) - LLM integrations
+//! - [`adk-schema`](https://docs.rs/adk-schema) - Canonical and typed JSON Schema models
 //! - [`adk-tool`](https://docs.rs/adk-tool) - Tool system
 //! - [`adk-session`](https://docs.rs/adk-session) - Session management
 //! - [`adk-artifact`](https://docs.rs/adk-artifact) - Artifact storage
@@ -486,6 +488,20 @@ pub use tokio;
 // ============================================================================
 // Component Modules (feature-gated)
 // ============================================================================
+
+/// Canonical JSON Schema documents and typed input/output models.
+///
+/// [`InputModel`](schema::InputModel) validates JSON before deserializing it;
+/// [`OutputModel`](schema::OutputModel) serializes Rust values before validating
+/// the resulting JSON. Provider-specific projection remains the responsibility
+/// of model adapters.
+///
+/// Available with feature: `schema` (included in `standard`).
+#[cfg(feature = "schema")]
+#[cfg_attr(docsrs, doc(cfg(feature = "schema")))]
+pub mod schema {
+    pub use adk_schema::*;
+}
 
 /// Agent implementations (LLM, Custom, Workflow agents).
 ///
@@ -1244,6 +1260,10 @@ pub mod prelude {
     // Models
     #[cfg(feature = "gemini")]
     pub use crate::model::GeminiModel;
+
+    // Typed schemas
+    #[cfg(feature = "schema")]
+    pub use crate::schema::{InputModel, ModelError, OutputModel};
 
     // Model providers (when specific features are enabled)
     #[cfg(feature = "openai")]

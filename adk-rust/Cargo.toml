@@ -30,6 +30,7 @@ minimal = [
 # Standard — production deployment with server, auth, graph workflows, and evaluation.
 standard = [
     "minimal",
+    "schema",
     "openai",
     "anthropic",
     "anthropic-client",
@@ -78,6 +79,7 @@ cli-telemetry-otlp = ["cli", "adk-cli/telemetry-otlp"]
 agents = ["dep:adk-agent"]
 record-payloads = ["agents", "adk-agent/record-payloads"]
 models = ["dep:adk-model"]
+schema = ["dep:adk-schema"]
 tools = ["dep:adk-tool"]
 skills = ["dep:adk-skill"]
 sessions = ["dep:adk-session"]
@@ -219,6 +221,7 @@ adk-core.workspace = true
 # Optional components
 adk-agent = { workspace = true, optional = true }
 adk-model = { workspace = true, optional = true }
+adk-schema = { workspace = true, optional = true }
 adk-tool = { workspace = true, optional = true }
 adk-skill = { workspace = true, optional = true }
 adk-session = { workspace = true, optional = true }
@@ -256,6 +259,7 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
+schemars.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "signal", "fs", "process", "io-util", "test-util"] }
 
 [[example]]
@@ -265,6 +269,10 @@ required-features = ["minimal", "tools"]
 [[example]]
 name = "performance_0_8_llm_agents"
 required-features = ["minimal"]
+
+[[example]]
+name = "typed_schema"
+required-features = ["schema"]
 
 [package.metadata.docs.rs]
 # Use "full" to show the complete API surface on docs.rs.

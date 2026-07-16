@@ -17,6 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **adk-schema: typed model API (Beta)** — a default-enabled `typed` feature
+  adds `InputModel<T>` and `OutputModel<T>` over one canonical, compiled Draft
+  2020-12 schema. Inputs parse to `Value`, validate schema-first, then use
+  path-aware Serde deserialization; outputs use path-aware serialization before
+  schema validation. `ModelError` preserves schema and `serde_json` causes while
+  keeping JSON Pointer issue paths distinct from Serde field paths. Dynamic
+  `InputSchema` and `OutputSchema` remain available with
+  `default-features = false`.
+- **adk-rust: typed schema integration** — the optional `schema` feature exposes
+  `adk_rust::schema`, joins the `standard` preset (not `minimal`), and re-exports
+  `InputModel`, `OutputModel`, and `ModelError` from the prelude. `adk-schema` is
+  registered as a Beta crate in Semver/documentation governance and as a Tier-1
+  publish crate.
 - **adk-agent: `CodeAgent` — a CodeAct agent** (`codeact` feature) — a peer to
   `LlmAgent` that acts by writing and executing one code script per turn instead
   of emitting tool calls one at a time. Tools are exposed as callable functions;

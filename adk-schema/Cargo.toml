@@ -5,17 +5,34 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/adk-schema"
+readme = "README.md"
 description = "Canonical JSON Schema documents and validation for ADK"
+keywords = ["json-schema", "validation", "serde", "schema", "adk"]
+categories = ["data-structures", "development-tools"]
 
 [dependencies]
 serde_json.workspace = true
 thiserror.workspace = true
 sha2.workspace = true
 hex.workspace = true
-schemars = { version = "1.2", optional = true }
+serde = { workspace = true, optional = true }
+serde_path_to_error = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
 jsonschema = { version = "0.47", optional = true, default-features = false }
 
 [features]
-default = []
+default = ["typed"]
+typed = [
+    "schemars",
+    "runtime-validation",
+    "dep:serde",
+    "dep:serde_path_to_error",
+]
 schemars = ["dep:schemars"]
 runtime-validation = ["dep:jsonschema"]
+
+[package.metadata.docs.rs]
+all-features = true

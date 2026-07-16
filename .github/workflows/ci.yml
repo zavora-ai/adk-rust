@@ -152,7 +152,7 @@ jobs:
         FAILED=0
         echo "### 📚 Documentation Coverage" >> "$GITHUB_STEP_SUMMARY"
         echo "" >> "$GITHUB_STEP_SUMMARY"
-        for crate in adk-core adk-agent adk-model adk-gemini adk-tool adk-runner adk-session adk-server adk-graph adk-memory adk-anthropic adk-rust; do
+        for crate in adk-core adk-schema adk-agent adk-model adk-gemini adk-tool adk-runner adk-session adk-server adk-graph adk-memory adk-anthropic adk-rust; do
           echo "Checking $crate..."
           OUTPUT=$(CI=true devenv shell cargo doc -p "$crate" --no-deps 2>&1)
           if echo "$OUTPUT" | grep -q "missing documentation"; then
