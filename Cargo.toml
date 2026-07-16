@@ -34,6 +34,7 @@ members = [
     "adk-action",
     "adk-anthropic",
     "adk-retry-reflect",
+    "adk-schema",
 
     # AWP protocol crates
     "awp-types",
@@ -156,6 +157,7 @@ livekit-api = { version = "=0.5.5", default-features = false, features = ["signa
 
 # ADK internal crates (use { workspace = true } in member crates)
 adk-core = { path = "adk-core", version = "2.0.0" }
+adk-schema = { path = "adk-schema", version = "2.0.0" }
 adk-rust-macros = { path = "adk-rust-macros", version = "2.0.0" }
 adk-agent = { path = "adk-agent", version = "2.0.0", default-features = false }
 adk-model = { path = "adk-model", version = "2.0.0", default-features = false }
