@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zavora.ai/schemas/computer-use/v8/approval-grant.schema.json",
+  "title": "Bounded approval grant",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "grantId", "scope", "principalId", "sessionId", "actionDigest", "scopeDigest",
+    "policyDigest", "tool", "operation", "actionClass", "mode", "issuedAt", "expiresAt",
+    "remainingUses", "consumedByActionIds"
+  ],
+  "properties": {
+    "grantId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "scope": { "enum": ["exact_action", "session_operation"] },
+    "principalId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "sessionId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "actionDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "scopeDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "policyDigest": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "tool": { "type": "string", "maxLength": 128 },
+    "operation": { "type": "string", "maxLength": 128 },
+    "actionClass": {
+      "enum": [
+        "observe", "navigate", "edit_reversible", "communicate_external", "authentication",
+        "financial", "destructive", "privilege_change", "secret_access"
+      ]
+    },
+    "mode": { "enum": ["shadow", "background", "foreground"] },
+    "issuedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "remainingUses": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "consumedByActionIds": {
+      "type": "array",
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "scope": { "const": "session_operation" } } },
+      "then": { "properties": { "tool": { "minLength": 1 }, "operation": { "minLength": 1 } } }
+    }
+  ]
+}

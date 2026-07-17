@@ -1,0 +1,16 @@
+{
+  "reservationId": "reservation-0001",
+  "revision": 1,
+  "intentId": "intent-edit-report",
+  "sessionId": "session-0001",
+  "principalId": "principal-local",
+  "executionGroupId": "group-0001",
+  "agentId": "planner-a",
+  "scope": {
+    "appId": "com.example.Report",
+    "windowId": 42
+  },
+  "state": "active",
+  "acquiredAt": "2026-07-13T10:00:00.000Z",
+  "expiresAt": "2026-07-13T10:00:30.000Z"
+}

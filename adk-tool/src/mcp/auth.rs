@@ -90,6 +90,8 @@ pub struct OAuth2Config {
     pub token_url: String,
     /// Requested scopes
     pub scopes: Vec<String>,
+    /// Timeout applied to OAuth token requests.
+    pub timeout: std::time::Duration,
     /// Cached token with expiry
     token_cache: RwLock<Option<CachedToken>>,
 }
@@ -102,6 +104,7 @@ impl OAuth2Config {
             client_secret: None,
             token_url: token_url.into(),
             scopes: Vec::new(),
+            timeout: std::time::Duration::from_secs(30),
             token_cache: RwLock::new(None),
         }
     }
@@ -118,15 +121,21 @@ impl OAuth2Config {
         self
     }
 
+    /// Set a bounded timeout for OAuth token requests.
+    pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
     /// Get or refresh the access token
     pub async fn get_or_refresh_token(&self) -> Result<String, AuthError> {
         // Check cache first
         {
             let cache = self.token_cache.read().await;
-            if let Some(ref cached) = *cache {
-                if !cached.is_expired() {
-                    return Ok(cached.access_token.clone());
-                }
+            if let Some(ref cached) = *cache
+                && !cached.is_expired()
+            {
+                return Ok(cached.access_token.clone());
             }
         }
 
@@ -161,7 +170,10 @@ impl OAuth2Config {
         // Make request (using reqwest if available)
         #[cfg(feature = "http-transport")]
         {
-            let client = reqwest::Client::new();
+            let client = reqwest::Client::builder()
+                .timeout(self.timeout)
+                .build()
+                .map_err(|e| AuthError::TokenFetch(e.to_string()))?;
             let response = client
                 .post(&self.token_url)
                 .form(&params)
@@ -171,7 +183,13 @@ impl OAuth2Config {
 
             if !response.status().is_success() {
                 let status = response.status();
-                let body = response.text().await.unwrap_or_default();
+                let mut body = response.text().await.unwrap_or_default();
+                if let Some(secret) = &self.client_secret
+                    && !secret.is_empty()
+                {
+                    body = body.replace(secret, "[REDACTED]");
+                }
+                let body = body.chars().take(512).collect::<String>();
                 return Err(AuthError::TokenFetch(format!(
                     "Token request failed: {} - {}",
                     status, body

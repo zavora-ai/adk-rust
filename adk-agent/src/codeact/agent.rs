@@ -32,8 +32,8 @@ use adk_core::{
     EventActions, EventStream, GenerateContentConfig, GlobalInstructionProvider, IncludeContents,
     InstructionProvider, InvocationContext, Llm, LlmRequest, LlmResponse, MemoryEntry,
     OnToolErrorCallback, Part, ReadonlyContext, RetryBudget, SharedState, Tool,
-    ToolCallbackContext, ToolConfirmationDecision, ToolConfirmationPolicy, ToolConfirmationRequest,
-    ToolContext, ToolOutcome, Toolset,
+    ToolCallbackContext, ToolConfirmationDecision, ToolConfirmationHandler, ToolConfirmationPolicy,
+    ToolConfirmationRequest, ToolContext, ToolOutcome, Toolset,
 };
 use async_stream::stream;
 use async_trait::async_trait;
@@ -104,6 +104,7 @@ struct LoopInputs {
     tools: Vec<Arc<dyn Tool>>,
     policy: ToolConfirmationPolicy,
     decisions: HashMap<String, ToolConfirmationDecision>,
+    confirmation_handler: Option<Arc<dyn ToolConfirmationHandler>>,
     /// The live invocation context; a fresh [`CodeToolContext`] is built from it
     /// per tool call so each call carries its own function-call id and actions.
     invocation_ctx: Arc<dyn InvocationContext>,
@@ -210,7 +211,7 @@ impl ToolPolicy<'_> {
 fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>> {
     stream! {
         let LoopInputs {
-            model, runtime, tools, policy, decisions, invocation_ctx, incoming, system_prompt, conversation,
+            model, runtime, tools, policy, decisions, confirmation_handler, invocation_ctx, incoming, system_prompt, conversation,
             pending, invocation_id, agent_name, max_iterations, max_error_chars, supports_suspension,
             transfer_targets, generate_content_config, tool_timeout, output_key,
             default_retry_budget, tool_retry_budgets, circuit_breaker_threshold, on_tool_error,
@@ -222,6 +223,8 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
         } = input;
 
         let tool_map = build_tool_map(&tools);
+        let mut live_confirmation_decisions =
+            HashMap::<String, ToolConfirmationDecision>::new();
         let roster = roster(&tool_map);
 
         // Tool-robustness state for this invocation.
@@ -302,7 +305,32 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                         Some(resume_to_record(with))
                     }
                     Disposition::Resolved(rec) => Some(rec.clone()),
-                    Disposition::AwaitingConfirmation => match decisions.get(&cp.call.tool).copied() {
+                    Disposition::AwaitingConfirmation => {
+                        let call_id = cp.call.call_id.to_string();
+                        let mut decision = live_confirmation_decisions
+                            .get(&call_id)
+                            .copied()
+                            .or_else(|| decisions.get(&cp.call.tool).copied());
+                        if decision.is_none()
+                            && let Some(handler) = confirmation_handler.as_ref()
+                        {
+                            let request = ToolConfirmationRequest {
+                                tool_name: cp.call.tool.clone(),
+                                function_call_id: Some(cp.call.call_id.to_string()),
+                                args: cp.call.args.clone(),
+                            };
+                            match handler.decide(&request).await {
+                                Ok(value) => {
+                                    live_confirmation_decisions.insert(call_id, value);
+                                    decision = Some(value);
+                                }
+                                Err(error) => {
+                                    yield Err(error);
+                                    return;
+                                }
+                            }
+                        }
+                        match decision {
                         Some(ToolConfirmationDecision::Approve) => {
                             let (with, control) = execute_for_resume(
                                 &tool_map, &invocation_ctx, &cp.call, &mut pending_actions,
@@ -316,7 +344,8 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                             Some(ResolutionRecord::Raise(denied_message(&cp.call.tool)))
                         }
                         None => None,
-                    },
+                        }
+                    }
                     Disposition::AwaitingCompletion { .. } => {
                         completion_for(&incoming, &cp.call.tool, cp.call.call_id)
                             .map(ResolutionRecord::Value)
@@ -461,7 +490,32 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
 
                         // Confirmation gate.
                         if policy.requires_confirmation(&name) {
-                            match decisions.get(&name).copied() {
+                            let call_id_key = call_id.to_string();
+                            let mut decision = live_confirmation_decisions
+                                .get(&call_id_key)
+                                .copied()
+                                .or_else(|| decisions.get(&name).copied());
+                            if decision.is_none()
+                                && let Some(handler) = confirmation_handler.as_ref()
+                            {
+                                let request = ToolConfirmationRequest {
+                                    tool_name: name.clone(),
+                                    function_call_id: Some(call_id.to_string()),
+                                    args: args.clone(),
+                                };
+                                match handler.decide(&request).await {
+                                    Ok(value) => {
+                                        live_confirmation_decisions
+                                            .insert(call_id_key, value);
+                                        decision = Some(value);
+                                    }
+                                    Err(error) => {
+                                        yield Err(error);
+                                        return;
+                                    }
+                                }
+                            }
+                            match decision {
                                 Some(ToolConfirmationDecision::Approve) => {}
                                 Some(ToolConfirmationDecision::Deny) => {
                                     match call.resume(ResumeWith::Raise(denied_message(&name))) {
@@ -1522,14 +1576,19 @@ impl CodeActAgent {
         &self,
         ctx: &Arc<dyn InvocationContext>,
     ) -> adk_core::Result<Vec<Arc<dyn Tool>>> {
-        if self.toolsets.is_empty() {
+        if self.toolsets.is_empty() && ctx.run_config().runtime_toolsets.is_empty() {
             return Ok(self.tools.clone());
         }
         let mut resolved = self.tools.clone();
         let static_names: std::collections::HashSet<String> =
             self.tools.iter().map(|t| t.name().to_string()).collect();
         let mut source: HashMap<String, String> = HashMap::new();
-        for toolset in &self.toolsets {
+        let mut active_toolsets: Vec<&dyn Toolset> =
+            self.toolsets.iter().map(AsRef::as_ref).collect();
+        active_toolsets.extend(
+            ctx.run_config().runtime_toolsets.iter().map(|runtime| runtime.toolset().as_ref()),
+        );
+        for toolset in active_toolsets {
             let provided = toolset.tools(ctx.clone() as Arc<dyn ReadonlyContext>).await?;
             for tool in provided {
                 let name = tool.name().to_string();
@@ -1702,6 +1761,7 @@ impl Agent for CodeActAgent {
             tools: resolved_tools,
             policy: self.policy.clone(),
             decisions: ctx.run_config().tool_confirmation_decisions.clone(),
+            confirmation_handler: ctx.run_config().tool_confirmation_handler.clone(),
             invocation_ctx: ctx.clone(),
             incoming: ctx.user_content().clone(),
             system_prompt,
@@ -2663,6 +2723,7 @@ mod tests {
             tools: vec![],
             policy: ToolConfirmationPolicy::Never,
             decisions: HashMap::new(),
+            confirmation_handler: None,
             invocation_ctx: Arc::new(MockInvocationContext::new(incoming.clone())),
             conversation: vec![incoming.clone()],
             incoming,

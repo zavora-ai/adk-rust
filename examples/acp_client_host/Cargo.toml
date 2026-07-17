@@ -1,0 +1,14 @@
+[package]
+name = "acp-client-host-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-acp = { path = "../../adk-acp" }
+anyhow = "1.0"
+async-trait = "0.1"
+dotenvy = "0.15"
+tokio = { version = "1.40", features = ["full"] }

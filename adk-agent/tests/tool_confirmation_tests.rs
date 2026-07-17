@@ -2,7 +2,7 @@ use adk_agent::LlmAgentBuilder;
 use adk_core::{
     Agent, CallbackContext, Content, FinishReason, InvocationContext, Llm, LlmRequest, LlmResponse,
     LlmResponseStream, Part, Result, RunConfig, Session, State, Tool, ToolConfirmationDecision,
-    ToolContext,
+    ToolConfirmationHandler, ToolConfirmationRequest, ToolContext,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -91,6 +91,19 @@ struct CountingTool {
 impl CountingTool {
     fn new() -> Self {
         Self { calls: Arc::new(AtomicUsize::new(0)) }
+    }
+}
+
+#[derive(Debug)]
+struct CountingConfirmationHandler {
+    decisions: AtomicUsize,
+}
+
+#[async_trait]
+impl ToolConfirmationHandler for CountingConfirmationHandler {
+    async fn decide(&self, _request: &ToolConfirmationRequest) -> Result<ToolConfirmationDecision> {
+        self.decisions.fetch_add(1, Ordering::SeqCst);
+        Ok(ToolConfirmationDecision::Approve)
     }
 }
 
@@ -345,4 +358,32 @@ async fn test_tool_confirmation_approve_executes_tool() {
 
     assert!(saw_tool_result, "expected approved tool execution response");
     assert_eq!(tool_calls.load(Ordering::SeqCst), 1, "tool should execute exactly once");
+}
+
+#[tokio::test]
+async fn live_allow_once_is_requested_for_each_tool_call() {
+    let model = Arc::new(SequencedModel::new(vec![
+        SequencedModel::function_call_response("test_tool", json!({"x": 1}), "call-a"),
+        SequencedModel::function_call_response("test_tool", json!({"x": 2}), "call-b"),
+        SequencedModel::text_response("done"),
+    ]));
+    let tool = Arc::new(CountingTool::new());
+    let tool_calls = tool.calls.clone();
+    let confirmation = Arc::new(CountingConfirmationHandler { decisions: AtomicUsize::new(0) });
+
+    let agent = LlmAgentBuilder::new("test-agent")
+        .model(model)
+        .tool(tool)
+        .require_tool_confirmation("test_tool")
+        .build()
+        .unwrap();
+    let run_config = RunConfig::builder().tool_confirmation_handler(confirmation.clone()).build();
+
+    let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
+    while let Some(event) = stream.next().await {
+        event.unwrap();
+    }
+
+    assert_eq!(confirmation.decisions.load(Ordering::SeqCst), 2);
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 2);
 }

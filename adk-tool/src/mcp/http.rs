@@ -5,15 +5,91 @@
 
 use super::auth::McpAuth;
 use super::elicitation::ElicitationHandler;
+use super::resource_notifications::ResourceNotificationHandler;
 use adk_core::{AdkError, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(feature = "http-transport")]
+#[derive(Clone)]
+struct HttpConnectionFactory {
+    builder: McpHttpClientBuilder,
+}
+
+#[cfg(feature = "http-transport")]
+#[derive(Clone)]
+struct HttpElicitationConnectionFactory {
+    builder: McpHttpClientBuilder,
+    handler: Arc<dyn ElicitationHandler>,
+    resource_notification_handler: Option<Arc<dyn ResourceNotificationHandler>>,
+}
+
+#[cfg(feature = "http-transport")]
+impl HttpElicitationConnectionFactory {
+    async fn connect_once(
+        &self,
+    ) -> std::result::Result<
+        rmcp::service::RunningService<rmcp::RoleClient, super::elicitation::AdkClientHandler>,
+        String,
+    > {
+        use rmcp::ServiceExt;
+
+        let transport = self.builder.build_transport().await.map_err(|error| error.to_string())?;
+        let mut handler = super::elicitation::AdkClientHandler::new(self.handler.clone());
+        if let Some(resource_handler) = &self.resource_notification_handler {
+            handler = handler.with_resource_notification_handler(Arc::clone(resource_handler));
+        }
+        handler
+            .serve(transport)
+            .await
+            .map_err(|error| format!("failed to connect to MCP server: {error}"))
+    }
+}
+
+#[cfg(feature = "http-transport")]
+#[async_trait::async_trait]
+impl super::ConnectionFactory<super::elicitation::AdkClientHandler>
+    for HttpElicitationConnectionFactory
+{
+    async fn create_connection(
+        &self,
+    ) -> std::result::Result<
+        rmcp::service::RunningService<rmcp::RoleClient, super::elicitation::AdkClientHandler>,
+        String,
+    > {
+        self.connect_once().await
+    }
+}
+
+#[cfg(feature = "http-transport")]
+impl HttpConnectionFactory {
+    async fn connect_once(
+        &self,
+    ) -> std::result::Result<rmcp::service::RunningService<rmcp::RoleClient, ()>, String> {
+        use rmcp::ServiceExt;
+
+        let transport = self.builder.build_transport().await.map_err(|error| error.to_string())?;
+        ().serve(transport)
+            .await
+            .map_err(|error| format!("failed to connect to MCP server: {error}"))
+    }
+}
+
+#[cfg(feature = "http-transport")]
+#[async_trait::async_trait]
+impl super::ConnectionFactory<()> for HttpConnectionFactory {
+    async fn create_connection(
+        &self,
+    ) -> std::result::Result<rmcp::service::RunningService<rmcp::RoleClient, ()>, String> {
+        self.connect_once().await
+    }
+}
+
 /// Builder for HTTP-based MCP connections.
 ///
 /// This builder creates connections to remote MCP servers using the
-/// streamable HTTP transport (SEP-1686 compliant).
+/// current MCP Streamable HTTP transport.
 ///
 /// # Example
 ///
@@ -48,6 +124,10 @@ pub struct McpHttpClientBuilder {
     headers: HashMap<String, String>,
     /// Optional elicitation handler
     elicitation_handler: Option<Arc<dyn ElicitationHandler>>,
+    /// Optional resource notification handler.
+    resource_notification_handler: Option<Arc<dyn ResourceNotificationHandler>>,
+    /// Recreate the MCP session once when a remote HTTP session expires.
+    reinit_on_expired_session: bool,
 }
 
 impl McpHttpClientBuilder {
@@ -63,6 +143,8 @@ impl McpHttpClientBuilder {
             timeout: Duration::from_secs(30),
             headers: HashMap::new(),
             elicitation_handler: None,
+            resource_notification_handler: None,
+            reinit_on_expired_session: true,
         }
     }
 
@@ -93,12 +175,94 @@ impl McpHttpClientBuilder {
         self
     }
 
+    /// Configure bounded automatic recovery when the server reports an expired session.
+    ///
+    /// Enabled by default. rmcp performs at most one re-initialization attempt.
+    pub fn reinit_on_expired_session(mut self, enabled: bool) -> Self {
+        self.reinit_on_expired_session = enabled;
+        self
+    }
+
+    #[cfg(feature = "http-transport")]
+    async fn build_transport(
+        &self,
+    ) -> Result<
+        rmcp::transport::streamable_http_client::StreamableHttpClientTransport<reqwest_mcp::Client>,
+    > {
+        use adk_core::{ErrorCategory, ErrorComponent};
+        use reqwest_mcp::header::{HeaderName, HeaderValue};
+        use rmcp::transport::streamable_http_client::{
+            StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
+        };
+
+        let mut custom_headers = HashMap::new();
+        for (name, value) in &self.headers {
+            let name = HeaderName::from_bytes(name.as_bytes()).map_err(|error| {
+                AdkError::tool(format!("invalid MCP HTTP header '{name}': {error}"))
+            })?;
+            let value = HeaderValue::from_str(value).map_err(|error| {
+                AdkError::tool(format!("invalid value for MCP HTTP header '{name}': {error}"))
+            })?;
+            custom_headers.insert(name, value);
+        }
+
+        let token = match &self.auth {
+            McpAuth::Bearer(token) => Some(token.clone()),
+            McpAuth::OAuth2(config) => {
+                Some(config.get_or_refresh_token().await.map_err(|error| {
+                    AdkError::new(
+                        ErrorComponent::Tool,
+                        ErrorCategory::Unauthorized,
+                        "mcp.oauth.token_fetch",
+                        format!("OAuth2 client-credentials authentication failed: {error}"),
+                    )
+                })?)
+            }
+            McpAuth::ApiKey { header, key } => {
+                let name = HeaderName::from_bytes(header.as_bytes()).map_err(|error| {
+                    AdkError::tool(format!("invalid MCP API-key header '{header}': {error}"))
+                })?;
+                let value = HeaderValue::from_str(key).map_err(|error| {
+                    AdkError::tool(format!("invalid MCP API-key value for '{header}': {error}"))
+                })?;
+                custom_headers.insert(name, value);
+                None
+            }
+            McpAuth::None => None,
+        };
+
+        let mut config = StreamableHttpClientTransportConfig::with_uri(self.endpoint.as_str())
+            .custom_headers(custom_headers)
+            .reinit_on_expired_session(self.reinit_on_expired_session);
+        if let Some(token) = token {
+            config = config.auth_header(token);
+        }
+
+        let client = reqwest_mcp::Client::builder()
+            .timeout(self.timeout)
+            .build()
+            .map_err(|error| AdkError::tool(format!("failed to build MCP HTTP client: {error}")))?;
+        Ok(StreamableHttpClientTransport::with_client(client, config))
+    }
+
     /// Configure an elicitation handler for the HTTP connection.
     ///
     /// When set, use [`connect_with_elicitation`](Self::connect_with_elicitation)
     /// to create a toolset that advertises elicitation capabilities.
     pub fn with_elicitation_handler(mut self, handler: Arc<dyn ElicitationHandler>) -> Self {
         self.elicitation_handler = Some(handler);
+        self
+    }
+
+    /// Configure a handler for resource and resource-list update notifications.
+    ///
+    /// Use this with [`connect_with_elicitation`](Self::connect_with_elicitation);
+    /// the handler is retained when an expired HTTP session is recreated.
+    pub fn with_resource_notification_handler(
+        mut self,
+        handler: Arc<dyn ResourceNotificationHandler>,
+    ) -> Self {
+        self.resource_notification_handler = Some(handler);
         self
     }
 
@@ -129,57 +293,14 @@ impl McpHttpClientBuilder {
     /// - Connection to the server fails
     /// - Authentication fails
     #[cfg(feature = "http-transport")]
-    pub async fn connect(
-        self,
-    ) -> Result<super::McpToolset<impl rmcp::service::Service<rmcp::RoleClient>>> {
-        use adk_core::{ErrorCategory, ErrorComponent};
-        use rmcp::ServiceExt;
-        use rmcp::transport::streamable_http_client::{
-            StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
-        };
-
-        // Extract the raw token from auth config
-        // rmcp's bearer_auth() adds "Bearer " prefix automatically
-        let token = match &self.auth {
-            McpAuth::Bearer(token) => Some(token.clone()),
-            McpAuth::OAuth2(config) => {
-                // Get token from OAuth2 flow
-                let token = config.get_or_refresh_token().await.map_err(|e| {
-                    AdkError::new(
-                        ErrorComponent::Tool,
-                        ErrorCategory::Unauthorized,
-                        "mcp.oauth.token_fetch",
-                        format!("OAuth2 authentication failed: {e}"),
-                    )
-                })?;
-                Some(token)
-            }
-            McpAuth::ApiKey { .. } => {
-                // API key auth not supported via rmcp's auth_header (uses different header)
-                // Would need custom client implementation
-                None
-            }
-            McpAuth::None => None,
-        };
-
-        // Build transport config with authentication
-        let mut config = StreamableHttpClientTransportConfig::with_uri(self.endpoint.as_str());
-
-        // Set auth header if we have a token (rmcp adds "Bearer " prefix via bearer_auth)
-        if let Some(token) = token {
-            config = config.auth_header(token);
-        }
-
-        // Create transport with config
-        let transport = StreamableHttpClientTransport::from_config(config);
-
-        // Connect using the service extension
-        let client = ()
-            .serve(transport)
+    pub async fn connect(self) -> Result<super::McpToolset<()>> {
+        let factory = Arc::new(HttpConnectionFactory { builder: self.clone() });
+        let client = factory
+            .connect_once()
             .await
-            .map_err(|e| AdkError::tool(format!("Failed to connect to MCP server: {e}")))?;
+            .map_err(|error| AdkError::tool(format!("Failed to connect to MCP server: {error}")))?;
 
-        Ok(super::McpToolset::new(client))
+        Ok(super::McpToolset::new(client).with_connection_factory(factory))
     }
 
     /// Connect to the MCP server (stub when http-transport feature is disabled).
@@ -214,50 +335,22 @@ impl McpHttpClientBuilder {
     #[cfg(feature = "http-transport")]
     pub async fn connect_with_elicitation(
         self,
-    ) -> Result<super::McpToolset<impl rmcp::service::Service<rmcp::RoleClient>>> {
-        use adk_core::{ErrorCategory, ErrorComponent};
-        use rmcp::ServiceExt;
-        use rmcp::transport::streamable_http_client::{
-            StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
-        };
-
-        let handler = self.elicitation_handler.ok_or_else(|| {
+    ) -> Result<super::McpToolset<super::elicitation::AdkClientHandler>> {
+        let handler = self.elicitation_handler.clone().ok_or_else(|| {
             AdkError::tool(
                 "connect_with_elicitation requires with_elicitation_handler to be called first",
             )
         })?;
 
-        // Extract the raw token from auth config
-        let token = match &self.auth {
-            McpAuth::Bearer(token) => Some(token.clone()),
-            McpAuth::OAuth2(config) => {
-                let token = config.get_or_refresh_token().await.map_err(|e| {
-                    AdkError::new(
-                        ErrorComponent::Tool,
-                        ErrorCategory::Unauthorized,
-                        "mcp.oauth.token_fetch",
-                        format!("OAuth2 authentication failed: {e}"),
-                    )
-                })?;
-                Some(token)
-            }
-            McpAuth::ApiKey { .. } => None,
-            McpAuth::None => None,
-        };
+        let resource_notification_handler = self.resource_notification_handler.clone();
+        let factory = Arc::new(HttpElicitationConnectionFactory {
+            builder: self,
+            handler,
+            resource_notification_handler,
+        });
+        let client = factory.connect_once().await.map_err(AdkError::tool)?;
 
-        let mut config = StreamableHttpClientTransportConfig::with_uri(self.endpoint.as_str());
-        if let Some(token) = token {
-            config = config.auth_header(token);
-        }
-
-        let transport = StreamableHttpClientTransport::from_config(config);
-        let adk_handler = super::elicitation::AdkClientHandler::new(handler);
-        let client = adk_handler
-            .serve(transport)
-            .await
-            .map_err(|e| AdkError::tool(format!("failed to connect to MCP server: {e}")))?;
-
-        Ok(super::McpToolset::new(client))
+        Ok(super::McpToolset::new(client).with_connection_factory(factory))
     }
 
     /// Connect with elicitation support (stub when http-transport feature is disabled).

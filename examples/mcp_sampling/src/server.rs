@@ -6,6 +6,10 @@
 //!
 //! Spawned as a subprocess by the client. Communicates over stdio.
 
+// This example intentionally verifies compatibility with sampling while the
+// MCP project retains it as a deprecated SEP-2577 capability.
+#![allow(deprecated)]
+
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -79,7 +83,7 @@ impl SamplingServer {
                     .content
                     .first()
                     .and_then(|c| match c {
-                        rmcp::model::SamplingMessageContent::Text(t) => Some(t.text.clone()),
+                        rmcp::model::SamplingMessageContentBlock::Text(t) => Some(t.text.clone()),
                         _ => None,
                     })
                     .unwrap_or_else(|| "(no text in response)".to_string());
@@ -122,7 +126,7 @@ impl SamplingServer {
                     .content
                     .first()
                     .and_then(|c| match c {
-                        rmcp::model::SamplingMessageContent::Text(t) => Some(t.text.clone()),
+                        rmcp::model::SamplingMessageContentBlock::Text(t) => Some(t.text.clone()),
                         _ => None,
                     })
                     .unwrap_or_else(|| "(no text in response)".to_string());

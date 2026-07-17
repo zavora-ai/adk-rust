@@ -1,7 +1,7 @@
 //! ACP agent wrapped as an ADK Tool.
 //!
 //! [`AcpAgentTool`] allows an ADK agent to delegate tasks to an external ACP agent
-//! (Claude Code, Codex, etc.) by sending prompts and receiving responses.
+//! by sending typed ACP prompts and receiving streamed responses.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -35,8 +35,8 @@ use crate::usage::{AcpUsage, UsageTracker};
 ///
 /// let tracker = UsageTracker::new();
 ///
-/// let claude = AcpAgentTool::new("claude-code")
-///     .description("Delegate complex coding tasks to Claude Code")
+/// let coding_agent = AcpAgentTool::new("my-coding-agent --acp")
+///     .description("Delegate repository work to an ACP coding agent")
 ///     .permission_policy(PermissionPolicy::Custom(Box::new(|req| {
 ///         if req.title.contains("delete") {
 ///             adk_acp::PermissionDecision::deny()
@@ -47,7 +47,7 @@ use crate::usage::{AcpUsage, UsageTracker};
 ///     .usage_tracker(tracker.clone());
 ///
 /// let agent = LlmAgentBuilder::new("orchestrator")
-///     .tool(Arc::new(claude))
+///     .tool(Arc::new(coding_agent))
 ///     .build()?;
 ///
 /// // After some invocations:
@@ -76,7 +76,7 @@ impl AcpAgentTool {
             name: name.clone(),
             description: format!("Delegate tasks to the {name} ACP agent"),
             config: AcpAgentConfig::new(&command),
-            permission_policy: Arc::new(PermissionPolicy::AutoApprove),
+            permission_policy: Arc::new(PermissionPolicy::DenyAll),
             usage_tracker: None,
         }
     }
@@ -101,9 +101,9 @@ impl AcpAgentTool {
 
     /// Set the permission policy for handling agent tool requests.
     ///
-    /// Default is `PermissionPolicy::AutoApprove` (YOLO mode).
-    /// Use `PermissionPolicy::DenyAll` for safe mode, or
-    /// `PermissionPolicy::Custom(...)` for fine-grained control.
+    /// Default is `PermissionPolicy::DenyAll`. Choose `AutoApprove` only for a
+    /// trusted development environment, or use `Custom(...)` for fine-grained
+    /// control.
     pub fn permission_policy(mut self, policy: PermissionPolicy) -> Self {
         self.permission_policy = Arc::new(policy);
         // Also update the config's auto_approve flag for the connection layer

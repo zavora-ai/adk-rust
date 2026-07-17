@@ -58,14 +58,29 @@ A dedicated, newcomer-friendly guide to building voice + multimodal agents — a
 
 - [Function Tools](tools/function-tools.md) - Create custom tools with async Rust functions
 - [Built-in Tools](tools/built-in-tools.md) - Pre-built tools like GoogleSearchTool
-- [MCP Tools](tools/mcp-tools.md) - Model Context Protocol integration
+- [MCP overview and architecture](mcp/index.md) - Where MCP fits and which ADK-Rust surface to use
+- [MCP client](mcp/client.md) - Tools, resources, prompts, completion, subscriptions, elicitation, tasks, and HTTP
+- [Dynamic MCP server manager](mcp/manager.md) - Runtime local-server registry, persistence, monitoring, and restart
+- [MCP server authoring](mcp/server.md) - Publish tools and other capabilities with the aligned official Rust SDK
+- [MCP security](mcp/security.md) - Authentication, visibility, authorization, approval, and secret handling
+- [MCP testing](mcp/testing.md) - Deterministic gates and deployment verification
 - [Browser Tools](tools/browser-tools.md) - 46 WebDriver tools for web automation
 - [UI Tools](tools/ui-tools.md) - Dynamic UI generation with forms, cards, charts
 - [RAG](tools/rag.md) - Retrieval-Augmented Generation for knowledge base search
-- [ACP Tools](tools/acp-tools.md) - Agent Client Protocol (Claude Code, Codex, Kiro CLI)
+- [ACP Tools](tools/acp-tools.md) - Use an ACP coding agent as a typed ADK-Rust tool
 - [Retry & Reflect](tools/retry-reflect.md) - Tool failure recovery with reflection prompts
 - [Action Nodes](tools/action-nodes.md) - 14 deterministic node types for workflow graphs
 - [Benchmarking](tools/benchmarking.md) - Performance measurement with `cargo adk bench`
+
+## Agent Client Protocol
+
+Use an external coding agent from ADK-Rust, or expose an ADK-Rust agent to an
+editor through stable ACP v1.
+
+- [Architecture and concepts](acp/index.md) - Client/host and coding-agent roles, sessions, capabilities, and protocol flow
+- [ACP client and host](acp/client.md) - Delegation, persistent sessions, streaming, cancellation, permissions, files, terminals, and MCP
+- [ACP agent server](acp/server.md) - Expose the Runner, tools, sessions, and live events through stdio
+- [Testing and support matrix](acp/testing.md) - Verified interoperability and deliberately unadvertised features
 
 ## Sessions & State
 

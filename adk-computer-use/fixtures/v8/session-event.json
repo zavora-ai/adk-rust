@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "eventId": "event-0001",
+  "sequence": 3,
+  "sessionId": "session-0001",
+  "actionId": "action-0001",
+  "type": "action.committed",
+  "at": "2026-07-13T10:00:01.050Z",
+  "principalId": "principal-0001",
+  "payload": {
+    "receiptId": "receipt-0001",
+    "leaseId": "lease-0001"
+  }
+}

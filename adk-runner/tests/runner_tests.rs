@@ -623,3 +623,119 @@ fn test_compute_transfer_context_nested() {
     assert_eq!(parent, Some("root".to_string()));
     assert!(peers.is_empty());
 }
+
+// Agent that emits events in a loop until cancelled or `max_ticks` is reached.
+// Used to validate cooperative cancellation (issue #402): it honors
+// `ctx.is_cancelled()` between ticks, and the runner's cancellation race
+// interrupts the in-flight await.
+struct CancellableLoopAgent {
+    max_ticks: usize,
+}
+
+#[async_trait]
+impl Agent for CancellableLoopAgent {
+    fn name(&self) -> &str {
+        "cancellable-loop"
+    }
+
+    fn description(&self) -> &str {
+        "Emits events until cancelled or max_ticks reached"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        let max_ticks = self.max_ticks;
+        let stream = futures::stream::unfold((0usize, ctx), move |(i, ctx)| async move {
+            // Stop before starting another tick if cancelled (Part 1/2 analog).
+            if i >= max_ticks || ctx.is_cancelled() {
+                return None;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            if ctx.is_cancelled() {
+                return None;
+            }
+            let mut event = Event::new(ctx.invocation_id());
+            event.author = "cancellable-loop".to_string();
+            event.llm_response.content = Some(Content::new("model").with_text(format!("tick-{i}")));
+            Some((Ok(event), (i + 1, ctx)))
+        });
+        Ok(Box::pin(stream))
+    }
+}
+
+#[tokio::test]
+async fn test_runner_interrupt_stops_agent_stream() {
+    // Issue #402: Runner::interrupt() must stop a long-running agent promptly
+    // rather than letting it run to natural completion.
+    let agent = Arc::new(CancellableLoopAgent { max_ticks: 1000 });
+    let runner = Runner::builder()
+        .app_name("test_app")
+        .agent(agent as Arc<dyn Agent>)
+        .session_service(Arc::new(MockSessionService) as Arc<dyn SessionService>)
+        .build()
+        .unwrap();
+
+    let session_id = "cancel-session";
+    let mut stream = runner
+        .run(
+            UserId::new("user123").unwrap(),
+            SessionId::new(session_id).unwrap(),
+            Content::new("user").with_text("go"),
+        )
+        .await
+        .unwrap();
+
+    // Ensure the agent is actually running (received at least one event).
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("first event should arrive within timeout");
+    assert!(first.is_some(), "expected at least one event before interrupt");
+
+    // Interrupt the running agent.
+    let interrupted = runner.interrupt(session_id);
+    assert!(interrupted, "interrupt() should find the active session");
+
+    // The stream must terminate promptly and well before max_ticks.
+    let mut extra = 0usize;
+    loop {
+        match tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await {
+            Ok(Some(_)) => {
+                extra += 1;
+                assert!(extra < 50, "stream kept producing events after interrupt");
+            }
+            Ok(None) => break, // stream ended — cancellation was honored
+            Err(_) => panic!("stream did not terminate after interrupt (timed out)"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_runner_runs_to_completion_without_interrupt() {
+    // Control case: without interrupt, the same agent runs to completion.
+    let agent = Arc::new(CancellableLoopAgent { max_ticks: 3 });
+    let runner = Runner::builder()
+        .app_name("test_app")
+        .agent(agent as Arc<dyn Agent>)
+        .session_service(Arc::new(MockSessionService) as Arc<dyn SessionService>)
+        .build()
+        .unwrap();
+
+    let mut stream = runner
+        .run(
+            UserId::new("user123").unwrap(),
+            SessionId::new("normal-session").unwrap(),
+            Content::new("user").with_text("go"),
+        )
+        .await
+        .unwrap();
+
+    let mut count = 0usize;
+    while let Some(result) = stream.next().await {
+        result.unwrap();
+        count += 1;
+    }
+    assert_eq!(count, 3, "agent should emit exactly max_ticks events when not interrupted");
+}

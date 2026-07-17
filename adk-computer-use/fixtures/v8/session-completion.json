@@ -1,0 +1,24 @@
+{
+  "sessionId": "session-0001",
+  "principalId": "principal-0001",
+  "executionGroupId": "group-0001",
+  "objective": "Complete the sandbox workflow",
+  "state": "completed",
+  "revision": 4,
+  "createdAt": "2026-07-13T10:00:00.000Z",
+  "updatedAt": "2026-07-13T10:00:02.000Z",
+  "completion": {
+    "summary": "The sandbox workflow completed safely.",
+    "postconditions": [
+      {
+        "description": "Expected result is present",
+        "satisfied": true,
+        "evidenceHash": "sha256:evidence"
+      }
+    ],
+    "lastAppId": "com.example.Sandbox",
+    "lastWindowId": 42,
+    "actionCounts": { "committed": 1 },
+    "completedAt": "2026-07-13T10:00:02.000Z"
+  }
+}

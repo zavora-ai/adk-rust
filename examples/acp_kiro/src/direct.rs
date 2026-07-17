@@ -20,8 +20,9 @@ use std::time::Instant;
 async fn main() -> anyhow::Result<()> {
     println!("=== ADK-ACP: Direct connection to Kiro CLI ===\n");
 
-    let config =
-        AcpAgentConfig::new("kiro-cli acp --trust-all-tools").working_dir(std::env::current_dir()?);
+    let config = AcpAgentConfig::new("kiro-cli acp")
+        .working_dir(std::env::current_dir()?)
+        .auto_approve(true);
 
     let prompt = "What files are in the current directory? List the first 5.";
     println!("Prompt: \"{prompt}\"\n");

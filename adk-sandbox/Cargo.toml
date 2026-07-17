@@ -23,6 +23,9 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 tempfile = "3.10"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Optional dependencies for wasm feature
 wasmtime = { version = "45", optional = true }
 wasmtime-wasi = { version = "45", optional = true }

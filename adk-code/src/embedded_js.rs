@@ -243,12 +243,12 @@ fn js_value_to_json(val: &JsValue, context: &mut Context) -> serde_json::Value {
             // Clean up
             let _ = global.delete_property_or_throw(key, context);
 
-            if let Ok(json_val) = result {
-                if let Some(s) = json_val.as_string() {
-                    let std_str: String = s.to_std_string_escaped();
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&std_str) {
-                        return parsed;
-                    }
+            if let Ok(json_val) = result
+                && let Some(s) = json_val.as_string()
+            {
+                let std_str: String = s.to_std_string_escaped();
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&std_str) {
+                    return parsed;
                 }
             }
             serde_json::Value::String("[object]".to_string())

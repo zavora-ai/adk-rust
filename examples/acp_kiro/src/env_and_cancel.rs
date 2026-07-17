@@ -12,7 +12,7 @@
 
 use adk_acp::{AcpAgentConfig, AcpSession, PermissionPolicy};
 use std::sync::Arc;
-use tokio::time::{Duration, timeout};
+use tokio::time::{Duration, sleep};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
     println!("─── Feature: Environment Variables ───");
     println!("Passing env vars to the agent process (no unsafe set_var).\n");
 
-    let config = AcpAgentConfig::new("kiro-cli acp --trust-all-tools")
+    let config = AcpAgentConfig::new("kiro-cli acp")
         .working_dir(std::env::current_dir()?)
         // These env vars are passed to the child process via Command::env()
         .env("ADK_EXAMPLE_MODE", "true")
@@ -32,8 +32,8 @@ async fn main() -> anyhow::Result<()> {
         .envs([("CUSTOM_VAR_1", "hello"), ("CUSTOM_VAR_2", "world")]);
 
     println!("Config created with {} env vars:", config.env.len());
-    for (k, v) in &config.env {
-        println!("  {k}={v}");
+    for key in config.env.keys() {
+        println!("  {key}");
     }
     println!();
 
@@ -67,30 +67,33 @@ async fn main() -> anyhow::Result<()> {
         &session_clone_prompt[..end]
     });
 
-    // Race: prompt vs timeout
-    let prompt_future = session.prompt(session_clone_prompt);
-    match timeout(Duration::from_secs(3), prompt_future).await {
-        Ok(Ok(result)) => {
-            // Agent responded within 3s (fast agent!)
-            println!("Agent responded in {:?} (faster than timeout)", result.duration);
-            println!("Response preview: {}...", &result.text[..result.text.len().min(100)]);
-        }
-        Ok(Err(e)) => {
-            println!("Prompt errored: {e}");
-        }
-        Err(_) => {
-            // Timed out — cancel the session
-            println!("⏱️  Timeout reached (3s). Cancelling...");
-            session.cancel().await?;
-            println!("✅ Session cancelled and restarted.\n");
-
-            // Verify session still works after cancel
-            println!("Verifying session works after cancel...");
-            let r2 = session.prompt("Say 'hello' and nothing else.").await?;
-            println!("Agent says: {}", r2.text.trim());
-            println!("✅ Session functional after cancel.");
+    // Keep the prompt future alive after the timer wins so it can receive the
+    // agent's official cancelled stop reason and clean up the turn.
+    {
+        let cancellation = session.cancellation_handle()?;
+        let mut prompt_future = Box::pin(session.prompt(session_clone_prompt));
+        tokio::select! {
+            result = &mut prompt_future => {
+                let result = result?;
+                println!("Agent responded in {:?} (faster than timeout)", result.duration);
+                println!("Response preview: {}...", result.text.chars().take(100).collect::<String>());
+            }
+            () = sleep(Duration::from_secs(3)) => {
+                println!("⏱️  Timeout reached (3s). Sending session/cancel...");
+                cancellation.cancel().await?;
+                match prompt_future.await {
+                    Ok(result) => println!("Agent completed while cancellation was in flight: {}", result.text),
+                    Err(error) => println!("Cancelled turn closed with: {error}"),
+                }
+                println!("✅ Cancelled turn cleaned up.\n");
+            }
         }
     }
+
+    println!("Verifying the same session accepts another prompt...");
+    let r2 = session.prompt("Say 'hello' and nothing else.").await?;
+    println!("Agent says: {}", r2.text.trim());
+    println!("✅ Session functional after cancellation.");
 
     // --- Summary ---
     println!("\n📊 Session Summary:");

@@ -1,7 +1,9 @@
-//! # MCP Sampling Example
+//! # MCP Sampling Compatibility Example
 //!
-//! Demonstrates ADK-Rust's MCP Sampling support — the ability for MCP servers
+//! Demonstrates ADK-Rust's compatibility support for MCP sampling — the ability for MCP servers
 //! to request LLM inference from the client via `sampling/createMessage`.
+//! Sampling is deprecated upstream through SEP-2577 and should not be the
+//! default architecture for a new MCP deployment.
 //!
 //! ## What This Shows
 //!

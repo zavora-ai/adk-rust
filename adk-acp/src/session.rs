@@ -10,10 +10,10 @@
 //! use adk_acp::{AcpSession, AcpAgentConfig, PermissionPolicy};
 //! use std::sync::Arc;
 //!
-//! let config = AcpAgentConfig::new("kiro-cli acp --trust-all-tools")
+//! let config = AcpAgentConfig::new("my-coding-agent --acp")
 //!     .working_dir("/path/to/project");
 //!
-//! let mut session = AcpSession::start(config, Arc::new(PermissionPolicy::AutoApprove)).await?;
+//! let mut session = AcpSession::start(config, Arc::new(PermissionPolicy::DenyAll)).await?;
 //!
 //! // First prompt — Kiro reads the project structure
 //! let r1 = session.prompt("List the files in src/").await?;
@@ -28,24 +28,24 @@
 //! ```
 
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agent_client_protocol::schema::{
-    InitializeRequest, ProtocolVersion, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SelectedPermissionOutcome,
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::schema::v1::{
+    CancelNotification, CloseSessionRequest, ContentBlock, ContentChunk, InitializeRequest,
+    NewSessionRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SessionNotification, SessionUpdate,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo};
-use agent_client_protocol_tokio::AcpAgent;
+use agent_client_protocol::util::MatchDispatch;
+use agent_client_protocol::{Agent, Client, ConnectionTo, Responder, SessionMessage};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::connection::AcpAgentConfig;
 use crate::error::{AcpError, Result};
-use crate::permissions::{
-    PermissionDecision, PermissionOption, PermissionPolicy, PermissionRequest,
-};
+use crate::host::{AcpHostHandler, capabilities};
+use crate::permissions::{PermissionPolicy, PermissionRequest, outcome_for};
 
 /// Result of a prompt sent to a persistent session.
 #[derive(Debug, Clone)]
@@ -81,6 +81,27 @@ struct SessionInner {
     result_rx: Arc<Mutex<tokio::sync::mpsc::Receiver<SessionResult>>>,
 }
 
+/// A cloneable handle that can cancel a prompt while another task awaits it.
+///
+/// Create the handle before calling [`AcpSession::prompt`], then move it into a
+/// UI event handler, timeout task, or shutdown task. It sends ACP's official
+/// `session/cancel` notification and leaves the session available for another
+/// prompt after the agent acknowledges cancellation.
+#[derive(Clone)]
+pub struct AcpCancellationHandle {
+    prompt_tx: tokio::sync::mpsc::Sender<SessionCommand>,
+}
+
+impl AcpCancellationHandle {
+    /// Ask the external ACP agent to cancel its current prompt.
+    pub async fn cancel(&self) -> Result<()> {
+        self.prompt_tx
+            .send(SessionCommand::Cancel)
+            .await
+            .map_err(|_| AcpError::ConnectionLost("agent process exited".into()))
+    }
+}
+
 enum SessionCommand {
     Prompt(String),
     Cancel,
@@ -103,17 +124,16 @@ impl AcpSession {
     pub async fn start(config: AcpAgentConfig, policy: Arc<PermissionPolicy>) -> Result<Self> {
         info!(command = %config.command, cwd = %config.working_dir.display(), "starting persistent ACP session");
 
-        let command_with_env =
-            crate::connection::build_command_with_env(&config.command, &config.env);
-
-        let agent = AcpAgent::from_str(&command_with_env).map_err(|e| {
-            AcpError::InvalidConfig(format!("invalid command '{}': {e}", config.command))
-        })?;
+        let agent = crate::connection::build_agent(&config)?;
 
         let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::channel::<SessionCommand>(1);
         let (result_tx, result_rx) = tokio::sync::mpsc::channel::<SessionResult>(1);
 
         let working_dir = config.working_dir.clone();
+        let mcp_servers = config.mcp_servers.clone();
+        let filesystem = config.filesystem.clone();
+        let terminal = config.terminal.clone();
+        let client_capabilities = capabilities(filesystem.as_ref(), terminal.as_ref());
         let policy_clone = policy.clone();
 
         // Spawn the ACP connection in a background task
@@ -124,89 +144,146 @@ impl AcpSession {
                 .on_receive_request(
                     {
                         let policy = policy_clone.clone();
-                        async move |request: RequestPermissionRequest,
-                                    responder,
-                                    _cx: ConnectionTo<Agent>| {
-                            let title = request
-                                .options
-                                .first()
-                                .map(|o| o.name.to_string())
-                                .unwrap_or_else(|| "Unknown operation".to_string());
-
-                            let perm_request = PermissionRequest {
-                                title: title.clone(),
-                                options: request
-                                    .options
-                                    .iter()
-                                    .map(|o| PermissionOption {
-                                        id: o.option_id.to_string(),
-                                        name: o.name.to_string(),
-                                    })
-                                    .collect(),
-                            };
-
-                            let decision = policy.decide(&perm_request);
-                            match &decision {
-                                PermissionDecision::Allow(option_id) => {
-                                    debug!(title = %title, "ACP permission granted");
-                                    responder.respond(RequestPermissionResponse::new(
-                                        RequestPermissionOutcome::Selected(
-                                            SelectedPermissionOutcome::new(option_id.clone()),
-                                        ),
-                                    ))
-                                }
-                                PermissionDecision::Deny => {
-                                    warn!(title = %title, "ACP permission DENIED");
-                                    responder.respond(RequestPermissionResponse::new(
-                                        RequestPermissionOutcome::Cancelled,
-                                    ))
-                                }
+                        move |request: RequestPermissionRequest,
+                              responder: Responder<RequestPermissionResponse>,
+                              cx: ConnectionTo<Agent>| {
+                            let policy = policy.clone();
+                            async move {
+                            cx.spawn(async move {
+                                let cancellation = responder.cancellation();
+                                let perm_request = PermissionRequest::from_acp(&request);
+                                let decision = tokio::select! {
+                                    decision = policy.decide(&perm_request) => decision,
+                                    _ = cancellation.cancelled() => {
+                                        return responder.respond(RequestPermissionResponse::new(
+                                            RequestPermissionOutcome::Cancelled,
+                                        ));
+                                    }
+                                };
+                                let outcome = outcome_for(&perm_request, &decision);
+                                debug!(title = %perm_request.title, decision = %decision, "ACP permission policy evaluated");
+                                responder.respond(RequestPermissionResponse::new(outcome))
+                            })?;
+                            Ok(())
                             }
                         }
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
+                .with_handler(AcpHostHandler::new(filesystem, terminal))
                 .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
                     // Initialize
-                    connection
-                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                    let initialization = connection
+                        .send_request(
+                            InitializeRequest::new(ProtocolVersion::V1)
+                                .client_capabilities(client_capabilities),
+                        )
                         .block_task()
                         .await?;
+                    crate::connection::validate_initialization(
+                        &initialization,
+                        &mcp_servers,
+                    )?;
 
                     // Create session and enter the prompt loop
                     connection
-                        .build_session(&working_dir)
+                        .build_session_from(
+                            NewSessionRequest::new(&working_dir).mcp_servers(mcp_servers),
+                        )
                         .block_task()
                         .run_until(async |mut session| {
                             // Process commands from the main task
                             while let Some(cmd) = prompt_rx.recv().await {
                                 match cmd {
                                     SessionCommand::Prompt(text) => {
-                                        match session.send_prompt(&text) {
-                                            Ok(()) => match session.read_to_string().await {
-                                                Ok(response) => {
-                                                    let _ = result_tx
-                                                        .send(SessionResult::Response(response))
-                                                        .await;
+                                        if let Err(error) = session.send_prompt(&text) {
+                                            let _ = result_tx
+                                                .send(SessionResult::Error(error.to_string()))
+                                                .await;
+                                            continue;
+                                        }
+
+                                        let connection = session.connection();
+                                        let session_id = session.session_id().clone();
+                                        let mut response = String::new();
+                                        let mut cancellation_requested = false;
+
+                                        loop {
+                                            tokio::select! {
+                                                update = session.read_update() => {
+                                                    match update? {
+                                                        SessionMessage::SessionMessage(dispatch) => {
+                                                            MatchDispatch::new(dispatch)
+                                                                .if_notification(async |notification: SessionNotification| {
+                                                                    if let SessionUpdate::AgentMessageChunk(ContentChunk {
+                                                                        content: ContentBlock::Text(text),
+                                                                        ..
+                                                                    }) = notification.update
+                                                                    {
+                                                                        response.push_str(&text.text);
+                                                                    }
+                                                                    Ok(())
+                                                                })
+                                                                .await
+                                                                .otherwise_ignore()?;
+                                                        }
+                                                        SessionMessage::StopReason(stop_reason) => {
+                                                            let result = if cancellation_requested
+                                                                || stop_reason
+                                                                    == agent_client_protocol::schema::v1::StopReason::Cancelled
+                                                            {
+                                                                SessionResult::Cancelled
+                                                            } else {
+                                                                SessionResult::Response(response)
+                                                            };
+                                                            let _ = result_tx.send(result).await;
+                                                            break;
+                                                        }
+                                                        _ => {}
+                                                    }
                                                 }
-                                                Err(e) => {
-                                                    let _ = result_tx
-                                                        .send(SessionResult::Error(e.to_string()))
-                                                        .await;
+                                                command = prompt_rx.recv() => {
+                                                    match command {
+                                                        Some(SessionCommand::Cancel) => {
+                                                            cancellation_requested = true;
+                                                            connection.send_notification(
+                                                                CancelNotification::new(session_id.clone()),
+                                                            )?;
+                                                        }
+                                                        Some(SessionCommand::Close) => {
+                                                            connection.send_notification(
+                                                                CancelNotification::new(session_id.clone()),
+                                                            )?;
+                                                            let _ = result_tx.send(SessionResult::Closed).await;
+                                                            return Ok(());
+                                                        }
+                                                        Some(SessionCommand::Prompt(_)) => {
+                                                            let _ = result_tx
+                                                                .send(SessionResult::Error(
+                                                                    "a prompt is already running in this ACP session".into(),
+                                                                ))
+                                                                .await;
+                                                        }
+                                                        None => return Ok(()),
+                                                    }
                                                 }
-                                            },
-                                            Err(e) => {
-                                                let _ = result_tx
-                                                    .send(SessionResult::Error(e.to_string()))
-                                                    .await;
                                             }
                                         }
                                     }
                                     SessionCommand::Cancel => {
+                                        session.connection().send_notification(
+                                            CancelNotification::new(session.session_id().clone()),
+                                        )?;
                                         let _ = result_tx.send(SessionResult::Cancelled).await;
-                                        break;
                                     }
                                     SessionCommand::Close => {
+                                        session
+                                            .connection()
+                                            .send_request(CloseSessionRequest::new(
+                                                session.session_id().clone(),
+                                            ))
+                                            .block_task()
+                                            .await?;
                                         let _ = result_tx.send(SessionResult::Closed).await;
                                         break;
                                     }
@@ -279,7 +356,18 @@ impl AcpSession {
     /// Close the session and terminate the agent process.
     pub async fn close(&mut self) -> Result<()> {
         if let Some(inner) = self.inner.take() {
-            let _ = inner.prompt_tx.send(SessionCommand::Close).await;
+            inner
+                .prompt_tx
+                .send(SessionCommand::Close)
+                .await
+                .map_err(|_| AcpError::ConnectionLost("agent process exited".into()))?;
+            let mut rx = inner.result_rx.lock().await;
+            match rx.recv().await {
+                Some(SessionResult::Closed) => {}
+                Some(SessionResult::Error(error)) => return Err(AcpError::Protocol(error)),
+                None => return Err(AcpError::ConnectionLost("agent process exited".into())),
+                _ => return Err(AcpError::Protocol("unexpected ACP close response".into())),
+            }
             info!(
                 prompt_count = self.prompt_count,
                 uptime = ?self.started_at.elapsed(),
@@ -291,9 +379,9 @@ impl AcpSession {
 
     /// Cancel the currently running prompt.
     ///
-    /// If the agent is processing a prompt, this terminates the session and
-    /// restarts it. The next call to [`prompt()`](Self::prompt) will work
-    /// on a fresh session context.
+    /// Because this method borrows the session, use
+    /// [`cancellation_handle`](Self::cancellation_handle) when a different task
+    /// must cancel a prompt currently being awaited.
     pub async fn cancel(&mut self) -> Result<()> {
         if let Some(inner) = &self.inner {
             info!("cancelling in-progress ACP prompt");
@@ -302,12 +390,16 @@ impl AcpSession {
             let mut rx = inner.result_rx.lock().await;
             let _ = rx.recv().await;
         }
-        // Close and restart
-        self.inner = None;
-        let mut new_session = AcpSession::start(self.config.clone(), self.policy.clone()).await?;
-        self.inner = new_session.inner.take();
-        info!("ACP session restarted after cancel");
         Ok(())
+    }
+
+    /// Return a handle that can cancel an in-flight prompt from another task.
+    pub fn cancellation_handle(&self) -> Result<AcpCancellationHandle> {
+        let inner = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| AcpError::ConnectionLost("session already closed".into()))?;
+        Ok(AcpCancellationHandle { prompt_tx: inner.prompt_tx.clone() })
     }
 
     /// Number of prompts sent in this session.

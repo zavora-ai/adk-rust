@@ -19,6 +19,9 @@ playground versions are being finalized:
 - `examples/bedrock_test` — Bedrock smoke testing
 - `examples/payments` — agentic commerce scenario index for ACP/AP2 validation paths
 - `examples/developer_ergonomics` — developer ergonomics validation (RunnerConfigBuilder, ToolExecutionStrategy, SimpleToolContext, StatefulTool, run_str, #[tool] attributes)
+- `examples/acp_client_host` — vendor-neutral ACP client with streamed updates, async permissions, and a workspace-bounded filesystem
+- `examples/acp_kiro` — external coding-agent delegation, persistent sessions, and concurrent cancellation
+- `examples/acp_server` — expose a tool-using ADK-Rust agent to an editor through stable ACP v1
 
 ## Validated Feature Examples
 
@@ -32,10 +35,19 @@ Standalone crates demonstrating current ADK-Rust features. Each has its own `Car
 | `examples/video_avatar` | Video Avatar configuration | `cargo run --manifest-path examples/video_avatar/Cargo.toml` |
 | `examples/server_builder` | ServerBuilder + graceful shutdown | `cargo run --manifest-path examples/server_builder/Cargo.toml` |
 
+**ACP examples:**
+
+| Example | Feature | Run |
+|---------|---------|-----|
+| `examples/acp_client_host` | External ACP agent with streamed UI events and client-controlled read-only files | Set `ACP_AGENT_COMMAND`, then `cargo run --manifest-path examples/acp_client_host/Cargo.toml` |
+| `examples/acp_kiro` | Direct, delegated, persistent, and cancellable coding-agent sessions | `cargo run --manifest-path examples/acp_kiro/Cargo.toml --bin acp-kiro-session` |
+| `examples/acp_server` | Gemini-backed ADK-Rust coding agent exposed to editors | Set `GOOGLE_API_KEY`, then `cargo run --manifest-path examples/acp_server/Cargo.toml` |
+
 **Dry-run mode (no external credentials):**
 
 | Example | Feature | Run |
 |---------|---------|-----|
+| `examples/mcp_manager` | Dynamic local MCP server registry with a deterministic Rust fixture | `cargo run --manifest-path examples/mcp_manager/Cargo.toml` |
 | `examples/slack_toolset` | Slack Toolset | `cargo run --manifest-path examples/slack_toolset/Cargo.toml` |
 | `examples/bigquery_toolset` | BigQuery Toolset | `cargo run --manifest-path examples/bigquery_toolset/Cargo.toml` |
 | `examples/spanner_toolset` | Spanner Toolset | `cargo run --manifest-path examples/spanner_toolset/Cargo.toml` |
@@ -45,7 +57,7 @@ Standalone crates demonstrating current ADK-Rust features. Each has its own `Car
 | Example | Feature | Run |
 |---------|---------|-----|
 | `examples/yaml_agent` | YAML Agent Definition | `cargo run --manifest-path examples/yaml_agent/Cargo.toml` |
-| `examples/mcp_sampling` | MCP Sampling | `cargo build --manifest-path examples/mcp_sampling/Cargo.toml && cargo run --manifest-path examples/mcp_sampling/Cargo.toml --bin sampling-client` |
+| `examples/mcp_sampling` | Deprecated MCP sampling compatibility | `cargo build --manifest-path examples/mcp_sampling/Cargo.toml && cargo run --manifest-path examples/mcp_sampling/Cargo.toml --bin sampling-client` |
 | `examples/secret_provider` | Secret Provider | `cargo run --manifest-path examples/secret_provider/Cargo.toml` |
 | `examples/user_personas` | User Personas Evaluation | `cargo run --manifest-path examples/user_personas/Cargo.toml` |
 | `examples/prompt_optimizer` | Prompt Optimizer | `cargo run --manifest-path examples/prompt_optimizer/Cargo.toml` |

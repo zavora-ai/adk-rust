@@ -461,7 +461,6 @@ let status_tool = FunctionTool::new(
 - `.with_long_running(true)` tells the agent this tool returns a pending status
 - The tool spawns work with `tokio::spawn()` and returns immediately
 - Provide a status check tool so users can poll progress
-```
 
 This adds a note to prevent the LLM from calling the tool repeatedly.
 
@@ -579,12 +578,17 @@ let ctx = SimpleToolContext::new("my-test-harness");
 let ctx = SimpleToolContext::new("my-mcp-server")
     .with_function_call_id("custom-call-id");
 
+// Bind a session ID so session-aware tools (and MCP servers that key state by
+// session) see a stable identifier instead of the empty default.
+let ctx = SimpleToolContext::new("my-mcp-server")
+    .with_session_id("session-42");
+
 // Use it to execute any tool
 let tool_ctx: Arc<dyn ToolContext> = Arc::new(ctx);
 let result = my_tool.execute(tool_ctx, json!({"key": "value"})).await?;
 ```
 
-Defaults: `user_id()` → `"anonymous"`, `session_id()` / `branch()` → `""`, `artifacts()` → `None`, `search_memory()` → empty vec. Both `invocation_id` and `function_call_id` are auto-generated UUIDs.
+Defaults: `user_id()` → `"anonymous"`, `session_id()` / `branch()` → `""`, `artifacts()` → `None`, `search_memory()` → empty vec. Both `invocation_id` and `function_call_id` are auto-generated UUIDs. Set a real session with `with_session_id(...)` when a tool routes or persists state per session.
 
 ---
 
