@@ -18,7 +18,7 @@ const DEFAULT_NUM_CHANNELS: i32 = 1;
 const BUFFER_DURATION_MS: u32 = 40;
 
 /// Reads audio frames from a LiveKit [`RemoteAudioTrack`] and sends them as
-/// base64-encoded PCM16 audio (24kHz) to the given [`RealtimeRunner`].
+/// typed PCM16 audio (24kHz) to the given [`RealtimeRunner`].
 ///
 /// This function runs continuously until the remote track stream ends, at which
 /// point it returns `Ok(())`. If sending audio to the runner fails, the error
@@ -38,13 +38,13 @@ pub async fn bridge_input(track: RemoteAudioTrack, runner: &RealtimeRunner) -> R
         if let Some(samples) = buffer.flush() {
             // Convert i16 samples to little-endian PCM16 bytes
             let chunk = AudioChunk::from_i16_samples(&samples, AudioFormat::pcm16_24khz());
-            runner.send_audio(&chunk.to_base64()).await?;
+            runner.send_audio_chunk(&chunk).await?;
         }
     }
 
     if let Some(samples) = buffer.flush_remaining() {
         let chunk = AudioChunk::from_i16_samples(&samples, AudioFormat::pcm16_24khz());
-        runner.send_audio(&chunk.to_base64()).await?;
+        runner.send_audio_chunk(&chunk).await?;
     }
 
     Ok(())
@@ -71,13 +71,13 @@ pub async fn bridge_gemini_input(track: RemoteAudioTrack, runner: &RealtimeRunne
         buffer.push(&frame.data);
         if let Some(samples) = buffer.flush() {
             let chunk = AudioChunk::from_i16_samples(&samples, AudioFormat::pcm16_16khz());
-            runner.send_audio(&chunk.to_base64()).await?;
+            runner.send_audio_chunk(&chunk).await?;
         }
     }
 
     if let Some(samples) = buffer.flush_remaining() {
         let chunk = AudioChunk::from_i16_samples(&samples, AudioFormat::pcm16_16khz());
-        runner.send_audio(&chunk.to_base64()).await?;
+        runner.send_audio_chunk(&chunk).await?;
     }
 
     Ok(())
