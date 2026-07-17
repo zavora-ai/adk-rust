@@ -24,9 +24,9 @@ use rmcp::{
     service::RunningService,
 };
 use serde_json::{Value, json};
-use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Mutex;
+use std::{collections::BTreeSet, sync::Arc};
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, warn};
 
 /// Shared factory object used to recreate MCP connections for refresh/retry.
@@ -179,6 +179,8 @@ where
     connection_factory: Option<DynConnectionFactory<S>>,
     /// Reconnection/retry configuration.
     refresh_config: RefreshConfig,
+    /// Resource subscriptions restored after an automatic connection refresh.
+    resource_subscriptions: Arc<RwLock<BTreeSet<String>>>,
 }
 
 impl<S> Clone for McpToolset<S>
@@ -193,6 +195,7 @@ where
             task_config: self.task_config.clone(),
             connection_factory: self.connection_factory.clone(),
             refresh_config: self.refresh_config.clone(),
+            resource_subscriptions: Arc::clone(&self.resource_subscriptions),
         }
     }
 }
@@ -226,6 +229,7 @@ where
             task_config: McpTaskConfig::default(),
             connection_factory: None,
             refresh_config: RefreshConfig::default(),
+            resource_subscriptions: Arc::new(RwLock::new(BTreeSet::new())),
         }
     }
 
@@ -425,6 +429,16 @@ where
             .await
             .map_err(|e| AdkError::tool(format!("Failed to refresh MCP connection: {e}")))?;
 
+        for uri in self.resource_subscriptions.read().await.iter() {
+            new_client.subscribe(SubscribeRequestParams::new(uri.clone())).await.map_err(
+                |error| {
+                    AdkError::tool(format!(
+                        "Failed to restore MCP resource subscription '{uri}': {error}"
+                    ))
+                },
+            )?;
+        }
+
         let mut client = self.client.lock().await;
         let old_token = client.cancellation_token();
         old_token.cancel();
@@ -575,7 +589,9 @@ where
         let client = self.client.lock().await;
         client.subscribe(SubscribeRequestParams::new(uri)).await.map_err(|error| {
             AdkError::tool(format!("failed to subscribe to MCP resource '{uri}': {error}"))
-        })
+        })?;
+        self.resource_subscriptions.write().await.insert(uri.to_string());
+        Ok(())
     }
 
     /// Remove a resource subscription created by [`subscribe_resource`](Self::subscribe_resource).
@@ -583,7 +599,9 @@ where
         let client = self.client.lock().await;
         client.unsubscribe(UnsubscribeRequestParams::new(uri)).await.map_err(|error| {
             AdkError::tool(format!("failed to unsubscribe MCP resource '{uri}': {error}"))
-        })
+        })?;
+        self.resource_subscriptions.write().await.remove(uri);
+        Ok(())
     }
 }
 
@@ -752,6 +770,31 @@ impl McpToolset<super::elicitation::AdkClientHandler> {
         Ok(Self::new(client))
     }
 
+    /// Create an MCP toolset with elicitation and resource notification handlers.
+    ///
+    /// Both handlers are installed before the protocol handshake, so resource
+    /// update notifications can be received immediately after subscribing.
+    pub async fn with_handlers<T, E, A>(
+        transport: T,
+        elicitation_handler: std::sync::Arc<dyn super::elicitation::ElicitationHandler>,
+        resource_notification_handler: std::sync::Arc<
+            dyn super::resource_notifications::ResourceNotificationHandler,
+        >,
+    ) -> Result<Self>
+    where
+        T: rmcp::transport::IntoTransport<rmcp::RoleClient, E, A> + Send + 'static,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        use rmcp::ServiceExt;
+        let adk_handler = super::elicitation::AdkClientHandler::new(elicitation_handler)
+            .with_resource_notification_handler(resource_notification_handler);
+        let client = adk_handler
+            .serve(transport)
+            .await
+            .map_err(|error| AdkError::tool(format!("failed to connect MCP server: {error}")))?;
+        Ok(Self::new(client))
+    }
+
     /// Create a McpToolset with MCP sampling support from a transport.
     ///
     /// This creates the MCP client using `AdkClientHandler`, which advertises
@@ -800,6 +843,31 @@ impl McpToolset<super::elicitation::AdkClientHandler> {
             .serve(transport)
             .await
             .map_err(|e| AdkError::tool(format!("failed to connect MCP server: {e}")))?;
+        Ok(Self::new(client))
+    }
+
+    /// Create a toolset with elicitation, sampling, and resource notifications.
+    #[cfg(feature = "mcp-sampling")]
+    pub async fn with_sampling_and_resource_handlers<T, E, A>(
+        transport: T,
+        elicitation_handler: std::sync::Arc<dyn super::elicitation::ElicitationHandler>,
+        sampling_handler: std::sync::Arc<dyn crate::sampling::SamplingHandler>,
+        resource_notification_handler: std::sync::Arc<
+            dyn super::resource_notifications::ResourceNotificationHandler,
+        >,
+    ) -> Result<Self>
+    where
+        T: rmcp::transport::IntoTransport<rmcp::RoleClient, E, A> + Send + 'static,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        use rmcp::ServiceExt;
+        let adk_handler = super::elicitation::AdkClientHandler::new(elicitation_handler)
+            .with_sampling_handler(sampling_handler)
+            .with_resource_notification_handler(resource_notification_handler);
+        let client = adk_handler
+            .serve(transport)
+            .await
+            .map_err(|error| AdkError::tool(format!("failed to connect MCP server: {error}")))?;
         Ok(Self::new(client))
     }
 }

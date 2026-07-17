@@ -20,6 +20,10 @@ use rmcp::model::{
 use rmcp::service::{NotificationContext, RequestContext, RoleClient};
 use serde_json::Value;
 
+use super::resource_notifications::{
+    ResourceNotificationHandler, dispatch_resource_list_changed, dispatch_resource_updated,
+};
+
 /// Trait for handling MCP elicitation requests from servers.
 ///
 /// Implement this trait to provide custom elicitation behavior when
@@ -123,6 +127,7 @@ impl ElicitationHandler for AutoDeclineElicitationHandler {
 /// `Arc<dyn SamplingHandler>` to handle `sampling/createMessage` requests.
 pub struct AdkClientHandler {
     handler: Arc<dyn ElicitationHandler>,
+    resource_notification_handler: Option<Arc<dyn ResourceNotificationHandler>>,
     #[cfg(feature = "mcp-sampling")]
     sampling_handler: Option<Arc<dyn crate::sampling::SamplingHandler>>,
 }
@@ -132,9 +137,19 @@ impl AdkClientHandler {
     pub fn new(handler: Arc<dyn ElicitationHandler>) -> Self {
         Self {
             handler,
+            resource_notification_handler: None,
             #[cfg(feature = "mcp-sampling")]
             sampling_handler: None,
         }
+    }
+
+    /// Set the handler for resource update and resource-list notifications.
+    pub fn with_resource_notification_handler(
+        mut self,
+        handler: Arc<dyn ResourceNotificationHandler>,
+    ) -> Self {
+        self.resource_notification_handler = Some(handler);
+        self
     }
 
     /// Set a sampling handler for `sampling/createMessage` requests.
@@ -329,6 +344,18 @@ impl rmcp::handler::client::ClientHandler for AdkClientHandler {
         _context: NotificationContext<RoleClient>,
     ) {
         tracing::debug!("received URL elicitation completion notification");
+    }
+
+    async fn on_resource_updated(
+        &self,
+        params: rmcp::model::ResourceUpdatedNotificationParam,
+        _context: NotificationContext<RoleClient>,
+    ) {
+        dispatch_resource_updated(&self.resource_notification_handler, &params.uri).await;
+    }
+
+    async fn on_resource_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        dispatch_resource_list_changed(&self.resource_notification_handler).await;
     }
 }
 

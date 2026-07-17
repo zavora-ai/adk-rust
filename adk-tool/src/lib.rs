@@ -121,7 +121,7 @@ pub use function_tool::FunctionTool;
 pub use mcp::{
     AutoDeclineElicitationHandler, ElicitationHandler, McpAuth, McpHttpClientBuilder,
     McpServerManager, McpTaskConfig, McpToolset, OAuth2Config, Resource, ResourceContents,
-    ResourceTemplate,
+    ResourceNotificationHandler, ResourceTemplate,
 };
 pub use simple_context::SimpleToolContext;
 pub use stateful_tool::StatefulTool;

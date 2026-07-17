@@ -107,8 +107,21 @@ def strip_inline_comment(line: str) -> str:
 
 def shell_commands(block: str) -> list[str]:
     commands: list[str] = []
+    # Join shell line-continuations (a trailing `\`) into one logical command
+    # so `shlex.split` does not choke on a dangling backslash.
+    logical_lines: list[str] = []
+    buffer = ""
     for raw in block.splitlines():
-        line = raw.strip()
+        stripped = raw.rstrip()
+        if stripped.endswith("\\") and not stripped.endswith("\\\\"):
+            buffer += stripped[:-1].rstrip() + " "
+            continue
+        logical_lines.append((buffer + stripped).strip())
+        buffer = ""
+    if buffer.strip():
+        logical_lines.append(buffer.strip())
+
+    for line in logical_lines:
         if not line or line.startswith("#") or line.startswith("export ") or line.startswith("cp "):
             continue
         for part in re.split(r"\s+&&\s+", line):

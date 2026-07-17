@@ -432,7 +432,6 @@ pub fn add_callback(mut self, cb: Callback) -> Self {
     self
 }
 ```
-```
 
 ## Async Patterns
 

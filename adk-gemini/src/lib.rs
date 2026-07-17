@@ -2,7 +2,8 @@
 
 //! # adk-gemini
 //!
-//! A Rust client library for Google's Gemini 2.0 API.
+//! A Rust client library for Google's Gemini API (Studio + Vertex AI),
+//! supporting current model generations such as Gemini 2.5 and 3.x.
 //!
 //! ## Crate Organization
 //!

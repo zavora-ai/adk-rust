@@ -5,10 +5,86 @@
 
 use super::auth::McpAuth;
 use super::elicitation::ElicitationHandler;
+use super::resource_notifications::ResourceNotificationHandler;
 use adk_core::{AdkError, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+
+#[cfg(feature = "http-transport")]
+#[derive(Clone)]
+struct HttpConnectionFactory {
+    builder: McpHttpClientBuilder,
+}
+
+#[cfg(feature = "http-transport")]
+#[derive(Clone)]
+struct HttpElicitationConnectionFactory {
+    builder: McpHttpClientBuilder,
+    handler: Arc<dyn ElicitationHandler>,
+    resource_notification_handler: Option<Arc<dyn ResourceNotificationHandler>>,
+}
+
+#[cfg(feature = "http-transport")]
+impl HttpElicitationConnectionFactory {
+    async fn connect_once(
+        &self,
+    ) -> std::result::Result<
+        rmcp::service::RunningService<rmcp::RoleClient, super::elicitation::AdkClientHandler>,
+        String,
+    > {
+        use rmcp::ServiceExt;
+
+        let transport = self.builder.build_transport().await.map_err(|error| error.to_string())?;
+        let mut handler = super::elicitation::AdkClientHandler::new(self.handler.clone());
+        if let Some(resource_handler) = &self.resource_notification_handler {
+            handler = handler.with_resource_notification_handler(Arc::clone(resource_handler));
+        }
+        handler
+            .serve(transport)
+            .await
+            .map_err(|error| format!("failed to connect to MCP server: {error}"))
+    }
+}
+
+#[cfg(feature = "http-transport")]
+#[async_trait::async_trait]
+impl super::ConnectionFactory<super::elicitation::AdkClientHandler>
+    for HttpElicitationConnectionFactory
+{
+    async fn create_connection(
+        &self,
+    ) -> std::result::Result<
+        rmcp::service::RunningService<rmcp::RoleClient, super::elicitation::AdkClientHandler>,
+        String,
+    > {
+        self.connect_once().await
+    }
+}
+
+#[cfg(feature = "http-transport")]
+impl HttpConnectionFactory {
+    async fn connect_once(
+        &self,
+    ) -> std::result::Result<rmcp::service::RunningService<rmcp::RoleClient, ()>, String> {
+        use rmcp::ServiceExt;
+
+        let transport = self.builder.build_transport().await.map_err(|error| error.to_string())?;
+        ().serve(transport)
+            .await
+            .map_err(|error| format!("failed to connect to MCP server: {error}"))
+    }
+}
+
+#[cfg(feature = "http-transport")]
+#[async_trait::async_trait]
+impl super::ConnectionFactory<()> for HttpConnectionFactory {
+    async fn create_connection(
+        &self,
+    ) -> std::result::Result<rmcp::service::RunningService<rmcp::RoleClient, ()>, String> {
+        self.connect_once().await
+    }
+}
 
 /// Builder for HTTP-based MCP connections.
 ///
@@ -48,6 +124,8 @@ pub struct McpHttpClientBuilder {
     headers: HashMap<String, String>,
     /// Optional elicitation handler
     elicitation_handler: Option<Arc<dyn ElicitationHandler>>,
+    /// Optional resource notification handler.
+    resource_notification_handler: Option<Arc<dyn ResourceNotificationHandler>>,
     /// Recreate the MCP session once when a remote HTTP session expires.
     reinit_on_expired_session: bool,
 }
@@ -65,6 +143,7 @@ impl McpHttpClientBuilder {
             timeout: Duration::from_secs(30),
             headers: HashMap::new(),
             elicitation_handler: None,
+            resource_notification_handler: None,
             reinit_on_expired_session: true,
         }
     }
@@ -175,6 +254,18 @@ impl McpHttpClientBuilder {
         self
     }
 
+    /// Configure a handler for resource and resource-list update notifications.
+    ///
+    /// Use this with [`connect_with_elicitation`](Self::connect_with_elicitation);
+    /// the handler is retained when an expired HTTP session is recreated.
+    pub fn with_resource_notification_handler(
+        mut self,
+        handler: Arc<dyn ResourceNotificationHandler>,
+    ) -> Self {
+        self.resource_notification_handler = Some(handler);
+        self
+    }
+
     /// Get the endpoint URL.
     pub fn endpoint(&self) -> &str {
         &self.endpoint
@@ -202,19 +293,14 @@ impl McpHttpClientBuilder {
     /// - Connection to the server fails
     /// - Authentication fails
     #[cfg(feature = "http-transport")]
-    pub async fn connect(
-        self,
-    ) -> Result<super::McpToolset<impl rmcp::service::Service<rmcp::RoleClient>>> {
-        use rmcp::ServiceExt;
-        let transport = self.build_transport().await?;
-
-        // Connect using the service extension
-        let client = ()
-            .serve(transport)
+    pub async fn connect(self) -> Result<super::McpToolset<()>> {
+        let factory = Arc::new(HttpConnectionFactory { builder: self.clone() });
+        let client = factory
+            .connect_once()
             .await
-            .map_err(|e| AdkError::tool(format!("Failed to connect to MCP server: {e}")))?;
+            .map_err(|error| AdkError::tool(format!("Failed to connect to MCP server: {error}")))?;
 
-        Ok(super::McpToolset::new(client))
+        Ok(super::McpToolset::new(client).with_connection_factory(factory))
     }
 
     /// Connect to the MCP server (stub when http-transport feature is disabled).
@@ -249,23 +335,22 @@ impl McpHttpClientBuilder {
     #[cfg(feature = "http-transport")]
     pub async fn connect_with_elicitation(
         self,
-    ) -> Result<super::McpToolset<impl rmcp::service::Service<rmcp::RoleClient>>> {
-        use rmcp::ServiceExt;
-
+    ) -> Result<super::McpToolset<super::elicitation::AdkClientHandler>> {
         let handler = self.elicitation_handler.clone().ok_or_else(|| {
             AdkError::tool(
                 "connect_with_elicitation requires with_elicitation_handler to be called first",
             )
         })?;
 
-        let transport = self.build_transport().await?;
-        let adk_handler = super::elicitation::AdkClientHandler::new(handler);
-        let client = adk_handler
-            .serve(transport)
-            .await
-            .map_err(|e| AdkError::tool(format!("failed to connect to MCP server: {e}")))?;
+        let resource_notification_handler = self.resource_notification_handler.clone();
+        let factory = Arc::new(HttpElicitationConnectionFactory {
+            builder: self,
+            handler,
+            resource_notification_handler,
+        });
+        let client = factory.connect_once().await.map_err(AdkError::tool)?;
 
-        Ok(super::McpToolset::new(client))
+        Ok(super::McpToolset::new(client).with_connection_factory(factory))
     }
 
     /// Connect with elicitation support (stub when http-transport feature is disabled).

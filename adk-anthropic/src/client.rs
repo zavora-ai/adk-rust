@@ -203,6 +203,11 @@ impl Anthropic {
         self
     }
 
+    /// Return the effective API base URL used for message requests.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// Set a custom timeout for this client.
     ///
     /// This method allows you to specify a different timeout for API requests.

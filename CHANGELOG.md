@@ -7,8 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-16
+
+### Changed
+
+- **MCP now uses official `rmcp 2.2` and MCP `2025-11-25` protocol types.**
+  ADK-Rust re-exports its aligned SDK for advanced transports and server
+  authoring. Sampling remains an opt-in deprecated-compatibility feature under
+  upstream SEP-2577. Downstream code that names `rmcp 1.x` content, elicitation,
+  or service types directly must migrate those annotations or import aligned
+  types through `adk_tool::mcp::rmcp`.
+- **MCP HTTP configuration is now effective.** Request timeouts, custom headers,
+  custom API-key headers, bearer or fixed client-credentials tokens, and bounded
+  expired-session recovery are applied to the Streamable HTTP client.
+- **MCP approval semantics are documented precisely.** `autoApprove` remains a
+  round-tripped configuration-compatibility field; it is not interpreted as
+  ADK-Rust authorization or human approval policy.
+- **adk-acp now uses the official `agent-client-protocol` 1.2 SDK while
+  negotiating stable wire protocol v1.** The client and server share the SDK's
+  typed JSON-RPC connection rather than maintaining a parallel wire model.
+- **ACP capability publication is now exact.** Unsupported media, remote
+  transports, and optional protocol features remain unadvertised. Stdio MCP is
+  accepted as required by stable v1; optional HTTP and SSE MCP are sent by the
+  client only when the external agent advertises them.
+- **ADK agent tool confirmation can be resolved live.** `RunConfig` accepts an
+  asynchronous `ToolConfirmationHandler`, and allow-once decisions are keyed by
+  exact function-call ID rather than tool name.
+- **Breaking:** major version bump. Accumulated API changes since 1.0.0 include
+  new public enum variants in `adk-anthropic` (`ContentBlock::WebFetchToolResult`,
+  `ToolUnionParam::WebFetch20250910`, `ServerTool::WebFetch20250910`) and a new
+  public field on `adk-graph`'s `StateGraph` (`deferred_configs`), which require
+  a major release under semver.
+
 ### Added
 
+- **adk-computer-use: governed computer-use orchestration crate.** First-party
+  ADK-Rust graph, wire contracts, scope authorization, cancellation bridge, and
+  tamper-evident evaluation receipts for the `computer-use-mcp` desktop-automation
+  server (the crate performs no actuation itself). Ships a deterministic
+  reference graph (parallel observation, digest-bound approval interrupts,
+  single-executor mutation, independent verification), a typed
+  `ComputerUseError` with an `AdkError` conversion, a portable `minimal_graph`
+  example, and a cross-platform `live_clipboard` example (macOS, Linux, Windows).
+- **Reconnect-safe MCP resource notifications.** Applications can register a
+  `ResourceNotificationHandler` for resource and catalog updates. `McpToolset`,
+  Streamable HTTP clients, and `McpServerManager` retain the callback and
+  restore active subscriptions after connection or managed-process recovery.
 - **Current MCP client surface.** `McpToolset` now exposes `list_prompts`,
   `get_prompt`, prompt and resource argument completion, resource subscribe and
   unsubscribe, and the negotiated MCP task lifecycle. Public MCP catalog types
@@ -39,69 +83,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `examples/acp_client_host` crate with deterministic workspace-boundary tests;
   expanded the Kiro and server examples; and added dedicated architecture,
   client, server, testing, security, and support-matrix documentation.
-
-### Changed
-
-- **MCP now uses official `rmcp 2.2` and MCP `2025-11-25` protocol types.**
-  ADK-Rust re-exports its aligned SDK for advanced transports and server
-  authoring. Sampling remains an opt-in deprecated-compatibility feature under
-  upstream SEP-2577. Downstream code that names `rmcp 1.x` content, elicitation,
-  or service types directly must migrate those annotations or import aligned
-  types through `adk_tool::mcp::rmcp`.
-- **MCP HTTP configuration is now effective.** Request timeouts, custom headers,
-  custom API-key headers, bearer or fixed client-credentials tokens, and bounded
-  expired-session recovery are applied to the Streamable HTTP client.
-- **MCP approval semantics are documented precisely.** `autoApprove` remains a
-  round-tripped configuration-compatibility field; it is not interpreted as
-  ADK-Rust authorization or human approval policy.
-- **adk-acp now uses the official `agent-client-protocol` 1.2 SDK while
-  negotiating stable wire protocol v1.** The client and server share the SDK's
-  typed JSON-RPC connection rather than maintaining a parallel wire model.
-- **ACP capability publication is now exact.** Unsupported media, remote
-  transports, and optional protocol features remain unadvertised. Stdio MCP is
-  accepted as required by stable v1; optional HTTP and SSE MCP are sent by the
-  client only when the external agent advertises them.
-- **ADK agent tool confirmation can be resolved live.** `RunConfig` accepts an
-  asynchronous `ToolConfirmationHandler`, and allow-once decisions are keyed by
-  exact function-call ID rather than tool name.
-
-### Fixed
-
-- **MCP tasks now use the official request flow.** Tool calls send task metadata,
-  receive `CreateTaskResult`, poll `tasks/get`, fetch `tasks/result`, and cancel
-  the remote task when local bounds are exceeded. Required and optional task
-  behavior follows negotiated server and tool capabilities.
-- **MCP manager supervision and locking.** Failed restart attempts remain eligible
-  until the configured limit, duplicate monitors are prevented, monitoring can
-  restart after being stopped, disabled servers cannot be started directly, and
-  tool discovery no longer holds the registry lock during network calls.
-- **MCP HTTP authentication and session handling.** API-key headers and caller
-  headers now reach the wire, OAuth client-credentials tokens are attached as
-  bearer credentials, configured request timeouts are honored, and one bounded
-  reinitialization can recover an expired Streamable HTTP session.
-- **adk-acp permission decisions no longer trust menu order or fabricated
-  option IDs.** Allow and reject choices are matched by protocol semantics and
-  the original opaque ID is returned; invalid selections cancel the request.
-- **ACP cancellation now cleans up the active turn without poisoning the next
-  prompt.** Both `session/cancel` and JSON-RPC request cancellation are covered
-  by official-SDK interoperability tests.
-- **adk-core: Event serialization no longer produces duplicate `"provider_metadata"` keys.**
-  `Event.provider_metadata` is now serialized as `"event_metadata"` to avoid collision
-  with `LlmResponse.provider_metadata` (which is flattened into the same JSON object).
-  Regression test added. (`#414`)
-
-## [2.0.0] - 2026-06-28
-
-### Changed
-
-- **Breaking:** major version bump. Accumulated API changes since 1.0.0 include
-  new public enum variants in `adk-anthropic` (`ContentBlock::WebFetchToolResult`,
-  `ToolUnionParam::WebFetch20250910`, `ServerTool::WebFetch20250910`) and a new
-  public field on `adk-graph`'s `StateGraph` (`deferred_configs`), which require
-  a major release under semver.
-
-### Added
-
 - **adk-agent: `CodeAgent` — a CodeAct agent** (`codeact` feature) — a peer to
   `LlmAgent` that acts by writing and executing one code script per turn instead
   of emitting tool calls one at a time. Tools are exposed as callable functions;
@@ -370,6 +351,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and clippy violations across feature-gated and test code fixed —
   adk-model now passes `--all-features --all-targets -D warnings`.
 
+### Fixed
+
+- **MCP tasks now use the official request flow.** Tool calls send task metadata,
+  receive `CreateTaskResult`, poll `tasks/get`, fetch `tasks/result`, and cancel
+  the remote task when local bounds are exceeded. Required and optional task
+  behavior follows negotiated server and tool capabilities.
+- **MCP manager supervision and locking.** Failed restart attempts remain eligible
+  until the configured limit, duplicate monitors are prevented, monitoring can
+  restart after being stopped, disabled servers cannot be started directly, and
+  tool discovery no longer holds the registry lock during network calls.
+- **MCP HTTP authentication and session handling.** API-key headers and caller
+  headers now reach the wire, OAuth client-credentials tokens are attached as
+  bearer credentials, configured request timeouts are honored, and one bounded
+  reinitialization can recover an expired Streamable HTTP session.
+- **adk-acp permission decisions no longer trust menu order or fabricated
+  option IDs.** Allow and reject choices are matched by protocol semantics and
+  the original opaque ID is returned; invalid selections cancel the request.
+- **ACP cancellation now cleans up the active turn without poisoning the next
+  prompt.** Both `session/cancel` and JSON-RPC request cancellation are covered
+  by official-SDK interoperability tests.
+- **adk-core: Event serialization no longer produces duplicate `"provider_metadata"` keys.**
+  `Event.provider_metadata` is now serialized as `"event_metadata"` to avoid collision
+  with `LlmResponse.provider_metadata` (which is flattened into the same JSON object).
+  Regression test added. (`#414`)
+
 ## [1.0.0] - 2026-06-07
 
 > **Note:** 0.10.0 was an internal-only release and was never published to crates.io. All changes below were shipped as part of 1.0.0.
@@ -395,6 +401,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **First stable release.** All 39 workspace crates promoted to 1.0.0, committing to semantic versioning guarantees. This milestone marks ADK-Rust as production-ready with a stable public API.
+
+- **adk-bench: benchmarking framework** — measures framework-level runtime
+  performance against real LLM APIs and supports cross-framework comparison with
+  the Python ADK (e.g., cold-start and simple-tool-call scenarios). Ships
+  Criterion benchmarks and reproducible result tables.
 
 - **adk-eval: Competitive parity features** — 10 new capabilities bringing the
   evaluation framework to parity with Braintrust, LangSmith, and Inspect AI:

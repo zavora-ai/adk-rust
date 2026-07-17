@@ -53,6 +53,35 @@ let api_key = std::env::var("ANTHROPIC_API_KEY")?;
 let model = AnthropicClient::new(AnthropicConfig::new(api_key, "claude-sonnet-4-6"))?;
 ```
 
+## Custom base URL (gateways, proxies, compatible endpoints)
+
+Point the client at a different endpoint to route through a corporate proxy or a
+Messages-API-compatible gateway. Provide the root URL **without** the `/v1/`
+suffix — it is appended automatically. `AnthropicConfig::with_base_url` flows
+through `adk-model` to the underlying client:
+
+```rust
+use adk_model::anthropic::{AnthropicClient, AnthropicConfig};
+
+let model = AnthropicClient::new(
+    AnthropicConfig::new(api_key, "claude-sonnet-4-6")
+        .with_base_url("https://gateway.internal/anthropic"),
+)?;
+```
+
+Or set it directly on the low-level client, and read back the effective endpoint
+with `base_url()`:
+
+```rust
+use adk_anthropic::Anthropic;
+
+let client = Anthropic::new(Some(api_key))?
+    .with_base_url("https://api.minimax.io/anthropic".to_string());
+assert_eq!(client.base_url(), "https://api.minimax.io/anthropic");
+```
+
+When unset, the client uses Anthropic's public API (`https://api.anthropic.com`).
+
 ## Key Features
 
 ### Adaptive Thinking (4.6+ models)

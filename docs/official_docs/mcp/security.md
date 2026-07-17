@@ -47,6 +47,22 @@ authorization, PKCE, or resource-indicator negotiation. Use `rmcp`'s
 authorization APIs or an identity component when the deployment requires that
 flow.
 
+Bound the token request so a slow or unreachable authorization server cannot
+hang connection setup, and note that the client never echoes the client secret
+back — token-endpoint error bodies are redacted before they reach logs:
+
+```rust
+use adk_tool::mcp::OAuth2Config;
+use std::time::Duration;
+
+let auth = OAuth2Config::new(client_id, token_url)
+    .with_secret(client_secret)
+    .with_scopes(vec!["mcp.read".into(), "mcp.invoke".into()])
+    .with_timeout(Duration::from_secs(10)); // token request timeout
+```
+
+The default token-request timeout is 30 seconds.
+
 ## Tool exposure and execution
 
 Use `with_tools` or `with_filter` to keep unnecessary capabilities out of the

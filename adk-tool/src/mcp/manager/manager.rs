@@ -4,7 +4,7 @@
 //! construction/builder methods, as well as lifecycle methods (start, stop,
 //! restart) for individual servers.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{
     Arc, Mutex as StdMutex,
     atomic::{AtomicBool, Ordering},
@@ -16,7 +16,9 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use super::super::elicitation::{AutoDeclineElicitationHandler, ElicitationHandler};
+use super::super::resource_notifications::ResourceNotificationHandler;
 use super::super::toolset::McpToolset;
+use super::super::{GetPromptResult, Prompt, Resource, ResourceContents, ResourceTemplate};
 use super::config::McpServerConfig;
 use super::entry::{BackoffState, McpServerEntry};
 use super::status::ServerStatus;
@@ -58,6 +60,12 @@ pub struct McpServerManager {
 
     /// Optional elicitation handler shared across all managed server connections.
     pub(crate) elicitation_handler: Option<Arc<dyn ElicitationHandler>>,
+
+    /// Optional resource notification handler shared across all managed connections.
+    pub(crate) resource_notification_handler: Option<Arc<dyn ResourceNotificationHandler>>,
+
+    /// Resource subscriptions restored when a managed process reconnects.
+    pub(crate) resource_subscriptions: Arc<RwLock<HashMap<String, BTreeSet<String>>>>,
 
     /// Optional sampling handler shared across all managed server connections.
     /// Only available when the `mcp-sampling` feature is enabled.
@@ -117,6 +125,8 @@ impl McpServerManager {
         Self {
             servers: Arc::new(RwLock::new(servers)),
             elicitation_handler: None,
+            resource_notification_handler: None,
+            resource_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "mcp-sampling")]
             sampling_handler: None,
             health_check_interval: Duration::from_secs(30),
@@ -189,6 +199,17 @@ impl McpServerManager {
         self
     }
 
+    /// Set the resource notification handler used for all managed connections.
+    ///
+    /// The handler is retained across manual and automatic server restarts.
+    pub fn with_resource_notification_handler(
+        mut self,
+        handler: Arc<dyn ResourceNotificationHandler>,
+    ) -> Self {
+        self.resource_notification_handler = Some(handler);
+        self
+    }
+
     /// Set the sampling handler used for all managed server connections.
     ///
     /// The handler is preserved across server restarts via `Arc` sharing.
@@ -256,6 +277,8 @@ impl McpServerManager {
             id,
             entry,
             &self.elicitation_handler,
+            &self.resource_notification_handler,
+            &self.resource_subscriptions,
             #[cfg(feature = "mcp-sampling")]
             &self.sampling_handler,
         )
@@ -269,6 +292,8 @@ impl McpServerManager {
         id: &str,
         entry: &mut McpServerEntry,
         elicitation_handler: &Option<Arc<dyn ElicitationHandler>>,
+        resource_notification_handler: &Option<Arc<dyn ResourceNotificationHandler>>,
+        resource_subscriptions: &Arc<RwLock<HashMap<String, BTreeSet<String>>>>,
         #[cfg(feature = "mcp-sampling")] sampling_handler: &Option<
             Arc<dyn crate::sampling::SamplingHandler>,
         >,
@@ -310,18 +335,42 @@ impl McpServerManager {
 
         #[cfg(feature = "mcp-sampling")]
         let toolset_result = if let Some(sampling) = sampling_handler {
-            McpToolset::with_sampling_handler(transport, handler, Arc::clone(sampling)).await
+            if let Some(resource_handler) = resource_notification_handler {
+                McpToolset::with_sampling_and_resource_handlers(
+                    transport,
+                    handler,
+                    Arc::clone(sampling),
+                    Arc::clone(resource_handler),
+                )
+                .await
+            } else {
+                McpToolset::with_sampling_handler(transport, handler, Arc::clone(sampling)).await
+            }
+        } else if let Some(resource_handler) = resource_notification_handler {
+            McpToolset::with_handlers(transport, handler, Arc::clone(resource_handler)).await
         } else {
             McpToolset::with_elicitation_handler(transport, handler).await
         };
 
         #[cfg(not(feature = "mcp-sampling"))]
-        let toolset_result = McpToolset::with_elicitation_handler(transport, handler).await;
+        let toolset_result = if let Some(resource_handler) = resource_notification_handler {
+            McpToolset::with_handlers(transport, handler, Arc::clone(resource_handler)).await
+        } else {
+            McpToolset::with_elicitation_handler(transport, handler).await
+        };
 
         let toolset = toolset_result.map_err(|e| {
             entry.status = ServerStatus::FailedToStart;
             AdkError::tool(format!("MCP handshake failed for server '{id}': {e}"))
         })?;
+
+        let subscriptions =
+            resource_subscriptions.read().await.get(id).cloned().unwrap_or_default();
+        for uri in subscriptions {
+            if let Err(error) = toolset.subscribe_resource(&uri).await {
+                tracing::warn!(server.id = id, %uri, %error, "failed to restore MCP resource subscription");
+            }
+        }
 
         // Success — update entry
         entry.status = ServerStatus::Running;
@@ -444,6 +493,8 @@ impl McpServerManager {
             id,
             entry,
             &self.elicitation_handler,
+            &self.resource_notification_handler,
+            &self.resource_subscriptions,
             #[cfg(feature = "mcp-sampling")]
             &self.sampling_handler,
         )
@@ -468,6 +519,84 @@ impl McpServerManager {
             .get(id)
             .map(|entry| entry.status)
             .ok_or_else(|| AdkError::tool(format!("unknown server ID: '{id}'")))
+    }
+
+    async fn running_toolset(
+        &self,
+        id: &str,
+    ) -> adk_core::Result<McpToolset<super::super::elicitation::AdkClientHandler>> {
+        let servers = self.servers.read().await;
+        let entry =
+            servers.get(id).ok_or_else(|| AdkError::tool(format!("MCP server not found: {id}")))?;
+        if entry.status != ServerStatus::Running {
+            return Err(AdkError::tool(format!("MCP server is not running: {id}")));
+        }
+        entry
+            .toolset
+            .clone()
+            .ok_or_else(|| AdkError::tool(format!("MCP server has no active connection: {id}")))
+    }
+
+    /// List static resources published by one running managed server.
+    pub async fn list_server_resources(&self, id: &str) -> adk_core::Result<Vec<Resource>> {
+        self.running_toolset(id).await?.list_resources().await
+    }
+
+    /// List URI templates published by one running managed server.
+    pub async fn list_server_resource_templates(
+        &self,
+        id: &str,
+    ) -> adk_core::Result<Vec<ResourceTemplate>> {
+        self.running_toolset(id).await?.list_resource_templates().await
+    }
+
+    /// List prompt templates published by one running managed server.
+    pub async fn list_server_prompts(&self, id: &str) -> adk_core::Result<Vec<Prompt>> {
+        self.running_toolset(id).await?.list_prompts().await
+    }
+
+    /// Read one resource from a running managed server.
+    pub async fn read_server_resource(
+        &self,
+        id: &str,
+        uri: &str,
+    ) -> adk_core::Result<Vec<ResourceContents>> {
+        self.running_toolset(id).await?.read_resource(uri).await
+    }
+
+    /// Subscribe to updates for one resource on a running managed server.
+    pub async fn subscribe_server_resource(&self, id: &str, uri: &str) -> adk_core::Result<()> {
+        self.running_toolset(id).await?.subscribe_resource(uri).await?;
+        self.resource_subscriptions
+            .write()
+            .await
+            .entry(id.to_string())
+            .or_default()
+            .insert(uri.to_string());
+        Ok(())
+    }
+
+    /// Remove a resource subscription from one running managed server.
+    pub async fn unsubscribe_server_resource(&self, id: &str, uri: &str) -> adk_core::Result<()> {
+        self.running_toolset(id).await?.unsubscribe_resource(uri).await?;
+        let mut subscriptions = self.resource_subscriptions.write().await;
+        if let Some(server_subscriptions) = subscriptions.get_mut(id) {
+            server_subscriptions.remove(uri);
+            if server_subscriptions.is_empty() {
+                subscriptions.remove(id);
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve one prompt from a running managed server.
+    pub async fn get_server_prompt(
+        &self,
+        id: &str,
+        name: &str,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> adk_core::Result<GetPromptResult> {
+        self.running_toolset(id).await?.get_prompt(name, arguments).await
     }
 
     /// Return a map of all server IDs to their current [`ServerStatus`].
@@ -533,6 +662,8 @@ impl McpServerManager {
         let monitor_running = Arc::clone(&self.monitor_running);
         let interval = self.health_check_interval;
         let elicitation_handler = self.elicitation_handler.clone();
+        let resource_notification_handler = self.resource_notification_handler.clone();
+        let resource_subscriptions = Arc::clone(&self.resource_subscriptions);
         #[cfg(feature = "mcp-sampling")]
         let sampling_handler = self.sampling_handler.clone();
 
@@ -670,6 +801,8 @@ impl McpServerManager {
                                             &id,
                                             entry,
                                             &elicitation_handler,
+                                            &resource_notification_handler,
+                                            &resource_subscriptions,
                                             #[cfg(feature = "mcp-sampling")]
                                             &sampling_handler,
                                         )

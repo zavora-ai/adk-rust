@@ -3,6 +3,7 @@ mod elicitation;
 mod http;
 pub mod manager;
 mod reconnect;
+mod resource_notifications;
 mod task;
 mod toolset;
 
@@ -14,6 +15,7 @@ pub use reconnect::{
     ConnectionFactory, ConnectionRefresher, RefreshConfig, RetryResult, SimpleClient,
     should_refresh_connection,
 };
+pub use resource_notifications::ResourceNotificationHandler;
 pub use task::{CreateTaskResult, McpTaskConfig, TaskError, TaskInfo, TaskStatus};
 pub use toolset::{McpToolset, ToolFilter};
 

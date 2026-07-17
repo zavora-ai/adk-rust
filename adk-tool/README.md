@@ -327,7 +327,8 @@ demonstrates a server asking its client application for additional information.
 
 The complete official guide covers client construction, server authoring,
 dynamic management, security, testing, resources, prompts, completion,
-subscriptions, elicitation, and tasks in `docs/official_docs/mcp/`.
+reconnect-safe subscriptions with `ResourceNotificationHandler`, elicitation,
+and tasks in `docs/official_docs/mcp/`.
 
 ## Toolset Composition
 

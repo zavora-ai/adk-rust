@@ -95,13 +95,45 @@ MCP `MethodNotFound`; other protocol and transport failures remain errors.
 ## Resource subscriptions
 
 ```rust
+use adk_tool::{AutoDeclineElicitationHandler, McpToolset, ResourceNotificationHandler};
+use std::sync::Arc;
+
+struct ResourceUpdates;
+
+#[async_trait::async_trait]
+impl ResourceNotificationHandler for ResourceUpdates {
+    async fn handle_resource_updated(
+        &self,
+        uri: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        println!("Resource changed: {uri}");
+        Ok(())
+    }
+
+    async fn handle_resource_list_changed(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        println!("The resource catalog changed");
+        Ok(())
+    }
+}
+
+let toolset = McpToolset::with_handlers(
+    transport,
+    Arc::new(AutoDeclineElicitationHandler),
+    Arc::new(ResourceUpdates),
+).await?;
+
 toolset.subscribe_resource("company://inventory/sku-42").await?;
-// Handle the server notification in the ClientHandler used for this connection.
 toolset.unsubscribe_resource("company://inventory/sku-42").await?;
 ```
 
-Subscribing creates the protocol subscription. Receiving the notification
-requires a client handler that implements the relevant notification callback.
+`McpToolset` restores active subscriptions after its bounded connection refresh.
+`McpServerManager` also retains subscriptions across managed process restarts.
+Handler errors and panics are logged without terminating the MCP connection.
+For Streamable HTTP, configure the same handler with
+`McpHttpClientBuilder::with_resource_notification_handler` before calling
+`connect_with_elicitation`.
 
 ## Elicitation
 

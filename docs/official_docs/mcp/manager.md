@@ -116,6 +116,75 @@ before returning the replacement error.
 `save_json_file` writes a temporary file in the destination directory and then
 renames it over the destination.
 
+## Resources, prompts, and notifications
+
+A managed server can publish resources and prompts in addition to tools. The
+manager exposes each server's resource and prompt surface by server ID, and
+delivers `resources/updated` / `resources/list_changed` notifications to a
+handler shared across every managed connection.
+
+Register the handler once; it is retained across manual and automatic restarts:
+
+```rust
+use adk_tool::{ResourceNotificationHandler, mcp::manager::McpServerManager};
+use std::sync::Arc;
+
+struct ReloadOnChange;
+
+#[async_trait::async_trait]
+impl ResourceNotificationHandler for ReloadOnChange {
+    async fn handle_resource_updated(
+        &self,
+        uri: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        tracing::info!(%uri, "resource changed; re-read it to refresh cached state");
+        Ok(())
+    }
+
+    async fn handle_resource_list_changed(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
+    }
+}
+
+let manager = Arc::new(
+    McpServerManager::from_json_file("mcp.json")?
+        .with_resource_notification_handler(Arc::new(ReloadOnChange)),
+);
+manager.start_server("workspace-tools").await?;
+```
+
+Then read and subscribe per server:
+
+```rust
+let resources = manager.list_server_resources("workspace-tools").await?;
+let templates = manager.list_server_resource_templates("workspace-tools").await?;
+let contents = manager.read_server_resource("workspace-tools", "config://policy").await?;
+
+let prompts = manager.list_server_prompts("workspace-tools").await?;
+let review = manager
+    .get_server_prompt("workspace-tools", "review_pr", None)
+    .await?;
+
+// Subscribe / unsubscribe. Subscriptions are restored automatically if the
+// managed process reconnects.
+manager.subscribe_server_resource("workspace-tools", "config://policy").await?;
+manager.unsubscribe_server_resource("workspace-tools", "config://policy").await?;
+```
+
+Each `*_server_*` method targets one running server by ID and returns
+`AdkError::Tool` if the server is unknown or not currently running.
+
+For a single connection (rather than the manager registry), the same surface is
+available directly on `McpToolset` via `McpToolset::with_handlers`,
+`list_resources`, `read_resource`, `list_prompts`, `get_prompt`, and
+`subscribe_resource`. See the runnable agentic example:
+
+```bash
+cargo run --manifest-path examples/mcp_resources/Cargo.toml --bin resources-client
+```
+
 ## Tool-name collisions
 
 If two running servers publish `search`, the aggregated names become:
