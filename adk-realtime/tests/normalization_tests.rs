@@ -1,3 +1,5 @@
+#![cfg(feature = "openai")]
+
 use adk_realtime::error::RealtimeError;
 use adk_realtime::events::ServerEvent;
 use serde_json::{Value, json};
@@ -37,18 +39,18 @@ mod openai_tests {
             // This mirrors the logic in OpenAIRealtimeSession::receive_raw
             match serde_json::from_str::<ServerEvent>(&text) {
                 Ok(mut event) => {
-                    if let ServerEvent::FunctionCallDone { arguments, name, .. } = &mut event {
-                        if let Value::String(s) = arguments {
-                            match serde_json::from_str::<Value>(s) {
-                                Ok(parsed) => {
-                                    *arguments = parsed;
-                                }
-                                Err(e) => {
-                                    return Some(Err(RealtimeError::protocol(format!(
-                                        "malformed function arguments for {}: {}",
-                                        name, e
-                                    ))));
-                                }
+                    if let ServerEvent::FunctionCallDone { arguments, name, .. } = &mut event
+                        && let Value::String(s) = arguments
+                    {
+                        match serde_json::from_str::<Value>(s) {
+                            Ok(parsed) => {
+                                *arguments = parsed;
+                            }
+                            Err(e) => {
+                                return Some(Err(RealtimeError::protocol(format!(
+                                    "malformed function arguments for {}: {}",
+                                    name, e
+                                ))));
                             }
                         }
                     }
@@ -117,7 +119,7 @@ mod openai_tests {
 #[tokio::test]
 async fn test_transfer_to_agent_validation() {
     use adk_core::{
-        Agent, CallbackContext, Content, EventStream, InvocationContext, ReadonlyContext, RunConfig,
+        Agent, CallbackContext, Content, InvocationContext, ReadonlyContext, RunConfig,
     };
     use adk_realtime::session::BoxedSession;
     use adk_realtime::{RealtimeAgent, RealtimeConfig, audio::AudioFormat};

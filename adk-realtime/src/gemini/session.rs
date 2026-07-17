@@ -655,18 +655,16 @@ impl GeminiRealtimeSession {
                 .iter()
                 .enumerate()
                 .map(|(idx, call)| {
-                    let name = call
-                        .get("name")
-                        .and_then(|n| n.as_str())
-                        .ok_or_else(|| RealtimeError::protocol("Gemini tool call missing 'name'"))?;
+                    let name = call.get("name").and_then(|n| n.as_str()).ok_or_else(|| {
+                        RealtimeError::protocol("Gemini tool call missing 'name'")
+                    })?;
                     let id = call
                         .get("id")
                         .and_then(|i| i.as_str())
                         .ok_or_else(|| RealtimeError::protocol("Gemini tool call missing 'id'"))?;
-                    let args = call
-                        .get("args")
-                        .cloned()
-                        .ok_or_else(|| RealtimeError::protocol("Gemini tool call missing 'args'"))?;
+                    let args = call.get("args").cloned().ok_or_else(|| {
+                        RealtimeError::protocol("Gemini tool call missing 'args'")
+                    })?;
 
                     if !args.is_object() {
                         return Err(RealtimeError::protocol(format!(

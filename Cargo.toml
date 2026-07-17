@@ -154,7 +154,7 @@ hex = "0.4"
 flate2 = "1.0"
 tar = "0.4"
 livekit = { version = "=0.7.51", default-features = false, features = ["tokio", "native-tls"] }
-livekit-api = { version = "=0.5.5", default-features = false, features = ["signal-client-tokio", "services-tokio", "access-token"] }
+livekit-api = { version = "=0.5.5", default-features = false, features = ["services-tokio", "access-token"] }
 livekit-datatrack = { version = "=0.1.10", default-features = false }
 libwebrtc = { version = "=0.3.40", default-features = false }
 webrtc-sys = { version = "=0.3.37", default-features = false }
