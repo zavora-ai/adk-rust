@@ -162,6 +162,36 @@ You MUST keep Tokio locks in async orchestration code, use `parking_lot::Mutex` 
 
 ---
 
+## 9. Preserve PCM16 channel-frame continuity in audio bridges
+
+Provider PCM16 byte streams arrive in arbitrary chunk sizes that need not align
+with sample boundaries or channel-frame boundaries (`num_channels *
+size_of::<i16>()` bytes).
+
+- You MUST carry incomplete trailing bytes at **channel-frame** granularity,
+  not sample granularity: emitting a partial frame shifts every later sample by
+  one channel (stereo phase inversion).
+- You MUST NOT drop an entire chunk because its decoded sample count is not a
+  multiple of `num_channels`, and you MUST NOT silently truncate trailing
+  bytes — both are audible data loss.
+- Carried bytes MUST be scoped to a single response `item_id` and cleared at
+  item-transition, response-done, and error boundaries, so one item's tail can
+  never contaminate the next item's audio.
+- Every discard MUST be observable: `tracing::warn!` with the item id, the
+  boundary name, and the discarded byte count. Silent audio loss is never
+  acceptable degradation.
+- Carry state MUST stay bounded below one channel frame, and the aligned
+  complete-frame path MUST keep the zero-copy `Cow::Borrowed` cast — allocate
+  only when combining a pending carry.
+
+**References**
+- **PROJECT RULE:** established by the LiveKit PCM channel-frame continuity
+  fix. Reference implementation and exhaustive chunk-boundary tests (every
+  chunk size across 1–4 channels): `RemainderState` in
+  `src/livekit/handler.rs`.
+
+---
+
 [^tokio-mutex]: Tokio `Mutex` docs: <https://docs.rs/tokio/latest/tokio/sync/struct.Mutex.html>
 [^tokio-rwlock]: Tokio `RwLock` docs: <https://docs.rs/tokio/latest/tokio/sync/struct.RwLock.html>
 [^std-mutex]: Rust standard library `Mutex` docs: <https://doc.rust-lang.org/std/sync/struct.Mutex.html>
