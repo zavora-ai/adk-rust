@@ -49,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-executor mutation, independent verification), a typed
   `ComputerUseError` with an `AdkError` conversion, a portable `minimal_graph`
   example, and a cross-platform `live_clipboard` example (macOS, Linux, Windows).
+- **adk-realtime: typed raw-audio submission through `RealtimeRunner`.**
+  `RealtimeRunner::send_audio_chunk` preserves `AudioFormat` through the provider-neutral
+  boundary, and the LiveKit input bridges now use it instead of forcing callers through
+  the base64 compatibility API.
 - **Reconnect-safe MCP resource notifications.** Applications can register a
   `ResourceNotificationHandler` for resource and catalog updates. `McpToolset`,
   Streamable HTTP clients, and `McpServerManager` retain the callback and
