@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **adk-realtime: typed raw-audio submission through `RealtimeRunner`.**
+  `RealtimeRunner::send_audio_chunk` preserves `AudioFormat` through the provider-neutral
+  boundary, and the LiveKit input bridges now use it instead of forcing callers through
+  the base64 compatibility API.
+
 ### Fixed
 
 - **adk-core: Event serialization no longer produces duplicate `"provider_metadata"` keys.**

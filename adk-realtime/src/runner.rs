@@ -599,7 +599,22 @@ impl RealtimeRunner {
         session.send_event(event).await
     }
 
-    /// Send audio to the session.
+    /// Send a typed raw-audio chunk to the session.
+    ///
+    /// This preserves the audio format at the provider boundary and lets the
+    /// provider choose its native encoding path. Prefer this method when the
+    /// caller already owns raw audio bytes.
+    pub async fn send_audio_chunk(&self, audio: &crate::audio::AudioChunk) -> Result<()> {
+        let session = self.session_handle().await?;
+        session.send_audio(audio).await
+    }
+
+    /// Send base64-encoded audio to the session.
+    ///
+    /// This compatibility entry point is useful when the caller already has a
+    /// base64 payload. Raw-audio callers should use
+    /// [`send_audio_chunk`](Self::send_audio_chunk) to avoid forcing an encoding
+    /// decision at the provider-neutral runner boundary.
     pub async fn send_audio(&self, audio_base64: &str) -> Result<()> {
         let session = self.session_handle().await?;
         session.send_audio_base64(audio_base64).await
@@ -936,7 +951,7 @@ impl RealtimeRunner {
 }
 
 #[cfg(test)]
-mod tool_response_tests {
+mod runner_tests {
     use super::*;
     use crate::audio::{AudioChunk, AudioFormat};
     use crate::events::{ClientEvent, ToolResponse};
@@ -970,11 +985,12 @@ mod tool_response_tests {
         }
     }
 
-    /// Records how the runner talks to the wire: tool outputs, create_response
-    /// calls, and the combined send_tool_response (which the runner must NOT use
-    /// on the auto-dispatch path).
+    /// Records which provider-session entry points the runner calls.
     #[derive(Default)]
     struct Counts {
+        raw_audio: AtomicUsize,
+        base64_audio: AtomicUsize,
+        last_audio: parking_lot::Mutex<Option<AudioChunk>>,
         tool_output: AtomicUsize,
         tool_response: AtomicUsize,
         create_response: AtomicUsize,
@@ -992,10 +1008,13 @@ mod tool_response_tests {
         fn is_connected(&self) -> bool {
             true
         }
-        async fn send_audio(&self, _audio: &AudioChunk) -> Result<()> {
+        async fn send_audio(&self, audio: &AudioChunk) -> Result<()> {
+            self.counts.raw_audio.fetch_add(1, Ordering::SeqCst);
+            *self.counts.last_audio.lock() = Some(audio.clone());
             Ok(())
         }
         async fn send_audio_base64(&self, _audio: &str) -> Result<()> {
+            self.counts.base64_audio.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
         async fn send_text(&self, _text: &str) -> Result<()> {
@@ -1061,6 +1080,44 @@ mod tool_response_tests {
 
     fn response_done() -> ServerEvent {
         ServerEvent::ResponseDone { event_id: "evt".into(), response: serde_json::json!({}) }
+    }
+
+    async fn runner_with_session(counts: Arc<Counts>) -> RealtimeRunner {
+        let runner =
+            RealtimeRunner::builder().model(Arc::new(MockModel) as BoxedModel).build().unwrap();
+        let session = Arc::new(RecordingSession { counts }) as Arc<dyn RealtimeSession>;
+
+        // The unit test owns the runner and installs the same session handle
+        // that `connect` would publish after provider setup.
+        *runner.session.write().await = Some(session);
+        runner
+    }
+
+    #[tokio::test]
+    async fn send_audio_chunk_preserves_bytes_and_format_on_raw_path() {
+        let counts = Arc::new(Counts::default());
+        let runner = runner_with_session(Arc::clone(&counts)).await;
+        let chunk = AudioChunk::pcm16_24khz(vec![1, 2, 3, 4]);
+
+        runner.send_audio_chunk(&chunk).await.unwrap();
+
+        assert_eq!(counts.raw_audio.load(Ordering::SeqCst), 1);
+        assert_eq!(counts.base64_audio.load(Ordering::SeqCst), 0);
+        let recorded = counts.last_audio.lock();
+        let recorded = recorded.as_ref().unwrap();
+        assert_eq!(recorded.data, chunk.data);
+        assert_eq!(recorded.format, chunk.format);
+    }
+
+    #[tokio::test]
+    async fn send_audio_keeps_base64_compatibility_path() {
+        let counts = Arc::new(Counts::default());
+        let runner = runner_with_session(Arc::clone(&counts)).await;
+
+        runner.send_audio("AQIDBA==").await.unwrap();
+
+        assert_eq!(counts.raw_audio.load(Ordering::SeqCst), 0);
+        assert_eq!(counts.base64_audio.load(Ordering::SeqCst), 1);
     }
 
     /// Two parallel tool calls in one response must produce exactly one
