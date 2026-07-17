@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **adk-realtime: preserve split PCM16 samples in the LiveKit audio bridge.**
+  Incomplete channel frames are retained only for the matching response item and cleared at
+  response and error boundaries, preventing malformed samples, stereo channel-phase shifts,
+  data loss, and cross-item audio contamination.
+
 ## [2.0.0] - 2026-07-16
 
 ### Changed
