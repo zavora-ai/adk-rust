@@ -91,6 +91,8 @@ proptest = "1.5"
 url = "2.5"
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+criterion = "0.5"
+stats_alloc = "0.1.10"
 
 [[example]]
 name = "openai_session_update"
@@ -132,6 +134,18 @@ required-features = ["openai-webrtc"]
 
 [[bench]]
 name = "livekit_pcm_bench"
+harness = false
+
+[[bench]]
+name = "audio_payload_ownership"
+harness = false
+
+[[bench]]
+name = "audio_payload_tail_latency"
+harness = false
+
+[[bench]]
+name = "audio_payload_allocations"
 harness = false
 
 [features]
