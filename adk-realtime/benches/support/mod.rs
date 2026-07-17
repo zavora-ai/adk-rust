@@ -107,7 +107,7 @@ pub fn validate_representations(frame: FrameCase) {
 
     assert_eq!(production.data, payload);
     assert_eq!(vec_chunk.data(), bytes_chunk.data());
-    assert_eq!(vec_chunk.data(), production.data.as_slice());
+    assert_eq!(vec_chunk.data(), production.data.as_ref());
     assert_eq!(vec_chunk.format(), bytes_chunk.format());
     assert_eq!(vec_chunk.format(), &production.format);
 
