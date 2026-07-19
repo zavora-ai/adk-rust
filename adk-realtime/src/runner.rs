@@ -134,6 +134,15 @@ pub trait EventHandler: Send + Sync {
         Ok(())
     }
 
+    /// Called when a response is cancelled or interrupted before completion
+    /// (e.g. caller barge-in). Distinct from [`EventHandler::on_error`]:
+    /// cancellation is a normal lifecycle boundary, not a failure, but like
+    /// the done/error boundaries it invalidates any partially received item
+    /// state a handler may be carrying.
+    async fn on_response_cancelled(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// Called on any error.
     async fn on_error(&self, _error: &RealtimeError) -> Result<()> {
         Ok(())

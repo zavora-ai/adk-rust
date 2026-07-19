@@ -175,8 +175,9 @@ size_of::<i16>()` bytes).
   multiple of `num_channels`, and you MUST NOT silently truncate trailing
   bytes — both are audible data loss.
 - Carried bytes MUST be scoped to a single response `item_id` and cleared at
-  item-transition, response-done, and error boundaries, so one item's tail can
-  never contaminate the next item's audio.
+  item-transition, response-done, response-cancelled (barge-in/interruption —
+  a normal boundary, never modeled as an error), and error boundaries, so one
+  item's tail can never contaminate the next item's audio.
 - Every discard MUST be observable: `tracing::warn!` with the item id, the
   boundary name, and the discarded byte count. Silent audio loss is never
   acceptable degradation.

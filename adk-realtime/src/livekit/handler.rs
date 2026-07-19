@@ -223,6 +223,11 @@ impl<H: EventHandler> EventHandler for LiveKitEventHandler<H> {
         self.inner.on_response_done().await
     }
 
+    async fn on_response_cancelled(&self) -> Result<()> {
+        self.state.lock().clear_pending_state("response_cancelled");
+        self.inner.on_response_cancelled().await
+    }
+
     async fn on_error(&self, error: &RealtimeError) -> Result<()> {
         self.state.lock().clear_pending_state("error");
         self.inner.on_error(error).await
@@ -335,6 +340,17 @@ mod tests {
 
         state.assemble(&[0x01, 0x02, 0x03], "item_a", MONO_FRAME_BYTES);
         state.clear_pending_state("error");
+
+        assert!(state.pending_bytes.is_empty());
+        assert_eq!(state.item_id, None);
+    }
+
+    #[test]
+    fn cancellation_boundary_clears_remainder() {
+        let mut state = RemainderState::new();
+
+        state.assemble(&[0x01, 0x02, 0x03], "item_a", MONO_FRAME_BYTES);
+        state.clear_pending_state("response_cancelled");
 
         assert!(state.pending_bytes.is_empty());
         assert_eq!(state.item_id, None);
