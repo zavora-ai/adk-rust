@@ -367,7 +367,7 @@
 //! Built-in OpenTelemetry support for production monitoring:
 //!
 //! ```no_run
-//! use adk_rust::telemetry::{init_telemetry, init_with_otlp};
+//! use adk_rust::telemetry::init_telemetry;
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Basic telemetry with console logging

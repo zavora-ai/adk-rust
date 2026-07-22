@@ -21,7 +21,7 @@ adk-plugin = { workspace = true, optional = true }
 adk-skill = { workspace = true, optional = true }
 async-trait.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "macros"] }
 futures.workspace = true
 async-stream.workspace = true
 uuid.workspace = true

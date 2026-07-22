@@ -114,24 +114,24 @@ impl AudioFormat {
 #[derive(Debug, Clone)]
 pub struct AudioChunk {
     /// Raw audio data.
-    pub data: Vec<u8>,
+    pub data: bytes::Bytes,
     /// Audio format of this chunk.
     pub format: AudioFormat,
 }
 
 impl AudioChunk {
     /// Create a new audio chunk.
-    pub fn new(data: Vec<u8>, format: AudioFormat) -> Self {
-        Self { data, format }
+    pub fn new(data: impl Into<bytes::Bytes>, format: AudioFormat) -> Self {
+        Self { data: data.into(), format }
     }
 
     /// Create a PCM16 24kHz audio chunk (OpenAI format).
-    pub fn pcm16_24khz(data: Vec<u8>) -> Self {
+    pub fn pcm16_24khz(data: impl Into<bytes::Bytes>) -> Self {
         Self::new(data, AudioFormat::pcm16_24khz())
     }
 
     /// Create a PCM16 16kHz audio chunk (Gemini input format).
-    pub fn pcm16_16khz(data: Vec<u8>) -> Self {
+    pub fn pcm16_16khz(data: impl Into<bytes::Bytes>) -> Self {
         Self::new(data, AudioFormat::pcm16_16khz())
     }
 
@@ -157,6 +157,14 @@ impl AudioChunk {
     ///
     /// This is useful when working with audio APIs (like LiveKit) that provide
     /// samples as `i16` slices rather than raw byte buffers.
+    #[cfg(target_endian = "little")]
+    pub fn from_i16_samples(samples: &[i16], format: AudioFormat) -> Self {
+        let bytes: &[u8] = bytemuck::cast_slice(samples);
+        let data = bytes::Bytes::copy_from_slice(bytes);
+        Self::new(data, format)
+    }
+
+    #[cfg(not(target_endian = "little"))]
     pub fn from_i16_samples(samples: &[i16], format: AudioFormat) -> Self {
         let mut data = Vec::with_capacity(samples.len() * 2);
         for sample in samples {
@@ -165,10 +173,33 @@ impl AudioChunk {
         Self::new(data, format)
     }
 
-    /// Convert the audio data to a vector of i16 samples (assuming PCM16 little-endian).
+    /// Convert the audio data to a slice of i16 samples (assuming PCM16 little-endian).
     ///
     /// Returns an error string if the data length is not even (not valid PCM16).
-    pub fn to_i16_samples(&self) -> Result<Vec<i16>, String> {
+    #[cfg(target_endian = "little")]
+    pub fn to_i16_samples(&self) -> Result<std::borrow::Cow<'_, [i16]>, String> {
+        if !self.data.len().is_multiple_of(2) {
+            return Err(format!(
+                "Invalid data length for PCM16: {} (must be even)",
+                self.data.len()
+            ));
+        }
+
+        // bytemuck::cast_slice requires the slice to be aligned
+        if (self.data.as_ptr() as usize) % std::mem::align_of::<i16>() == 0 {
+            let samples: &[i16] = bytemuck::cast_slice(self.data.as_ref());
+            Ok(std::borrow::Cow::Borrowed(samples))
+        } else {
+            let mut samples = Vec::with_capacity(self.data.len() / 2);
+            for chunk in self.data.chunks_exact(2) {
+                samples.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+            }
+            Ok(std::borrow::Cow::Owned(samples))
+        }
+    }
+
+    #[cfg(not(target_endian = "little"))]
+    pub fn to_i16_samples(&self) -> Result<std::borrow::Cow<'_, [i16]>, String> {
         if !self.data.len().is_multiple_of(2) {
             return Err(format!(
                 "Invalid data length for PCM16: {} (must be even)",
@@ -179,7 +210,7 @@ impl AudioChunk {
         for chunk in self.data.chunks_exact(2) {
             samples.push(i16::from_le_bytes([chunk[0], chunk[1]]));
         }
-        Ok(samples)
+        Ok(std::borrow::Cow::Owned(samples))
     }
 }
 
@@ -224,6 +255,29 @@ impl SmartAudioBuffer {
     /// Flush any remaining samples in the buffer.
     pub fn flush_remaining(&mut self) -> Option<Vec<i16>> {
         if self.buffer.is_empty() { None } else { Some(std::mem::take(&mut self.buffer)) }
+    }
+
+    /// Returns the current capacity of the underlying buffer.
+    pub fn capacity(&self) -> usize {
+        self.buffer.capacity()
+    }
+
+    /// Process the buffered samples with a closure and then clear the buffer while retaining capacity.
+    ///
+    /// This is a more efficient alternative to `flush()` when the samples don't need
+    /// to be owned by the caller after the closure returns (e.g., they are immediately
+    /// encoded to base64 or copied).
+    pub fn process_and_clear<F, R>(&mut self, f: F) -> Option<R>
+    where
+        F: FnOnce(&[i16]) -> R,
+    {
+        if self.should_flush() {
+            let result = f(&self.buffer);
+            self.buffer.clear();
+            Some(result)
+        } else {
+            None
+        }
     }
 }
 
@@ -308,19 +362,41 @@ mod tests {
         let samples: Vec<i16> = vec![0, 1, -1, 32767, -32768, 1000, -1000];
         let chunk = AudioChunk::from_i16_samples(&samples, AudioFormat::pcm16_24khz());
         let recovered = chunk.to_i16_samples().unwrap();
-        assert_eq!(samples, recovered);
+        assert_eq!(samples.as_slice(), recovered.as_ref());
     }
 
     #[test]
     fn test_i16_samples_empty() {
         let chunk = AudioChunk::from_i16_samples(&[], AudioFormat::pcm16_24khz());
         assert!(chunk.data.is_empty());
-        assert_eq!(chunk.to_i16_samples().unwrap(), Vec::<i16>::new());
+        assert_eq!(chunk.to_i16_samples().unwrap().as_ref(), Vec::<i16>::new().as_slice());
     }
 
     #[test]
     fn test_i16_samples_odd_bytes_error() {
         let chunk = AudioChunk::pcm16_24khz(vec![0, 1, 2]); // 3 bytes = invalid PCM16
         assert!(chunk.to_i16_samples().is_err());
+    }
+
+    #[test]
+    fn test_smart_audio_buffer_capacity_retention() {
+        let mut buffer = SmartAudioBuffer::new(1000, 10); // 10ms target
+        buffer.push(&[0; 100]); // 100ms
+        let initial_cap = buffer.capacity();
+        assert!(initial_cap >= 100);
+
+        // process_and_clear should retain capacity
+        let processed = buffer.process_and_clear(|samples| {
+            assert_eq!(samples.len(), 100);
+            true
+        });
+        assert!(processed.is_some());
+        assert_eq!(buffer.capacity(), initial_cap);
+        assert!(buffer.buffer.is_empty());
+
+        // flush should LOSE capacity (due to mem::take)
+        buffer.push(&[0; 100]);
+        let _ = buffer.flush();
+        assert_eq!(buffer.capacity(), 0);
     }
 }

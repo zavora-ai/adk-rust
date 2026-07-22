@@ -652,11 +652,19 @@ impl OpenAITransportLink for OpenAIWebRTCSession {
             return Err(RealtimeError::NotConnected);
         }
 
+        // OpenAI WebRTC currently supports only mono PCM16 at 24kHz.
+        if audio.format != crate::audio::AudioFormat::pcm16_24khz() {
+            return Err(RealtimeError::config(format!(
+                "this OpenAI WebRTC adapter currently supports only pcm16 at 24kHz mono, received: {:?}",
+                audio.format
+            )));
+        }
+
         let pcm_samples = audio
             .to_i16_samples()
             .map_err(|e| RealtimeError::opus(format!("Invalid PCM16 audio data: {e}")))?;
 
-        self.write_audio_to_track(&pcm_samples).await
+        self.write_audio_to_track(pcm_samples.as_ref()).await
     }
 
     /// Send base64-encoded PCM16 audio over the WebRTC audio track.
@@ -679,7 +687,7 @@ impl OpenAITransportLink for OpenAIWebRTCSession {
         let pcm_samples: Vec<i16> =
             raw_bytes.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
 
-        self.write_audio_to_track(&pcm_samples).await
+        self.write_audio_to_track(pcm_samples.as_ref()).await
     }
 
     async fn receive_raw(&self) -> Option<Result<ServerEvent>> {
