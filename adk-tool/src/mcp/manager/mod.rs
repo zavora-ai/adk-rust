@@ -6,6 +6,9 @@
 //! monitors health, auto-restarts on crash with exponential backoff, and aggregates
 //! tools from all managed servers behind the [`Toolset`](adk_core::Toolset) trait.
 //!
+//! The registry can add, update, enable, disable, remove, export, and persist
+//! server definitions while the application is running.
+//!
 //! # Configuration
 //!
 //! Server configurations are loaded from Kiro's `mcp.json` format via

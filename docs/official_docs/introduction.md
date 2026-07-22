@@ -112,7 +112,10 @@ Tools give agents abilities beyond conversation, letting them interact with exte
 - **GoogleSearchTool**: Built-in web search capability
 - **BrowserToolset**: 46 WebDriver tools for web automation (navigation, forms, screenshots, etc.)
 - **ExitLoopTool**: Control loop termination in LoopAgent
-- **McpToolset**: Integration with Model Context Protocol servers
+- **McpToolset**: Connect one MCP server and expose reviewed tools, resources,
+  prompts, completion, subscriptions, elicitation, and negotiated tasks
+- **McpServerManager**: Add, update, monitor, restart, persist, and aggregate a
+  changing registry of local MCP servers while the application is running
 
 ### Sessions
 

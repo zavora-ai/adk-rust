@@ -17,8 +17,8 @@ use crate::tool::AcpAgentTool;
 /// use adk_acp::{AcpToolset, AcpAgentTool};
 ///
 /// let toolset = AcpToolset::new("coding-agents")
-///     .add(AcpAgentTool::new("claude-code").description("Complex refactoring"))
-///     .add(AcpAgentTool::new("codex").description("Quick code generation"));
+///     .with_agent(AcpAgentTool::new("review-agent --acp").description("Review changes"))
+///     .with_agent(AcpAgentTool::new("test-agent --acp").description("Run and repair tests"));
 ///
 /// let agent = LlmAgentBuilder::new("orchestrator")
 ///     .toolset(Arc::new(toolset))

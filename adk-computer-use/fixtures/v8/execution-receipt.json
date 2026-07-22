@@ -1,0 +1,15 @@
+{
+  "receiptId": "receipt-0001",
+  "sessionId": "session-0001",
+  "actionId": "action-0001",
+  "actionDigest": "7f7d7be7f49459e151aebc2437b8f445f98c93896f50fa0d8916eb64189570ef",
+  "attempt": 1,
+  "status": "committed",
+  "createdAt": "2026-07-13T10:00:01.000Z",
+  "updatedAt": "2026-07-13T10:00:01.050Z",
+  "result": {
+    "structuredContent": {
+      "observation_id": "observation-0002"
+    }
+  }
+}

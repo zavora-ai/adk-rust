@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zavora.ai/schemas/computer-use/v8/action-postcondition.schema.json",
+  "title": "Digest-bound action postcondition",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "exists"],
+      "properties": {
+        "kind": { "const": "ui_element" },
+        "role": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "exists": { "type": "boolean" },
+        "valueDigest": { "$ref": "#/$defs/digest" }
+      },
+      "anyOf": [{ "required": ["role"] }, { "required": ["label"] }],
+      "allOf": [{
+        "if": { "properties": { "exists": { "const": false } }, "required": ["exists"] },
+        "then": { "not": { "required": ["valueDigest"] } }
+      }]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "exists"],
+      "properties": {
+        "kind": { "const": "filesystem" },
+        "path": { "type": "string", "minLength": 1 },
+        "exists": { "type": "boolean" },
+        "contentDigest": { "$ref": "#/$defs/digest" }
+      },
+      "allOf": [{
+        "if": { "properties": { "exists": { "const": false } }, "required": ["exists"] },
+        "then": { "not": { "required": ["contentDigest"] } }
+      }]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "name", "exists"],
+      "properties": {
+        "kind": { "const": "registry" },
+        "path": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "exists": { "type": "boolean" },
+        "valueDigest": { "$ref": "#/$defs/digest" }
+      },
+      "allOf": [{
+        "if": { "properties": { "exists": { "const": false } }, "required": ["exists"] },
+        "then": { "not": { "required": ["valueDigest"] } }
+      }]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "pid", "running"],
+      "properties": {
+        "kind": { "const": "process" },
+        "pid": { "type": "integer", "minimum": 1 },
+        "running": { "const": false }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "windowId", "exists"],
+      "properties": {
+        "kind": { "const": "window" },
+        "windowId": { "type": "integer", "minimum": 0 },
+        "exists": { "type": "boolean" }
+      }
+    }
+  ],
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  }
+}

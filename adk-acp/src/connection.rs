@@ -7,21 +7,20 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::{
-    InitializeRequest, ProtocolVersion, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SelectedPermissionOutcome,
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::schema::v1::{
+    EnvVariable, InitializeRequest, InitializeResponse, McpServer, NewSessionRequest,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo};
-use agent_client_protocol_tokio::AcpAgent;
-use tracing::{debug, info, warn};
+use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo, Responder};
+use tracing::{debug, info};
 
 use crate::error::{AcpError, Result};
-use crate::permissions::{
-    PermissionDecision, PermissionOption, PermissionPolicy, PermissionRequest,
-};
+use crate::host::{AcpFileSystem, AcpHostHandler, AcpTerminal, capabilities};
+use crate::permissions::{PermissionPolicy, PermissionRequest, outcome_for};
 
 /// Configuration for connecting to an ACP agent.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AcpAgentConfig {
     /// Command to spawn the agent (e.g., "claude-code" or "codex --model o3").
     pub command: String,
@@ -33,6 +32,38 @@ pub struct AcpAgentConfig {
     /// Environment variables to inject when spawning the agent process.
     /// These are merged with the current process environment (these take precedence).
     pub env: std::collections::HashMap<String, String>,
+    /// MCP servers made available to the external agent for each new session.
+    pub mcp_servers: Vec<McpServer>,
+    /// Optional file host exposed to the external ACP agent.
+    pub filesystem: Option<Arc<dyn AcpFileSystem>>,
+    /// Optional terminal host exposed to the external ACP agent.
+    pub terminal: Option<Arc<dyn AcpTerminal>>,
+}
+
+impl std::fmt::Debug for AcpAgentConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let environment_keys: Vec<&str> = self.env.keys().map(String::as_str).collect();
+        let mcp_servers: Vec<(&str, &'static str)> = self
+            .mcp_servers
+            .iter()
+            .map(|server| match server {
+                McpServer::Stdio(config) => (config.name.as_str(), "stdio"),
+                McpServer::Http(config) => (config.name.as_str(), "http"),
+                McpServer::Sse(config) => (config.name.as_str(), "sse"),
+                _ => ("unknown", "unsupported"),
+            })
+            .collect();
+        formatter
+            .debug_struct("AcpAgentConfig")
+            .field("command", &self.command)
+            .field("working_dir", &self.working_dir)
+            .field("auto_approve", &self.auto_approve)
+            .field("environment_keys", &environment_keys)
+            .field("mcp_servers", &mcp_servers)
+            .field("filesystem_enabled", &self.filesystem.is_some())
+            .field("terminal_enabled", &self.terminal.is_some())
+            .finish()
+    }
 }
 
 impl AcpAgentConfig {
@@ -41,8 +72,11 @@ impl AcpAgentConfig {
         Self {
             command: command.into(),
             working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            auto_approve: true,
+            auto_approve: false,
             env: std::collections::HashMap::new(),
+            mcp_servers: Vec::new(),
+            filesystem: None,
+            terminal: None,
         }
     }
 
@@ -72,6 +106,33 @@ impl AcpAgentConfig {
         for (k, v) in vars {
             self.env.insert(k.into(), v.into());
         }
+        self
+    }
+
+    /// Add an MCP server to every session created with this configuration.
+    ///
+    /// ACP v1 requires agents to support stdio MCP servers. HTTP and SSE
+    /// entries should only be used when the remote agent advertises them.
+    pub fn mcp_server(mut self, server: McpServer) -> Self {
+        self.mcp_servers.push(server);
+        self
+    }
+
+    /// Set all MCP servers supplied during ACP session creation.
+    pub fn mcp_servers(mut self, servers: Vec<McpServer>) -> Self {
+        self.mcp_servers = servers;
+        self
+    }
+
+    /// Expose application-controlled file callbacks to the ACP agent.
+    pub fn filesystem(mut self, filesystem: Arc<dyn AcpFileSystem>) -> Self {
+        self.filesystem = Some(filesystem);
+        self
+    }
+
+    /// Expose a complete application-controlled terminal lifecycle to the ACP agent.
+    pub fn terminal(mut self, terminal: Arc<dyn AcpTerminal>) -> Self {
+        self.terminal = Some(terminal);
         self
     }
 }
@@ -116,73 +177,61 @@ pub async fn prompt_agent_with_policy(
 ) -> Result<String> {
     info!(command = %config.command, cwd = %config.working_dir.display(), "spawning ACP agent");
 
-    // Build command with env vars prepended (SDK parses leading NAME=value as env vars
-    // and passes them to the child process via Command::env — no unsafe needed).
-    let command_with_env = build_command_with_env(&config.command, &config.env);
-
-    let agent = AcpAgent::from_str(&command_with_env).map_err(|e| {
-        AcpError::InvalidConfig(format!("invalid command '{}': {e}", config.command))
-    })?;
+    let agent = build_agent(config)?;
 
     let prompt_text = prompt.to_string();
     let working_dir = config.working_dir.clone();
+    let mcp_servers = config.mcp_servers.clone();
+    let filesystem = config.filesystem.clone();
+    let terminal = config.terminal.clone();
+    let client_capabilities = capabilities(filesystem.as_ref(), terminal.as_ref());
     let policy_clone = policy.clone();
 
     let result: std::result::Result<String, agent_client_protocol::Error> = Client
         .builder()
         .on_receive_request(
-            async move |request: RequestPermissionRequest, responder, _cx: ConnectionTo<Agent>| {
-                // Convert SDK permission request to our domain type
-                let title = request
-                    .options
-                    .first()
-                    .map(|o| o.name.to_string())
-                    .unwrap_or_else(|| "Unknown operation".to_string());
-
-                let perm_request = PermissionRequest {
-                    title: title.clone(),
-                    options: request
-                        .options
-                        .iter()
-                        .map(|o| PermissionOption {
-                            id: o.option_id.to_string(),
-                            name: o.name.to_string(),
-                        })
-                        .collect(),
-                };
-
-                // Evaluate the policy
-                let decision = policy_clone.decide(&perm_request);
-
-                match &decision {
-                    PermissionDecision::Allow(option_id) => {
-                        debug!(title = %title, decision = %decision, "ACP permission granted");
-                        responder.respond(RequestPermissionResponse::new(
-                            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                                option_id.clone(),
-                            )),
-                        ))
-                    }
-                    PermissionDecision::Deny => {
-                        warn!(title = %title, "ACP permission DENIED by policy");
-                        responder.respond(RequestPermissionResponse::new(
-                            RequestPermissionOutcome::Cancelled,
-                        ))
-                    }
+            move |request: RequestPermissionRequest,
+                  responder: Responder<RequestPermissionResponse>,
+                  cx: ConnectionTo<Agent>| {
+                let policy = policy_clone.clone();
+                async move {
+                cx.spawn(async move {
+                    let cancellation = responder.cancellation();
+                    let perm_request = PermissionRequest::from_acp(&request);
+                    let decision = tokio::select! {
+                        decision = policy.decide(&perm_request) => decision,
+                        _ = cancellation.cancelled() => {
+                            return responder.respond(RequestPermissionResponse::new(
+                                RequestPermissionOutcome::Cancelled,
+                            ));
+                        }
+                    };
+                    let outcome = outcome_for(&perm_request, &decision);
+                    debug!(title = %perm_request.title, decision = %decision, "ACP permission policy evaluated");
+                    responder.respond(RequestPermissionResponse::new(outcome))
+                })?;
+                Ok(())
                 }
             },
             agent_client_protocol::on_receive_request!(),
         )
+        .with_handler(AcpHostHandler::new(filesystem, terminal))
         .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
             // Initialize
-            connection
-                .send_request(InitializeRequest::new(ProtocolVersion::V1))
+            let initialization = connection
+                .send_request(
+                    InitializeRequest::new(ProtocolVersion::V1)
+                        .client_capabilities(client_capabilities),
+                )
                 .block_task()
                 .await?;
+            validate_initialization(&initialization, &mcp_servers)?;
 
             // Create session, send prompt, and collect response
             let response_text = connection
-                .build_session(&working_dir)
+                .build_session_from(
+                    NewSessionRequest::new(&working_dir).mcp_servers(mcp_servers),
+                )
                 .block_task()
                 .run_until(async |mut session| {
                     session.send_prompt(&prompt_text)?;
@@ -198,19 +247,76 @@ pub async fn prompt_agent_with_policy(
     result.map_err(|e| AcpError::Protocol(e.to_string()))
 }
 
-/// Build a command string with environment variables prepended.
-///
-/// The ACP SDK's `AcpAgent::from_str` / `from_args` parses leading `NAME=value`
-/// tokens as environment variables and passes them to the child process via
-/// `Command::env()` — no unsafe `set_var` needed.
-pub(crate) fn build_command_with_env(
-    command: &str,
-    env: &std::collections::HashMap<String, String>,
-) -> String {
-    if env.is_empty() {
-        return command.to_string();
+pub(crate) fn validate_initialization(
+    response: &InitializeResponse,
+    mcp_servers: &[McpServer],
+) -> std::result::Result<(), agent_client_protocol::Error> {
+    if response.protocol_version != ProtocolVersion::V1 {
+        return Err(agent_client_protocol::Error::invalid_params()
+            .data("the ACP agent did not negotiate protocol version 1"));
     }
-    let mut parts: Vec<String> = env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-    parts.push(command.to_string());
-    parts.join(" ")
+    for server in mcp_servers {
+        match server {
+            McpServer::Stdio(_) => {}
+            McpServer::Http(_) if response.agent_capabilities.mcp_capabilities.http => {}
+            McpServer::Sse(_) if response.agent_capabilities.mcp_capabilities.sse => {}
+            McpServer::Http(_) => {
+                return Err(agent_client_protocol::Error::invalid_params()
+                    .data("the ACP agent did not advertise HTTP MCP support"));
+            }
+            McpServer::Sse(_) => {
+                return Err(agent_client_protocol::Error::invalid_params()
+                    .data("the ACP agent did not advertise SSE MCP support"));
+            }
+            _ => {
+                return Err(agent_client_protocol::Error::invalid_params()
+                    .data("the ACP agent did not advertise this MCP transport"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Build an SDK process component while preserving environment values exactly.
+pub(crate) fn build_agent(config: &AcpAgentConfig) -> Result<AcpAgent> {
+    let parsed = AcpAgent::from_str(&config.command).map_err(|error| {
+        AcpError::InvalidConfig(format!("invalid command '{}': {error}", config.command))
+    })?;
+    match parsed.into_server() {
+        McpServer::Stdio(mut stdio) => {
+            stdio.env.extend(
+                config
+                    .env
+                    .iter()
+                    .map(|(name, value)| EnvVariable::new(name.clone(), value.clone())),
+            );
+            Ok(AcpAgent::new(McpServer::Stdio(stdio)))
+        }
+        _ => Err(AcpError::InvalidConfig(
+            "AcpAgentConfig currently supports local stdio agents".into(),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use agent_client_protocol::schema::v1::{EnvVariable, McpServerStdio};
+
+    use super::*;
+
+    #[test]
+    fn debug_output_redacts_environment_values() {
+        let config = AcpAgentConfig::new("agent --acp")
+            .env("API_TOKEN", "top-secret-agent-token")
+            .mcp_server(McpServer::Stdio(
+                McpServerStdio::new("private-tools", "/bin/echo")
+                    .env(vec![EnvVariable::new("MCP_SECRET", "top-secret-mcp-token")]),
+            ));
+
+        let debug = format!("{config:?}");
+        assert!(debug.contains("API_TOKEN"));
+        assert!(debug.contains("private-tools"));
+        assert!(!debug.contains("top-secret-agent-token"));
+        assert!(!debug.contains("top-secret-mcp-token"));
+    }
 }

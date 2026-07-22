@@ -229,45 +229,17 @@ This returns Server-Sent Events with incremental task status updates.
 
 ---
 
-## Connecting to MCP-A2A Server
+## Keep MCP and A2A boundaries distinct
 
-The MCP-A2A Server bridges MCP (Model Context Protocol) clients to A2A agents. This lets tools like Claude Desktop, Cursor, or any MCP client interact with your A2A agent.
+MCP connects an agent application to tools, resources, and other published
+capabilities. A2A connects independently deployed agents and carries the life
+of their remote work. A bridge can translate between the protocols, but that
+bridge is a separately deployed component with its own identity, authorization,
+schema mapping, task-state mapping, and failure behavior.
 
-### How It Works
-
-```
-MCP Client (Claude Desktop, etc.)
-    ↓ MCP protocol
-MCP-A2A Server
-    ↓ A2A protocol (JSON-RPC)
-Your ADK-Rust A2A Agent
-```
-
-The MCP-A2A Server discovers your agent via its agent card, then translates MCP tool calls into A2A `message/send` requests.
-
-### Setup
-
-1. Start your A2A agent:
-
-```bash
-cargo run
-# Agent running on http://localhost:8080
-```
-
-2. Point the MCP-A2A Server at your agent's URL:
-
-```json
-{
-  "mcpServers": {
-    "my-agent": {
-      "command": "mcp-a2a-server",
-      "args": ["--agent-url", "http://localhost:8080"]
-    }
-  }
-}
-```
-
-The MCP-A2A Server fetches the agent card from `http://localhost:8080/.well-known/agent.json` and exposes the agent's skills as MCP tools.
+ADK-Rust does not ship a binary named `mcp-a2a-server`. Do not place that
+command in MCP configuration unless your deployment separately provides and
+tests such a bridge. When both sides are agents, use the A2A client directly.
 
 ### Connecting from Another ADK-Rust Agent
 

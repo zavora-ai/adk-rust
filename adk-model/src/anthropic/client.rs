@@ -37,8 +37,11 @@ pub struct AnthropicClient {
 impl AnthropicClient {
     /// Create a new Anthropic client.
     pub fn new(config: AnthropicConfig) -> Result<Self, AdkError> {
-        let client = Anthropic::new(Some(config.api_key.clone()))
+        let mut client = Anthropic::new(Some(config.api_key.clone()))
             .map_err(|e| AdkError::model(format!("Failed to create Anthropic client: {e}")))?;
+        if let Some(base_url) = &config.base_url {
+            client = client.with_base_url(base_url.clone());
+        }
 
         Ok(Self {
             client,
@@ -793,6 +796,17 @@ mod tests {
             config: None,
             previous_response_id: None,
         }
+    }
+
+    #[test]
+    fn custom_base_url_reaches_the_underlying_anthropic_client() {
+        let client = AnthropicClient::new(
+            AnthropicConfig::new("test-key", "claude-sonnet-4-6")
+                .with_base_url("https://gateway.example.test/anthropic"),
+        )
+        .unwrap();
+
+        assert_eq!(client.client.base_url(), "https://gateway.example.test/anthropic");
     }
 
     /// Requirement 1.1: System-role content extracted to system parameter.

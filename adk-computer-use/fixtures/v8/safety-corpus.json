@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "description": "Sanitized deterministic v8 execution-kernel safety scenarios.",
+  "scenarios": [
+    {
+      "id": "background-commit-restores",
+      "fault": "none",
+      "expected": { "status": "committed", "effects": 1, "restores": 1, "replayEffects": 1 }
+    },
+    {
+      "id": "stale-target-before-effect",
+      "fault": "target_drift",
+      "expected": { "error": "stale_target", "effects": 0, "restores": 0 }
+    },
+    {
+      "id": "crash-after-effect-no-replay",
+      "fault": "fail_after_effect",
+      "expected": { "error": "indeterminate", "effects": 1, "restores": 0, "replayEffects": 1 }
+    },
+    {
+      "id": "physical-user-revokes-inflight",
+      "fault": "wait_for_abort",
+      "expected": { "error": "interrupted", "receiptStatus": "indeterminate", "effects": 0, "restores": 0 }
+    }
+  ]
+}

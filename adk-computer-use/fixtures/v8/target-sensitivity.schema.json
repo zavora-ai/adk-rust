@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zavora.ai/schemas/computer-use/v8/target-sensitivity.schema.json",
+  "title": "Disclosure-safe target sensitivity evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["assessment", "source", "signals", "fieldsChecked", "observedAt"],
+  "properties": {
+    "assessment": { "enum": ["sensitive", "non_sensitive", "unknown"] },
+    "source": { "enum": ["accessibility", "unavailable"] },
+    "signals": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 10,
+      "items": {
+        "enum": [
+          "secure_role",
+          "secure_subrole",
+          "protected_content",
+          "uia_is_password",
+          "sensitive_label",
+          "ambiguous_match",
+          "element_not_found",
+          "inspection_error",
+          "invalid_field",
+          "native_signal_unavailable"
+        ]
+      }
+    },
+    "fieldsChecked": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "observedAt": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "assessment": { "enum": ["sensitive", "non_sensitive"] } } },
+      "then": {
+        "properties": {
+          "source": { "const": "accessibility" },
+          "fieldsChecked": { "minimum": 1 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "assessment": { "const": "sensitive" } } },
+      "then": { "properties": { "signals": { "minItems": 1 } } }
+    }
+  ]
+}

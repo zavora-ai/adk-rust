@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex};
 /// a caller name; all other fields use safe defaults.
 pub struct SimpleToolContext {
     caller_name: String,
+    session_id: String,
     invocation_id: String,
     function_call_id: String,
     user_content: Content,
@@ -42,6 +43,7 @@ impl SimpleToolContext {
     pub fn new(caller_name: impl Into<String>) -> Self {
         Self {
             caller_name: caller_name.into(),
+            session_id: String::new(),
             invocation_id: uuid::Uuid::new_v4().to_string(),
             function_call_id: uuid::Uuid::new_v4().to_string(),
             user_content: Content::new("user"),
@@ -55,6 +57,16 @@ impl SimpleToolContext {
     /// method to provide a specific ID instead.
     pub fn with_function_call_id(mut self, id: impl Into<String>) -> Self {
         self.function_call_id = id.into();
+        self
+    }
+
+    /// Attach the session that owns this tool call.
+    ///
+    /// This is useful for desktop shells, test harnesses, and other callers
+    /// that execute tools outside the full agent loop but still need
+    /// session-aware callbacks such as MCP elicitation.
+    pub fn with_session_id(mut self, id: impl Into<String>) -> Self {
+        self.session_id = id.into();
         self
     }
 }
@@ -78,7 +90,7 @@ impl ReadonlyContext for SimpleToolContext {
     }
 
     fn session_id(&self) -> &str {
-        ""
+        &self.session_id
     }
 
     fn branch(&self) -> &str {
@@ -113,5 +125,22 @@ impl ToolContext for SimpleToolContext {
 
     async fn search_memory(&self, _query: &str) -> Result<Vec<MemoryEntry>> {
         Ok(vec![])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_id_is_empty_by_default() {
+        let context = SimpleToolContext::new("test");
+        assert_eq!(ReadonlyContext::session_id(&context), "");
+    }
+
+    #[test]
+    fn session_id_can_be_attached_for_out_of_loop_tool_calls() {
+        let context = SimpleToolContext::new("desktop").with_session_id("session-123");
+        assert_eq!(ReadonlyContext::session_id(&context), "session-123");
     }
 }

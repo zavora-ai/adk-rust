@@ -219,6 +219,46 @@ fn test_context_end_invocation() {
 }
 
 #[test]
+fn test_context_is_cancelled_defaults_false() {
+    // Without a cancellation token, is_cancelled() must be false (issue #402).
+    let agent = Arc::new(MockAgent { name: "test_agent".to_string() });
+    let ctx = InvocationContext::new(
+        "inv-123".to_string(),
+        agent,
+        "user-456".to_string(),
+        "test-app".to_string(),
+        "session-789".to_string(),
+        Content::new("user"),
+        Arc::new(MockSessionWithState::new()),
+    )
+    .unwrap();
+
+    assert!(!ctx.is_cancelled());
+}
+
+#[test]
+fn test_context_is_cancelled_reflects_token() {
+    // With a token attached, is_cancelled() tracks the token (issue #402).
+    let token = tokio_util::sync::CancellationToken::new();
+    let agent = Arc::new(MockAgent { name: "test_agent".to_string() });
+    let ctx = InvocationContext::new(
+        "inv-123".to_string(),
+        agent,
+        "user-456".to_string(),
+        "test-app".to_string(),
+        "session-789".to_string(),
+        Content::new("user"),
+        Arc::new(MockSessionWithState::new()),
+    )
+    .unwrap()
+    .with_cancellation_token(token.clone());
+
+    assert!(!ctx.is_cancelled(), "not cancelled before token fires");
+    token.cancel();
+    assert!(ctx.is_cancelled(), "cancelled after token fires");
+}
+
+#[test]
 fn test_context_agent_access() {
     let agent = Arc::new(MockAgent { name: "test_agent".to_string() });
 

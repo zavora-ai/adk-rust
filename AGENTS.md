@@ -122,6 +122,11 @@ adk-realtime/    Real-time bidirectional audio/video streaming (OpenAI, Gemini L
                  LiveKit, WebRTC), mid-session context mutation, interruption detection,
                  video avatar providers (HeyGen, D-ID)
 adk-browser/     Browser automation tools via WebDriver
+adk-computer-use/ Governed orchestration layer for the computer-use-mcp desktop-automation server:
+                 deterministic reference graph (parallel observation, digest-bound approval
+                 interrupts, single-executor mutation, verification), camelCase wire contracts,
+                 scope authorization, cancellation bridge, and tamper-evident evaluation
+                 receipts. Performs no actuation itself.
 adk-eval/        Evaluation framework: trajectory, semantic, rubric, LLM-judge, user personas,
                  prompt optimizer, structured judge (typed verdicts), embedding similarity,
                  cost/latency tracking, trace analysis (loop/redundancy detection), regression
@@ -141,6 +146,10 @@ adk-cli/         Command-line launcher for agents, `cargo adk deploy` for ADK Pl
 adk-rust-macros/ Procedural macros (#[tool] attribute with read_only, concurrency_safe,
                  long_running metadata)
 adk-code/        Code execution (experimental)
+adk-devtools/    Developer tools for coding agents — inner-loop file/search/edit tools
+                 (read_file, write_file, edit_file, glob, grep, ...) scoped to a sandboxed workspace
+adk-bench/       Benchmarking framework: framework-level runtime performance with real LLM APIs
+                 and cross-framework (Python ADK) comparison
 adk-sandbox/     Sandboxed execution environments — process/WASM backends, OS-level sandbox profiles
                  (Seatbelt on macOS, bubblewrap on Linux, AppContainer on Windows)
 adk-audio/       Audio processing, STT/TTS providers, Deepgram streaming, desktop audio

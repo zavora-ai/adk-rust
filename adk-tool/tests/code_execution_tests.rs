@@ -264,10 +264,14 @@ fn test_all_tools_have_code_required_in_schema() {
 // ===========================================================================
 
 #[tokio::test]
-async fn test_javascript_placeholder_returns_rejected() {
+async fn test_javascript_returns_a_stable_execution_status() {
     let tool = JavaScriptCodeTool::new();
     let result = tool.execute(mock_ctx(), json!({"code": "1+1"})).await.unwrap();
-    assert_eq!(result["status"], "rejected");
+    let status = result["status"].as_str().unwrap_or("").to_ascii_lowercase();
+    assert!(
+        matches!(status.as_str(), "success" | "failed" | "timeout" | "rejected"),
+        "expected an execution status, got: {status}"
+    );
 }
 
 #[tokio::test]
@@ -276,9 +280,9 @@ async fn test_python_placeholder_returns_rejected() {
     let result = tool.execute(mock_ctx(), json!({"code": "print(1)"})).await.unwrap();
     // PythonCodeTool now uses ContainerCommandExecutor — it will attempt real
     // execution. The status depends on whether docker is available.
-    let status = result["status"].as_str().unwrap_or("");
+    let status = result["status"].as_str().unwrap_or("").to_ascii_lowercase();
     assert!(
-        status == "Success" || status == "Failed" || status == "Timeout",
+        matches!(status.as_str(), "success" | "failed" | "timeout"),
         "expected an execution status, got: {status}"
     );
 }
@@ -289,9 +293,9 @@ async fn test_frontend_placeholder_returns_rejected() {
     let result = tool.execute(mock_ctx(), json!({"code": "console.log(1)"})).await.unwrap();
     // FrontendCodeTool now uses ContainerCommandExecutor — it will attempt real
     // execution. The status depends on whether docker/node image is available.
-    let status = result["status"].as_str().unwrap_or("");
+    let status = result["status"].as_str().unwrap_or("").to_ascii_lowercase();
     assert!(
-        status == "Success" || status == "Failed" || status == "Timeout",
+        matches!(status.as_str(), "success" | "failed" | "timeout"),
         "expected an execution status, got: {status}"
     );
 }

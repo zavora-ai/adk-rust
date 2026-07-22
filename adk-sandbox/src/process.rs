@@ -360,6 +360,17 @@ impl ProcessBackend {
         }
         cmd.kill_on_drop(true);
 
+        // Give each execution its own process group. `kill_on_drop` only
+        // targets the immediate child, which is not enough for shell tools:
+        // compilers, scripts, and background jobs can otherwise survive a
+        // timeout. Descendants inherit this group unless they deliberately
+        // detach, so the timeout path can terminate the execution tree.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.as_std_mut().process_group(0);
+        }
+
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
@@ -371,6 +382,8 @@ impl ProcessBackend {
 
         let start = Instant::now();
         let mut child = cmd.spawn()?;
+        #[cfg(unix)]
+        let process_group = child.id().map(|id| id as i32);
 
         // Pipe stdin if provided
         if let Some(ref input) = request.stdin
@@ -399,7 +412,18 @@ impl ProcessBackend {
                 Err(SandboxError::ExecutionFailed(format!("failed to wait for child process: {e}")))
             }
             Err(_) => {
-                // Timeout — child is killed by kill_on_drop
+                // Timeout — terminate the Unix process group before
+                // `kill_on_drop` cleans up the immediate child. This prevents
+                // background descendants from escaping the execution limit.
+                #[cfg(unix)]
+                if let Some(group) = process_group {
+                    // SAFETY: `group` is the positive PID returned for the
+                    // child we just placed in a new process group. A negative
+                    // PID asks kill(2) to signal that process group only.
+                    unsafe {
+                        libc::kill(-group, libc::SIGKILL);
+                    }
+                }
                 Span::current().record("duration_ms", duration.as_millis() as u64);
                 Err(SandboxError::Timeout { timeout: request.timeout })
             }
@@ -478,6 +502,23 @@ mod tests {
             matches!(result, Err(SandboxError::Timeout { .. })),
             "expected Timeout, got: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_timeout_terminates_background_descendants() {
+        let backend = ProcessBackend::default();
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("escaped-child");
+        let escaped_marker = marker.to_string_lossy().replace('\'', "'\\''");
+        let code = format!("(sleep 1; touch '{escaped_marker}') & wait");
+        let mut request = make_request(Language::Command, &code);
+        request.timeout = Duration::from_millis(100);
+
+        let result = backend.execute(request).await;
+        assert!(matches!(result, Err(SandboxError::Timeout { .. })));
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        assert!(!marker.exists(), "a background descendant survived the execution timeout");
     }
 
     #[tokio::test]

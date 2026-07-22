@@ -1,0 +1,19 @@
+{
+  "leaseId": "lease-0001",
+  "revision": 1,
+  "sessionId": "session-0001",
+  "principalId": "principal-0001",
+  "agentId": "executor",
+  "kind": "exclusive",
+  "executionMode": "foreground",
+  "state": "active",
+  "acquiredAt": "2026-07-13T10:00:00.500Z",
+  "expiresAt": "2026-07-13T10:00:30.500Z",
+  "actionBudget": 1,
+  "actionsUsed": 0,
+  "boundaries": {
+    "appIds": ["com.example.Sandbox"],
+    "windowIds": [42],
+    "displayIds": ["main"]
+  }
+}

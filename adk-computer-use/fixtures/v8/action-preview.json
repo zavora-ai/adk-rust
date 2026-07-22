@@ -1,0 +1,57 @@
+{
+  "envelope": {
+    "actionId": "action-0001",
+    "sessionId": "session-0001",
+    "executionGroupId": "group-0001",
+    "principalId": "principal-0001",
+    "agentId": "executor",
+    "tool": "left_click",
+    "operation": "left_click",
+    "actionClass": "navigate",
+    "requestedMode": "background",
+    "target": {
+      "platform": "darwin",
+      "appId": "com.example.Sandbox",
+      "windowId": 42,
+      "observationId": "observation-0001",
+      "screenshotHash": "sha256:fixture",
+      "confidence": 1,
+      "capturedAt": "2026-07-13T10:00:00.000Z"
+    },
+    "targetSensitivity": {
+      "assessment": "non_sensitive",
+      "source": "accessibility",
+      "signals": [],
+      "fieldsChecked": 1,
+      "observedAt": "2026-07-13T10:00:00.000Z"
+    },
+    "dataLabels": ["private"],
+    "postcondition": {
+      "kind": "ui_element",
+      "role": "AXStaticText",
+      "label": "Saved",
+      "exists": true
+    },
+    "reversible": true,
+    "externalSideEffect": true,
+    "proposedAt": "2026-07-13T10:00:00.000Z",
+    "expiresAt": "2026-07-13T10:00:30.000Z",
+    "argsDigest": "7f7d7be7f49459e151aebc2437b8f445f98c93896f50fa0d8916eb64189570ef"
+  },
+  "capability": {
+    "appId": "com.example.Sandbox",
+    "operation": "left_click",
+    "backend": "physical_input",
+    "supportedModes": ["shadow", "foreground"],
+    "interference": "moves_physical_pointer",
+    "confidence": 0.75,
+    "verificationSource": "platform_rule"
+  },
+  "policy": {
+    "decision": "allow",
+    "policyDigest": "fixture-policy",
+    "reasons": ["fixture"]
+  },
+  "executable": false,
+  "blocker": "foreground_required"
+}

@@ -16,18 +16,18 @@ use std::collections::HashMap;
 /// use adk_tool::mcp::manager::McpServerConfig;
 ///
 /// let json = r#"{
-///     "command": "npx",
-///     "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+///     "command": "/opt/company/bin/workspace-mcp",
+///     "args": ["--stdio", "--root", "/srv/workspace"],
 ///     "env": {},
 ///     "disabled": false,
 ///     "autoApprove": ["read_file"]
 /// }"#;
 ///
 /// let config: McpServerConfig = serde_json::from_str(json).unwrap();
-/// assert_eq!(config.command, "npx");
+/// assert_eq!(config.command, "/opt/company/bin/workspace-mcp");
 /// assert!(!config.disabled);
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerConfig {
     /// Executable command to spawn the MCP server process.
@@ -45,7 +45,10 @@ pub struct McpServerConfig {
     #[serde(default)]
     pub disabled: bool,
 
-    /// Tool names pre-approved for execution without confirmation.
+    /// Tool names carried through compatible `mcp.json` files.
+    ///
+    /// The manager does not bypass ADK-Rust tool authorization from this field.
+    /// Applications must enforce approval through their normal tool policy.
     #[serde(default)]
     pub auto_approve: Vec<String>,
 
@@ -132,7 +135,7 @@ impl Default for RestartPolicy {
 ///
 /// The top-level JSON object contains a `mcpServers` key mapping server IDs
 /// to their configurations.
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)] // Used by McpServerManager in manager.rs (Task 3+)
 pub(crate) struct McpJsonFile {

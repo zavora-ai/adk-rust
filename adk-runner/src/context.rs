@@ -251,6 +251,12 @@ pub struct InvocationContext {
     /// Optional secret service for retrieving secrets at runtime.
     /// When present, `get_secret()` delegates to this service.
     secret_service: Option<Arc<dyn SecretService>>,
+    /// Optional cooperative cancellation token.
+    ///
+    /// When present, `is_cancelled()` reflects this token, letting agents and
+    /// tools detect external cancellation (`Runner::interrupt()` or
+    /// `RunConfig::cancellation_token`) during long-running work.
+    cancellation_token: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl InvocationContext {
@@ -282,6 +288,7 @@ impl InvocationContext {
             request_context: None,
             shared_state: None,
             secret_service: None,
+            cancellation_token: None,
         })
     }
 
@@ -338,6 +345,7 @@ impl InvocationContext {
             request_context: None,
             shared_state: None,
             secret_service: None,
+            cancellation_token: None,
         })
     }
 
@@ -413,6 +421,16 @@ impl InvocationContext {
     /// Azure Key Vault, GCP Secret Manager).
     pub fn with_secret_service(mut self, service: Arc<dyn SecretService>) -> Self {
         self.secret_service = Some(service);
+        self
+    }
+
+    /// Attach a cooperative cancellation token.
+    ///
+    /// When set, [`is_cancelled`](adk_core::InvocationContext::is_cancelled)
+    /// reflects this token, so agents and tools can detect external
+    /// cancellation during long-running work.
+    pub fn with_cancellation_token(mut self, token: tokio_util::sync::CancellationToken) -> Self {
+        self.cancellation_token = Some(token);
         self
     }
 
@@ -494,6 +512,12 @@ impl InvocationContextTrait for InvocationContext {
 
     fn ended(&self) -> bool {
         self.ended.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancellation_token
+            .as_ref()
+            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
     }
 
     fn user_scopes(&self) -> Vec<String> {

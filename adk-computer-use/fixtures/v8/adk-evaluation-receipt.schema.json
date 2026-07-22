@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zavora.ai/schemas/computer-use/v8/adk-evaluation-receipt.schema.json",
+  "title": "ADK-Rust Computer Use v8 Evaluation Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "protocol", "subjectVersion", "generatedAt", "commands", "assertions", "claims", "sources", "sourceDigest", "outputDigest", "receiptDigest"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "protocol": { "const": "adk-rust-computer-use-v8-evaluation" },
+    "subjectVersion": { "type": "string", "minLength": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "commands": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 } },
+    "assertions": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "claims": {
+      "type": "object", "additionalProperties": false,
+      "required": ["testsPassed", "authBound", "multimodalEvidence", "duplicateMutations", "crashPointsCovered", "testCount"],
+      "properties": {
+        "testsPassed": { "const": true }, "authBound": { "const": true }, "multimodalEvidence": { "const": true },
+        "duplicateMutations": { "const": 0 }, "crashPointsCovered": { "type": "integer", "minimum": 2 }, "testCount": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "sources": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["path", "digest"],
+        "properties": { "path": { "type": "string" }, "digest": { "$ref": "#/$defs/digest" } }
+      }
+    },
+    "sourceDigest": { "$ref": "#/$defs/digest" }, "outputDigest": { "$ref": "#/$defs/digest" }, "receiptDigest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" } }
+}
