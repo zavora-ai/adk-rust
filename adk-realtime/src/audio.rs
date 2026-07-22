@@ -159,6 +159,14 @@ impl AudioChunk {
     ///
     /// This is useful when working with audio APIs (like LiveKit) that provide
     /// samples as `i16` slices rather than raw byte buffers.
+    #[cfg(target_endian = "little")]
+    pub fn from_i16_samples(samples: &[i16], format: AudioFormat) -> Self {
+        let bytes: &[u8] = bytemuck::cast_slice(samples);
+        let data = bytes::Bytes::copy_from_slice(bytes);
+        Self::new(data, format)
+    }
+
+    #[cfg(not(target_endian = "little"))]
     pub fn from_i16_samples(samples: &[i16], format: AudioFormat) -> Self {
         let mut data = Vec::with_capacity(samples.len() * 2);
         for sample in samples {
@@ -167,10 +175,33 @@ impl AudioChunk {
         Self::new(data, format)
     }
 
-    /// Convert the audio data to a vector of i16 samples (assuming PCM16 little-endian).
+    /// Convert the audio data to a slice of i16 samples (assuming PCM16 little-endian).
     ///
     /// Returns an error string if the data length is not even (not valid PCM16).
-    pub fn to_i16_samples(&self) -> Result<Vec<i16>, String> {
+    #[cfg(target_endian = "little")]
+    pub fn to_i16_samples(&self) -> Result<std::borrow::Cow<'_, [i16]>, String> {
+        if !self.data.len().is_multiple_of(2) {
+            return Err(format!(
+                "Invalid data length for PCM16: {} (must be even)",
+                self.data.len()
+            ));
+        }
+
+        // bytemuck::cast_slice requires the slice to be aligned
+        if (self.data.as_ptr() as usize) % std::mem::align_of::<i16>() == 0 {
+            let samples: &[i16] = bytemuck::cast_slice(self.data.as_ref());
+            Ok(std::borrow::Cow::Borrowed(samples))
+        } else {
+            let mut samples = Vec::with_capacity(self.data.len() / 2);
+            for chunk in self.data.chunks_exact(2) {
+                samples.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+            }
+            Ok(std::borrow::Cow::Owned(samples))
+        }
+    }
+
+    #[cfg(not(target_endian = "little"))]
+    pub fn to_i16_samples(&self) -> Result<std::borrow::Cow<'_, [i16]>, String> {
         if !self.data.len().is_multiple_of(2) {
             return Err(format!(
                 "Invalid data length for PCM16: {} (must be even)",
@@ -181,7 +212,7 @@ impl AudioChunk {
         for chunk in self.data.chunks_exact(2) {
             samples.push(i16::from_le_bytes([chunk[0], chunk[1]]));
         }
-        Ok(samples)
+        Ok(std::borrow::Cow::Owned(samples))
     }
 }
 
@@ -333,14 +364,14 @@ mod tests {
         let samples: Vec<i16> = vec![0, 1, -1, 32767, -32768, 1000, -1000];
         let chunk = AudioChunk::from_i16_samples(&samples, AudioFormat::pcm16_24khz());
         let recovered = chunk.to_i16_samples().unwrap();
-        assert_eq!(samples, recovered);
+        assert_eq!(samples.as_slice(), recovered.as_ref());
     }
 
     #[test]
     fn test_i16_samples_empty() {
         let chunk = AudioChunk::from_i16_samples(&[], AudioFormat::pcm16_24khz());
         assert!(chunk.data.is_empty());
-        assert_eq!(chunk.to_i16_samples().unwrap(), Vec::<i16>::new());
+        assert_eq!(chunk.to_i16_samples().unwrap().as_ref(), Vec::<i16>::new().as_slice());
     }
 
     #[test]

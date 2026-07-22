@@ -23,7 +23,7 @@ fn test_pcm_byte_equivalence() {
     assert_eq!(chunk.data.as_ref(), &expected_bytes);
 
     let recovered = chunk.to_i16_samples().unwrap();
-    assert_eq!(samples, recovered);
+    assert_eq!(samples.as_slice(), recovered.as_ref());
 }
 
 #[test]

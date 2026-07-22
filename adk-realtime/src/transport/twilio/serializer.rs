@@ -82,7 +82,9 @@ impl TwilioMediaSerializer {
     /// Serialize a TransportEvent or Control into a Twilio WebSocket message.
     pub fn serialize_audio(&self, stream_id: &str, audio: &AudioChunk) -> String {
         // Extract samples from the input PCM16 chunk (Gemini Live outputs 24kHz)
-        let samples = audio.to_i16_samples().unwrap_or_default();
+        let samples_cow =
+            audio.to_i16_samples().unwrap_or_else(|_| std::borrow::Cow::Owned(vec![]));
+        let samples = samples_cow.as_ref();
 
         // Downsample to 8kHz for Twilio
         let samples_8khz = match audio.format.sample_rate {
@@ -102,7 +104,7 @@ impl TwilioMediaSerializer {
                 }
                 downsampled
             }
-            _ => samples,
+            _ => samples.to_vec(),
         };
 
         // Encode 8kHz PCM16 samples to μ-law bytes

@@ -664,7 +664,7 @@ impl OpenAITransportLink for OpenAIWebRTCSession {
             .to_i16_samples()
             .map_err(|e| RealtimeError::opus(format!("Invalid PCM16 audio data: {e}")))?;
 
-        self.write_audio_to_track(&pcm_samples).await
+        self.write_audio_to_track(pcm_samples.as_ref()).await
     }
 
     /// Send base64-encoded PCM16 audio over the WebRTC audio track.
@@ -687,7 +687,7 @@ impl OpenAITransportLink for OpenAIWebRTCSession {
         let pcm_samples: Vec<i16> =
             raw_bytes.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
 
-        self.write_audio_to_track(&pcm_samples).await
+        self.write_audio_to_track(pcm_samples.as_ref()).await
     }
 
     async fn receive_raw(&self) -> Option<Result<ServerEvent>> {
