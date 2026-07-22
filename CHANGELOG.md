@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-model: preserve whitespace-only text deltas when streaming through OpenAI-compatible providers.**
+  Whitespace-only stream deltas and boundary whitespace are no longer dropped, so concatenating
+  the emitted `Part::Text` reconstructs the source byte-exactly (Markdown, indentation, tables,
+  and prose spacing are preserved). (`#441`)
+
 - **adk-core: Event serialization no longer produces duplicate `"provider_metadata"` keys.**
   `Event.provider_metadata` is now serialized as `"event_metadata"` to avoid collision
   with `LlmResponse.provider_metadata` (which is flattened into the same JSON object).

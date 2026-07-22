@@ -91,7 +91,7 @@ fn parse_qwen_format(text: &str, _parts: &mut Vec<Part>) -> Option<Vec<Part>> {
         let start = remaining.find("<tool_call>")?;
 
         // Add any text before the tool call
-        let before = remaining[..start].trim();
+        let before = &remaining[..start];
         if !before.is_empty() {
             result.push(Part::Text { text: before.to_string() });
         }
@@ -117,7 +117,7 @@ fn parse_qwen_format(text: &str, _parts: &mut Vec<Part>) -> Option<Vec<Part>> {
 
         remaining = &after_open[end + "</tool_call>".len()..];
         if remaining.trim().is_empty() || !remaining.contains("<tool_call>") {
-            let trailing = remaining.trim();
+            let trailing = remaining;
             if !trailing.is_empty() {
                 result.push(Part::Text { text: trailing.to_string() });
             }
@@ -172,7 +172,7 @@ fn parse_llama_format(text: &str, _parts: &mut Vec<Part>) -> Option<Vec<Part>> {
     let start = text.find(tag)?;
 
     let mut result = Vec::new();
-    let before = text[..start].trim();
+    let before = &text[..start];
     if !before.is_empty() {
         result.push(Part::Text { text: before.to_string() });
     }
@@ -193,7 +193,7 @@ fn parse_mistral_nemo_format(text: &str, _parts: &mut Vec<Part>) -> Option<Vec<P
     let start = text.find(tag)?;
 
     let mut result = Vec::new();
-    let before = text[..start].trim();
+    let before = &text[..start];
     if !before.is_empty() {
         result.push(Part::Text { text: before.to_string() });
     }
@@ -227,7 +227,7 @@ fn parse_deepseek_format(text: &str) -> Option<Vec<Part>> {
     let json_str = after_fence[..fence_end].trim();
 
     let mut result = Vec::new();
-    let before = text[..fence_start].trim();
+    let before = &text[..fence_start];
     if !before.is_empty() {
         result.push(Part::Text { text: before.to_string() });
     }
@@ -268,7 +268,7 @@ fn parse_gemma4_format(text: &str) -> Option<Vec<Part>> {
 
     loop {
         let start = remaining.find("<|tool_call>")?;
-        let before = remaining[..start].trim();
+        let before = &remaining[..start];
         if !before.is_empty() {
             result.push(Part::Text { text: before.to_string() });
         }
@@ -300,7 +300,7 @@ fn parse_gemma4_format(text: &str) -> Option<Vec<Part>> {
 
         remaining = &after_open[end + "<tool_call|>".len()..];
         if remaining.trim().is_empty() || !remaining.contains("<|tool_call>") {
-            let trailing = remaining.trim();
+            let trailing = remaining;
             if !trailing.is_empty() {
                 result.push(Part::Text { text: trailing.to_string() });
             }
@@ -322,7 +322,7 @@ fn parse_action_tag_format(text: &str) -> Option<Vec<Part>> {
     let start = text.find(start_tag)?;
     let mut result = Vec::new();
 
-    let before = text[..start].trim();
+    let before = &text[..start];
     if !before.is_empty() {
         result.push(Part::Text { text: before.to_string() });
     }
@@ -337,7 +337,7 @@ fn parse_action_tag_format(text: &str) -> Option<Vec<Part>> {
         return None;
     }
 
-    let trailing = after_open[end + end_tag.len()..].trim();
+    let trailing = &after_open[end + end_tag.len()..];
     if !trailing.is_empty() {
         result.push(Part::Text { text: trailing.to_string() });
     }
@@ -455,7 +455,7 @@ impl ToolCallBuffer {
         // Otherwise emit as text
         let text = std::mem::take(&mut self.buffer);
         self.buffering = false;
-        if text.trim().is_empty() { Vec::new() } else { vec![Part::Text { text }] }
+        if text.is_empty() { Vec::new() } else { vec![Part::Text { text }] }
     }
 
     fn starts_tool_call_prefix(&self) -> bool {
@@ -505,7 +505,7 @@ impl ToolCallBuffer {
     fn flush_as_emit(&mut self) -> BufferAction {
         let text = std::mem::take(&mut self.buffer);
         self.buffering = false;
-        if text.trim().is_empty() {
+        if text.is_empty() {
             BufferAction::Emit(Vec::new())
         } else {
             BufferAction::Emit(vec![Part::Text { text }])
@@ -578,12 +578,17 @@ mod tests {
 
     #[test]
     fn test_multiple_tool_calls() {
+        // The two tool-call markups are separated by a single `\n`. After the
+        // whitespace-preservation fix, that separating newline is emitted as a
+        // `Part::Text` between the two `Part::FunctionCall`s (byte-exact
+        // reconstruction per Requirements 2.5/2.6), yielding 3 parts.
         let text = r#"<tool_call>{"name": "a", "arguments": {}}</tool_call>
 <tool_call>{"name": "b", "arguments": {"x": 1}}</tool_call>"#;
         let parts = parse_text_tool_calls(text).unwrap();
-        assert_eq!(parts.len(), 2);
+        assert_eq!(parts.len(), 3);
         assert!(matches!(&parts[0], Part::FunctionCall { name, .. } if name == "a"));
-        assert!(matches!(&parts[1], Part::FunctionCall { name, .. } if name == "b"));
+        assert!(matches!(&parts[1], Part::Text { text } if text == "\n"));
+        assert!(matches!(&parts[2], Part::FunctionCall { name, .. } if name == "b"));
     }
 
     #[test]
@@ -817,5 +822,170 @@ mod tests {
         let has_fn_call =
             parts.iter().any(|p| matches!(p, Part::FunctionCall { name, .. } if name == "search"));
         assert!(has_fn_call);
+    }
+
+    // ===== Whitespace-preservation regression tests =====
+
+    /// Stream a sequence of deltas through `ToolCallBuffer` (push each, then
+    /// flush) and return the concatenation of all emitted `Part::Text` values.
+    fn stream_and_reconstruct(deltas: &[&str]) -> String {
+        let mut buf = ToolCallBuffer::new();
+        let mut out = String::new();
+        let mut collect = |parts: Vec<Part>| {
+            for part in parts {
+                if let Part::Text { text } = part {
+                    out.push_str(&text);
+                }
+            }
+        };
+        for delta in deltas {
+            if let BufferAction::Emit(parts) = buf.push(delta) {
+                collect(parts);
+            }
+        }
+        collect(buf.flush());
+        out
+    }
+
+    #[test]
+    fn test_regression_markdown_structure_reconstructs() {
+        // Counterexample 1 (Requirements 2.1, 2.2, 2.3): whitespace-only deltas
+        // between visible text must be preserved so Markdown structure survives.
+        let reconstructed =
+            stream_and_reconstruct(&["Heading", "\n\n", "- first", "\n", "- second"]);
+        assert_eq!(reconstructed, "Heading\n\n- first\n- second");
+    }
+
+    #[test]
+    fn test_regression_single_space_reconstructs() {
+        // Counterexample 2 (Requirements 2.1, 2.4): a single-space delta between
+        // words must be preserved.
+        let reconstructed = stream_and_reconstruct(&["Hello", " ", "world"]);
+        assert_eq!(reconstructed, "Hello world");
+    }
+
+    #[test]
+    fn test_flush_as_emit_whitespace_only_emits_text() {
+        // Requirement 2.1: a whitespace-only delta must be emitted as Part::Text
+        // (previously dropped by the `text.trim().is_empty()` guard).
+        let mut buf = ToolCallBuffer::new();
+        match buf.push("\n\n") {
+            BufferAction::Emit(parts) => {
+                assert_eq!(parts.len(), 1);
+                assert!(matches!(&parts[0], Part::Text { text } if text == "\n\n"));
+            }
+            BufferAction::Buffering => panic!("whitespace-only delta should emit"),
+        }
+    }
+
+    #[test]
+    fn test_flush_whitespace_only_emits_text() {
+        // Requirement 2.2: whitespace-only buffered content at end-of-stream must
+        // be emitted by flush rather than discarded.
+        let mut buf = ToolCallBuffer::new();
+        // Place whitespace-only content into the buffer as if mid-tool-call
+        // buffering had accumulated it, then flush at end of stream.
+        buf.buffer.push_str("   \n\t");
+        buf.buffering = true;
+        let parts = buf.flush();
+        assert_eq!(parts.len(), 1);
+        assert!(matches!(&parts[0], Part::Text { text } if text == "   \n\t"));
+    }
+
+    // ===== Boundary-whitespace preservation across the six markup formats =====
+
+    #[test]
+    fn test_boundary_whitespace_qwen_preserved() {
+        // Leading/trailing whitespace around the markup is preserved, while the
+        // inner tool name/args stay trimmed (inner is `.trim()`ed before parse).
+        let text = "lead \n<tool_call>  {\"name\": \"search\", \"arguments\": {\"q\": \"rust\"}}  </tool_call>\n trail";
+        let parts = parse_text_tool_calls(text).unwrap();
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(&parts[0], Part::Text { text } if text == "lead \n"));
+        match &parts[1] {
+            Part::FunctionCall { name, args, .. } => {
+                assert_eq!(name, "search");
+                assert_eq!(args["q"], "rust");
+            }
+            _ => panic!("expected FunctionCall"),
+        }
+        assert!(matches!(&parts[2], Part::Text { text } if text == "\n trail"));
+    }
+
+    #[test]
+    fn test_boundary_whitespace_llama_preserved() {
+        let text = "pre \n<|python_tag|>  {\"name\": \"get_weather\", \"parameters\": {\"city\": \"NYC\"}}";
+        let parts = parse_text_tool_calls(text).unwrap();
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(&parts[0], Part::Text { text } if text == "pre \n"));
+        match &parts[1] {
+            Part::FunctionCall { name, args, .. } => {
+                assert_eq!(name, "get_weather");
+                assert_eq!(args["city"], "NYC");
+            }
+            _ => panic!("expected FunctionCall"),
+        }
+    }
+
+    #[test]
+    fn test_boundary_whitespace_mistral_nemo_preserved() {
+        let text = "pre \n[TOOL_CALLS]  [{\"name\": \"search\", \"arguments\": {\"q\": \"rust\"}}]";
+        let parts = parse_text_tool_calls(text).unwrap();
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(&parts[0], Part::Text { text } if text == "pre \n"));
+        match &parts[1] {
+            Part::FunctionCall { name, args, .. } => {
+                assert_eq!(name, "search");
+                assert_eq!(args["q"], "rust");
+            }
+            _ => panic!("expected FunctionCall"),
+        }
+    }
+
+    #[test]
+    fn test_boundary_whitespace_deepseek_preserved() {
+        let text = "pre \n```json\n{\"name\": \"search\", \"arguments\": {\"q\": \"rust\"}}\n```";
+        let parts = parse_text_tool_calls(text).unwrap();
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(&parts[0], Part::Text { text } if text == "pre \n"));
+        match &parts[1] {
+            Part::FunctionCall { name, args, .. } => {
+                assert_eq!(name, "search");
+                assert_eq!(args["q"], "rust");
+            }
+            _ => panic!("expected FunctionCall"),
+        }
+    }
+
+    #[test]
+    fn test_boundary_whitespace_gemma4_preserved() {
+        let text = "pre \n<|tool_call>call:get_weather{<|\"|>city<|\"|>:<|\"|>Tokyo<|\"|>}<tool_call|>\n post";
+        let parts = parse_text_tool_calls(text).unwrap();
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(&parts[0], Part::Text { text } if text == "pre \n"));
+        match &parts[1] {
+            Part::FunctionCall { name, args, .. } => {
+                assert_eq!(name, "get_weather");
+                assert_eq!(args["city"], "Tokyo");
+            }
+            _ => panic!("expected FunctionCall"),
+        }
+        assert!(matches!(&parts[2], Part::Text { text } if text == "\n post"));
+    }
+
+    #[test]
+    fn test_boundary_whitespace_action_tag_preserved() {
+        let text = "pre \n<|action_start|>  {\"name\": \"search\", \"arguments\": {\"q\": \"rust\"}}  <|action_end|>\n post";
+        let parts = parse_text_tool_calls(text).unwrap();
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(&parts[0], Part::Text { text } if text == "pre \n"));
+        match &parts[1] {
+            Part::FunctionCall { name, args, .. } => {
+                assert_eq!(name, "search");
+                assert_eq!(args["q"], "rust");
+            }
+            _ => panic!("expected FunctionCall"),
+        }
+        assert!(matches!(&parts[2], Part::Text { text } if text == "\n post"));
     }
 }
