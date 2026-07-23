@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   response and error boundaries, preventing malformed samples, stereo channel-phase shifts,
   data loss, and cross-item audio contamination.
 
+- **adk-model: preserve whitespace-only text deltas when streaming through OpenAI-compatible providers.**
+  Whitespace-only stream deltas and boundary whitespace are no longer dropped, so concatenating
+  the emitted `Part::Text` reconstructs the source byte-exactly (Markdown, indentation, tables,
+  and prose spacing are preserved). (`#441`)
+
 ## [2.0.0] - 2026-07-16
 
 ### Changed

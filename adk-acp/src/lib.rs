@@ -38,7 +38,7 @@
 //!
 //! - Use [`AcpAgentTool`], [`AcpToolset`], [`AcpSession`], or [`stream_prompt`]
 //!   when an ADK-Rust application should call an external coding agent.
-//! - Enable the `server` feature and use [`AcpServer`] when an editor or ACP
+//! - Enable the `server` feature and use `AcpServer` when an editor or ACP
 //!   client should call an ADK-Rust agent.
 //!
 //! The client transport currently starts a local ACP subprocess over stdio.
