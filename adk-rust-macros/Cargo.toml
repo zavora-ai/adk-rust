@@ -18,7 +18,7 @@ proc-macro = true
 [dependencies]
 proc-macro2 = "1"
 quote = "1"
-syn = { version = "2", features = ["full", "extra-traits"] }
+syn = { version = "3", features = ["full", "extra-traits"] }
 
 [dev-dependencies]
 # Internal dev-deps are path-only (no version) so cargo strips them from the

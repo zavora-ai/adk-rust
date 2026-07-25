@@ -30,7 +30,7 @@ sha2 = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }
 hex = { workspace = true }
-syn = { version = "2", features = ["full", "parsing"] }
+syn = { version = "3", features = ["full", "parsing"] }
 serde_yaml_ng = "0.10"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
