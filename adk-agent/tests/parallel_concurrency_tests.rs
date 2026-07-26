@@ -380,3 +380,65 @@ async fn dropping_the_stream_tears_down_branches() {
         "dropping the merged stream must drop every branch's state"
     );
 }
+
+/// Each branch stamps its own conversation branch onto the events it emits, so a
+/// branch-scoped history read can later exclude siblings. The shape matches ADK
+/// Python and ADK Go: `{parent}.{parallel_agent}.{sub_agent}`.
+#[tokio::test]
+async fn branches_stamp_their_own_branch_on_events() {
+    let make = |name: &'static str| {
+        CustomAgentBuilder::new(name)
+            .handler(move |_ctx| async move {
+                Ok(Box::pin(stream::iter(vec![Ok(event(name))])) as adk_core::EventStream)
+            })
+            .build()
+            .unwrap()
+    };
+
+    let parallel =
+        ParallelAgent::new("analysis", vec![Arc::new(make("alpha")), Arc::new(make("beta"))]);
+    let collected =
+        parallel.run(Arc::new(TestContext::new())).await.unwrap().collect::<Vec<_>>().await;
+
+    let mut stamped: Vec<(String, String)> = collected
+        .into_iter()
+        .map(|r| {
+            let e = r.expect("no branch should fail");
+            (e.author, e.branch)
+        })
+        .collect();
+    stamped.sort();
+
+    assert_eq!(
+        stamped,
+        vec![
+            ("alpha".to_string(), "analysis.alpha".to_string()),
+            ("beta".to_string(), "analysis.beta".to_string()),
+        ]
+    );
+}
+
+/// A branch already carrying a deeper branch (a nested workflow stamped it) keeps
+/// it, so nesting composes instead of the outer agent overwriting the inner one.
+#[tokio::test]
+async fn an_existing_deeper_branch_is_preserved() {
+    let nested = CustomAgentBuilder::new("outer")
+        .handler(|_ctx| async move {
+            let mut e = event("inner");
+            e.branch = "analysis.outer.inner_parallel.leaf".to_string();
+            Ok(Box::pin(stream::iter(vec![Ok(e)])) as adk_core::EventStream)
+        })
+        .build()
+        .unwrap();
+
+    let parallel = ParallelAgent::new("analysis", vec![Arc::new(nested)]);
+    let collected =
+        parallel.run(Arc::new(TestContext::new())).await.unwrap().collect::<Vec<_>>().await;
+
+    assert_eq!(collected.len(), 1);
+    assert_eq!(
+        collected[0].as_ref().unwrap().branch,
+        "analysis.outer.inner_parallel.leaf",
+        "an inner workflow's branch must not be overwritten"
+    );
+}

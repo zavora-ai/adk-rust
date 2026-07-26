@@ -318,6 +318,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-agent/adk-core/adk-runner: `ParallelAgent` sub-agents no longer read each
+  other's output.** Concurrent branches all read the full session history, so an
+  analyst in a fan-out could see a sibling's answer before forming its own — while
+  the docs described sub-agents as working independently. `ParallelAgent` now
+  places each sub-agent on its own conversation branch
+  (`{parent}.{parallel_agent}.{sub_agent}`) and stamps emitted events with it, and
+  history reads are scoped to that branch: an event is visible when its branch
+  equals the reader's or is an *ancestor* of it, so the conversation leading to
+  the fan-out stays visible while siblings and nested descendants do not. This
+  mirrors ADK Python's `_is_event_belongs_to_branch` and ADK Go's
+  `eventBelongsToBranch`, including the delimiter guard that stops `agent_0` from
+  matching `agent_00`.
+
+  The mechanism is additive and opt-in by construction: an empty branch on either
+  side matches everything, so events written without a branch stay globally
+  visible and agents outside a fan-out are unaffected. New API:
+  `Session::conversation_history_scoped` (defaulted, so existing `Session`
+  implementations keep compiling) and `adk_core::event_belongs_to_branch`. A
+  branch already carrying a deeper path is preserved, so nested workflows compose
+  rather than the outer agent overwriting the inner one.
+
 - **adk-agent: `ParallelAgent` branches now actually run in parallel.** The
   previous implementation resolved every sub-agent's `run()` future together but
   then drained each returned `EventStream` to completion in turn. Since

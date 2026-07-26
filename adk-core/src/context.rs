@@ -257,6 +257,26 @@ pub trait Session: Send + Sync {
     fn conversation_history_for_agent(&self, _agent_name: &str) -> Vec<Content> {
         self.conversation_history()
     }
+    /// Returns conversation history scoped to an agent and a conversation branch.
+    ///
+    /// `branch` is the invocation branch of the agent asking for history. An
+    /// event is visible when its branch equals that branch or is an *ancestor*
+    /// of it, so a sub-agent sees the conversation that led to it but not what
+    /// its siblings produced. `ParallelAgent` relies on this to keep concurrent
+    /// branches from contaminating each other's context, mirroring ADK Python's
+    /// `_is_event_belongs_to_branch` and ADK Go's `eventBelongsToBranch`.
+    ///
+    /// An empty `branch` on either side means "unscoped" and matches everything,
+    /// so implementations that never set [`crate::Event::branch`] are unaffected.
+    ///
+    /// Default implementation ignores `branch` and preserves the agent-name
+    /// filtering behaviour, so existing [`Session`] implementations keep working.
+    fn conversation_history_scoped(&self, agent_name: Option<&str>, _branch: &str) -> Vec<Content> {
+        match agent_name {
+            Some(name) => self.conversation_history_for_agent(name),
+            None => self.conversation_history(),
+        }
+    }
     /// Append content to conversation history (for sequential agent support)
     fn append_to_history(&self, _content: Content) {
         // Default no-op - implementations can override to track history

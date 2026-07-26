@@ -128,6 +128,7 @@ pub use error::{AdkError, ErrorCategory, ErrorComponent, ErrorDetails, Result, R
 pub use event::{
     Event, EventActions, EventCompaction, KEY_PREFIX_APP, KEY_PREFIX_TEMP, KEY_PREFIX_USER,
     TOOL_PROGRESS_CALL_ID_KEY, TOOL_PROGRESS_STREAM_KEY, ToolCallView, ToolResultView,
+    event_belongs_to_branch,
 };
 pub use identity::{
     AdkIdentity, AppName, ExecutionIdentity, IdentityError, InvocationId, SessionId, UserId,

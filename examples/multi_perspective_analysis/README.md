@@ -61,12 +61,12 @@ Exact numbers vary with model latency. The point is that wall clock stays close
 to the slowest branch while the sum of branch spans is larger — the branches
 overlapped.
 
-> **Note:** each analyst currently reads the full session history, so a branch may
-> see events from a sibling that streamed earlier. Sub-agent context isolation
-> (per-branch history scoping, as ADK Python and ADK Go do) is not yet
-> implemented. For deliberate cross-agent coordination, use
-> `ParallelAgent::with_shared_state()` and the
-> [`parallel_shared_state`](../parallel_shared_state) example.
+> **Isolation:** each analyst runs on its own conversation branch
+> (`multi_perspective_analysis.<analyst>`), so a branch does not see what its
+> siblings produced — the three opinions are formed independently. The user turn
+> and anything produced before the fan-out stay visible to all of them. For
+> deliberate cross-agent coordination, use `ParallelAgent::with_shared_state()`
+> and the [`parallel_shared_state`](../parallel_shared_state) example.
 
 ## Related
 

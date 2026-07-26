@@ -225,7 +225,7 @@ proptest! {
             mutable.append_event(make_event(author, &format!("msg-{i}")));
         }
 
-        let history = mutable.conversation_history_for_agent_impl(None);
+        let history = mutable.conversation_history_for_agent_impl(None, "");
         prop_assert_eq!(history.len(), authors.len());
 
         for (content, author) in history.iter().zip(authors.iter()) {
@@ -255,7 +255,7 @@ proptest! {
             mutable.append_event(make_event(author, &format!("msg-{i}")));
         }
 
-        let filtered = mutable.conversation_history_for_agent_impl(Some("agent-alpha"));
+        let filtered = mutable.conversation_history_for_agent_impl(Some("agent-alpha"), "");
         let expected_count = authors.iter()
             .filter(|a| *a == "user" || *a == "agent-alpha")
             .count();

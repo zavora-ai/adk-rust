@@ -106,9 +106,15 @@ impl MutableSession {
     /// already done.
     ///
     /// When `agent_name` is `None`, all events are included (backward-compatible).
+    ///
+    /// `branch` additionally scopes history to a conversation branch: an event is
+    /// kept when its branch equals `branch` or is an ancestor of it, so
+    /// concurrent `ParallelAgent` branches do not read each other's output. An
+    /// empty `branch`, or an event without one, matches everything.
     pub fn conversation_history_for_agent_impl(
         &self,
         agent_name: Option<&str>,
+        branch: &str,
     ) -> Vec<adk_core::Content> {
         let Ok(events) = self.events.read() else {
             tracing::error!("events RwLock poisoned in conversation_history — returning empty");
@@ -138,6 +144,13 @@ impl MutableSession {
             if let Some(boundary) = compaction_boundary
                 && event.timestamp <= boundary
             {
+                continue;
+            }
+
+            // Skip events from sibling branches (and from branches nested below
+            // this one). Ancestor branches stay visible so a sub-agent still sees
+            // the conversation that led to it.
+            if !adk_core::event_belongs_to_branch(branch, &event.branch) {
                 continue;
             }
 
@@ -187,11 +200,19 @@ impl adk_core::Session for MutableSession {
     }
 
     fn conversation_history(&self) -> Vec<adk_core::Content> {
-        self.conversation_history_for_agent_impl(None)
+        self.conversation_history_for_agent_impl(None, "")
     }
 
     fn conversation_history_for_agent(&self, agent_name: &str) -> Vec<adk_core::Content> {
-        self.conversation_history_for_agent_impl(Some(agent_name))
+        self.conversation_history_for_agent_impl(Some(agent_name), "")
+    }
+
+    fn conversation_history_scoped(
+        &self,
+        agent_name: Option<&str>,
+        branch: &str,
+    ) -> Vec<adk_core::Content> {
+        self.conversation_history_for_agent_impl(agent_name, branch)
     }
 }
 

@@ -146,6 +146,13 @@ and performance guarantees.
 
 `ParallelAgent` runs all sub-agents concurrently. Each agent receives the same input and works independently.
 
+Independence is enforced, not just intended: each sub-agent runs on its own
+conversation branch (`{parent}.{parallel_agent}.{sub_agent}`), and history reads
+are scoped to that branch. A sub-agent sees the conversation that led to the
+fan-out but not what its siblings produced, so concurrent branches cannot
+contaminate each other's context. Use `ParallelAgent::with_shared_state()` when
+you *want* sub-agents to coordinate.
+
 ### When to Use
 
 - Multiple perspectives on the same topic

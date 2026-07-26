@@ -1375,11 +1375,18 @@ impl Agent for LlmAgent {
             // NOTE: Session history already includes the current user message (added by Runner before agent runs)
             // When transfer_targets is set, this agent was invoked via transfer — filter out
             // other agents' events so the LLM doesn't see the parent's tool calls as its own.
-            let session_history = if !ctx.run_config().transfer_targets.is_empty() {
-                ctx.session().conversation_history_for_agent(&agent_name)
+            //
+            // The branch additionally scopes history to this agent's position in the
+            // run: sibling branches (concurrent `ParallelAgent` sub-agents) are
+            // excluded while ancestors stay visible. An empty branch matches
+            // everything, so agents outside a fan-out are unaffected.
+            let agent_filter = if ctx.run_config().transfer_targets.is_empty() {
+                None
             } else {
-                ctx.session().conversation_history()
+                Some(agent_name.as_str())
             };
+            let session_history =
+                ctx.session().conversation_history_scoped(agent_filter, ctx.branch());
             let mut session_history = session_history;
             let current_user_content = ctx.user_content().clone();
             if let Some(index) = session_history.iter().rposition(|content| content.role == "user") {

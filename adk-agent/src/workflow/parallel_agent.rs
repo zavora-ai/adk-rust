@@ -9,6 +9,7 @@ use async_stream::stream;
 use async_trait::async_trait;
 use std::sync::Arc;
 
+use super::branch_context::{BranchContext, derive_sub_branch};
 use super::shared_state_context::SharedStateContext;
 
 /// Parallel agent executes sub-agents concurrently
@@ -213,17 +214,39 @@ impl Agent for ParallelAgent {
                 let mut per_agent: Vec<BranchStream> = Vec::with_capacity(sub_agents.len());
 
                 for (index, agent) in sub_agents.into_iter().enumerate() {
-                    let ctx: Arc<dyn InvocationContext> = if let Some(ref shared) = shared {
+                    let base: Arc<dyn InvocationContext> = if let Some(ref shared) = shared {
                         Arc::new(SharedStateContext::new(run_ctx.clone(), shared.clone()))
                     } else {
                         run_ctx.clone()
                     };
+
+                    // Each sub-agent runs on its own branch, so a history read
+                    // scoped by branch excludes what its siblings produced while
+                    // still seeing the conversation that led to the fan-out. The
+                    // shape mirrors ADK Python (`{parent}.{agent}.{sub_agent}`)
+                    // and ADK Go.
+                    let branch = derive_sub_branch(
+                        base.branch(),
+                        &format!("{agent_name}.{}", agent.name()),
+                    );
+                    let ctx: Arc<dyn InvocationContext> =
+                        Arc::new(BranchContext::new(base, branch.clone()));
 
                     per_agent.push(Box::pin(stream! {
                         match agent.run(ctx).await {
                             Ok(mut events) => {
                                 while let Some(event_result) = events.next().await {
                                     let failed = event_result.is_err();
+                                    // Record which branch produced the event so a
+                                    // later branch-scoped history read can exclude
+                                    // it from siblings. A nested workflow may have
+                                    // already stamped a deeper branch; leave it.
+                                    let event_result = event_result.map(|mut event| {
+                                        if event.branch.is_empty() {
+                                            event.branch = branch.clone();
+                                        }
+                                        event
+                                    });
                                     yield (index, event_result);
                                     if failed {
                                         // Abandon this branch, leave the others running.
