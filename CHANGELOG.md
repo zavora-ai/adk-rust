@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-server: UI routes bypassed configured authentication.** The session,
+  artifact, and debug routers received the authentication layer; `ui_api_router` was
+  merged without it. With an extractor configured, an unauthenticated caller could
+  create and mutate MCP-UI bridge state under any chosen `(app_name, user_id,
+  session_id)` tuple, poll another user's notifications, and list, read, or overwrite
+  globally registered UI resources — including replacing the HTML text of an existing
+  resource URI.
+
+  All `/api/ui/*` routes now carry the same authentication layer as the other
+  routers. Bridge handlers substitute the authenticated user for the user named in
+  the request body, so one authenticated caller can no longer address another's
+  bridge state. A registered UI resource records the user that registered it; only
+  that user may read or replace it, and a read of another user's resource answers 404
+  rather than disclosing that the URI exists.
+
+  Servers with no extractor configured are unchanged: there is no authenticated
+  identity to bind, so routes stay open and resources stay globally visible.
+
 - **Dependency advisories resolved.** Bumped `surrealdb` (optional `adk-rag`
   backend) to 3.2.1, fixing GHSA-cc8f-fcx3-gpjr (high: arbitrary file read via
   `DEFINE ANALYZER` mapper filter) plus four related medium advisories. Bumped
