@@ -318,6 +318,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-model: DeepSeek requests now carry a response format when a schema is set.**
+  `DeepSeekClient::build_request` read temperature, top-p, token limits, tools,
+  thinking, and reasoning effort, but always sent `response_format: None` — even with
+  `GenerateContentConfig::response_schema` present — while the provider module
+  advertised structured JSON output. Native enforcement was never requested, so
+  structured turns relied entirely on the agent's textual instruction and could cost
+  extra retries.
+
+  A response schema now enables DeepSeek's JSON Output
+  (`response_format: {"type": "json_object"}`), which is the only mode the API
+  supports; there is no `json_schema` variant, so the schema itself remains enforced
+  by the agent's validation and the module documentation now says so rather than
+  implying provider-side schema enforcement. DeepSeek also requires the word "json"
+  to appear in the prompt when JSON Output is on, or the API can return empty
+  content, so the adapter adds that mention when the conversation does not already
+  contain it.
+
 - **adk-agent/adk-tool: workflow context wrappers no longer drop cancellation,
   secrets, and shared state.** Each wrapper re-implements `InvocationContext` and
   delegates to an inner context, but most capability methods have permissive trait
