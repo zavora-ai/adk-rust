@@ -120,15 +120,15 @@ impl TriggerRuntime {
         }
 
         // Spawn event listener (single task handles all event configs)
-        if !event_configs.is_empty() {
-            if let Some(event_rx) = self.event_rx.take() {
-                let graph = Arc::clone(&self.graph);
-                let shutdown_rx = self.shutdown_rx.clone();
-                let handle = tokio::spawn(async move {
-                    run_event_trigger(graph, event_configs, event_rx, shutdown_rx).await;
-                });
-                handles.push(handle);
-            }
+        if !event_configs.is_empty()
+            && let Some(event_rx) = self.event_rx.take()
+        {
+            let graph = Arc::clone(&self.graph);
+            let shutdown_rx = self.shutdown_rx.clone();
+            let handle = tokio::spawn(async move {
+                run_event_trigger(graph, event_configs, event_rx, shutdown_rx).await;
+            });
+            handles.push(handle);
         }
 
         handles

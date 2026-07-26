@@ -139,10 +139,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let tool_name = name.as_deref().unwrap_or("unknown");
                 // Agent delegation shows up as tool use
                 eprintln!("  ⚙️  Tool: {tool_name}");
-                if let Some(inp) = &input {
-                    if let Some(agent_name) = inp.get("agent_name").and_then(|v| v.as_str()) {
-                        eprintln!("    → Delegating to: {agent_name}");
-                    }
+                if let Some(inp) = &input
+                    && let Some(agent_name) = inp.get("agent_name").and_then(|v| v.as_str())
+                {
+                    eprintln!("    → Delegating to: {agent_name}");
                 }
             }
             SessionEvent::StatusIdle { stop_reason } => {

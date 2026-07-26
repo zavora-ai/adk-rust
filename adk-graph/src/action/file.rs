@@ -128,18 +128,16 @@ async fn execute_write(
     })?;
 
     // Create parent directories if configured
-    if write_cfg.create_dirs {
-        if let Some(parent) = std::path::Path::new(path).parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                GraphError::NodeExecutionFailed {
-                    node: node_id.to_string(),
-                    message: ActionError::FileWrite(format!(
-                        "failed to create directories for '{path}': {e}"
-                    ))
-                    .to_string(),
-                }
-            })?;
-        }
+    if write_cfg.create_dirs
+        && let Some(parent) = std::path::Path::new(path).parent()
+    {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| GraphError::NodeExecutionFailed {
+            node: node_id.to_string(),
+            message: ActionError::FileWrite(format!(
+                "failed to create directories for '{path}': {e}"
+            ))
+            .to_string(),
+        })?;
     }
 
     let content_str = match &write_cfg.content {

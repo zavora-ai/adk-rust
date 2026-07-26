@@ -222,11 +222,11 @@ async fn test_cleanup_test_vaults() {
     let mut cleaned = 0;
     for vault in &vaults {
         let name = vault.display_name.as_deref().unwrap_or("");
-        if name.contains("Test") || name.contains("ADK") {
-            if client.archive_vault(&vault.id).await.is_ok() {
-                cleaned += 1;
-                eprintln!("Archived vault: {} ({})", vault.id, name);
-            }
+        if (name.contains("Test") || name.contains("ADK"))
+            && client.archive_vault(&vault.id).await.is_ok()
+        {
+            cleaned += 1;
+            eprintln!("Archived vault: {} ({})", vault.id, name);
         }
     }
     eprintln!("Cleaned up {cleaned} test vaults");

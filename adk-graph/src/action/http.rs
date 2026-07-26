@@ -55,15 +55,13 @@ pub async fn execute_http(config: &HttpNodeConfig, ctx: &NodeContext) -> Result<
     let status = response.status().as_u16();
 
     // Validate status code
-    if let Some(pattern) = &config.response.status_validation {
-        if !validate_status(status, pattern) {
-            return Err(GraphError::NodeExecutionFailed {
-                node: node_id.clone(),
-                message: format!(
-                    "HTTP status {status} does not match validation pattern '{pattern}'"
-                ),
-            });
-        }
+    if let Some(pattern) = &config.response.status_validation
+        && !validate_status(status, pattern)
+    {
+        return Err(GraphError::NodeExecutionFailed {
+            node: node_id.clone(),
+            message: format!("HTTP status {status} does not match validation pattern '{pattern}'"),
+        });
     }
 
     // Parse response
@@ -188,15 +186,15 @@ fn validate_status(status: u16, pattern: &str) -> bool {
         if let Some((start_str, end_str)) = part.split_once('-') {
             if let (Ok(start), Ok(end)) =
                 (start_str.trim().parse::<u16>(), end_str.trim().parse::<u16>())
+                && status >= start
+                && status <= end
             {
-                if status >= start && status <= end {
-                    return true;
-                }
-            }
-        } else if let Ok(code) = part.parse::<u16>() {
-            if status == code {
                 return true;
             }
+        } else if let Ok(code) = part.parse::<u16>()
+            && status == code
+        {
+            return true;
         }
     }
     false

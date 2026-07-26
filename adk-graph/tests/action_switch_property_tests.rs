@@ -56,7 +56,7 @@ fn arb_state_value() -> impl Strategy<Value = Value> {
         Just(json!(42)),
         Just(json!(100)),
         Just(json!(-1)),
-        Just(json!(3.14)),
+        Just(json!(1.5)),
         Just(json!(true)),
         Just(json!(false)),
         Just(json!([])),

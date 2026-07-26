@@ -256,11 +256,11 @@ async fn test_cleanup_test_memory_stores() {
     let mut cleaned = 0;
     for store in &stores {
         let name = store.name.as_deref().unwrap_or("");
-        if name.contains("Test") || name.contains("ADK") {
-            if client.delete_memory_store(&store.id).await.is_ok() {
-                cleaned += 1;
-                eprintln!("Deleted store: {} ({})", store.id, name);
-            }
+        if (name.contains("Test") || name.contains("ADK"))
+            && client.delete_memory_store(&store.id).await.is_ok()
+        {
+            cleaned += 1;
+            eprintln!("Deleted store: {} ({})", store.id, name);
         }
     }
     eprintln!("Cleaned up {cleaned} test stores");

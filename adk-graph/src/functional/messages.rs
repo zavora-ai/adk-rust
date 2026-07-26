@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(assistant_msgs.len(), 1);
 
         let system_msgs = mv.by_role(MessageRole::System);
-        assert_eq!(system_msgs.is_empty(), true);
+        assert!(system_msgs.is_empty());
     }
 
     #[test]

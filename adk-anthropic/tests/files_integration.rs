@@ -141,10 +141,13 @@ async fn test_download_uploaded_file_fails() {
     // Attempt to download (should fail — only code execution outputs are downloadable)
     let result = client.download_file(&file.id).await;
     // The API may return 403 or 400 for non-downloadable files
-    if result.is_err() {
-        eprintln!("Expected: download of uploaded file failed: {:?}", result.unwrap_err());
-    } else {
-        eprintln!("Note: download succeeded (API behavior may have changed)");
+    match result {
+        Err(error) => {
+            eprintln!("Expected: download of uploaded file failed: {error:?}");
+        }
+        Ok(_) => {
+            eprintln!("Note: download succeeded (API behavior may have changed)");
+        }
     }
 
     // Clean up
@@ -161,14 +164,13 @@ async fn test_cleanup_test_files() {
     let mut deleted = 0;
     for file in &files {
         let name = file.filename.as_deref().unwrap_or("");
-        if name.starts_with("test")
+        if (name.starts_with("test")
             || name.starts_with("list_test")
-            || name.starts_with("no_download")
+            || name.starts_with("no_download"))
+            && client.delete_file(&file.id).await.is_ok()
         {
-            if client.delete_file(&file.id).await.is_ok() {
-                deleted += 1;
-                eprintln!("Deleted file: {} ({})", file.id, name);
-            }
+            deleted += 1;
+            eprintln!("Deleted file: {} ({})", file.id, name);
         }
     }
     eprintln!("Cleaned up {deleted} test files out of {} total", files.len());

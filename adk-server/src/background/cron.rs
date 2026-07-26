@@ -216,10 +216,10 @@ impl CronJobStore {
 
     /// Dequeue the next pending run for a cron job (for `Queue` policy).
     pub async fn dequeue_run(&self, job_id: &str) -> Option<String> {
-        if let Some(job) = self.jobs.write().await.get_mut(job_id) {
-            if !job.queued_runs.is_empty() {
-                return Some(job.queued_runs.remove(0));
-            }
+        if let Some(job) = self.jobs.write().await.get_mut(job_id)
+            && !job.queued_runs.is_empty()
+        {
+            return Some(job.queued_runs.remove(0));
         }
         None
     }
@@ -443,30 +443,29 @@ async fn trigger_run(state: &CronState, job: &CronJob) {
                         cron_store.decrement_active_runs(&job_id).await;
 
                         // If queue policy, check for queued runs
-                        if let Some(job) = cron_store.get(&job_id).await {
-                            if job.concurrency_policy == ConcurrencyPolicy::Queue {
-                                if let Some(queued_run_id) = cron_store.dequeue_run(&job_id).await {
-                                    // Create and execute the queued run
-                                    let now = Utc::now();
-                                    let queued_run = super::BackgroundRun {
-                                        run_id: queued_run_id.clone(),
-                                        workflow_id: job.workflow_id.clone(),
-                                        status: RunStatus::Queued,
-                                        input: job.input.clone().unwrap_or_default(),
-                                        result: None,
-                                        error: None,
-                                        created_at: now,
-                                        updated_at: now,
-                                        timeout: Some(Duration::from_secs(3600)),
-                                        max_retries: 0,
-                                        retry_count: 0,
-                                        cancel_token: CancellationToken::new(),
-                                    };
-                                    bg_store.insert(queued_run).await;
-                                    cron_store.increment_active_runs(&job_id).await;
-                                    bg_runner.execute(queued_run_id);
-                                }
-                            }
+                        if let Some(job) = cron_store.get(&job_id).await
+                            && job.concurrency_policy == ConcurrencyPolicy::Queue
+                            && let Some(queued_run_id) = cron_store.dequeue_run(&job_id).await
+                        {
+                            // Create and execute the queued run
+                            let now = Utc::now();
+                            let queued_run = super::BackgroundRun {
+                                run_id: queued_run_id.clone(),
+                                workflow_id: job.workflow_id.clone(),
+                                status: RunStatus::Queued,
+                                input: job.input.clone().unwrap_or_default(),
+                                result: None,
+                                error: None,
+                                created_at: now,
+                                updated_at: now,
+                                timeout: Some(Duration::from_secs(3600)),
+                                max_retries: 0,
+                                retry_count: 0,
+                                cancel_token: CancellationToken::new(),
+                            };
+                            bg_store.insert(queued_run).await;
+                            cron_store.increment_active_runs(&job_id).await;
+                            bg_runner.execute(queued_run_id);
                         }
                         break;
                     }

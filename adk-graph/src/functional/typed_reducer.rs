@@ -3,9 +3,9 @@
 //! This module provides the [`TypedReducer`] trait for defining custom merge
 //! strategies on typed state values, along with built-in implementations:
 //!
-//! - [`ReplaceReducer`]: Last-write-wins (returns incoming value)
-//! - [`AppendReducer`]: Vec concatenation (extends current with incoming)
-//! - [`MergeReducer`]: Deep merge for JSON-like structures
+//! - [`ReplaceReducer`] — Last-write-wins (returns incoming value)
+//! - [`AppendReducer`] — Vec concatenation (extends current with incoming)
+//! - [`MergeReducer`] — Deep merge for JSON-like structures
 //!
 //! # Example
 //!

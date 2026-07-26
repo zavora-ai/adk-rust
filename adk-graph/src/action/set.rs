@@ -19,18 +19,18 @@ pub async fn execute_set(config: &SetNodeConfig, ctx: &NodeContext) -> Result<No
     let mut output = NodeOutput::new();
 
     // Load environment variables if configured
-    if let Some(env_cfg) = &config.env_vars {
-        if env_cfg.load_from_env {
-            for key in &env_cfg.keys {
-                let env_key = if let Some(prefix) = &env_cfg.prefix {
-                    format!("{prefix}{key}")
-                } else {
-                    key.clone()
-                };
-                if let Ok(val) = std::env::var(&env_key) {
-                    output = output.with_update(key, Value::String(val));
-                    tracing::debug!(key = %key, "loaded env var");
-                }
+    if let Some(env_cfg) = &config.env_vars
+        && env_cfg.load_from_env
+    {
+        for key in &env_cfg.keys {
+            let env_key = if let Some(prefix) = &env_cfg.prefix {
+                format!("{prefix}{key}")
+            } else {
+                key.clone()
+            };
+            if let Ok(val) = std::env::var(&env_key) {
+                output = output.with_update(key, Value::String(val));
+                tracing::debug!(key = %key, "loaded env var");
             }
         }
     }
@@ -83,10 +83,10 @@ fn resolve_variable_value(value: &Value, state: &HashMap<String, Value>) -> Valu
             if s.contains("{{") {
                 // If the entire string was a single variable reference that resolved to
                 // a non-string JSON value, try to parse it back
-                if let Ok(parsed) = serde_json::from_str::<Value>(&interpolated) {
-                    if !parsed.is_string() {
-                        return parsed;
-                    }
+                if let Ok(parsed) = serde_json::from_str::<Value>(&interpolated)
+                    && !parsed.is_string()
+                {
+                    return parsed;
                 }
             }
             Value::String(interpolated)

@@ -211,7 +211,7 @@ fn arb_variable_value() -> impl Strategy<Value = Value> {
     prop_oneof![
         Just(json!("hello")),
         Just(json!(42)),
-        Just(json!(3.14)),
+        Just(json!(1.5)),
         Just(json!(true)),
         Just(json!(false)),
         Just(json!(null)),

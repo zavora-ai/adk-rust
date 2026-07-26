@@ -195,14 +195,14 @@ impl StateSchemaValidator {
 
         // Check type expectations for present fields.
         for (field, expected_type) in &self.type_expectations {
-            if let Some(value) = state.get(field) {
-                if !expected_type.matches(value) {
-                    return Err(FunctionalError::SchemaValidation {
-                        field: field.clone(),
-                        expected: expected_type.type_name().to_string(),
-                        actual: value_type_name(value).to_string(),
-                    });
-                }
+            if let Some(value) = state.get(field)
+                && !expected_type.matches(value)
+            {
+                return Err(FunctionalError::SchemaValidation {
+                    field: field.clone(),
+                    expected: expected_type.type_name().to_string(),
+                    actual: value_type_name(value).to_string(),
+                });
             }
         }
 
@@ -225,14 +225,14 @@ impl StateSchemaValidator {
     /// has a value that does not match its declared expected type.
     pub fn validate_task_output(&self, output: &State) -> Result<(), FunctionalError> {
         for (field, value) in output {
-            if let Some(expected_type) = self.type_expectations.get(field) {
-                if !expected_type.matches(value) {
-                    return Err(FunctionalError::SchemaValidation {
-                        field: field.clone(),
-                        expected: expected_type.type_name().to_string(),
-                        actual: value_type_name(value).to_string(),
-                    });
-                }
+            if let Some(expected_type) = self.type_expectations.get(field)
+                && !expected_type.matches(value)
+            {
+                return Err(FunctionalError::SchemaValidation {
+                    field: field.clone(),
+                    expected: expected_type.type_name().to_string(),
+                    actual: value_type_name(value).to_string(),
+                });
             }
         }
 
@@ -371,7 +371,7 @@ mod tests {
         assert!(ExpectedType::Null.matches(&json!(null)));
         assert!(ExpectedType::Boolean.matches(&json!(true)));
         assert!(ExpectedType::Number.matches(&json!(42)));
-        assert!(ExpectedType::Number.matches(&json!(3.14)));
+        assert!(ExpectedType::Number.matches(&json!(1.5)));
         assert!(ExpectedType::String.matches(&json!("hello")));
         assert!(ExpectedType::Array.matches(&json!([1, 2, 3])));
         assert!(ExpectedType::Object.matches(&json!({"key": "value"})));

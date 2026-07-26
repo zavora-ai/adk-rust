@@ -197,14 +197,14 @@ impl RunStore {
 
     /// Increment the retry count and re-queue the run.
     pub async fn retry(&self, run_id: &str) -> bool {
-        if let Some(run) = self.runs.write().await.get_mut(run_id) {
-            if run.retry_count < run.max_retries {
-                run.retry_count += 1;
-                run.status = RunStatus::Queued;
-                run.error = None;
-                run.updated_at = Utc::now();
-                return true;
-            }
+        if let Some(run) = self.runs.write().await.get_mut(run_id)
+            && run.retry_count < run.max_retries
+        {
+            run.retry_count += 1;
+            run.status = RunStatus::Queued;
+            run.error = None;
+            run.updated_at = Utc::now();
+            return true;
         }
         false
     }

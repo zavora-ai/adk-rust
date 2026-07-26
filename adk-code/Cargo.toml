@@ -34,4 +34,7 @@ docker = ["dep:bollard", "dep:rand", "dep:futures"]
 
 [dev-dependencies]
 proptest = "1.5"
-tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
+# rt-multi-thread: the property tests build a runtime with `Runtime::new()`, which
+# is gated on it. Without this the crate only compiles as part of a workspace
+# build that happens to unify the feature in from another member.
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "test-util"] }

@@ -335,15 +335,13 @@ async fn test_custom_tool_flow() {
             }
             Ok(SessionEvent::StatusIdle { stop_reason, .. }) => {
                 // Check if it's requires_action
-                if let Some(reason) = &stop_reason {
-                    if reason.get("type").and_then(|v| v.as_str()) == Some("requires_action") {
-                        if let Some(ids) = reason.get("event_ids").and_then(|v| v.as_array()) {
-                            if let Some(first_id) = ids.first().and_then(|v| v.as_str()) {
-                                custom_tool_event_id = first_id.to_string();
-                                received_custom_tool_use = true;
-                            }
-                        }
-                    }
+                if let Some(reason) = &stop_reason
+                    && reason.get("type").and_then(|v| v.as_str()) == Some("requires_action")
+                    && let Some(ids) = reason.get("event_ids").and_then(|v| v.as_array())
+                    && let Some(first_id) = ids.first().and_then(|v| v.as_str())
+                {
+                    custom_tool_event_id = first_id.to_string();
+                    received_custom_tool_use = true;
                 }
                 break;
             }

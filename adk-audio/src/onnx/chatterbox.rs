@@ -189,50 +189,50 @@ impl ChatterboxTtsProvider {
             "loading chatterbox models"
         );
 
-        eprintln!("[chatterbox] loading speech_encoder.onnx ...");
+        tracing::debug!(model = "speech_encoder.onnx", "loading onnx model");
         let mut speech_encoder =
             Self::create_session(&onnx_dir.join("speech_encoder.onnx"), &config)?;
-        eprintln!("[chatterbox] speech_encoder loaded OK");
+        tracing::debug!(model = "speech_encoder.onnx", "onnx model loaded");
 
-        eprintln!("[chatterbox] loading embed_tokens.onnx ...");
+        tracing::debug!(model = "embed_tokens.onnx", "loading onnx model");
         let embed_tokens = Self::create_session(&onnx_dir.join("embed_tokens.onnx"), &config)?;
-        eprintln!("[chatterbox] embed_tokens loaded OK");
+        tracing::debug!(model = "embed_tokens.onnx", "onnx model loaded");
 
-        eprintln!("[chatterbox] loading conditional_decoder.onnx ...");
+        tracing::debug!(model = "conditional_decoder.onnx", "loading onnx model");
         let conditional_decoder =
             Self::create_session(&onnx_dir.join("conditional_decoder.onnx"), &config)?;
-        eprintln!("[chatterbox] conditional_decoder loaded OK");
+        tracing::debug!(model = "conditional_decoder.onnx", "onnx model loaded");
 
-        eprintln!("[chatterbox] loading {} ...", config.variant.language_model_filename());
+        tracing::debug!(model = %config.variant.language_model_filename(), "loading onnx model");
         let language_model = Self::create_session(
             &onnx_dir.join(config.variant.language_model_filename()),
             &config,
         )?;
-        eprintln!("[chatterbox] language_model loaded OK");
+        tracing::debug!(model = "language_model", "onnx model loaded");
 
         let tokenizer_path = model_dir.join("tokenizer.json");
-        eprintln!("[chatterbox] loading tokenizer from {} ...", tokenizer_path.display());
+        tracing::debug!(path = %tokenizer_path.display(), "loading tokenizer");
         let tokenizer =
             tokenizers::Tokenizer::from_file(&tokenizer_path).map_err(|e| AudioError::Tts {
                 provider: "Chatterbox".into(),
                 message: format!("failed to load tokenizer from {}: {e}", tokenizer_path.display()),
             })?;
-        eprintln!("[chatterbox] tokenizer loaded OK");
+        tracing::debug!("tokenizer loaded");
 
         // Pre-encode reference voice
-        eprintln!("[chatterbox] pre-encoding reference voice ...");
+        tracing::debug!("pre-encoding reference voice");
         let cached_encoder_output = if let Some(ref wav_path) = config.reference_wav {
-            eprintln!("[chatterbox] running speech encoder on {} ...", wav_path.display());
+            tracing::debug!(path = %wav_path.display(), "running speech encoder");
             Some(Self::run_speech_encoder(&mut speech_encoder, wav_path)?)
         } else if let Some(ref default_wav) = default_voice_path {
             tracing::info!(path = %default_wav.display(), "using default_voice.wav as reference");
-            eprintln!("[chatterbox] running speech encoder on default_voice.wav ...");
+            tracing::debug!(path = "default_voice.wav", "running speech encoder");
             Some(Self::run_speech_encoder(&mut speech_encoder, default_wav)?)
         } else {
-            eprintln!("[chatterbox] no reference voice, skipping pre-encode");
+            tracing::debug!("no reference voice, skipping pre-encode");
             None
         };
-        eprintln!("[chatterbox] reference voice encoding done");
+        tracing::debug!("reference voice encoding done");
 
         Ok(Self {
             config,
@@ -476,15 +476,15 @@ impl ChatterboxTtsProvider {
         &self,
         voice_wav: Option<&Path>,
     ) -> AudioResult<SpeechEncoderOutput> {
-        if voice_wav.is_none() {
-            if let Some(ref out) = self.cached_encoder_output {
-                return Ok(SpeechEncoderOutput {
-                    cond_emb: out.cond_emb.clone(),
-                    prompt_token: out.prompt_token.clone(),
-                    ref_x_vector: out.ref_x_vector.clone(),
-                    prompt_feat: out.prompt_feat.clone(),
-                });
-            }
+        if voice_wav.is_none()
+            && let Some(ref out) = self.cached_encoder_output
+        {
+            return Ok(SpeechEncoderOutput {
+                cond_emb: out.cond_emb.clone(),
+                prompt_token: out.prompt_token.clone(),
+                ref_x_vector: out.ref_x_vector.clone(),
+                prompt_feat: out.prompt_feat.clone(),
+            });
         }
 
         let wav_path = voice_wav
@@ -650,18 +650,16 @@ impl ChatterboxTtsProvider {
         let text_seq_len = input_ids.len();
         let total_seq_len = cond_seq_len + text_seq_len;
 
-        eprintln!(
-            "[chatterbox] input_ids ({} tokens): {:?}",
-            input_ids.len(),
-            &input_ids[..input_ids.len().min(20)]
-        );
-        eprintln!("[chatterbox] position_ids: {:?}", &position_ids[..position_ids.len().min(20)]);
-        eprintln!(
-            "[chatterbox] cond_emb shape: {:?}, hidden_dim={hidden_dim}, cond_seq_len={cond_seq_len}",
-            cond_shape
-        );
-        eprintln!(
-            "[chatterbox] total_seq_len={total_seq_len} (cond={cond_seq_len} + text={text_seq_len})"
+        tracing::trace!(
+            token.count = input_ids.len(),
+            input_ids = ?&input_ids[..input_ids.len().min(20)],
+            position_ids = ?&position_ids[..position_ids.len().min(20)],
+            cond_emb.shape = ?cond_shape,
+            hidden_dim,
+            seq_len.cond = cond_seq_len,
+            seq_len.text = text_seq_len,
+            seq_len.total = total_seq_len,
+            "prefill inputs prepared"
         );
 
         let mut prefill_embeds = Vec::with_capacity(total_seq_len * hidden_dim);
@@ -686,18 +684,24 @@ impl ChatterboxTtsProvider {
             total_seq_len, // attention_mask length
         )?;
 
-        eprintln!("[chatterbox] prefill logits len={}, top5: {:?}", first_output.logits.len(), {
+        if tracing::enabled!(tracing::Level::TRACE) {
             let mut indexed: Vec<(usize, f32)> =
                 first_output.logits.iter().copied().enumerate().collect();
-            indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-            indexed.iter().take(5).map(|(i, v)| (*i, *v)).collect::<Vec<_>>()
-        });
+            indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            tracing::trace!(
+                logits.len = first_output.logits.len(),
+                logits.top5 = ?indexed.iter().take(5).collect::<Vec<_>>(),
+                "prefill logits"
+            );
+        }
 
         let mut next_token = self.sample_token(&first_output.logits, &generate_tokens);
-        eprintln!("[chatterbox] prefill → next_token={next_token} (STOP={})", STOP_SPEECH_TOKEN);
-        eprintln!(
-            "[chatterbox] prefill KV cache: layer0 key shape={:?}, value shape={:?}",
-            first_output.kv_cache.keys[0].shape, first_output.kv_cache.values[0].shape,
+        tracing::trace!(
+            next_token,
+            stop_token = STOP_SPEECH_TOKEN,
+            kv_cache.key.shape = ?first_output.kv_cache.keys[0].shape,
+            kv_cache.value.shape = ?first_output.kv_cache.values[0].shape,
+            "prefill complete"
         );
         generate_tokens.push(next_token);
         let mut kv_cache = first_output.kv_cache;
@@ -726,9 +730,12 @@ impl ChatterboxTtsProvider {
 
             next_token = self.sample_token(&output.logits, &generate_tokens);
             if step <= 10 {
-                eprintln!(
-                    "[chatterbox] step {step} → next_token={next_token}, kv_shape={:?}, attn_len={attn_len}",
-                    output.kv_cache.keys[0].shape
+                tracing::trace!(
+                    step,
+                    next_token,
+                    kv_cache.shape = ?output.kv_cache.keys[0].shape,
+                    attn_len,
+                    "decode step"
                 );
             }
             generate_tokens.push(next_token);
@@ -1044,14 +1051,12 @@ impl TtsProvider for ChatterboxTtsProvider {
 
         let encoder_output = self.get_encoder_output(voice_wav.as_deref()).await?;
 
-        eprintln!(
-            "[chatterbox] encoder output: cond_emb shape={:?} len={}, prompt_token shape={:?} len={}, xvec shape={:?}, pfeat shape={:?}",
-            encoder_output.cond_emb.0,
-            encoder_output.cond_emb.1.len(),
-            encoder_output.prompt_token.0,
-            encoder_output.prompt_token.1.len(),
-            encoder_output.ref_x_vector.0,
-            encoder_output.prompt_feat.0,
+        tracing::trace!(
+            cond_emb.shape = ?encoder_output.cond_emb.0,
+            cond_emb.len = encoder_output.cond_emb.1.len(),
+            prompt_token.shape = ?encoder_output.prompt_token.0,
+            prompt_token.len = encoder_output.prompt_token.1.len(),
+            "encoder output"
         );
 
         tracing::info!(text_len = request.text.len(), "starting chatterbox synthesis");

@@ -566,19 +566,19 @@ impl WhisperDecoder {
         }
 
         // Flush remaining tokens without a closing timestamp
-        if !current_word_tokens.is_empty() {
-            if let Ok(text) = self.tokenizer.decode(&current_word_tokens, true) {
-                let text = text.trim().to_string();
-                if !text.is_empty() {
-                    let start = current_start_ms.unwrap_or(0);
-                    words.push(Word {
-                        text,
-                        start_ms: start,
-                        end_ms: start, // Unknown end
-                        confidence: 0.5,
-                        speaker: None,
-                    });
-                }
+        if !current_word_tokens.is_empty()
+            && let Ok(text) = self.tokenizer.decode(&current_word_tokens, true)
+        {
+            let text = text.trim().to_string();
+            if !text.is_empty() {
+                let start = current_start_ms.unwrap_or(0);
+                words.push(Word {
+                    text,
+                    start_ms: start,
+                    end_ms: start, // Unknown end
+                    confidence: 0.5,
+                    speaker: None,
+                });
             }
         }
 

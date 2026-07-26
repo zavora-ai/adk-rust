@@ -58,20 +58,20 @@ pub async fn execute_rss(config: &RssNodeConfig, ctx: &NodeContext) -> Result<No
         .into_iter()
         .filter(|item| {
             // Skip seen items
-            if let Some(link) = item["link"].as_str() {
-                if seen_ids.contains(link) {
-                    return false;
-                }
+            if let Some(link) = item["link"].as_str()
+                && seen_ids.contains(link)
+            {
+                return false;
             }
             // Apply keyword filter
-            if let Some(filter) = &config.filter {
-                if !filter.keywords.is_empty() {
-                    let title = item["title"].as_str().unwrap_or("");
-                    let description = item["description"].as_str().unwrap_or("");
-                    let text = format!("{title} {description}").to_lowercase();
-                    if !filter.keywords.iter().any(|kw| text.contains(&kw.to_lowercase())) {
-                        return false;
-                    }
+            if let Some(filter) = &config.filter
+                && !filter.keywords.is_empty()
+            {
+                let title = item["title"].as_str().unwrap_or("");
+                let description = item["description"].as_str().unwrap_or("");
+                let text = format!("{title} {description}").to_lowercase();
+                if !filter.keywords.iter().any(|kw| text.contains(&kw.to_lowercase())) {
+                    return false;
                 }
             }
             true
@@ -80,23 +80,23 @@ pub async fn execute_rss(config: &RssNodeConfig, ctx: &NodeContext) -> Result<No
 
     // Update seen items
     let mut output = NodeOutput::new();
-    if let Some(tracking) = &config.seen_tracking {
-        if tracking.enabled {
-            for item in &filtered {
-                if let Some(link) = item["link"].as_str() {
-                    seen_ids.insert(link.to_string());
-                }
+    if let Some(tracking) = &config.seen_tracking
+        && tracking.enabled
+    {
+        for item in &filtered {
+            if let Some(link) = item["link"].as_str() {
+                seen_ids.insert(link.to_string());
             }
-            // Cap at max_items
-            let max = tracking.max_items.unwrap_or(1000) as usize;
-            let seen_vec: Vec<String> = if seen_ids.len() > max {
-                seen_ids.into_iter().take(max).collect()
-            } else {
-                seen_ids.into_iter().collect()
-            };
-            let state_key = tracking.state_key.as_deref().unwrap_or("rss_seen_items");
-            output = output.with_update(state_key, json!(seen_vec));
         }
+        // Cap at max_items
+        let max = tracking.max_items.unwrap_or(1000) as usize;
+        let seen_vec: Vec<String> = if seen_ids.len() > max {
+            seen_ids.into_iter().take(max).collect()
+        } else {
+            seen_ids.into_iter().collect()
+        };
+        let state_key = tracking.state_key.as_deref().unwrap_or("rss_seen_items");
+        output = output.with_update(state_key, json!(seen_vec));
     }
 
     let result = json!({
@@ -115,14 +115,14 @@ fn load_seen_ids(
     state: &std::collections::HashMap<String, Value>,
 ) -> HashSet<String> {
     let mut seen = HashSet::new();
-    if let Some(tracking) = &config.seen_tracking {
-        if tracking.enabled {
-            let state_key = tracking.state_key.as_deref().unwrap_or("rss_seen_items");
-            if let Some(Value::Array(arr)) = state.get(state_key) {
-                for v in arr {
-                    if let Some(s) = v.as_str() {
-                        seen.insert(s.to_string());
-                    }
+    if let Some(tracking) = &config.seen_tracking
+        && tracking.enabled
+    {
+        let state_key = tracking.state_key.as_deref().unwrap_or("rss_seen_items");
+        if let Some(Value::Array(arr)) = state.get(state_key) {
+            for v in arr {
+                if let Some(s) = v.as_str() {
+                    seen.insert(s.to_string());
                 }
             }
         }
