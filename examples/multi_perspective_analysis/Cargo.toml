@@ -1,0 +1,15 @@
+[package]
+name = "multi-perspective-analysis-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Three LLM analysts run concurrently under ParallelAgent, with per-branch timing that shows the branches overlapping"
+
+[workspace]
+
+[dependencies]
+# The umbrella crate with the standard tier: agents, models, runner, sessions.
+adk-rust = { path = "../../adk-rust", features = ["standard"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+dotenvy = "0.15"
