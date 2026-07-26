@@ -318,6 +318,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-agent: provider errors are no longer reported as successful turns.**
+  `LlmResponse` carries `interrupted`, `error_code`, and `error_message`, and a
+  provider adapter can report a terminal failure inside an otherwise successful
+  stream item — `adk-anthropic`'s `from_stream_error`, the OpenAI Responses error
+  event, and the OpenAI websocket transport all do. `LlmAgent` copied content,
+  finish reason, usage, and provider metadata onto its events but not those three
+  fields, and never inspected them, so a failed turn arrived as an ordinary event
+  with no content and the run completed successfully. Callers, persistence, retry
+  policy, and telemetry could not distinguish a provider failure from a model that
+  simply said nothing.
+
+  Those fields now travel with both partial and final events, and a terminal
+  `error_code` ends the run with an `AdkError` coded `model.provider_error`,
+  carrying the provider's own code in the error details under
+  `provider_error_code`. The event is emitted *before* the failure so the failed
+  turn stays observable and persisted rather than vanishing into an error.
+  `interrupted` is recorded but is not treated as terminal, and truncation is
+  unaffected: a response cut short by a token limit reports
+  `finish_reason: MaxTokens` and no error code.
+
 - **adk-agent/adk-tool: workflow context wrappers no longer drop cancellation,
   secrets, and shared state.** Each wrapper re-implements `InvocationContext` and
   delegates to an inner context, but most capability methods have permissive trait
