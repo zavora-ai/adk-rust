@@ -27,7 +27,7 @@ uuid.workspace = true
 chrono.workspace = true
 futures.workspace = true
 tracing.workspace = true
-quick-xml = { version = "0.37", optional = true }
+quick-xml = { version = "0.41", optional = true }
 statrs = { version = "0.18", optional = true }
 
 [features]

@@ -9,6 +9,15 @@
 
 [advisories]
 ignore = [
+    # quick-xml 0.26: memory-exhaustion and quadratic-parse DoS. Reached only as
+    # lancedb -> lance-testing -> pprof -> inferno, behind the optional
+    # `adk-rag/lancedb` feature; lancedb declares `lance-testing` as a normal
+    # dependency so the path cannot be dropped downstream. Crates this workspace
+    # declares directly are on the patched line (adk-eval requires 0.41), and
+    # deny.toml bans quick-xml < 0.41 outside the inferno path.
+    "RUSTSEC-2026-0195",
+    "RUSTSEC-2026-0194",
+
     # rsa: Marvin timing side-channel (no upstream fix, accepted risk)
     "RUSTSEC-2023-0071",
 

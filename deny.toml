@@ -1,0 +1,171 @@
+# cargo-deny configuration — supply-chain policy for the ADK-Rust workspace.
+#
+# Enforced by the nightly `supply-chain` job (`.github/workflows/ci-nightly.yml`)
+# alongside `cargo audit`. Run locally with `cargo deny check`.
+#
+# The accepted-advisory list mirrors `.cargo/audit.toml` so both tools agree.
+# Every entry is justified in `docs/security/DEPENDENCY-ADVISORIES.md`; add the
+# rationale there before adding an ID here.
+
+[graph]
+# Optional backends (surrealdb, lancedb, the ONNX audio models, mistral.rs,
+# LiveKit) carry most of the dependency surface. Resolving every feature keeps
+# the crates a production deployment actually enables under the gate.
+all-features = true
+
+[output]
+feature-depth = 1
+
+[advisories]
+# Unmaintained advisories are actionable only for dependencies this workspace
+# declares. A transitive crate going unmaintained deep in the graph is upstream's
+# to replace; failing the build on it turns the gate into noise. Vulnerabilities
+# and unsoundness remain errors at any depth.
+unmaintained = "workspace"
+
+ignore = [
+    # --- Vulnerabilities: reviewed and accepted, see the security doc ---
+
+    # quick-xml 0.26 — memory-exhaustion and quadratic-parse DoS.
+    # Reached only as lancedb -> lance-testing -> pprof -> inferno, behind the
+    # optional `adk-rag/lancedb` feature. lancedb declares `lance-testing` as a
+    # normal (not dev) dependency with `default = []`, so the path cannot be
+    # dropped downstream. The crates this workspace declares directly are on the
+    # patched line (`adk-eval` requires quick-xml 0.41), and the `[[bans.deny]]`
+    # entry below keeps that floor enforced.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+
+    # rsa — Marvin timing side-channel. No upstream fix exists.
+    "RUSTSEC-2023-0071",
+
+    # rustls-webpki < 0.103.12 — CRL and name-constraint handling. The old line
+    # is pinned inside the AWS SDK's own HTTP client stack.
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+
+    # --- Unsoundness and notices: reviewed, no ADK-reachable path ---
+    "RUSTSEC-2026-0190", # anyhow: Error::downcast_mut
+    "RUSTSEC-2026-0202", # cxx
+    "RUSTSEC-2026-0186", # memmap2
+    "RUSTSEC-2026-0097", # rand
+    "RUSTSEC-2026-0174", # http-types: ASCII invariant in Authorization value
+
+    # --- Unmaintained crates carried by upstream dependencies ---
+    "RUSTSEC-2023-0089", # atomic-polyfill
+    "RUSTSEC-2024-0384", # instant
+    "RUSTSEC-2024-0436", # paste
+    "RUSTSEC-2025-0012", # backoff
+    "RUSTSEC-2025-0052", # async-std
+    "RUSTSEC-2025-0057", # fxhash
+    "RUSTSEC-2025-0119", # number_prefix
+    "RUSTSEC-2025-0134", # rustls-pemfile
+    "RUSTSEC-2025-0141", # bincode
+    "RUSTSEC-2026-0150", # audiopus_sys
+    "RUSTSEC-2026-0173", # proc-macro-error2
+]
+
+[licenses]
+# Permissive licenses plus MPL-2.0. MPL-2.0 is file-level copyleft, satisfied by
+# linking without relicensing this workspace; it arrives through the `symphonia`
+# audio decoders and the `cssparser`/`selectors` sanitizer stack.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "NCSA",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+# `intel-mkl-src` ships the Intel Simplified Software License, which has no SPDX
+# identifier, so the expression is stated explicitly. Every other license-file
+# crate is detected from the file it publishes.
+[[licenses.clarify]]
+crate = "intel-mkl-src"
+expression = "LicenseRef-Intel-Simplified-Software-License"
+license-files = [{ path = "License.txt", hash = 0x3bf8c2d0 }]
+
+# Non-OSI licenses, reached only through opt-in features. Allowed per-crate so
+# that enabling those features is a visible decision rather than a silent one:
+#   * surrealdb and its sub-crates (Business Source License 1.1)
+#     — `adk-rag/surrealdb`
+#   * intel-mkl-src (Intel Simplified Software License) — `adk-mistralrs/mkl`
+# See docs/security/DEPENDENCY-ADVISORIES.md ("Non-OSI dependency licenses").
+[[licenses.exceptions]]
+crate = "surrealdb"
+allow = ["BUSL-1.1"]
+
+[[licenses.exceptions]]
+crate = "surrealdb-core"
+allow = ["BUSL-1.1"]
+
+[[licenses.exceptions]]
+crate = "surrealdb-types"
+allow = ["BUSL-1.1"]
+
+[[licenses.exceptions]]
+crate = "surrealdb-types-derive"
+allow = ["BUSL-1.1"]
+
+[[licenses.exceptions]]
+crate = "surrealdb-strand"
+allow = ["BUSL-1.1"]
+
+[[licenses.exceptions]]
+crate = "surrealdb-collections"
+allow = ["BUSL-1.1"]
+
+[[licenses.exceptions]]
+crate = "surrealdb-protocol"
+allow = ["BUSL-1.1"]
+
+# `inferno` renders flamegraph SVG inside lance-testing's profiler, reached only
+# through the optional `adk-rag/lancedb` feature. CDDL-1.0 is OSI-approved,
+# file-level copyleft and imposes no obligation on this workspace's own sources.
+[[licenses.exceptions]]
+crate = "inferno"
+allow = ["CDDL-1.0"]
+
+[[licenses.exceptions]]
+crate = "intel-mkl-src"
+allow = ["LicenseRef-Intel-Simplified-Software-License"]
+
+[licenses.private]
+# `xtask` is the repo-internal task runner (`publish = false`) and carries no
+# license field.
+ignore = true
+
+[bans]
+# Duplicate transitive versions are tolerated: the arrow/lance, opentelemetry,
+# and rustls stacks each pin their own line.
+multiple-versions = "allow"
+wildcards = "deny"
+# Internal dev-dependencies are declared path-only (no version) so publish order
+# cannot deadlock — see scripts/check-publish-order.py. Those resolve as
+# wildcards and are expected.
+allow-wildcard-paths = true
+
+[[bans.deny]]
+# Keep declared quick-xml usage on the patched line. `inferno` is the sole
+# permitted wrapper, matching the documented advisory ignore above.
+crate = "quick-xml:<0.41"
+wrappers = ["inferno"]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

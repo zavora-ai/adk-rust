@@ -8,11 +8,37 @@ The purpose of this file is to provide transparency to consumers about the secur
 
 These accepted advisories are also configured in [`.cargo/audit.toml`](../../.cargo/audit.toml) so that `cargo audit` passes in CI while still surfacing new, unreviewed advisories.
 
-**Last reviewed:** 2026-06-07
+**Last reviewed:** 2026-07-26 (2.0.0 release review)
+
+---
+
+## Resolved in 2.0.0
+
+| Advisory | Crate | Resolution |
+|---|---|---|
+| RUSTSEC-2026-0193, RUSTSEC-2026-0213 | `ammonia` | Lockfile updated to 4.1.4. |
+| RUSTSEC-2026-0204 | `crossbeam-epoch` | Lockfile updated to 0.9.20. |
+| RUSTSEC-2026-0194, RUSTSEC-2026-0195 | `quick-xml` (declared) | `adk-eval` now requires quick-xml 0.41. The transitive 0.26 copy is covered below. |
 
 ---
 
 ## Active Advisories
+
+### RUSTSEC-2026-0194, RUSTSEC-2026-0195 — quick-xml 0.26: parser denial of service
+
+- **Crate:** `quick-xml` (0.26.0)
+- **Severity:** High (7.5) — availability only
+- **Advisories:**
+  - [RUSTSEC-2026-0194](https://rustsec.org/advisories/RUSTSEC-2026-0194) — quadratic run time checking a start tag for duplicate attribute names
+  - [RUSTSEC-2026-0195](https://rustsec.org/advisories/RUSTSEC-2026-0195) — unbounded namespace-declaration allocation in `NsReader`
+- **ADK Impact:** `adk-rag` → `lancedb` → `lance-testing` → `pprof` → `inferno` → `quick-xml 0.26`, behind the optional `adk-rag/lancedb` feature.
+- **Status:** Patched upstream in quick-xml ≥ 0.41. The 0.26 copy cannot be updated from this workspace: `lancedb` declares `lance-testing` as a normal (not dev) dependency with `default = []`, so no feature selection removes the path. It needs a `lancedb` release that moves `lance-testing` to dev-dependencies.
+- **Disposition:** Accepted risk — no ADK-reachable path
+- **Conditions:** Both advisories require the attacker to control XML fed to the parser.
+- **ADK-Specific Context:** `inferno` parses only the flamegraph SVG that `pprof` generates in-process during profiling. No ADK-Rust request, document, or tool input reaches this parser, and the profiler is not invoked by the RAG backend at runtime.
+- **Mitigation:** The crates this workspace declares directly are on the patched line — `adk-eval` requires quick-xml 0.41. `deny.toml` bans `quick-xml < 0.41` with `inferno` as the sole permitted wrapper, so a direct regression cannot hide behind this exception.
+
+---
 
 ### RUSTSEC-2023-0071 — rsa: Marvin Attack (Timing Side-Channel)
 
@@ -106,16 +132,33 @@ The following crates are flagged by `cargo audit` as unmaintained. Each has been
 
 ---
 
+## Non-OSI dependency licenses
+
+Two optional backends link code under licenses that are not OSI-approved. They are
+allowed per-crate in [`deny.toml`](../../deny.toml) rather than through the global
+allow-list, so enabling the feature is a visible decision.
+
+| Crate | License | Reached through | Note |
+|---|---|---|---|
+| `surrealdb`, `surrealdb-core`, `surrealdb-types`, `surrealdb-types-derive`, `surrealdb-strand`, `surrealdb-collections`, `surrealdb-protocol` | Business Source License 1.1 | `adk-rag/surrealdb` | BSL restricts production use of the licensed work until its change date. Review before enabling the SurrealDB vector backend in a commercial deployment. |
+| `intel-mkl-src` | Intel Simplified Software License | `adk-mistralrs/mkl` | Intel's redistribution terms apply to the bundled MKL binaries. |
+| `inferno` | CDDL-1.0 (OSI-approved, file-level copyleft) | `adk-rag/lancedb` → `lance-testing` → `pprof` | No obligation on this workspace's own sources. |
+
+Neither `surrealdb` nor `intel-mkl-src` is enabled by any default, `standard`,
+`enterprise`, or `full` feature tier.
+
+---
+
 ## Review Cadence
 
-This document is reviewed at each minor release. Run `cargo audit` to check for new advisories:
+This document is reviewed at each minor release. Run both supply-chain gates:
 
 ```bash
 cargo audit
+cargo deny check
 ```
 
-To check for outdated dependencies:
-
-```bash
-cargo audit --deny warnings
-```
+`cargo audit` scans `Cargo.lock`; `cargo deny check` additionally enforces the
+license allow-list, the registry allow-list, and the `quick-xml` version floor.
+The accepted-advisory lists in [`.cargo/audit.toml`](../../.cargo/audit.toml) and
+[`deny.toml`](../../deny.toml) are kept in sync — add the rationale here first.
