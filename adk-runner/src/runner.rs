@@ -14,6 +14,35 @@ use adk_skill::{SkillInjector, SkillInjectorConfig};
 use async_stream::stream;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
+
+/// A run currently in flight, tracked so it can be interrupted.
+///
+/// Keyed by run ID rather than session ID: a session ID is only unique within an
+/// app and user, and one identity may have several runs in flight at once.
+#[derive(Debug, Clone)]
+struct ActiveRun {
+    identity: adk_core::AdkIdentity,
+    token: CancellationToken,
+}
+
+/// Registry of in-flight runs, keyed by run ID.
+type ActiveRuns = Arc<std::sync::Mutex<std::collections::HashMap<u64, ActiveRun>>>;
+
+/// Deregisters a run when its event stream is dropped.
+///
+/// Removal is by run ID, so a finishing run can never deregister a different run
+/// that happens to share the same session ID.
+struct ActiveRunCleanup {
+    active_runs: ActiveRuns,
+    run_id: u64,
+}
+
+impl Drop for ActiveRunCleanup {
+    fn drop(&mut self) {
+        let mut runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+        runs.remove(&self.run_id);
+    }
+}
 use tracing::Instrument;
 
 /// Configuration for constructing a [`Runner`].
@@ -106,7 +135,8 @@ pub struct Runner {
     context_compaction: Option<Arc<crate::compaction::CompactionConfig>>,
     /// Per-session cancellation tokens for the interrupt API.
     /// Each `run()` call registers a token here; `interrupt()` cancels it.
-    active_sessions: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
+    active_runs: ActiveRuns,
+    next_run_id: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Runner {
@@ -179,7 +209,8 @@ impl Runner {
             intra_compactor,
             #[cfg(feature = "context-compaction")]
             context_compaction: config.context_compaction.map(Arc::new),
-            active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            active_runs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            next_run_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
         })
     }
 
@@ -252,17 +283,25 @@ impl Runner {
         #[cfg(feature = "context-compaction")]
         let context_compaction = self.context_compaction.clone();
 
-        // Register a per-session cancellation token for the interrupt API.
-        // If a global token is configured, create a child token so that
-        // either global cancellation OR per-session interrupt stops this run.
-        let session_token = CancellationToken::new();
-        let session_id_str = session_id.as_str().to_string();
-        {
-            let mut sessions = self.active_sessions.lock().unwrap_or_else(|e| e.into_inner());
-            sessions.insert(session_id_str.clone(), session_token.clone());
-        }
-        let active_sessions = self.active_sessions.clone();
+        // Built once and used for every persistence write, so a backend with a
+        // composite natural key can bind each event to its tenant.
+        let identity =
+            adk_core::AdkIdentity::new(typed_app_name.clone(), user_id.clone(), session_id.clone());
 
+        // Register this run for the interrupt API. The registration is keyed by a
+        // unique run ID rather than the raw session ID: two identities can share a
+        // session ID, and one identity can have two runs in flight, and both cases
+        // previously overwrote each other's token.
+        let session_token = CancellationToken::new();
+        let run_id = self.next_run_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        {
+            let mut runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+            runs.insert(
+                run_id,
+                ActiveRun { identity: identity.clone(), token: session_token.clone() },
+            );
+        }
+        let active_runs = self.active_runs.clone();
         // Effective token: cancelled if either the global token or the session token fires
         let effective_token = if let Some(ref global) = cancellation_token {
             let combined = CancellationToken::new();
@@ -285,23 +324,14 @@ impl Runner {
             Some(session_token.clone())
         };
 
+        // Built here rather than inside the generator: registration happens as soon
+        // as `run` is called, so deregistration must also survive a stream that is
+        // dropped before it is ever polled. Moving the guard into the generator
+        // keeps it alive exactly as long as the stream.
+        let cleanup = ActiveRunCleanup { active_runs: active_runs.clone(), run_id };
+
         let s = stream! {
-            // Clean up session tracking when the stream ends.
-            // We use a simple struct with Drop to ensure cleanup even on early return.
-            struct SessionCleanup {
-                active_sessions: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
-                session_id: String,
-            }
-            impl Drop for SessionCleanup {
-                fn drop(&mut self) {
-                    let mut sessions = self.active_sessions.lock().unwrap_or_else(|e| e.into_inner());
-                    sessions.remove(&self.session_id);
-                }
-            }
-            let _cleanup = SessionCleanup {
-                active_sessions: active_sessions.clone(),
-                session_id: session_id_str,
-            };
+            let _cleanup = cleanup;
 
             // Use the effective token (combines global + per-session)
             let cancellation_token = effective_token;
@@ -417,7 +447,12 @@ impl Runner {
                         early_event.llm_response.content = Some(content);
 
                         ctx.mutable_session().append_event(early_event.clone());
-                        if let Err(e) = session_service.append_event(ctx.session_id(), early_event.clone()).await {
+                        if let Err(e) = session_service
+                            .append_event_for_identity(adk_session::AppendEventRequest {
+                                identity: identity.clone(),
+                                event: early_event.clone(),
+                            })
+                            .await {
                             yield Err(e);
                             return;
                         }
@@ -502,7 +537,12 @@ impl Runner {
             // Note: adk_session::Event is a re-export of adk_core::Event, so we can use it directly
             ctx.mutable_session().append_event(user_event.clone());
 
-            if let Err(e) = session_service.append_event(ctx.session_id(), user_event).await {
+            if let Err(e) = session_service
+                .append_event_for_identity(adk_session::AppendEventRequest {
+                    identity: identity.clone(),
+                    event: user_event,
+                })
+                .await {
                 #[cfg(feature = "plugins")]
                 if let Some(manager) = plugin_manager.as_ref() {
                     manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
@@ -793,7 +833,12 @@ impl Runner {
                         // constraint. The final chunk (partial=false) carries the
                         // complete accumulated content.
                         if !event.llm_response.partial
-                            && let Err(e) = session_service.append_event(ctx.session_id(), event.clone()).await {
+                            && let Err(e) = session_service
+                                .append_event_for_identity(adk_session::AppendEventRequest {
+                                    identity: identity.clone(),
+                                    event: event.clone(),
+                                })
+                                .await {
                                 #[cfg(feature = "plugins")]
                                 if let Some(manager) = plugin_manager.as_ref() {
                                     manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
@@ -974,7 +1019,12 @@ impl Runner {
                             transfer_ctx.mutable_session().append_event(event.clone());
 
                             if !event.llm_response.partial
-                                && let Err(e) = session_service.append_event(ctx.session_id(), event.clone()).await {
+                                && let Err(e) = session_service
+                                    .append_event_for_identity(adk_session::AppendEventRequest {
+                                        identity: identity.clone(),
+                                        event: event.clone(),
+                                    })
+                                    .await {
                                     #[cfg(feature = "plugins")]
                                     if let Some(manager) = plugin_manager.as_ref() {
                                         manager.run_after_run(ctx.clone() as Arc<dyn adk_core::InvocationContext>).await;
@@ -1039,10 +1089,12 @@ impl Runner {
                             match compaction_cfg.summarizer.summarize_events(events_to_compact).await {
                                 Ok(Some(compaction_event)) => {
                                     // Persist the compaction event
-                                    if let Err(e) = session_service.append_event(
-                                        ctx.session_id(),
-                                        compaction_event.clone(),
-                                    ).await {
+                                    if let Err(e) = session_service
+                                        .append_event_for_identity(adk_session::AppendEventRequest {
+                                            identity: identity.clone(),
+                                            event: compaction_event.clone(),
+                                        })
+                                        .await {
                                         tracing::warn!(error = %e, "Failed to persist compaction event");
                                     } else {
                                         tracing::info!(
@@ -1118,21 +1170,78 @@ impl Runner {
     /// let mut stream = runner.run(user_id, session_id, new_content).await?;
     /// ```
     pub fn interrupt(&self, session_id: &str) -> bool {
-        let sessions = self.active_sessions.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(token) = sessions.get(session_id) {
-            tracing::info!(session.id = session_id, "interrupting running agent");
-            token.cancel();
-            true
-        } else {
+        let runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+        let matching: Vec<&ActiveRun> =
+            runs.values().filter(|run| run.identity.session_id.as_ref() == session_id).collect();
+        if matching.is_empty() {
             tracing::debug!(session.id = session_id, "no active run to interrupt");
-            false
+            return false;
         }
+        tracing::info!(
+            session.id = session_id,
+            run.count = matching.len(),
+            "interrupting running agent"
+        );
+        for run in matching {
+            run.token.cancel();
+        }
+        true
+    }
+
+    /// Interrupts runs for one exact identity.
+    ///
+    /// A session ID is only unique within an app and user, so this is the precise
+    /// form of [`Runner::interrupt`] for a `Runner` shared across tenants.
+    /// Returns `true` when at least one run was cancelled.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let cancelled = runner.interrupt_identity("my-app", "user-1", "session-1");
+    /// ```
+    pub fn interrupt_identity(&self, app_name: &str, user_id: &str, session_id: &str) -> bool {
+        let runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cancelled = false;
+        for run in runs.values() {
+            if run.identity.app_name.as_ref() == app_name
+                && run.identity.user_id.as_ref() == user_id
+                && run.identity.session_id.as_ref() == session_id
+            {
+                run.token.cancel();
+                cancelled = true;
+            }
+        }
+        if !cancelled {
+            tracing::debug!(
+                app.name = app_name,
+                user.id = user_id,
+                session.id = session_id,
+                "no active run to interrupt"
+            );
+        }
+        cancelled
+    }
+
+    /// Returns the identity of every run currently in flight.
+    ///
+    /// One identity appears once per in-flight run, so a repeated entry means that
+    /// identity has concurrent runs.
+    pub fn active_runs(&self) -> Vec<adk_core::AdkIdentity> {
+        let runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+        runs.values().map(|run| run.identity.clone()).collect()
     }
 
     /// Returns the session IDs of all currently running agent executions.
+    ///
+    /// Session IDs are deduplicated. Use [`Runner::active_runs`] when the app and
+    /// user dimensions matter.
     pub fn active_session_ids(&self) -> Vec<String> {
-        let sessions = self.active_sessions.lock().unwrap_or_else(|e| e.into_inner());
-        sessions.keys().cloned().collect()
+        let runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ids: Vec<String> =
+            runs.values().map(|run| run.identity.session_id.as_ref().to_string()).collect();
+        ids.sort();
+        ids.dedup();
+        ids
     }
 
     /// Returns a reference to the context compaction configuration, if set.

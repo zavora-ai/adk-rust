@@ -58,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `adk-core` | New variant `Part::EmbeddedResource` (`Part` is not `#[non_exhaustive]`) | Exhaustive `match` must add an arm |
   | `adk-core` | `RunConfig` and `RunConfigBuilder` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code holding them across `catch_unwind` |
   | `adk-graph` | New public field `StateGraph::deferred_configs` | Struct literals must add the field |
+  | `adk-runner` | `MutableSession::conversation_history_for_agent_impl` now takes two parameters (an `agent_name` and a `branch`) instead of one | Direct callers must pass the invocation branch; pass `""` for unscoped behaviour |
   | `adk-realtime` | `ClientEvent` and `ServerEvent` are now `#[non_exhaustive]` | Downstream `match` needs a wildcard arm; the enums can no longer be constructed exhaustively outside the crate |
   | `adk-realtime` | `ServerEvent::Unknown` discriminant changed 21 → 23 | Affects code depending on the numeric discriminant |
   | `adk-realtime` | New public field `RealtimeConfig::affective_dialog` | Struct literals must add the field |
@@ -317,6 +318,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entries, so no plan update is emitted today.
 
 ### Fixed
+
+- **adk-runner: runs and persistence writes are keyed by full identity.** Two
+  defects with the same root cause — the identity triple was resolved and then
+  discarded.
+
+  Active runs were tracked in a `HashMap<String, CancellationToken>` keyed by the
+  raw session ID. Because a session ID is only unique within an app and user,
+  `(app-a, user-a, shared-id)` and `(app-b, user-b, shared-id)` collided inside one
+  `Runner`, and two concurrent runs for one identity overwrote each other's token.
+  The drop guard then removed the key unconditionally, so a finishing run could
+  deregister a different run that was still going. Runs are now keyed by a unique
+  run ID carrying the full identity, and cleanup removes only the entry it
+  inserted. `Runner::interrupt(session_id)` now cancels every run for that session
+  rather than whichever registered last; the new `Runner::interrupt_identity`
+  targets one exact identity, and `Runner::active_runs` reports identities.
+  Registration was also eager while cleanup was lazy inside the stream generator,
+  so a stream dropped before its first poll leaked its registration permanently;
+  the guard is now created eagerly.
+
+  Separately, the Runner resolved sessions with the full triple but persisted every
+  event through `append_event(session_id, event)`. All five write sites now use
+  `append_event_for_identity`, so a backend whose natural key is composite can bind
+  each event to its tenant.
 
 - **adk-agent/adk-tool: workflow context wrappers no longer drop cancellation,
   secrets, and shared state.** Each wrapper re-implements `InvocationContext` and
