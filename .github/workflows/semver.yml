@@ -39,19 +39,13 @@ jobs:
       run: |
         echo "### Stable-tier crates (fail on breakage)" >> "$GITHUB_STEP_SUMMARY"
         FAILED=0
-        # Pre-1.0 crates where new public fields/variants are allowed in minor bumps
-        PRE1_ALLOWED="adk-gemini adk-server"
         for crate in adk-core adk-agent adk-model adk-gemini adk-tool adk-runner adk-session adk-server adk-graph adk-memory adk-anthropic; do
           echo "Checking $crate..."
           if cargo semver-checks check-release -p "$crate" --default-features; then
             echo "✅ $crate" >> "$GITHUB_STEP_SUMMARY"
           else
-            if echo "$PRE1_ALLOWED" | grep -qw "$crate"; then
-              echo "⚠️ $crate — new public API (allowed pre-1.0)" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "❌ $crate — BREAKING" >> "$GITHUB_STEP_SUMMARY"
-              FAILED=1
-            fi
+            echo "❌ $crate — BREAKING" >> "$GITHUB_STEP_SUMMARY"
+            FAILED=1
           fi
         done
         if [ "$FAILED" -ne 0 ]; then
@@ -59,12 +53,22 @@ jobs:
           exit 1
         fi
 
+    # Every other published crate. Warn-only because these tiers do not carry the
+    # Stable API commitment (see STABILITY.md).
+    #
+    # Absent on purpose: `adk-computer-use` and `adk-devtools` are new in 2.0.0 and
+    # have no published baseline to diff against, and `adk-rust-macros` exposes no
+    # library target for cargo-semver-checks to read. Add the first two here once
+    # 2.0.0 is on crates.io.
     - name: Semver checks — Beta/Experimental (warn only)
       run: |
         echo "### Beta/Experimental crates (warn only)" >> "$GITHUB_STEP_SUMMARY"
         for crate in adk-artifact adk-auth \
           adk-telemetry adk-guardrail adk-plugin adk-skill \
-          adk-cli adk-realtime adk-browser adk-eval adk-audio; do
+          adk-cli adk-realtime adk-browser adk-eval adk-audio \
+          adk-acp adk-awp awp-types adk-action adk-code adk-deploy \
+          adk-managed adk-enterprise adk-payments adk-rag adk-sandbox \
+          adk-retry-reflect adk-mistralrs adk-bench cargo-adk; do
           echo "Checking $crate..."
           if cargo semver-checks check-release -p "$crate" --default-features; then
             echo "✅ $crate" >> "$GITHUB_STEP_SUMMARY"

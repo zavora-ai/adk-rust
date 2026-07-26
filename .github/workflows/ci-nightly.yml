@@ -46,19 +46,26 @@ jobs:
   # design.md §5 (audio ONNX, realtime `full`, GPU compile-checks). Default CI
   # (ci.yml clippy/test) only ever builds default features, so a regression in a
   # non-default feature combination is invisible on the PR and merge tiers. This
-  # job compiles each notable combo on the appropriate runner.
+  # job lints each notable combo on the appropriate runner.
   #
-  # GPU features cannot RUN on GitHub runners (no GPU), so they are compile-only
-  # via `cargo check`; the Metal combo runs on macOS where the Metal toolchain is
-  # available even without a discrete GPU. Feature names below were verified
-  # against the real Cargo.toml manifests:
+  # These run `cargo clippy -- -D warnings`, not `cargo check`. Compiling proved
+  # too weak: the 2.0.0 release review found 15 clippy errors sitting in
+  # feature-gated modules (adk-audio ONNX, adk-graph `functional` and
+  # `action-full`, adk-server `background`, adk-anthropic `managed-agents`) that
+  # no gate had ever linted. GPU combos stay compile-only because their
+  # toolchains are not fully available on hosted runners.
+  #
+  # Feature names below were verified against the real Cargo.toml manifests:
   #   • adk-realtime  `full`  = openai + gemini + vertex-live + livekit
-  #   • adk-audio     `whisper-onnx`, `moonshine` = ONNX STT backends (imply `onnx`)
+  #   • adk-audio     `all-onnx` = every ONNX backend (implies `onnx`)
+  #   • adk-graph     `functional`, `action-full` = functional API, action nodes
+  #   • adk-server    `background` = background runs + cron scheduling
   #   • adk-mistralrs `metal` = mistralrs/metal (macOS GPU acceleration)
   #
   # EXTENSION POINT: to cover another feature combination, append one matrix
-  # entry with { name, os, neutralize-wild, command }. Keep GPU/hardware combos
-  # compile-only (`cargo check`) and on a runner whose toolchain supports them.
+  # entry with { name, os, neutralize-wild, command }. Prefer clippy with
+  # `-D warnings`; keep GPU/hardware combos compile-only (`cargo check`) on a
+  # runner whose toolchain supports them.
   feature-combinations:
     name: features (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
@@ -71,14 +78,38 @@ jobs:
           - name: realtime-full
             os: ubuntu-latest
             neutralize-wild: 'true'
-            command: cargo check -p adk-realtime --features full --all-targets
-          # audio ONNX speech-to-text backends (whisper + moonshine). Both imply
-          # the `onnx` feature; neither pulls the espeak-ng system dep that
-          # `kokoro` requires, so this compiles on a plain runner.
-          - name: audio-onnx-stt
+            command: cargo clippy -p adk-realtime --features full --all-targets -- -D warnings
+          # Every audio ONNX backend. `kokoro` pulls the espeak-ng system dep,
+          # installed in the step below.
+          - name: audio-all-onnx
             os: ubuntu-latest
             neutralize-wild: 'true'
-            command: cargo check -p adk-audio --features whisper-onnx,moonshine --all-targets
+            command: cargo clippy -p adk-audio --features all-onnx --all-targets -- -D warnings
+          # Functional graph API (#[entrypoint]/#[task] macros, typed reducers).
+          - name: graph-functional
+            os: ubuntu-latest
+            neutralize-wild: 'true'
+            command: cargo clippy -p adk-graph --features functional --all-targets -- -D warnings
+          # Every action-node executor (http, db, code, email, rss, trigger).
+          - name: graph-action-full
+            os: ubuntu-latest
+            neutralize-wild: 'true'
+            command: cargo clippy -p adk-graph --features action-full --all-targets -- -D warnings
+          # Background runs + cron scheduling REST surface.
+          - name: server-background
+            os: ubuntu-latest
+            neutralize-wild: 'true'
+            command: cargo clippy -p adk-server --features background --all-targets -- -D warnings
+          # Anthropic Managed Agents + Files APIs.
+          - name: anthropic-managed-agents
+            os: ubuntu-latest
+            neutralize-wild: 'true'
+            command: cargo clippy -p adk-anthropic --features managed-agents,files --all-targets -- -D warnings
+          # Every provider in the model facade.
+          - name: model-all-providers
+            os: ubuntu-latest
+            neutralize-wild: 'true'
+            command: cargo clippy -p adk-model --features all-providers --all-targets -- -D warnings
           # GPU compile-check: Metal acceleration for adk-mistralrs. Compile-only
           # (`cargo check`) on macOS, where the Metal toolchain is present even
           # though the runner has no discrete GPU to execute against.
@@ -92,26 +123,30 @@ jobs:
     - name: Setup Rust
       uses: ./.github/actions/setup-rust
       with:
+        components: clippy
         cache-key: features-${{ matrix.name }}
         neutralize-wild: ${{ matrix.neutralize-wild }}
 
+    # espeak-ng is required by `espeak-rs`, pulled in by adk-audio's `kokoro`
+    # backend (part of `all-onnx`). Installed unconditionally so adding a matrix
+    # entry stays a one-line change.
     - name: Install system dependencies (Linux)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake protobuf-compiler
+        sudo apt-get install -y cmake protobuf-compiler libespeak-ng-dev
 
     - name: Install system dependencies (macOS)
       if: runner.os == 'macOS'
-      run: brew install cmake protobuf
+      run: brew install cmake protobuf espeak-ng
 
-    - name: Compile feature combination
+    - name: Lint feature combination
       run: ${{ matrix.command }}
 
     - name: Feature-combination summary
       if: always()
       shell: bash
-      run: echo "### 🧩 feature combo '${{ matrix.name }}' compiled" >> "$GITHUB_STEP_SUMMARY"
+      run: echo "### 🧩 feature combo '${{ matrix.name }}' checked" >> "$GITHUB_STEP_SUMMARY"
 
   # ── Supply-chain: advisory + policy checks ─────────────────────
   # Requirement 2.3 (supply-chain checks on a scheduled trigger). Two tools:
@@ -120,11 +155,10 @@ jobs:
   #     accepted there (see docs/security/DEPENDENCY-ADVISORIES.md) are skipped
   #     while NEW advisories surface as failures. This is the ENFORCING gate.
   #   • cargo-deny — broader supply-chain policy (bans, sources, licenses,
-  #     advisories). The repo has NO root deny.toml today, so cargo-deny runs with
-  #     built-in defaults and is ADVISORY (continue-on-error) to avoid spurious
-  #     nightly failures on advisories already accepted in .cargo/audit.toml
-  #     (which cargo-deny does not read) and on the default license policy.
-  #     Add a root deny.toml to make this an enforcing gate.
+  #     advisories) configured by the root `deny.toml`. Its accepted-advisory list
+  #     mirrors `.cargo/audit.toml` (cargo-deny does not read that file), and it
+  #     additionally enforces the license allow-list, the registry allow-list, and
+  #     the `quick-xml` version floor. Both gates are ENFORCING.
   supply-chain:
     runs-on: ubuntu-latest
     steps:
@@ -145,15 +179,53 @@ jobs:
     - name: cargo audit
       run: cargo audit
 
-    # Advisory until a root deny.toml exists (see job comment above).
+    # Enforcing: reads the root deny.toml.
     - name: cargo deny check
-      continue-on-error: true
       run: cargo deny check
 
     - name: Supply-chain summary
       if: always()
       shell: bash
       run: echo "### 🔐 supply-chain checks (cargo audit + cargo deny) completed" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Standalone examples: compile every examples/* crate ────────
+  # Each example under examples/ is its own workspace with its own Cargo.lock and
+  # path dependencies back into this repo. Nothing else in CI compiles them:
+  # `cargo check --workspace` cannot see them (they are in the root manifest's
+  # `exclude`/outside `members`), and scripts/check-doc-examples.sh only validates
+  # that documented commands resolve in cargo metadata. A public API change can
+  # therefore break the adoption surface silently.
+  #
+  # Nightly tier because this is ~96 separate crate graphs. Sharded so each job
+  # stays within a sensible runtime; the script shares one CARGO_TARGET_DIR per
+  # shard so the ADK crates compile once per shard rather than once per example.
+  examples-compile:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: examples-compile-${{ matrix.shard }}
+        neutralize-wild: 'true'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake protobuf-compiler
+
+    - name: Compile standalone examples (shard ${{ matrix.shard }} of 4)
+      run: bash scripts/check-examples-compile.sh ${{ matrix.shard }} 4
+
+    - name: Examples summary
+      if: always()
+      shell: bash
+      run: echo "### 📦 standalone example compile, shard ${{ matrix.shard }} of 4" >> "$GITHUB_STEP_SUMMARY"
 
   # ── Integration tests: #[ignore]d tests gated on secrets ───────
   # Requirement 2.3 (scheduled integration coverage). The workspace marks tests

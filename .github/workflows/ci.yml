@@ -235,6 +235,25 @@ jobs:
           exit 1
         fi
 
+    # Doctests: nextest cannot run them, so `ws-test` never touches a single doc
+    # example. Without this step a documented snippet can stop compiling and no
+    # job notices — that is how five broken examples reached the 2.0.0 review in
+    # `adk-rust`'s crate-level docs.
+    #
+    # `adk-rust` is excluded from the workspace pass and run separately under
+    # `full`: its crate-level docs cover the whole API surface, so the examples
+    # only resolve when the optional modules they reference are compiled in. That
+    # matches the feature set docs.rs renders (see adk-rust's
+    # [package.metadata.docs.rs]).
+    - name: Run doctests
+      run: |
+        CI=true devenv shell cargo test --workspace --doc --exclude adk-rust
+        CI=true devenv shell cargo test -p adk-rust --features full --doc
+
+    - name: Doctest summary
+      if: always()
+      run: echo "### 🧪 doctests (workspace + adk-rust --features full) completed" >> "$GITHUB_STEP_SUMMARY"
+
   # ── Scaffolds: cargo-adk generated projects compile ────────────
   templates:
     needs: fmt

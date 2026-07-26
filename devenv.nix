@@ -120,7 +120,7 @@
   tasks = {
     "ci:test" = {
       description = "Run full workspace quality gates.";
-      exec = "cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings && cargo nextest run --workspace";
+      exec = "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo nextest run --workspace";
     };
   };
 
@@ -130,7 +130,10 @@
     ws-test.exec = "RUSTC_WRAPPER=sccache cargo nextest run --workspace $@";
     ws-test-ci.exec = "RUSTC_WRAPPER=sccache cargo nextest run --workspace --profile ci $@";
     ws-test-slow.exec = "RUSTC_WRAPPER=sccache cargo test --workspace $@";
-    ws-clippy.exec = "RUSTC_WRAPPER=sccache cargo clippy --workspace $@ -- -D warnings";
+    # --all-targets so tests, examples, and benches are linted too. Without it the
+    # PR-tier clippy gate silently skipped every non-lib target, contradicting the
+    # command documented in AGENTS.md and CONTRIBUTING.md.
+    ws-clippy.exec = "RUSTC_WRAPPER=sccache cargo clippy --workspace --all-targets $@ -- -D warnings";
     ws-summary.exec = ''
       if [ -n "$GITHUB_STEP_SUMMARY" ]; then
         echo "## 🚀 CI Summary" >> "$GITHUB_STEP_SUMMARY"
