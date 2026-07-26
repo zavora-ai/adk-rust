@@ -144,7 +144,7 @@ impl Agent for ParallelAgent {
         let shared_state_enabled = self.shared_state_enabled;
 
         let s = stream! {
-            use futures::stream::{FuturesUnordered, StreamExt};
+            use futures::stream::{StreamExt, select_all};
 
             for callback in before_callbacks.as_ref() {
                 match callback(run_ctx.clone() as Arc<dyn CallbackContext>).await {
@@ -180,7 +180,6 @@ impl Agent for ParallelAgent {
                 }
             }
 
-            let mut futures = FuturesUnordered::new();
 
             // Create shared state if enabled (fresh per run)
             let shared = if shared_state_enabled {
@@ -189,46 +188,72 @@ impl Agent for ParallelAgent {
                 None
             };
 
-            for agent in sub_agents {
-                let ctx: Arc<dyn InvocationContext> = if let Some(ref shared) = shared {
-                    Arc::new(SharedStateContext::new(run_ctx.clone(), shared.clone()))
-                } else {
-                    run_ctx.clone()
-                };
-                futures.push(async move {
-                    agent.run(ctx).await
-                });
-            }
+            // Each sub-agent gets its own stream that resolves `run()` and drains
+            // the resulting events. Merging these with `select_all` polls every
+            // sub-agent concurrently, which is what makes this agent parallel:
+            // `Agent::run` only *builds* an `EventStream`, so awaiting the run
+            // futures together is not enough — the streams themselves have to be
+            // polled together. Draining one stream to completion before touching
+            // the next made nominally parallel branches run one at a time.
+            //
+            // Polling from a single task also gives the backpressure the ADK
+            // Python and Go implementations arrange explicitly (a resume signal
+            // and an ack channel respectively): a sub-agent cannot run ahead
+            // while an already-produced event is still being consumed upstream,
+            // so the runner's per-event persistence stays in step with execution.
+            //
+            // Dropping the merged stream drops every sub-agent stream with it, so
+            // a consumer that stops early tears down in-flight sub-agents instead
+            // of leaving them running.
+            let mut merged = {
+                // Item is (sub-agent index, event result). The index lets a failure
+                // be attributed to the branch that produced it.
+                type BranchStream =
+                    std::pin::Pin<Box<dyn futures::Stream<Item = (usize, Result<Event>)> + Send>>;
+                let mut per_agent: Vec<BranchStream> = Vec::with_capacity(sub_agents.len());
 
-            let mut first_error: Option<adk_core::AdkError> = None;
+                for (index, agent) in sub_agents.into_iter().enumerate() {
+                    let ctx: Arc<dyn InvocationContext> = if let Some(ref shared) = shared {
+                        Arc::new(SharedStateContext::new(run_ctx.clone(), shared.clone()))
+                    } else {
+                        run_ctx.clone()
+                    };
 
-            while let Some(result) = futures.next().await {
-                match result {
-                    Ok(mut stream) => {
-                        while let Some(event_result) = stream.next().await {
-                            match event_result {
-                                Ok(event) => yield Ok(event),
-                                Err(e) => {
-                                    if first_error.is_none() {
-                                        first_error = Some(e);
+                    per_agent.push(Box::pin(stream! {
+                        match agent.run(ctx).await {
+                            Ok(mut events) => {
+                                while let Some(event_result) = events.next().await {
+                                    let failed = event_result.is_err();
+                                    yield (index, event_result);
+                                    if failed {
+                                        // Abandon this branch, leave the others running.
+                                        break;
                                     }
-                                    // Continue draining other agents instead of returning
-                                    break;
                                 }
                             }
+                            Err(e) => yield (index, Err(e)),
                         }
-                    }
-                    Err(e) => {
-                        if first_error.is_none() {
-                            first_error = Some(e);
-                        }
-                        // Continue draining remaining futures to avoid resource leaks
-                    }
+                    }));
+                }
+
+                select_all(per_agent)
+            };
+
+            // Errors are collected with their sub-agent index so the reported
+            // error stays deterministic. With branches running concurrently,
+            // "whichever failed first" would be a race; the lowest index matches
+            // the declared sub-agent order this agent was constructed with.
+            let mut failures: Vec<(usize, adk_core::AdkError)> = Vec::new();
+
+            while let Some((index, event_result)) = merged.next().await {
+                match event_result {
+                    Ok(event) => yield Ok(event),
+                    Err(e) => failures.push((index, e)),
                 }
             }
 
             // After all agents complete, propagate the first error if any
-            if let Some(e) = first_error {
+            if let Some((_, e)) = failures.into_iter().min_by_key(|(index, _)| *index) {
                 yield Err(e);
                 return;
             }

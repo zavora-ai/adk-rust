@@ -318,6 +318,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-agent: `ParallelAgent` branches now actually run in parallel.** The
+  previous implementation resolved every sub-agent's `run()` future together but
+  then drained each returned `EventStream` to completion in turn. Since
+  `Agent::run` only *builds* a stream — the work happens when the stream is
+  polled — branches executed one at a time, so latency was additive and a slow
+  branch blocked every later one (two 300 ms branches took 604 ms; they now take
+  302 ms). Branch streams are merged with `select_all`, matching the ADK Python
+  (`_merge_agent_run`) and ADK Go (`parallelagent`) designs, including their
+  per-branch backpressure: a branch cannot run ahead while an event it already
+  produced is still being consumed, so the runner's per-event persistence stays
+  in step with execution. Dropping the merged stream now tears down in-flight
+  branches instead of leaving them running. Error handling is unchanged — every
+  branch still drains and a single terminal error is surfaced — except that the
+  reported error is now chosen by sub-agent declaration order rather than by
+  whichever branch failed first, which concurrency would otherwise make a race.
+
 - **adk-runner/adk-agent: workflow agents are resumed at the root across turns**
   (#419) — in a session that persists across turns, `find_agent_to_run` no
   longer routes a follow-up user message to a single sub-agent that responded
