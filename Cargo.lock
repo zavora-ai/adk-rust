@@ -718,6 +718,7 @@ dependencies = [
  "sqlx 0.8.6",
  "surrealdb",
  "surrealdb-types",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

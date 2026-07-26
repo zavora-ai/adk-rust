@@ -39,6 +39,7 @@ surrealdb-types = { version = "3.0.1", optional = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 proptest = "1.6"
+tempfile = "3"
 
 [features]
 default = []
