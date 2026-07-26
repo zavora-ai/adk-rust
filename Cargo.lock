@@ -214,7 +214,7 @@ dependencies = [
  "google-cloud-gax 1.11.0",
  "google-cloud-secretmanager-v1",
  "hex",
- "jsonwebtoken 10.4.0",
+ "jsonwebtoken 11.0.0",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -10130,6 +10130,24 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "signature",
+ "simple_asn1",
+ "zeroize",
+]
+
+[[package]]
+name = "jsonwebtoken"
+version = "11.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "881733cbc631fc9e472e24447ce32a64bedf2da498d6d8570b08edc87de71f65"
+dependencies = [
+ "aws-lc-rs",
+ "base64 0.22.1",
+ "getrandom 0.2.17",
+ "js-sys",
+ "pem",
+ "serde",
+ "serde_json",
  "signature",
  "simple_asn1",
  "zeroize",
