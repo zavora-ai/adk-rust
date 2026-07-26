@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-devtools: workspace containment was bypassable through symlinks.**
+  `Workspace::resolve` normalized a requested path lexically and checked
+  `starts_with(root)`. A symlink sitting lexically under the root satisfies that
+  check while pointing anywhere on the host, and ordinary file I/O follows it, so
+  `read_file`, `write_file`, and `edit_file` could reach host files outside the
+  advertised workspace. A symlinked parent directory redirected creation and writes
+  the same way. The existing containment test covered `..` traversal only.
+
+  Containment is now enforced against the resolved path: the deepest existing
+  ancestor of the target is canonicalized, resolving every link along the way, and
+  the result must still be inside the root. That covers both a symlinked final
+  component and a symlinked parent directory, including creation of a file that does
+  not exist yet under a redirected directory. A symlink whose target stays inside the
+  workspace keeps working, because repositories legitimately contain internal links
+  and refusing them would break ordinary work without improving containment.
+
+  This is a check, not a lock. A symlink planted between the check and the
+  subsequent open would still be followed; closing that window needs
+  descriptor-relative traversal with platform no-follow semantics, which the
+  documentation now states plainly.
+
 - **Dependency advisories resolved.** Bumped `surrealdb` (optional `adk-rag`
   backend) to 3.2.1, fixing GHSA-cc8f-fcx3-gpjr (high: arbitrary file read via
   `DEFINE ANALYZER` mapper filter) plus four related medium advisories. Bumped
