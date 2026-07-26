@@ -73,7 +73,9 @@
 //!
 //! ### LlmAgent - AI-Powered Reasoning
 //!
-//! The core agent type that uses Large Language Models for intelligent reasoning:
+//! The core agent type that uses Large Language Models for intelligent
+//! reasoning. `GoogleSearchTool` below requires the `tools` feature (included in
+//! `standard` and above); the agent itself needs only the default tier:
 //!
 //! ```no_run
 //! use adk_rust::prelude::*;
@@ -152,7 +154,8 @@
 //!
 //! ## Tools
 //!
-//! Give your agents capabilities beyond conversation:
+//! Give your agents capabilities beyond conversation. The tool types below
+//! require the `tools` feature (included in `standard` and above):
 //!
 //! ### Function Tools - Custom Operations
 //!
@@ -280,7 +283,8 @@
 //!
 //! ## Artifacts
 //!
-//! Store and retrieve binary data (images, files, etc.):
+//! Store and retrieve binary data (images, files, etc.). Requires the
+//! `artifacts` feature (included in `standard` and above):
 //!
 //! ```no_run
 //! use adk_rust::prelude::*;
@@ -342,7 +346,8 @@
 //!
 //! ### Agent-to-Agent (A2A) Protocol
 //!
-//! Expose your agent for inter-agent communication:
+//! Expose your agent for inter-agent communication. Requires the `server`
+//! feature (included in `standard` and above):
 //!
 //! ```no_run
 //! use adk_rust::server::{create_app_with_a2a, ServerConfig};
@@ -364,17 +369,19 @@
 //!
 //! ## Observability
 //!
-//! Built-in OpenTelemetry support for production monitoring:
+//! Built-in OpenTelemetry support for production monitoring. Requires the
+//! `telemetry` feature (included in `standard` and above); OTLP export adds
+//! `telemetry-otlp`:
 //!
 //! ```no_run
-//! use adk_rust::telemetry::{init_telemetry, init_with_otlp};
+//! use adk_rust::telemetry::init_telemetry;
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Basic telemetry with console logging
 //! init_telemetry("my-agent-service")?;
 //!
-//! // Or with OTLP export for distributed tracing
-//! // init_with_otlp("my-agent-service", "http://localhost:4317")?;
+//! // With `features = ["telemetry-otlp"]`, export spans to a collector instead:
+//! // adk_rust::telemetry::init_with_otlp("my-agent-service", "http://localhost:4317")?;
 //!
 //! // All agent operations now emit traces and metrics
 //! # Ok(())

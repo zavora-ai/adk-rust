@@ -8,6 +8,8 @@ authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 description = "Native Rust SDK for ADK-Rust Enterprise Managed Agent Service"
+keywords = ["ai", "agent", "sdk", "enterprise", "llm"]
+categories = ["api-bindings", "asynchronous"]
 
 [dependencies]
 reqwest = { workspace = true }
