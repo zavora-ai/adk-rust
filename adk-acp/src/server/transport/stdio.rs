@@ -889,7 +889,7 @@ mod tests {
         }
 
         async fn run(&self, ctx: Arc<dyn InvocationContext>) -> AdkResult<EventStream> {
-            let decision = ctx.run_config().tool_confirmation_decisions.get("delete_file").copied();
+            let decision = ctx.run_config().tool_confirmation_decisions.get("call-1").copied();
             let applied_decision = self.applied_decision.clone();
             let executed = self.executed.clone();
             let s = async_stream::stream! {

@@ -57,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `adk-core` | New public fields: `RunConfig::{tool_confirmation_handler, runtime_toolsets}` | Struct literals must add the fields; prefer `RunConfig::builder()` |
   | `adk-core` | New variant `Part::EmbeddedResource` (`Part` is not `#[non_exhaustive]`) | Exhaustive `match` must add an arm |
   | `adk-core` | `RunConfig` and `RunConfigBuilder` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code holding them across `catch_unwind` |
+  | `adk-core` | `RunConfig::tool_confirmation_decisions` is now keyed by **function call ID** instead of tool name | Approvals keyed by tool name are no longer found, so the call stays unconfirmed; key by `ToolConfirmationRequest::function_call_id` |
+  | `adk-core` | New public field `RunConfig::tool_confirmation_fingerprints` | Struct literals must add the field; prefer `RunConfig::builder()` |
   | `adk-graph` | New public field `StateGraph::deferred_configs` | Struct literals must add the field |
   | `adk-realtime` | `ClientEvent` and `ServerEvent` are now `#[non_exhaustive]` | Downstream `match` needs a wildcard arm; the enums can no longer be constructed exhaustively outside the crate |
   | `adk-realtime` | `ServerEvent::Unknown` discriminant changed 21 → 23 | Affects code depending on the numeric discriminant |
@@ -317,6 +319,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entries, so no plan update is emitted today.
 
 ### Fixed
+
+- **adk-core/adk-agent: tool approvals are scoped to one exact call.** Live
+  decisions from a `ToolConfirmationHandler` were tracked by function-call ID, but
+  static decisions in `RunConfig::tool_confirmation_decisions` were looked up by
+  **tool name**. One `delete_file` approval therefore authorized every
+  `delete_file` call evaluated against that map, whatever its arguments, and two
+  calls to the same tool in one turn could not receive different decisions. A
+  decision intended for one action could be replayed onto a materially different
+  one, which weakens the authorization boundary precisely in the resumed and
+  web-driven flows that rely on the static map.
+
+  Static decisions are now keyed by function-call ID, matching the live path and
+  the ID already reported on `ToolConfirmationRequest`. An unrecognized key means
+  "no decision", so the call stays pending rather than executing.
+
+  The new `RunConfig::tool_confirmation_fingerprints` optionally binds a decision
+  to the arguments it was granted for, using the new
+  `adk_core::tool_call_fingerprint`. This defends the case where a call ID is
+  replayed with different arguments after a round trip through something
+  untrusted, such as a browser. A mismatch is treated as unconfirmed. The
+  fingerprint is canonical over object key order, so re-serialized arguments still
+  match.
+
+  Consumers updated to the call-keyed contract: `adk-acp`'s permission bridge
+  (whose own module documentation already claimed call-level correlation while the
+  code keyed by name), and both confirmation gates in `adk-agent`'s CodeAct agent.
 
 - **adk-agent/adk-tool: workflow context wrappers no longer drop cancellation,
   secrets, and shared state.** Each wrapper re-implements `InvocationContext` and

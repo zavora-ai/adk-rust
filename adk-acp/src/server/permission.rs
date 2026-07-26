@@ -13,12 +13,11 @@
 //! tool-call id, so the client sees the exact call it is approving and the
 //! outcome is correlated to that call (Requirement 7.5, Property P8).
 //!
-//! ADK's resume API ([`RunConfig::tool_confirmation_decisions`]) is keyed by
-//! *tool name*, so the decision the bridge derives is applied to the runner
-//! under the tool name from the same request. Because the runner pauses at the
-//! first still-undecided confirmation and resumes one decision at a time, this
-//! preserves the function-call correlation for the call that was actually
-//! awaiting approval.
+//! The resume API ([`RunConfig::tool_confirmation_decisions`]) is keyed by
+//! *function-call ID*, so the decision the bridge derives is recorded against the
+//! exact call the client approved and cannot be replayed onto another call of the
+//! same tool. A confirmation request that carries no call ID is rejected rather
+//! than approved under a weaker key.
 //!
 //! # SDK safety
 //!

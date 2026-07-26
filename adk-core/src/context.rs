@@ -697,6 +697,71 @@ pub enum ToolConfirmationDecision {
     Deny,
 }
 
+/// Produces a canonical fingerprint of a tool call.
+///
+/// The fingerprint is the tool name followed by its arguments in canonical JSON
+/// form, with object keys sorted at every level so that two structurally equal
+/// argument sets always produce the same string. It is deliberately readable
+/// rather than hashed, so a mismatch can be diagnosed by inspection.
+///
+/// Use it with
+/// [`RunConfig::tool_confirmation_fingerprints`](RunConfig::tool_confirmation_fingerprints)
+/// to bind an approval to the exact arguments it was granted for.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::tool_call_fingerprint;
+/// use serde_json::json;
+///
+/// // Key order does not change the fingerprint.
+/// let a = tool_call_fingerprint("delete_file", &json!({ "path": "/tmp/a", "force": true }));
+/// let b = tool_call_fingerprint("delete_file", &json!({ "force": true, "path": "/tmp/a" }));
+/// assert_eq!(a, b);
+///
+/// // A different path does not.
+/// let c = tool_call_fingerprint("delete_file", &json!({ "path": "/etc/passwd", "force": true }));
+/// assert_ne!(a, c);
+/// ```
+pub fn tool_call_fingerprint(tool_name: &str, args: &Value) -> String {
+    let mut out = String::with_capacity(tool_name.len() + 32);
+    out.push_str(tool_name);
+    out.push('\u{1f}');
+    write_canonical(args, &mut out);
+    out
+}
+
+/// Writes `value` as canonical JSON, with object keys sorted at every level.
+fn write_canonical(value: &Value, out: &mut String) {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (i, key) in keys.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&Value::String((*key).clone()).to_string());
+                out.push(':');
+                write_canonical(&map[*key], out);
+            }
+            out.push('}');
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_canonical(item, out);
+            }
+            out.push(']');
+        }
+        other => out.push_str(&other.to_string()),
+    }
+}
+
 /// Policy defining which tools require human confirmation before execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -799,9 +864,32 @@ impl std::fmt::Debug for RuntimeToolset {
 pub struct RunConfig {
     /// The streaming mode for agent responses.
     pub streaming_mode: StreamingMode,
-    /// Optional per-tool confirmation decisions for the current run.
-    /// Keys are tool names.
+    /// Static confirmation decisions for the current run, keyed by **function
+    /// call ID**.
+    ///
+    /// The ID is the one reported on
+    /// [`ToolConfirmationRequest::function_call_id`], so a decision authorizes the
+    /// exact call it was requested for. A decision under a tool *name* is not
+    /// consulted, because one name can cover materially different calls — a
+    /// `delete_file` approval for a scratch path must not authorize a call that
+    /// targets a different path.
+    ///
+    /// Use [`tool_confirmation_fingerprints`](Self::tool_confirmation_fingerprints)
+    /// to additionally bind a decision to the arguments it was granted for. For
+    /// name-wide or policy-driven decisions, supply a
+    /// [`tool_confirmation_handler`](Self::tool_confirmation_handler) instead.
     pub tool_confirmation_decisions: HashMap<String, ToolConfirmationDecision>,
+    /// Optional argument binding for entries in
+    /// [`tool_confirmation_decisions`](Self::tool_confirmation_decisions), keyed by
+    /// the same function call ID.
+    ///
+    /// The value is the fingerprint produced by [`tool_call_fingerprint`] for the
+    /// call the decision was granted for. When an entry is present and the actual
+    /// call does not match it, the decision is ignored and the call is treated as
+    /// unconfirmed — the safe direction. Use this when a decision travels through
+    /// an untrusted round trip, such as a browser, where the arguments could be
+    /// changed while the call ID is replayed.
+    pub tool_confirmation_fingerprints: HashMap<String, String>,
     /// Optional live decision source for confirmations that have no static
     /// entry in [`tool_confirmation_decisions`](Self::tool_confirmation_decisions).
     pub tool_confirmation_handler: Option<Arc<dyn ToolConfirmationHandler>>,
@@ -858,6 +946,7 @@ impl Default for RunConfig {
         Self {
             streaming_mode: StreamingMode::SSE,
             tool_confirmation_decisions: HashMap::new(),
+            tool_confirmation_fingerprints: HashMap::new(),
             tool_confirmation_handler: None,
             runtime_toolsets: Vec::new(),
             cached_content: None,
@@ -923,12 +1012,25 @@ impl RunConfigBuilder {
         self
     }
 
-    /// Sets per-tool confirmation decisions for the current run.
+    /// Sets static confirmation decisions for the current run, keyed by function
+    /// call ID.
+    ///
+    /// The ID is the one carried on `ToolConfirmationRequest::function_call_id`.
     pub fn tool_confirmation_decisions(
         mut self,
         decisions: HashMap<String, ToolConfirmationDecision>,
     ) -> Self {
         self.config.tool_confirmation_decisions = decisions;
+        self
+    }
+
+    /// Binds confirmation decisions to the arguments they were granted for.
+    ///
+    /// Keys are function call IDs and values are fingerprints from
+    /// [`tool_call_fingerprint`]. A decision whose fingerprint does not match the
+    /// actual call is ignored and the call is treated as unconfirmed.
+    pub fn tool_confirmation_fingerprints(mut self, fingerprints: HashMap<String, String>) -> Self {
+        self.config.tool_confirmation_fingerprints = fingerprints;
         self
     }
 
