@@ -22,7 +22,7 @@ adk-core = { workspace = true }
 # dispatch (`ForkSessionRequest` / `ForkSessionResponse`, the `session.fork`
 # capability). The method is stable-adjacent in the SDK but gated behind this
 # feature; we enable it to implement Requirement 10 (session fork).
-agent-client-protocol = { version = "1.2.0", features = ["unstable_session_fork"] }
+agent-client-protocol = { version = "2.0.0", features = ["unstable_session_fork"] }
 async-trait = { workspace = true }
 base64 = "0.22"
 futures = { workspace = true }
