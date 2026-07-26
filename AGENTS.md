@@ -503,12 +503,104 @@ refactor(ui): extract validation into per-type trait impls
 test(eval): add trajectory property tests
 ```
 
+Subject line only, unless the change is not self-evident from the subject. See
+[Writing style](#writing-style) for body, register, and issue-reference rules.
+
+## Writing style
+
+This guideline governs every text artefact an agent commits or posts: commit messages, code
+comments, rustdoc, PR bodies, issue comments, and review replies. `CONTRIBUTING.md` and
+`docs/official_docs/` are the reference corpus — match their register.
+
+The register rules below govern text committed to or posted on the repository. They do not govern
+`AGENTS.md` itself, which is instruction addressed to the agent and uses the second-person
+imperative.
+
+Committed and posted text is project documentation, not a contributor's voice. Do not adopt a
+maintainer's tone, do not offer personal preferences or recommendations in committed artefacts,
+and keep analysis, discovery narrative, and reasoning in the conversation with the human rather
+than in the repository.
+
+The house register:
+
+- **Structure over prose**: enumerations become tables, procedures become numbered headed steps,
+  definitions become bold-lead bullets.
+- **Present tense, stating what the system does**: "The gate fails the build when a feature-gated
+  module stops compiling."
+- **"You" for the reader, "we" only for project-level decisions**: "We follow an issue-first
+  workflow."
+- **Rationale is a single clause, not a paragraph**: "Excluded so `--all-features` works without
+  CUDA toolkit."
+- **Code blocks are complete**, with full imports, not fragments.
+- **Callouts** are `> **Note:**` blockquotes or inline `**Important:**`.
+- **Em dashes are house style** — use them where they read naturally.
+
+### Commit messages
+
+- Conventional-commit subject, imperative, under ~70 characters:
+  `fix(rag): upgrade lancedb to 0.31, unbreak and cover the backend`.
+- Body only when the change is not self-evident from the subject. When present, keep it short and
+  factual, prefer bullets over paragraphs, and state what changed and why in as few lines as
+  possible.
+- Reference issues as `Fixes #123` or `Closes #123`.
+- No discovery narrative, no first person, no essay-length bodies.
+
+### Code comments
+
+- Explain **why**, not **what** — the code already states what it does.
+- Single line where possible. A multi-line block earns its length by recording a non-obvious
+  constraint, invariant, or upstream quirk.
+- Do not restate the code. Do not write changelog entries or migration history in comments.
+
+```rust
+// All arrow types come from lancedb's own re-exports, so the arrow version is
+// stated exactly once, by lancedb, and cannot drift between crates.
+use lancedb::arrow::arrow_schema::{DataType, Field, Schema};
+```
+
+### Rustdoc
+
+Follow the pattern in `CONTRIBUTING.md` ("Documentation"): brief one-line summary, more detail if
+needed, `# Example` where practical, `# Errors` when the function returns `Result`. Present tense,
+third person, no "we" or "I".
+
+```rust
+/// Swaps the active LoRA adapter without reloading the base model.
+///
+/// # Errors
+///
+/// Returns `MistralRsError::AdapterNotFound` when `adapter_name` is not among the loaded adapters.
+pub async fn swap_adapter(&self, adapter_name: &str) -> Result<()> { ... }
+```
+
+### PR bodies, issue comments, and review replies
+
+- Lead with what changed, then use the PR template's headed sections (`## What`, `## Why`,
+  `## How`) and complete its checklist.
+- Prefer tables and bullets over paragraphs.
+- State verification results as facts: "`cargo nextest run --workspace` passes; three regression
+  tests added in `adk-rag/tests/`."
+- No narration of the authoring process, no opinions framed as personal preference, no persuasion.
+
+### Do and don't
+
+| Don't | Do |
+|-------|----|
+| "Root cause was lancedb sitting four breaking releases stale, not arrow drifting up." | "lancedb 0.28 and later re-export every arrow crate they depend on." |
+| "I verified the workspace compiles and my recommendation is the PR tier." | "`cargo check --workspace` passes. `feature-coverage` runs in the PR tier." |
+| "This gate fails loudly, which is strictly better than the negligent silence it replaced." | "The gate fails the build when a feature-gated module stops compiling." |
+| "Worth noting, one sequencing consequence is that two things are left." | A `### Remaining work` heading followed by a list. |
+| A 20-line narrative commit body recounting the investigation. | `fix(realtime): drop session guard before provider await` |
+| "I'd put the arrow pin in adk-rag since that's where it hurts most." | "`adk-rag` takes arrow types from `lancedb::arrow`, so the version is stated once, by lancedb." |
+| A paragraph listing four authorization mechanisms and their tradeoffs. | A `\| Mechanism \| Use Case \| Granularity \| Runtime \|` table. |
+
 ## PR workflow
 
 - **Branch naming**: Use `prefix/short-description`. Allowed prefixes: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `chore/`.
 - **Reference**: Include `Fixes #123` or similar in the PR description.
 - **Scope**: Keep PRs focused — one logical change per PR. Don't mix unrelated changes.
-- **Quality Gates**: All four gates must pass before merge: `fmt`, `clippy`, `test`, `check` (via `devenv shell`).
+- **Local gates before pushing**: Run `fmt`, `clippy`, `test`, and `check` via `devenv shell`. These are local shorthand, not CI job names — `check` has no CI job at all.
+- **CI gates that block merge**: The PR tier only (see [CI cost tiers](#ci-cost-tiers)). CONTRIBUTING.md ("Branch Protection — Required Status Checks") is authoritative for the required-check set.
 
 ### PR Checklist requirements
 
