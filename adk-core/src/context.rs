@@ -604,19 +604,43 @@ pub trait Memory: Send + Sync {
         Err(AdkError::memory("delete not implemented"))
     }
 
-    /// Search for memories within a specific project.
-    /// Returns global entries + entries for the given project.
-    /// Default delegates to `search` (global-only results).
-    async fn search_in_project(&self, query: &str, project_id: &str) -> Result<Vec<MemoryEntry>> {
-        let _ = project_id;
-        self.search(query).await
+    /// Whether this memory keeps project-scoped entries isolated.
+    ///
+    /// Returns `false` by default, so a caller can tell real isolation apart from a
+    /// memory that has no project support instead of inferring it from data.
+    fn supports_project_scoping(&self) -> bool {
+        false
     }
 
-    /// Add a memory entry scoped to a specific project.
-    /// Default delegates to `add` (global entry).
+    /// Searches memories within a specific project.
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns an error. Delegating to the global search
+    /// would return entries the project boundary is meant to exclude, and nothing in
+    /// the result would say the boundary was ignored.
+    async fn search_in_project(&self, query: &str, project_id: &str) -> Result<Vec<MemoryEntry>> {
+        let _ = (query, project_id);
+        Err(AdkError::memory(
+            "this memory does not implement project scoping, so `search_in_project` cannot \
+             honour the project boundary; check `supports_project_scoping` first, or call \
+             `search` if global scope is intended",
+        ))
+    }
+
+    /// Adds a memory entry scoped to a specific project.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error by default. Writing the entry globally would make data
+    /// intended for one project visible everywhere under the same app and user.
     async fn add_to_project(&self, entry: MemoryEntry, project_id: &str) -> Result<()> {
-        let _ = project_id;
-        self.add(entry).await
+        let _ = (entry, project_id);
+        Err(AdkError::memory(
+            "this memory does not implement project scoping, so `add_to_project` cannot honour \
+             the project boundary; check `supports_project_scoping` first, or call `add` if \
+             global scope is intended",
+        ))
     }
 }
 

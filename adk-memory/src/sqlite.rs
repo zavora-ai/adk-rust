@@ -433,6 +433,10 @@ impl MemoryService for SqliteMemoryService {
         Ok(())
     }
 
+    fn supports_project_scoping(&self) -> bool {
+        true
+    }
+
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, session_id = %session_id, project_id = %project_id, entry_count = entries.len()))]
     async fn add_session_to_project(
         &self,

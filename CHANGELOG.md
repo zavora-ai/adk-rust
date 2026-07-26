@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-core/adk-memory: project-scoped memory no longer falls back to global
+  scope.** `add_session_to_project`, `add_entry_to_project`, and
+  `delete_entries_in_project` had default implementations that discarded `project_id`
+  and called their global equivalents, and `Memory::search_in_project` and
+  `Memory::add_to_project` did the same. A backend therefore compiled as
+  project-aware without implementing a single project method: the call succeeded
+  while operating in global scope, and neither the type system nor the return value
+  said so. Data intended for one project became visible to everything under the same
+  app and user, and a project-scoped delete removed entries outside the project.
+
+  Those defaults now return an error naming the method and the reason. Six built-in
+  backends (in-memory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j) implement all four
+  project methods and now advertise `supports_project_scoping() == true`.
+  `GraphMemoryService` implements none of them and therefore refuses project calls it
+  previously answered in global scope — the behaviour change is the fix.
+  `MemoryServiceAdapter` reports the capability of the backend it wraps.
+
 - **Dependency advisories resolved.** Bumped `surrealdb` (optional `adk-rag`
   backend) to 3.2.1, fixing GHSA-cc8f-fcx3-gpjr (high: arbitrary file read via
   `DEFINE ANALYZER` mapper filter) plus four related medium advisories. Bumped
@@ -57,6 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `adk-core` | New public fields: `RunConfig::{tool_confirmation_handler, runtime_toolsets}` | Struct literals must add the fields; prefer `RunConfig::builder()` |
   | `adk-core` | New variant `Part::EmbeddedResource` (`Part` is not `#[non_exhaustive]`) | Exhaustive `match` must add an arm |
   | `adk-core` | `RunConfig` and `RunConfigBuilder` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code holding them across `catch_unwind` |
+  | `adk-core` | `Memory::search_in_project` and `Memory::add_to_project` now return an error by default instead of silently operating globally; new `Memory::supports_project_scoping` | A custom `Memory` that relied on the fallback must implement the project methods or accept the error |
+  | `adk-memory` | `MemoryService::{add_session_to_project, add_entry_to_project, delete_entries_in_project}` now return an error by default; new `MemoryService::supports_project_scoping` | A custom backend must implement them; `GraphMemoryService` now refuses project calls it previously answered globally |
   | `adk-graph` | New public field `StateGraph::deferred_configs` | Struct literals must add the field |
   | `adk-realtime` | `ClientEvent` and `ServerEvent` are now `#[non_exhaustive]` | Downstream `match` needs a wildcard arm; the enums can no longer be constructed exhaustively outside the crate |
   | `adk-realtime` | `ServerEvent::Unknown` discriminant changed 21 → 23 | Affects code depending on the numeric discriminant |
