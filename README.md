@@ -8,7 +8,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.94%2B-orange.svg)
 [![GitHub Discussions](https://img.shields.io/github/discussions/zavora-ai/adk-rust?style=flat&logo=github&color=5865F2)](https://github.com/zavora-ai/adk-rust/discussions)
 
-> **🚀 v1.0.0 Released!** First stable release — 39 crates, 130K+ downloads in 6 months, semver stability commitment, all former Beta crates promoted to Stable. Plus: `adk-bench` benchmarking framework (4.6× faster cold start vs Python), authoritative `ROADMAP.md`, and security hardening. See [CHANGELOG](CHANGELOG.md) for full details.
+> **🚀 v2.0.0 Released!** 41 published crates. Official `rmcp 2.2` MCP SDK (protocol `2025-11-25`) with effective HTTP configuration, official `agent-client-protocol` 1.2 for ACP with exact capability publication, the new `adk-computer-use` governed desktop-automation layer, `adk-devtools` coding-agent tools, live async tool confirmation keyed by function-call ID, and resolved dependency advisories. See the [migration guide](docs/official_docs/migration/1.0-to-2.0.md) for the complete breaking-change list and [CHANGELOG](CHANGELOG.md) for full details.
 >
 > **Contributors:** Many thanks to [@mikefaille](https://github.com/mikefaille) — AdkIdentity design, realtime audio, LiveKit bridge, skill system. [@rohan-panickar](https://github.com/rohan-panickar) — OpenAI-compatible providers, xAI, multimodal content. [@dhruv-pant](https://github.com/dhruv-pant) — Gemini service account auth. [@tomtom215](https://github.com/tomtom215) — A2A Protocol v1.0.0 types crate ([a2a-protocol-types](https://crates.io/crates/a2a-protocol-types)), Foundation-verified wire types powering our A2A v1 layer. [@danielsan](https://github.com/danielsan) — Google deps issue & PR (#181, #203), RAG crash report (#205). [@CodingFlow](https://github.com/CodingFlow) — Gemini 3 thinking level, global endpoint, citationSources (#177, #178, #179). [@ctylx](https://github.com/ctylx) — skill discovery fix (#204). [@poborin](https://github.com/poborin) — project config proposal (#176). [@chillin-capybara](https://github.com/chillin-capybara) — ACP integration, adk-acp crate. [@baotao2006](https://github.com/baotao2006) — UTF-8 boundary audit, CJK search/skill/eval fixes (#349, #357). [Get started →](https://github.com/zavora-ai/adk-rust/wiki/quickstart)
 >
@@ -100,7 +100,7 @@ ADK-Rust provides a comprehensive framework for building AI agents in Rust, feat
 - **Agentic commerce**: ACP and AP2 payment orchestration with durable transaction journals and evidence-backed recall
 - **Agentic Web Protocol (AWP)**: Make websites agent-native with discovery, capability manifests, trust levels, rate limiting, consent, and health monitoring
 - **Production features**: Session management, artifact storage, memory systems with project-scoped isolation, REST/A2A APIs
-- **Developer experience**: Interactive CLI, 75+ in-repo examples (120+ in the [playground](https://github.com/zavora-ai/adk-playground)), comprehensive documentation
+- **Developer experience**: Interactive CLI, 97 standalone example crates plus in-crate examples (120+ more in the [playground](https://github.com/zavora-ai/adk-playground)), comprehensive documentation
 
 **Status**: Production-ready, actively maintained
 
@@ -1157,15 +1157,13 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 
 </details>
 
-**Planned** (see [docs/roadmap/](docs/roadmap/)):
+**Planned** (see [ROADMAP.md](ROADMAP.md) for the authoritative roadmap):
 
 | Priority | Feature | Target | Status |
 |----------|---------|--------|--------|
-| 🔴 P0 | [ADK-UI vNext (A2UI + Generative UI)](docs/roadmap/adk-ui.md) | Q2-Q4 2026 | Planned |
-| 🟡 P1 | [Cloud Integrations](docs/roadmap/cloud-integrations.md) | Q2-Q3 2026 | Planned |
-| 🟢 P2 | [Enterprise Features](docs/roadmap/enterprise.md) | Q4 2026 | Planned |
-
-## Star History
+| 🔴 P0 | [ADK-UI vNext (A2UI + Generative UI)](https://github.com/zavora-ai/adk-ui) | Q2-Q4 2026 | Planned |
+| 🟡 P1 | Cloud Integrations | Q2-Q3 2026 | Planned |
+| 🟢 P2 | Enterprise Features | Q4 2026 | Planned |
 
 ## Star History
 

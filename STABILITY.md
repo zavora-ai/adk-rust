@@ -52,22 +52,27 @@ The table below assigns one stability tier to every public `adk-*` crate in the 
 | `adk-sandbox` | **Stable** | Sandboxed execution environments |
 | `adk-audio` | **Stable** | Audio processing and STT/TTS providers |
 | `adk-mistralrs` | **Stable** | Native local LLM inference via mistral.rs |
+| `adk-acp` | **Beta** | Agent Client Protocol client and server (tracks the upstream ACP spec) |
+| `adk-awp` | **Beta** | Agentic Web Protocol implementation (tracks the upstream AWP spec) |
+| `awp-types` | **Beta** | AWP protocol types, zero `adk-*` dependencies |
+| `adk-devtools` | **Beta** | Coding-agent dev tools scoped to a `Workspace` (new in 2.0.0) |
+| `adk-computer-use` | **Beta** | Governed orchestration for the `computer-use-mcp` server (new in 2.0.0) |
 | `adk-enterprise` | **Experimental** | Enterprise client SDK for ADK-Rust Managed Agent Service |
 | `adk-managed` | **Experimental** | Managed agent runtime engine |
 
 ### Beta Crate Rationale
 
-These crates are fully functional but remain Beta at 1.0 because their APIs depend on rapidly evolving external specifications or hardware capabilities:
+The crates listed as Beta in the table above are fully functional but track
+external specifications that are still moving, so their public API may change in a
+minor release. Every other crate was promoted to Stable in 1.0.0.
 
 | Crate | Reason for Beta | Path to Stable |
 |-------|----------------|----------------|
-| `adk-realtime` | WebRTC and Live API specs are evolving (OpenAI, Gemini, LiveKit) | Stabilize after upstream APIs settle |
-| `adk-browser` | WebDriver protocol and browser automation patterns still changing | Stabilize when WebDriver BiDi adoption matures |
-| `adk-eval` | Evaluation methodology is an active research area; API surface may expand | Promote after 1-2 release cycles without breaking changes |
-| `adk-code` | Code execution security model under active development | Stabilize alongside `adk-sandbox` |
-| `adk-sandbox` | OS-level sandboxing APIs differ across platforms; API may evolve | Stabilize after cross-platform testing at scale |
-| `adk-audio` | ONNX model ecosystem and audio format support expanding rapidly | Promote when model selection stabilizes |
-| `adk-mistralrs` | Upstream mistral.rs releases new model architectures frequently | Track upstream stability |
+| `adk-acp` | Agent Client Protocol is evolving upstream; capability negotiation follows the SDK | Stabilize once the ACP wire spec settles past v1 |
+| `adk-awp` | Agentic Web Protocol is a young specification | Stabilize when the AWP spec reaches a versioned release |
+| `awp-types` | Mirrors the AWP wire format, so it moves with the spec | Stabilize alongside `adk-awp` |
+| `adk-devtools` | New in 2.0.0; the coding-agent tool surface is still being shaped by use | Promote after 1-2 release cycles without breaking changes |
+| `adk-computer-use` | New in 2.0.0; tracks the `computer-use-mcp` wire contracts | Stabilize when the upstream contracts are versioned |
 
 ### Excluded from Workspace
 
@@ -134,4 +139,40 @@ ADK-Rust 1.0.0 was released on June 7, 2026. All Stable-tier crates commit to lo
 
 - Breaking changes to Stable-tier crates require a 2.0.0 release
 - Beta crates may have breaking changes in 1.x minor releases (with migration guides)
+- Experimental crates may change without notice
+
+## 2.0 Milestone
+
+ADK-Rust 2.0.0 is the second major release. It keeps the Stable-tier commitment and
+spends the major version on the breakage that had accumulated since 1.0.0.
+
+### What the major version bought
+
+| Area | Change |
+|---|---|
+| MCP | Official `rmcp 2.2` SDK, protocol `2025-11-25` |
+| ACP | Official `agent-client-protocol` 1.2; `PermissionDecision::Allow` split into `AllowOnce`/`AllowAlways`/`Select` |
+| Tool authorization | `RunConfig` gained an async `ToolConfirmationHandler`; decisions key on function-call ID |
+| Realtime | `ClientEvent`/`ServerEvent` became `#[non_exhaustive]` so future protocol events are additive |
+| New crates | `adk-devtools`, `adk-computer-use` (both Beta) |
+
+The complete breaking-change list, generated with `cargo semver-checks`, is in
+[`CHANGELOG.md`](CHANGELOG.md) and the
+[1.0 → 2.0 migration guide](docs/official_docs/migration/1.0-to-2.0.md).
+
+### Criteria Status
+
+| Criterion | Status | Notes |
+|-----------|--------|-------|
+| **Semver compliance** | ✅ Met | `cargo semver-checks check-release` accepts the 1.0.0 → 2.0.0 bump for every published crate. Because a major bump permits any change, the breaking-change inventory is generated separately with `--release-type minor` and recorded in the changelog. |
+| **Migration guide** | ✅ Met | [docs/official_docs/migration/1.0-to-2.0.md](docs/official_docs/migration/1.0-to-2.0.md) covers every breakage with before/after code. |
+| **Test coverage** | ✅ Met | 3700+ workspace tests plus 300+ doctests, all gated in CI. |
+| **CI enforcement** | ✅ Met | `fmt`, `clippy --all-targets -D warnings`, `nextest --workspace`, doctests, doc build, template scaffolding, and semver run per PR; supply-chain (`cargo audit` + `cargo deny`) and standalone-example compilation run nightly. |
+| **Supply chain** | ✅ Met | `cargo audit` and `cargo deny check` both pass. Accepted advisories and non-OSI dependency licenses are documented in [docs/security/DEPENDENCY-ADVISORIES.md](docs/security/DEPENDENCY-ADVISORIES.md). |
+| **Documentation coverage** | 🔲 In progress | Public API coverage is high; formal 90% audit pending tooling automation. |
+
+### Post-2.0 Contract
+
+- Breaking changes to Stable-tier crates require a 3.0.0 release
+- Beta crates may have breaking changes in 2.x minor releases (with migration guides)
 - Experimental crates may change without notice

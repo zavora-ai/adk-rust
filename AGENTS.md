@@ -29,16 +29,18 @@ is preserved (see the `ci-pipeline-restructure` spec). No coverage is dropped �
 expensive axes move to a later tier.
 
 - **PR tier** (`ci.yml` + `semver.yml`, on pull requests) — the merge-blocking
-  set: `fmt` (prerequisite gate), `clippy --workspace -D warnings`,
+  set: `fmt` (prerequisite gate), `clippy --workspace --all-targets -D warnings`,
   `nextest --workspace` (Linux, runs at most once), `feature-coverage` for
   feature-gated modules default builds skip (e.g. `adk-agent --features codeact`),
-  `docs` (single `cargo doc --workspace --no-deps`), `templates`, compile-only
-  `macos`/`windows` builds, and `semver` (stable strict, beta warn-only).
+  `docs` (`cargo doc --workspace --no-deps` plus doctests), `templates`,
+  compile-only `macos`/`windows` builds, and `semver` (stable strict, everything
+  else warn-only).
 - **Merge tier** (`ci-merge.yml`, on `push: main`) — cross-platform
   `nextest --workspace` on macOS/Windows, the out-of-workspace Monty build, and
   doc-example compilation. Runs post-merge; not branch-protection-required.
 - **Nightly tier** (`ci-nightly.yml`, on `schedule`) — the feature-combination
-  matrix, `cargo-audit`/`cargo-deny` supply-chain checks, and `#[ignore]`
+  matrix (clippy with `-D warnings`), `cargo-audit`/`cargo-deny` supply-chain
+  checks, standalone `examples/*` compilation (4 shards), and `#[ignore]`
   integration tests gated on available secrets. Not branch-protection-required.
 
 Only the PR tier gates merges. See CONTRIBUTING.md ("Branch Protection — Required
@@ -97,7 +99,7 @@ adk-anthropic/   Dedicated Anthropic API client: streaming, adaptive thinking, p
                  multiagent orchestration, file mounting, self-hosted environments.
                  Files API (`files` feature): upload, download, list, get, delete.
 adk-tool/        Tool system: FunctionTool, StatefulTool, SimpleToolContext, MCP integration
-                 (rmcp 1.2), McpServerManager (lifecycle, health, auto-restart), MCP Resource
+                 (rmcp 2.2), McpServerManager (lifecycle, health, auto-restart), MCP Resource
                  API, MCP Elicitation, Google Search, built-in tool wrappers (Gemini/OpenAI/
                  Anthropic), Slack/BigQuery/Spanner toolsets
 adk-runner/      Agent execution runtime with event streaming, RunnerConfigBuilder (typestate),
@@ -204,7 +206,7 @@ adk-ui/          Dynamic UI generation (forms, cards, tables, charts) — extrac
 ### Examples and docs
 
 ```
-examples/              60 standalone example crates (each with own Cargo.toml) covering all major
+examples/              97 standalone example crates (each with own Cargo.toml) covering all major
                        features. Additional 120+ examples in the adk-playground repo.
 docs/official_docs/    Comprehensive documentation site content
 ```
@@ -630,20 +632,29 @@ Always verify builds during publish — never use `--no-verify`. Verification en
 
 ### Publish order
 
-Crates must be published in dependency order. Wait for each crate to be indexed before publishing dependents.
+Crates must be published in dependency order. `cargo xtask publish` (via
+`./publish.sh`) computes the order from the workspace graph, so this list is
+documentation rather than configuration — `scripts/check-publish-order.sh` is the
+gate that keeps it satisfiable. The current 8 tiers over 41 publishable crates:
 
 ```
-Tier 1: adk-core
-Tier 2: adk-telemetry, adk-memory, adk-artifact, adk-plugin, adk-skill, adk-auth, adk-guardrail,
-        adk-gemini, adk-anthropic, adk-rust-macros, awp-types
-Tier 3: adk-session, adk-action
-Tier 4: adk-tool, adk-model, adk-browser, adk-audio
-Tier 5: adk-agent, adk-graph, adk-awp, adk-acp
-Tier 6: adk-runner, adk-realtime, adk-eval, adk-rag, adk-retry-reflect
-Tier 7: adk-server, adk-cli, adk-deploy, adk-payments
-Tier 8: cargo-adk
-Tier 9: adk-rust (umbrella — always last)
+Tier 1: adk-core, adk-anthropic, adk-deploy, adk-enterprise, adk-rust-macros,
+        adk-telemetry, awp-types
+Tier 2: adk-action, adk-artifact, adk-awp, adk-browser, adk-devtools, adk-gemini,
+        adk-guardrail, adk-memory, adk-mistralrs, adk-plugin, adk-sandbox,
+        adk-session
+Tier 3: adk-code, adk-graph, adk-model, adk-rag, adk-realtime, adk-retry-reflect,
+        adk-skill
+Tier 4: adk-agent, adk-audio, adk-runner, adk-tool
+Tier 5: adk-acp, adk-eval, adk-managed, adk-server
+Tier 6: adk-auth, adk-bench, adk-cli
+Tier 7: adk-computer-use, adk-payments, cargo-adk
+Tier 8: adk-rust (umbrella — always last)
 ```
+
+> **Note:** internal **dev**-dependencies are declared path-only (no version) so
+> they do not constrain this order. Adding a versioned internal dev-dependency can
+> deadlock the release; `check-publish-order.sh` warns when one appears.
 
 ### Publish workflow
 

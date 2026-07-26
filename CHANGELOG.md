@@ -41,14 +41,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ADK agent tool confirmation can be resolved live.** `RunConfig` accepts an
   asynchronous `ToolConfirmationHandler`, and allow-once decisions are keyed by
   exact function-call ID rather than tool name.
-- **Breaking:** major version bump. Accumulated API changes since 1.0.0 include
-  new public enum variants in `adk-anthropic` (`ContentBlock::WebFetchToolResult`,
-  `ToolUnionParam::WebFetch20250910`, `ServerTool::WebFetch20250910`) and a new
-  public field on `adk-graph`'s `StateGraph` (`deferred_configs`), which require
-  a major release under semver. The list also includes the new `adk-core`
-  `Part::EmbeddedResource` variant: `Part` is not `#[non_exhaustive]`, so
-  downstream code that matches on it exhaustively must add an arm for the new
-  variant.
+- **Breaking:** major version bump. The complete list of public API breakage since
+  1.0.0, as reported by `cargo semver-checks check-release --release-type minor`
+  against the published 1.0.0 baseline, is below. A migration guide with
+  before/after code is in
+  [docs/official_docs/migration/1.0-to-2.0.md](docs/official_docs/migration/1.0-to-2.0.md).
+
+  | Crate | Change | Downstream impact |
+  |---|---|---|
+  | `adk-acp` | `PermissionDecision::Allow` **removed**, replaced by `Select(String)`, `AllowOnce`, and `AllowAlways` | Code constructing or matching `Allow` must pick the intended variant |
+  | `adk-acp` | New public fields: `PermissionRequest::{session_id, tool_call_id, kind, raw_input}`, `AcpAgentConfig::{mcp_servers, filesystem, terminal}`, `PermissionOption::kind` | Struct literals must add the fields; prefer `..Default::default()` |
+  | `adk-acp` | New variants: `OutputChunk::{ToolUpdate, Usage}`, `PermissionPolicy::AsyncCustom` | Exhaustive `match` must add arms |
+  | `adk-acp` | `AcpAgentConfig` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code storing it across `catch_unwind` |
+  | `adk-anthropic` | New variants: `ContentBlock::WebFetchToolResult`, `ToolUnionParam::WebFetch20250910`, `ServerTool::WebFetch20250910` | Exhaustive `match` must add arms |
+  | `adk-core` | New public fields: `RunConfig::{tool_confirmation_handler, runtime_toolsets}` | Struct literals must add the fields; prefer `RunConfig::builder()` |
+  | `adk-core` | New variant `Part::EmbeddedResource` (`Part` is not `#[non_exhaustive]`) | Exhaustive `match` must add an arm |
+  | `adk-core` | `RunConfig` and `RunConfigBuilder` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code holding them across `catch_unwind` |
+  | `adk-graph` | New public field `StateGraph::deferred_configs` | Struct literals must add the field |
+  | `adk-realtime` | `ClientEvent` and `ServerEvent` are now `#[non_exhaustive]` | Downstream `match` needs a wildcard arm; the enums can no longer be constructed exhaustively outside the crate |
+  | `adk-realtime` | `ServerEvent::Unknown` discriminant changed 21 → 23 | Affects code depending on the numeric discriminant |
+  | `adk-realtime` | New public field `RealtimeConfig::affective_dialog` | Struct literals must add the field |
+  | `adk-telemetry` | `AdkSpanLayer::new` now takes one generic type parameter instead of none | Call sites passing explicit generics must be updated |
+  | `adk-telemetry` | `AdkSpanLayer` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code holding it across `catch_unwind` |
 
 ### Added
 
