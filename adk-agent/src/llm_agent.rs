@@ -946,11 +946,49 @@ impl LlmAgentBuilder {
 
 // AgentToolContext wraps the parent InvocationContext and preserves all context
 // instead of throwing it away like SimpleToolContext did
+/// Progress events held in flight for one tool batch.
+///
+/// The queue exists to decouple a tool that writes progress from a client that
+/// reads it. It is bounded so a verbose tool cannot grow the queue without limit
+/// while the consumer is slow.
+const TOOL_PROGRESS_CAPACITY: usize = 256;
+
+/// How long a tool waits for queue space before its chunk is dropped.
+///
+/// A short wait applies real backpressure to a tool that outruns its consumer,
+/// without letting a stalled consumer block the tool indefinitely.
+const TOOL_PROGRESS_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Largest single progress chunk forwarded, in bytes.
+const TOOL_PROGRESS_MAX_CHUNK_BYTES: usize = 8 * 1024;
+
+/// Total progress bytes forwarded for one tool call.
+const TOOL_PROGRESS_MAX_TOTAL_BYTES: usize = 1024 * 1024;
+
+/// Text appended in place of progress output that was not forwarded.
+const TOOL_PROGRESS_TRUNCATION_MARKER: &str = "[adk: tool progress truncated]";
+
+/// Truncates `text` to at most `max_bytes`, never splitting a character.
+fn truncate_on_char_boundary(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 struct AgentToolContext {
     parent_ctx: Arc<dyn InvocationContext>,
     function_call_id: String,
     actions: Mutex<EventActions>,
-    progress_tx: Option<tokio::sync::mpsc::UnboundedSender<Event>>,
+    progress_tx: Option<tokio::sync::mpsc::Sender<Event>>,
+    /// Progress bytes forwarded so far for this call.
+    progress_bytes: std::sync::atomic::AtomicUsize,
+    /// Set once the truncation marker has been emitted, so it is emitted once.
+    progress_truncated: std::sync::atomic::AtomicBool,
 }
 
 impl AgentToolContext {
@@ -960,14 +998,87 @@ impl AgentToolContext {
             function_call_id,
             actions: Mutex::new(EventActions::default()),
             progress_tx: None,
+            progress_bytes: std::sync::atomic::AtomicUsize::new(0),
+            progress_truncated: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
     /// Attach a progress sink so [`ToolContext::emit_progress`] forwards chunks
     /// as partial [`Event`]s onto the agent's `EventStream`.
-    fn with_progress(mut self, tx: tokio::sync::mpsc::UnboundedSender<Event>) -> Self {
+    fn with_progress(mut self, tx: tokio::sync::mpsc::Sender<Event>) -> Self {
         self.progress_tx = Some(tx);
         self
+    }
+
+    /// Forwards one progress chunk under this call's budget.
+    ///
+    /// The policy is bounded and lossy by design: memory is capped, and output that
+    /// does not fit is replaced by a single truncation marker rather than stalling
+    /// the tool or growing without limit. A tool that outruns its consumer waits
+    /// briefly, which slows the tool rather than the whole run.
+    async fn forward_progress(
+        &self,
+        tx: &tokio::sync::mpsc::Sender<Event>,
+        stream: &str,
+        chunk: &str,
+    ) {
+        use std::sync::atomic::Ordering;
+
+        if self.progress_truncated.load(Ordering::Relaxed) {
+            return;
+        }
+
+        // Cap one chunk, then cap the call. Truncation respects char boundaries so
+        // multi-byte text is never split mid-character.
+        let payload = truncate_on_char_boundary(chunk, TOOL_PROGRESS_MAX_CHUNK_BYTES);
+        let forwarded = self.progress_bytes.fetch_add(payload.len(), Ordering::Relaxed);
+        if forwarded.saturating_add(payload.len()) > TOOL_PROGRESS_MAX_TOTAL_BYTES {
+            self.mark_progress_truncated(tx, stream).await;
+            return;
+        }
+
+        let event = Event::tool_progress(
+            self.parent_ctx.invocation_id(),
+            self.parent_ctx.agent_name(),
+            &self.function_call_id,
+            stream,
+            payload,
+        );
+
+        match tx.try_send(event) {
+            Ok(()) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Full(event)) => {
+                // Wait briefly for the consumer to catch up, then give up on this
+                // chunk so a stalled consumer cannot block the tool.
+                match tokio::time::timeout(TOOL_PROGRESS_SEND_TIMEOUT, tx.send(event)).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => {}
+                    Err(_) => self.mark_progress_truncated(tx, stream).await,
+                }
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
+        }
+    }
+
+    /// Emits the truncation marker once for this call.
+    async fn mark_progress_truncated(&self, tx: &tokio::sync::mpsc::Sender<Event>, stream: &str) {
+        use std::sync::atomic::Ordering;
+        if self.progress_truncated.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        tracing::warn!(
+            function_call.id = %self.function_call_id,
+            progress.stream = %stream,
+            "tool progress exceeded its budget, remaining output is not forwarded"
+        );
+        let marker = Event::tool_progress(
+            self.parent_ctx.invocation_id(),
+            self.parent_ctx.agent_name(),
+            &self.function_call_id,
+            stream,
+            TOOL_PROGRESS_TRUNCATION_MARKER,
+        );
+        let _ = tx.try_send(marker);
     }
 
     fn actions_guard(&self) -> std::sync::MutexGuard<'_, EventActions> {
@@ -1056,15 +1167,10 @@ impl ToolContext for AgentToolContext {
         // Primary path: forward as a partial Event on the agent's EventStream so
         // UIs consume tool progress through the same channel as everything else.
         if let Some(tx) = &self.progress_tx {
-            let event = Event::tool_progress(
-                self.parent_ctx.invocation_id(),
-                self.parent_ctx.agent_name(),
-                &self.function_call_id,
-                stream,
-                chunk,
-            );
-            // Best-effort: a closed receiver just means nobody is listening.
-            let _ = tx.send(event);
+            // A closed receiver means nobody is listening, so stop building events.
+            if !tx.is_closed() {
+                self.forward_progress(tx, stream, chunk).await;
+            }
         }
         // Secondary path: structured trace for log-based observability.
         tracing::debug!(
@@ -2202,7 +2308,7 @@ impl Agent for LlmAgent {
                     // AgentToolContext gets a clone; the dispatch loop below drains
                     // it concurrently and yields progress events to the client.
                     let (progress_tx, mut progress_rx) =
-                        tokio::sync::mpsc::unbounded_channel::<Event>();
+                        tokio::sync::mpsc::channel::<Event>(TOOL_PROGRESS_CAPACITY);
 
                     // Per-tool execution async block. Returns (index, Content, EventActions, escalate_or_skip).
                     // Each tool retains its own retry budget, circuit breaker, tracing span,

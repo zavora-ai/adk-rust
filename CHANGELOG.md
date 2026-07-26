@@ -318,6 +318,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-agent: tool progress is bounded.** Each tool batch created a
+  `tokio::sync::mpsc::unbounded_channel`, and `emit_progress` sent into it with no
+  backpressure and no aggregate limit. A tool producing output faster than the
+  client consumed it — a compiler log, a shell command, a runaway loop — grew the
+  queue until it was drained or the process ran out of memory, and a slow SSE
+  consumer made it worse.
+
+  The queue is now bounded at 256 events, a chunk is capped at 8 KiB (truncated on
+  a character boundary, so multi-byte text is never split), and a call may forward
+  1 MiB of progress in total. A tool that outruns its consumer waits up to 100 ms
+  for space and then drops the chunk, so a stalled consumer slows the tool briefly
+  but can never stall it indefinitely. Whenever output is dropped, exactly one
+  progress event carrying `[adk: tool progress truncated]` is emitted for that
+  call, so a gap is visible rather than silent. Final tool results are unaffected.
+
 - **adk-agent/adk-tool: workflow context wrappers no longer drop cancellation,
   secrets, and shared state.** Each wrapper re-implements `InvocationContext` and
   delegates to an inner context, but most capability methods have permissive trait
