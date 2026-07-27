@@ -468,6 +468,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-sandbox: sandboxed compilation uses the caller's toolchain.** The compile phase passed
+  `RUSTUP_HOME` and `CARGO_HOME` into the sandbox but not `RUSTUP_TOOLCHAIN`. `rustc` on `PATH` is
+  usually a rustup shim, so without it the shim ignored the caller's selection and resolved
+  `rust-toolchain.toml` instead — compiling with a different toolchain than intended, or, when the
+  pinned one is not installed, attempting a download that the sandbox's network denial blocks. That
+  surfaced as `info: syncing channel updates for …` reported as a compile failure.
+
 - **adk-sandbox: the Linux bubblewrap enforcer is selectable again.** `LinuxEnforcer::probe` ran
   `bwrap --unshare-user -- /bin/true` with no bind mounts. bwrap gives the new namespace an empty
   root, so `/bin/true` did not exist inside it and `execvp` failed — which the probe reported as

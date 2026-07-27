@@ -393,10 +393,25 @@ impl ProcessBackend {
     /// This widens what the compile phase can see compared with the run phase. An OS
     /// enforcer is what constrains it; see [`ProcessBackend::isolation`].
     fn toolchain_env() -> Vec<(String, String)> {
-        ["PATH", "DEVELOPER_DIR", "SDKROOT", "HOME", "TMPDIR", "RUSTUP_HOME", "CARGO_HOME"]
-            .iter()
-            .filter_map(|key| std::env::var(key).ok().map(|value| ((*key).to_string(), value)))
-            .collect()
+        // RUSTUP_TOOLCHAIN matters as much as RUSTUP_HOME: `rustc` on PATH is usually a rustup
+        // shim, and without it the shim ignores the caller's selection and resolves
+        // `rust-toolchain.toml` instead. That either compiles with a different toolchain than the
+        // caller intended, or — when the pinned one is not installed — tries to download it and
+        // fails against the sandbox's network denial, reporting "syncing channel updates" from
+        // what looks like a compile error.
+        [
+            "PATH",
+            "DEVELOPER_DIR",
+            "SDKROOT",
+            "HOME",
+            "TMPDIR",
+            "RUSTUP_HOME",
+            "CARGO_HOME",
+            "RUSTUP_TOOLCHAIN",
+        ]
+        .iter()
+        .filter_map(|key| std::env::var(key).ok().map(|value| ((*key).to_string(), value)))
+        .collect()
     }
 
     /// Shared execution logic, with `extra_env` applied below policy and request values.
