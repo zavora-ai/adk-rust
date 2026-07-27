@@ -23,6 +23,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `None`. A scope- or secret-checking tool therefore behaved differently in realtime than
   under a `Runner`, and could not distinguish an unauthenticated caller from a context that
   simply dropped the scopes. All three now delegate to the parent invocation context.
+- **adk-sandbox: filesystem isolation is reported as read and write separately, and the
+  Windows enforcer reports itself unavailable.** `EnforcedLimits::filesystem_isolation` was
+  set true whenever any enforcer was configured. The macOS Seatbelt profile denies network,
+  fork, and *writes* before re-allowing writes to configured paths — it never denies reads,
+  so sandboxed code could read host files outside the allowed paths while the capability
+  said the filesystem was isolated. Read-only entries in `allowed_paths` were effectively
+  documentation. The field is now `filesystem_write_isolation` and
+  `filesystem_read_isolation`, and macOS reports write isolation without read isolation;
+  the platform table and the Seatbelt description say so.
+
+  The Windows `probe` checked that `CreateAppContainerProfile` links, which proves the
+  platform API exists but not that the enforcer works — `configure_command` still returns
+  `EnforcerFailed` because container creation, ACLs, capabilities, and job-object cleanup
+  are unimplemented. A caller selecting an enforcer by probing would pick it and fail at
+  run time, so `probe` now returns `EnforcerUnavailable` naming AppContainer. The README,
+  sandbox docs, example README, and AGENTS.md no longer list AppContainer as supported.
+- **adk-sandbox: Rust compilation runs inside the boundary, policy env is applied, and the
+  isolation class is reported.** `ProcessBackend` compiled Rust source with a command
+  built outside `run_command` and awaited with `output()`, so the compile phase had no
+  enforcer wrapper, no request timeout, and no process group. Compilation is not inert —
+  `include_str!` reads files and procedural macros run arbitrary code — so a configured OS
+  policy did not cover the phase that could already touch the host, and a compiler that
+  blocked ran past the requested timeout. Compilation now goes through the same path as
+  execution.
+
+  `SandboxPolicy::env` was never applied; only `ExecRequest::env` reached the child, so a
+  policy that set variables silently supplied none. The policy now supplies defaults and
+  the request overrides them, which the documentation states.
+
+  New `ProcessBackend::isolation()` returns `IsolationClass::SubprocessOnly` or
+  `OsEnforced`, so a caller can tell what it is getting rather than inferring it from the
+  crate name; `default()` is subprocess-only.
+
+  Programs are also resolved to an absolute path against the caller's `PATH` *before* the
+  environment is cleared. A bare `python3`, `node`, or `rustc` previously required the
+  caller to put `PATH` into `ExecRequest::env`, which also handed the executed code
+  everything else on that `PATH`. The compile phase additionally receives toolchain
+  variables when set, because `rustc` cannot invoke a linker without them; that widening
+  is documented, and an enforcer is what constrains it.
 
 - **adk-core/adk-auth: secret access from tools is authorizable and audited.**
   `SecretService` and `SecretProvider` received only a secret *name*. Once a provider
@@ -184,6 +223,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `adk-realtime` | `ClientEvent` and `ServerEvent` are now `#[non_exhaustive]` | Downstream `match` needs a wildcard arm; the enums can no longer be constructed exhaustively outside the crate |
   | `adk-realtime` | `ServerEvent::Unknown` discriminant changed 21 → 23 | Affects code depending on the numeric discriminant |
   | `adk-realtime` | New public field `RealtimeConfig::affective_dialog` | Struct literals must add the field |
+  | `adk-sandbox` | `EnforcedLimits::filesystem_isolation` replaced by `filesystem_write_isolation` and `filesystem_read_isolation` | Read the field that matches what you need; the two are not equivalent on macOS |
   | `adk-telemetry` | `AdkSpanLayer::new` now takes one generic type parameter instead of none | Call sites passing explicit generics must be updated |
   | `adk-telemetry` | `AdkSpanLayer` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code holding it across `catch_unwind` |
 
@@ -440,6 +480,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entries, so no plan update is emitted today.
 
 ### Fixed
+
+- **adk-realtime: `max_concurrent_tools` is enforced, and tools no longer stall the event
+  loop.** The field defaulted to 4 and was read by nothing — no semaphore, no scheduler.
+  `FunctionCallDone` was awaited inline in `handle_event`, which the run loop awaited before
+  reading the next event, so tool calls ran strictly one at a time and blocked audio,
+  transcripts, and interruptions for the full duration of each call. Tool calls are now
+  dispatched onto the run loop under a semaphore sized by `max_concurrent_tools`, so event
+  intake continues while tools run. The single follow-up `create_response` owed after
+  automatic tool output is now issued once both the dispatching response has closed and
+  every dispatched tool has reported, in either order — previously the ordering was implicit
+  in the inline await and would have been lost.
+- **adk-realtime: transport loss is distinguishable from a graceful close.**
+  `EventHandler::on_disconnect` is called when the provider transport ends, before `run`
+  returns. `run` returns `Ok(())` for both cases, so a caller previously could not tell
+  them apart. The runner still does not reconnect automatically; the policy is documented.
 
 - **adk-server: background runs execute a workflow instead of reporting success.**
   `BackgroundRunner::run_with_timeout` received neither the workflow ID nor the input. It
