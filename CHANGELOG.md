@@ -426,6 +426,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-model: content parts a provider cannot carry are recorded, not silently dropped.**
+  The Bedrock converter returned `None` at five sites — one carrying the comment
+  `// Unsupported MIME type — skip silently` — so audio, video, arbitrary binary, some file
+  references, unsupported embedded blobs, and Gemini-specific server-tool parts vanished on
+  the way to the model. A request could reach the provider without material the caller
+  supplied, and the model could answer as though it had seen a document it never received.
+  The new `adk_model::part_conversion` module classifies every part as `Converted`,
+  `Downgraded`, or `Omitted`, warns as each loss is recorded, and offers
+  `ConversionReport::into_error` for callers that must fail before dispatch rather than send
+  an incomplete request. `adk_model::bedrock::convert::report_for_contents` exposes the
+  outcome without issuing a request. Accounting is complete by construction: a part that
+  leaves an adapter with no recorded fate is reported as an unexplained omission.
+
 - **adk-server: background runs execute a workflow instead of reporting success.**
   `BackgroundRunner::run_with_timeout` received neither the workflow ID nor the input. It
   checked cancellation and returned `Completed` with an empty object, so a client got a

@@ -277,6 +277,9 @@ pub mod openai;
 pub mod openai_compatible;
 #[cfg(feature = "openrouter")]
 pub mod openrouter;
+/// Conversion outcomes for content parts sent to a provider.
+pub mod part_conversion;
+
 /// Canonical provider identifiers and metadata.
 pub mod provider;
 /// Retry logic with exponential backoff for transient provider errors.
