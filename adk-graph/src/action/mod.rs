@@ -62,6 +62,45 @@ impl ActionNodeExecutor {
         &self.config
     }
 
+    /// Why this node cannot execute, if it cannot.
+    ///
+    /// Some action variants accept and validate a configuration while their backend is
+    /// still a placeholder, and some require a feature that is not compiled in. Both
+    /// used to surface only when the node ran, which is operationally different from a
+    /// configuration rejected before the workflow starts.
+    pub fn unavailable_reason(&self) -> Option<String> {
+        match &self.config {
+            ActionNodeConfig::Database(config) => Some(format!(
+                "database node '{}' cannot execute: the driver is a validated placeholder \
+                 with no backend integrated",
+                config.standard.id
+            )),
+            ActionNodeConfig::Email(config) => Some(format!(
+                "email node '{}' cannot execute: IMAP monitoring and SMTP sending are \
+                 not implemented",
+                config.standard.id
+            )),
+            ActionNodeConfig::Code(config)
+                if matches!(
+                    config.language,
+                    adk_action::CodeLanguage::Javascript | adk_action::CodeLanguage::Typescript
+                ) =>
+            {
+                Some(format!(
+                    "code node '{}' cannot execute: JavaScript and TypeScript have no \
+                     sandboxed runtime yet; use language 'rust'",
+                    config.standard.id
+                ))
+            }
+            #[cfg(not(feature = "action-http"))]
+            ActionNodeConfig::Http(config) => Some(format!(
+                "http node '{}' cannot execute: the 'action-http' feature is not enabled",
+                config.standard.id
+            )),
+            _ => None,
+        }
+    }
+
     /// Build a state map from the `NodeContext` for interpolation.
     fn state_map(ctx: &NodeContext) -> HashMap<String, Value> {
         ctx.state.clone()
@@ -204,6 +243,13 @@ impl ActionNodeExecutor {
 
 #[async_trait]
 impl Node for ActionNodeExecutor {
+    fn validate(&self) -> Result<()> {
+        match self.unavailable_reason() {
+            Some(message) => Err(GraphError::InvalidGraph(message)),
+            None => Ok(()),
+        }
+    }
+
     #[allow(clippy::misnamed_getters)]
     fn name(&self) -> &str {
         // Node::name() is used as a unique identifier, which is the `id` field

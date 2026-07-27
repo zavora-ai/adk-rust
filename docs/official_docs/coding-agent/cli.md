@@ -1,7 +1,7 @@
 # Coding Agent CLI
 
 The `adk-rust` CLI ships three native coding commands. All run a real agent in a
-**sandboxed workspace**, default to a Gemini 3 model, and resolve the API key
+**confined workspace**, default to a Gemini 3 model, and resolve the API key
 non-interactively from `--api-key` or the environment
 (`GEMINI_API_KEY`/`GOOGLE_API_KEY`, `OPENAI_API_KEY`, …) — so they never block on
 a setup prompt.

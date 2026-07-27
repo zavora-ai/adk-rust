@@ -166,8 +166,23 @@ async fn stream_turn(runner: &Runner, session_id: &str, prompt: &str) -> Result<
 }
 
 /// Run a shell command in `dir`; returns (exit_code, combined stdout+stderr).
+/// Run the goal-mode success check.
+///
+/// Uses the same environment policy as the agent's `bash` tool, so a check cannot see
+/// credentials the agent itself is not allowed to see.
 fn run_check(dir: &str, command: &str) -> (Option<i32>, String) {
-    match std::process::Command::new("sh").arg("-c").arg(command).current_dir(dir).output() {
+    let mut cmd = std::process::Command::new("sh");
+    cmd.arg("-c").arg(command).current_dir(dir);
+
+    let workspace = adk_devtools::Workspace::new(dir);
+    if !workspace.inherits_env() {
+        cmd.env_clear();
+        for (key, value) in workspace.bash_env() {
+            cmd.env(key, value);
+        }
+    }
+
+    match cmd.output() {
         Ok(o) => {
             let mut out = String::from_utf8_lossy(&o.stdout).to_string();
             out.push_str(&String::from_utf8_lossy(&o.stderr));
