@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-realtime: `RealtimeAgent` honours before-tool callback decisions.** The dispatch loop
+  built `(error_result, EventActions::default())` as a discarded expression statement and then
+  fell through to `tool.execute`, so a before-tool callback could neither deny a tool nor
+  substitute a result — it reported a decision that had no effect, which is worse than having
+  no gate, because the gate looked present. `Ok(Some(content))` now substitutes a result and
+  skips execution, `Err` refuses the tool and skips after-callbacks, and after-callback
+  substitutions and errors are applied instead of dropped by `let _ =`. This matches the
+  standard agent loop exactly.
+- **adk-realtime: realtime tools see the caller's scopes, secrets, and shared state.**
+  `RealtimeToolContext` implemented only the required trait methods, so `user_scopes()`
+  returned an empty list, `get_secret()` returned `None`, and `shared_state()` returned
+  `None`. A scope- or secret-checking tool therefore behaved differently in realtime than
+  under a `Runner`, and could not distinguish an unauthenticated caller from a context that
+  simply dropped the scopes. All three now delegate to the parent invocation context.
+
 - **adk-core/adk-auth: secret access from tools is authorizable and audited.**
   `SecretService` and `SecretProvider` received only a secret *name*. Once a provider
   was attached to an invocation, policy collapsed to whatever the backing cloud

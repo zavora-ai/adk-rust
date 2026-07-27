@@ -134,3 +134,41 @@ example is a headless probe that exercises single-tool, parallel-tool, and
 calculator turns on both providers.
 
 Next: [Multimodal →](multimodal.md)
+
+## Tool callbacks on the direct agent
+
+`RealtimeAgent` applies before- and after-tool callbacks with the same contract as the
+standard agent loop:
+
+| Callback returns | Effect |
+|------------------|--------|
+| `Ok(None)` | The tool runs |
+| `Ok(Some(content))` from a *before* callback | The content becomes the result; **the tool does not run** |
+| `Err(e)` from a *before* callback | The error becomes the result, the tool does not run, and after-callbacks are skipped |
+| `Ok(Some(content))` from an *after* callback | The content replaces the tool's result |
+| `Err(e)` from an *after* callback | The error replaces the tool's result |
+
+A callback's `Content` is converted to the JSON result the provider expects: a
+`FunctionResponse` part contributes its payload, anything else contributes its text under a
+`result` key.
+
+> **Important:** before this contract was honoured, a before-callback's decision was computed
+> and discarded, so the tool ran regardless — a gate that reported a denial without enforcing
+> one. After-callback results, including errors, were dropped.
+
+## Realtime tool context
+
+A tool invoked from `RealtimeAgent` sees the same capabilities it sees under a `Runner`:
+
+| Capability | Source |
+|------------|--------|
+| `user_scopes()` | The parent invocation context |
+| `get_secret(name)` | The parent invocation context |
+| `shared_state()` | The parent invocation context |
+| `search_memory(query)` | The parent's memory service |
+| Identity (`app_name`, `user_id`, `session_id`, `branch`) | The parent invocation context |
+
+> **Note:** these previously fell through to the trait defaults — an empty scope list, `None`
+> for secrets, and `None` for shared state — so a scope- or secret-checking tool behaved
+> differently in realtime than under a Runner, and could not tell an unauthenticated caller
+> from a context that simply failed to pass scopes through.
