@@ -25,7 +25,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are unimplemented. A caller selecting an enforcer by probing would pick it and fail at
   run time, so `probe` now returns `EnforcerUnavailable` naming AppContainer. The README,
   sandbox docs, example README, and AGENTS.md no longer list AppContainer as supported.
-
 - **adk-sandbox: Rust compilation runs inside the boundary, policy env is applied, and the
   isolation class is reported.** `ProcessBackend` compiled Rust source with a command
   built outside `run_command` and awaited with `output()`, so the compile phase had no
