@@ -133,12 +133,32 @@ The `background` feature in `adk-server` adds REST endpoints for async workflow 
 
 ### Usage
 
-```rust
-use adk_server::background::{BackgroundState, background_runs_router_with_state};
+A run names a `workflowId`. Something has to turn that name into work, so register a
+`WorkflowExecutor` — without one, a submitted run **fails** rather than reporting
+completion:
 
-let state = BackgroundState::new();
+```rust
+use adk_server::background::{
+    BackgroundState, WorkflowRegistry, background_runs_router_with_state,
+};
+use serde_json::json;
+use std::sync::Arc;
+
+let registry = WorkflowRegistry::new().register("summarize", |input, cancel| async move {
+    if cancel.is_cancelled() {
+        return Err("cancelled before starting".to_string());
+    }
+    Ok(json!({ "summary": "…", "of": input.get("document") }))
+});
+
+let state = BackgroundState::new().with_executor(Arc::new(registry));
 let app = axum::Router::new().merge(background_runs_router_with_state(state));
 ```
+
+Submitting an unregistered `workflowId` returns **404** rather than queuing a run that
+can never execute. Implement `WorkflowExecutor` directly to bridge to `adk-graph`, the
+functional API, or your own dispatcher; return `Err` to fail the run, which is what makes
+the retry budget meaningful.
 
 ### Status Lifecycle
 
@@ -147,6 +167,14 @@ queued → running → completed
                  → failed (retries if configured)
                  → cancelled (via DELETE)
 ```
+
+Retry re-executes the workflow **from the beginning** with the original input. It is not
+checkpoint-aware, so a workflow with side effects should be idempotent or guard its own
+progress.
+
+> **Important:** run records live in an in-memory store. A process restart loses every
+> record, including in-flight runs. Treat these endpoints as an async execution surface,
+> not a durable job queue.
 
 ## Cron Scheduling
 
@@ -158,14 +186,23 @@ The `background` feature also includes cron job management.
 |--------|------|-------------|
 | POST | `/cron` | Create a cron job |
 | GET | `/cron` | List all jobs |
+| GET | `/cron/{job_id}` | Get one job |
 | PATCH | `/cron/{job_id}` | Pause/resume |
 | DELETE | `/cron/{job_id}` | Delete a job |
 
 ### Concurrency Policies
 
-- **skip**: Skip execution if previous run still active (default)
+- **skip**: Skip the occurrence if a previous run is still active (default)
 - **allow**: Permit concurrent executions
-- **queue**: Queue new execution until current completes
+- **queue**: Queue the occurrence and run it when the active run finishes
+
+Each schedule occurrence is claimed once, so an occurrence that arrives while a run is
+active produces exactly one queued run rather than one per scheduler poll. Queued runs
+drain in order, and each is monitored the same way a directly triggered run is, so the
+active count returns to zero even if a run fails or is cancelled.
+
+Cron jobs use the same executor as background runs — a job whose `workflowId` is not
+registered will fail its runs.
 
 ### Usage
 

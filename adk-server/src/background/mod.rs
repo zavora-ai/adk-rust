@@ -217,17 +217,139 @@ impl RunStore {
 /// Orchestrates background run execution with timeout, retry, and cancellation.
 ///
 /// The `BackgroundRunner` spawns tokio tasks for each submitted run, enforces
-/// timeout policies, and handles retry logic by re-enqueuing failed runs from
-/// their last checkpoint.
-#[derive(Debug, Clone)]
+/// timeout policies, and retries a failed run from the beginning up to its retry
+/// budget. Retry is not checkpoint-aware: a retried run re-executes the workflow with
+/// the original input.
+/// Executes a registered workflow for a background run.
+///
+/// A background run names a `workflow_id`; something has to turn that into work.
+/// Implement this to bridge to whatever executes workflows in your application —
+/// `adk-graph`, the functional API, or your own dispatcher.
+///
+/// # Errors
+///
+/// Return `Err` to mark the run failed. A failure is what makes the configured retry
+/// budget meaningful, so surface real failures rather than encoding them as `Ok`.
+#[async_trait::async_trait]
+pub trait WorkflowExecutor: Send + Sync {
+    /// Whether `workflow_id` can be executed.
+    ///
+    /// Checked before a run is queued, so an unknown workflow is rejected instead of
+    /// being accepted and then reported as complete.
+    fn has_workflow(&self, workflow_id: &str) -> bool;
+
+    /// Run `workflow_id` with `input`.
+    ///
+    /// `cancel_token` fires when the run is cancelled or times out; implementations
+    /// should observe it and stop.
+    async fn execute(
+        &self,
+        workflow_id: &str,
+        input: WorkflowState,
+        cancel_token: CancellationToken,
+    ) -> std::result::Result<Value, String>;
+}
+
+/// A `WorkflowExecutor` holding closures registered by name.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use adk_server::background::WorkflowRegistry;
+/// use serde_json::json;
+///
+/// let registry = WorkflowRegistry::new().register("greet", |input, _cancel| async move {
+///     Ok(json!({ "greeted": input.get("name").cloned() }))
+/// });
+/// ```
+#[derive(Default)]
+pub struct WorkflowRegistry {
+    workflows: std::collections::HashMap<String, Arc<BoxedWorkflow>>,
+}
+
+/// The boxed form of a registered workflow.
+type BoxedWorkflow = dyn Fn(
+        WorkflowState,
+        CancellationToken,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = std::result::Result<Value, String>> + Send>,
+    > + Send
+    + Sync;
+
+impl WorkflowRegistry {
+    /// An empty registry, which accepts no workflow.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register `workflow_id`.
+    #[must_use]
+    pub fn register<F, Fut>(mut self, workflow_id: impl Into<String>, workflow: F) -> Self
+    where
+        F: Fn(WorkflowState, CancellationToken) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = std::result::Result<Value, String>> + Send + 'static,
+    {
+        self.workflows.insert(
+            workflow_id.into(),
+            Arc::new(move |input, cancel| Box::pin(workflow(input, cancel))),
+        );
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl WorkflowExecutor for WorkflowRegistry {
+    fn has_workflow(&self, workflow_id: &str) -> bool {
+        self.workflows.contains_key(workflow_id)
+    }
+
+    async fn execute(
+        &self,
+        workflow_id: &str,
+        input: WorkflowState,
+        cancel_token: CancellationToken,
+    ) -> std::result::Result<Value, String> {
+        match self.workflows.get(workflow_id) {
+            Some(workflow) => workflow(input, cancel_token).await,
+            None => Err(format!("workflow '{workflow_id}' is not registered")),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct BackgroundRunner {
     store: RunStore,
+    executor: Option<Arc<dyn WorkflowExecutor>>,
+}
+
+impl std::fmt::Debug for BackgroundRunner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackgroundRunner")
+            .field("store", &self.store)
+            .field("has_executor", &self.executor.is_some())
+            .finish()
+    }
 }
 
 impl BackgroundRunner {
     /// Create a new background runner backed by the given store.
+    ///
+    /// Without an executor a run cannot do any work, and is failed rather than
+    /// reported complete.
     pub fn new(store: RunStore) -> Self {
-        Self { store }
+        Self { store, executor: None }
+    }
+
+    /// The configured executor, if any.
+    pub fn executor(&self) -> Option<&Arc<dyn WorkflowExecutor>> {
+        self.executor.as_ref()
+    }
+
+    /// Attach the executor that resolves and runs workflows.
+    #[must_use]
+    pub fn with_executor(mut self, executor: Arc<dyn WorkflowExecutor>) -> Self {
+        self.executor = Some(executor);
+        self
     }
 
     /// Submit and execute a background run.
@@ -237,6 +359,7 @@ impl BackgroundRunner {
     /// `cancelled` based on the outcome.
     pub fn execute(&self, run_id: String) {
         let store = self.store.clone();
+        let executor = self.executor.clone();
         tokio::spawn(async move {
             // Retrieve the run record
             let run = match store.get(&run_id).await {
@@ -251,7 +374,14 @@ impl BackgroundRunner {
             store.update_status(&run_id, RunStatus::Running).await;
 
             // Execute with timeout and cancellation
-            let result = Self::run_with_timeout(timeout_duration, &cancel_token).await;
+            let result = Self::run_with_timeout(
+                executor.as_ref(),
+                &run.workflow_id,
+                run.input.clone(),
+                timeout_duration,
+                &cancel_token,
+            )
+            .await;
 
             match result {
                 RunOutcome::Completed(value) => {
@@ -263,8 +393,12 @@ impl BackgroundRunner {
                         // Re-execute after retry
                         let store_clone = store.clone();
                         let run_id_clone = run_id.clone();
+                        let executor_clone = executor.clone();
                         tokio::spawn(async move {
-                            let runner = BackgroundRunner::new(store_clone);
+                            let mut runner = BackgroundRunner::new(store_clone);
+                            if let Some(executor) = executor_clone {
+                                runner = runner.with_executor(executor);
+                            }
                             runner.execute(run_id_clone);
                         });
                     } else {
@@ -283,19 +417,27 @@ impl BackgroundRunner {
 
     /// Execute the workflow with timeout enforcement and cancellation support.
     async fn run_with_timeout(
+        executor: Option<&Arc<dyn WorkflowExecutor>>,
+        workflow_id: &str,
+        input: WorkflowState,
         timeout_duration: Option<Duration>,
         cancel_token: &CancellationToken,
     ) -> RunOutcome {
-        // The actual workflow execution is a placeholder — in a real implementation
-        // this would invoke the workflow via the functional API's TaskContext.
-        // For now, we simulate immediate completion.
         let work = async {
-            // Check cancellation before work
             if cancel_token.is_cancelled() {
                 return RunOutcome::Cancelled;
             }
-            // Placeholder: immediate success with empty object result
-            RunOutcome::Completed(Value::Object(serde_json::Map::new()))
+            // Without an executor there is nothing to run. Reporting success here is
+            // what made a submitted run look complete while never executing.
+            let Some(executor) = executor else {
+                return RunOutcome::Failed(format!(
+                    "no workflow executor is configured, so workflow '{workflow_id}' cannot run"
+                ));
+            };
+            match executor.execute(workflow_id, input, cancel_token.clone()).await {
+                Ok(value) => RunOutcome::Completed(value),
+                Err(error) => RunOutcome::Failed(error),
+            }
         };
 
         match timeout_duration {
@@ -342,6 +484,16 @@ pub struct BackgroundState {
 }
 
 impl BackgroundState {
+    /// Attach the executor that resolves and runs workflows.
+    ///
+    /// Without one, a submitted run has nothing to execute and is failed rather than
+    /// reported complete.
+    #[must_use]
+    pub fn with_executor(mut self, executor: Arc<dyn WorkflowExecutor>) -> Self {
+        self.runner = self.runner.with_executor(executor);
+        self
+    }
+
     /// Create a new background state with a fresh store and runner.
     pub fn new() -> Self {
         let store = RunStore::new();
@@ -365,6 +517,20 @@ async fn submit_run(
     State(state): State<BackgroundState>,
     Json(request): Json<SubmitRunRequest>,
 ) -> impl IntoResponse {
+    // Reject an unknown workflow before it is queued, rather than accepting it and
+    // reporting a status for work that can never run.
+    if let Some(executor) = state.runner.executor()
+        && !executor.has_workflow(&request.workflow_id)
+    {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("unknown workflow '{}'", request.workflow_id)
+            })),
+        )
+            .into_response();
+    }
+
     let run_id = uuid::Uuid::new_v4().to_string();
     let now = Utc::now();
 
@@ -391,7 +557,7 @@ async fn submit_run(
     let response =
         SubmitRunResponse { run_id, status: RunStatus::Queued, created_at: now.to_rfc3339() };
 
-    (StatusCode::CREATED, Json(response))
+    (StatusCode::CREATED, Json(response)).into_response()
 }
 
 /// GET /runs/{run_id} — Get run status.

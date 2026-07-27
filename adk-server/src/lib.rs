@@ -83,8 +83,8 @@ pub mod background;
 #[cfg(feature = "background")]
 pub use background::{
     BackgroundRun, BackgroundRunner, BackgroundState, RunStatus, RunStatusResponse, RunStore,
-    SubmitRunRequest, SubmitRunResponse, WorkflowState, background_runs_router,
-    background_runs_router_with_state,
+    SubmitRunRequest, SubmitRunResponse, WorkflowExecutor, WorkflowRegistry, WorkflowState,
+    background_runs_router, background_runs_router_with_state,
 };
 #[cfg(feature = "background")]
 pub use background::{

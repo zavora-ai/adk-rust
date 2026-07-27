@@ -318,6 +318,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-server: background runs execute a workflow instead of reporting success.**
+  `BackgroundRunner::run_with_timeout` received neither the workflow ID nor the input. It
+  checked cancellation and returned `Completed` with an empty object, so a client got a
+  completed status for work that never ran — and because the placeholder could not fail,
+  the retry budget was never exercised by anything.
+
+  A run now goes through a `WorkflowExecutor`, which resolves the `workflow_id` and
+  receives the input and the cancellation token. `WorkflowRegistry` provides a
+  closure-based implementation. Submitting an unregistered workflow returns 404 instead
+  of queuing a run that can never execute, and a run submitted with no executor
+  configured **fails** rather than reporting completion. Retry re-executes from the
+  beginning with the original input; the documentation previously claimed it resumed from
+  the last checkpoint, which nothing implemented, and now says what it does. Run records
+  remain in-memory and are lost on restart, which the docs now state rather than implying
+  durability.
+
+- **adk-server: a cron occurrence is claimed once.** Due detection used
+  `last_execution.unwrap_or(created_at)`, and under the `Queue` policy scheduling state
+  advanced only when a run *started*. An occurrence waiting behind an active run
+  therefore stayed due and was enqueued again on every one-second poll, turning one
+  schedule point into many runs. When the active run finished, its monitor started one
+  queued run without creating a monitor for it, so `active_run_count` stayed nonzero for
+  good and every later `Skip` and `Queue` decision was stuck.
+
+  `due_occurrences` now reports the exact schedule point, `claim_occurrence` takes it
+  atomically under one write lock, and the scheduler acts only on a won claim. Every run
+  — including one taken off the queue — goes through the same monitored path, which now
+  follows the whole chain and releases the active slot even if a run record disappears.
+
+- **adk-server: `GET /cron/{job_id}` is mounted.** The module documented the endpoint and
+  a store `get` existed, but only PATCH and DELETE were routed, so clients had to list
+  every job and filter locally.
+
 - **adk-agent/adk-tool: workflow context wrappers no longer drop cancellation,
   secrets, and shared state.** Each wrapper re-implements `InvocationContext` and
   delegates to an inner context, but most capability methods have permissive trait
