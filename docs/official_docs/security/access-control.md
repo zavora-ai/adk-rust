@@ -456,6 +456,32 @@ cannot leak a value.
 > [`AuthorizingSecretService`](#per-tool-authorization) to get a per-tool boundary, and
 > still scope the cloud credentials themselves: one IAM identity per deployment with
 > access to only the secrets that deployment needs.
+> **Important:** the provider interface takes only a secret *name*. There is no
+> per-tool grant, namespace, or access audit at the ADK layer, so any tool holding a
+> context can request any name the backing credentials can read. Scope the cloud
+> credentials themselves — one IAM identity per deployment with access to only the
+> secrets that deployment needs — and treat provider-side audit logs as the record of
+> access.
+### What the extractor protects
+
+Configuring an extractor turns authentication on for every non-public route:
+
+| Routes | Behaviour with an extractor configured |
+|--------|----------------------------------------|
+| `/api/sessions/*`, `/api/apps/*`, artifacts, debug | 401 without a valid token |
+| `/api/ui/*` — bridge, notifications, resources | 401 without a valid token; the authenticated user replaces any user named in the request body |
+| `/api/run*` | 401 without a valid token; the authenticated user overrides the supplied user |
+| `/health` | Public |
+
+UI bridge state is keyed by `(app_name, user_id, session_id)` taken from the request
+body, so the authenticated user is substituted for the body value rather than
+trusted. A registered UI resource records the user that registered it; only that
+user can read or replace it, and a read of someone else's resource answers 404 so
+the URI's existence is not disclosed.
+
+With **no** extractor configured there is no authenticated identity to bind, so
+routes stay open and resources stay globally visible. Authentication is opt-in —
+configure an extractor for any deployment that is not a single trusted user.
 
 ## Error Handling
 

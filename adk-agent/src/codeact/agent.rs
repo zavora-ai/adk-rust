@@ -307,10 +307,12 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                     Disposition::Resolved(rec) => Some(rec.clone()),
                     Disposition::AwaitingConfirmation => {
                         let call_id = cp.call.call_id.to_string();
+                        // Static decisions are keyed by call ID, so a resumed
+                        // checkpoint is authorized only for its own call.
                         let mut decision = live_confirmation_decisions
                             .get(&call_id)
                             .copied()
-                            .or_else(|| decisions.get(&cp.call.tool).copied());
+                            .or_else(|| decisions.get(&call_id).copied());
                         if decision.is_none()
                             && let Some(handler) = confirmation_handler.as_ref()
                         {
@@ -494,7 +496,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                             let mut decision = live_confirmation_decisions
                                 .get(&call_id_key)
                                 .copied()
-                                .or_else(|| decisions.get(&name).copied());
+                                .or_else(|| decisions.get(&call_id_key).copied());
                             if decision.is_none()
                                 && let Some(handler) = confirmation_handler.as_ref()
                             {

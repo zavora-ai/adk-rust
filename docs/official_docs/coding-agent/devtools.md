@@ -51,7 +51,18 @@ let ws = Workspace::new("./my-repo")
 ```
 
 - **Path containment** — any path that resolves outside the root is rejected, so
-  the agent can't read or write `../../etc/...`.
+  the agent can't read or write `../../etc/...`. Containment is enforced against the
+  **resolved** path, not just the literal one: a symlink pointing outside the root is
+  rejected even though it sits lexically inside. That covers a symlinked final
+  component and a symlinked parent directory, so creation through a redirected
+  directory is refused too. A symlink whose target stays inside the workspace keeps
+  working, since repositories legitimately contain internal links.
+
+  The check is not a lock. A symlink planted between the check and the subsequent
+  open would still be followed; closing that window needs descriptor-relative
+  traversal with platform no-follow semantics. Treat the file tools as containment
+  against an agent that wanders, not as isolation against an adversary that can
+  write into the workspace concurrently.
 - **Read-only mode** — `Workspace::read_only(..)` hides the mutating tools
   entirely (the model only ever sees `read_file`/`glob`/`grep`).
 - **`bash` timeout + output caps** — long or chatty commands are bounded.

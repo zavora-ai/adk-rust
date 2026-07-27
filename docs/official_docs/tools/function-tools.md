@@ -513,6 +513,24 @@ model text, and the final tool result all arrive on one ordered stream.
 tools and runners that don't stream are unaffected. Only tools that opt in emit
 progress, and only consumers that check `tool_progress_stream()` observe it.
 
+**Progress is bounded and lossy.** A tool can produce output faster than a client
+consumes it — a compiler log, a shell command, a runaway loop — so the framework
+caps what it will hold and forward rather than growing without limit:
+
+| Limit | Value | On exceeding it |
+|-------|-------|-----------------|
+| Queue depth per tool batch | 256 events | The tool waits up to 100 ms for space, then the chunk is dropped |
+| Bytes per chunk | 8 KiB | The chunk is truncated on a character boundary |
+| Bytes per tool call | 1 MiB | Remaining progress is not forwarded |
+
+When output is dropped for any of these reasons, exactly one progress event
+carrying the text `[adk: tool progress truncated]` is emitted for that call, so a
+gap is always visible rather than silent. A slow consumer therefore slows the tool
+briefly but can never stall it indefinitely or exhaust memory.
+
+These limits apply only to *progress*. A tool's final result is not affected, so
+truncate large results inside the tool if that matters to you.
+
 > See the `streaming_bash` example for a complete web UI that renders live
 > `bash` output and one-shot tool results (`read_file`, `grep`, `glob`) from a
 > single event feed. The streaming `bash` tool itself lives in `adk-devtools`.
