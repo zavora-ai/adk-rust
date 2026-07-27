@@ -236,7 +236,7 @@ is running. See the [MCP guide](docs/official_docs/tools/mcp-tools.md).
 | `adk-eval` | Agent evaluation | Test definitions, trajectory validation, LLM-judged scoring, rubrics |
 | `adk-guardrail` | Input/output validation | PII redaction, content filtering, JSON schema validation |
 | `adk-auth` | Access control | Role-based permissions, declarative scope-based security, SSO/OAuth, audit logging |
-| `adk-sandbox` | Sandboxed code execution | Process/WASM backends, OS-level sandbox profiles (Seatbelt, bubblewrap, AppContainer) |
+| `adk-sandbox` | Sandboxed code execution | Process/WASM backends, OS-level sandbox profiles (Seatbelt on macOS, bubblewrap on Linux; Windows AppContainer not implemented) |
 | `adk-telemetry` | Observability | Structured logging, OpenTelemetry tracing, span helpers |
 | `adk-managed` | Managed agent runtime (Experimental) | Provider-neutral durable agent execution, checkpointing, event replay |
 | `adk-enterprise` | Enterprise client SDK (Experimental) | HTTP/SSE client for managed agent service, zero runtime deps |
@@ -1123,7 +1123,7 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 
 **v0.7.0** — OS sandbox profiles, ServerBuilder, project-scoped memory, Gemini 3.1 Flash-Lite:
 - **Project-Scoped Memory** — Optional `project_id` dimension for memory isolation across all 6 backends (InMemory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j). Global entries visible everywhere, project entries isolated. `MemoryServiceAdapter::with_project_id()`, `Memory::search_in_project()`, `Memory::add_to_project()`, GDPR-compliant `delete_user` across all projects.
-- **OS Sandbox Profiles** — Platform-native sandbox enforcement (Seatbelt on macOS, bubblewrap on Linux, AppContainer on Windows).
+- **OS Sandbox Profiles** — Platform-native sandbox enforcement (Seatbelt on macOS, bubblewrap on Linux; Windows AppContainer is not implemented and reports itself unavailable).
 - **ServerBuilder API** — Custom Axum controllers alongside built-in routes with shared middleware. Graceful shutdown endpoint.
 - **MCP Server Lifecycle** — `McpServerManager` for spawning, monitoring, and auto-restarting MCP server processes.
 - **Agent Interruption** — `Runner::interrupt(session_id)` for mid-execution cancellation.
