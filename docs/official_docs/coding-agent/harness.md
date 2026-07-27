@@ -26,7 +26,7 @@ Builder options:
 | Method | Effect |
 |--------|--------|
 | `.model(Arc<dyn Llm>)` | The model (required). |
-| `.workspace(Workspace)` | The sandboxed workspace (required). |
+| `.workspace(Workspace)` | The workspace the tools are confined to (required). |
 | `.name("…")` | Agent name (default `"coding-agent"`). |
 | `.instruction("…")` | Extra guidance appended to the base coding prompt. |
 | `.tool(Arc<dyn Tool>)` | Register an extra tool (MCP, function tool, …). |

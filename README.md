@@ -551,7 +551,7 @@ Examples live in the dedicated [adk-playground](https://github.com/zavora-ai/adk
 
 ### Coding Agent
 
-A native coding agent: read/edit/run code in a **sandboxed workspace**, plan with
+A native coding agent: read/edit/run code in a **confined workspace**, plan with
 todos, iterate toward a goal autonomously, and orchestrate parallel reviewers —
 on any provider. Build one in a single call:
 
@@ -574,7 +574,7 @@ adk-rust goal "all tests green" --until "cargo test" --resume    # autonomous, d
 adk-rust ultracode "add input validation"                        # parallel ultra-review
 ```
 
-- **`code`** — one-shot tasks in a sandboxed dir (`adk-devtools`: read/write/edit/glob/grep/bash).
+- **`code`** — one-shot tasks confined to a workspace dir (`adk-devtools`: read/write/edit/glob/grep/bash). File tools are path-contained; `bash` runs host-local with a cleared environment, not in an OS sandbox.
 - **`goal`** — Codex/Hermes-style autonomous loop (plan → act → verify against a
   `--until` command), **durable & resumable** via an on-disk checkpoint.
 - **`ultracode`** — Claude Code-style fan-out to parallel correctness/edge-case/style

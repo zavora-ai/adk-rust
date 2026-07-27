@@ -41,4 +41,4 @@ pub mod tools;
 pub use error::DevToolError;
 pub use tools::{BashTool, EditFileTool, GlobTool, GrepTool, ReadFileTool, WriteFileTool};
 pub use toolset::DevToolset;
-pub use workspace::Workspace;
+pub use workspace::{DEFAULT_ENV_ALLOWLIST, Workspace};

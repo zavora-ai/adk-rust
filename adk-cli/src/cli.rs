@@ -64,13 +64,14 @@ pub enum Commands {
 
     /// Run the coding agent on a task in a workspace directory.
     ///
-    /// The agent can read/edit files and run commands, sandboxed to the
+    /// The agent can read/edit files and run commands, confined to the
     /// directory. Example: `adk-rust code "make the failing test pass"`
     Code {
         /// The task / instruction for the agent.
         task: String,
 
-        /// Workspace directory the agent operates in (sandboxed).
+        /// Workspace directory the agent operates in. File tools are confined to it;
+        /// `bash` runs on the host with the environment cleared, not in an OS sandbox.
         #[arg(short, long, default_value = ".")]
         dir: String,
 
@@ -92,7 +93,8 @@ pub enum Commands {
         #[arg(long)]
         until: String,
 
-        /// Workspace directory the agent operates in (sandboxed).
+        /// Workspace directory the agent operates in. File tools are confined to it;
+        /// `bash` runs on the host with the environment cleared, not in an OS sandbox.
         #[arg(short, long, default_value = ".")]
         dir: String,
 
@@ -118,7 +120,8 @@ pub enum Commands {
         /// The task to implement and review.
         task: String,
 
-        /// Workspace directory the agent operates in (sandboxed).
+        /// Workspace directory the agent operates in. File tools are confined to it;
+        /// `bash` runs on the host with the environment cleared, not in an OS sandbox.
         #[arg(short, long, default_value = ".")]
         dir: String,
 
@@ -158,7 +161,7 @@ pub enum GraphCommands {
         db: Option<String>,
     },
 
-    /// Replay execution between two steps, printing state transitions
+    /// Print the recorded state at each checkpointed step in a range (reads only)
     Replay {
         /// Thread identifier to replay
         thread_id: String,
