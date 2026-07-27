@@ -56,6 +56,21 @@ use crate::types::{ManagedAgentDef, RuntimeError, SessionEvent, SessionStatus, U
 
 // ─── ActiveSession ───────────────────────────────────────────────────────────
 
+/// The addressing a managed session's conversation was persisted under.
+///
+/// Deletion has to remove what creation wrote. Keeping the triple rather than rebuilding it
+/// means a change to how sessions are addressed cannot leave orphaned conversation data
+/// behind in the configured backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PersistedIdentity {
+    /// The app name the session was created under.
+    pub(crate) app_name: String,
+    /// The user the session was created for.
+    pub(crate) user_id: String,
+    /// The session's own identifier.
+    pub(crate) session_id: String,
+}
+
 /// Internal state for an active (or recently active) session.
 ///
 /// Each session spawns a background task running the [`SessionLoop`](crate::session_loop::SessionLoop).
@@ -77,6 +92,11 @@ pub(crate) struct ActiveSession {
     pub(crate) pause_notify: Arc<Notify>,
     /// Current session status (shared with the session loop).
     pub(crate) status: Arc<RwLock<SessionStatus>>,
+    /// The identity this session's conversation is persisted under.
+    ///
+    /// Recorded at creation so deletion removes exactly what creation wrote, rather than
+    /// re-deriving an identity and risking a mismatch that silently leaves data behind.
+    pub(crate) persisted_as: PersistedIdentity,
     /// Checkpoint manager for durable state.
     pub(crate) checkpoint: Arc<RwLock<CheckpointManager>>,
 }
@@ -327,17 +347,27 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
         //    session to exist. We create it here with the same triple
         //    (app_name="managed", user_id="managed_user", session_id) that
         //    build_runner/run_str use in the session loop.
+        let persisted_as = PersistedIdentity {
+            app_name: "managed".to_string(),
+            user_id: "managed_user".to_string(),
+            session_id: session_id.clone(),
+        };
+
         self.session_service
             .create(CreateRequest {
-                app_name: "managed".to_string(),
-                user_id: "managed_user".to_string(),
+                app_name: persisted_as.app_name.clone(),
+                user_id: persisted_as.user_id.clone(),
                 session_id: Some(session_id.clone()),
                 state: std::collections::HashMap::new(),
             })
             .await
             .map_err(|e| RuntimeError::internal(format!("failed to seed session: {e}")))?;
 
-        // 8. Spawn SessionLoop as background task
+        // 8. Spawn SessionLoop as background task, sharing the status the caller observes
+        //    so normal queued → running → idle transitions are visible through
+        //    `ManagedAgentRuntime::status`.
+        let status = Arc::new(RwLock::new(SessionStatus::Queued));
+
         #[cfg(feature = "memory")]
         let session_loop = SessionLoop::with_pause_controls(
             session_id.clone(),
@@ -351,7 +381,8 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
             Arc::clone(&agent_arc),
             Arc::clone(&self.session_service),
             self.memory.clone(),
-        );
+        )
+        .with_shared_status(Arc::clone(&status));
         #[cfg(not(feature = "memory"))]
         let session_loop = SessionLoop::with_pause_controls(
             session_id.clone(),
@@ -364,15 +395,14 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
             Arc::clone(&checkpoint),
             Arc::clone(&agent_arc),
             Arc::clone(&self.session_service),
-        );
+        )
+        .with_shared_status(Arc::clone(&status));
         tokio::spawn(session_loop.run());
-
-        // 9. Set initial status to Queued
-        let status = Arc::new(RwLock::new(SessionStatus::Queued));
 
         // 10. Create and store ActiveSession
         let active_session = ActiveSession {
             agent: agent_arc,
+            persisted_as,
             event_tx,
             broadcast_tx,
             cancel_token,
@@ -514,11 +544,38 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
 
         // Remove from sessions map
         let removed = self.sessions.write().await.remove(&session.0);
-        if removed.is_none() {
+        let Some(removed) = removed else {
             return Err(RuntimeError::NotFound { session_id: session.0.clone() });
-        }
+        };
 
-        debug!(session_id = %session.0, "session deleted");
+        // Deleting the handle is the control plane only. `start_session` seeded a persistent
+        // session and the Runner appended every turn to it, so stopping here reported
+        // deletion while the conversation stayed in the configured backend — surviving the
+        // process that "deleted" it. Delete under the identity creation used.
+        let identity = removed.persisted_as;
+        self.session_service
+            .delete(adk_session::DeleteRequest {
+                app_name: identity.app_name.clone(),
+                user_id: identity.user_id.clone(),
+                session_id: identity.session_id.clone(),
+            })
+            .await
+            .map_err(|e| {
+                // The handle is already gone, so the caller must be told the data is not.
+                RuntimeError::internal(format!(
+                    "session {} was removed from the runtime but its persisted conversation \
+                     could not be deleted: {e}. The data remains under app {} / user {} and \
+                     needs manual cleanup.",
+                    identity.session_id, identity.app_name, identity.user_id
+                ))
+            })?;
+
+        debug!(
+            session_id = %session.0,
+            app_name = %identity.app_name,
+            user_id = %identity.user_id,
+            "session deleted, including persisted conversation"
+        );
         Ok(())
     }
 }

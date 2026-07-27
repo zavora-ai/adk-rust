@@ -107,7 +107,11 @@ pub struct SessionLoop {
     /// Notify used to wake the loop after resume.
     pause_notify: Arc<Notify>,
     /// Current session status.
-    status: SessionStatus,
+    ///
+    /// Shared with the public session handle when the runtime installs its own via
+    /// [`SessionLoop::with_shared_status`]. Without that, the handle reported `Queued` for
+    /// the whole life of a session because the loop wrote to a field the handle never read.
+    status: Arc<RwLock<SessionStatus>>,
     /// The agent driving this session.
     agent: Arc<dyn Agent>,
     /// Session persistence backend (needed by the Runner).
@@ -151,7 +155,7 @@ impl SessionLoop {
             cancel_token,
             pause_flag: Arc::new(Mutex::new(false)),
             pause_notify: Arc::new(Notify::new()),
-            status: SessionStatus::Queued,
+            status: Arc::new(RwLock::new(SessionStatus::Queued)),
             agent,
             session_service,
             #[cfg(feature = "memory")]
@@ -190,7 +194,7 @@ impl SessionLoop {
             cancel_token,
             pause_flag,
             pause_notify,
-            status: SessionStatus::Queued,
+            status: Arc::new(RwLock::new(SessionStatus::Queued)),
             agent,
             session_service,
             memory,
@@ -225,11 +229,29 @@ impl SessionLoop {
             cancel_token,
             pause_flag,
             pause_notify,
-            status: SessionStatus::Queued,
+            status: Arc::new(RwLock::new(SessionStatus::Queued)),
             agent,
             session_service,
             usage_tracker: SessionUsageTracker::new(),
         }
+    }
+
+    /// Reports status into the handle the caller already holds.
+    ///
+    /// The runtime's `ActiveSession` owns the status a caller observes through
+    /// `ManagedAgentRuntime::status`. Installing it here is what makes normal
+    /// queued → running → idle transitions visible; without it the loop wrote to its own
+    /// field and the public handle stayed `Queued` through an entire session.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let session_loop = SessionLoop::with_pause_controls(/* ... */)
+    ///     .with_shared_status(Arc::clone(&active.status));
+    /// ```
+    pub fn with_shared_status(mut self, status: Arc<RwLock<SessionStatus>>) -> Self {
+        self.status = status;
+        self
     }
 
     /// Get a clone of the pause flag for external control.
@@ -375,7 +397,7 @@ impl SessionLoop {
     /// Process a single turn: emit status.running, invoke Runner, emit events, emit status.idle.
     async fn process_turn(&mut self, content: Vec<ContentBlock>) -> Result<(), RuntimeError> {
         // 1. Emit status.running
-        self.status = SessionStatus::Running;
+        *self.status.write().await = SessionStatus::Running;
         let running_event = SessionEvent::StatusRunning { seq: self.seq.next() };
         self.emit_event(running_event).await;
 
@@ -617,8 +639,11 @@ impl SessionLoop {
     /// Emit a session event: assign to checkpoint and broadcast.
     async fn emit_event(&mut self, event: SessionEvent) {
         // Checkpoint atomically via the shared manager.
-        let run_state =
-            RunState { seq: self.seq.current(), pending_tool_ids: Vec::new(), status: self.status };
+        let run_state = RunState {
+            seq: self.seq.current(),
+            pending_tool_ids: Vec::new(),
+            status: *self.status.read().await,
+        };
         self.checkpoint.write().await.checkpoint(event.clone(), run_state);
 
         // Broadcast to subscribers (ignore if no receivers).
@@ -627,7 +652,7 @@ impl SessionLoop {
 
     /// Emit a `status.idle` event and update internal status.
     async fn emit_idle(&mut self, stop_reason: Option<StopReason>, usage: Option<UsageReport>) {
-        self.status = SessionStatus::Idle;
+        *self.status.write().await = SessionStatus::Idle;
         let idle_event = SessionEvent::StatusIdle { seq: self.seq.next(), stop_reason, usage };
         self.emit_event(idle_event).await;
     }

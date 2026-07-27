@@ -279,3 +279,42 @@ cargo run --manifest-path examples/managed_runtime_hello/Cargo.toml
 ```
 
 This runs fixture F-1 end-to-end with `ScriptedLlm` (no API key required).
+
+## Status reporting
+
+`ManagedAgentRuntime::status` reads the same handle the session loop writes to, so normal
+transitions are visible, not just control-plane ones:
+
+| Transition | Cause |
+|------------|-------|
+| `Queued` → `Running` | A turn begins |
+| `Running` → `Idle` | The turn completes and usage is recorded |
+| any → `Paused` | `pause` |
+| any → `Archived` | `archive` or `delete_session` |
+
+> **Note:** before this was one shared handle, `status` reported `Queued` for the entire life
+> of a session, including while it was executing turns. Control-plane transitions
+> (pause, resume, archive) were visible because they wrote to the handle directly.
+
+## Deletion semantics
+
+`delete_session` removes both planes:
+
+1. Sets the session terminal and cancels its loop.
+2. Removes the runtime handle.
+3. Deletes the persisted conversation through the injected `SessionService`, under the same
+   identity `start_session` created it with.
+
+If step 3 fails, `delete_session` returns an error naming the app, user, and session that
+still hold data — the handle is already gone at that point, so the caller has to be told
+what needs manual cleanup rather than being allowed to assume success.
+
+```rust,ignore
+runtime.delete_session(&session).await?;
+// The handle is gone and the conversation is no longer in the session backend.
+```
+
+> **Important:** managed sessions are persisted under a fixed app name `managed` and user
+> `managed_user`. Caller identity and `EnvironmentConfig` are not yet applied — see the
+> crate's experimental status. Deletion therefore removes the conversation for the session
+> ID, not for a tenant.
