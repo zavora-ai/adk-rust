@@ -134,3 +134,97 @@ example is a headless probe that exercises single-tool, parallel-tool, and
 calculator turns on both providers.
 
 Next: [Multimodal →](multimodal.md)
+
+## Tool callbacks on the direct agent
+
+`RealtimeAgent` applies before- and after-tool callbacks with the same contract as the
+standard agent loop:
+
+| Callback returns | Effect |
+|------------------|--------|
+| `Ok(None)` | The tool runs |
+| `Ok(Some(content))` from a *before* callback | The content becomes the result; **the tool does not run** |
+| `Err(e)` from a *before* callback | The error becomes the result, the tool does not run, and after-callbacks are skipped |
+| `Ok(Some(content))` from an *after* callback | The content replaces the tool's result |
+| `Err(e)` from an *after* callback | The error replaces the tool's result |
+
+A callback's `Content` is converted to the JSON result the provider expects: a
+`FunctionResponse` part contributes its payload, anything else contributes its text under a
+`result` key.
+
+> **Important:** before this contract was honoured, a before-callback's decision was computed
+> and discarded, so the tool ran regardless — a gate that reported a denial without enforcing
+> one. After-callback results, including errors, were dropped.
+
+## Realtime tool context
+
+A tool invoked from `RealtimeAgent` sees the same capabilities it sees under a `Runner`:
+
+| Capability | Source |
+|------------|--------|
+| `user_scopes()` | The parent invocation context |
+| `get_secret(name)` | The parent invocation context |
+| `shared_state()` | The parent invocation context |
+| `search_memory(query)` | The parent's memory service |
+| Identity (`app_name`, `user_id`, `session_id`, `branch`) | The parent invocation context |
+
+> **Note:** these previously fell through to the trait defaults — an empty scope list, `None`
+> for secrets, and `None` for shared state — so a scope- or secret-checking tool behaved
+> differently in realtime than under a Runner, and could not tell an unauthenticated caller
+> from a context that simply failed to pass scopes through.
+## Tool concurrency
+
+`RunnerConfig::max_concurrent_tools` (default 4) bounds how many tool handlers run at
+once. When a response dispatches several calls, the runner queues each on its event loop
+and admits it to execution as a permit frees:
+
+```rust
+use adk_realtime::{RealtimeRunner, RunnerConfig};
+
+let runner = RealtimeRunner::builder()
+    .model(model)
+    .runner_config(RunnerConfig {
+        auto_execute_tools: true,
+        auto_respond_tools: true,
+        max_concurrent_tools: 3,
+    })
+    .build()?;
+```
+
+Two properties follow, and both are covered by tests:
+
+- **Event intake continues during tool execution.** Audio deltas, transcripts, and
+  interruptions are handled while tools run. A handler that waits on something arriving
+  later in the session no longer deadlocks the session.
+- **One follow-up response, after the last output.** When tool output is sent
+  automatically, the model is owed a single `create_response`. It is issued once both the
+  dispatching response has closed and every dispatched tool has reported — in either
+  order, since a response can now close while tools are still running.
+
+> **Important:** the bound governs concurrency, not parallelism. Handlers share the
+> runner's task, so a handler that blocks the thread — synchronous file or network I/O,
+> heavy computation — still stalls the loop. Use `tokio::task::spawn_blocking` for those.
+
+## Disconnect policy
+
+The runner does not reconnect automatically. On transport loss it lets dispatched tools
+finish, calls `EventHandler::on_disconnect`, and returns from `run`:
+
+```rust
+use adk_realtime::{EventHandler, Result};
+
+struct Reconnecting;
+
+#[async_trait::async_trait]
+impl EventHandler for Reconnecting {
+    async fn on_disconnect(&self) -> Result<()> {
+        tracing::warn!("realtime transport ended");
+        Ok(())
+    }
+}
+```
+
+Reconnection stays with the caller because it requires deciding what context to replay
+and, on Gemini, whether a stored resumption token is still valid. The `on_disconnect` hook
+exists so transport loss can be told apart from a graceful `close` — `run` returns
+`Ok(())` for both.
