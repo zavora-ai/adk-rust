@@ -31,8 +31,11 @@ pub const DEFAULT_MAX_ENTRIES: usize = 128;
 struct CachedEntry {
     value: String,
     expires_at: Instant,
-    /// Last read, used to choose an eviction victim when the cache is full.
-    last_access: Instant,
+    /// Monotonic read sequence, used to choose an eviction victim.
+    ///
+    /// A counter rather than a timestamp: two reads can share an `Instant`, which
+    /// would leave the victim to be decided by hash order.
+    last_access: u64,
 }
 
 impl CachedEntry {
@@ -72,6 +75,8 @@ pub struct CachedSecretProvider<P: SecretProvider> {
     cache: Arc<RwLock<HashMap<String, CachedEntry>>>,
     ttl: Duration,
     max_entries: usize,
+    /// Hands out the read sequence numbers used for eviction ordering.
+    access_counter: std::sync::atomic::AtomicU64,
 }
 
 impl<P: SecretProvider> CachedSecretProvider<P> {
@@ -82,6 +87,7 @@ impl<P: SecretProvider> CachedSecretProvider<P> {
             cache: Arc::new(RwLock::new(HashMap::new())),
             ttl,
             max_entries: DEFAULT_MAX_ENTRIES,
+            access_counter: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -131,6 +137,11 @@ impl<P: SecretProvider> CachedSecretProvider<P> {
         self.cache.read().await.is_empty()
     }
 
+    /// The next read sequence number.
+    fn next_access(&self) -> u64 {
+        self.access_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Insert a freshly fetched value, purging expired entries and enforcing capacity.
     async fn store(&self, name: &str, value: &str) {
         if self.max_entries == 0 {
@@ -157,7 +168,11 @@ impl<P: SecretProvider> CachedSecretProvider<P> {
 
         cache.insert(
             name.to_string(),
-            CachedEntry { value: value.to_string(), expires_at: now + self.ttl, last_access: now },
+            CachedEntry {
+                value: value.to_string(),
+                expires_at: now + self.ttl,
+                last_access: self.next_access(),
+            },
         );
     }
 }
@@ -184,7 +199,7 @@ impl<P: SecretProvider> SecretProvider for CachedSecretProvider<P> {
                 if entry.is_expired(now) {
                     cache.remove(name);
                 } else {
-                    entry.last_access = now;
+                    entry.last_access = self.next_access();
                     return Ok(entry.value.clone());
                 }
             }
