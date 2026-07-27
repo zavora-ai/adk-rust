@@ -153,6 +153,21 @@ fan-out but not what its siblings produced, so concurrent branches cannot
 contaminate each other's context. Use `ParallelAgent::with_shared_state()` when
 you *want* sub-agents to coordinate.
 
+Branches are polled together, so wall-clock cost is roughly the slowest branch
+rather than the sum of all of them, and a slow branch does not hold up the
+others. Two consequences worth designing around:
+
+- **Events interleave.** Events arrive in the order branches produce them, not
+  grouped per sub-agent. Use `event.author` (or `event.branch`) to attribute a
+  chunk to its branch. Ordering across branches is not guaranteed.
+- **One error ends the run, chosen deterministically.** Every branch still runs
+  to completion, and a single terminal error is surfaced afterwards. When more
+  than one branch fails, the error reported is the one from the earliest
+  sub-agent in declaration order — not whichever failed first in wall-clock
+  terms, which concurrency would make a race.
+
+Dropping the event stream early tears down branches that are still in flight.
+
 ### When to Use
 
 - Multiple perspectives on the same topic

@@ -159,6 +159,39 @@ let mut stream = runner.run_str(
 
 If the string fails validation (empty, contains null bytes, or exceeds the length limit), `run_str()` returns an error before starting the agent loop. The existing `run()` method with typed `UserId`/`SessionId` remains unchanged.
 
+## Interruption and Run Isolation
+
+A run is registered as soon as `run()` returns its stream, and deregistered when
+that stream is dropped — including when it is dropped without ever being polled.
+
+| Method | Scope |
+|--------|-------|
+| `interrupt(session_id)` | Cancels **every** in-flight run for that session ID, across apps and users |
+| `interrupt_identity(app_name, user_id, session_id)` | Cancels runs for one exact identity |
+| `active_runs()` | The identity of every in-flight run; a repeated identity means concurrent runs |
+| `active_session_ids()` | Deduplicated session IDs of in-flight runs |
+
+```rust
+// Cancel one tenant's run without touching another that shares the session ID
+let cancelled = runner.interrupt_identity("my-app", "user-1", "session-1");
+```
+
+A session ID is only unique within an app and user, so `interrupt(session_id)` is
+the broad form and `interrupt_identity` the precise one. Prefer
+`interrupt_identity` when a single `Runner` serves more than one app or user.
+
+Runs are tracked by a unique run ID rather than by session ID, so two runs for the
+same identity are tracked separately and each deregisters only itself.
+
+### Persistence Is Identity-Bound
+
+Every event the Runner persists — user turns, model responses, transfer events,
+plugin events, and compaction events — is written through
+`SessionService::append_event_for_identity` with the full
+`(app_name, user_id, session_id)` triple. A `SessionService` whose natural key is
+composite can therefore bind each event to its tenant, and can reject or ignore
+the raw-session-ID `append_event` path entirely.
+
 ## Execution Flow
 
 ```

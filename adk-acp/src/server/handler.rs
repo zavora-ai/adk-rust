@@ -570,10 +570,10 @@ impl AcpSessionHandler {
         let session_id = AdkSessionId::new(request.session_id.to_string())
             .map_err(|e| AcpServerError::Execution(e.to_string()))?;
 
-        // Accumulated tool-confirmation decisions, keyed by tool name (the key
-        // ADK's `RunConfig::tool_confirmation_decisions` resume API uses). The
-        // map grows one decision per resume as the runner pauses at each
-        // still-undecided confirmation.
+        // Accumulated tool-confirmation decisions, keyed by function-call ID (the
+        // key `RunConfig::tool_confirmation_decisions` uses, so a decision
+        // authorizes only the call it was granted for). The map grows one decision
+        // per resume as the runner pauses at each still-undecided confirmation.
         let mut decisions: HashMap<String, ToolConfirmationDecision> = HashMap::new();
         // The first run carries the client's prompt content; every resume run
         // carries an empty user turn so the runner replays persisted history and
@@ -583,9 +583,9 @@ impl AcpSessionHandler {
 
         // The runner pauses at the first still-undecided confirmation and
         // resumes one decision at a time, so the number of iterations is bounded
-        // by the number of distinct tools requiring confirmation. The guard is a
+        // by the number of distinct calls requiring confirmation. The guard is a
         // defensive backstop against a misbehaving agent that re-interrupts for a
-        // tool that already has a decision.
+        // call that already has a decision.
         const MAX_CONFIRMATION_ROUNDS: usize = 64;
 
         for _round in 0..MAX_CONFIRMATION_ROUNDS {
@@ -656,7 +656,7 @@ impl AcpSessionHandler {
 
             // Drive the permission bridge for each pending confirmation: send a
             // `session/request_permission` to the client, await the outcome, and
-            // record the decision (cancellation → deny) keyed by tool name for
+            // record the decision (cancellation → deny) against the exact call for
             // the next resume run.
             for confirmation in &pending {
                 if cancellation_token.is_cancelled() {
@@ -665,7 +665,16 @@ impl AcpSessionHandler {
                 let decision =
                     PermissionBridge::request(&connection, &request.session_id, confirmation)
                         .await?;
-                decisions.insert(confirmation.tool_name.clone(), decision);
+                // A confirmation without a call ID cannot be bound to one call, so
+                // there is nothing safe to authorize.
+                let Some(call_id) = confirmation.function_call_id.clone() else {
+                    return Err(AcpServerError::Execution(
+                        "tool confirmation request carried no function call ID, so a \
+                         decision cannot be bound to the call"
+                            .into(),
+                    ));
+                };
+                decisions.insert(call_id, decision);
             }
             is_resume = true;
         }

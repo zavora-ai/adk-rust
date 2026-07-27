@@ -136,6 +136,35 @@ impl std::fmt::Debug for LlmAgent {
     }
 }
 
+/// Resolves a static confirmation decision for one exact tool call.
+///
+/// Decisions are keyed by function call ID rather than tool name, so an approval
+/// cannot be replayed onto a different call that happens to use the same tool. When
+/// the run also supplies a fingerprint for that ID, the call's own fingerprint must
+/// match it; a mismatch is treated as no decision, which leaves the call
+/// unconfirmed rather than silently authorising different arguments.
+fn static_confirmation_decision(
+    decisions: &std::collections::HashMap<String, ToolConfirmationDecision>,
+    fingerprints: &std::collections::HashMap<String, String>,
+    function_call_id: &str,
+    tool_name: &str,
+    args: &serde_json::Value,
+) -> Option<ToolConfirmationDecision> {
+    let decision = decisions.get(function_call_id).copied()?;
+    if let Some(expected) = fingerprints.get(function_call_id) {
+        let actual = adk_core::tool_call_fingerprint(tool_name, args);
+        if &actual != expected {
+            tracing::warn!(
+                tool.name = %tool_name,
+                function_call.id = %function_call_id,
+                "confirmation decision does not match this call's arguments, treating as unconfirmed"
+            );
+            return None;
+        }
+    }
+    Some(decision)
+}
+
 impl LlmAgent {
     /// Returns the sandbox configuration attached to this agent, if any.
     ///
@@ -1340,6 +1369,8 @@ impl Agent for LlmAgent {
         let s = stream! {
             let confirmation_decisions =
                 ctx.run_config().tool_confirmation_decisions.clone();
+            let confirmation_fingerprints =
+                ctx.run_config().tool_confirmation_fingerprints.clone();
             let mut live_confirmation_decisions =
                 std::collections::HashMap::<String, ToolConfirmationDecision>::new();
             let confirmation_handler = ctx.run_config().tool_confirmation_handler.clone();
@@ -1936,6 +1967,12 @@ impl Agent for LlmAgent {
                             partial_event.llm_response.content = chunk.content.clone();
                             partial_event.llm_response.provider_metadata = chunk.provider_metadata.clone();
                             partial_event.llm_response.interaction_id = chunk.interaction_id.clone();
+                            // Terminal error fields travel with the event. Without this a
+                            // provider failure delivered as `Ok(LlmResponse { error_code, .. })`
+                            // reached the caller as an ordinary, apparently successful turn.
+                            partial_event.llm_response.interrupted = chunk.interrupted;
+                            partial_event.llm_response.error_code = chunk.error_code.clone();
+                            partial_event.llm_response.error_message = chunk.error_message.clone();
 
                             // Populate long_running_tool_ids
                             if let Some(ref content) = chunk.content {
@@ -1990,6 +2027,9 @@ impl Agent for LlmAgent {
                             final_event.llm_response.usage_metadata = last.usage_metadata.clone();
                             final_event.llm_response.provider_metadata = last.provider_metadata.clone();
                             final_event.llm_response.interaction_id = last.interaction_id.clone();
+                            final_event.llm_response.interrupted = last.interrupted;
+                            final_event.llm_response.error_code = last.error_code.clone();
+                            final_event.llm_response.error_message = last.error_message.clone();
                             final_provider_metadata = last.provider_metadata.clone();
                             final_event.provider_metadata.insert("gcp.vertex.agent.llm_response".to_string(), serde_json::to_string(last).unwrap_or_default());
                         }
@@ -2000,6 +2040,50 @@ impl Agent for LlmAgent {
                         }
 
                         yield Ok(final_event);
+                    }
+
+                    // A provider that reports a terminal error inside an `Ok`
+                    // response ends the turn. The event above already carries the
+                    // error fields so the failure is observable and persisted;
+                    // this converts it into a `Result` failure so callers, retry
+                    // policy, and telemetry see it rather than reading an empty
+                    // turn as success.
+                    //
+                    // In this workspace `error_code` marks a genuine failure —
+                    // truncation is reported through `finish_reason`
+                    // (`FinishReason::MaxTokens`), not through `error_code`.
+                    if let Some(ref last) = last_chunk
+                        && let Some(ref code) = last.error_code
+                    {
+                        let message = last
+                            .error_message
+                            .clone()
+                            .unwrap_or_else(|| "provider reported a terminal error".to_string());
+                        tracing::error!(
+                            error.code = %code,
+                            error.message = %message,
+                            agent = %agent_name,
+                            "model reported a terminal error"
+                        );
+                        // The provider's own code is preserved in the ADK error code
+                        // so retry policy and telemetry can key on it.
+                        // Built before the yield point: a borrow may not cross it.
+                        // `AdkError::code` is `&'static str`, so the provider's own
+                        // code travels in the details metadata instead, where retry
+                        // policy and telemetry can read it.
+                        let mut details = adk_core::ErrorDetails::default();
+                        details
+                            .metadata
+                            .insert("provider_error_code".to_string(), serde_json::json!(code));
+                        let provider_error = adk_core::AdkError::new(
+                            adk_core::ErrorComponent::Model,
+                            adk_core::ErrorCategory::Internal,
+                            "model.provider_error",
+                            format!("{code}: {message}"),
+                        )
+                        .with_details(details);
+                        yield Err(provider_error);
+                        return;
                     }
 
                     // Record LLM response to span before guard drops
@@ -2246,7 +2330,14 @@ impl Agent for LlmAgent {
                     let mut confirmation_interrupted = false;
                     for (_, fc_name, fc_args, _, fc_call_id) in &fc_parts {
                         if tool_confirmation_policy.requires_confirmation(fc_name)
-                            && confirmation_decisions.get(fc_name).copied().is_none()
+                            && static_confirmation_decision(
+                                &confirmation_decisions,
+                                &confirmation_fingerprints,
+                                fc_call_id,
+                                fc_name,
+                                fc_args,
+                            )
+                            .is_none()
                             && live_confirmation_decisions
                                 .get(fc_call_id)
                                 .copied()
@@ -2332,6 +2423,7 @@ impl Agent for LlmAgent {
                         #[cfg(feature = "enhanced-plugins")]
                         let enhanced_plugin_manager = &enhanced_plugin_manager;
                         let confirmation_decisions = &confirmation_decisions;
+                        let confirmation_fingerprints = &confirmation_fingerprints;
                         let live_confirmation_decisions = &live_confirmation_decisions;
                         async move {
                             let mut tool_actions = EventActions::default();
@@ -2367,7 +2459,15 @@ impl Agent for LlmAgent {
                                 match live_confirmation_decisions
                                     .get(&function_call_id)
                                     .copied()
-                                    .or_else(|| confirmation_decisions.get(&name).copied())
+                                    .or_else(|| {
+                                        static_confirmation_decision(
+                                            confirmation_decisions,
+                                            confirmation_fingerprints,
+                                            &function_call_id,
+                                            &name,
+                                            &args,
+                                        )
+                                    })
                                 {
                                     Some(ToolConfirmationDecision::Approve) => {
                                         tool_actions.tool_confirmation_decision =
