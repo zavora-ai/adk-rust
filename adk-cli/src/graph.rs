@@ -54,7 +54,9 @@ async fn run_steps(thread_id: &str, db: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Replay execution between two steps, printing state transitions.
+/// Print the recorded state at each checkpointed step in a range.
+///
+/// Reads checkpoints; nothing is executed.
 async fn run_replay(
     thread_id: &str,
     from: usize,
@@ -64,7 +66,8 @@ async fn run_replay(
     let checkpointer = load_checkpointer(db)?;
     let handle = standalone_handle(thread_id, checkpointer.clone());
 
-    let transitions = handle.replay(from, to).await.context("failed to replay")?;
+    let transitions =
+        handle.state_history(from, to).await.context("failed to read state history")?;
 
     if transitions.is_empty() {
         println!("No state transitions found in the specified range.");
@@ -75,7 +78,7 @@ async fn run_replay(
         Some(end) => format!("{from}..={end}"),
         None => format!("{from}..end"),
     };
-    println!("Replaying thread '{thread_id}' (steps {range_desc}):\n");
+    println!("Recorded state for thread '{thread_id}' (steps {range_desc}):\n");
 
     for (step, state) in &transitions {
         println!("── Step {step} ──");
@@ -83,7 +86,7 @@ async fn run_replay(
         println!("{json}\n");
     }
 
-    println!("Replay complete: {} state(s) shown.", transitions.len());
+    println!("{} recorded state(s) shown; nothing was re-executed.", transitions.len());
     Ok(())
 }
 
@@ -205,8 +208,8 @@ impl StandaloneTimeTravelHandle {
         Ok(steps)
     }
 
-    /// Replay between two steps, returning intermediate states.
-    async fn replay(
+    /// Return the recorded state at each checkpointed step in a range.
+    async fn state_history(
         &self,
         from_step: usize,
         to_step: Option<usize>,

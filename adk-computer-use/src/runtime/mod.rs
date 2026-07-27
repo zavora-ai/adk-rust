@@ -1,9 +1,12 @@
 //! The [`ComputerUseRuntime`] boundary and its concrete adapters.
 //!
 //! [`ComputerUseRuntime`] is the extension point driven by the deterministic
-//! graph in [`crate::build_reference_graph`]. The [`mcp`] submodule provides
+//! graph in [`crate::build_reference_graph`]. The [`mcp`](crate::runtime::mcp) submodule provides
 //! [`ComputerUseMcpRuntime`], backed by a live `computer-use-mcp` server.
 //! Tests and portable examples can supply an in-process implementation instead.
+
+/// Binds MCP responses back to the request that produced them.
+pub mod binding;
 
 pub mod mcp;
 
@@ -15,6 +18,56 @@ use crate::{
 };
 use async_trait::async_trait;
 use serde_json::Value;
+
+/// What is actually known about an action's effect after execution.
+///
+/// `verify` previously returned `bool`, computed as `receipt.status == Committed`. That
+/// collapsed two different claims: that the runtime accepted the action, and that the
+/// intended effect was observed. A committed action whose effect did not occur was reported
+/// as completed, and the reference graph labelled the node and its output "verification".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerificationOutcome {
+    /// The declared postcondition was observed to hold, with evidence bound to it.
+    Verified,
+    /// The runtime committed the action, but no independent postcondition evidence is
+    /// available — either none was declared, or the receipt carried none.
+    CommittedUnverified {
+        /// Why verification could not be performed, for the operator reading the result.
+        reason: String,
+    },
+    /// The action did not commit, or the evidence contradicts the postcondition.
+    Failed {
+        /// What went wrong.
+        reason: String,
+    },
+}
+
+impl VerificationOutcome {
+    /// Whether the postcondition was independently observed.
+    ///
+    /// Deliberately false for [`VerificationOutcome::CommittedUnverified`]: a caller asking
+    /// "was this verified?" must not be told yes because the action merely committed.
+    pub fn is_verified(&self) -> bool {
+        matches!(self, VerificationOutcome::Verified)
+    }
+
+    /// Whether the action was performed, whether or not its effect was verified.
+    pub fn is_committed(&self) -> bool {
+        matches!(
+            self,
+            VerificationOutcome::Verified | VerificationOutcome::CommittedUnverified { .. }
+        )
+    }
+
+    /// A stable status string for the graph's `result.status` field.
+    pub fn status(&self) -> &'static str {
+        match self {
+            VerificationOutcome::Verified => "completed",
+            VerificationOutcome::CommittedUnverified { .. } => "committed_unverified",
+            VerificationOutcome::Failed { .. } => "verification_failed",
+        }
+    }
+}
 
 /// Runtime boundary implemented by the computer-use MCP server or an in-process adapter.
 ///
@@ -77,8 +130,20 @@ pub trait ComputerUseRuntime: Send + Sync {
         lease: &ControlLease,
         approval_grant_id: Option<&str>,
     ) -> Result<ExecutionReceipt, ComputerUseError>;
-    /// Independently verify the receipt returned by [`execute_action`](Self::execute_action).
-    async fn verify(&self, receipt: &ExecutionReceipt) -> Result<bool, ComputerUseError>;
+    /// Report whether the action's postcondition was independently observed to hold.
+    ///
+    /// A committed receipt is an acknowledgement that the runtime accepted and performed the
+    /// action. It is not evidence that the intended effect occurred, so the two are reported
+    /// separately: see [`VerificationOutcome`].
+    ///
+    /// `postcondition` is the envelope's declared expected state, or `None` when the action
+    /// declared none — in which case there is nothing to verify and the honest answer is
+    /// [`VerificationOutcome::CommittedUnverified`].
+    async fn verify(
+        &self,
+        receipt: &ExecutionReceipt,
+        postcondition: Option<&crate::ActionPostcondition>,
+    ) -> Result<VerificationOutcome, ComputerUseError>;
 
     /// Pause the session's desktop authority. Defaults to unsupported.
     async fn pause_session(

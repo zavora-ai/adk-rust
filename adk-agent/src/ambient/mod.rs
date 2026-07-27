@@ -28,4 +28,4 @@ pub use agent::{AmbientAgent, AmbientAgentStatus, TriggerHandler};
 pub use cron_trigger::CronTrigger;
 pub use event_source::{EventSource, TriggerEvent};
 pub use file_watch_trigger::FileWatchTrigger;
-pub use webhook_trigger::WebhookTrigger;
+pub use webhook_trigger::{WebhookRequest, WebhookTrigger, WebhookVerifier};

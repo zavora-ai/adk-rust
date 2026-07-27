@@ -156,6 +156,8 @@ impl EventSource for FileWatchTrigger {
                                 "event": event_kind,
                                 "path": event_path.display().to_string(),
                             }),
+                            // A filesystem change has no caller.
+                            principal: None,
                         };
 
                         if tx.send(trigger_event).await.is_err() {

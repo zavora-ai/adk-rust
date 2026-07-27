@@ -1,8 +1,9 @@
 use adk_computer_use::{
-    ActionClass, ActionEnvelope, ActionPreview, CancellationBridge, ComputerUseError,
-    ComputerUseRuntime, ControlLease, ExecutionCapability, ExecutionMode, ExecutionReceipt,
-    LeaseBoundaries, PolicyDecision, ReceiptStatus, ScopeAuthorizer, TargetReservation,
-    TargetReservationScope, build_reference_graph, build_reference_graph_with_checkpointer,
+    ActionClass, ActionEnvelope, ActionPostcondition, ActionPreview, CancellationBridge,
+    ComputerUseError, ComputerUseRuntime, ControlLease, ExecutionCapability, ExecutionMode,
+    ExecutionReceipt, LeaseBoundaries, PolicyDecision, ReceiptStatus, ScopeAuthorizer,
+    TargetReservation, TargetReservationScope, VerificationOutcome, build_reference_graph,
+    build_reference_graph_with_checkpointer,
 };
 use adk_graph::{ExecutionConfig, GraphError, MemoryCheckpointer, State};
 use async_trait::async_trait;
@@ -207,8 +208,23 @@ impl ComputerUseRuntime for FakeRuntime {
         Ok(receipt)
     }
 
-    async fn verify(&self, receipt: &ExecutionReceipt) -> Result<bool, ComputerUseError> {
-        Ok(receipt.status == ReceiptStatus::Committed)
+    async fn verify(
+        &self,
+        receipt: &ExecutionReceipt,
+        postcondition: Option<&ActionPostcondition>,
+    ) -> Result<VerificationOutcome, ComputerUseError> {
+        if receipt.status != ReceiptStatus::Committed {
+            return Ok(VerificationOutcome::Failed {
+                reason: format!("receipt status is {:?}", receipt.status),
+            });
+        }
+        // Committing is not verifying: without a postcondition there is nothing to check.
+        Ok(match postcondition {
+            Some(_) => VerificationOutcome::Verified,
+            None => VerificationOutcome::CommittedUnverified {
+                reason: "no postcondition declared".to_string(),
+            },
+        })
     }
 
     async fn pause_session(&self, session_id: &str, reason: &str) -> Result<(), ComputerUseError> {
@@ -243,7 +259,11 @@ async fn graph_parallelizes_observation_and_has_one_executor_effect() {
     let graph = build_reference_graph(runtime.clone(), authorizer()).unwrap();
     let output = graph.invoke(input(), ExecutionConfig::new("thread-1")).await.unwrap();
 
-    assert_eq!(output.get("verified"), Some(&json!(true)));
+    // The fixture action declares no postcondition, so the graph reports it as committed
+    // without claiming verification. Previously `verified` was true here purely because the
+    // receipt committed, which is what CU-02 was about.
+    assert_eq!(output.get("committed"), Some(&json!(true)));
+    assert_eq!(output.get("verified"), Some(&json!(false)));
     assert!(runtime.max_observation_concurrency.load(Ordering::SeqCst) >= 2);
     assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 1);
     assert_eq!(runtime.reservations.load(Ordering::SeqCst), 1);
@@ -289,7 +309,11 @@ async fn approval_resume_executes_only_the_original_digest_with_the_exact_grant(
         )
         .await
         .unwrap();
-    assert_eq!(output.get("verified"), Some(&json!(true)));
+    // The fixture action declares no postcondition, so the graph reports it as committed
+    // without claiming verification. Previously `verified` was true here purely because the
+    // receipt committed, which is what CU-02 was about.
+    assert_eq!(output.get("committed"), Some(&json!(true)));
+    assert_eq!(output.get("verified"), Some(&json!(false)));
     assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 1);
     assert_eq!(runtime.last_approval_grant.lock().await.as_deref(), Some("grant-exact"));
 }
@@ -328,7 +352,11 @@ async fn approval_resume_can_delegate_bearer_handling_to_the_runtime() {
         )
         .await
         .unwrap();
-    assert_eq!(output.get("verified"), Some(&json!(true)));
+    // The fixture action declares no postcondition, so the graph reports it as committed
+    // without claiming verification. Previously `verified` was true here purely because the
+    // receipt committed, which is what CU-02 was about.
+    assert_eq!(output.get("committed"), Some(&json!(true)));
+    assert_eq!(output.get("verified"), Some(&json!(false)));
     assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 1);
     assert_eq!(*runtime.last_approval_grant.lock().await, None);
 }
@@ -423,7 +451,11 @@ async fn graph_retry_after_post_commit_crash_does_not_duplicate_mutation() {
     assert!(graph.invoke(input(), ExecutionConfig::new("thread-crash-1")).await.is_err());
     let output = graph.invoke(input(), ExecutionConfig::new("thread-crash-2")).await.unwrap();
 
-    assert_eq!(output.get("verified"), Some(&json!(true)));
+    // The fixture action declares no postcondition, so the graph reports it as committed
+    // without claiming verification. Previously `verified` was true here purely because the
+    // receipt committed, which is what CU-02 was about.
+    assert_eq!(output.get("committed"), Some(&json!(true)));
+    assert_eq!(output.get("verified"), Some(&json!(false)));
     assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 1);
 }
 
@@ -437,6 +469,10 @@ async fn graph_retry_after_pre_effect_crash_executes_exactly_once() {
     assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 0);
     let output = graph.invoke(input(), ExecutionConfig::new("thread-pre-effect-2")).await.unwrap();
 
-    assert_eq!(output.get("verified"), Some(&json!(true)));
+    // The fixture action declares no postcondition, so the graph reports it as committed
+    // without claiming verification. Previously `verified` was true here purely because the
+    // receipt committed, which is what CU-02 was about.
+    assert_eq!(output.get("committed"), Some(&json!(true)));
+    assert_eq!(output.get("verified"), Some(&json!(false)));
     assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 1);
 }

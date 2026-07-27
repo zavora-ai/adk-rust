@@ -13,6 +13,13 @@ pub struct TriggerEvent {
     pub source: String,
     /// Source-specific metadata.
     pub payload: Value,
+    /// The verified principal this event is attributed to, when the source authenticates.
+    ///
+    /// `None` for sources with no notion of a caller — a cron tick or a file change. For
+    /// [`WebhookTrigger`](super::WebhookTrigger) this is whatever its verifier returned, so
+    /// a handler can tell an authorized trigger from an anonymous one instead of treating
+    /// every event as equally trusted.
+    pub principal: Option<String>,
 }
 
 /// A source of trigger events for ambient agents.

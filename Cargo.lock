@@ -117,12 +117,14 @@ dependencies = [
  "jsonschema 0.28.3",
  "notify",
  "proptest",
+ "reqwest 0.12.28",
  "schemars 1.2.1",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -427,6 +429,7 @@ dependencies = [
  "adk-core",
  "async-trait",
  "glob",
+ "libc",
  "regex",
  "serde",
  "serde_json",

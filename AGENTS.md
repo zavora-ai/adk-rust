@@ -153,7 +153,7 @@ adk-devtools/    Developer tools for coding agents — inner-loop file/search/ed
 adk-bench/       Benchmarking framework: framework-level runtime performance with real LLM APIs
                  and cross-framework (Python ADK) comparison
 adk-sandbox/     Sandboxed execution environments — process/WASM backends, OS-level sandbox profiles
-                 (Seatbelt on macOS, bubblewrap on Linux, AppContainer on Windows)
+                 (Seatbelt on macOS, bubblewrap on Linux; Windows AppContainer unimplemented)
 adk-audio/       Audio processing, STT/TTS providers, Deepgram streaming, desktop audio
                  (capture/playback/VAD), ONNX models (Whisper, Moonshine, Kokoro, Chatterbox)
 adk-rag/         Retrieval-augmented generation pipelines
@@ -162,8 +162,8 @@ adk-action/      Action node definitions (14 node types), StandardProperties, va
 adk-enterprise/  Enterprise client SDK — lightweight HTTP/SSE client for the ADK-Rust Enterprise
                  Managed Agent Service. Zero adk-* runtime dependencies. Agents, sessions,
                  streaming, vaults, memory. Self-hosted support. EXPERIMENTAL.
-adk-managed/     Managed agent runtime — provider-neutral, durable, resumable agent execution
-                 engine. ManagedAgentRuntime trait, DefaultManagedAgentRuntime, declarative
+adk-managed/     Managed agent runtime — provider-neutral agent execution engine with in-process
+                 checkpointing (state does not survive process loss). ManagedAgentRuntime trait, DefaultManagedAgentRuntime, declarative
                  ManagedAgentDef, supervised session loop with checkpointing, custom tool
                  parking, event replay, ScriptedLlm test double, golden fixture tests.
                  Feature-gated: `managed-runtime` on umbrella crate. EXPERIMENTAL.
