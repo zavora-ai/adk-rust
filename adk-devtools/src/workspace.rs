@@ -27,7 +27,19 @@ pub struct Workspace {
     bash_timeout: Duration,
     max_output_bytes: usize,
     read_tracker: Arc<Mutex<HashSet<PathBuf>>>,
+    /// Whether `bash` inherits the parent process environment.
+    inherit_env: bool,
+    /// Variables passed through when the environment is not inherited.
+    env_allowlist: Vec<String>,
 }
+
+/// Environment variables `bash` receives by default.
+///
+/// The parent environment of an agent process routinely holds provider API keys, and a
+/// model-directed command could read them with `env`. Only variables tools genuinely
+/// need to function are passed through, and none of them is a credential.
+pub const DEFAULT_ENV_ALLOWLIST: &[&str] =
+    &["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TERM", "USER", "SHELL"];
 
 impl Workspace {
     /// Create a read-write workspace rooted at `root` (bash enabled).
@@ -43,6 +55,8 @@ impl Workspace {
             bash_timeout: Duration::from_secs(120),
             max_output_bytes: 1_048_576,
             read_tracker: Arc::new(Mutex::new(HashSet::new())),
+            inherit_env: false,
+            env_allowlist: DEFAULT_ENV_ALLOWLIST.iter().map(|k| (*k).to_string()).collect(),
         }
     }
 
@@ -77,6 +91,51 @@ impl Workspace {
     pub fn max_output_bytes(mut self, bytes: usize) -> Self {
         self.max_output_bytes = bytes;
         self
+    }
+
+    /// Pass the whole parent environment to `bash`.
+    ///
+    /// Off by default, because the parent environment of an agent process routinely
+    /// holds provider API keys and a model-directed command can read them with `env`.
+    /// Enable it only when the commands you run genuinely need the caller's environment
+    /// and you accept that exposure.
+    #[must_use]
+    pub fn inherit_env(mut self, yes: bool) -> Self {
+        self.inherit_env = yes;
+        self
+    }
+
+    /// Replace the variables `bash` receives when the environment is not inherited.
+    ///
+    /// Defaults to [`DEFAULT_ENV_ALLOWLIST`]. Adding a variable that holds a credential
+    /// re-exposes it.
+    #[must_use]
+    pub fn env_allowlist<I, S>(mut self, keys: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.env_allowlist = keys.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Whether `bash` inherits the parent environment.
+    pub fn inherits_env(&self) -> bool {
+        self.inherit_env
+    }
+
+    /// The variables `bash` receives, resolved from the current process.
+    ///
+    /// Empty when the environment is inherited, in which case the caller must not clear
+    /// it.
+    pub fn bash_env(&self) -> Vec<(String, String)> {
+        if self.inherit_env {
+            return Vec::new();
+        }
+        self.env_allowlist
+            .iter()
+            .filter_map(|key| std::env::var(key).ok().map(|value| (key.clone(), value)))
+            .collect()
     }
 
     /// The workspace root.

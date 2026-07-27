@@ -119,6 +119,7 @@ fn test_successful_build_with_all_services_configured() {
             store_to_memory: true,
             inject_memory_context: false,
             max_memory_injection: 5,
+            max_history_injection: 20,
         })
         .build();
 

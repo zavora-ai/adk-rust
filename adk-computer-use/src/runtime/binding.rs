@@ -1,0 +1,175 @@
+//! Binds every security-relevant MCP response back to what was actually asked for.
+//!
+//! Typed deserialization proves shape, not provenance. `ControlLease`, `TargetReservation`,
+//! and `ExecutionReceipt` have no invariant-enforcing constructor, so a well-formed object
+//! belonging to another session, principal, or action deserializes cleanly and was accepted
+//! into graph state. The external runtime stays authoritative; this is the local check that
+//! makes a stale, confused, or mismatched response fail here rather than propagate.
+//!
+//! Each validator compares one response against the envelope that requested it and reports
+//! the first mismatch by field name, so a rejection says what did not line up.
+
+use crate::contracts::{ActionEnvelope, ControlLease, ExecutionReceipt, TargetReservation};
+use crate::error::ComputerUseError;
+
+/// Reports a mismatch between what was requested and what came back.
+fn mismatch(object: &str, field: &str, expected: &str, actual: &str) -> ComputerUseError {
+    ComputerUseError::IdentityMismatch(format!(
+        "{object} returned by the computer-use runtime is not bound to this request: {field} \
+         is {actual:?}, expected {expected:?}. The response was rejected rather than stored."
+    ))
+}
+
+/// Compares two optional values, treating a returned `None` as acceptable.
+///
+/// The wire contract makes `agent_id` and similar fields optional, so absence is under-
+/// specification rather than contradiction. A *present and different* value is a mismatch.
+fn check_optional(
+    object: &str,
+    field: &str,
+    expected: Option<&str>,
+    actual: Option<&str>,
+) -> Result<(), ComputerUseError> {
+    match (expected, actual) {
+        (Some(expected), Some(actual)) if expected != actual => {
+            Err(mismatch(object, field, expected, actual))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Verifies a lease belongs to this session, principal, agent, and mode, and is usable.
+///
+/// # Errors
+///
+/// Returns [`ComputerUseError::IdentityMismatch`] when any bound field disagrees with
+/// `envelope`, when the lease is not active, or when its action budget is exhausted.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_computer_use::runtime::binding::validate_lease;
+/// use adk_computer_use::{ActionEnvelope, ControlLease};
+///
+/// # fn envelope() -> ActionEnvelope { unimplemented!() }
+/// # fn lease_for_another_session() -> ControlLease { unimplemented!() }
+/// # fn check() -> Result<(), Box<dyn std::error::Error>> {
+/// let envelope = envelope();
+/// let lease = lease_for_another_session();
+///
+/// // A well-formed lease bound to a different session is refused here rather than
+/// // entering graph state.
+/// assert!(validate_lease(&lease, &envelope).is_err());
+/// # Ok(())
+/// # }
+/// ```
+pub fn validate_lease(
+    lease: &ControlLease,
+    envelope: &ActionEnvelope,
+) -> Result<(), ComputerUseError> {
+    const OBJECT: &str = "control lease";
+
+    if lease.session_id != envelope.session_id {
+        return Err(mismatch(OBJECT, "session_id", &envelope.session_id, &lease.session_id));
+    }
+    if lease.principal_id != envelope.principal_id {
+        return Err(mismatch(OBJECT, "principal_id", &envelope.principal_id, &lease.principal_id));
+    }
+    check_optional(OBJECT, "agent_id", envelope.agent_id.as_deref(), lease.agent_id.as_deref())?;
+
+    if lease.execution_mode != envelope.requested_mode {
+        return Err(mismatch(
+            OBJECT,
+            "execution_mode",
+            &format!("{:?}", envelope.requested_mode),
+            &format!("{:?}", lease.execution_mode),
+        ));
+    }
+
+    // A lease that is not active grants nothing, and a zero budget cannot cover the action
+    // it was acquired for. Both are usable-looking objects that must not proceed.
+    if !lease.state.eq_ignore_ascii_case("active") {
+        return Err(ComputerUseError::IdentityMismatch(format!(
+            "control lease {} is in state {:?}, not active, so it authorizes nothing",
+            lease.lease_id, lease.state
+        )));
+    }
+    if lease.action_budget == 0 {
+        return Err(ComputerUseError::IdentityMismatch(format!(
+            "control lease {} has no remaining action budget",
+            lease.lease_id
+        )));
+    }
+
+    Ok(())
+}
+
+/// Verifies a reservation belongs to this session, principal, agent, and action.
+///
+/// # Errors
+///
+/// Returns [`ComputerUseError::IdentityMismatch`] when any bound field disagrees with
+/// `envelope`.
+pub fn validate_reservation(
+    reservation: &TargetReservation,
+    envelope: &ActionEnvelope,
+) -> Result<(), ComputerUseError> {
+    const OBJECT: &str = "target reservation";
+
+    if reservation.session_id != envelope.session_id {
+        return Err(mismatch(OBJECT, "session_id", &envelope.session_id, &reservation.session_id));
+    }
+    if reservation.principal_id != envelope.principal_id {
+        return Err(mismatch(
+            OBJECT,
+            "principal_id",
+            &envelope.principal_id,
+            &reservation.principal_id,
+        ));
+    }
+    check_optional(
+        OBJECT,
+        "agent_id",
+        envelope.agent_id.as_deref(),
+        reservation.agent_id.as_deref(),
+    )?;
+    check_optional(
+        OBJECT,
+        "execution_group_id",
+        envelope.execution_group_id.as_deref(),
+        reservation.execution_group_id.as_deref(),
+    )?;
+
+    Ok(())
+}
+
+/// Verifies a receipt describes the action that was actually submitted.
+///
+/// The digest is the strongest binding available: `ActionEnvelope::args_digest` is what
+/// approval was granted against, so a receipt carrying a different digest describes different
+/// work regardless of matching identifiers. An empty expected digest is treated as
+/// unavailable rather than as a match against an empty value.
+///
+/// # Errors
+///
+/// Returns [`ComputerUseError::IdentityMismatch`] when the session, action ID, or action
+/// digest disagrees with `envelope`.
+pub fn validate_receipt(
+    receipt: &ExecutionReceipt,
+    envelope: &ActionEnvelope,
+    expected_digest: &str,
+) -> Result<(), ComputerUseError> {
+    const OBJECT: &str = "execution receipt";
+
+    if receipt.session_id != envelope.session_id {
+        return Err(mismatch(OBJECT, "session_id", &envelope.session_id, &receipt.session_id));
+    }
+    if receipt.action_id != envelope.action_id {
+        return Err(mismatch(OBJECT, "action_id", &envelope.action_id, &receipt.action_id));
+    }
+    if !expected_digest.is_empty() && receipt.action_digest != expected_digest {
+        return Err(mismatch(OBJECT, "action_digest", expected_digest, &receipt.action_digest));
+    }
+
+    Ok(())
+}

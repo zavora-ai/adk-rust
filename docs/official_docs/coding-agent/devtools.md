@@ -1,7 +1,7 @@
 # Dev Tools (`adk-devtools`)
 
 `adk-devtools` is the inner-loop toolset a coding agent needs — read, edit,
-search, and run — with every operation **scoped to a sandboxed workspace**. It's
+search, and run — with every operation **scoped to a workspace directory**. It's
 a standalone, publishable crate depending only on `adk-core`, so it composes with
 any `LlmAgent` (the [`CodingAgent`](harness.md) harness wires it for you).
 
@@ -65,7 +65,13 @@ let ws = Workspace::new("./my-repo")
   write into the workspace concurrently.
 - **Read-only mode** — `Workspace::read_only(..)` hides the mutating tools
   entirely (the model only ever sees `read_file`/`glob`/`grep`).
-- **`bash` timeout + output caps** — long or chatty commands are bounded.
+- **`bash` environment is cleared** — the command receives only `PATH`, `HOME`, `LANG`,
+  `LC_ALL`, `TMPDIR`, `TERM`, `USER`, and `SHELL`, so provider API keys held by the agent
+  process are not readable with `env`. `Workspace::inherit_env(true)` restores the old
+  pass-everything behaviour, and `env_allowlist` replaces the set.
+- **`bash` timeout + output caps** — long or chatty commands are bounded. A timed-out
+  command is killed as a **process group**, so anything it started is killed too;
+  previously only the direct child was signalled and descendants survived.
 
 ## Using it directly
 
@@ -87,9 +93,16 @@ workspace yields a read-only agent automatically.
 
 ## Sandboxing model
 
-Phase 1 runs `bash` **host-local** (`sh -c`, working directory pinned to the
-root) with a timeout — it is path-contained and bounded, but not strongly
-OS-isolated. The policy vocabulary aligns with `adk-code`'s `SandboxPolicy`; for
+Phase 1 runs `bash` **host-local** (`sh -c`, working directory pinned to the root) with a
+timeout and a cleared environment. What that does and does not give you:
+
+| Enforced | Not enforced |
+|----------|--------------|
+| File tools cannot resolve outside the root, including through symlinks | `bash` can still use absolute paths — the working directory is not an OS boundary |
+| The command cannot read the agent's environment variables | The command can reach the network |
+| A timeout kills the command and its descendants | Nothing limits memory or CPU |
+
+So it is path-contained, environment-isolated, and bounded, but **not** OS-isolated. The policy vocabulary aligns with `adk-code`'s `SandboxPolicy`; for
 strong isolation, run `bash` behind a containerized executor (see the
 [design doc](https://github.com/zavora-ai/adk-rust/blob/main/docs/design/coding-agent.md#9-security--sandboxing)).
 Combine with [`adk-guardrail`](../security/guardrails.md) (command allowlists,

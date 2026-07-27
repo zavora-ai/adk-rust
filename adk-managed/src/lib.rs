@@ -1,13 +1,13 @@
 //! # adk-managed
 //!
-//! Managed agent runtime for ADK-Rust — a provider-neutral, durable, resumable
+//! Managed agent runtime for ADK-Rust — a provider-neutral, resumable
 //! agent execution engine.
 //!
 //! ## Overview
 //!
 //! `adk-managed` provides the `ManagedAgentRuntime` trait and its default implementation.
 //! It takes a declarative `ManagedAgentDef`, builds a runnable agent, and operates it as
-//! a durable, resumable, event-streaming background session. The runtime composes existing
+//! a resumable, event-streaming background session. The runtime composes existing
 //! shipping components behind a unified lifecycle trait.
 //!
 //! ## Architecture
@@ -58,7 +58,9 @@ pub use event_mapping::{
 pub use parking::ToolParkingLot;
 pub use replay::{create_event_stream, get_seq};
 pub use resolver::{DefaultModelResolver, ModelResolver, ResolverError, ResolverResult};
-pub use runtime::{AgentHandle, EnvironmentConfig, ManagedAgentRuntime, SessionHandle};
+pub use runtime::{
+    AgentHandle, EnvironmentConfig, ManagedAgentRuntime, ManagedOwner, SessionHandle,
+};
 pub use schema_normalization::{normalize_for_provider, representative_mcp_schema};
 pub use sequence::SequenceCounter;
 pub use session_loop::SessionLoop;
