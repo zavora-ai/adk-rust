@@ -91,6 +91,11 @@ pub struct IntegrationConfig {
     pub inject_memory_context: bool,
     /// Maximum memory entries to inject into system instruction.
     pub max_memory_injection: usize,
+    /// Maximum prior conversation turns carried into the provider session.
+    ///
+    /// Bounded because the instruction is sent at session creation and counts against the
+    /// model's context. Zero disables history injection while leaving memory injection alone.
+    pub max_history_injection: usize,
 }
 
 impl Default for IntegrationConfig {
@@ -100,6 +105,7 @@ impl Default for IntegrationConfig {
             store_to_memory: true,
             inject_memory_context: true,
             max_memory_injection: 10,
+            max_history_injection: 20,
         }
     }
 }
@@ -108,6 +114,9 @@ impl Default for IntegrationConfig {
 
 use std::sync::Arc;
 
+use std::collections::HashMap;
+
+use adk_core::Content;
 use adk_memory::MemoryService;
 use adk_plugin::EnhancedPluginManager;
 use adk_session::SessionService;
@@ -157,6 +166,48 @@ pub struct IntegratedRealtimeRunner {
     pub(crate) identity: SessionIdentity,
     /// Integration-layer configuration.
     pub(crate) config: IntegrationConfig,
+    /// The ADK tools by name, so the live path can run them through the policy pipeline.
+    ///
+    /// The builder wrapped each one in a `ToolBridgeAdapter` for the inner runner and then
+    /// dropped the originals, which is why the active path could only reach the adapter — and
+    /// the adapter applies no confirmation, callbacks, or plugins.
+    pub(crate) adk_tools: HashMap<String, Arc<dyn adk_core::Tool>>,
+}
+
+/// Renders the most recent `limit` turns as bounded `role: text` lines.
+///
+/// The instruction is sent once at session creation and counts against the model's context, so
+/// this keeps the newest turns, drops anything without text, and truncates long turns rather
+/// than carrying a transcript of unbounded size.
+fn summarize_turns(turns: &[Content], limit: usize) -> Vec<String> {
+    /// Longest rendered form of a single turn.
+    const MAX_TURN_CHARS: usize = 400;
+
+    if limit == 0 {
+        return Vec::new();
+    }
+
+    turns
+        .iter()
+        .rev()
+        .take(limit)
+        .filter_map(|turn| {
+            let text: String = turn.parts.iter().filter_map(|part| part.text()).collect();
+            if text.trim().is_empty() {
+                return None;
+            }
+
+            let mut end = text.len().min(MAX_TURN_CHARS);
+            while end < text.len() && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            let rendered = if end < text.len() { format!("{}…", &text[..end]) } else { text };
+            Some(format!("{}: {rendered}", turn.role))
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 impl IntegratedRealtimeRunner {
@@ -190,7 +241,14 @@ impl IntegratedRealtimeRunner {
     /// runner.connect().await?;
     /// ```
     pub async fn connect(&self) -> Result<()> {
-        // 1. Load session history if session_service is configured
+        // Context is collected first, then injected into the provider config as one block.
+        // Previously the session was fetched into `_session` and dropped, and the memory
+        // branch logged "injecting memory entries" next to a comment saying injection was a
+        // future enhancement — so a resumed session began with neither, while the log said
+        // otherwise.
+        let mut context_sections: Vec<String> = Vec::new();
+
+        // 1. Prior conversation history.
         if let Some(ref session_service) = self.session_service {
             let get_req = adk_session::GetRequest {
                 app_name: self.identity.app_name.clone(),
@@ -200,11 +258,24 @@ impl IntegratedRealtimeRunner {
                 after: None,
             };
             match session_service.get(get_req).await {
-                Ok(_session) => {
+                Ok(session) => {
+                    let history: Vec<Content> = session
+                        .events()
+                        .all()
+                        .into_iter()
+                        .filter_map(|event| event.llm_response.content)
+                        .collect();
+                    let carried = summarize_turns(&history, self.config.max_history_injection);
                     tracing::debug!(
                         session_id = %self.identity.session_id,
+                        turns.available = history.len(),
+                        turns.carried = carried.len(),
                         "loaded prior session history"
                     );
+                    if !carried.is_empty() {
+                        context_sections
+                            .push(format!("Earlier in this conversation:\n{}", carried.join("\n")));
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -216,7 +287,7 @@ impl IntegratedRealtimeRunner {
             }
         }
 
-        // 2. Query MemoryService at session start if inject_memory_context is enabled
+        // 2. Recalled memory.
         if self.config.inject_memory_context
             && let Some(ref memory_service) = self.memory_service
         {
@@ -232,14 +303,21 @@ impl IntegratedRealtimeRunner {
                 .await
             {
                 Ok(response) => {
-                    if !response.memories.is_empty() {
-                        tracing::debug!(
-                            count = response.memories.len(),
-                            "injecting memory entries into session context"
-                        );
-                        // Memory entries are available for system instruction enrichment.
-                        // Actual injection into the system instruction happens via
-                        // update_session in a future enhancement.
+                    let recalled = summarize_turns(
+                        &response
+                            .memories
+                            .iter()
+                            .map(|entry| entry.content.clone())
+                            .collect::<Vec<Content>>(),
+                        self.config.max_memory_injection,
+                    );
+                    tracing::debug!(
+                        count = recalled.len(),
+                        "carrying memory entries into the session instruction"
+                    );
+                    if !recalled.is_empty() {
+                        context_sections
+                            .push(format!("Relevant recalled context:\n{}", recalled.join("\n")));
                     }
                 }
                 Err(e) => {
@@ -249,6 +327,10 @@ impl IntegratedRealtimeRunner {
                     );
                 }
             }
+        }
+
+        if !context_sections.is_empty() {
+            self.runner.prepend_instruction_context(&context_sections.join("\n\n")).await;
         }
 
         // 3. Connect the underlying runner — this is the only error that propagates
@@ -327,6 +409,14 @@ impl IntegratedRealtimeRunner {
     /// );
     /// runner.update_session(update).await?;
     /// ```
+    /// The system instruction the provider session was created with.
+    ///
+    /// Includes any prior-history and recalled-memory context carried in by
+    /// [`IntegratedRealtimeRunner::connect`].
+    pub async fn instruction(&self) -> Option<String> {
+        self.runner.instruction().await
+    }
+
     pub async fn update_session(&self, config: SessionUpdateConfig) -> Result<()> {
         self.runner.update_session(config).await
     }
@@ -379,7 +469,7 @@ impl IntegratedRealtimeRunner {
             // bridged ADK tools and native handlers registered on the builder run,
             // and (with `auto_respond_tools`) the result is sent back to the model.
             if let ServerEvent::FunctionCallDone { call_id, name, arguments, .. } = server_event
-                && let Err(e) = self.runner.dispatch_tool_call(call_id, name, arguments).await
+                && let Err(e) = self.dispatch_with_policy(call_id, name, arguments).await
             {
                 tracing::warn!(
                     tool = %name,
@@ -510,6 +600,50 @@ impl IntegratedRealtimeRunner {
     /// are non-fatal: logged and swallowed, with execution falling through to
     /// direct tool invocation.
     #[allow(dead_code)] // Will be wired in event loop handling
+    /// Dispatches one provider tool call, preferring the policy pipeline.
+    ///
+    /// An ADK tool registered on this builder runs through `execute_tool_with_plugins`, which
+    /// applies the configured plugin pipeline, records the call for the transcript, and
+    /// persists the tool event. Previously the live path called
+    /// `RealtimeRunner::dispatch_tool_call`, which invokes the `ToolBridgeAdapter` directly —
+    /// the adapter creates a context and calls `Tool::execute` with no plugins, callbacks, or
+    /// confirmation, so a tool governed in the standard agent loop ran ungoverned here.
+    ///
+    /// A name that is not a registered ADK tool is a native handler, and falls through to the
+    /// runner's own dispatch. That bypass is now explicit rather than the default.
+    async fn dispatch_with_policy(&self, call_id: &str, name: &str, arguments: &str) -> Result<()> {
+        let Some(tool) = self.adk_tools.get(name).cloned() else {
+            tracing::debug!(
+                tool = %name,
+                "no ADK tool by this name; dispatching as a native handler"
+            );
+            return self.runner.dispatch_tool_call(call_id, name, arguments).await;
+        };
+
+        let call = crate::events::ToolCall {
+            call_id: call_id.to_string(),
+            name: name.to_string(),
+            arguments: serde_json::from_str(arguments)
+                .unwrap_or(serde_json::Value::Object(Default::default())),
+        };
+
+        let result = self.execute_tool_with_plugins(&tool, &call).await?;
+        self.runner.send_tool_result(call_id, result).await
+    }
+
+    /// Runs one tool through the policy pipeline, for conformance tests.
+    ///
+    /// Exposed so the governed path can be asserted directly rather than only through a live
+    /// provider session, which is why this defect had no coverage.
+    #[doc(hidden)]
+    pub async fn execute_tool_with_plugins_for_test(
+        &self,
+        tool: &Arc<dyn adk_core::Tool>,
+        call: &crate::events::ToolCall,
+    ) -> Result<Value> {
+        self.execute_tool_with_plugins(tool, call).await
+    }
+
     pub(crate) async fn execute_tool_with_plugins(
         &self,
         tool: &Arc<dyn adk_core::Tool>,
@@ -556,11 +690,21 @@ impl IntegratedRealtimeRunner {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "before_tool_call plugin error (non-fatal)");
-                    // Fallback: execute tool directly
-                    tool.execute(ctx as Arc<dyn adk_core::ToolContext>, call.arguments.clone())
-                        .await
-                        .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+                    // Fail closed. A before-tool plugin is where authorization, redaction, and
+                    // policy live, so executing the tool when that pipeline fails turns a
+                    // broken guard into no guard. The model receives the error instead.
+                    tracing::error!(
+                        tool = tool.name(),
+                        error = %e,
+                        "before_tool_call plugin failed; refusing the tool"
+                    );
+                    serde_json::json!({
+                        "error": format!(
+                            "tool {} was refused: its before-tool plugin pipeline failed ({e}). \
+                             Execution is refused rather than proceeding without policy.",
+                            tool.name()
+                        )
+                    })
                 }
             }
         } else {
@@ -691,6 +835,7 @@ mod session_persistence_tests {
                 persist_transcripts: true,
                 store_to_memory: false,
                 inject_memory_context: false,
+                max_history_injection: 20,
                 max_memory_injection: 0,
             })
             .build()
@@ -1034,6 +1179,7 @@ mod session_persistence_tests {
                 session_id: "test-session".to_string(),
             },
             config: IntegrationConfig::default(),
+            adk_tools: HashMap::new(),
         }
     }
 
@@ -1171,8 +1317,10 @@ mod session_persistence_tests {
                 persist_transcripts: true,
                 store_to_memory: false,
                 inject_memory_context: false,
+                max_history_injection: 20,
                 max_memory_injection: 0,
             },
+            adk_tools: HashMap::new(),
         };
 
         // 5. Start a turn in the aggregator so record_tool_call has somewhere to attach
@@ -1460,7 +1608,9 @@ mod graceful_degradation_tests {
                         store_to_memory: true,
                         inject_memory_context: true,
                         max_memory_injection: 10,
+                        max_history_injection: 20,
                     },
+                    adk_tools: HashMap::new(),
                 };
 
                 // Process events through the aggregator — this is the path that
@@ -1509,8 +1659,10 @@ mod graceful_degradation_tests {
                 persist_transcripts: true,
                 store_to_memory: false,
                 inject_memory_context: false,
+                max_history_injection: 20,
                 max_memory_injection: 0,
             },
+            adk_tools: HashMap::new(),
         };
 
         // Process a UserUtteranceComplete event — should not panic even

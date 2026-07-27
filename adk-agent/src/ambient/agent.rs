@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use adk_core::{AdkError, Agent, EventStream, Result};
+use adk_core::{AdkError, Agent, Event, EventStream, Result};
 use futures::StreamExt;
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::{Notify, RwLock, Semaphore, mpsc};
 use tokio::task::JoinHandle;
 
 use super::event_source::EventSource;
@@ -48,6 +48,8 @@ pub enum AmbientAgentStatus {
     /// The agent is stopped — no background task is running.
     Stopped,
 }
+/// Triggers handled at once unless [`AmbientAgent::with_max_concurrent_triggers`] says otherwise.
+const DEFAULT_MAX_CONCURRENT_TRIGGERS: usize = 4;
 
 /// A background agent triggered by an event source.
 ///
@@ -81,6 +83,14 @@ pub struct AmbientAgent {
     status: Arc<RwLock<AmbientAgentStatus>>,
     resume_notify: Arc<Notify>,
     handle: Option<JoinHandle<()>>,
+    /// Bounds how many triggers are handled at once.
+    ///
+    /// Events used to be handled strictly one at a time — the loop drained a handler's whole
+    /// event stream before polling the source again — so one slow trigger blocked every later
+    /// one.
+    max_concurrent_triggers: usize,
+    /// Receives events the agent produces, when a caller asks for them.
+    output_tx: Option<mpsc::Sender<Result<Event>>>,
 }
 
 impl AmbientAgent {
@@ -95,7 +105,38 @@ impl AmbientAgent {
             status: Arc::new(RwLock::new(AmbientAgentStatus::Stopped)),
             resume_notify: Arc::new(Notify::new()),
             handle: None,
+            max_concurrent_triggers: DEFAULT_MAX_CONCURRENT_TRIGGERS,
+            output_tx: None,
         }
+    }
+
+    /// Bounds how many triggers are handled concurrently. Defaults to four.
+    ///
+    /// A bound of zero is treated as one.
+    pub fn with_max_concurrent_triggers(mut self, max_concurrent_triggers: usize) -> Self {
+        self.max_concurrent_triggers = max_concurrent_triggers.max(1);
+        self
+    }
+
+    /// Delivers the events the agent produces to the returned receiver.
+    ///
+    /// Without this, produced events were logged at debug level and discarded, so a caller had
+    /// no way to observe what an ambient run did. Errors are delivered too, so a failing trigger
+    /// is visible rather than only logged.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut outputs = ambient.take_output(64);
+    /// ambient.start().await?;
+    /// while let Some(event) = outputs.recv().await {
+    ///     // observe what each trigger produced
+    /// }
+    /// ```
+    pub fn take_output(&mut self, capacity: usize) -> mpsc::Receiver<Result<Event>> {
+        let (tx, rx) = mpsc::channel(capacity.max(1));
+        self.output_tx = Some(tx);
+        rx
     }
 
     /// Set a trigger handler that will be called when the event source fires.
@@ -112,11 +153,24 @@ impl AmbientAgent {
     ///
     /// # Errors
     ///
-    /// Returns an error if the agent is already running or paused.
+    /// Returns an error if the agent is already running or paused, or if no trigger handler is
+    /// configured.
+    ///
+    /// Starting without a handler used to succeed and then only log each trigger, so
+    /// `AmbientAgent::new(..).start()` looked like it was running the agent while the agent was
+    /// never invoked. Refusing makes that visible at the call site.
     pub async fn start(&mut self) -> Result<()> {
         let current = *self.status.read().await;
         if current != AmbientAgentStatus::Stopped {
             return Err(AdkError::agent("agent already running"));
+        }
+
+        if self.trigger_handler.is_none() {
+            return Err(AdkError::agent(
+                "AmbientAgent has no trigger handler, so starting it would log trigger events \
+                 without ever invoking the agent. Call `with_trigger_handler` with a closure \
+                 that drives the agent through a Runner.",
+            ));
         }
 
         // Subscribe to the event source
@@ -129,61 +183,88 @@ impl AmbientAgent {
 
         *self.status.write().await = AmbientAgentStatus::Running;
 
+        let permits = Arc::new(Semaphore::new(self.max_concurrent_triggers));
+        let output_tx = self.output_tx.clone();
+        let handler = trigger_handler.expect("checked above");
+
         let handle = tokio::spawn(async move {
             let mut stream = stream;
+            let mut running = futures::stream::FuturesUnordered::new();
 
-            while let Some(event) = stream.next().await {
-                // Check if paused — wait until resumed
+            loop {
+                // Check if paused — wait until resumed.
                 loop {
                     let current_status = *status.read().await;
                     match current_status {
                         AmbientAgentStatus::Running => break,
-                        AmbientAgentStatus::Paused => {
-                            // Wait for resume signal
-                            resume_notify.notified().await;
-                        }
+                        AmbientAgentStatus::Paused => resume_notify.notified().await,
                         AmbientAgentStatus::Stopped => return,
                     }
                 }
 
-                // Process the event — invoke the agent via the trigger handler
-                tracing::info!(
-                    agent = agent.name(),
-                    source = %event.source,
-                    "ambient agent triggered"
-                );
-                tracing::debug!(payload = %event.payload, "trigger event payload");
+                // Draining finished triggers alongside reading the source is what removes the
+                // head-of-line blocking: one slow trigger no longer holds up every later one.
+                let event = if running.is_empty() {
+                    stream.next().await
+                } else {
+                    tokio::select! {
+                        biased;
+                        Some(()) = running.next() => continue,
+                        event = stream.next() => event,
+                    }
+                };
 
-                if let Some(ref handler) = trigger_handler {
-                    match handler(event, agent.clone()).await {
+                let Some(event) = event else {
+                    // Source exhausted: let dispatched triggers finish so their output is not
+                    // dropped mid-flight.
+                    while running.next().await.is_some() {}
+                    return;
+                };
+
+                let handler = Arc::clone(&handler);
+                let agent = Arc::clone(&agent);
+                let permits = Arc::clone(&permits);
+                let output_tx = output_tx.clone();
+
+                running.push(async move {
+                    let _permit = permits.acquire_owned().await;
+
+                    tracing::info!(
+                        agent = agent.name(),
+                        source = %event.source,
+                        "ambient agent triggered"
+                    );
+
+                    match handler(event, Arc::clone(&agent)).await {
                         Ok(mut event_stream) => {
-                            // Consume the event stream, logging results
                             while let Some(result) = event_stream.next().await {
-                                match result {
-                                    Ok(ev) => {
-                                        tracing::debug!(
-                                            author = %ev.author,
-                                            "ambient agent produced event"
-                                        );
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            error = %e,
-                                            "ambient agent invocation error"
-                                        );
-                                        break;
-                                    }
+                                let failed = result.is_err();
+                                if let Err(ref e) = result {
+                                    tracing::warn!(error = %e, "ambient agent invocation error");
+                                }
+
+                                // Delivered when a caller asked for output, instead of being
+                                // logged and dropped.
+                                if let Some(ref tx) = output_tx
+                                    && tx.send(result).await.is_err()
+                                {
+                                    tracing::debug!("ambient output receiver dropped");
+                                    return;
+                                }
+
+                                if failed {
+                                    return;
                                 }
                             }
                         }
                         Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                "ambient agent trigger handler failed"
-                            );
+                            tracing::warn!(error = %e, "ambient agent trigger handler failed");
+                            if let Some(ref tx) = output_tx {
+                                let _ = tx.send(Err(e)).await;
+                            }
                         }
                     }
-                }
+                });
             }
         });
 

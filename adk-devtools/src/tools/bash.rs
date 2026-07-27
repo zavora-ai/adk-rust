@@ -71,14 +71,30 @@ impl Tool for BashTool {
             .map(Duration::from_secs)
             .unwrap_or_else(|| self.workspace.bash_timeout_value());
 
-        let mut child = tokio::process::Command::new("sh")
-            .arg("-c")
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c")
             .arg(&command)
             .current_dir(self.workspace.root())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(DevToolError::from)?;
+            .stderr(Stdio::piped());
+
+        // The parent environment of an agent process routinely holds provider API keys,
+        // and `env` would print them. Pass through only what tools need, unless the
+        // workspace opts into inheriting.
+        if !self.workspace.inherits_env() {
+            cmd.env_clear();
+            for (key, value) in self.workspace.bash_env() {
+                cmd.env(key, value);
+            }
+        }
+
+        // Run in its own process group so a timeout can terminate descendants. Killing
+        // only the direct child left `sh`'s children running after the tool returned.
+        #[cfg(unix)]
+        cmd.process_group(0);
+
+        let mut child = cmd.spawn().map_err(DevToolError::from)?;
+        let child_pid = child.id();
 
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
@@ -136,13 +152,34 @@ impl Tool for BashTool {
             }
             Ok(Err(e)) => Err(DevToolError::from(e).into()),
             Err(_) => {
-                let _ = child.start_kill();
+                terminate_process_group(&mut child, child_pid);
                 ctx.emit_progress("stderr", &format!("\n[timeout after {}s]\n", timeout.as_secs()))
                     .await;
                 Err(DevToolError::Timeout(timeout).into())
             }
         }
     }
+}
+
+/// Terminate a timed-out command and everything it started.
+///
+/// The child leads its own process group, so signalling the negated pid reaches
+/// grandchildren too. Killing only the direct child left descendants — a spawned server,
+/// a background build — running after the tool returned.
+fn terminate_process_group(child: &mut tokio::process::Child, pid: Option<u32>) {
+    #[cfg(unix)]
+    if let Some(pid) = pid {
+        // SAFETY: `killpg` takes a process-group id and a signal, and cannot violate
+        // memory safety. A failure means the group already exited.
+        unsafe {
+            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = pid;
+
+    // Also signal the child directly, which is all that is available off Unix.
+    let _ = child.start_kill();
 }
 
 fn truncate(mut s: String, cap: usize) -> (String, bool) {

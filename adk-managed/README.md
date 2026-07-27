@@ -1,6 +1,12 @@
 # adk-managed
 
-Managed agent runtime for ADK-Rust — a provider-neutral, durable, resumable agent execution engine.
+Managed agent runtime for ADK-Rust — a provider-neutral agent execution engine with
+checkpointing, event replay, and a supervised session loop.
+
+> **Experimental.** Checkpoints, the agent registry, and active sessions are held **in
+> memory**. They survive pause, resume, and replay within a process; they do **not** survive
+> process loss, and a new process cannot resume a session started by another. Durable managed
+> state is not implemented.
 
 [![Crates.io](https://img.shields.io/crates/v/adk-managed.svg)](https://crates.io/crates/adk-managed)
 [![Documentation](https://docs.rs/adk-managed/badge.svg)](https://docs.rs/adk-managed)
@@ -8,14 +14,14 @@ Managed agent runtime for ADK-Rust — a provider-neutral, durable, resumable ag
 
 ## Overview
 
-`adk-managed` provides the `ManagedAgentRuntime` trait and its default implementation. It takes a declarative `ManagedAgentDef`, builds a runnable agent, and operates it as a durable, resumable, event-streaming background session. The runtime composes existing shipping components behind a unified lifecycle trait.
+`adk-managed` provides the `ManagedAgentRuntime` trait and its default implementation. It takes a declarative `ManagedAgentDef`, builds a runnable agent, and operates it as a resumable, event-streaming background session, checkpointed in memory. The runtime composes existing shipping components behind a unified lifecycle trait.
 
 This is the execution engine inside a managed agent service. It is a **library**, not a service — the platform hosts it.
 
 ## Key Capabilities
 
 - **Provider-neutral**: Identical event sequences regardless of LLM provider (Gemini, OpenAI, Anthropic, Ollama, OpenAI-compatible)
-- **Durable sessions**: Checkpoint after every event; survive process crashes with zero event loss
+- **Checkpointed sessions**: Checkpoint after every event, enabling replay and resume **within the process**. Checkpoints are in-memory and do not survive process loss.
 - **Resumable**: Rehydrate from checkpoint and continue from last consistent state
 - **Event streaming**: Uniform `SessionEvent` stream with monotonic sequence numbers and SSE replay support
 - **Custom tool parking**: Client-executed tools park the loop until results arrive (or timeout)
@@ -37,7 +43,7 @@ This is the execution engine inside a managed agent service. It is a **library**
 │  ManagedAgentRuntime trait + DefaultManagedAgentRuntime      │
 │  ───────────────────────────────────────────────────        │
 │  • Builds runnable agents from ManagedAgentDef              │
-│  • Runs supervised session loop (durable, resumable)        │
+│  • Runs supervised session loop (in-process checkpoints)    │
 │  • Emits provider-neutral SessionEvent stream               │
 │  • Manages custom tool parking, checkpoints, interrupts     │
 │  • Resolves ModelRef → Arc<dyn Llm>                         │

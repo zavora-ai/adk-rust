@@ -117,3 +117,31 @@ recompiling.
 | Affective dialogue | ❌ | ❌ | ✅ |
 
 Next: [Tools →](tools.md)
+
+## Diagnostics and payload privacy
+
+Realtime frames carry transcripts, tool arguments, tool results, and identifiers. When a
+recognized event fails to deserialize — provider schema drift — the warning reports a
+field-safe summary and withholds the frame:
+
+| Field | Content |
+|-------|---------|
+| `event_type` | The provider event type that failed |
+| `error` | The deserialization error |
+| `payload.bytes` | Frame size in bytes |
+| `payload.digest` | Short digest, for correlating repeats of the same drift |
+| `payload.raw` | `<redacted>` unless payload recording is compiled in |
+
+> **Note:** the digest groups log lines within a run. It is not a cryptographic digest and
+> is not stable across processes.
+
+To diagnose drift with the frame in hand, compile `adk-realtime` with the
+`record-payloads` feature, which records the first 300 bytes:
+
+```toml
+[dependencies]
+adk-realtime = { version = "2.0.0", features = ["openai", "record-payloads"] }
+```
+
+The feature is off by default and is a deliberate choice per build, because schema drift is
+exactly when operators widen log collection and retention.

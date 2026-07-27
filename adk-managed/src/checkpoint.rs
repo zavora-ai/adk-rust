@@ -1,4 +1,9 @@
-//! Checkpoint management for durable sessions.
+//! Checkpoint management for resumable sessions.
+//!
+//! Checkpoints are held in memory. They support replay and resume **within a process**; they
+//! do not survive process loss, so a new process cannot resume a session started by another.
+//! "Atomic" below means a single assignment under a lock, not a transaction with a persistent
+//! store.
 //!
 //! The [`CheckpointManager`] provides atomic checkpoint persistence so that
 //! a crash cannot leave an event emitted but un-checkpointed (or vice versa).
@@ -14,7 +19,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{SessionEvent, SessionStatus};
+use std::sync::Arc;
+
+use crate::state_store::{ManagedSessionState, ManagedStateStore};
+use crate::types::{RuntimeError, SessionEvent, SessionStatus};
 
 /// Run-state persisted with each checkpoint.
 ///
@@ -53,7 +61,7 @@ impl RunState {
     }
 }
 
-/// Manages atomic checkpoint persistence for durable sessions.
+/// Manages in-process checkpoint state for resumable sessions.
 ///
 /// Each checkpoint atomically stores an event and the updated run-state so that
 /// a crash cannot leave an event emitted but un-checkpointed (or vice versa).
@@ -76,10 +84,12 @@ impl RunState {
 pub struct CheckpointManager {
     /// The session ID this manager is checkpointing for.
     session_id: String,
-    /// The event log (in-memory implementation).
+    /// The event log held by this manager.
     events: Vec<SessionEvent>,
     /// Current run state.
     run_state: RunState,
+    /// Where [`CheckpointManager::flush`] writes, when a store is configured.
+    store: Option<Arc<dyn ManagedStateStore>>,
 }
 
 impl CheckpointManager {
@@ -88,22 +98,98 @@ impl CheckpointManager {
     /// Initializes with an empty event log and the initial run state
     /// (seq=0, no pending tools, queued status).
     pub fn new(session_id: String) -> Self {
-        Self { session_id, events: Vec::new(), run_state: RunState::initial() }
+        Self { session_id, events: Vec::new(), run_state: RunState::initial(), store: None }
     }
 
-    /// Atomically persist an event and updated run-state.
+    /// Writes flushed checkpoints to `store`.
     ///
-    /// Both the event and the new state are stored together in one operation,
-    /// guaranteeing that replay will see a consistent view after any crash.
+    /// Check [`ManagedStateStore::durability`] to learn whether those writes survive process
+    /// loss. With the shipped [`InMemoryManagedStateStore`](crate::InMemoryManagedStateStore)
+    /// they do not.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use adk_managed::{CheckpointManager, InMemoryManagedStateStore};
+    /// use std::sync::Arc;
+    ///
+    /// let manager = CheckpointManager::new("session-1".to_string())
+    ///     .with_store(Arc::new(InMemoryManagedStateStore::new()));
+    /// assert!(manager.store().is_some());
+    /// ```
+    pub fn with_store(mut self, store: Arc<dyn ManagedStateStore>) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    /// The configured store, if any.
+    pub fn store(&self) -> Option<&Arc<dyn ManagedStateStore>> {
+        self.store.as_ref()
+    }
+
+    /// Writes the current snapshot to the configured store.
+    ///
+    /// A no-op without a store. Separate from [`CheckpointManager::checkpoint`] because that
+    /// method is synchronous and a store write is not; a caller that needs the snapshot
+    /// externally visible must flush.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the store rejects the write.
+    pub async fn flush(&self) -> Result<(), RuntimeError> {
+        let Some(store) = &self.store else {
+            return Ok(());
+        };
+
+        store
+            .save(
+                &self.session_id,
+                ManagedSessionState {
+                    events: self.events.clone(),
+                    run_state: self.run_state.clone(),
+                },
+            )
+            .await
+    }
+
+    /// Rebuilds a manager for `session_id` from `store`.
+    ///
+    /// Returns a manager with the stored snapshot when one exists, and an empty one otherwise.
+    /// Whether anything is found across a restart depends entirely on the store's durability —
+    /// with the in-memory backend a new process finds nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the store cannot be read.
+    pub async fn restore(
+        session_id: String,
+        store: Arc<dyn ManagedStateStore>,
+    ) -> Result<Self, RuntimeError> {
+        let restored = store.load(&session_id).await?;
+        let (events, run_state) = match restored {
+            Some(state) => (state.events, state.run_state),
+            None => (Vec::new(), RunState::initial()),
+        };
+
+        Ok(Self { session_id, events, run_state, store: Some(store) })
+    }
+
+    /// Records an event and the updated run state together.
+    ///
+    /// The pair is applied in one call, so replay never sees an event without its state. This
+    /// is a write to this manager's own fields, **not** a transaction with a persistent store:
+    /// it says nothing about surviving a crash. Call [`CheckpointManager::flush`] to write the
+    /// snapshot out, and check the store's durability to learn what that write guarantees.
     pub fn checkpoint(&mut self, event: SessionEvent, run_state: RunState) {
         self.events.push(event);
         self.run_state = run_state;
     }
 
-    /// Load the last checkpoint for resume.
+    /// The events and run state this manager holds, for resume within the process.
     ///
-    /// Returns all stored events and the current run state, providing
-    /// everything needed to reconstruct a session after a restart.
+    /// Reconstructing a session in a *different* process requires a crash-durable
+    /// [`ManagedStateStore`] and [`CheckpointManager::restore`]; this method reads local
+    /// fields only.
     pub fn load_checkpoint(&self) -> (Vec<SessionEvent>, RunState) {
         (self.events.clone(), self.run_state.clone())
     }

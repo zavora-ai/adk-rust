@@ -53,7 +53,8 @@ pub mod contracts;
 mod error;
 mod eval;
 mod graph;
-mod runtime;
+/// Runtime adapters and response binding.
+pub mod runtime;
 
 pub use auth::{AuthorizationError, ComputerUseAuthContext, ScopeAuthorizer};
 pub use cancellation::{AgentInterrupter, CancellationBridge, CancellationError};
@@ -65,6 +66,7 @@ pub use eval::{
 pub use graph::{build_reference_graph, build_reference_graph_with_checkpointer};
 pub use runtime::{
     ComputerUseMcpConfig, ComputerUseMcpRuntime, ComputerUseRuntime, TraceCorrelation,
+    VerificationOutcome,
 };
 
 // Wire contracts are re-exported at the crate root for ergonomic access.

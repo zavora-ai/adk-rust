@@ -13,9 +13,10 @@
 //! ```
 
 use adk_computer_use::{
-    ActionClass, ActionEnvelope, ActionPreview, ComputerUseError, ComputerUseRuntime, ControlLease,
-    ExecutionCapability, ExecutionMode, ExecutionReceipt, LeaseBoundaries, PolicyDecision,
-    ReceiptStatus, ScopeAuthorizer, build_reference_graph,
+    ActionClass, ActionEnvelope, ActionPostcondition, ActionPreview, ComputerUseError,
+    ComputerUseRuntime, ControlLease, ExecutionCapability, ExecutionMode, ExecutionReceipt,
+    LeaseBoundaries, PolicyDecision, ReceiptStatus, ScopeAuthorizer, VerificationOutcome,
+    build_reference_graph,
 };
 use adk_graph::{ExecutionConfig, State};
 use async_trait::async_trait;
@@ -131,8 +132,23 @@ impl ComputerUseRuntime for InProcessRuntime {
         })
     }
 
-    async fn verify(&self, receipt: &ExecutionReceipt) -> Result<bool, ComputerUseError> {
-        Ok(receipt.status == ReceiptStatus::Committed)
+    async fn verify(
+        &self,
+        receipt: &ExecutionReceipt,
+        postcondition: Option<&ActionPostcondition>,
+    ) -> Result<VerificationOutcome, ComputerUseError> {
+        if receipt.status != ReceiptStatus::Committed {
+            return Ok(VerificationOutcome::Failed {
+                reason: format!("receipt status is {:?}", receipt.status),
+            });
+        }
+        // Committing is not verifying: without a postcondition there is nothing to check.
+        Ok(match postcondition {
+            Some(_) => VerificationOutcome::Verified,
+            None => VerificationOutcome::CommittedUnverified {
+                reason: "no postcondition declared".to_string(),
+            },
+        })
     }
 }
 
