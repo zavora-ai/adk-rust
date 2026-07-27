@@ -341,6 +341,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event through `append_event(session_id, event)`. All five write sites now use
   `append_event_for_identity`, so a backend whose natural key is composite can bind
   each event to its tenant.
+- **adk-graph: checkpoints recorded finished work as pending, and streamed runs
+  never checkpointed at all.** Three defects in `PregelExecutor`:
+
+  1. `run` saved its checkpoint *before* advancing the frontier, so the stored
+     `pending_nodes` were the nodes that had just completed. Resuming re-executed
+     them and re-applied their updates, which is wrong for any node that is not
+     idempotent — counters, accumulators, appends, and external side effects.
+     Checkpoints are now written after the frontier advances, and a finished run
+     records an empty frontier so resuming a completed thread returns the final
+     state instead of restarting the graph. Interrupts deliberately keep saving
+     the executing frontier, because an interrupted node still owes its updates.
+  2. `run_stream` saved no checkpoints, and its interrupt path returned without
+     saving one — so a streamed run could not be resumed and a streamed
+     human-in-the-loop interrupt was unrecoverable. Streamed runs now checkpoint
+     on the same schedule as blocking runs, including on interrupt.
+  3. In `StreamMode::Messages` the executor drained `execute_stream` for events
+     and then called `execute` again to obtain state updates, running every node
+     twice per super-step. For `AgentNode` that meant two billed model calls per
+     node, and the streamed tokens came from a different execution than the state
+     that was kept. Nodes now report their updates on the stream as
+     `StreamEvent::Updates`, and the executor applies those from the single
+     execution.
+
+  `Node::execute_stream` therefore carries a new contract: an implementation must
+  yield a `StreamEvent::Updates` event with its state updates. The default
+  implementation does this, so nodes built from closures are unaffected. A custom
+  override that does not will stream events but contribute no state in `Messages`
+  mode. `AgentNode::execute_stream` now applies its output mapper, which it
+  previously never did. Timeout policies now apply to the streamed execution
+  itself, where `idle_timeout` means no event was produced within the limit.
+- **adk-agent: provider errors are no longer reported as successful turns.**
+  `LlmResponse` carries `interrupted`, `error_code`, and `error_message`, and a
+  provider adapter can report a terminal failure inside an otherwise successful
+  stream item — `adk-anthropic`'s `from_stream_error`, the OpenAI Responses error
+  event, and the OpenAI websocket transport all do. `LlmAgent` copied content,
+  finish reason, usage, and provider metadata onto its events but not those three
+  fields, and never inspected them, so a failed turn arrived as an ordinary event
+  with no content and the run completed successfully. Callers, persistence, retry
+  policy, and telemetry could not distinguish a provider failure from a model that
+  simply said nothing.
+
+  Those fields now travel with both partial and final events, and a terminal
+  `error_code` ends the run with an `AdkError` coded `model.provider_error`,
+  carrying the provider's own code in the error details under
+  `provider_error_code`. The event is emitted *before* the failure so the failed
+  turn stays observable and persisted rather than vanishing into an error.
+  `interrupted` is recorded but is not treated as terminal, and truncation is
+  unaffected: a response cut short by a token limit reports
+  `finish_reason: MaxTokens` and no error code.
 
 - **adk-agent/adk-tool: workflow context wrappers no longer drop cancellation,
   secrets, and shared state.** Each wrapper re-implements `InvocationContext` and
