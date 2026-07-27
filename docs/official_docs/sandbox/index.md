@@ -13,6 +13,37 @@ The `adk-sandbox` crate provides isolated code execution for ADK agents, with tw
 | `ProcessBackend` + sandbox | Kernel-level | Same as above | `process` + `sandbox-native` |
 | `WasmBackend` | Full (memory, fs, network) | WASM only | `wasm` |
 
+### Which Isolation Are You Getting?
+
+`ProcessBackend::isolation()` reports it, so this is not something to infer from the
+crate name:
+
+| Result | Meaning |
+|--------|---------|
+| `IsolationClass::SubprocessOnly` | A child process with a cleared environment, a timeout, and its own process group. The OS applies no further restriction: the code can read the host filesystem and reach the network. This is what `ProcessBackend::default()` gives you. |
+| `IsolationClass::OsEnforced` | An enforcer **and** a policy are attached, so the OS restricts the child. |
+
+Two things about the process backend worth knowing:
+
+- **Programs are resolved before the environment is cleared.** A bare `python3`, `node`,
+  or `rustc` is looked up on the caller's `PATH` and passed to the child as an absolute
+  path. That means the child does not need a `PATH` of its own to start — previously a
+  caller had to put `PATH` in `ExecRequest::env`, which also let the executed code spawn
+  anything else on it.
+- **Compilation runs through the same boundary as execution.** Rust source used to be
+  compiled by a command built outside the shared path, so the compile had no enforcer
+  wrapper, no timeout, and no process group. That matters because compilation is not
+  inert: `include_str!` reads files and procedural macros run arbitrary code before the
+  produced binary exists. The compile phase does receive toolchain variables (`PATH`,
+  `SDKROOT`, `DEVELOPER_DIR`, `HOME`, `TMPDIR`, `RUSTUP_HOME`, `CARGO_HOME`) when they
+  are set, because `rustc` cannot invoke a linker without them; an OS enforcer is what
+  constrains that phase.
+
+### Environment Precedence
+
+`SandboxPolicy::env` supplies defaults for every execution and `ExecRequest::env`
+overrides them per call. The policy's variables were previously ignored entirely.
+
 ## OS Sandbox Profiles
 
 OS-level sandbox enforcement restricts child processes at the kernel level. This goes beyond environment isolation — the OS itself blocks unauthorized filesystem access, network connections, and process spawning.
@@ -21,9 +52,9 @@ OS-level sandbox enforcement restricts child processes at the kernel level. This
 
 | Platform | Enforcer | How It Works |
 |----------|----------|-------------|
-| macOS | Seatbelt (`sandbox-exec`) | Syscall-level rules: "allow default, deny dangerous" |
+| macOS | Seatbelt (`sandbox-exec`) | Syscall-level rules: "allow default, deny dangerous" — denies writes, network, and fork; **reads are not restricted** |
 | Linux | bubblewrap (`bwrap`) | Filesystem namespace isolation (whitelist mounts) |
-| Windows | AppContainer | Token-based ACL restrictions |
+| Windows | AppContainer | **Not implemented** — the enforcer reports itself unavailable |
 
 ### Quick Start
 
@@ -85,7 +116,7 @@ The policy defines what a sandboxed process is allowed to do:
 
 **Linux (bubblewrap):** Uses namespace-based whitelist — nothing exists by default, you mount only what's needed. Install with `apt install bubblewrap` or `dnf install bubblewrap`.
 
-**Windows (AppContainer):** Uses token-based ACLs — the process runs with a restricted SID that has no access by default, then you grant ACLs on specific paths.
+**Windows (AppContainer):** Not implemented. The design is token-based ACLs — a restricted SID with no access by default, then ACLs granted on specific paths — but container creation, ACLs, capabilities, and job-object cleanup are absent, so `probe()` returns `EnforcerUnavailable`. Run without an enforcer on Windows, or use macOS or Linux where enforcement is real.
 
 ### Example
 
