@@ -104,6 +104,10 @@ impl adk_core::Memory for MemoryServiceAdapter {
         inner.health_check().await
     }
 
+    fn supports_project_scoping(&self) -> bool {
+        self.inner.supports_project_scoping()
+    }
+
     async fn search_in_project(
         &self,
         query: &str,

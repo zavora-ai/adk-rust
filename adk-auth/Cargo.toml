@@ -28,7 +28,8 @@ otlp-audit = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-o
 adk-core.workspace = true
 adk-server = { workspace = true, optional = true }
 async-trait.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "time"] }
+zeroize = "1.8.2"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true

@@ -117,7 +117,46 @@ impl Workspace {
         if !normalized.starts_with(&self.root) {
             return Err(DevToolError::PathEscape(path.to_string()));
         }
+        // A lexical check alone is not containment: a symlink sitting lexically
+        // under the root can point anywhere, and ordinary file I/O follows it.
+        self.reject_symlink_escape(&normalized, path)?;
         Ok(normalized)
+    }
+
+    /// Rejects a path that reaches outside the root by following a symlink.
+    ///
+    /// The deepest existing ancestor of the target is canonicalized, which resolves
+    /// every symlink along the way, and the result must still be inside the root.
+    /// That covers a symlinked final component and a symlinked parent directory, so
+    /// creation through a redirected directory is refused as well. A symlink whose
+    /// target stays inside the workspace is allowed, since repositories legitimately
+    /// contain internal links.
+    ///
+    /// This is a check, not a lock. A symlink swapped between this check and the
+    /// subsequent open would still be followed; closing that window needs
+    /// descriptor-relative traversal with platform no-follow semantics.
+    fn reject_symlink_escape(
+        &self,
+        normalized: &Path,
+        requested: &str,
+    ) -> Result<(), DevToolError> {
+        let mut existing = normalized;
+        loop {
+            match std::fs::canonicalize(existing) {
+                Ok(canonical) => {
+                    if !canonical.starts_with(&self.root) {
+                        return Err(DevToolError::PathEscape(requested.to_string()));
+                    }
+                    return Ok(());
+                }
+                // The path does not exist yet, so step up to what does. A component
+                // that does not exist cannot redirect anything.
+                Err(_) => match existing.parent() {
+                    Some(parent) if parent.starts_with(&self.root) => existing = parent,
+                    _ => return Ok(()),
+                },
+            }
+        }
     }
 
     /// Render a path relative to the root for display (falls back to the full path).

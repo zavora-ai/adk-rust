@@ -106,6 +106,36 @@ let adapter = MemoryServiceAdapter::new(service, "app", "user")
 Use projects to keep, say, a user's *work* and *personal* assistants from sharing
 memory while still sharing truly global facts.
 
+### Not every backend implements project scoping
+
+Project isolation is a backend capability, not something the trait can guarantee.
+Ask before relying on it:
+
+```rust
+if service.supports_project_scoping() {
+    service.add_entry_to_project("app", "user", "acme-project", entry).await?;
+} else {
+    // Decide explicitly: refuse, or store globally on purpose.
+}
+```
+
+| Backend | Project scoping |
+|---------|-----------------|
+| `InMemoryMemoryService` | Yes |
+| `SqliteMemoryService` | Yes |
+| `PostgresMemoryService` | Yes |
+| `RedisMemoryService` | Yes |
+| `MongoMemoryService` | Yes |
+| `Neo4jMemoryService` | Yes |
+| `GraphMemoryService` | **No** — project methods return an error |
+
+A backend without project support **fails** the call rather than silently writing or
+deleting globally. Widening the scope of a write would make data intended for one
+project visible to everything under the same app and user, and widening a delete
+would remove entries outside the named project — neither is something a caller could
+detect from the return value. `MemoryServiceAdapter::supports_project_scoping`
+reports what its backend supports.
+
 ## GDPR erasure
 
 `delete_user(app, user)` removes **all** of a user's memories (entries and

@@ -354,6 +354,135 @@ let extractor = JwtRequestContextExtractor::builder()
 
 The extractor validates the Bearer token, maps `user_id` with `ClaimsMapper`, and forwards JWT `scope` / `scp` claims into `RequestContext.scopes`.
 
+## Secret Providers
+
+Tools reach runtime secrets through `ToolContext::get_secret` and
+`InvocationContext::get_secret`. Behind those is `adk_auth::secrets::SecretProvider`,
+with cloud implementations behind feature flags:
+
+| Provider | Feature |
+|----------|---------|
+| AWS Secrets Manager | `aws-secrets` |
+| Azure Key Vault | `azure-keyvault` |
+| GCP Secret Manager | `gcp-secrets` |
+
+Attach one to a run by wrapping it as a `SecretService`:
+
+```rust
+use adk_auth::secrets::{CachedSecretProvider, SecretProvider, SecretServiceAdapter};
+use std::sync::Arc;
+use std::time::Duration;
+
+// Any SecretProvider — here wrapped in the cache
+let cached = Arc::new(CachedSecretProvider::new(provider, Duration::from_secs(300)));
+let service = Arc::new(SecretServiceAdapter::new(cached));
+```
+
+### Per-Tool Authorization
+
+By default a tool holding a context can name any secret, and the provider sees only
+that name — nothing distinguishes a weather tool asking for its own API key from the
+same tool asking for a payment credential. `AuthorizingSecretService` decides per tool
+before the provider is consulted:
+
+```rust
+use adk_auth::secrets::authorizing::{AuthorizingSecretService, SecretGrant};
+use std::sync::Arc;
+
+let service = Arc::new(
+    AuthorizingSecretService::new(inner)
+        .grant("weather_lookup", SecretGrant::none().name("weather-api-key"))
+        .grant("charge_card", SecretGrant::none().prefix("billing/"))
+        .with_audit_sink(audit_sink),
+);
+```
+
+| Rule | Behaviour |
+|------|-----------|
+| Tool has a grant covering the name | Allowed |
+| Tool has a grant that does not cover the name | Denied; the provider is never called |
+| Tool has no grant | Denied |
+| Request carries no tool identity | Denied unless `grant_untooled` opens it |
+
+Everything is denied until granted, and a denial returns an `Unauthorized` error. A
+denied name is never looked up, so it does not appear in provider-side access logs as
+an attempted read.
+
+The identity is not something a tool asserts. `LlmAgent` stamps the dispatched tool's
+name onto the request, alongside the app, user, session, and invocation, so a tool
+cannot present another tool's identity. A tool can add only a *purpose*:
+
+```rust
+// inside a tool
+let key = ctx.get_secret_for_purpose("weather-api-key", "call the forecast endpoint").await?;
+```
+
+> **Note:** an agent invoked as a tool crosses a `ToolContext`, which carries no
+> identity of its own, so accesses made inside that agent present the outer agent's
+> identity rather than the inner tool's. Grant accordingly.
+
+### Auditing Access
+
+`SecretAuditSink` receives one `SecretAccessDecision` per decision, carrying the
+outcome, the secret name, the tool, the user, the invocation, and the reason — and
+never a secret value. Allows are also logged at `info` and denials at `warn`.
+
+### Caching
+
+`CachedSecretProvider` serves a value for its TTL, then refetches. It is bounded and
+revocable:
+
+| Control | Behaviour |
+|---------|-----------|
+| `with_max_entries(n)` | At most `n` names cached; the least recently used is dropped when full. Defaults to 128; `0` disables caching |
+| `invalidate(name)` | Drops one secret immediately — use this when a secret is rotated so the old value is not served for the rest of its TTL |
+| `invalidate_all()` | Drops everything |
+| `purge_expired()` | Drops expired entries without waiting for them to be read again |
+
+A bound matters when secret names are derived from input: without one, the cache can
+grow for the lifetime of the process.
+
+### What the cache does and does not guarantee
+
+A TTL controls what the cache **returns**, not how long a value stays in process
+memory. Entries are zeroized when they expire, are evicted, or are invalidated, which
+shortens residency to roughly the TTL. That is a reduction, not erasure — a `String`
+may already have been reallocated, copied by the allocator, swapped to disk, or
+captured in a core dump. Debug output for the cache is redacted so a diagnostic print
+cannot leak a value.
+
+> **Important:** a bare `SecretProvider` applies no policy of its own — any tool
+> holding a context can request any name the backing credentials can read. Wrap it in
+> [`AuthorizingSecretService`](#per-tool-authorization) to get a per-tool boundary, and
+> still scope the cloud credentials themselves: one IAM identity per deployment with
+> access to only the secrets that deployment needs.
+> **Important:** the provider interface takes only a secret *name*. There is no
+> per-tool grant, namespace, or access audit at the ADK layer, so any tool holding a
+> context can request any name the backing credentials can read. Scope the cloud
+> credentials themselves — one IAM identity per deployment with access to only the
+> secrets that deployment needs — and treat provider-side audit logs as the record of
+> access.
+### What the extractor protects
+
+Configuring an extractor turns authentication on for every non-public route:
+
+| Routes | Behaviour with an extractor configured |
+|--------|----------------------------------------|
+| `/api/sessions/*`, `/api/apps/*`, artifacts, debug | 401 without a valid token |
+| `/api/ui/*` — bridge, notifications, resources | 401 without a valid token; the authenticated user replaces any user named in the request body |
+| `/api/run*` | 401 without a valid token; the authenticated user overrides the supplied user |
+| `/health` | Public |
+
+UI bridge state is keyed by `(app_name, user_id, session_id)` taken from the request
+body, so the authenticated user is substituted for the body value rather than
+trusted. A registered UI resource records the user that registered it; only that
+user can read or replace it, and a read of someone else's resource answers 404 so
+the URI's existence is not disclosed.
+
+With **no** extractor configured there is no authenticated identity to bind, so
+routes stay open and resources stay globally visible. Authentication is opt-in —
+configure an extractor for any deployment that is not a single trusted user.
+
 ## Error Handling
 
 ```rust

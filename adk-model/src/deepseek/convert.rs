@@ -195,6 +195,18 @@ pub struct Usage {
 }
 
 /// Convert ADK Content to DeepSeek Message.
+/// Builds a system message carrying `text`.
+pub fn system_message(text: impl Into<String>) -> Message {
+    Message {
+        role: "system".to_string(),
+        content: Some(text.into()),
+        name: None,
+        tool_calls: None,
+        tool_call_id: None,
+        reasoning_content: None,
+    }
+}
+
 pub fn content_to_message(content: &Content) -> Message {
     let role = match content.role.as_str() {
         "model" | "assistant" => "assistant",

@@ -307,10 +307,12 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                     Disposition::Resolved(rec) => Some(rec.clone()),
                     Disposition::AwaitingConfirmation => {
                         let call_id = cp.call.call_id.to_string();
+                        // Static decisions are keyed by call ID, so a resumed
+                        // checkpoint is authorized only for its own call.
                         let mut decision = live_confirmation_decisions
                             .get(&call_id)
                             .copied()
-                            .or_else(|| decisions.get(&cp.call.tool).copied());
+                            .or_else(|| decisions.get(&call_id).copied());
                         if decision.is_none()
                             && let Some(handler) = confirmation_handler.as_ref()
                         {
@@ -494,7 +496,7 @@ fn run_codeact(input: LoopInputs) -> impl Stream<Item = adk_core::Result<Event>>
                             let mut decision = live_confirmation_decisions
                                 .get(&call_id_key)
                                 .copied()
-                                .or_else(|| decisions.get(&name).copied());
+                                .or_else(|| decisions.get(&call_id_key).copied());
                             if decision.is_none()
                                 && let Some(handler) = confirmation_handler.as_ref()
                             {
@@ -2598,6 +2600,20 @@ impl ToolContext for CodeToolContext {
     }
     async fn get_secret(&self, name: &str) -> adk_core::Result<Option<String>> {
         self.inner.get_secret(name).await
+    }
+
+    async fn get_secret_for_purpose(
+        &self,
+        name: &str,
+        purpose: &str,
+    ) -> adk_core::Result<Option<String>> {
+        // Inline code runs under the CodeAct agent rather than a named tool, so the
+        // identity presented is the run's, with the stated purpose attached.
+        let request = adk_core::SecretRequest::new(name)
+            .with_identity(self.inner.app_name(), self.inner.user_id(), self.inner.session_id())
+            .with_invocation_id(self.inner.invocation_id())
+            .with_purpose(purpose);
+        self.inner.get_secret_for(&request).await
     }
 }
 

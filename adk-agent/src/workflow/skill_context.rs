@@ -138,6 +138,10 @@ impl InvocationContext for UserContentOverrideContext {
     async fn get_secret(&self, name: &str) -> Result<Option<String>> {
         self.parent.get_secret(name).await
     }
+
+    async fn get_secret_for(&self, request: &adk_core::SecretRequest) -> Result<Option<String>> {
+        self.parent.get_secret_for(request).await
+    }
 }
 
 #[allow(dead_code)]

@@ -558,6 +558,16 @@ pub trait InvocationContext: CallbackContext {
     async fn get_secret(&self, _name: &str) -> Result<Option<String>> {
         Ok(None)
     }
+
+    /// Resolves a secret for a described access.
+    ///
+    /// A wrapper context must forward this, and a tool context builds the request from
+    /// the identity the framework gave it. The default drops the description and calls
+    /// [`InvocationContext::get_secret`], which keeps a context that predates the
+    /// request object working.
+    async fn get_secret_for(&self, request: &SecretRequest) -> Result<Option<String>> {
+        self.get_secret(&request.name).await
+    }
 }
 
 // Placeholder service traits
@@ -604,19 +614,43 @@ pub trait Memory: Send + Sync {
         Err(AdkError::memory("delete not implemented"))
     }
 
-    /// Search for memories within a specific project.
-    /// Returns global entries + entries for the given project.
-    /// Default delegates to `search` (global-only results).
-    async fn search_in_project(&self, query: &str, project_id: &str) -> Result<Vec<MemoryEntry>> {
-        let _ = project_id;
-        self.search(query).await
+    /// Whether this memory keeps project-scoped entries isolated.
+    ///
+    /// Returns `false` by default, so a caller can tell real isolation apart from a
+    /// memory that has no project support instead of inferring it from data.
+    fn supports_project_scoping(&self) -> bool {
+        false
     }
 
-    /// Add a memory entry scoped to a specific project.
-    /// Default delegates to `add` (global entry).
+    /// Searches memories within a specific project.
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns an error. Delegating to the global search
+    /// would return entries the project boundary is meant to exclude, and nothing in
+    /// the result would say the boundary was ignored.
+    async fn search_in_project(&self, query: &str, project_id: &str) -> Result<Vec<MemoryEntry>> {
+        let _ = (query, project_id);
+        Err(AdkError::memory(
+            "this memory does not implement project scoping, so `search_in_project` cannot \
+             honour the project boundary; check `supports_project_scoping` first, or call \
+             `search` if global scope is intended",
+        ))
+    }
+
+    /// Adds a memory entry scoped to a specific project.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error by default. Writing the entry globally would make data
+    /// intended for one project visible everywhere under the same app and user.
     async fn add_to_project(&self, entry: MemoryEntry, project_id: &str) -> Result<()> {
-        let _ = project_id;
-        self.add(entry).await
+        let _ = (entry, project_id);
+        Err(AdkError::memory(
+            "this memory does not implement project scoping, so `add_to_project` cannot honour \
+             the project boundary; check `supports_project_scoping` first, or call `add` if \
+             global scope is intended",
+        ))
     }
 }
 
@@ -650,6 +684,100 @@ pub trait SecretService: Send + Sync {
     ///
     /// Returns the secret string on success, or an [`AdkError`] on failure.
     async fn get_secret(&self, name: &str) -> Result<String>;
+
+    /// Retrieve a secret for a described access.
+    ///
+    /// This is the form an authorizing service implements: the request carries who is
+    /// asking and why, so a decision can be made before the value is fetched. The
+    /// default implementation ignores the context and calls
+    /// [`SecretService::get_secret`], which is correct for a service that has no
+    /// policy of its own.
+    ///
+    /// Every field on [`SecretRequest`] is set by the framework at the call site, not
+    /// supplied by the tool, so a tool cannot present another tool's identity.
+    async fn get_secret_for(&self, request: &SecretRequest) -> Result<String> {
+        self.get_secret(&request.name).await
+    }
+}
+
+/// A described secret access.
+///
+/// Carries the requested name plus the identity the framework observed at the call
+/// site, so a [`SecretService`] can authorize and audit rather than being handed a
+/// bare name with no context.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::SecretRequest;
+///
+/// let request = SecretRequest::new("payments-api-key")
+///     .with_tool_name("charge_card")
+///     .with_purpose("authorize a customer payment");
+///
+/// assert_eq!(request.tool_name.as_deref(), Some("charge_card"));
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecretRequest {
+    /// Name of the requested secret.
+    pub name: String,
+    /// The tool making the request, when the access came from a tool.
+    ///
+    /// Set by the framework from the tool it dispatched, never from a value the tool
+    /// provided.
+    pub tool_name: Option<String>,
+    /// Application the run belongs to.
+    pub app_name: Option<String>,
+    /// Authenticated user the run belongs to.
+    pub user_id: Option<String>,
+    /// Session the run belongs to.
+    pub session_id: Option<String>,
+    /// Invocation the access happened in, for correlating audit records.
+    pub invocation_id: Option<String>,
+    /// Why the secret is needed, when the caller states it.
+    pub purpose: Option<String>,
+}
+
+impl SecretRequest {
+    /// Creates a request for `name` with no identity attached.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into(), ..Default::default() }
+    }
+
+    /// Attaches the requesting tool's name.
+    #[must_use]
+    pub fn with_tool_name(mut self, tool_name: impl Into<String>) -> Self {
+        self.tool_name = Some(tool_name.into());
+        self
+    }
+
+    /// Attaches the run's identity.
+    #[must_use]
+    pub fn with_identity(
+        mut self,
+        app_name: impl Into<String>,
+        user_id: impl Into<String>,
+        session_id: impl Into<String>,
+    ) -> Self {
+        self.app_name = Some(app_name.into());
+        self.user_id = Some(user_id.into());
+        self.session_id = Some(session_id.into());
+        self
+    }
+
+    /// Attaches the invocation the access happened in.
+    #[must_use]
+    pub fn with_invocation_id(mut self, invocation_id: impl Into<String>) -> Self {
+        self.invocation_id = Some(invocation_id.into());
+        self
+    }
+
+    /// Attaches a stated purpose.
+    #[must_use]
+    pub fn with_purpose(mut self, purpose: impl Into<String>) -> Self {
+        self.purpose = Some(purpose.into());
+        self
+    }
 }
 
 /// A single entry returned from memory search.
@@ -695,6 +823,71 @@ pub enum ToolConfirmationDecision {
     Approve,
     /// Deny the tool execution.
     Deny,
+}
+
+/// Produces a canonical fingerprint of a tool call.
+///
+/// The fingerprint is the tool name followed by its arguments in canonical JSON
+/// form, with object keys sorted at every level so that two structurally equal
+/// argument sets always produce the same string. It is deliberately readable
+/// rather than hashed, so a mismatch can be diagnosed by inspection.
+///
+/// Use it with
+/// [`RunConfig::tool_confirmation_fingerprints`](RunConfig::tool_confirmation_fingerprints)
+/// to bind an approval to the exact arguments it was granted for.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::tool_call_fingerprint;
+/// use serde_json::json;
+///
+/// // Key order does not change the fingerprint.
+/// let a = tool_call_fingerprint("delete_file", &json!({ "path": "/tmp/a", "force": true }));
+/// let b = tool_call_fingerprint("delete_file", &json!({ "force": true, "path": "/tmp/a" }));
+/// assert_eq!(a, b);
+///
+/// // A different path does not.
+/// let c = tool_call_fingerprint("delete_file", &json!({ "path": "/etc/passwd", "force": true }));
+/// assert_ne!(a, c);
+/// ```
+pub fn tool_call_fingerprint(tool_name: &str, args: &Value) -> String {
+    let mut out = String::with_capacity(tool_name.len() + 32);
+    out.push_str(tool_name);
+    out.push('\u{1f}');
+    write_canonical(args, &mut out);
+    out
+}
+
+/// Writes `value` as canonical JSON, with object keys sorted at every level.
+fn write_canonical(value: &Value, out: &mut String) {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (i, key) in keys.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&Value::String((*key).clone()).to_string());
+                out.push(':');
+                write_canonical(&map[*key], out);
+            }
+            out.push('}');
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_canonical(item, out);
+            }
+            out.push(']');
+        }
+        other => out.push_str(&other.to_string()),
+    }
 }
 
 /// Policy defining which tools require human confirmation before execution.
@@ -799,9 +992,32 @@ impl std::fmt::Debug for RuntimeToolset {
 pub struct RunConfig {
     /// The streaming mode for agent responses.
     pub streaming_mode: StreamingMode,
-    /// Optional per-tool confirmation decisions for the current run.
-    /// Keys are tool names.
+    /// Static confirmation decisions for the current run, keyed by **function
+    /// call ID**.
+    ///
+    /// The ID is the one reported on
+    /// [`ToolConfirmationRequest::function_call_id`], so a decision authorizes the
+    /// exact call it was requested for. A decision under a tool *name* is not
+    /// consulted, because one name can cover materially different calls — a
+    /// `delete_file` approval for a scratch path must not authorize a call that
+    /// targets a different path.
+    ///
+    /// Use [`tool_confirmation_fingerprints`](Self::tool_confirmation_fingerprints)
+    /// to additionally bind a decision to the arguments it was granted for. For
+    /// name-wide or policy-driven decisions, supply a
+    /// [`tool_confirmation_handler`](Self::tool_confirmation_handler) instead.
     pub tool_confirmation_decisions: HashMap<String, ToolConfirmationDecision>,
+    /// Optional argument binding for entries in
+    /// [`tool_confirmation_decisions`](Self::tool_confirmation_decisions), keyed by
+    /// the same function call ID.
+    ///
+    /// The value is the fingerprint produced by [`tool_call_fingerprint`] for the
+    /// call the decision was granted for. When an entry is present and the actual
+    /// call does not match it, the decision is ignored and the call is treated as
+    /// unconfirmed — the safe direction. Use this when a decision travels through
+    /// an untrusted round trip, such as a browser, where the arguments could be
+    /// changed while the call ID is replayed.
+    pub tool_confirmation_fingerprints: HashMap<String, String>,
     /// Optional live decision source for confirmations that have no static
     /// entry in [`tool_confirmation_decisions`](Self::tool_confirmation_decisions).
     pub tool_confirmation_handler: Option<Arc<dyn ToolConfirmationHandler>>,
@@ -858,6 +1074,7 @@ impl Default for RunConfig {
         Self {
             streaming_mode: StreamingMode::SSE,
             tool_confirmation_decisions: HashMap::new(),
+            tool_confirmation_fingerprints: HashMap::new(),
             tool_confirmation_handler: None,
             runtime_toolsets: Vec::new(),
             cached_content: None,
@@ -923,12 +1140,25 @@ impl RunConfigBuilder {
         self
     }
 
-    /// Sets per-tool confirmation decisions for the current run.
+    /// Sets static confirmation decisions for the current run, keyed by function
+    /// call ID.
+    ///
+    /// The ID is the one carried on `ToolConfirmationRequest::function_call_id`.
     pub fn tool_confirmation_decisions(
         mut self,
         decisions: HashMap<String, ToolConfirmationDecision>,
     ) -> Self {
         self.config.tool_confirmation_decisions = decisions;
+        self
+    }
+
+    /// Binds confirmation decisions to the arguments they were granted for.
+    ///
+    /// Keys are function call IDs and values are fingerprints from
+    /// [`tool_call_fingerprint`]. A decision whose fingerprint does not match the
+    /// actual call is ignored and the call is treated as unconfirmed.
+    pub fn tool_confirmation_fingerprints(mut self, fingerprints: HashMap<String, String>) -> Self {
+        self.config.tool_confirmation_fingerprints = fingerprints;
         self
     }
 

@@ -120,9 +120,10 @@ pub use callbacks::{
 pub use context::{
     Artifacts, BackpressurePolicy, CallbackContext, IncludeContents, InvocationContext,
     MAX_STATE_KEY_LEN, Memory, MemoryEntry, ReadonlyContext, ReadonlyState, RunConfig,
-    RunConfigBuilder, RuntimeToolset, SecretService, Session, State, StreamingMode,
+    RunConfigBuilder, RuntimeToolset, SecretRequest, SecretService, Session, State, StreamingMode,
     ToolCallbackContext, ToolConcurrencyConfig, ToolConfirmationDecision, ToolConfirmationHandler,
-    ToolConfirmationPolicy, ToolConfirmationRequest, ToolOutcome, validate_state_key,
+    ToolConfirmationPolicy, ToolConfirmationRequest, ToolOutcome, tool_call_fingerprint,
+    validate_state_key,
 };
 pub use error::{AdkError, ErrorCategory, ErrorComponent, ErrorDetails, Result, RetryHint};
 pub use event::{

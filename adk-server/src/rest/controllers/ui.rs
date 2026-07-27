@@ -7,6 +7,7 @@ use crate::ui_types::{
     McpUiPermissions, McpUiResourceCsp, default_mcp_ui_host_capabilities, default_mcp_ui_host_info,
     validate_mcp_apps_render_options,
 };
+use axum::Extension;
 use axum::{Json, extract::Query, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -119,6 +120,11 @@ pub struct ReadUiResourceQuery {
 struct UiResourceEntry {
     resource: UiResource,
     content: UiResourceContent,
+    /// The authenticated user that registered this resource, when the server has
+    /// authentication configured. `None` means the resource was registered by an
+    /// unauthenticated server and is visible to everyone, which preserves the
+    /// behaviour of a server that has no auth to enforce.
+    owner: Option<String>,
 }
 
 static UI_RESOURCE_REGISTRY: OnceLock<RwLock<HashMap<String, UiResourceEntry>>> = OnceLock::new();
@@ -841,6 +847,83 @@ pub(crate) fn mark_mcp_ui_initialized(
     Ok(())
 }
 
+/// Whether `owner` may be accessed by `caller`.
+///
+/// A resource registered without an owner stays readable by anyone, so a server
+/// with no authentication behaves as before. Once a resource has an owner, only
+/// that user may read or replace it: the registry is process-global and keyed by
+/// URI alone, so without this check one authenticated caller could read or
+/// overwrite another's registered HTML.
+fn may_access_resource(owner: Option<&String>, caller: Option<&adk_core::RequestContext>) -> bool {
+    match (owner, caller) {
+        (None, _) => true,
+        (Some(_), None) => true,
+        (Some(owner), Some(caller)) => owner == &caller.user_id,
+    }
+}
+
+/// Bridge parameters that name the user whose bridge state is addressed.
+///
+/// Implemented for every bridge params type so one rule binds them all to the
+/// authenticated caller.
+trait BridgeUser {
+    fn user_id_mut(&mut self) -> &mut String;
+}
+
+/// Replaces the caller-supplied user with the authenticated one.
+///
+/// The bridge registry is keyed by `(app_name, user_id, session_id)` taken from the
+/// request body, so a body-supplied user would let one authenticated caller read and
+/// mutate another's bridge state. When authentication is configured, the body value
+/// is not trusted. When it is not configured, there is no authenticated identity to
+/// bind and the body value stands.
+fn bind_authenticated_user<P: BridgeUser>(
+    params: &mut P,
+    request_context: Option<&adk_core::RequestContext>,
+) {
+    if let Some(context) = request_context {
+        let supplied = params.user_id_mut();
+        if supplied != &context.user_id {
+            info!(
+                supplied.user_id = %supplied,
+                authenticated.user_id = %context.user_id,
+                "ui bridge request named a different user, using the authenticated user"
+            );
+            *supplied = context.user_id.clone();
+        }
+    }
+}
+
+impl BridgeUser for McpUiInitializeParams {
+    fn user_id_mut(&mut self) -> &mut String {
+        &mut self.user_id
+    }
+}
+
+impl BridgeUser for McpUiMessageParams {
+    fn user_id_mut(&mut self) -> &mut String {
+        &mut self.user_id
+    }
+}
+
+impl BridgeUser for McpUiUpdateModelContextParams {
+    fn user_id_mut(&mut self) -> &mut String {
+        &mut self.user_id
+    }
+}
+
+impl BridgeUser for McpUiPollNotificationsParams {
+    fn user_id_mut(&mut self) -> &mut String {
+        &mut self.user_id
+    }
+}
+
+impl BridgeUser for McpUiListChangedParams {
+    fn user_id_mut(&mut self) -> &mut String {
+        &mut self.user_id
+    }
+}
+
 /// GET /api/ui/capabilities
 pub async fn ui_capabilities() -> Json<UiCapabilities> {
     Json(UiCapabilities {
@@ -864,64 +947,85 @@ pub async fn ui_capabilities() -> Json<UiCapabilities> {
 
 /// POST /api/ui/initialize
 pub(crate) async fn ui_initialize(
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Json(input): Json<McpUiBridgeInput<McpUiInitializeParams>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let (params, response_mode) = parse_bridge_input(input, "ui/initialize")?;
+    let (mut params, response_mode) = parse_bridge_input(input, "ui/initialize")?;
+    bind_authenticated_user(&mut params, request_context.as_ref());
     let result = initialize_mcp_ui_bridge(params)?;
     bridge_result_json(response_mode, result)
 }
 
 /// POST /api/ui/message
 pub(crate) async fn ui_message(
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Json(input): Json<McpUiBridgeInput<McpUiMessageParams>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let (params, response_mode) = parse_bridge_input(input, "ui/message")?;
+    let (mut params, response_mode) = parse_bridge_input(input, "ui/message")?;
+    bind_authenticated_user(&mut params, request_context.as_ref());
     let result = message_mcp_ui_bridge(params)?;
     bridge_result_json(response_mode, result)
 }
 
 /// POST /api/ui/update-model-context
 pub(crate) async fn ui_update_model_context(
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Json(input): Json<McpUiBridgeInput<McpUiUpdateModelContextParams>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let (params, response_mode) = parse_bridge_input(input, "ui/update-model-context")?;
+    let (mut params, response_mode) = parse_bridge_input(input, "ui/update-model-context")?;
+    bind_authenticated_user(&mut params, request_context.as_ref());
     let result = update_mcp_ui_bridge_model_context(params)?;
     bridge_result_json(response_mode, result)
 }
 
 /// POST /api/ui/notifications/poll
 pub(crate) async fn ui_poll_notifications(
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Json(input): Json<McpUiBridgeInput<McpUiPollNotificationsParams>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let (params, response_mode) = parse_bridge_input(input, "ui/notifications/poll")?;
+    let (mut params, response_mode) = parse_bridge_input(input, "ui/notifications/poll")?;
+    bind_authenticated_user(&mut params, request_context.as_ref());
     let result = poll_mcp_ui_bridge_notifications(params)?;
     bridge_result_json(response_mode, result)
 }
 
 /// POST /api/ui/notifications/resources-list-changed
 pub(crate) async fn ui_notify_resources_list_changed(
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Json(input): Json<McpUiBridgeInput<McpUiListChangedParams>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let (params, response_mode) =
+    let (mut params, response_mode) =
         parse_bridge_input(input, "ui/notifications/resources/list_changed")?;
+    bind_authenticated_user(&mut params, request_context.as_ref());
     let result = notify_mcp_ui_resource_list_changed(params)?;
     bridge_result_json(response_mode, result)
 }
 
 /// POST /api/ui/notifications/tools-list-changed
 pub(crate) async fn ui_notify_tools_list_changed(
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Json(input): Json<McpUiBridgeInput<McpUiListChangedParams>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let (params, response_mode) = parse_bridge_input(input, "ui/notifications/tools/list_changed")?;
+    let (mut params, response_mode) =
+        parse_bridge_input(input, "ui/notifications/tools/list_changed")?;
+    bind_authenticated_user(&mut params, request_context.as_ref());
     let result = notify_mcp_ui_tool_list_changed(params)?;
     bridge_result_json(response_mode, result)
 }
 
 /// GET /api/ui/resources
-pub async fn list_ui_resources() -> Json<UiResourceListResponse> {
+pub async fn list_ui_resources(
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
+) -> Json<UiResourceListResponse> {
     let resources: Vec<UiResource> = resource_registry()
         .read()
-        .map(|registry| registry.values().map(|entry| entry.resource.clone()).collect())
+        .map(|registry| {
+            registry
+                .values()
+                .filter(|entry| may_access_resource(entry.owner.as_ref(), request_context.as_ref()))
+                .map(|entry| entry.resource.clone())
+                .collect()
+        })
         .unwrap_or_default();
     info!(resource_count = resources.len(), "ui resource list requested");
     Json(UiResourceListResponse { resources })
@@ -929,6 +1033,7 @@ pub async fn list_ui_resources() -> Json<UiResourceListResponse> {
 
 /// GET /api/ui/resources/read?uri=ui://...
 pub async fn read_ui_resource(
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Query(query): Query<ReadUiResourceQuery>,
 ) -> Result<Json<UiResourceReadResponse>, (StatusCode, String)> {
     validate_ui_resource_uri(&query.uri)?;
@@ -939,12 +1044,18 @@ pub async fn read_ui_resource(
         warn!(uri = %query.uri, "ui resource read failed: not found");
         return Err((StatusCode::NOT_FOUND, format!("resource not found: {}", query.uri)));
     };
+    if !may_access_resource(entry.owner.as_ref(), request_context.as_ref()) {
+        // Reported as not found so the URI's existence is not disclosed.
+        warn!(uri = %query.uri, "ui resource read denied: owned by another user");
+        return Err((StatusCode::NOT_FOUND, format!("resource not found: {}", query.uri)));
+    }
     info!(uri = %query.uri, "ui resource read");
     Ok(Json(UiResourceReadResponse { contents: vec![entry.content.clone()] }))
 }
 
 /// POST /api/ui/resources/register
 pub async fn register_ui_resource(
+    Extension(request_context): Extension<Option<adk_core::RequestContext>>,
     Json(req): Json<RegisterUiResourceRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     validate_ui_resource_uri(&req.uri)?;
@@ -972,12 +1083,22 @@ pub async fn register_ui_resource(
             blob: None,
             meta,
         },
+        owner: request_context.as_ref().map(|context| context.user_id.clone()),
     };
 
-    resource_registry()
-        .write()
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "resource registry poisoned".to_string()))?
-        .insert(uri.clone(), entry);
+    let mut registry = resource_registry().write().map_err(|_| {
+        (StatusCode::INTERNAL_SERVER_ERROR, "resource registry poisoned".to_string())
+    })?;
+    // Registration replaces an existing URI, so an unauthorized overwrite would let
+    // one caller substitute another's resource content.
+    if let Some(existing) = registry.get(&uri)
+        && !may_access_resource(existing.owner.as_ref(), request_context.as_ref())
+    {
+        warn!(uri = %uri, "ui resource registration denied: owned by another user");
+        return Err((StatusCode::FORBIDDEN, format!("resource is owned by another user: {uri}")));
+    }
+    registry.insert(uri.clone(), entry);
+    drop(registry);
     info!(
         uri = %uri,
         name = %name,

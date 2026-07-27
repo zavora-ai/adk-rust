@@ -11,7 +11,7 @@ use crate::interrupt::Interrupt;
 use crate::node::{ExecutionConfig, NodeContext};
 use crate::state::{Checkpoint, State};
 use crate::stream::{StreamEvent, StreamMode};
-use crate::timeout::{ProgressHandle, execute_with_timeout};
+use crate::timeout::{OnTimeout, ProgressHandle, execute_with_timeout, item_timeout_budget};
 use futures::stream::{self, StreamExt};
 use std::collections::HashMap;
 use std::time::Instant;
@@ -129,6 +129,9 @@ impl<'a> PregelExecutor<'a> {
 
             // Handle interrupts
             if let Some(interrupt) = result.interrupt {
+                // The frontier saved here is deliberately the one that was
+                // executing: an interrupted node has not produced its updates,
+                // so resuming must run it again.
                 let checkpoint_id = self.save_checkpoint().await?;
                 return Err(GraphError::Interrupted(Box::new(InterruptedExecution::new(
                     self.config.thread_id.clone(),
@@ -139,22 +142,21 @@ impl<'a> PregelExecutor<'a> {
                 ))));
             }
 
-            // Save checkpoint after each step
-            self.save_checkpoint().await?;
-
-            // Check if we're done (all paths led to END)
-            if self.graph.leads_to_end(&result.executed_nodes, &self.state) {
-                let next = self.graph.get_next_nodes(&result.executed_nodes, &self.state);
-                if next.is_empty() {
-                    break;
-                }
-            }
-
-            // Determine next nodes and apply deferred node filtering
+            // Advance the frontier *before* checkpointing. A checkpoint records
+            // what still has to run, so saving while `pending_nodes` still holds
+            // the nodes that just finished would re-execute them on resume.
             let next_candidates = self.graph.get_next_nodes(&result.executed_nodes, &self.state);
             self.pending_nodes =
                 self.filter_deferred_nodes(next_candidates, &result.executed_nodes)?;
             self.step += 1;
+
+            // An empty frontier is a terminal checkpoint: resuming it re-reads
+            // the final state instead of restarting the graph.
+            self.save_checkpoint().await?;
+
+            if self.pending_nodes.is_empty() {
+                break;
+            }
         }
 
         Ok(self.state.clone())
@@ -228,20 +230,93 @@ impl<'a> PregelExecutor<'a> {
 
                             let start = std::time::Instant::now();
 
-                            let mut node_stream = node.execute_stream(&ctx);
+                            // The timeout policy now applies to the streamed
+                            // execution itself. For a stream, "idle" means no
+                            // event was produced within the idle timeout.
+                            let max_attempts = match policy.as_ref().map(|p| &p.on_timeout) {
+                                Some(OnTimeout::Retry { max_attempts }) => (*max_attempts).max(1),
+                                _ => 1,
+                            };
                             let mut collected_events = Vec::new();
+                            let mut streamed_updates = Vec::new();
+                            let mut timed_out_after;
+                            let mut attempt = 0;
 
-                            while let Some(event_result) = node_stream.next().await {
-                                match event_result {
-                                    Ok(event) => {
-                                        // Yield Message events immediately
-                                        if matches!(event, StreamEvent::Message { .. }) {
-                                            yield Ok(event.clone());
+                            loop {
+                                attempt += 1;
+                                collected_events.clear();
+                                streamed_updates.clear();
+                                timed_out_after = None;
+                                let attempt_start = std::time::Instant::now();
+                                let mut node_stream = node.execute_stream(&ctx);
+                                let mut failure = None;
+
+                                loop {
+                                    let budget = policy
+                                        .as_ref()
+                                        .and_then(|p| item_timeout_budget(p, attempt_start.elapsed()));
+                                    let item = match budget {
+                                        Some(budget) => {
+                                            match tokio::time::timeout(budget, node_stream.next()).await {
+                                                Ok(item) => item,
+                                                Err(_) => {
+                                                    timed_out_after = Some(attempt_start.elapsed());
+                                                    break;
+                                                }
+                                            }
                                         }
-                                        collected_events.push(event);
+                                        None => node_stream.next().await,
+                                    };
+
+                                    match item {
+                                        Some(Ok(event)) => {
+                                            // Yield Message events immediately
+                                            if matches!(event, StreamEvent::Message { .. }) {
+                                                yield Ok(event.clone());
+                                            }
+                                            // The node reports its state updates on the
+                                            // stream, so they are taken from the single
+                                            // execution that produced these events.
+                                            if let StreamEvent::Updates { ref updates, .. } = event {
+                                                streamed_updates.push(updates.clone());
+                                            }
+                                            collected_events.push(event);
+                                        }
+                                        Some(Err(e)) => {
+                                            failure = Some(e);
+                                            break;
+                                        }
+                                        None => break,
                                     }
-                                    Err(e) => {
-                                        yield Err(e);
+                                }
+                                drop(node_stream);
+
+                                if let Some(e) = failure {
+                                    yield Err(e);
+                                    return;
+                                }
+                                if timed_out_after.is_none() || attempt >= max_attempts {
+                                    break;
+                                }
+                            }
+
+                            if let Some(elapsed) = timed_out_after {
+                                let on_timeout =
+                                    policy.as_ref().map(|p| p.on_timeout.clone()).unwrap_or_default();
+                                match on_timeout {
+                                    OnTimeout::Skip => {
+                                        tracing::warn!(
+                                            node = %node_name,
+                                            elapsed = ?elapsed,
+                                            "node timed out while streaming, skipping"
+                                        );
+                                        streamed_updates.clear();
+                                    }
+                                    OnTimeout::Fail | OnTimeout::Retry { .. } => {
+                                        yield Err(GraphError::NodeTimedOut {
+                                            node: node_name.clone(),
+                                            elapsed,
+                                        });
                                         return;
                                     }
                                 }
@@ -252,15 +327,8 @@ impl<'a> PregelExecutor<'a> {
                             result.events.push(StreamEvent::node_end(node_name, self.step, duration_ms));
                             result.events.extend(collected_events);
 
-                            // Get output from execute for state updates, with timeout if configured
-                            let output_result = match policy {
-                                Some(ref timeout_policy) => {
-                                    execute_with_timeout(node.as_ref(), &ctx, timeout_policy).await
-                                }
-                                None => node.execute(&ctx).await,
-                            };
-                            if let Ok(output) = output_result {
-                                for (key, value) in output.updates {
+                            for updates in streamed_updates {
+                                for (key, value) in updates {
                                     self.graph.schema.apply_update(&mut self.state, &key, value);
                                 }
                             }
@@ -324,6 +392,14 @@ impl<'a> PregelExecutor<'a> {
 
                 // Handle interrupts
                 if let Some(interrupt) = result.interrupt {
+                    // Persist before reporting: without this the interrupt is
+                    // unresumable, because resuming loads the checkpoint for the
+                    // thread. The frontier saved is the one that was executing,
+                    // since an interrupted node still owes its updates.
+                    if let Err(e) = self.save_checkpoint().await {
+                        yield Err(e);
+                        return;
+                    }
                     yield Ok(StreamEvent::interrupted(
                         result.executed_nodes.first().map(|s| s.as_str()).unwrap_or("unknown"),
                         &interrupt.to_string(),
@@ -331,14 +407,8 @@ impl<'a> PregelExecutor<'a> {
                     return;
                 }
 
-                // Check if done
-                if self.graph.leads_to_end(&result.executed_nodes, &self.state) {
-                    let next = self.graph.get_next_nodes(&result.executed_nodes, &self.state);
-                    if next.is_empty() {
-                        break;
-                    }
-                }
-
+                // Advance the frontier before checkpointing, so the checkpoint
+                // records what still has to run rather than what just finished.
                 self.pending_nodes = {
                     let next_candidates = self.graph.get_next_nodes(&result.executed_nodes, &self.state);
                     match self.filter_deferred_nodes(next_candidates, &result.executed_nodes) {
@@ -350,6 +420,11 @@ impl<'a> PregelExecutor<'a> {
                     }
                 };
                 self.step += 1;
+
+                if let Err(e) = self.save_checkpoint().await {
+                    yield Err(e);
+                    return;
+                }
             }
 
             yield Ok(StreamEvent::done(self.state.clone(), self.step + 1));

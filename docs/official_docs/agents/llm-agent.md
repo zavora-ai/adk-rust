@@ -437,6 +437,27 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### How Providers Enforce the Schema
+
+`output_schema` reaches the provider as `GenerateContentConfig::response_schema`.
+What the provider does with it differs, and the agent validates the result either
+way:
+
+| Provider | Native enforcement |
+|----------|--------------------|
+| Gemini | Full schema, sent as the response schema |
+| OpenAI and OpenAI-compatible | Full schema, sent as a strict `json_schema` response format |
+| OpenRouter | Full schema |
+| DeepSeek | JSON **syntax** only — DeepSeek's JSON Output mode has no `json_schema` variant, so the schema is enforced by the agent's validation |
+
+Where a provider enforces syntax only, or nothing at all, the agent still injects the
+schema as an instruction and validates the reply, so a non-conforming answer costs a
+retry rather than returning bad data.
+
+> **Note:** DeepSeek requires the word "json" to appear in the prompt whenever JSON
+> Output is on, otherwise the API can return empty content. The adapter adds that
+> mention itself when your prompt does not already contain it.
+
 ### JSON Output Example
 
 Input: "John met Sarah in Paris on December 25th"

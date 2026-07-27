@@ -4,7 +4,9 @@
 //! legacy models (`deepseek-chat`, `deepseek-reasoner`).
 
 use super::config::{DeepSeekConfig, ThinkingMode};
-use super::convert::{self, ChatCompletionRequest, ChatCompletionResponse, ThinkingConfig};
+use super::convert::{
+    self, ChatCompletionRequest, ChatCompletionResponse, ResponseFormat, ThinkingConfig,
+};
 use crate::retry::{RetryConfig, execute_with_retry, is_retryable_model_error};
 use adk_core::{
     AdkError, ErrorCategory, ErrorComponent, FinishReason, GenericSchemaAdapter, Llm, LlmRequest,
@@ -101,7 +103,29 @@ impl DeepSeekClient {
 
     /// Build a chat completion request from an LLM request.
     fn build_request(&self, request: &LlmRequest, stream: bool) -> ChatCompletionRequest {
-        let messages: Vec<_> = request.contents.iter().map(convert::content_to_message).collect();
+        let mut messages: Vec<_> =
+            request.contents.iter().map(convert::content_to_message).collect();
+
+        // DeepSeek's structured-output contract is JSON Output: `response_format`
+        // accepts only `{"type": "json_object"}` — there is no `json_schema` mode —
+        // and the API requires the word "json" to appear in the system or user
+        // prompt, otherwise it can return empty content.
+        // https://api-docs.deepseek.com/guides/json_mode
+        let response_format = match request.config.as_ref().and_then(|c| c.response_schema.as_ref())
+        {
+            Some(schema) => {
+                if !mentions_json(&messages) {
+                    messages.insert(
+                        0,
+                        convert::system_message(format!(
+                            "Respond with a single json object matching this schema: {schema}"
+                        )),
+                    );
+                }
+                Some(ResponseFormat { format_type: "json_object".to_string() })
+            }
+            None => None,
+        };
 
         let tools = if request.tools.is_empty() {
             None
@@ -143,12 +167,20 @@ impl DeepSeekClient {
             max_tokens,
             stream: Some(stream),
             tools,
-            response_format: None,
+            response_format,
             thinking,
             reasoning_effort,
             stop: None,
         }
     }
+}
+
+/// Whether the conversation already satisfies DeepSeek's requirement that the word
+/// "json" appear in the prompt when JSON Output is enabled.
+fn mentions_json(messages: &[convert::Message]) -> bool {
+    messages.iter().any(|message| {
+        message.content.as_deref().is_some_and(|text| text.to_lowercase().contains("json"))
+    })
 }
 
 #[async_trait]
@@ -434,5 +466,103 @@ impl Llm for DeepSeekClient {
         };
 
         Ok(crate::usage_tracking::with_usage_tracking(Box::pin(response_stream), usage_span))
+    }
+}
+
+#[cfg(test)]
+mod response_format_tests {
+    //! `build_request` read temperature, top-p, token limits, tools, thinking, and
+    //! reasoning effort but always sent `response_format: None`, even with a
+    //! `response_schema` present, while the module advertised structured JSON output.
+    //! The schema reached the model only as the agent's textual instruction, so native
+    //! enforcement was never requested and structured turns could cost retries.
+
+    use super::*;
+    use adk_core::{Content, GenerateContentConfig, LlmRequest};
+    use serde_json::json;
+
+    fn client() -> DeepSeekClient {
+        DeepSeekClient::chat("test-key").expect("client builds")
+    }
+
+    fn schema() -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": { "answer": { "type": "string" } },
+            "required": ["answer"]
+        })
+    }
+
+    fn request_with(config: Option<GenerateContentConfig>, prompt: &str) -> LlmRequest {
+        let mut request =
+            LlmRequest::new("deepseek-chat", vec![Content::new("user").with_text(prompt)]);
+        request.config = config;
+        request
+    }
+
+    #[test]
+    fn a_response_schema_requests_json_output() {
+        let request = request_with(
+            Some(GenerateContentConfig { response_schema: Some(schema()), ..Default::default() }),
+            "give me the answer as json",
+        );
+
+        let built = client().build_request(&request, false);
+        let wire = serde_json::to_value(&built).expect("request serializes");
+
+        // DeepSeek accepts only `json_object`; there is no `json_schema` mode.
+        assert_eq!(
+            wire["response_format"],
+            json!({ "type": "json_object" }),
+            "a response schema must request DeepSeek's JSON Output mode"
+        );
+    }
+
+    #[test]
+    fn no_schema_leaves_the_response_format_unset() {
+        let request = request_with(None, "hello");
+        let built = client().build_request(&request, false);
+        let wire = serde_json::to_value(&built).expect("request serializes");
+
+        assert!(
+            wire.get("response_format").is_none(),
+            "an ordinary turn must not request JSON Output"
+        );
+    }
+
+    #[test]
+    fn the_documented_json_keyword_requirement_is_satisfied() {
+        // DeepSeek requires the word "json" in the system or user prompt whenever
+        // JSON Output is enabled, or the API may return empty content.
+        let request = request_with(
+            Some(GenerateContentConfig { response_schema: Some(schema()), ..Default::default() }),
+            "summarise the document",
+        );
+
+        let built = client().build_request(&request, false);
+
+        assert!(
+            built.messages.iter().any(|m| m
+                .content
+                .as_deref()
+                .is_some_and(|text| text.to_lowercase().contains("json"))),
+            "enabling JSON Output without the keyword risks empty responses"
+        );
+    }
+
+    #[test]
+    fn an_existing_json_mention_is_not_duplicated() {
+        let request = request_with(
+            Some(GenerateContentConfig { response_schema: Some(schema()), ..Default::default() }),
+            "reply in json please",
+        );
+
+        let built = client().build_request(&request, false);
+
+        assert_eq!(
+            built.messages.len(),
+            1,
+            "the prompt already mentions json, so nothing needs to be added"
+        );
     }
 }
