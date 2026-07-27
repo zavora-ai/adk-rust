@@ -1,4 +1,9 @@
-//! Checkpoint management for durable sessions.
+//! Checkpoint management for resumable sessions.
+//!
+//! Checkpoints are held in memory. They support replay and resume **within a process**; they
+//! do not survive process loss, so a new process cannot resume a session started by another.
+//! "Atomic" below means a single assignment under a lock, not a transaction with a persistent
+//! store.
 //!
 //! The [`CheckpointManager`] provides atomic checkpoint persistence so that
 //! a crash cannot leave an event emitted but un-checkpointed (or vice versa).
@@ -53,7 +58,7 @@ impl RunState {
     }
 }
 
-/// Manages atomic checkpoint persistence for durable sessions.
+/// Manages in-process checkpoint state for resumable sessions.
 ///
 /// Each checkpoint atomically stores an event and the updated run-state so that
 /// a crash cannot leave an event emitted but un-checkpointed (or vice versa).

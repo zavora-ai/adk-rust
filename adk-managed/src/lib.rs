@@ -1,13 +1,13 @@
 //! # adk-managed
 //!
-//! Managed agent runtime for ADK-Rust — a provider-neutral, durable, resumable
+//! Managed agent runtime for ADK-Rust — a provider-neutral, resumable
 //! agent execution engine.
 //!
 //! ## Overview
 //!
 //! `adk-managed` provides the `ManagedAgentRuntime` trait and its default implementation.
 //! It takes a declarative `ManagedAgentDef`, builds a runnable agent, and operates it as
-//! a durable, resumable, event-streaming background session. The runtime composes existing
+//! a resumable, event-streaming background session. The runtime composes existing
 //! shipping components behind a unified lifecycle trait.
 //!
 //! ## Architecture

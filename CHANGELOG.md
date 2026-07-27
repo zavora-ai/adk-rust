@@ -426,6 +426,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Release statements are checked against one source.** The workspace version, the changelog
+  heading, the README release banner, and the README roadmap's "current" marker were
+  maintained independently. `scripts/check-doc-versions.sh` skips `CHANGELOG.md` and never
+  looked at the banner or the roadmap, so nothing detected drift between them. The new
+  `scripts/check-release-consistency.sh` derives all three from the workspace version and runs
+  in the PR-tier `docs` job. Its `--release` mode additionally requires a `v<version>` tag so a
+  published artifact can be attributed to an exact commit; outside release mode it reports the
+  commit a release would be cut from. There is currently **no `v2.0.0` tag**, which is why a
+  defect cannot be attributed to the published artifact from this repository alone.
+- **adk-managed no longer described as durable.** The crate README, crate docs, root README,
+  and AGENTS.md called managed execution durable, and the README claimed sessions "survive
+  process crashes with zero event loss". Checkpoints, the agent registry, and active sessions
+  are held in memory: they support replay and resume within a process and do not survive
+  process loss. The "atomic checkpoint persistence" wording is corrected too — it is a single
+  assignment under a lock, not a transaction with a persistent store.
+
 - **adk-server: background runs execute a workflow instead of reporting success.**
   `BackgroundRunner::run_with_timeout` received neither the workflow ID nor the input. It
   checked cancellation and returned `Completed` with an empty object, so a client got a

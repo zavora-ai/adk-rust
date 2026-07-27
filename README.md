@@ -238,7 +238,7 @@ is running. See the [MCP guide](docs/official_docs/tools/mcp-tools.md).
 | `adk-auth` | Access control | Role-based permissions, declarative scope-based security, SSO/OAuth, audit logging |
 | `adk-sandbox` | Sandboxed code execution | Process/WASM backends, OS-level sandbox profiles (Seatbelt, bubblewrap, AppContainer) |
 | `adk-telemetry` | Observability | Structured logging, OpenTelemetry tracing, span helpers |
-| `adk-managed` | Managed agent runtime (Experimental) | Provider-neutral durable agent execution, checkpointing, event replay |
+| `adk-managed` | Managed agent runtime (Experimental) | Provider-neutral agent execution, in-process checkpointing and event replay (state does not survive process loss) |
 | `adk-enterprise` | Enterprise client SDK (Experimental) | HTTP/SSE client for managed agent service, zero runtime deps |
 
 > **Extracted to standalone repos:** [adk-ui](https://github.com/zavora-ai/adk-ui) (dynamic UI generation), [adk-studio](https://github.com/zavora-ai/adk-studio) (visual agent builder), [adk-playground](https://github.com/zavora-ai/adk-playground) (120+ examples).
