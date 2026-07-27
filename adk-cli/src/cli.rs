@@ -158,7 +158,7 @@ pub enum GraphCommands {
         db: Option<String>,
     },
 
-    /// Replay execution between two steps, printing state transitions
+    /// Print the recorded state at each checkpointed step in a range (reads only)
     Replay {
         /// Thread identifier to replay
         thread_id: String,

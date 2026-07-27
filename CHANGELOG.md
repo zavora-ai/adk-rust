@@ -164,6 +164,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `adk-memory` | `MemoryService::{add_session_to_project, add_entry_to_project, delete_entries_in_project}` now return an error by default; new `MemoryService::supports_project_scoping` | A custom backend must implement them; `GraphMemoryService` now refuses project calls it previously answered globally |
   | `adk-core` | `RunConfig::tool_confirmation_decisions` is now keyed by **function call ID** instead of tool name | Approvals keyed by tool name are no longer found, so the call stays unconfirmed; key by `ToolConfirmationRequest::function_call_id` |
   | `adk-core` | New public field `RunConfig::tool_confirmation_fingerprints` | Struct literals must add the field; prefer `RunConfig::builder()` |
+  | `adk-graph` | `TimeTravelHandle::replay` renamed to `state_history` | Rename the call; behaviour is unchanged, and it never re-executed anything despite the old name |
+  | `adk-graph` | New public field `ExecutionConfig::parent_context` | Struct literals must add the field; prefer `ExecutionConfig::new` plus `with_parent_context` |
   | `adk-graph` | New public field `StateGraph::deferred_configs` | Struct literals must add the field |
   | `adk-runner` | `MutableSession::conversation_history_for_agent_impl` now takes two parameters (an `agent_name` and a `branch`) instead of one | Direct callers must pass the invocation branch; pass `""` for unscoped behaviour |
   | `adk-realtime` | `ClientEvent` and `ServerEvent` are now `#[non_exhaustive]` | Downstream `match` needs a wildcard arm; the enums can no longer be constructed exhaustively outside the crate |
@@ -425,6 +427,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entries, so no plan update is emitted today.
 
 ### Fixed
+
+- **adk-graph: an agent inside a graph keeps the caller's runtime.** `AgentNode` built a
+  `GraphInvocationContext` from scratch for every run: it hardcoded
+  `user_id = "graph_user"`, `app_name = "graph_app"`, and branch `main`, used a default
+  `RunConfig`, returned `None` for artifacts and memory, and let every optional
+  capability fall back to its default — so secrets, shared state, cancellation, scopes,
+  and request metadata all disappeared. An identity-dependent tool saw a synthetic
+  principal inside a graph and the real one outside it, and `Runner::interrupt` could
+  not reach an agent running as a node.
+
+  `ExecutionConfig::with_parent_context` carries the invocation into the graph, and
+  `GraphAgent` sets it automatically, so identity, scopes, request metadata, secrets,
+  memory, artifacts, shared state, cancellation, and `RunConfig` all reach the agent.
+  The branch is deliberately *derived* as `{caller_branch}.{agent_name}` so a node's
+  events stay attributable. A graph invoked directly, with no parent, keeps the
+  synthetic identity — that is now an explicit standalone mode rather than the only
+  behaviour. Node conversation history remains scoped to the node's own graph session.
+
+- **adk-graph: `TimeTravelHandle::replay` is renamed to `state_history`.** Its rustdoc
+  said it "re-executes the graph", and the module described replaying. The
+  implementation listed checkpoints, sorted and filtered them, and returned stored
+  `(step, state)` pairs — it never invoked a node. Callers could have treated stored
+  snapshots as a fresh replay. The method now says what it does: it reads checkpoints
+  and executes nothing, and `fork_at` plus a normal invoke is the way to actually re-run
+  from a point in history. `adk graph replay` keeps its name but no longer claims to
+  replay; its output states that nothing was re-executed.
+
 
 - **adk-server: background runs execute a workflow instead of reporting success.**
   `BackgroundRunner::run_with_timeout` received neither the workflow ID nor the input. It
