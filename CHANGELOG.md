@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-sandbox: Rust compilation runs inside the boundary, policy env is applied, and the
+  isolation class is reported.** `ProcessBackend` compiled Rust source with a command
+  built outside `run_command` and awaited with `output()`, so the compile phase had no
+  enforcer wrapper, no request timeout, and no process group. Compilation is not inert —
+  `include_str!` reads files and procedural macros run arbitrary code — so a configured OS
+  policy did not cover the phase that could already touch the host, and a compiler that
+  blocked ran past the requested timeout. Compilation now goes through the same path as
+  execution.
+
+  `SandboxPolicy::env` was never applied; only `ExecRequest::env` reached the child, so a
+  policy that set variables silently supplied none. The policy now supplies defaults and
+  the request overrides them, which the documentation states.
+
+  New `ProcessBackend::isolation()` returns `IsolationClass::SubprocessOnly` or
+  `OsEnforced`, so a caller can tell what it is getting rather than inferring it from the
+  crate name; `default()` is subprocess-only.
+
+  Programs are also resolved to an absolute path against the caller's `PATH` *before* the
+  environment is cleared. A bare `python3`, `node`, or `rustc` previously required the
+  caller to put `PATH` into `ExecRequest::env`, which also handed the executed code
+  everything else on that `PATH`. The compile phase additionally receives toolchain
+  variables when set, because `rustc` cannot invoke a linker without them; that widening
+  is documented, and an enforcer is what constrains it.
+
 - **adk-core/adk-auth: secret access from tools is authorizable and audited.**
   `SecretService` and `SecretProvider` received only a secret *name*. Once a provider
   was attached to an invocation, policy collapsed to whatever the backing cloud

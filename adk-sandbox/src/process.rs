@@ -126,10 +126,58 @@ pub struct ProcessBackend {
     policy: Option<SandboxPolicy>,
 }
 
+/// How much isolation a backend actually provides.
+///
+/// Reported so a caller can tell the two apart rather than assuming the stronger one
+/// because the crate is named `adk-sandbox`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IsolationClass {
+    /// A child process with a cleared environment, a timeout, and its own process group.
+    ///
+    /// The OS applies no further restriction: the code can read the host filesystem and
+    /// reach the network. This is what [`ProcessBackend::default`] provides.
+    SubprocessOnly,
+    /// A child process wrapped by an OS enforcer — Seatbelt, bubblewrap, or AppContainer
+    /// — under a [`SandboxPolicy`].
+    OsEnforced,
+}
+
+/// Resolve a bare program name to an absolute path using the caller's `PATH`.
+///
+/// Returns `None` when the name already contains a path separator, or when nothing on
+/// `PATH` matches — in which case the command is left as it was so the spawn error still
+/// names the program the caller asked for.
+fn resolve_program(program: &OsStr) -> Option<std::path::PathBuf> {
+    let as_path = std::path::Path::new(program);
+    if as_path.components().count() > 1 {
+        return None;
+    }
+
+    let path_var = std::env::var_os("PATH")?;
+    std::env::split_paths(&path_var).find_map(|dir| {
+        let candidate = dir.join(program);
+        candidate.is_file().then_some(candidate)
+    })
+}
+
 impl ProcessBackend {
     /// Creates a new `ProcessBackend` with the given configuration.
+    ///
+    /// The result is [`IsolationClass::SubprocessOnly`] until an enforcer and policy are
+    /// attached; see [`ProcessBackend::isolation`].
     pub fn new(config: ProcessConfig) -> Self {
         Self { config, enforcer: None, policy: None }
+    }
+
+    /// How much isolation this backend applies.
+    ///
+    /// Check this before treating execution as sandboxed. Without an enforcer *and* a
+    /// policy, execution is subprocess isolation only.
+    pub fn isolation(&self) -> IsolationClass {
+        match (self.enforcer.is_some(), self.policy.is_some()) {
+            (true, true) => IsolationClass::OsEnforced,
+            _ => IsolationClass::SubprocessOnly,
+        }
     }
 
     /// Creates a new `ProcessBackend` with OS-level sandbox enforcement.
@@ -253,25 +301,21 @@ impl ProcessBackend {
 
         std::fs::write(&src_path, &request.code)?;
 
-        // Compile step
-        let compile_output = {
+        // Compile through the same path as execution. Building the command here and
+        // calling `output()` directly skipped the enforcer, the timeout, and the
+        // process group — and Rust compilation is not inert: `include_str!` and
+        // procedural macros read files and can run arbitrary code at compile time, so
+        // the compiler needs the same boundary as the binary it produces.
+        let compile_result = {
             let mut cmd = Command::new(&self.config.rustc_path);
-            cmd.arg(&src_path).arg("-o").arg(&bin_path).env_clear().kill_on_drop(true);
-            for (k, v) in &request.env {
-                cmd.env(k, v);
-            }
-            cmd.output().await?
+            cmd.arg(&src_path).arg("-o").arg(&bin_path);
+            self.run_command_with_env(cmd, request, &Self::toolchain_env()).await?
         };
 
-        if !compile_output.status.success() {
-            let stderr = truncate_utf8(compile_output.stderr, MAX_OUTPUT_BYTES);
-            let stdout = truncate_utf8(compile_output.stdout, MAX_OUTPUT_BYTES);
-            let exit_code = compile_output.status.code().unwrap_or(1);
-            let result =
-                ExecResult { stdout, stderr, exit_code, duration: std::time::Duration::ZERO };
-            Span::current().record("exit_code", exit_code);
-            Span::current().record("duration_ms", 0_u64);
-            return Ok(result);
+        if compile_result.exit_code != 0 {
+            Span::current().record("exit_code", compile_result.exit_code);
+            Span::current().record("duration_ms", compile_result.duration.as_millis() as u64);
+            return Ok(compile_result);
         }
 
         // Run the compiled binary
@@ -333,6 +377,31 @@ impl ProcessBackend {
         cmd: Command,
         request: &ExecRequest,
     ) -> Result<ExecResult, SandboxError> {
+        self.run_command_with_env(cmd, request, &[]).await
+    }
+
+    /// Variables a compiler needs to find its own tools.
+    ///
+    /// `rustc` shells out to a linker — `cc`, and `xcrun` on macOS — and resolves them
+    /// through the environment. With the environment cleared it cannot link at all, so
+    /// compilation gets these passed through from the caller when they are set.
+    ///
+    /// This widens what the compile phase can see compared with the run phase. An OS
+    /// enforcer is what constrains it; see [`ProcessBackend::isolation`].
+    fn toolchain_env() -> Vec<(String, String)> {
+        ["PATH", "DEVELOPER_DIR", "SDKROOT", "HOME", "TMPDIR", "RUSTUP_HOME", "CARGO_HOME"]
+            .iter()
+            .filter_map(|key| std::env::var(key).ok().map(|value| ((*key).to_string(), value)))
+            .collect()
+    }
+
+    /// Shared execution logic, with `extra_env` applied below policy and request values.
+    async fn run_command_with_env(
+        &self,
+        cmd: Command,
+        request: &ExecRequest,
+        extra_env: &[(String, String)],
+    ) -> Result<ExecResult, SandboxError> {
         // If a sandbox enforcer is configured, wrap the command.
         // We extract the program and args from the pre-built Command,
         // pass them through the enforcer, and create a new Command.
@@ -354,7 +423,32 @@ impl ProcessBackend {
             cmd
         };
 
+        // Resolve a bare program name against the caller's PATH *before* clearing the
+        // environment. Clearing first leaves the child with no PATH, and program
+        // resolution then fails with ENOENT — so a backend configured with `"rustc"`,
+        // `"python3"`, or `"node"` could not execute anything at all.
+        {
+            let program = cmd.as_std().get_program().to_owned();
+            if let Some(resolved) = resolve_program(&program) {
+                let args: Vec<OsString> = cmd.as_std().get_args().map(OsStr::to_owned).collect();
+                let mut resolved_cmd = Command::new(resolved);
+                resolved_cmd.args(&args);
+                cmd = resolved_cmd;
+            }
+        }
+
+        // Environment precedence: the policy supplies defaults for every execution, and
+        // the request overrides them per call. `SandboxPolicy::env` was previously
+        // ignored entirely, so a policy that set variables silently supplied none.
         cmd.env_clear();
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
+        if let Some(policy) = &self.policy {
+            for (k, v) in &policy.env {
+                cmd.env(k, v);
+            }
+        }
         for (k, v) in &request.env {
             cmd.env(k, v);
         }
