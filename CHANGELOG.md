@@ -426,6 +426,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-agent: an ambient agent invokes the agent, delivers its output, and does not serialize
+  triggers.** `AmbientAgent::start` succeeded without a trigger handler and then only logged each
+  event, so `AmbientAgent::new(..).start()` appeared to run an agent that was never invoked; it
+  now fails with an error naming what is missing. Events and errors the agent produces are
+  delivered through `take_output(capacity)` instead of being logged at debug level and dropped.
+  Triggers are dispatched under `with_max_concurrent_triggers` (default 4) rather than one at a
+  time — the loop previously drained a handler's entire event stream before polling the source
+  again, so one slow trigger blocked every later one. Durable offsets, dead letters, and retry
+  remain the caller's responsibility and are documented as such.
+
 - **adk-server: background runs execute a workflow instead of reporting success.**
   `BackgroundRunner::run_with_timeout` received neither the workflow ID nor the input. It
   checked cancellation and returned `Completed` with an empty object, so a client got a
