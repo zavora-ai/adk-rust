@@ -303,6 +303,11 @@ impl IntegratedRealtimeRunnerBuilder {
 
         let runner = Arc::new(runner_builder.build()?);
 
+        // Kept so the live event path can run them through the policy pipeline rather than
+        // only through the bridge adapter.
+        let adk_tools_by_name =
+            self.adk_tools.iter().map(|tool| (tool.name().to_string(), Arc::clone(tool))).collect();
+
         Ok(super::IntegratedRealtimeRunner {
             runner,
             session_service: self.session_service,
@@ -311,6 +316,7 @@ impl IntegratedRealtimeRunnerBuilder {
             aggregator: tokio::sync::RwLock::new(super::transcript::TranscriptAggregator::new()),
             identity,
             config: self.integration_config,
+            adk_tools: adk_tools_by_name,
         })
     }
 }

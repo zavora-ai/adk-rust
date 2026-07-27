@@ -64,7 +64,8 @@ pub trait SandboxBackend: Send + Sync {
 ///         timeout: true,
 ///         memory: false,
 ///         network_isolation: false,
-///         filesystem_isolation: false,
+///         filesystem_write_isolation: false,
+///         filesystem_read_isolation: false,
 ///         environment_isolation: true,
 ///     },
 /// };
@@ -93,8 +94,15 @@ pub struct EnforcedLimits {
     pub memory: bool,
     /// Whether the backend isolates network access.
     pub network_isolation: bool,
-    /// Whether the backend isolates filesystem access.
-    pub filesystem_isolation: bool,
+    /// Whether the backend prevents writes outside the policy's allowed paths.
+    pub filesystem_write_isolation: bool,
+    /// Whether the backend prevents *reads* outside the policy's allowed paths.
+    ///
+    /// Separate from write isolation because they are not equivalent and the platforms
+    /// differ. The macOS Seatbelt profile denies writes, network, and fork but leaves
+    /// reads open, so code can read host files outside the allowed paths even though it
+    /// cannot modify them. Reporting one `filesystem_isolation` flag hid that.
+    pub filesystem_read_isolation: bool,
     /// Whether the backend isolates environment variables.
     pub environment_isolation: bool,
 }

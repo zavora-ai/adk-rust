@@ -110,3 +110,31 @@ The MIA coaching example uses the graph + tools so the coach remembers the user'
 goals and preferences between sessions; see [Examples](examples.md).
 
 Next: [Building web apps →](building-web-apps.md)
+
+## What is carried into a resumed session
+
+`IntegratedRealtimeRunner::connect` builds one context block and prepends it to the system
+instruction before the provider session is created:
+
+| Section | Source | Bound |
+|---------|--------|-------|
+| `Earlier in this conversation:` | The prior session's events | `IntegrationConfig::max_history_injection` (default 20 turns) |
+| `Relevant recalled context:` | `MemoryService::search` | `IntegrationConfig::max_memory_injection` (default 10 entries) |
+
+Both are bounded because the instruction is sent once at session creation and counts against
+the model's context. Each turn is rendered as `role: text`, truncated at 400 characters, and
+turns without text are dropped. Setting a bound to zero disables that section.
+
+`IntegratedRealtimeRunner::instruction()` returns what the session was created with, so the
+carried context can be asserted rather than inferred:
+
+```rust,ignore
+runner.connect().await?;
+let instruction = runner.instruction().await.unwrap_or_default();
+assert!(instruction.contains("Relevant recalled context"));
+```
+
+> **Important:** this context was previously loaded and discarded — the prior session was
+> fetched into `_session` and dropped, and the memory branch logged "injecting memory entries
+> into session context" beside a comment stating that injection was a future enhancement. A
+> resumed session began with neither, while the logs said otherwise.

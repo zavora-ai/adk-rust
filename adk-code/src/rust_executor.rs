@@ -406,7 +406,8 @@ mod tests {
                     timeout: true,
                     memory: false,
                     network_isolation: false,
-                    filesystem_isolation: false,
+                    filesystem_write_isolation: false,
+                    filesystem_read_isolation: false,
                     environment_isolation: false,
                 },
             }
