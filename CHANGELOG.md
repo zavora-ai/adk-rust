@@ -426,6 +426,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-realtime: `max_concurrent_tools` is enforced, and tools no longer stall the event
+  loop.** The field defaulted to 4 and was read by nothing — no semaphore, no scheduler.
+  `FunctionCallDone` was awaited inline in `handle_event`, which the run loop awaited before
+  reading the next event, so tool calls ran strictly one at a time and blocked audio,
+  transcripts, and interruptions for the full duration of each call. Tool calls are now
+  dispatched onto the run loop under a semaphore sized by `max_concurrent_tools`, so event
+  intake continues while tools run. The single follow-up `create_response` owed after
+  automatic tool output is now issued once both the dispatching response has closed and
+  every dispatched tool has reported, in either order — previously the ordering was implicit
+  in the inline await and would have been lost.
+- **adk-realtime: transport loss is distinguishable from a graceful close.**
+  `EventHandler::on_disconnect` is called when the provider transport ends, before `run`
+  returns. `run` returns `Ok(())` for both cases, so a caller previously could not tell
+  them apart. The runner still does not reconnect automatically; the policy is documented.
+
 - **adk-server: background runs execute a workflow instead of reporting success.**
   `BackgroundRunner::run_with_timeout` received neither the workflow ID nor the input. It
   checked cancellation and returned `Completed` with an empty object, so a client got a
