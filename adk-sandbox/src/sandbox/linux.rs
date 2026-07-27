@@ -158,8 +158,13 @@ impl SandboxEnforcer for LinuxEnforcer {
         match result {
             Ok(status) if status.success() => {
                 // Also check user namespaces are available
+                // The root bind is not optional. bwrap gives the new namespace an empty
+                // root, so without it `/bin/true` does not exist inside and execvp fails —
+                // which this probe then reported as "user namespaces are not available",
+                // pointing operators at a sysctl that was never the problem. The check
+                // failed on every host, so the enforcer was never selectable on Linux.
                 let ns_check = std::process::Command::new("bwrap")
-                    .args(["--unshare-user", "--", "/bin/true"])
+                    .args(["--ro-bind", "/", "/", "--unshare-user", "--", "/bin/true"])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .status();

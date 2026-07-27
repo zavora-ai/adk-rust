@@ -468,6 +468,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-sandbox: the Linux bubblewrap enforcer is selectable again.** `LinuxEnforcer::probe` ran
+  `bwrap --unshare-user -- /bin/true` with no bind mounts. bwrap gives the new namespace an empty
+  root, so `/bin/true` did not exist inside it and `execvp` failed — which the probe reported as
+  "user namespaces are not available. Check that `kernel.unprivileged_userns_clone` sysctl is set
+  to 1". The check therefore failed on **every** host, including hosts where bubblewrap works
+  perfectly, so `get_enforcer()` never returned the bubblewrap enforcer: Linux ran with no
+  OS-level sandbox while the documentation advertised one, and the diagnostic pointed operators at
+  a sysctl that was never the cause. The probe now binds the root filesystem, so it tests what it
+  claims to.
+- **adk-sandbox: the bubblewrap argument property tests compile.** `bwrap_args_property_tests.rs`
+  used an inline `{args:?}` capture inside `prop_assert_eq!`, which expands through `concat!` and
+  cannot capture. The file is both `cfg(target_os = "linux")` and behind the `sandbox-linux`
+  feature, so no build ever compiled it and the failure went unnoticed; the bwrap argument
+  construction had no executing test coverage on the only platform where it runs.
+
 - **adk-server: background runs execute a workflow instead of reporting success.**
   `BackgroundRunner::run_with_timeout` received neither the workflow ID nor the input. It
   checked cancellation and returned `Completed` with an empty object, so a client got a

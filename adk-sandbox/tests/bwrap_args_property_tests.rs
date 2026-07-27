@@ -182,14 +182,22 @@ proptest! {
         prop_assert_eq!(
             count_flag(&args, "--die-with-parent"),
             1,
-            "--die-with-parent should appear exactly once: {args:?}"
+            // `prop_assert_eq!` expands through `concat!`, which cannot capture an inline
+            // `{args:?}`; the argument has to be positional. This file is both Linux-only
+            // and behind `sandbox-linux`, so nothing ever compiled it.
+            "--die-with-parent should appear exactly once: {:?}",
+            args
         );
 
         // --unshare-pid should appear exactly once
         prop_assert_eq!(
             count_flag(&args, "--unshare-pid"),
             1,
-            "--unshare-pid should appear exactly once: {args:?}"
+            // `prop_assert_eq!` expands through `concat!`, which cannot capture an inline
+            // `{args:?}`; the argument has to be positional. This file is both Linux-only
+            // and behind `sandbox-linux`, so nothing ever compiled it.
+            "--unshare-pid should appear exactly once: {:?}",
+            args
         );
     }
 }
