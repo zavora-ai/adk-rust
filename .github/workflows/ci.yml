@@ -161,6 +161,16 @@ jobs:
           - { package: adk-agent, features: codeact }
           - { package: adk-model, features: openrouter }
           - { package: adk-sandbox, features: wasm }
+          # sandbox-linux is Linux-only *and* feature-gated, so nothing built it until a
+          # container run found the bubblewrap probe could never succeed and that its
+          # property tests did not compile.
+          - { package: adk-sandbox, features: sandbox-linux }
+          # ambient and integration carry the webhook trigger, the ambient loop, and the
+          # realtime integration layer. Two individually-green PRs broke the ambient build
+          # in combination because no job compiled it.
+          - { package: adk-agent, features: ambient }
+          - { package: adk-realtime, features: integration }
+          - { package: adk-managed, features: memory }
           - { package: adk-audio, features: fx }
           - { package: adk-rag, features: lancedb }
     steps:

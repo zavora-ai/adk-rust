@@ -55,6 +55,8 @@ impl EventSource for BurstSource {
             .map(|index| TriggerEvent {
                 source: "burst".to_string(),
                 payload: serde_json::json!({ "index": index }),
+                // A synthetic burst has no authenticated caller.
+                principal: None,
             })
             .collect();
         Ok(Box::pin(futures::stream::iter(events)))
