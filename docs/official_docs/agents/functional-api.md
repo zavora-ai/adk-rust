@@ -240,3 +240,40 @@ cargo run --manifest-path examples/cron_scheduling/Cargo.toml
 ---
 
 **Previous**: [← Graph Agents](./graph-agents.md) | **Next**: [Realtime Agents →](./realtime-agents.md)
+
+## Interrupt and typed resume
+
+`TaskContext::interrupt<T>` suspends the workflow and, on a later run, returns the value supplied
+for that site.
+
+Each interrupt site gets a **continuation key** from its position in the run — `interrupt-1`,
+`interrupt-2`, and so on — so a replayed workflow reaches the same interrupts in the same order
+and finds the value it was given.
+
+```rust,ignore
+// First run: no value supplied, so the workflow suspends.
+let error = ctx.interrupt::<Approval>("approve the refund").await.unwrap_err();
+// workflow suspended at interrupt 'interrupt-1': approve the refund
+
+// Second run: supply the value under that key.
+let ctx = ctx.with_resume_values(HashMap::from([
+    ("interrupt-1".to_string(), serde_json::json!({ "approved": true, "approver": "alice" })),
+]));
+let approval: Approval = ctx.interrupt("approve the refund").await?;
+```
+
+The key is also written to the interrupt checkpoint under `continuation_key`.
+
+| Situation | Result |
+|-----------|--------|
+| No value for the key | `FunctionalError::Suspended { continuation_key, message }` |
+| A value that deserializes into `T` | `Ok(value)` |
+| A value that does not deserialize into `T` | `FunctionalError::InterruptTypeMismatch` naming the site |
+
+> **Important:** `interrupt` previously returned `InterruptTypeMismatch` with "workflow
+> interrupted" on **every** call, and nothing outside the method consumed a resume value. A caller
+> could not tell "needs input" from "your value was the wrong type", had no key to supply a value
+> under, and never received a typed value at the call site.
+
+> **Note:** `From<FunctionalError> for GraphError` flattens to `GraphError::Other(String)`, so a
+> caller matching structurally should match on `FunctionalError` before conversion.

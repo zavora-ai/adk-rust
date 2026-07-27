@@ -69,6 +69,14 @@ pub struct TaskContext {
     /// Pending dynamic route targets set by `route_to()`.
     /// Consumed by the executor to populate `EventActions.route`.
     pending_route: Option<Vec<String>>,
+    /// Values supplied for interrupt sites, keyed by continuation key.
+    ///
+    /// Without this there was no resume channel at all: `interrupt` always returned an error and
+    /// nothing outside the method consumed a resume value, so the typed-resumption contract in
+    /// its signature could not be honoured.
+    resume_values: HashMap<String, Value>,
+    /// Counts interrupt calls so each site gets a stable key across a replay.
+    interrupt_ordinal: Arc<RwLock<usize>>,
 }
 
 impl TaskContext {
@@ -95,6 +103,8 @@ impl TaskContext {
             schema_validator: None,
             iteration_counters: HashMap::new(),
             pending_route: None,
+            resume_values: HashMap::new(),
+            interrupt_ordinal: Arc::new(RwLock::new(0)),
         }
     }
 
@@ -175,6 +185,30 @@ impl TaskContext {
     /// let approval: bool = ctx.interrupt("Please approve this action").await?;
     /// ```
     pub async fn interrupt<T: DeserializeOwned>(&self, message: &str) -> Result<T> {
+        // Each interrupt site gets a key from its position in the run. Replaying the same
+        // workflow reaches the same interrupts in the same order, so the key a caller was told
+        // to supply is the key the site looks for.
+        let continuation_key = {
+            let mut ordinal = self.interrupt_ordinal.write().await;
+            *ordinal += 1;
+            format!("interrupt-{ordinal}")
+        };
+
+        // Resume: a value supplied for this site is returned to the call site, which is what the
+        // signature promised and what previously could not happen.
+        if let Some(value) = self.resume_values.get(&continuation_key) {
+            return serde_json::from_value(value.clone()).map_err(|e| {
+                FunctionalError::InterruptTypeMismatch {
+                    task: continuation_key.clone(),
+                    message: format!(
+                        "the value supplied for {continuation_key} does not deserialize into the \
+                         type this interrupt expects: {e}"
+                    ),
+                }
+                .into()
+            });
+        }
+
         // Emit the interrupt event for stream listeners.
         self.emit(StreamEvent::interrupted("functional_task", message));
 
@@ -185,7 +219,8 @@ impl TaskContext {
             self.current_step().await,
             vec![],
         )
-        .with_metadata("interrupt_message", Value::String(message.to_string()));
+        .with_metadata("interrupt_message", Value::String(message.to_string()))
+        .with_metadata("continuation_key", Value::String(continuation_key.clone()));
 
         self.checkpointer.save(&checkpoint).await.map_err(|e| {
             FunctionalError::CheckpointFailed {
@@ -209,15 +244,34 @@ impl TaskContext {
             );
         }
 
-        // In a real runtime the workflow executor would suspend here and
-        // later provide the resume value. For now we return an error
-        // indicating the interrupt was requested — the macro-generated
-        // wrapper handles actual suspension/resumption.
-        Err(FunctionalError::InterruptTypeMismatch {
-            task: "interrupt".to_string(),
-            message: format!("workflow interrupted: {message}"),
-        }
-        .into())
+        Err(FunctionalError::Suspended { continuation_key, message: message.to_string() }.into())
+    }
+
+    /// Supplies values for interrupt sites, keyed by continuation key.
+    ///
+    /// Re-invoke the entrypoint with these set to resume: an interrupt whose key is present
+    /// returns the deserialized value instead of suspending.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // First run suspends and reports its continuation key.
+    /// let Err(e) = run(ctx).await else { unreachable!() };
+    ///
+    /// // Second run supplies the value under that key.
+    /// let ctx = ctx.with_resume_values(HashMap::from([
+    ///     ("interrupt-1".to_string(), serde_json::json!({ "approved": true })),
+    /// ]));
+    /// let output = run(ctx).await?;
+    /// ```
+    pub fn with_resume_values(mut self, resume_values: HashMap<String, Value>) -> Self {
+        self.resume_values = resume_values;
+        self
+    }
+
+    /// The values available to interrupt sites in this context.
+    pub fn resume_values(&self) -> &HashMap<String, Value> {
+        &self.resume_values
     }
 
     /// Get the thread identifier for this context.
