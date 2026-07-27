@@ -1,3 +1,5 @@
+use crate::runtime::VerificationOutcome;
+use crate::runtime::binding::{validate_lease, validate_receipt, validate_reservation};
 use crate::{
     ActionEnvelope, ActionPreview, ComputerUseError, ComputerUseRuntime, ControlLease,
     ExecutionReceipt, SessionDeletionResult, SessionFollowUp, SessionFollowUpPage,
@@ -269,6 +271,70 @@ fn object(value: Value) -> Result<Map<String, Value>, ComputerUseError> {
     Ok(value)
 }
 
+/// Decides what a committed receipt proves about its declared postcondition.
+///
+/// Looks for a `verification` object on the receipt result carrying the observed digest, and
+/// requires it to match the postcondition's expected digest. Anything less is reported as
+/// committed-but-unverified rather than as verification, so the absence of evidence is never
+/// mistaken for evidence of success.
+fn evaluate_postcondition_evidence(
+    receipt: &ExecutionReceipt,
+    postcondition: &crate::ActionPostcondition,
+) -> VerificationOutcome {
+    let expected = expected_digest(postcondition);
+
+    let Some(verification) = receipt.result.as_ref().and_then(|result| result.get("verification"))
+    else {
+        return VerificationOutcome::CommittedUnverified {
+            reason: "the receipt carried no verification evidence for the declared postcondition"
+                .to_string(),
+        };
+    };
+
+    // An explicit negative observation is a failure, not merely missing evidence.
+    if verification.get("satisfied").and_then(Value::as_bool) == Some(false) {
+        return VerificationOutcome::Failed {
+            reason: "the runtime reported the postcondition was not satisfied".to_string(),
+        };
+    }
+
+    let observed = verification.get("observedDigest").and_then(Value::as_str);
+
+    match (expected, observed) {
+        (Some(expected), Some(observed)) if expected == observed => VerificationOutcome::Verified,
+        (Some(expected), Some(observed)) => VerificationOutcome::Failed {
+            reason: format!(
+                "observed digest {observed:?} does not match the expected postcondition digest \
+                 {expected:?}"
+            ),
+        },
+        (Some(_), None) => VerificationOutcome::CommittedUnverified {
+            reason: "verification evidence carried no observed digest to compare".to_string(),
+        },
+        // A digest-free postcondition (existence only) is satisfied by an explicit
+        // affirmative observation.
+        (None, _) => match verification.get("satisfied").and_then(Value::as_bool) {
+            Some(true) => VerificationOutcome::Verified,
+            _ => VerificationOutcome::CommittedUnverified {
+                reason: "the postcondition declares no digest and the evidence made no explicit \
+                         satisfied claim"
+                    .to_string(),
+            },
+        },
+    }
+}
+
+/// The digest a postcondition expects, where it declares one.
+fn expected_digest(postcondition: &crate::ActionPostcondition) -> Option<&str> {
+    use crate::ActionPostcondition;
+    match postcondition {
+        ActionPostcondition::UiElement { value_digest, .. } => value_digest.as_deref(),
+        ActionPostcondition::Filesystem { content_digest, .. } => content_digest.as_deref(),
+        ActionPostcondition::Registry { value_digest, .. } => value_digest.as_deref(),
+        _ => None,
+    }
+}
+
 #[async_trait]
 impl<S> ComputerUseRuntime for ComputerUseMcpRuntime<S>
 where
@@ -352,7 +418,12 @@ where
             )
             .await?,
         );
-        Ok(serde_json::from_value(value.get("lease").cloned().unwrap_or(value))?)
+        let lease: ControlLease =
+            serde_json::from_value(value.get("lease").cloned().unwrap_or(value))?;
+        // Deserialization proves shape, not provenance: a well-formed lease for another
+        // session or principal parses cleanly. Bind it before it reaches graph state.
+        validate_lease(&lease, envelope)?;
+        Ok(lease)
     }
 
     async fn reserve_target(
@@ -377,7 +448,10 @@ where
             )
             .await?,
         );
-        Ok(Some(serde_json::from_value(value.get("reservation").cloned().unwrap_or(value))?))
+        let reservation: TargetReservation =
+            serde_json::from_value(value.get("reservation").cloned().unwrap_or(value))?;
+        validate_reservation(&reservation, envelope)?;
+        Ok(Some(reservation))
     }
 
     async fn release_target(
@@ -420,11 +494,37 @@ where
             runtime.action_digest = %receipt.action_digest,
             "computer-use action receipt"
         );
+        // The digest covers the envelope, so a receipt carrying a different one describes
+        // different work even when the identifiers line up.
+        validate_receipt(&receipt, envelope, &envelope.args_digest)?;
         Ok(receipt)
     }
 
-    async fn verify(&self, receipt: &ExecutionReceipt) -> Result<bool, ComputerUseError> {
-        Ok(receipt.status == crate::ReceiptStatus::Committed)
+    async fn verify(
+        &self,
+        receipt: &ExecutionReceipt,
+        postcondition: Option<&crate::ActionPostcondition>,
+    ) -> Result<VerificationOutcome, ComputerUseError> {
+        // A committed receipt says the runtime accepted and performed the action. It does not
+        // say the intended effect occurred. Returning `status == Committed` as "verified"
+        // reported a committed-but-ineffective action as completed.
+        if receipt.status != crate::ReceiptStatus::Committed {
+            return Ok(VerificationOutcome::Failed {
+                reason: format!("receipt status is {:?}, not committed", receipt.status),
+            });
+        }
+
+        let Some(postcondition) = postcondition else {
+            return Ok(VerificationOutcome::CommittedUnverified {
+                reason: "the action declared no postcondition, so there is nothing to verify"
+                    .to_string(),
+            });
+        };
+
+        // `computer-use-mcp` may verify before issuing a receipt, but that is its contract,
+        // not something this adapter can assume. Evidence has to be present and bound to the
+        // postcondition to count.
+        Ok(evaluate_postcondition_evidence(receipt, postcondition))
     }
 
     async fn pause_session(&self, session_id: &str, reason: &str) -> Result<(), ComputerUseError> {

@@ -19,7 +19,7 @@
 //! async fn example(runtime: &dyn ManagedAgentRuntime) {
 //!     let def = ManagedAgentDef::default();
 //!     let agent = runtime.create(def).await.unwrap();
-//!     let session = runtime.start_session(&agent, None).await.unwrap();
+//!     let session = runtime.start_session(&agent, &ManagedOwner::new("app", "user").unwrap(), None).await.unwrap();
 //!     let status = runtime.status(&session).await.unwrap();
 //!     println!("Session status: {status:?}");
 //! }
@@ -66,6 +66,77 @@ pub struct AgentHandle(pub String);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SessionHandle(pub String);
+
+/// Who a managed session belongs to.
+///
+/// Every managed session was previously persisted under the constants `managed` /
+/// `managed_user`, so all sessions shared one logical namespace: session lookup, memory, and
+/// deletion could not be scoped to a caller, and audit could not attribute a session to
+/// anyone. The runtime needs this at creation because the underlying `SessionService` is
+/// addressed by app and user, and substituting constants to satisfy that contract is what
+/// erased the caller.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_managed::ManagedOwner;
+///
+/// let owner = ManagedOwner::new("support-console", "user-42")?;
+/// assert_eq!(owner.app_name(), "support-console");
+///
+/// // Blank components are rejected, since they would silently re-create a shared namespace.
+/// assert!(ManagedOwner::new("", "user-42").is_err());
+/// # Ok::<(), adk_managed::types::RuntimeError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ManagedOwner {
+    app_name: String,
+    user_id: String,
+}
+
+impl ManagedOwner {
+    /// Validates and builds an owner identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError::InvalidRequest`] when either component is empty or whitespace.
+    pub fn new(
+        app_name: impl Into<String>,
+        user_id: impl Into<String>,
+    ) -> Result<Self, RuntimeError> {
+        let app_name = app_name.into();
+        let user_id = user_id.into();
+
+        if app_name.trim().is_empty() {
+            return Err(RuntimeError::InvalidRequest {
+                message: "a managed session needs a non-empty app name to be addressable and \
+                          auditable"
+                    .to_string(),
+                param: Some("app_name".to_string()),
+            });
+        }
+        if user_id.trim().is_empty() {
+            return Err(RuntimeError::InvalidRequest {
+                message: "a managed session needs a non-empty user id; without one, sessions \
+                          share a namespace and cannot be scoped to a caller"
+                    .to_string(),
+                param: Some("user_id".to_string()),
+            });
+        }
+
+        Ok(Self { app_name, user_id })
+    }
+
+    /// The app this session belongs to.
+    pub fn app_name(&self) -> &str {
+        &self.app_name
+    }
+
+    /// The user this session belongs to.
+    pub fn user_id(&self) -> &str {
+        &self.user_id
+    }
+}
 
 // ─── EnvironmentConfig ───────────────────────────────────────────────────────
 
@@ -136,6 +207,7 @@ pub trait ManagedAgentRuntime: Send + Sync {
     async fn start_session(
         &self,
         agent: &AgentHandle,
+        owner: &ManagedOwner,
         env: Option<EnvironmentConfig>,
     ) -> Result<SessionHandle, RuntimeError>;
 

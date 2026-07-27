@@ -24,6 +24,14 @@ regex.workspace = true
 walkdir = "2.5"
 glob = "0.3"
 
+# Only used for the process-group kill that stops a timed-out command's descendants.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# The bash boundary tests are `#![cfg(unix)]` and probe liveness with `libc::kill`.
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }

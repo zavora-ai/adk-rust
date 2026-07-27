@@ -153,7 +153,7 @@ adk-devtools/    Developer tools for coding agents — inner-loop file/search/ed
 adk-bench/       Benchmarking framework: framework-level runtime performance with real LLM APIs
                  and cross-framework (Python ADK) comparison
 adk-sandbox/     Sandboxed execution environments — process/WASM backends, OS-level sandbox profiles
-                 (Seatbelt on macOS, bubblewrap on Linux, AppContainer on Windows)
+                 (Seatbelt on macOS, bubblewrap on Linux; Windows AppContainer unimplemented)
 adk-audio/       Audio processing, STT/TTS providers, Deepgram streaming, desktop audio
                  (capture/playback/VAD), ONNX models (Whisper, Moonshine, Kokoro, Chatterbox)
 adk-rag/         Retrieval-augmented generation pipelines

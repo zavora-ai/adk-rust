@@ -34,6 +34,8 @@ jsonschema = { version = "0.28", default-features = false }
 cron = { version = "0.15", optional = true }
 notify = { version = "8", optional = true }
 axum = { version = "0.8", optional = true }
+# Graceful shutdown for the webhook trigger's owned HTTP listener.
+tokio-util = { version = "0.7", optional = true }
 
 [features]
 default = ["skills"]
@@ -44,9 +46,11 @@ sandbox = ["dep:adk-sandbox", "adk-sandbox/workspace"]
 coding = ["dep:adk-devtools"]
 codeact = []
 record-payloads = []
-ambient = ["dep:cron", "dep:notify", "dep:axum"]
+ambient = ["dep:cron", "dep:notify", "dep:axum", "dep:tokio-util"]
 
 [dev-dependencies]
+# Drives the webhook trigger over real HTTP in the trust-boundary tests.
+reqwest = { workspace = true }
 # Internal dev-deps are path-only (no version) so cargo strips them from the
 # published manifest — they can never block or reorder a crates.io publish.
 adk-model = { path = "../adk-model", features = ["gemini", "gemini-interactions", "openai"] }

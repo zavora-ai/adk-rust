@@ -601,3 +601,74 @@ The generated projects are compiled in CI by `scripts/check-cargo-adk-templates.
 ---
 
 **Previous**: [← Realtime Agents](../agents/realtime-agents.md) | **Next**: [Ollama (Local) →](./ollama.md)
+
+## What happens to content a provider cannot carry
+
+`Content` can express more than any single provider transport accepts, so each adapter has
+to decide what to do with the remainder. Those decisions are now recorded rather than
+applied invisibly. Every part is classified:
+
+| Disposition | Meaning |
+|-------------|---------|
+| `Converted` | Carried to the provider in an equivalent native form |
+| `Downgraded` | Carried in a lossier form — a file reference rendered as descriptive text the model can read but not fetch |
+| `Omitted` | Not carried at all |
+
+Downgrades and omissions emit a `tracing` warning as they are recorded, naming the part
+kind, MIME type, and reason, so neither is silent.
+
+To see the outcome before dispatching a request:
+
+```rust
+use adk_core::{Content, Part};
+use adk_model::bedrock::convert::report_for_contents;
+
+let content = Content {
+    role: "user".to_string(),
+    parts: vec![Part::inline_data("audio/wav", vec![0u8; 16])],
+};
+let report = report_for_contents(std::slice::from_ref(&content));
+
+for omission in report.omitted_parts() {
+    println!("{} was dropped: {}", omission.kind, omission.detail);
+}
+```
+
+To refuse a request that would reach the model incomplete rather than receive an answer
+about material the model never saw:
+
+```rust
+use adk_core::{Content, Part};
+use adk_model::bedrock::convert::report_for_contents;
+
+let content = Content {
+    role: "user".to_string(),
+    parts: vec![Part::inline_data("video/mp4", vec![0u8; 16])],
+};
+
+if let Some(error) = report_for_contents(std::slice::from_ref(&content)).into_error() {
+    return Err(error);
+}
+```
+
+`into_error` covers omissions only. A downgrade still reaches the model, and rejecting it
+would refuse the documented textual fallback.
+
+> **Note:** the ledger is complete by construction. Any part that leaves an adapter without
+> a recorded fate — including one added by a future change — is recorded as an omission
+> with an explicit "no recorded reason", and `adk-model/tests/part_conversion_matrix_tests.rs`
+> fails on it.
+
+### Bedrock Converse coverage
+
+| Part | Disposition |
+|------|-------------|
+| Text, FunctionCall, FunctionResponse, Thinking | `Converted` |
+| `InlineData` with JPEG, PNG, GIF, WebP | `Converted` as an image block |
+| `InlineData` with a supported document type (PDF and similar) | `Converted` as a document block |
+| `InlineData` with audio, video, or arbitrary binary | `Omitted` |
+| `FileData` for an image or supported document | `Downgraded` to text — Converse takes S3 URIs, not arbitrary URLs |
+| `FileData` for any other type | `Omitted` |
+| `ServerToolCall`, `ServerToolResponse` | `Omitted` — Gemini-specific |
+| `EmbeddedResource` text, or a blob of a supported type | `Converted` |
+| `EmbeddedResource` blob of an unsupported type | `Omitted` |

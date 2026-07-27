@@ -26,7 +26,8 @@
 
 mod client;
 mod config;
-pub(crate) mod convert;
+/// Conversion between ADK content and Bedrock Converse blocks.
+pub mod convert;
 
 pub use client::BedrockClient;
 pub use config::BedrockConfig;

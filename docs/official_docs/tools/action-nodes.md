@@ -33,12 +33,29 @@ adk-rust = { version = "2.0.0", features = ["action"] }
 | `Loop` | Iterate over collections or until a condition | Control |
 | `Merge` | Join multiple branches back together | Control |
 | `Wait` | Pause execution for a duration or until event | Control |
-| `Code` | Execute arbitrary code (JavaScript/Python/Rust) | Compute |
-| `Database` | Query databases (SQL, key-value, document) | I/O |
-| `Email` | Send emails via SMTP or provider APIs | I/O |
+| `Code` | Execute arbitrary code (Rust; **JS/TS not implemented**) | Compute |
+| `Database` | Query databases — **not implemented** | I/O |
+| `Email` | Send emails via SMTP — **not implemented** | I/O |
 | `Notification` | Send notifications (Slack, webhook, push) | I/O |
 | `RSS` | Read and parse RSS/Atom feeds | I/O |
 | `File` | Read, write, and transform files | I/O |
+
+## Availability Is Checked When the Graph Is Built
+
+Some node types accept and validate a configuration while their backend does not exist.
+Those are refused by `StateGraph::compile()`, not part-way through a run:
+
+| Configuration | Status |
+|---------------|--------|
+| `Database` (any type) | Rejected — no driver is integrated |
+| `Email` (monitor or send) | Rejected — IMAP and SMTP are not implemented |
+| `Code` with `language: javascript` or `typescript` | Rejected — no sandboxed runtime; use `rust` |
+| `Http` without the `action-http` feature | Rejected — enable the feature |
+
+A rejection names the node and the reason, so a workflow that cannot run fails while it
+is being assembled rather than after earlier nodes have already had side effects.
+
+Implement `Node::validate` on a custom node to take part in the same check.
 
 ## StandardProperties
 
