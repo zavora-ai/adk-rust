@@ -9,6 +9,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-realtime: integrated ADK tools run through the policy pipeline, and plugin failures
+  fail closed.** The live `next_event` path called `RealtimeRunner::dispatch_tool_call`, which
+  invokes the `ToolBridgeAdapter` directly — the adapter builds a context and calls
+  `Tool::execute` with no plugin pipeline, no callbacks, and no confirmation. A tool controlled
+  in the standard agent loop therefore ran uncontrolled in realtime, and the richer
+  `execute_tool_with_plugins` was unreachable from the live path. ADK tools are now dispatched
+  through it; a name that is not a registered ADK tool falls through to native-handler dispatch,
+  making that bypass explicit rather than universal. The `before_tool_call` error branch also
+  logged "non-fatal" and then executed the tool anyway — authorization, redaction, and policy
+  live in before-tool plugins, so a broken guard became no guard. It now refuses the tool and
+  returns the failure to the model.
+- **adk-realtime: `RealtimeAgent` honours before-tool callback decisions.** The dispatch loop
+  built `(error_result, EventActions::default())` as a discarded expression statement and then
+  fell through to `tool.execute`, so a before-tool callback could neither deny a tool nor
+  substitute a result — it reported a decision that had no effect, which is worse than having
+  no gate, because the gate looked present. `Ok(Some(content))` now substitutes a result and
+  skips execution, `Err` refuses the tool and skips after-callbacks, and after-callback
+  substitutions and errors are applied instead of dropped by `let _ =`. This matches the
+  standard agent loop exactly.
+- **adk-realtime: realtime tools see the caller's scopes, secrets, and shared state.**
+  `RealtimeToolContext` implemented only the required trait methods, so `user_scopes()`
+  returned an empty list, `get_secret()` returned `None`, and `shared_state()` returned
+  `None`. A scope- or secret-checking tool therefore behaved differently in realtime than
+  under a `Runner`, and could not distinguish an unauthenticated caller from a context that
+  simply dropped the scopes. All three now delegate to the parent invocation context.
+- **adk-sandbox: filesystem isolation is reported as read and write separately, and the
+  Windows enforcer reports itself unavailable.** `EnforcedLimits::filesystem_isolation` was
+  set true whenever any enforcer was configured. The macOS Seatbelt profile denies network,
+  fork, and *writes* before re-allowing writes to configured paths — it never denies reads,
+  so sandboxed code could read host files outside the allowed paths while the capability
+  said the filesystem was isolated. Read-only entries in `allowed_paths` were effectively
+  documentation. The field is now `filesystem_write_isolation` and
+  `filesystem_read_isolation`, and macOS reports write isolation without read isolation;
+  the platform table and the Seatbelt description say so.
+
+  The Windows `probe` checked that `CreateAppContainerProfile` links, which proves the
+  platform API exists but not that the enforcer works — `configure_command` still returns
+  `EnforcerFailed` because container creation, ACLs, capabilities, and job-object cleanup
+  are unimplemented. A caller selecting an enforcer by probing would pick it and fail at
+  run time, so `probe` now returns `EnforcerUnavailable` naming AppContainer. The README,
+  sandbox docs, example README, and AGENTS.md no longer list AppContainer as supported.
+- **adk-sandbox: Rust compilation runs inside the boundary, policy env is applied, and the
+  isolation class is reported.** `ProcessBackend` compiled Rust source with a command
+  built outside `run_command` and awaited with `output()`, so the compile phase had no
+  enforcer wrapper, no request timeout, and no process group. Compilation is not inert —
+  `include_str!` reads files and procedural macros run arbitrary code — so a configured OS
+  policy did not cover the phase that could already touch the host, and a compiler that
+  blocked ran past the requested timeout. Compilation now goes through the same path as
+  execution.
+
+  `SandboxPolicy::env` was never applied; only `ExecRequest::env` reached the child, so a
+  policy that set variables silently supplied none. The policy now supplies defaults and
+  the request overrides them, which the documentation states.
+
+  New `ProcessBackend::isolation()` returns `IsolationClass::SubprocessOnly` or
+  `OsEnforced`, so a caller can tell what it is getting rather than inferring it from the
+  crate name; `default()` is subprocess-only.
+
+  Programs are also resolved to an absolute path against the caller's `PATH` *before* the
+  environment is cleared. A bare `python3`, `node`, or `rustc` previously required the
+  caller to put `PATH` into `ExecRequest::env`, which also handed the executed code
+  everything else on that `PATH`. The compile phase additionally receives toolchain
+  variables when set, because `rustc` cannot invoke a linker without them; that widening
+  is documented, and an enforcer is what constrains it.
+
 - **adk-core/adk-auth: secret access from tools is authorizable and audited.**
   `SecretService` and `SecretProvider` received only a secret *name*. Once a provider
   was attached to an invocation, policy collapsed to whatever the backing cloud
@@ -156,6 +221,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `adk-acp` | New public fields: `PermissionRequest::{session_id, tool_call_id, kind, raw_input}`, `AcpAgentConfig::{mcp_servers, filesystem, terminal}`, `PermissionOption::kind` | Struct literals must add the fields; prefer `..Default::default()` |
   | `adk-acp` | New variants: `OutputChunk::{ToolUpdate, Usage}`, `PermissionPolicy::AsyncCustom` | Exhaustive `match` must add arms |
   | `adk-acp` | `AcpAgentConfig` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code storing it across `catch_unwind` |
+  | `adk-managed` | `ManagedAgentRuntime::start_session` requires a `ManagedOwner`, and rejects an `EnvironmentConfig` it cannot honour | Pass an owner; supply `None` for `env` unless a sandboxed runtime is configured |
   | `adk-anthropic` | New variants: `ContentBlock::WebFetchToolResult`, `ToolUnionParam::WebFetch20250910`, `ServerTool::WebFetch20250910` | Exhaustive `match` must add arms |
   | `adk-core` | New public fields: `RunConfig::{tool_confirmation_handler, runtime_toolsets}` | Struct literals must add the fields; prefer `RunConfig::builder()` |
   | `adk-core` | New variant `Part::EmbeddedResource` (`Part` is not `#[non_exhaustive]`) | Exhaustive `match` must add an arm |
@@ -169,6 +235,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `adk-realtime` | `ClientEvent` and `ServerEvent` are now `#[non_exhaustive]` | Downstream `match` needs a wildcard arm; the enums can no longer be constructed exhaustively outside the crate |
   | `adk-realtime` | `ServerEvent::Unknown` discriminant changed 21 → 23 | Affects code depending on the numeric discriminant |
   | `adk-realtime` | New public field `RealtimeConfig::affective_dialog` | Struct literals must add the field |
+  | `adk-sandbox` | `EnforcedLimits::filesystem_isolation` replaced by `filesystem_write_isolation` and `filesystem_read_isolation` | Read the field that matches what you need; the two are not equivalent on macOS |
   | `adk-telemetry` | `AdkSpanLayer::new` now takes one generic type parameter instead of none | Call sites passing explicit generics must be updated |
   | `adk-telemetry` | `AdkSpanLayer` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code holding it across `catch_unwind` |
 
@@ -440,6 +507,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implemented action are unaffected. A custom node can take part by overriding
   `validate`. The node-type table in the docs now marks what is not implemented instead
   of listing it as available.
+- **adk-managed: sessions belong to an owner, and ignored environment configuration is
+  refused.** `start_session` named its environment argument `_env` and never read it, so a
+  caller supplying environment variables or a working directory received a session that
+  silently ignored them. Every session was also persisted under the constants `managed` /
+  `managed_user`, and the session loop repeated them for each Runner call, so all managed
+  sessions shared one logical namespace: lookup, memory, and deletion could not be scoped to a
+  caller and no session could be attributed to one. `start_session` now requires a validated
+  `ManagedOwner`, persists the session under it, and makes Runner calls with it;
+  `EnvironmentConfig` requesting anything is rejected with an explanation, because sessions run
+  in-process and applying it would mutate state shared with every other session.
+- **adk-managed: deleting a session now deletes its persisted conversation.**
+  `delete_session` archived the session, cancelled its loop, and dropped the in-memory
+  handle, but never called `SessionService::delete` — even though `start_session` had seeded a
+  persistent session that the Runner appended every turn to. The API reported deletion while
+  the conversation remained in the configured backend, outliving the process that deleted it.
+  The identity used at creation is now recorded on the session and used for deletion, so a
+  change to session addressing cannot orphan data. If backend deletion fails, the error names
+  the app, user, and session that still hold data.
+- **adk-managed: session status reflects normal execution, not only control-plane calls.**
+  `ActiveSession` owned the `Arc<RwLock<SessionStatus>>` that `ManagedAgentRuntime::status`
+  reads, while `SessionLoop` owned a separate plain field, despite a comment claiming the two
+  were shared. Queued → running → idle transitions updated only the loop's copy, so a session
+  actively executing turns kept reporting `Queued`; only pause, resume, archive, and deletion
+  moved the public value. The loop now writes to the caller's handle via
+  `SessionLoop::with_shared_status`.
+
+- **adk-realtime: integrated sessions actually receive the history and memory they load.**
+  `IntegratedRealtimeRunner::connect` fetched the prior session into `_session` and dropped it,
+  and the memory branch logged "injecting memory entries into session context" next to a
+  comment saying injection was a future enhancement. A resumed session began with neither the
+  history nor the memory the builder implies, while the logs reported otherwise. Both are now
+  rendered into one bounded block and prepended to the system instruction before the provider
+  session is created, governed by `max_memory_injection` and the new `max_history_injection`.
+  `IntegratedRealtimeRunner::instruction()` and `RealtimeRunner::instruction()` expose what a
+  session was created with, so carried context can be asserted instead of inferred from logs.
+- **adk-realtime: `max_concurrent_tools` is enforced, and tools no longer stall the event
+  loop.** The field defaulted to 4 and was read by nothing — no semaphore, no scheduler.
+  `FunctionCallDone` was awaited inline in `handle_event`, which the run loop awaited before
+  reading the next event, so tool calls ran strictly one at a time and blocked audio,
+  transcripts, and interruptions for the full duration of each call. Tool calls are now
+  dispatched onto the run loop under a semaphore sized by `max_concurrent_tools`, so event
+  intake continues while tools run. The single follow-up `create_response` owed after
+  automatic tool output is now issued once both the dispatching response has closed and
+  every dispatched tool has reported, in either order — previously the ordering was implicit
+  in the inline await and would have been lost.
+- **adk-realtime: transport loss is distinguishable from a graceful close.**
+  `EventHandler::on_disconnect` is called when the provider transport ends, before `run`
+  returns. `run` returns `Ok(())` for both cases, so a caller previously could not tell
+  them apart. The runner still does not reconnect automatically; the policy is documented.
 
 - **adk-server: background runs execute a workflow instead of reporting success.**
   `BackgroundRunner::run_with_timeout` received neither the workflow ID nor the input. It
