@@ -53,7 +53,8 @@ let agent = LlmAgentBuilder::new("assistant")
    ```
 3. The agent stream ends — execution is paused
 4. Your UI shows the user: "The agent wants to delete `/data/report.csv`. Allow?"
-5. On the next `Runner::run()`, pass the decision:
+5. On the next `Runner::run()`, pass the decision **keyed by the function call ID**
+   from the request:
 
 ```rust
 use adk_core::{RunConfig, ToolConfirmationDecision};
@@ -61,7 +62,7 @@ use std::collections::HashMap;
 
 let mut decisions = HashMap::new();
 decisions.insert(
-    "delete_file".to_string(),
+    "call_abc123".to_string(), // functionCallId from the request, not the tool name
     ToolConfirmationDecision::Approve, // or Deny
 );
 
@@ -69,6 +70,52 @@ decisions.insert(
 ```
 
 If denied, the tool is skipped and the LLM receives a message like "Tool execution was denied by the user" so it can adjust its approach.
+
+### Decisions Authorize One Exact Call
+
+A decision applies to the single call it was requested for. Keying by tool name
+would make one approval authorize every call of that tool, so an approval for
+`delete_file` on a scratch path would also authorize a call targeting something
+else. Two calls to the same tool in one turn therefore need two decisions.
+
+An unknown call ID means "no decision", which leaves the call awaiting
+confirmation. The failure direction is always toward asking again rather than
+executing.
+
+### Binding a Decision to Its Arguments
+
+When a decision travels through something you do not control — a browser, a queue,
+an external approval service — the call ID could be replayed with different
+arguments. Bind the decision to the arguments it was granted for:
+
+```rust
+use adk_core::{RunConfig, ToolConfirmationDecision, tool_call_fingerprint};
+use serde_json::json;
+use std::collections::HashMap;
+
+let approved_args = json!({ "path": "/data/report.csv" });
+
+let mut decisions = HashMap::new();
+decisions.insert("call_abc123".to_string(), ToolConfirmationDecision::Approve);
+
+let mut fingerprints = HashMap::new();
+fingerprints.insert(
+    "call_abc123".to_string(),
+    tool_call_fingerprint("delete_file", &approved_args),
+);
+
+let config = RunConfig::builder()
+    .tool_confirmation_decisions(decisions)
+    .tool_confirmation_fingerprints(fingerprints)
+    .build();
+```
+
+If the call that arrives does not match the fingerprint, the decision is ignored
+and the call is treated as unconfirmed. `tool_call_fingerprint` is canonical over
+key order, so a re-serialized argument object still matches.
+
+For decisions that should apply by policy rather than per call, implement a
+`ToolConfirmationHandler` instead of widening the static map.
 
 ### CLI Example
 
@@ -174,7 +221,10 @@ async fn main() -> anyhow::Result<()> {
 
                 // Re-run with the decision
                 let mut decisions = HashMap::new();
-                decisions.insert(confirmation.tool_name.clone(), decision);
+                // Keyed by the call ID, so the decision authorizes only this call.
+                if let Some(call_id) = confirmation.function_call_id.clone() {
+                    decisions.insert(call_id, decision);
+                }
 
                 let content = Content::new("user").with_text("");
                 let mut resume_stream = runner.run(

@@ -361,7 +361,10 @@ pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> 
         )
         .route("/ui/resources", get(controllers::ui::list_ui_resources))
         .route("/ui/resources/read", get(controllers::ui::read_ui_resource))
-        .route("/ui/resources/register", post(controllers::ui::register_ui_resource));
+        .route("/ui/resources/register", post(controllers::ui::register_ui_resource))
+        // These routes mutate and read shared bridge and resource state, so they
+        // carry the same authentication as the session, artifact, and debug routers.
+        .layer(auth_layer.clone());
 
     let session_router = Router::new()
         .route("/sessions", post(controllers::session::create_session))
@@ -673,7 +676,10 @@ impl ServerBuilder {
             )
             .route("/ui/resources", get(controllers::ui::list_ui_resources))
             .route("/ui/resources/read", get(controllers::ui::read_ui_resource))
-            .route("/ui/resources/register", post(controllers::ui::register_ui_resource));
+            .route("/ui/resources/register", post(controllers::ui::register_ui_resource))
+            // These routes mutate and read shared bridge and resource state, so they
+            // carry the same authentication as the session, artifact, and debug routers.
+            .layer(auth_layer.clone());
 
         let session_router = Router::new()
             .route("/sessions", post(controllers::session::create_session))

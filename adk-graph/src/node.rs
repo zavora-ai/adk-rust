@@ -190,18 +190,24 @@ pub trait Node: Send + Sync {
     /// Execute the node and return state updates
     async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput>;
 
-    /// Stream execution events (default: wraps execute)
+    /// Streams execution events for this node.
+    ///
+    /// An implementation must report the node's state updates by yielding a
+    /// [`StreamEvent::Updates`] event, because a streaming executor takes the
+    /// updates from this stream rather than executing the node a second time.
+    /// The default implementation wraps [`Node::execute`] and does so.
     fn execute_stream<'a>(
         &'a self,
         ctx: &'a NodeContext,
     ) -> Pin<Box<dyn futures::Stream<Item = Result<StreamEvent>> + Send + 'a>> {
-        let _name = self.name().to_string();
+        let name = self.name().to_string();
         Box::pin(async_stream::stream! {
             match self.execute(ctx).await {
                 Ok(output) => {
                     for event in output.events {
                         yield Ok(event);
                     }
+                    yield Ok(StreamEvent::Updates { node: name, updates: output.updates });
                 }
                 Err(e) => yield Err(e),
             }
@@ -419,6 +425,7 @@ impl Node for AgentNode {
         let name = self.name.clone();
         let agent = self.agent.clone();
         let input_mapper = &self.input_mapper;
+        let output_mapper = &self.output_mapper;
         let thread_id = ctx.config.thread_id.clone();
         let content = (input_mapper)(&ctx.state);
 
@@ -476,6 +483,14 @@ impl Node for AgentNode {
                     yield Ok(StreamEvent::custom(&name, "agent_event", json));
                 }
             }
+
+            // Report state updates from this run. Without this the streaming
+            // executor has no updates to apply and would have to run the agent
+            // a second time to obtain them.
+            yield Ok(StreamEvent::Updates {
+                node: name.clone(),
+                updates: (output_mapper)(&all_events),
+            });
         })
     }
 }
