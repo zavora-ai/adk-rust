@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-sandbox: filesystem isolation is reported as read and write separately, and the
+  Windows enforcer reports itself unavailable.** `EnforcedLimits::filesystem_isolation` was
+  set true whenever any enforcer was configured. The macOS Seatbelt profile denies network,
+  fork, and *writes* before re-allowing writes to configured paths — it never denies reads,
+  so sandboxed code could read host files outside the allowed paths while the capability
+  said the filesystem was isolated. Read-only entries in `allowed_paths` were effectively
+  documentation. The field is now `filesystem_write_isolation` and
+  `filesystem_read_isolation`, and macOS reports write isolation without read isolation;
+  the platform table and the Seatbelt description say so.
+
+  The Windows `probe` checked that `CreateAppContainerProfile` links, which proves the
+  platform API exists but not that the enforcer works — `configure_command` still returns
+  `EnforcerFailed` because container creation, ACLs, capabilities, and job-object cleanup
+  are unimplemented. A caller selecting an enforcer by probing would pick it and fail at
+  run time, so `probe` now returns `EnforcerUnavailable` naming AppContainer. The README,
+  sandbox docs, example README, and AGENTS.md no longer list AppContainer as supported.
+
 - **adk-sandbox: Rust compilation runs inside the boundary, policy env is applied, and the
   isolation class is reported.** `ProcessBackend` compiled Rust source with a command
   built outside `run_command` and awaited with `output()`, so the compile phase had no
@@ -193,6 +210,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `adk-realtime` | `ClientEvent` and `ServerEvent` are now `#[non_exhaustive]` | Downstream `match` needs a wildcard arm; the enums can no longer be constructed exhaustively outside the crate |
   | `adk-realtime` | `ServerEvent::Unknown` discriminant changed 21 → 23 | Affects code depending on the numeric discriminant |
   | `adk-realtime` | New public field `RealtimeConfig::affective_dialog` | Struct literals must add the field |
+  | `adk-sandbox` | `EnforcedLimits::filesystem_isolation` replaced by `filesystem_write_isolation` and `filesystem_read_isolation` | Read the field that matches what you need; the two are not equivalent on macOS |
   | `adk-telemetry` | `AdkSpanLayer::new` now takes one generic type parameter instead of none | Call sites passing explicit generics must be updated |
   | `adk-telemetry` | `AdkSpanLayer` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code holding it across `catch_unwind` |
 

@@ -216,7 +216,8 @@ impl SandboxBackend for WasmBackend {
                 timeout: true,
                 memory: true,
                 network_isolation: true,
-                filesystem_isolation: true,
+                filesystem_write_isolation: true,
+                filesystem_read_isolation: true,
                 environment_isolation: true,
             },
         }
@@ -530,7 +531,7 @@ mod tests {
         assert!(caps.enforced_limits.timeout);
         assert!(caps.enforced_limits.memory);
         assert!(caps.enforced_limits.network_isolation);
-        assert!(caps.enforced_limits.filesystem_isolation);
+        assert!(caps.enforced_limits.filesystem_write_isolation);
         assert!(caps.enforced_limits.environment_isolation);
         assert_eq!(caps.supported_languages, vec![Language::Wasm]);
     }

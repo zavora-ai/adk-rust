@@ -52,9 +52,9 @@ OS-level sandbox enforcement restricts child processes at the kernel level. This
 
 | Platform | Enforcer | How It Works |
 |----------|----------|-------------|
-| macOS | Seatbelt (`sandbox-exec`) | Syscall-level rules: "allow default, deny dangerous" |
+| macOS | Seatbelt (`sandbox-exec`) | Syscall-level rules: "allow default, deny dangerous" — denies writes, network, and fork; **reads are not restricted** |
 | Linux | bubblewrap (`bwrap`) | Filesystem namespace isolation (whitelist mounts) |
-| Windows | AppContainer | Token-based ACL restrictions |
+| Windows | AppContainer | **Not implemented** — the enforcer reports itself unavailable |
 
 ### Quick Start
 
@@ -116,7 +116,7 @@ The policy defines what a sandboxed process is allowed to do:
 
 **Linux (bubblewrap):** Uses namespace-based whitelist — nothing exists by default, you mount only what's needed. Install with `apt install bubblewrap` or `dnf install bubblewrap`.
 
-**Windows (AppContainer):** Uses token-based ACLs — the process runs with a restricted SID that has no access by default, then you grant ACLs on specific paths.
+**Windows (AppContainer):** Not implemented. The design is token-based ACLs — a restricted SID with no access by default, then ACLs granted on specific paths — but container creation, ACLs, capabilities, and job-object cleanup are absent, so `probe()` returns `EnforcerUnavailable`. Run without an enforcer on Windows, or use macOS or Linux where enforcement is real.
 
 ### Example
 

@@ -118,7 +118,7 @@ impl Default for ProcessConfig {
 ///     enforcer,
 ///     policy,
 /// );
-/// assert!(backend.capabilities().enforced_limits.filesystem_isolation);
+/// assert!(backend.capabilities().enforced_limits.filesystem_write_isolation);
 /// ```
 pub struct ProcessBackend {
     config: ProcessConfig,
@@ -256,7 +256,11 @@ impl SandboxBackend for ProcessBackend {
                 timeout: true,
                 memory: false,
                 network_isolation: has_enforcer && denies_network,
-                filesystem_isolation: has_enforcer,
+                filesystem_write_isolation: has_enforcer,
+                // The macOS profile denies writes, network, and fork but leaves reads
+                // open, so read isolation is not claimed there. Linux bubblewrap builds
+                // a filesystem namespace, which does confine reads.
+                filesystem_read_isolation: has_enforcer && cfg!(target_os = "linux"),
                 environment_isolation: true,
             },
         }
@@ -704,7 +708,8 @@ mod tests {
         assert!(caps.enforced_limits.environment_isolation);
         assert!(!caps.enforced_limits.memory);
         assert!(!caps.enforced_limits.network_isolation);
-        assert!(!caps.enforced_limits.filesystem_isolation);
+        assert!(!caps.enforced_limits.filesystem_write_isolation);
+        assert!(!caps.enforced_limits.filesystem_read_isolation);
         assert!(caps.supported_languages.contains(&Language::Rust));
         assert!(caps.supported_languages.contains(&Language::Python));
         assert!(caps.supported_languages.contains(&Language::JavaScript));
