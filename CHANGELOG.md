@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-agent: `WebhookTrigger` has a trust boundary and a bounded lifetime.** The trigger
+  bound `0.0.0.0:<port>` and accepted every POST on its path — no signature check, no
+  authentication hook, no principal, no body policy — so any caller who could reach the port
+  could start application-defined agent work, and a malformed body was wrapped as a JSON
+  string and delivered as a trigger event indistinguishable from a deliberate one. It now
+  binds loopback by default, and serving any wider address requires a `WebhookVerifier`;
+  subscribing without one fails with `agent.ambient.webhook_unauthenticated` rather than
+  exposing an open trigger. Verified requests carry their principal on
+  `TriggerEvent::principal`. Rejections return a bare `401` with the reason logged, so the
+  endpoint cannot be used to probe which part of a credential was wrong. Bodies are capped
+  (1 MiB by default, `with_max_body_bytes`) and non-JSON bodies are rejected with `400`
+  unless `accept_non_json()` is set.
+
+  The HTTP listener also outlived its consumer: `axum::serve` was spawned with no shutdown
+  signal, so dropping the event stream left the port bound, accepting requests it could not
+  deliver and blocking a restart on the same port. The server's lifetime is now tied to the
+  subscription stream, which shuts it down gracefully on drop.
+
 - **adk-core/adk-auth: secret access from tools is authorizable and audited.**
   `SecretService` and `SecretProvider` received only a secret *name*. Once a provider
   was attached to an invocation, policy collapsed to whatever the backing cloud
@@ -156,6 +174,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `adk-acp` | New public fields: `PermissionRequest::{session_id, tool_call_id, kind, raw_input}`, `AcpAgentConfig::{mcp_servers, filesystem, terminal}`, `PermissionOption::kind` | Struct literals must add the fields; prefer `..Default::default()` |
   | `adk-acp` | New variants: `OutputChunk::{ToolUpdate, Usage}`, `PermissionPolicy::AsyncCustom` | Exhaustive `match` must add arms |
   | `adk-acp` | `AcpAgentConfig` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code storing it across `catch_unwind` |
+  | `adk-agent` | `TriggerEvent` gains a public `principal` field | Add `principal: None` to struct literals; webhook events carry the verified principal |
+  | `adk-agent` | `WebhookTrigger` binds loopback by default, requires a verifier for any wider address, and rejects non-JSON bodies | Call `with_bind_address` plus `with_verifier` to expose it; `accept_non_json()` restores the old body handling |
+  | `adk-agent` | `WebhookTrigger` no longer `UnwindSafe`/`RefUnwindSafe` | It now holds a verifier behind `Arc<dyn ...>`; affects code storing it across `catch_unwind` |
   | `adk-anthropic` | New variants: `ContentBlock::WebFetchToolResult`, `ToolUnionParam::WebFetch20250910`, `ServerTool::WebFetch20250910` | Exhaustive `match` must add arms |
   | `adk-core` | New public fields: `RunConfig::{tool_confirmation_handler, runtime_toolsets}` | Struct literals must add the fields; prefer `RunConfig::builder()` |
   | `adk-core` | New variant `Part::EmbeddedResource` (`Part` is not `#[non_exhaustive]`) | Exhaustive `match` must add an arm |
