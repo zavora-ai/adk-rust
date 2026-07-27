@@ -76,6 +76,8 @@ impl EventSource for CronTrigger {
                         "expression": expression,
                         "tick": chrono::Utc::now().to_rfc3339(),
                     }),
+                    // A schedule has no caller.
+                    principal: None,
                 };
             }
         };

@@ -732,6 +732,41 @@ Final Answer: "The weather in Paris is 72°F and sunny with 45% humidity.
 
 Wraps any ADK `Agent` (typically `LlmAgent`) as a graph node:
 
+#### What the agent sees
+
+An agent inside a graph runs under a context derived from the invocation that
+started the graph, so it behaves the same as it does outside one. When a `Runner`
+invokes a `GraphAgent`, the caller's identity and services are carried through
+automatically:
+
+| Carried through | Note |
+|-----------------|------|
+| `app_name`, `user_id`, `session_id` | The caller's, not a synthetic one |
+| Scopes and request metadata | So scope checks see the caller's grants |
+| Secret service, memory, artifacts, shared state | Available exactly as outside the graph |
+| Cancellation | `Runner::interrupt` reaches an agent running as a node |
+| `RunConfig` | Inherited from the caller |
+| `branch` | **Derived**, as `{caller_branch}.{agent_name}`, so a node's events are attributable |
+
+A graph invoked directly — `graph.invoke(state, ExecutionConfig::new("thread"))` —
+has no invocation to inherit. That is **standalone mode**: the node gets
+`user_id = "graph_user"`, `app_name = "graph_app"`, branch `main`, no secrets, and no
+memory. It is a deliberate mode for running a graph outside a `Runner`, not a
+fallback to reach for in production.
+
+To bridge manually — for instance when driving a graph from your own executor — pass
+the invocation explicitly:
+
+```rust
+let config = ExecutionConfig::new(ctx.session_id()).with_parent_context(ctx.clone());
+```
+
+> **Note:** the node still runs on its own in-memory graph session, so agent
+> conversation history inside a node is scoped to the node rather than appended to the
+> caller's session.
+
+
+
 ```rust
 let node = AgentNode::new(llm_agent)
     .with_input_mapper(|state| {
@@ -1073,6 +1108,14 @@ interrupt ends the stream, so a human-in-the-loop pause is resumable in either
 execution mode.
 
 ### Checkpoint History (Time Travel)
+
+> **Reads only.** `TimeTravelHandle::state_history(from, to)` returns the state that
+> was *stored* at each checkpointed step. It executes nothing — no node runs, no event
+> is regenerated, and no side effect repeats. To re-run from a point in history, use
+> `fork_at` to branch that checkpoint and invoke the graph on the forked thread. The
+> method was previously named `replay` and documented as re-executing the graph, which
+> it never did.
+
 
 Checkpoints also enable **durable resume** — if a graph execution crashes or the process restarts, execution resumes from the last persisted checkpoint rather than starting over. Use `SqliteCheckpointer` or `PostgresCheckpointer` for crash-safe persistence.
 

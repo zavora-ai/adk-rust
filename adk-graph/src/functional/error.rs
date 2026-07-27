@@ -27,6 +27,23 @@ pub enum FunctionalError {
         actual: String,
     },
 
+    /// The workflow suspended at an interrupt and needs a resume value.
+    ///
+    /// `continuation_key` identifies the interrupt site. Supply the value under that key via
+    /// `TaskContext::with_resume_values` and re-invoke the entrypoint; the interrupt call then
+    /// returns the value instead of this error.
+    ///
+    /// Previously an interrupt always produced `InterruptTypeMismatch`, so a caller could not
+    /// tell "needs input" from "the value you gave me was the wrong type" — and there was no
+    /// key to supply the value under.
+    #[error("workflow suspended at interrupt '{continuation_key}': {message}")]
+    Suspended {
+        /// Key identifying this interrupt site within the thread.
+        continuation_key: String,
+        /// The message passed to `interrupt`.
+        message: String,
+    },
+
     /// Interrupt deserialization error (wrong type provided on resume).
     #[error("interrupt resume type mismatch for task '{task}': {message}")]
     InterruptTypeMismatch {

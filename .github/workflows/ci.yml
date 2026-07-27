@@ -289,6 +289,12 @@ jobs:
         # must exist in adk-rust/Cargo.toml (catches stale "0.8.2" snippets and
         # phantom features like the removed `labs`).
         CI=true devenv shell bash scripts/check-doc-versions.sh
+        # Release-statement guard: the changelog heading, README banner, and
+        # roadmap "current" marker are all derived from one source — the
+        # workspace version — so a bump cannot land with any of them stale.
+        # check-doc-versions.sh skips CHANGELOG.md and never looked at the
+        # banner or roadmap, which is how those three drifted apart.
+        CI=true devenv shell bash scripts/check-release-consistency.sh
         # Publish-order guard: publish.sh tiers must satisfy the workspace
         # dependency graph, including versioned dev-deps (what broke v1.0.0).
         CI=true devenv shell bash scripts/check-publish-order.sh

@@ -1,6 +1,7 @@
 use crate::{
-    ActionClass, ActionPreview, ComputerUseAuthContext, ComputerUseRuntime, ControlLease,
-    ExecutionMode, ExecutionReceipt, ScopeAuthorizer, TargetReservation,
+    ActionClass, ActionEnvelope, ActionPreview, ComputerUseAuthContext, ComputerUseRuntime,
+    ControlLease, ExecutionMode, ExecutionReceipt, ScopeAuthorizer, TargetReservation,
+    VerificationOutcome,
 };
 use adk_graph::{
     Checkpointer, CompiledGraph, DeferredNodeConfig, END, GraphError, MergeStrategy, NodeOutput,
@@ -93,7 +94,10 @@ pub fn build_reference_graph_with_checkpointer(
                 && ctx.get("visual_evidence").is_some()
                 && ctx.get("semantic_evidence").is_some();
             if !complete {
-                return Err(node_error("join_observations", "fan-in completed without all evidence"));
+                return Err(node_error(
+                    "join_observations",
+                    "fan-in completed without all evidence",
+                ));
             }
             Ok(NodeOutput::new().with_update("observations_joined", json!(true)))
         },
@@ -136,16 +140,14 @@ pub fn build_reference_graph_with_checkpointer(
                 .ok_or_else(|| node_error("request_approval", "missing preview"))?,
         )?;
         let approval = ctx.get("approval").and_then(Value::as_object);
-        let approved_digest = approval
-            .and_then(|value| value.get("actionDigest"))
-            .and_then(Value::as_str);
+        let approved_digest =
+            approval.and_then(|value| value.get("actionDigest")).and_then(Value::as_str);
         let grant_id = approval
             .and_then(|value| value.get("grantId"))
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty());
-        let approved_policy = approval
-            .and_then(|value| value.get("policyDigest"))
-            .and_then(Value::as_str);
+        let approved_policy =
+            approval.and_then(|value| value.get("policyDigest")).and_then(Value::as_str);
         let runtime_approved = approval
             .and_then(|value| value.get("runtimeApproved"))
             .and_then(Value::as_bool)
@@ -179,7 +181,8 @@ pub fn build_reference_graph_with_checkpointer(
             .and_then(|value| value.get("blocker"))
             .cloned()
             .unwrap_or_else(|| json!("policy_denied"));
-        Ok(NodeOutput::new().with_update("result", json!({ "status": "blocked", "reason": blocker })))
+        Ok(NodeOutput::new()
+            .with_update("result", json!({ "status": "blocked", "reason": blocker })))
     })
     .add_node_fn("reserve_target", move |ctx| {
         let runtime = reservation_runtime.clone();
@@ -221,9 +224,7 @@ pub fn build_reference_graph_with_checkpointer(
                     .ok_or_else(|| node_error("execute", "missing preview"))?,
             )?;
             let lease: ControlLease = serde_json::from_value(
-                ctx.get("lease")
-                    .cloned()
-                    .ok_or_else(|| node_error("execute", "missing lease"))?,
+                ctx.get("lease").cloned().ok_or_else(|| node_error("execute", "missing lease"))?,
             )?;
             let envelope = &preview.envelope;
             let auth = ComputerUseAuthContext {
@@ -266,8 +267,15 @@ pub fn build_reference_graph_with_checkpointer(
                     .cloned()
                     .ok_or_else(|| node_error("verify", "missing receipt"))?,
             )?;
-            let verified = runtime
-                .verify(&receipt)
+            // The postcondition comes from the envelope the action was approved against, so
+            // verification is evaluated against what was promised rather than against nothing.
+            let postcondition = ctx
+                .get("envelope")
+                .and_then(|value| serde_json::from_value::<ActionEnvelope>(value.clone()).ok())
+                .and_then(|envelope| envelope.postcondition);
+
+            let outcome = runtime
+                .verify(&receipt, postcondition.as_ref())
                 .await
                 .map_err(|error| node_error("verify", error.to_string()))?;
             if let Some(reservation) = ctx.get("reservation")
@@ -279,11 +287,25 @@ pub fn build_reference_graph_with_checkpointer(
                     .await
                     .map_err(|error| node_error("verify", error.to_string()))?;
             }
+            // `verified` is true only when the postcondition was observed. A committed action
+            // with no evidence reports `committed_unverified` and carries the reason, instead
+            // of being labelled completed.
+            let detail = match &outcome {
+                VerificationOutcome::Verified => None,
+                VerificationOutcome::CommittedUnverified { reason }
+                | VerificationOutcome::Failed { reason } => Some(reason.clone()),
+            };
+
             Ok(NodeOutput::new()
-                .with_update("verified", json!(verified))
+                .with_update("verified", json!(outcome.is_verified()))
+                .with_update("committed", json!(outcome.is_committed()))
                 .with_update(
                     "result",
-                    json!({ "status": if verified { "completed" } else { "verification_failed" }, "receiptId": receipt.receipt_id }),
+                    json!({
+                        "status": outcome.status(),
+                        "receiptId": receipt.receipt_id,
+                        "verificationDetail": detail,
+                    }),
                 ))
         }
     })
@@ -298,11 +320,7 @@ pub fn build_reference_graph_with_checkpointer(
     .add_conditional_edges(
         "preview",
         |state| state.get("route").and_then(Value::as_str).unwrap_or("blocked").to_string(),
-        [
-            ("allowed", "reserve_target"),
-            ("approval", "request_approval"),
-            ("blocked", "blocked"),
-        ],
+        [("allowed", "reserve_target"), ("approval", "request_approval"), ("blocked", "blocked")],
     )
     .add_edge("request_approval", "reserve_target")
     .add_edge("blocked", END)

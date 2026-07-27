@@ -162,8 +162,8 @@ adk-action/      Action node definitions (14 node types), StandardProperties, va
 adk-enterprise/  Enterprise client SDK — lightweight HTTP/SSE client for the ADK-Rust Enterprise
                  Managed Agent Service. Zero adk-* runtime dependencies. Agents, sessions,
                  streaming, vaults, memory. Self-hosted support. EXPERIMENTAL.
-adk-managed/     Managed agent runtime — provider-neutral, durable, resumable agent execution
-                 engine. ManagedAgentRuntime trait, DefaultManagedAgentRuntime, declarative
+adk-managed/     Managed agent runtime — provider-neutral agent execution engine with in-process
+                 checkpointing (state does not survive process loss). ManagedAgentRuntime trait, DefaultManagedAgentRuntime, declarative
                  ManagedAgentDef, supervised session loop with checkpointing, custom tool
                  parking, event replay, ScriptedLlm test double, golden fixture tests.
                  Feature-gated: `managed-runtime` on umbrella crate. EXPERIMENTAL.
