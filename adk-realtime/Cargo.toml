@@ -17,7 +17,7 @@ readme = "README.md"
 adk-core.workspace = true
 
 # Async runtime
-tokio = { workspace = true, features = ["sync", "net", "time", "rt"] }
+tokio = { workspace = true, features = ["sync", "net", "time", "rt", "macros"] }
 async-trait.workspace = true
 futures.workspace = true
 async-stream.workspace = true
@@ -154,6 +154,9 @@ harness = false
 
 [features]
 default = []
+# Allow diagnostics to include bounded raw provider frames. Off by default because
+# realtime frames carry transcripts, tool arguments, and identifiers.
+record-payloads = []
 # Enable ADK services integration (sessions, memory, plugins)
 integration = ["dep:adk-session", "dep:adk-memory", "dep:adk-plugin", "dep:chrono"]
 # Enable OpenAI Realtime API support

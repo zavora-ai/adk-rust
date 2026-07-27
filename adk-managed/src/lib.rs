@@ -57,7 +57,9 @@ pub use event_mapping::{
 pub use parking::ToolParkingLot;
 pub use replay::{create_event_stream, get_seq};
 pub use resolver::{DefaultModelResolver, ModelResolver, ResolverError, ResolverResult};
-pub use runtime::{AgentHandle, EnvironmentConfig, ManagedAgentRuntime, SessionHandle};
+pub use runtime::{
+    AgentHandle, EnvironmentConfig, ManagedAgentRuntime, ManagedOwner, SessionHandle,
+};
 pub use schema_normalization::{normalize_for_provider, representative_mcp_schema};
 pub use sequence::SequenceCounter;
 pub use session_loop::SessionLoop;

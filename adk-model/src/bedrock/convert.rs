@@ -4,6 +4,7 @@
 //! and the Bedrock Converse API format used by `aws-sdk-bedrockruntime`.
 
 use super::config::{BedrockCacheConfig, BedrockCacheTtl};
+use crate::part_conversion::ConversionReport;
 use adk_core::{Content, FinishReason, GenerateContentConfig, LlmResponse, Part, UsageMetadata};
 use aws_sdk_bedrockruntime::types::{
     self as bedrock, CachePointBlock, CachePointType, CacheTtl, ContentBlock, ContentBlockDelta,
@@ -126,50 +127,219 @@ fn build_cache_point_block(cache_config: &BedrockCacheConfig) -> CachePointBlock
 }
 
 /// Convert ADK `Part` list to Bedrock `ContentBlock` list.
+/// Reports what became of every part in `contents` when converted for Bedrock.
+///
+/// Exposed so callers and conformance tests can see the fate of each supplied part without
+/// issuing a request. Use [`crate::part_conversion::ConversionReport::into_error`] to refuse a request that would
+/// reach the model incomplete.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::{Content, Part};
+/// use adk_model::bedrock::convert::report_for_contents;
+///
+/// let content = Content { role: "user".to_string(), parts: vec![Part::inline_data("audio/wav", vec![1])] };
+/// let report = report_for_contents(std::slice::from_ref(&content));
+///
+/// assert!(report.has_omissions(), "Bedrock Converse carries no audio block");
+/// ```
+pub fn report_for_contents(contents: &[Content]) -> ConversionReport {
+    let mut report = ConversionReport::new("bedrock");
+    for content in contents {
+        let _ = adk_parts_to_bedrock_inner(&content.parts, &mut report);
+    }
+    report
+}
+
+/// Converts parts to Bedrock content blocks, recording what each part's fate was.
+///
+/// Bedrock Converse accepts a narrower set than `Content` can express. Every part that is
+/// left out or rendered lossily is recorded — and warned about — rather than disappearing.
+fn adk_parts_to_bedrock_reported(parts: &[Part]) -> (Vec<ContentBlock>, ConversionReport) {
+    let mut report = ConversionReport::new("bedrock");
+    let blocks = adk_parts_to_bedrock_inner(parts, &mut report);
+    (blocks, report)
+}
+
 fn adk_parts_to_bedrock(parts: &[Part]) -> Vec<ContentBlock> {
+    adk_parts_to_bedrock_reported(parts).0
+}
+
+fn adk_parts_to_bedrock_inner(parts: &[Part], report: &mut ConversionReport) -> Vec<ContentBlock> {
     let contains_function_call = parts.iter().any(|part| matches!(part, Part::FunctionCall { .. }));
 
     parts
         .iter()
-        .filter_map(|part| match part {
-            Part::Text { text } => {
-                if text.is_empty() || contains_function_call {
-                    None
-                } else {
-                    Some(ContentBlock::Text(text.clone()))
+        .filter_map(|part| {
+            // Accounting wraps the conversion so a part cannot leave without a recorded
+            // fate. If a branch drops one without saying why — including any branch added
+            // later — the safety net below records it as an unexplained omission rather
+            // than letting it vanish.
+            let before = report.outcomes().len();
+            let block = convert_one_part(part, contains_function_call, report);
+
+            if report.outcomes().len() == before {
+                match block.is_some() {
+                    true => report.converted(part_kind(part)),
+                    false => report.omitted(
+                        part_kind(part),
+                        part_mime_type(part),
+                        "dropped by the Bedrock adapter without a recorded reason",
+                    ),
                 }
             }
-            Part::FunctionCall { name, args, id, .. } => {
-                let tool_use = ToolUseBlock::builder()
-                    .tool_use_id(id.clone().unwrap_or_else(|| format!("call_{name}")))
-                    .name(name.clone())
-                    .input(json_value_to_document(args))
-                    .build()
-                    .ok()?;
-                Some(ContentBlock::ToolUse(tool_use))
+
+            block
+        })
+        .collect()
+}
+
+/// The `Part` variant name, for reporting.
+fn part_kind(part: &Part) -> &'static str {
+    match part {
+        Part::Text { .. } => "Text",
+        Part::InlineData { .. } => "InlineData",
+        Part::FileData { .. } => "FileData",
+        Part::FunctionCall { .. } => "FunctionCall",
+        Part::FunctionResponse { .. } => "FunctionResponse",
+        Part::Thinking { .. } => "Thinking",
+        Part::ServerToolCall { .. } => "ServerToolCall",
+        Part::ServerToolResponse { .. } => "ServerToolResponse",
+        Part::EmbeddedResource { .. } => "EmbeddedResource",
+    }
+}
+
+/// The part's MIME type, where it has one.
+fn part_mime_type(part: &Part) -> Option<&str> {
+    match part {
+        Part::InlineData { mime_type, .. } | Part::FileData { mime_type, .. } => Some(mime_type),
+        Part::EmbeddedResource { resource } => match resource {
+            adk_core::EmbeddedResource::Blob(blob) => blob.mime_type.as_deref(),
+            adk_core::EmbeddedResource::Text(_) => None,
+        },
+        _ => None,
+    }
+}
+
+fn convert_one_part(
+    part: &Part,
+    contains_function_call: bool,
+    report: &mut ConversionReport,
+) -> Option<ContentBlock> {
+    match part {
+        Part::Text { text } => {
+            if text.is_empty() || contains_function_call {
+                None
+            } else {
+                Some(ContentBlock::Text(text.clone()))
             }
-            Part::FunctionResponse { function_response, id } => {
-                let tool_result = ToolResultBlock::builder()
-                    .tool_use_id(id.clone().unwrap_or_else(|| "unknown".to_string()))
-                    .content(ToolResultContentBlock::Text(
-                        crate::tool_result::serialize_tool_result(&function_response.response),
-                    ))
-                    .build()
-                    .ok()?;
-                Some(ContentBlock::ToolResult(tool_result))
+        }
+        Part::FunctionCall { name, args, id, .. } => {
+            let tool_use = ToolUseBlock::builder()
+                .tool_use_id(id.clone().unwrap_or_else(|| format!("call_{name}")))
+                .name(name.clone())
+                .input(json_value_to_document(args))
+                .build()
+                .ok()?;
+            Some(ContentBlock::ToolUse(tool_use))
+        }
+        Part::FunctionResponse { function_response, id } => {
+            let tool_result = ToolResultBlock::builder()
+                .tool_use_id(id.clone().unwrap_or_else(|| "unknown".to_string()))
+                .content(ToolResultContentBlock::Text(crate::tool_result::serialize_tool_result(
+                    &function_response.response,
+                )))
+                .build()
+                .ok()?;
+            Some(ContentBlock::ToolResult(tool_result))
+        }
+        Part::Thinking { thinking, .. } => {
+            if thinking.is_empty() || contains_function_call {
+                None
+            } else {
+                // Bedrock Converse API doesn't accept thinking blocks in input,
+                // convert to text for conversation history
+                Some(ContentBlock::Text(thinking.clone()))
             }
-            Part::Thinking { thinking, .. } => {
-                if thinking.is_empty() || contains_function_call {
+        }
+        Part::InlineData { mime_type, data } => {
+            if let Some(fmt) = mime_to_bedrock_image_format(mime_type) {
+                let source = ImageSource::Bytes(aws_smithy_types::Blob::new(data.as_slice()));
+                ImageBlock::builder()
+                    .format(fmt)
+                    .source(source)
+                    .build()
+                    .ok()
+                    .map(ContentBlock::Image)
+            } else if let Some(fmt) = mime_to_bedrock_document_format(mime_type) {
+                let source = DocumentSource::Bytes(aws_smithy_types::Blob::new(data.as_slice()));
+                DocumentBlock::builder()
+                    .format(fmt)
+                    .name("document")
+                    .source(source)
+                    .build()
+                    .ok()
+                    .map(ContentBlock::Document)
+            } else {
+                report.omitted(
+                    "InlineData",
+                    Some(mime_type),
+                    "no Bedrock Converse image or document format accepts this media type",
+                );
+                None
+            }
+        }
+        Part::FileData { mime_type, .. } => {
+            // Bedrock Converse API supports S3 URIs for images/documents, but not
+            // arbitrary HTTP URLs. For now, represent as text so the model sees the
+            // reference rather than silently dropping it.
+            if mime_type.starts_with("image/")
+                || mime_to_bedrock_document_format(mime_type).is_some()
+            {
+                report.downgraded(
+                    "FileData",
+                    Some(mime_type),
+                    "text",
+                    "Bedrock Converse takes S3 URIs, not arbitrary URLs, so the reference \
+                         is sent as text the model can read but not fetch",
+                );
+                Some(ContentBlock::Text(attachment::file_attachment_to_text(
+                    mime_type,
+                    part.file_uri().unwrap_or(""),
+                )))
+            } else {
+                report.omitted(
+                    "FileData",
+                    Some(mime_type),
+                    "not an image or a supported document type",
+                );
+                None
+            }
+        }
+        // Server-side tool parts are Gemini-specific; Bedrock has no equivalent.
+        Part::ServerToolCall { .. } | Part::ServerToolResponse { .. } => {
+            report.omitted(
+                "ServerToolCall/ServerToolResponse",
+                None,
+                "server-side tool parts are Gemini-specific and have no Bedrock equivalent",
+            );
+            None
+        }
+        // Embedded resources: text → text block; blob → inline image/document bytes.
+        Part::EmbeddedResource { resource } => match resource {
+            adk_core::EmbeddedResource::Text(text) => {
+                if text.text.is_empty() {
                     None
                 } else {
-                    // Bedrock Converse API doesn't accept thinking blocks in input,
-                    // convert to text for conversation history
-                    Some(ContentBlock::Text(thinking.clone()))
+                    Some(ContentBlock::Text(text.text.clone()))
                 }
             }
-            Part::InlineData { mime_type, data } => {
+            adk_core::EmbeddedResource::Blob(blob) => {
+                let mime_type = blob.mime_type.as_deref().unwrap_or("application/octet-stream");
                 if let Some(fmt) = mime_to_bedrock_image_format(mime_type) {
-                    let source = ImageSource::Bytes(aws_smithy_types::Blob::new(data.as_slice()));
+                    let source =
+                        ImageSource::Bytes(aws_smithy_types::Blob::new(blob.data.as_slice()));
                     ImageBlock::builder()
                         .format(fmt)
                         .source(source)
@@ -178,7 +348,7 @@ fn adk_parts_to_bedrock(parts: &[Part]) -> Vec<ContentBlock> {
                         .map(ContentBlock::Image)
                 } else if let Some(fmt) = mime_to_bedrock_document_format(mime_type) {
                     let source =
-                        DocumentSource::Bytes(aws_smithy_types::Blob::new(data.as_slice()));
+                        DocumentSource::Bytes(aws_smithy_types::Blob::new(blob.data.as_slice()));
                     DocumentBlock::builder()
                         .format(fmt)
                         .name("document")
@@ -187,65 +357,16 @@ fn adk_parts_to_bedrock(parts: &[Part]) -> Vec<ContentBlock> {
                         .ok()
                         .map(ContentBlock::Document)
                 } else {
-                    // Unsupported MIME type — skip silently
+                    report.omitted(
+                        "EmbeddedResource::Blob",
+                        Some(mime_type),
+                        "no Bedrock Converse image or document format accepts this media type",
+                    );
                     None
                 }
             }
-            Part::FileData { mime_type, .. } => {
-                // Bedrock Converse API supports S3 URIs for images/documents, but not
-                // arbitrary HTTP URLs. For now, represent as text so the model sees the
-                // reference rather than silently dropping it.
-                if mime_type.starts_with("image/")
-                    || mime_to_bedrock_document_format(mime_type).is_some()
-                {
-                    Some(ContentBlock::Text(attachment::file_attachment_to_text(
-                        mime_type,
-                        part.file_uri().unwrap_or(""),
-                    )))
-                } else {
-                    None
-                }
-            }
-            // Server-side tool parts are Gemini-specific; skip for Bedrock
-            Part::ServerToolCall { .. } | Part::ServerToolResponse { .. } => None,
-            // Embedded resources: text → text block; blob → inline image/document bytes.
-            Part::EmbeddedResource { resource } => match resource {
-                adk_core::EmbeddedResource::Text(text) => {
-                    if text.text.is_empty() {
-                        None
-                    } else {
-                        Some(ContentBlock::Text(text.text.clone()))
-                    }
-                }
-                adk_core::EmbeddedResource::Blob(blob) => {
-                    let mime_type = blob.mime_type.as_deref().unwrap_or("application/octet-stream");
-                    if let Some(fmt) = mime_to_bedrock_image_format(mime_type) {
-                        let source =
-                            ImageSource::Bytes(aws_smithy_types::Blob::new(blob.data.as_slice()));
-                        ImageBlock::builder()
-                            .format(fmt)
-                            .source(source)
-                            .build()
-                            .ok()
-                            .map(ContentBlock::Image)
-                    } else if let Some(fmt) = mime_to_bedrock_document_format(mime_type) {
-                        let source = DocumentSource::Bytes(aws_smithy_types::Blob::new(
-                            blob.data.as_slice(),
-                        ));
-                        DocumentBlock::builder()
-                            .format(fmt)
-                            .name("document")
-                            .source(source)
-                            .build()
-                            .ok()
-                            .map(ContentBlock::Document)
-                    } else {
-                        None
-                    }
-                }
-            },
-        })
-        .collect()
+        },
+    }
 }
 
 /// Map a MIME type to a Bedrock `ImageFormat`, if supported.

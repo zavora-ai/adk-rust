@@ -25,6 +25,15 @@ pub struct ExecutionConfig {
     pub recursion_limit: usize,
     /// Additional configuration
     pub metadata: HashMap<String, Value>,
+    /// The invocation this graph run belongs to, when it has one.
+    ///
+    /// An [`AgentNode`] runs a real agent, and that agent expects the identity,
+    /// services, and cancellation of the run it belongs to. Without a parent the node
+    /// has to fabricate them, which makes an agent behave differently inside a graph
+    /// than outside it. Set this with
+    /// [`ExecutionConfig::with_parent_context`] to carry them through; leaving it
+    /// unset is standalone mode and is what a graph invoked outside a `Runner` gets.
+    pub parent_context: Option<Arc<dyn adk_core::InvocationContext>>,
 }
 
 impl ExecutionConfig {
@@ -35,7 +44,19 @@ impl ExecutionConfig {
             resume_from: None,
             recursion_limit: 50,
             metadata: HashMap::new(),
+            parent_context: None,
         }
+    }
+
+    /// Carry the invocation this graph run belongs to into its nodes.
+    ///
+    /// An [`AgentNode`] then presents the caller's identity, services, request
+    /// context, and cancellation to the agent it runs, instead of a synthetic
+    /// standalone context.
+    #[must_use]
+    pub fn with_parent_context(mut self, parent: Arc<dyn adk_core::InvocationContext>) -> Self {
+        self.parent_context = Some(parent);
+        self
     }
 
     /// Set the recursion limit
@@ -189,6 +210,19 @@ pub trait Node: Send + Sync {
 
     /// Execute the node and return state updates
     async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput>;
+
+    /// Rejects a node that cannot execute, before the graph runs.
+    ///
+    /// Called for every node by [`StateGraph::compile`](crate::graph::StateGraph::compile), so a configuration whose
+    /// backend is unavailable fails while the graph is being built rather than
+    /// part-way through a run, when earlier nodes may already have had side effects.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error describing what is unavailable. The default accepts the node.
+    fn validate(&self) -> Result<()> {
+        Ok(())
+    }
 
     /// Streams execution events for this node.
     ///
@@ -387,10 +421,11 @@ impl Node for AgentNode {
         let content = (self.input_mapper)(&ctx.state);
 
         // Create a graph invocation context with the agent
-        let invocation_ctx = Arc::new(GraphInvocationContext::new(
+        let invocation_ctx = Arc::new(GraphInvocationContext::with_parent(
             ctx.config.thread_id.clone(),
             content,
             self.agent.clone(),
+            ctx.config.parent_context.clone(),
         ));
 
         // Run the agent and collect events
@@ -426,15 +461,17 @@ impl Node for AgentNode {
         let agent = self.agent.clone();
         let input_mapper = &self.input_mapper;
         let output_mapper = &self.output_mapper;
+        let parent_context = ctx.config.parent_context.clone();
         let thread_id = ctx.config.thread_id.clone();
         let content = (input_mapper)(&ctx.state);
 
         Box::pin(async_stream::stream! {
             tracing::debug!("AgentNode::execute_stream called for {}", name);
-            let invocation_ctx = Arc::new(GraphInvocationContext::new(
+            let invocation_ctx = Arc::new(GraphInvocationContext::with_parent(
                 thread_id,
                 content,
                 agent.clone(),
+                parent_context,
             ));
 
             let stream = match agent.run(invocation_ctx).await {
@@ -503,25 +540,66 @@ struct GraphInvocationContext {
     session: Arc<GraphSession>,
     run_config: adk_core::RunConfig,
     ended: std::sync::atomic::AtomicBool,
+    /// The invocation this graph run belongs to, when it has one.
+    ///
+    /// Present: identity, services, request context, and cancellation come from the
+    /// caller, so an agent behaves the same inside a graph as outside it.
+    /// Absent: standalone mode, with the synthetic identity below.
+    parent: Option<Arc<dyn adk_core::InvocationContext>>,
+    /// Identity strings, owned because the trait returns them by reference.
+    user_id: String,
+    app_name: String,
+    branch: String,
 }
 
+/// Identity used when a graph runs with no parent invocation.
+const STANDALONE_USER_ID: &str = "graph_user";
+/// Application name used when a graph runs with no parent invocation.
+const STANDALONE_APP_NAME: &str = "graph_app";
+
 impl GraphInvocationContext {
-    fn new(
+    fn with_parent(
         session_id: String,
         user_content: adk_core::Content,
         agent: Arc<dyn adk_core::Agent>,
+        parent: Option<Arc<dyn adk_core::InvocationContext>>,
     ) -> Self {
         let invocation_id = uuid::Uuid::new_v4().to_string();
         let session = Arc::new(GraphSession::new(session_id));
         // Add user content to history
         session.append_content(user_content.clone());
+
+        // A node runs on its own branch below the caller's, so events it produces are
+        // attributable and do not read as the parent agent's own turn.
+        let (user_id, app_name, branch, run_config) = match parent.as_ref() {
+            Some(parent) => (
+                parent.user_id().to_string(),
+                parent.app_name().to_string(),
+                match parent.branch() {
+                    "" => agent.name().to_string(),
+                    existing => format!("{existing}.{}", agent.name()),
+                },
+                parent.run_config().clone(),
+            ),
+            None => (
+                STANDALONE_USER_ID.to_string(),
+                STANDALONE_APP_NAME.to_string(),
+                "main".to_string(),
+                adk_core::RunConfig::default(),
+            ),
+        };
+
         Self {
             invocation_id,
             user_content,
             agent,
             session,
-            run_config: adk_core::RunConfig::default(),
+            run_config,
             ended: std::sync::atomic::AtomicBool::new(false),
+            parent,
+            user_id,
+            app_name,
+            branch,
         }
     }
 }
@@ -537,11 +615,11 @@ impl adk_core::ReadonlyContext for GraphInvocationContext {
     }
 
     fn user_id(&self) -> &str {
-        "graph_user"
+        &self.user_id
     }
 
     fn app_name(&self) -> &str {
-        "graph_app"
+        &self.app_name
     }
 
     fn session_id(&self) -> &str {
@@ -549,7 +627,7 @@ impl adk_core::ReadonlyContext for GraphInvocationContext {
     }
 
     fn branch(&self) -> &str {
-        "main"
+        &self.branch
     }
 
     fn user_content(&self) -> &adk_core::Content {
@@ -561,7 +639,11 @@ impl adk_core::ReadonlyContext for GraphInvocationContext {
 #[async_trait]
 impl adk_core::CallbackContext for GraphInvocationContext {
     fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
-        None
+        self.parent.as_ref().and_then(|parent| parent.artifacts())
+    }
+
+    fn shared_state(&self) -> Option<Arc<adk_core::SharedState>> {
+        self.parent.as_ref().and_then(|parent| parent.shared_state())
     }
 }
 
@@ -573,7 +655,7 @@ impl adk_core::InvocationContext for GraphInvocationContext {
     }
 
     fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
-        None
+        self.parent.as_ref().and_then(|parent| parent.memory())
     }
 
     fn session(&self) -> &dyn adk_core::Session {
@@ -586,10 +668,43 @@ impl adk_core::InvocationContext for GraphInvocationContext {
 
     fn end_invocation(&self) {
         self.ended.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(parent) = &self.parent {
+            parent.end_invocation();
+        }
     }
 
     fn ended(&self) -> bool {
         self.ended.load(std::sync::atomic::Ordering::SeqCst)
+            || self.parent.as_ref().is_some_and(|parent| parent.ended())
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.parent.as_ref().is_some_and(|parent| parent.is_cancelled())
+    }
+
+    fn user_scopes(&self) -> Vec<String> {
+        self.parent.as_ref().map(|parent| parent.user_scopes()).unwrap_or_default()
+    }
+
+    fn request_metadata(&self) -> std::collections::HashMap<String, Value> {
+        self.parent.as_ref().map(|parent| parent.request_metadata()).unwrap_or_default()
+    }
+
+    async fn get_secret(&self, name: &str) -> adk_core::Result<Option<String>> {
+        match &self.parent {
+            Some(parent) => parent.get_secret(name).await,
+            None => Ok(None),
+        }
+    }
+
+    async fn get_secret_for(
+        &self,
+        request: &adk_core::SecretRequest,
+    ) -> adk_core::Result<Option<String>> {
+        match &self.parent {
+            Some(parent) => parent.get_secret_for(request).await,
+            None => Ok(None),
+        }
     }
 }
 

@@ -5,7 +5,7 @@ An LLM-agent-driven example that demonstrates the OS sandbox profiles feature wi
 ## What It Demonstrates
 
 - **SandboxPolicy builder** — declarative, platform-agnostic policy defining allowed filesystem paths, network, and process permissions
-- **Platform enforcer** — automatic selection of the OS-native sandbox (Seatbelt on macOS, bubblewrap on Linux, AppContainer on Windows)
+- **Platform enforcer** — automatic selection of the OS-native sandbox (Seatbelt on macOS, bubblewrap on Linux; Windows AppContainer is not implemented)
 - **Sandboxed ProcessBackend** — code execution with kernel-level restrictions
 - **LLM agent with sandboxed tool** — Gemini generates Python code, executes it through the sandbox
 - **Sandbox enforcement** — successful code execution within allowed paths, blocked network access
@@ -17,7 +17,7 @@ An LLM-agent-driven example that demonstrates the OS sandbox profiles feature wi
 |----------|----------|---------|
 | macOS | Seatbelt (`sandbox-exec`) | Built-in |
 | Linux | bubblewrap (`bwrap`) | `apt install bubblewrap` or `dnf install bubblewrap` |
-| Windows | AppContainer | Built-in (Windows 8+) |
+| Windows | AppContainer | **Not implemented** |
 | Other | None (fallback) | Runs unsandboxed with warning |
 
 ## Sandbox Policy

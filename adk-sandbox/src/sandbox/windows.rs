@@ -77,21 +77,24 @@ impl SandboxEnforcer for WindowsEnforcer {
     fn probe(&self) -> Result<(), SandboxError> {
         // On non-Windows platforms, this enforcer is never available.
         // On Windows, verify the AppContainer API is accessible.
+        // Reported unavailable on every platform, including Windows.
+        //
+        // The previous probe checked that `CreateAppContainerProfile` links, which proves
+        // the platform API exists but not that this enforcer can use it —
+        // `configure_command` still returns `EnforcerFailed` because container creation,
+        // ACLs, capabilities, and job-object cleanup are not implemented. A probe that
+        // succeeds while execution cannot is worse than one that says so: a caller
+        // selecting an enforcer by probing would pick this one and fail at run time.
         #[cfg(target_os = "windows")]
-        {
-            // Attempt to call CreateAppContainerProfile with a probe name.
-            // If the API is available (Windows 8+), this succeeds or returns
-            // ALREADY_EXISTS — both indicate the API works.
-            use windows_sys::Win32::Security::CreateAppContainerProfile;
-            // The function exists if we can reference it — link-time check.
-            let _ = CreateAppContainerProfile as usize;
-            return Ok(());
-        }
-
+        let message = "AppContainer enforcement is not implemented: the platform API is \
+                       present, but container creation, ACLs, capabilities, and job-object \
+                       cleanup are not. Run without an enforcer, or on macOS or Linux.";
         #[cfg(not(target_os = "windows"))]
+        let message = "AppContainer is only available on Windows 8 or later.";
+
         Err(SandboxError::EnforcerUnavailable {
             enforcer: "appcontainer".to_string(),
-            message: "AppContainer is only available on Windows 8 or later.".to_string(),
+            message: message.to_string(),
         })
     }
 
