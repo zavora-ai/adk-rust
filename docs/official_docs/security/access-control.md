@@ -378,6 +378,55 @@ let cached = Arc::new(CachedSecretProvider::new(provider, Duration::from_secs(30
 let service = Arc::new(SecretServiceAdapter::new(cached));
 ```
 
+### Per-Tool Authorization
+
+By default a tool holding a context can name any secret, and the provider sees only
+that name — nothing distinguishes a weather tool asking for its own API key from the
+same tool asking for a payment credential. `AuthorizingSecretService` decides per tool
+before the provider is consulted:
+
+```rust
+use adk_auth::secrets::authorizing::{AuthorizingSecretService, SecretGrant};
+use std::sync::Arc;
+
+let service = Arc::new(
+    AuthorizingSecretService::new(inner)
+        .grant("weather_lookup", SecretGrant::none().name("weather-api-key"))
+        .grant("charge_card", SecretGrant::none().prefix("billing/"))
+        .with_audit_sink(audit_sink),
+);
+```
+
+| Rule | Behaviour |
+|------|-----------|
+| Tool has a grant covering the name | Allowed |
+| Tool has a grant that does not cover the name | Denied; the provider is never called |
+| Tool has no grant | Denied |
+| Request carries no tool identity | Denied unless `grant_untooled` opens it |
+
+Everything is denied until granted, and a denial returns an `Unauthorized` error. A
+denied name is never looked up, so it does not appear in provider-side access logs as
+an attempted read.
+
+The identity is not something a tool asserts. `LlmAgent` stamps the dispatched tool's
+name onto the request, alongside the app, user, session, and invocation, so a tool
+cannot present another tool's identity. A tool can add only a *purpose*:
+
+```rust
+// inside a tool
+let key = ctx.get_secret_for_purpose("weather-api-key", "call the forecast endpoint").await?;
+```
+
+> **Note:** an agent invoked as a tool crosses a `ToolContext`, which carries no
+> identity of its own, so accesses made inside that agent present the outer agent's
+> identity rather than the inner tool's. Grant accordingly.
+
+### Auditing Access
+
+`SecretAuditSink` receives one `SecretAccessDecision` per decision, carrying the
+outcome, the secret name, the tool, the user, the invocation, and the reason — and
+never a secret value. Allows are also logged at `info` and denials at `warn`.
+
 ### Caching
 
 `CachedSecretProvider` serves a value for its TTL, then refetches. It is bounded and
@@ -402,6 +451,11 @@ may already have been reallocated, copied by the allocator, swapped to disk, or
 captured in a core dump. Debug output for the cache is redacted so a diagnostic print
 cannot leak a value.
 
+> **Important:** a bare `SecretProvider` applies no policy of its own — any tool
+> holding a context can request any name the backing credentials can read. Wrap it in
+> [`AuthorizingSecretService`](#per-tool-authorization) to get a per-tool boundary, and
+> still scope the cloud credentials themselves: one IAM identity per deployment with
+> access to only the secrets that deployment needs.
 > **Important:** the provider interface takes only a secret *name*. There is no
 > per-tool grant, namespace, or access audit at the ADK layer, so any tool holding a
 > context can request any name the backing credentials can read. Scope the cloud

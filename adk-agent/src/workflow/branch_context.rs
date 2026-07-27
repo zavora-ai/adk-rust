@@ -138,6 +138,10 @@ impl InvocationContext for BranchContext {
     async fn get_secret(&self, name: &str) -> Result<Option<String>> {
         self.inner.get_secret(name).await
     }
+
+    async fn get_secret_for(&self, request: &adk_core::SecretRequest) -> Result<Option<String>> {
+        self.inner.get_secret_for(request).await
+    }
 }
 
 #[cfg(test)]

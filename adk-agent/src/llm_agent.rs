@@ -1012,6 +1012,9 @@ fn truncate_on_char_boundary(text: &str, max_bytes: usize) -> &str {
 struct AgentToolContext {
     parent_ctx: Arc<dyn InvocationContext>,
     function_call_id: String,
+    /// The tool this context was built for, recorded by the dispatcher so secret
+    /// requests carry an identity the tool cannot choose.
+    tool_name: Option<String>,
     actions: Mutex<EventActions>,
     progress_tx: Option<tokio::sync::mpsc::Sender<Event>>,
     /// Progress bytes forwarded so far for this call.
@@ -1025,11 +1028,18 @@ impl AgentToolContext {
         Self {
             parent_ctx,
             function_call_id,
+            tool_name: None,
             actions: Mutex::new(EventActions::default()),
             progress_tx: None,
             progress_bytes: std::sync::atomic::AtomicUsize::new(0),
             progress_truncated: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Record which tool this context serves.
+    fn with_tool_name(mut self, tool_name: impl Into<String>) -> Self {
+        self.tool_name = Some(tool_name.into());
+        self
     }
 
     /// Attach a progress sink so [`ToolContext::emit_progress`] forwards chunks
@@ -1039,6 +1049,25 @@ impl AgentToolContext {
         self
     }
 
+    /// Builds a described secret access from the identity the framework holds.
+    ///
+    /// The tool name comes from the dispatch record rather than from anything the tool
+    /// supplied, so one tool cannot request a secret under another tool's identity.
+    async fn request_secret(&self, name: &str, purpose: Option<&str>) -> Result<Option<String>> {
+        let mut request = adk_core::SecretRequest::new(name)
+            .with_identity(
+                self.parent_ctx.app_name(),
+                self.parent_ctx.user_id(),
+                self.parent_ctx.session_id(),
+            )
+            .with_invocation_id(self.parent_ctx.invocation_id());
+        if let Some(tool_name) = &self.tool_name {
+            request = request.with_tool_name(tool_name);
+        }
+        if let Some(purpose) = purpose {
+            request = request.with_purpose(purpose);
+        }
+        self.parent_ctx.get_secret_for(&request).await
     /// Forwards one progress chunk under this call's budget.
     ///
     /// The policy is bounded and lossy by design: memory is capped, and output that
@@ -1189,7 +1218,11 @@ impl ToolContext for AgentToolContext {
     }
 
     async fn get_secret(&self, name: &str) -> Result<Option<String>> {
-        self.parent_ctx.get_secret(name).await
+        self.request_secret(name, None).await
+    }
+
+    async fn get_secret_for_purpose(&self, name: &str, purpose: &str) -> Result<Option<String>> {
+        self.request_secret(name, Some(purpose)).await
     }
 
     async fn emit_progress(&self, stream: &str, chunk: &str) {
@@ -2615,6 +2648,7 @@ impl Agent for LlmAgent {
                                 if let Some(tool) = tool_map.get(&name) {
                                     let tool_ctx: Arc<dyn ToolContext> = Arc::new(
                                         AgentToolContext::new(ctx.clone(), function_call_id.clone())
+                                            .with_tool_name(tool.name())
                                             .with_progress(progress_tx.clone()),
                                     );
                                     let span_name = format!("execute_tool {name}");

@@ -440,6 +440,19 @@ impl InvocationContext for AgentToolInvocationContext {
         self.parent_ctx.get_secret(name).await
     }
 
+    async fn get_secret_for(
+        &self,
+        request: &adk_core::SecretRequest,
+    ) -> adk_core::Result<Option<String>> {
+        // The parent here is a `ToolContext`, which carries no identity of its own, so
+        // only the stated purpose survives the hop. An agent invoked as a tool
+        // therefore presents that agent's identity rather than the inner tool's.
+        match &request.purpose {
+            Some(purpose) => self.parent_ctx.get_secret_for_purpose(&request.name, purpose).await,
+            None => self.parent_ctx.get_secret(&request.name).await,
+        }
+    }
+
     // `is_cancelled` and `request_metadata` are not forwarded: they are not part
     // of the `ToolContext` surface this wrapper is constructed from, so there is
     // nothing to delegate to. Cancellation therefore does not currently reach an

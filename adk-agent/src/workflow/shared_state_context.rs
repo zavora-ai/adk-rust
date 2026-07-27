@@ -118,4 +118,11 @@ impl InvocationContext for SharedStateContext {
     async fn get_secret(&self, name: &str) -> adk_core::Result<Option<String>> {
         self.inner.get_secret(name).await
     }
+
+    async fn get_secret_for(
+        &self,
+        request: &adk_core::SecretRequest,
+    ) -> adk_core::Result<Option<String>> {
+        self.inner.get_secret_for(request).await
+    }
 }
