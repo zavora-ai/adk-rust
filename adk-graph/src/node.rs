@@ -190,6 +190,19 @@ pub trait Node: Send + Sync {
     /// Execute the node and return state updates
     async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput>;
 
+    /// Rejects a node that cannot execute, before the graph runs.
+    ///
+    /// Called for every node by [`StateGraph::compile`], so a configuration whose
+    /// backend is unavailable fails while the graph is being built rather than
+    /// part-way through a run, when earlier nodes may already have had side effects.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error describing what is unavailable. The default accepts the node.
+    fn validate(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// Streams execution events for this node.
     ///
     /// An implementation must report the node's state updates by yielding a

@@ -426,6 +426,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-graph: an action node whose backend does not exist is rejected when the graph is
+  built.** Database actions validated a connection and then returned an error explaining
+  that no driver is integrated; email monitor and send did the same; JavaScript and
+  TypeScript code execution is a placeholder; and a node needing an unenabled feature
+  failed the same way. A workflow could deserialize, validate, and compile, then fail
+  only when that node executed — after earlier nodes had already had their side effects.
+
+  `Node::validate` is a new defaulted trait method, and `StateGraph::compile` calls it
+  for every node, so an unavailable configuration is refused up front with the node name
+  and the reason. `ActionNodeExecutor` reports database nodes, email nodes, JS/TS code
+  nodes, and feature-gated nodes whose feature is off. Rust code nodes and every
+  implemented action are unaffected. A custom node can take part by overriding
+  `validate`. The node-type table in the docs now marks what is not implemented instead
+  of listing it as available.
+
 - **adk-server: background runs execute a workflow instead of reporting success.**
   `BackgroundRunner::run_with_timeout` received neither the workflow ID nor the input. It
   checked cancellation and returned `Completed` with an empty object, so a client got a
