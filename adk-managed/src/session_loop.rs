@@ -106,6 +106,13 @@ pub struct SessionLoop {
     pause_flag: Arc<Mutex<bool>>,
     /// Notify used to wake the loop after resume.
     pause_notify: Arc<Notify>,
+    /// The owner this session's Runner calls are made under.
+    ///
+    /// Defaults to the historical `managed` / `managed_user` constants so an existing loop
+    /// keeps working, and is replaced by [`SessionLoop::with_owner`] when the runtime knows
+    /// who the session belongs to. Hardcoding the constants is what put every managed session
+    /// in one namespace.
+    owner: (String, String),
     /// Current session status.
     ///
     /// Shared with the public session handle when the runtime installs its own via
@@ -155,6 +162,7 @@ impl SessionLoop {
             cancel_token,
             pause_flag: Arc::new(Mutex::new(false)),
             pause_notify: Arc::new(Notify::new()),
+            owner: ("managed".to_string(), "managed_user".to_string()),
             status: Arc::new(RwLock::new(SessionStatus::Queued)),
             agent,
             session_service,
@@ -194,6 +202,7 @@ impl SessionLoop {
             cancel_token,
             pause_flag,
             pause_notify,
+            owner: ("managed".to_string(), "managed_user".to_string()),
             status: Arc::new(RwLock::new(SessionStatus::Queued)),
             agent,
             session_service,
@@ -229,11 +238,28 @@ impl SessionLoop {
             cancel_token,
             pause_flag,
             pause_notify,
+            owner: ("managed".to_string(), "managed_user".to_string()),
             status: Arc::new(RwLock::new(SessionStatus::Queued)),
             agent,
             session_service,
             usage_tracker: SessionUsageTracker::new(),
         }
+    }
+
+    /// Makes this loop's Runner calls under `owner`.
+    ///
+    /// Without this the loop used the constants `managed` / `managed_user`, so every managed
+    /// session shared one logical namespace and no session could be attributed to a caller.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let session_loop = SessionLoop::with_pause_controls(/* ... */)
+    ///     .with_owner(owner.app_name(), owner.user_id());
+    /// ```
+    pub fn with_owner(mut self, app_name: impl Into<String>, user_id: impl Into<String>) -> Self {
+        self.owner = (app_name.into(), user_id.into());
+        self
     }
 
     /// Reports status into the handle the caller already holds.
@@ -414,7 +440,7 @@ impl SessionLoop {
         let runner = self.build_runner()?;
 
         let event_stream = runner
-            .run_str("managed_user", &self.session_id, user_content)
+            .run_str(&self.owner.1, &self.session_id, user_content)
             .await
             .map_err(|e| RuntimeError::internal(format!("runner invocation failed: {e}")))?;
 
@@ -477,7 +503,7 @@ impl SessionLoop {
     fn build_runner(&self) -> Result<Runner, RuntimeError> {
         #[allow(unused_mut)]
         let mut builder = Runner::builder()
-            .app_name("managed")
+            .app_name(self.owner.0.as_str())
             .agent(Arc::clone(&self.agent))
             .session_service(Arc::clone(&self.session_service))
             .cancellation_token(self.cancel_token.clone());

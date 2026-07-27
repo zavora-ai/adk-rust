@@ -314,7 +314,47 @@ runtime.delete_session(&session).await?;
 // The handle is gone and the conversation is no longer in the session backend.
 ```
 
-> **Important:** managed sessions are persisted under a fixed app name `managed` and user
-> `managed_user`. Caller identity and `EnvironmentConfig` are not yet applied — see the
-> crate's experimental status. Deletion therefore removes the conversation for the session
-> ID, not for a tenant.
+> **Important:** deletion removes the conversation for the session under its owner. See
+> [Session ownership](#session-ownership).
+
+## Session ownership
+
+`start_session` requires a `ManagedOwner`. The session is persisted under that identity, and
+every Runner call the session loop makes uses it:
+
+```rust
+use adk_managed::{ManagedAgentRuntime, ManagedOwner};
+
+# async fn start(runtime: &dyn ManagedAgentRuntime, agent: &adk_managed::AgentHandle)
+# -> Result<(), adk_managed::RuntimeError> {
+let owner = ManagedOwner::new("support-console", "user-42")?;
+let session = runtime.start_session(agent, &owner, None).await?;
+# Ok(())
+# }
+```
+
+Both components are required and must be non-blank. Sessions belonging to different owners are
+addressed separately, so lookup and deletion are scoped to one owner and cannot reach another's
+data.
+
+> **Note:** every managed session was previously persisted under the constants `managed` /
+> `managed_user`, so all of them shared one logical namespace: nothing could be scoped to a
+> caller and no session could be attributed to one.
+
+## Environment configuration
+
+`EnvironmentConfig` carries `env_vars` and `working_dir`. This runtime **rejects** a
+configuration that requests either:
+
+```text
+invalid request: EnvironmentConfig cannot be honoured by this runtime: sessions run
+in-process, so per-session environment variables and working directories would have to mutate
+process-global state shared with other sessions. Pass `None`, or configure a sandboxed runtime.
+```
+
+Sessions run in-process, so applying per-session environment variables or a working directory
+would mutate state shared with every other session. Refusing is the honest outcome; a sandboxed
+execution boundary is what would make the request satisfiable.
+
+> **Note:** the argument was previously named `_env` and discarded, so a caller supplying
+> environment configuration received a session that silently ignored it.

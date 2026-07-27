@@ -50,7 +50,9 @@ use crate::checkpoint::CheckpointManager;
 use crate::parking::ToolParkingLot;
 use crate::replay::create_event_stream;
 use crate::resolver::ModelResolver;
-use crate::runtime::{AgentHandle, EnvironmentConfig, ManagedAgentRuntime, SessionHandle};
+use crate::runtime::{
+    AgentHandle, EnvironmentConfig, ManagedAgentRuntime, ManagedOwner, SessionHandle,
+};
 use crate::session_loop::SessionLoop;
 use crate::types::{ManagedAgentDef, RuntimeError, SessionEvent, SessionStatus, UserEvent};
 
@@ -314,8 +316,27 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
     async fn start_session(
         &self,
         agent: &AgentHandle,
-        _env: Option<EnvironmentConfig>,
+        owner: &ManagedOwner,
+        env: Option<EnvironmentConfig>,
     ) -> Result<SessionHandle, RuntimeError> {
+        // Environment configuration was accepted and discarded — the parameter was named
+        // `_env`. Applying `env_vars` or `working_dir` to an in-process session loop would
+        // mutate process-global state shared with every other session, so the runtime refuses
+        // rather than pretending. A sandboxed execution boundary is what would make this
+        // honourable.
+        if let Some(env) = &env
+            && (!env.env_vars.is_empty() || env.working_dir.is_some())
+        {
+            return Err(RuntimeError::InvalidRequest {
+                message: "EnvironmentConfig cannot be honoured by this runtime: sessions run \
+                          in-process, so per-session environment variables and working \
+                          directories would have to mutate process-global state shared with \
+                          other sessions. Pass `None`, or configure a sandboxed runtime."
+                    .to_string(),
+                param: Some("env".to_string()),
+            });
+        }
+
         // 1. Look up agent from registry
         let agents = self.agents.read().await;
         let registered = agents
@@ -345,11 +366,11 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
         // 7. Seed the session in the SessionService.
         //    The Runner's run() calls session_service.get() which requires the
         //    session to exist. We create it here with the same triple
-        //    (app_name="managed", user_id="managed_user", session_id) that
+        //    (owner app, owner user, session_id) that
         //    build_runner/run_str use in the session loop.
         let persisted_as = PersistedIdentity {
-            app_name: "managed".to_string(),
-            user_id: "managed_user".to_string(),
+            app_name: owner.app_name().to_string(),
+            user_id: owner.user_id().to_string(),
             session_id: session_id.clone(),
         };
 
@@ -382,7 +403,8 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
             Arc::clone(&self.session_service),
             self.memory.clone(),
         )
-        .with_shared_status(Arc::clone(&status));
+        .with_shared_status(Arc::clone(&status))
+        .with_owner(owner.app_name(), owner.user_id());
         #[cfg(not(feature = "memory"))]
         let session_loop = SessionLoop::with_pause_controls(
             session_id.clone(),
@@ -396,7 +418,8 @@ impl ManagedAgentRuntime for DefaultManagedAgentRuntime {
             Arc::clone(&agent_arc),
             Arc::clone(&self.session_service),
         )
-        .with_shared_status(Arc::clone(&status));
+        .with_shared_status(Arc::clone(&status))
+        .with_owner(owner.app_name(), owner.user_id());
         tokio::spawn(session_loop.run());
 
         // 10. Create and store ActiveSession
@@ -644,6 +667,10 @@ mod tests {
         }
     }
 
+    fn test_owner() -> ManagedOwner {
+        ManagedOwner::new("app", "user").expect("valid owner")
+    }
+
     fn create_test_runtime() -> DefaultManagedAgentRuntime {
         let resolver: Arc<dyn ModelResolver> = Arc::new(MockResolver);
         let sessions = mock_session_service();
@@ -830,7 +857,10 @@ mod tests {
         };
 
         let agent = runtime.create(def).await.unwrap();
-        let session = runtime.start_session(&agent, None).await.unwrap();
+        let session = runtime
+            .start_session(&agent, &ManagedOwner::new("app", "user").unwrap(), None)
+            .await
+            .unwrap();
         assert!(!session.0.is_empty());
     }
 
@@ -851,7 +881,10 @@ mod tests {
         };
 
         let agent = runtime.create(def).await.unwrap();
-        let session = runtime.start_session(&agent, None).await.unwrap();
+        let session = runtime
+            .start_session(&agent, &ManagedOwner::new("app", "user").unwrap(), None)
+            .await
+            .unwrap();
 
         let status = runtime.status(&session).await.unwrap();
         assert_eq!(status, SessionStatus::Queued);
@@ -862,7 +895,7 @@ mod tests {
         let runtime = create_test_runtime();
 
         let fake_agent = AgentHandle("nonexistent".to_string());
-        let result = runtime.start_session(&fake_agent, None).await;
+        let result = runtime.start_session(&fake_agent, &test_owner(), None).await;
         assert!(result.is_err());
     }
 
@@ -885,7 +918,10 @@ mod tests {
         };
 
         let agent = runtime.create(def).await.unwrap();
-        let session = runtime.start_session(&agent, None).await.unwrap();
+        let session = runtime
+            .start_session(&agent, &ManagedOwner::new("app", "user").unwrap(), None)
+            .await
+            .unwrap();
 
         let event =
             UserEvent::Message { content: vec![ContentBlock::Text { text: "Hello".to_string() }] };
@@ -925,7 +961,10 @@ mod tests {
         };
 
         let agent = runtime.create(def).await.unwrap();
-        let session = runtime.start_session(&agent, None).await.unwrap();
+        let session = runtime
+            .start_session(&agent, &ManagedOwner::new("app", "user").unwrap(), None)
+            .await
+            .unwrap();
 
         // Subscribe to stream
         let mut stream = runtime.stream_events(&session, None).await.unwrap();
@@ -975,7 +1014,10 @@ mod tests {
         };
 
         let agent = runtime.create(def).await.unwrap();
-        let session = runtime.start_session(&agent, None).await.unwrap();
+        let session = runtime
+            .start_session(&agent, &ManagedOwner::new("app", "user").unwrap(), None)
+            .await
+            .unwrap();
 
         let result = runtime.interrupt(&session).await;
         assert!(result.is_ok());
@@ -998,7 +1040,10 @@ mod tests {
         };
 
         let agent = runtime.create(def).await.unwrap();
-        let session = runtime.start_session(&agent, None).await.unwrap();
+        let session = runtime
+            .start_session(&agent, &ManagedOwner::new("app", "user").unwrap(), None)
+            .await
+            .unwrap();
 
         runtime.pause(&session).await.unwrap();
         let status = runtime.status(&session).await.unwrap();
@@ -1022,7 +1067,10 @@ mod tests {
         };
 
         let agent = runtime.create(def).await.unwrap();
-        let session = runtime.start_session(&agent, None).await.unwrap();
+        let session = runtime
+            .start_session(&agent, &ManagedOwner::new("app", "user").unwrap(), None)
+            .await
+            .unwrap();
 
         runtime.pause(&session).await.unwrap();
         assert_eq!(runtime.status(&session).await.unwrap(), SessionStatus::Paused);
@@ -1048,7 +1096,10 @@ mod tests {
         };
 
         let agent = runtime.create(def).await.unwrap();
-        let session = runtime.start_session(&agent, None).await.unwrap();
+        let session = runtime
+            .start_session(&agent, &ManagedOwner::new("app", "user").unwrap(), None)
+            .await
+            .unwrap();
 
         runtime.archive(&session).await.unwrap();
         let status = runtime.status(&session).await.unwrap();
@@ -1072,7 +1123,10 @@ mod tests {
         };
 
         let agent = runtime.create(def).await.unwrap();
-        let session = runtime.start_session(&agent, None).await.unwrap();
+        let session = runtime
+            .start_session(&agent, &ManagedOwner::new("app", "user").unwrap(), None)
+            .await
+            .unwrap();
 
         runtime.delete_session(&session).await.unwrap();
 

@@ -156,6 +156,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `adk-acp` | New public fields: `PermissionRequest::{session_id, tool_call_id, kind, raw_input}`, `AcpAgentConfig::{mcp_servers, filesystem, terminal}`, `PermissionOption::kind` | Struct literals must add the fields; prefer `..Default::default()` |
   | `adk-acp` | New variants: `OutputChunk::{ToolUpdate, Usage}`, `PermissionPolicy::AsyncCustom` | Exhaustive `match` must add arms |
   | `adk-acp` | `AcpAgentConfig` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code storing it across `catch_unwind` |
+  | `adk-managed` | `ManagedAgentRuntime::start_session` requires a `ManagedOwner`, and rejects an `EnvironmentConfig` it cannot honour | Pass an owner; supply `None` for `env` unless a sandboxed runtime is configured |
   | `adk-anthropic` | New variants: `ContentBlock::WebFetchToolResult`, `ToolUnionParam::WebFetch20250910`, `ServerTool::WebFetch20250910` | Exhaustive `match` must add arms |
   | `adk-core` | New public fields: `RunConfig::{tool_confirmation_handler, runtime_toolsets}` | Struct literals must add the fields; prefer `RunConfig::builder()` |
   | `adk-core` | New variant `Part::EmbeddedResource` (`Part` is not `#[non_exhaustive]`) | Exhaustive `match` must add an arm |
@@ -425,6 +426,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entries, so no plan update is emitted today.
 
 ### Fixed
+
+- **adk-managed: sessions belong to an owner, and ignored environment configuration is
+  refused.** `start_session` named its environment argument `_env` and never read it, so a
+  caller supplying environment variables or a working directory received a session that
+  silently ignored them. Every session was also persisted under the constants `managed` /
+  `managed_user`, and the session loop repeated them for each Runner call, so all managed
+  sessions shared one logical namespace: lookup, memory, and deletion could not be scoped to a
+  caller and no session could be attributed to one. `start_session` now requires a validated
+  `ManagedOwner`, persists the session under it, and makes Runner calls with it;
+  `EnvironmentConfig` requesting anything is rejected with an explanation, because sessions run
+  in-process and applying it would mutate state shared with every other session.
 
 - **adk-managed: deleting a session now deletes its persisted conversation.**
   `delete_session` archived the session, cancelled its loop, and dropped the in-memory

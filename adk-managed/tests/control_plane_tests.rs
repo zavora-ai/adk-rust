@@ -14,7 +14,9 @@
 use adk_core::{Content, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream};
 use adk_managed::resolver::{ModelResolver, ResolverResult};
 use adk_managed::types::{ContentBlock, ManagedAgentDef, ModelRef, SessionStatus, UserEvent};
-use adk_managed::{DefaultManagedAgentRuntime, ManagedAgentRuntime};
+use adk_managed::{
+    DefaultManagedAgentRuntime, EnvironmentConfig, ManagedAgentRuntime, ManagedOwner,
+};
 use adk_session::InMemorySessionService;
 use adk_session::service::{GetRequest, SessionService};
 use async_trait::async_trait;
@@ -68,6 +70,11 @@ fn runtime_with_service() -> (DefaultManagedAgentRuntime, Arc<InMemorySessionSer
     (runtime, service)
 }
 
+/// The owner every session in these tests belongs to.
+fn test_owner() -> ManagedOwner {
+    ManagedOwner::new(MANAGED_APP, MANAGED_USER).expect("valid owner")
+}
+
 /// A minimal agent definition; no model call is made by these tests.
 fn agent_def(name: &str) -> ManagedAgentDef {
     ManagedAgentDef::new(name, ModelRef::Shorthand("silent".to_string()))
@@ -92,7 +99,7 @@ async fn session_exists(service: &InMemorySessionService, session_id: &str) -> b
 async fn deleting_a_managed_session_removes_its_persisted_conversation() {
     let (runtime, service) = runtime_with_service();
     let agent = runtime.create(agent_def("deleter")).await.expect("agent");
-    let session = runtime.start_session(&agent, None).await.expect("session");
+    let session = runtime.start_session(&agent, &test_owner(), None).await.expect("session");
 
     assert!(
         session_exists(&service, session.0.as_str()).await,
@@ -111,7 +118,7 @@ async fn deleting_a_managed_session_removes_its_persisted_conversation() {
 async fn deleting_an_unknown_session_is_still_reported_as_not_found() {
     let (runtime, _service) = runtime_with_service();
     let agent = runtime.create(agent_def("deleter")).await.expect("agent");
-    let session = runtime.start_session(&agent, None).await.expect("session");
+    let session = runtime.start_session(&agent, &test_owner(), None).await.expect("session");
 
     runtime.delete_session(&session).await.expect("first delete");
 
@@ -126,7 +133,7 @@ async fn deleting_an_unknown_session_is_still_reported_as_not_found() {
 async fn a_new_session_reports_queued_through_the_public_handle() {
     let (runtime, _service) = runtime_with_service();
     let agent = runtime.create(agent_def("reporter")).await.expect("agent");
-    let session = runtime.start_session(&agent, None).await.expect("session");
+    let session = runtime.start_session(&agent, &test_owner(), None).await.expect("session");
 
     // The starting point. What matters is that this handle is the one the loop writes to,
     // asserted below.
@@ -137,7 +144,7 @@ async fn a_new_session_reports_queued_through_the_public_handle() {
 async fn a_working_session_stops_reporting_queued() {
     let (runtime, _service) = runtime_with_service();
     let agent = runtime.create(agent_def("reporter")).await.expect("agent");
-    let session = runtime.start_session(&agent, None).await.expect("session");
+    let session = runtime.start_session(&agent, &test_owner(), None).await.expect("session");
 
     runtime
         .send_event(
@@ -171,9 +178,106 @@ async fn a_working_session_stops_reporting_queued() {
 async fn archive_is_visible_through_the_public_handle() {
     let (runtime, _service) = runtime_with_service();
     let agent = runtime.create(agent_def("reporter")).await.expect("agent");
-    let session = runtime.start_session(&agent, None).await.expect("session");
+    let session = runtime.start_session(&agent, &test_owner(), None).await.expect("session");
 
     runtime.archive(&session).await.expect("archive");
 
     assert_eq!(runtime.status(&session).await.expect("status"), SessionStatus::Archived);
+}
+
+// ── Owner identity and environment ────────────────────────────────────
+//
+// `start_session` named its environment argument `_env` and never read it, and every session
+// was persisted under the constants `managed` / `managed_user`. All managed sessions therefore
+// shared one logical namespace: lookup, memory, and deletion could not be scoped to a caller,
+// and no session could be attributed to one.
+
+#[tokio::test]
+async fn two_owners_persist_into_separate_namespaces() {
+    let (runtime, service) = runtime_with_service();
+    let agent = runtime.create(agent_def("shared")).await.expect("agent");
+
+    let alice = ManagedOwner::new("console", "alice").unwrap();
+    let bob = ManagedOwner::new("console", "bob").unwrap();
+
+    let alice_session = runtime.start_session(&agent, &alice, None).await.expect("alice");
+    let bob_session = runtime.start_session(&agent, &bob, None).await.expect("bob");
+
+    // Each session exists only under its own owner.
+    assert!(exists_for(&service, &alice, alice_session.0.as_str()).await);
+    assert!(exists_for(&service, &bob, bob_session.0.as_str()).await);
+    assert!(
+        !exists_for(&service, &bob, alice_session.0.as_str()).await,
+        "one owner's session must not be addressable as another's"
+    );
+}
+
+#[tokio::test]
+async fn deleting_one_owners_session_leaves_the_others_intact() {
+    let (runtime, service) = runtime_with_service();
+    let agent = runtime.create(agent_def("shared")).await.expect("agent");
+
+    let alice = ManagedOwner::new("console", "alice").unwrap();
+    let bob = ManagedOwner::new("console", "bob").unwrap();
+    let alice_session = runtime.start_session(&agent, &alice, None).await.expect("alice");
+    let bob_session = runtime.start_session(&agent, &bob, None).await.expect("bob");
+
+    runtime.delete_session(&alice_session).await.expect("delete");
+
+    assert!(!exists_for(&service, &alice, alice_session.0.as_str()).await);
+    assert!(
+        exists_for(&service, &bob, bob_session.0.as_str()).await,
+        "deleting one owner's session must not remove another's"
+    );
+}
+
+#[tokio::test]
+async fn an_owner_needs_both_components() {
+    assert!(
+        ManagedOwner::new("", "user").is_err(),
+        "a blank app name recreates a shared namespace"
+    );
+    assert!(ManagedOwner::new("app", "").is_err(), "a blank user id cannot be scoped to a caller");
+    assert!(ManagedOwner::new("   ", "user").is_err(), "whitespace is not an identity");
+    assert!(ManagedOwner::new("app", "user").is_ok());
+}
+
+#[tokio::test]
+async fn environment_configuration_is_refused_rather_than_ignored() {
+    let (runtime, _service) = runtime_with_service();
+    let agent = runtime.create(agent_def("env")).await.expect("agent");
+    let owner = ManagedOwner::new("console", "alice").unwrap();
+
+    let mut env = EnvironmentConfig::default();
+    env.env_vars.insert("API_KEY".to_string(), "value".to_string());
+
+    let error = runtime
+        .start_session(&agent, &owner, Some(env))
+        .await
+        .expect_err("configuration the runtime cannot honour must not be silently discarded");
+    assert!(error.to_string().contains("in-process"), "{error}");
+
+    // An empty configuration asks for nothing, so it is accepted.
+    assert!(
+        runtime.start_session(&agent, &owner, Some(EnvironmentConfig::default())).await.is_ok()
+    );
+}
+
+/// Whether the backend holds `session_id` under `owner`.
+async fn exists_for(
+    service: &InMemorySessionService,
+    owner: &ManagedOwner,
+    session_id: &str,
+) -> bool {
+    service
+        .get(GetRequest {
+            app_name: owner.app_name().to_string(),
+            user_id: owner.user_id().to_string(),
+            session_id: session_id.to_string(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .map(|_| true)
+        .unwrap_or(false)
 }
