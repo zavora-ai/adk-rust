@@ -73,6 +73,10 @@ impl MemoryService for InMemoryMemoryService {
         Ok(())
     }
 
+    fn supports_project_scoping(&self) -> bool {
+        true
+    }
+
     async fn add_session_to_project(
         &self,
         app_name: &str,
