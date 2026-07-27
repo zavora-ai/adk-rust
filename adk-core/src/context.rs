@@ -558,6 +558,16 @@ pub trait InvocationContext: CallbackContext {
     async fn get_secret(&self, _name: &str) -> Result<Option<String>> {
         Ok(None)
     }
+
+    /// Resolves a secret for a described access.
+    ///
+    /// A wrapper context must forward this, and a tool context builds the request from
+    /// the identity the framework gave it. The default drops the description and calls
+    /// [`InvocationContext::get_secret`], which keeps a context that predates the
+    /// request object working.
+    async fn get_secret_for(&self, request: &SecretRequest) -> Result<Option<String>> {
+        self.get_secret(&request.name).await
+    }
 }
 
 // Placeholder service traits
@@ -650,6 +660,100 @@ pub trait SecretService: Send + Sync {
     ///
     /// Returns the secret string on success, or an [`AdkError`] on failure.
     async fn get_secret(&self, name: &str) -> Result<String>;
+
+    /// Retrieve a secret for a described access.
+    ///
+    /// This is the form an authorizing service implements: the request carries who is
+    /// asking and why, so a decision can be made before the value is fetched. The
+    /// default implementation ignores the context and calls
+    /// [`SecretService::get_secret`], which is correct for a service that has no
+    /// policy of its own.
+    ///
+    /// Every field on [`SecretRequest`] is set by the framework at the call site, not
+    /// supplied by the tool, so a tool cannot present another tool's identity.
+    async fn get_secret_for(&self, request: &SecretRequest) -> Result<String> {
+        self.get_secret(&request.name).await
+    }
+}
+
+/// A described secret access.
+///
+/// Carries the requested name plus the identity the framework observed at the call
+/// site, so a [`SecretService`] can authorize and audit rather than being handed a
+/// bare name with no context.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_core::SecretRequest;
+///
+/// let request = SecretRequest::new("payments-api-key")
+///     .with_tool_name("charge_card")
+///     .with_purpose("authorize a customer payment");
+///
+/// assert_eq!(request.tool_name.as_deref(), Some("charge_card"));
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecretRequest {
+    /// Name of the requested secret.
+    pub name: String,
+    /// The tool making the request, when the access came from a tool.
+    ///
+    /// Set by the framework from the tool it dispatched, never from a value the tool
+    /// provided.
+    pub tool_name: Option<String>,
+    /// Application the run belongs to.
+    pub app_name: Option<String>,
+    /// Authenticated user the run belongs to.
+    pub user_id: Option<String>,
+    /// Session the run belongs to.
+    pub session_id: Option<String>,
+    /// Invocation the access happened in, for correlating audit records.
+    pub invocation_id: Option<String>,
+    /// Why the secret is needed, when the caller states it.
+    pub purpose: Option<String>,
+}
+
+impl SecretRequest {
+    /// Creates a request for `name` with no identity attached.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into(), ..Default::default() }
+    }
+
+    /// Attaches the requesting tool's name.
+    #[must_use]
+    pub fn with_tool_name(mut self, tool_name: impl Into<String>) -> Self {
+        self.tool_name = Some(tool_name.into());
+        self
+    }
+
+    /// Attaches the run's identity.
+    #[must_use]
+    pub fn with_identity(
+        mut self,
+        app_name: impl Into<String>,
+        user_id: impl Into<String>,
+        session_id: impl Into<String>,
+    ) -> Self {
+        self.app_name = Some(app_name.into());
+        self.user_id = Some(user_id.into());
+        self.session_id = Some(session_id.into());
+        self
+    }
+
+    /// Attaches the invocation the access happened in.
+    #[must_use]
+    pub fn with_invocation_id(mut self, invocation_id: impl Into<String>) -> Self {
+        self.invocation_id = Some(invocation_id.into());
+        self
+    }
+
+    /// Attaches a stated purpose.
+    #[must_use]
+    pub fn with_purpose(mut self, purpose: impl Into<String>) -> Self {
+        self.purpose = Some(purpose.into());
+        self
+    }
 }
 
 /// A single entry returned from memory search.

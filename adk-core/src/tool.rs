@@ -187,6 +187,16 @@ pub trait ToolContext: CallbackContext {
     async fn get_secret(&self, _name: &str) -> Result<Option<String>> {
         Ok(None)
     }
+
+    /// Resolves a secret, stating why it is needed.
+    ///
+    /// The tool identity is added by the framework, not taken from the tool, so a
+    /// purpose is the only part a tool contributes. An authorizing
+    /// [`SecretService`](crate::SecretService) sees both.
+    async fn get_secret_for_purpose(&self, name: &str, purpose: &str) -> Result<Option<String>> {
+        let _ = purpose;
+        self.get_secret(name).await
+    }
 }
 
 /// Configuration for automatic tool retry on failure.

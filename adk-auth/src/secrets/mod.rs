@@ -17,6 +17,7 @@
 //! let secret = provider.get_secret("my-api-key").await?;
 //! ```
 
+pub mod authorizing;
 pub mod cached;
 pub mod provider;
 

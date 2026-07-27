@@ -2599,6 +2599,20 @@ impl ToolContext for CodeToolContext {
     async fn get_secret(&self, name: &str) -> adk_core::Result<Option<String>> {
         self.inner.get_secret(name).await
     }
+
+    async fn get_secret_for_purpose(
+        &self,
+        name: &str,
+        purpose: &str,
+    ) -> adk_core::Result<Option<String>> {
+        // Inline code runs under the CodeAct agent rather than a named tool, so the
+        // identity presented is the run's, with the stated purpose attached.
+        let request = adk_core::SecretRequest::new(name)
+            .with_identity(self.inner.app_name(), self.inner.user_id(), self.inner.session_id())
+            .with_invocation_id(self.inner.invocation_id())
+            .with_purpose(purpose);
+        self.inner.get_secret_for(&request).await
+    }
 }
 
 /// Wraps a [`CallbackContext`] to expose a [`ToolOutcome`] to after-tool

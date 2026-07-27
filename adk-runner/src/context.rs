@@ -555,8 +555,18 @@ impl InvocationContextTrait for InvocationContext {
     }
 
     async fn get_secret(&self, name: &str) -> adk_core::Result<Option<String>> {
+        let request = adk_core::SecretRequest::new(name)
+            .with_identity(self.app_name(), self.user_id(), self.session_id())
+            .with_invocation_id(self.invocation_id());
+        self.get_secret_for(&request).await
+    }
+
+    async fn get_secret_for(
+        &self,
+        request: &adk_core::SecretRequest,
+    ) -> adk_core::Result<Option<String>> {
         match &self.secret_service {
-            Some(service) => service.get_secret(name).await.map(Some),
+            Some(service) => service.get_secret_for(request).await.map(Some),
             None => Ok(None),
         }
     }
