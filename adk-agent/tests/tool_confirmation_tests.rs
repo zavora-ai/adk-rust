@@ -294,7 +294,7 @@ async fn test_tool_confirmation_deny_skips_tool_execution() {
     let mut run_config = RunConfig::default();
     run_config
         .tool_confirmation_decisions
-        .insert("test_tool".to_string(), ToolConfirmationDecision::Deny);
+        .insert("call-2".to_string(), ToolConfirmationDecision::Deny);
 
     let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
     let mut saw_denied_response = false;
@@ -339,7 +339,7 @@ async fn test_tool_confirmation_approve_executes_tool() {
     let mut run_config = RunConfig::default();
     run_config
         .tool_confirmation_decisions
-        .insert("test_tool".to_string(), ToolConfirmationDecision::Approve);
+        .insert("call-3".to_string(), ToolConfirmationDecision::Approve);
 
     let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
     let mut saw_tool_result = false;
@@ -386,4 +386,148 @@ async fn live_allow_once_is_requested_for_each_tool_call() {
 
     assert_eq!(confirmation.decisions.load(Ordering::SeqCst), 2);
     assert_eq!(tool_calls.load(Ordering::SeqCst), 2);
+}
+
+// ── Approvals are scoped to one exact call ─────────────────────────────
+
+/// A model emitting two calls to the same tool with different arguments in one turn.
+fn two_calls_to_same_tool() -> LlmResponse {
+    LlmResponse {
+        content: Some(Content {
+            role: "model".to_string(),
+            parts: vec![
+                Part::FunctionCall {
+                    name: "test_tool".to_string(),
+                    args: json!({ "path": "/tmp/scratch" }),
+                    id: Some("call-scratch".to_string()),
+                    thought_signature: None,
+                },
+                Part::FunctionCall {
+                    name: "test_tool".to_string(),
+                    args: json!({ "path": "/etc/passwd" }),
+                    id: Some("call-sensitive".to_string()),
+                    thought_signature: None,
+                },
+            ],
+        }),
+        usage_metadata: None,
+        finish_reason: Some(FinishReason::Stop),
+        citation_metadata: None,
+        partial: false,
+        turn_complete: true,
+        interrupted: false,
+        error_code: None,
+        error_message: None,
+        provider_metadata: None,
+        interaction_id: None,
+    }
+}
+
+#[tokio::test]
+async fn approving_one_call_does_not_approve_a_sibling_with_the_same_tool_name() {
+    let model = Arc::new(SequencedModel::new(vec![two_calls_to_same_tool()]));
+    let agent = LlmAgentBuilder::new("test-agent")
+        .model(model)
+        .tool(Arc::new(CountingTool::new()))
+        .require_tool_confirmation("test_tool")
+        .build()
+        .unwrap();
+
+    // Approve only the scratch-path call.
+    let mut run_config = RunConfig::default();
+    run_config
+        .tool_confirmation_decisions
+        .insert("call-scratch".to_string(), ToolConfirmationDecision::Approve);
+
+    let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
+    let mut confirmation_requests = Vec::new();
+    while let Some(result) = stream.next().await {
+        let event = result.unwrap();
+        if let Some(request) = event.actions.tool_confirmation.as_ref() {
+            confirmation_requests.push(request.clone());
+        }
+    }
+
+    // The sensitive call must still be held for confirmation. Under name keying the
+    // approval for the scratch path authorised it too.
+    assert!(
+        confirmation_requests
+            .iter()
+            .any(|r| r.function_call_id.as_deref() == Some("call-sensitive")),
+        "the un-approved sibling call must still require confirmation; \
+         requests seen: {confirmation_requests:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_approval_bound_to_arguments_is_ignored_when_they_change() {
+    let model = Arc::new(SequencedModel::new(vec![SequencedModel::function_call_response(
+        "test_tool",
+        json!({ "path": "/etc/passwd" }),
+        "call-replayed",
+    )]));
+    let agent = LlmAgentBuilder::new("test-agent")
+        .model(model)
+        .tool(Arc::new(CountingTool::new()))
+        .require_tool_confirmation("test_tool")
+        .build()
+        .unwrap();
+
+    // The decision was granted for a different path, and is bound to it.
+    let mut run_config = RunConfig::default();
+    run_config
+        .tool_confirmation_decisions
+        .insert("call-replayed".to_string(), ToolConfirmationDecision::Approve);
+    run_config.tool_confirmation_fingerprints.insert(
+        "call-replayed".to_string(),
+        adk_core::tool_call_fingerprint("test_tool", &json!({ "path": "/tmp/scratch" })),
+    );
+
+    let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
+    let mut confirmation_requests = Vec::new();
+    while let Some(result) = stream.next().await {
+        let event = result.unwrap();
+        if let Some(request) = event.actions.tool_confirmation.as_ref() {
+            confirmation_requests.push(request.clone());
+        }
+    }
+
+    assert!(
+        !confirmation_requests.is_empty(),
+        "a decision replayed onto different arguments must not authorise the call"
+    );
+}
+
+#[tokio::test]
+async fn a_matching_fingerprint_still_authorises_the_call() {
+    let args = json!({ "path": "/tmp/scratch" });
+    let model = Arc::new(SequencedModel::new(vec![
+        SequencedModel::function_call_response("test_tool", args.clone(), "call-bound"),
+        SequencedModel::text_response("done"),
+    ]));
+    let agent = LlmAgentBuilder::new("test-agent")
+        .model(model)
+        .tool(Arc::new(CountingTool::new()))
+        .require_tool_confirmation("test_tool")
+        .build()
+        .unwrap();
+
+    let mut run_config = RunConfig::default();
+    run_config
+        .tool_confirmation_decisions
+        .insert("call-bound".to_string(), ToolConfirmationDecision::Approve);
+    run_config
+        .tool_confirmation_fingerprints
+        .insert("call-bound".to_string(), adk_core::tool_call_fingerprint("test_tool", &args));
+
+    let mut stream = agent.run(Arc::new(MockContext::new(run_config))).await.unwrap();
+    let mut approved = false;
+    while let Some(result) = stream.next().await {
+        let event = result.unwrap();
+        if event.actions.tool_confirmation_decision == Some(ToolConfirmationDecision::Approve) {
+            approved = true;
+        }
+    }
+
+    assert!(approved, "a fingerprint matching the actual call must authorise it");
 }

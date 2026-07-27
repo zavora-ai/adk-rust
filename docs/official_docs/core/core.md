@@ -437,23 +437,59 @@ Full context for agent execution (extends CallbackContext):
 pub trait InvocationContext: CallbackContext {
     /// The agent being executed
     fn agent(&self) -> Arc<dyn Agent>;
-    
+
     /// Memory service (if configured)
     fn memory(&self) -> Option<Arc<dyn Memory>>;
-    
+
     /// Current session with state and history
     fn session(&self) -> &dyn Session;
-    
+
     /// Execution configuration
     fn run_config(&self) -> &RunConfig;
-    
+
     /// Signal that this invocation should end
     fn end_invocation(&self);
-    
+
     /// Check if invocation has been ended
     fn ended(&self) -> bool;
+
+    // Capability methods — all have defaults, so an implementation may omit them.
+
+    /// Whether the run has been cancelled, e.g. by `Runner::interrupt`.
+    /// Default: `false`.
+    fn is_cancelled(&self) -> bool;
+
+    /// Authenticated scopes for the caller. Default: empty.
+    fn user_scopes(&self) -> Vec<String>;
+
+    /// Request-scoped metadata. Default: empty.
+    fn request_metadata(&self) -> HashMap<String, serde_json::Value>;
+
+    /// Resolve a secret through the configured provider. Default: `Ok(None)`.
+    async fn get_secret(&self, name: &str) -> Result<Option<String>>;
 }
 ```
+
+#### Capability preservation in derived contexts
+
+The capability methods above, plus `shared_state()` and `artifacts()` on
+`CallbackContext`, all have permissive defaults — `false`, empty, or `None`. That
+matters when a context is *derived*: workflow agents wrap the caller's context to
+change one thing (a branch, the user content, the session), and a wrapper that
+does not forward a capability method silently falls back to its default rather
+than failing to compile.
+
+Every wrapper in the workspace forwards all of them, and a conformance suite
+enforces it by pushing a context with non-default values for each capability
+through each wrapper, including a composed stack. Practically this means
+cancellation, secrets, scopes, request metadata, shared state, artifacts, and
+memory reach a sub-agent regardless of whether it runs directly, under a
+`LoopAgent`, under a `ParallelAgent`, or with skills injected.
+
+> **Note:** if you implement `InvocationContext` yourself by wrapping another
+> context, forward every method above. `ToolContext` does not expose
+> `is_cancelled` or `request_metadata`, so an agent invoked *as a tool* does not
+> currently observe cancellation.
 
 ---
 

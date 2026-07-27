@@ -1050,6 +1050,28 @@ let graph = StateGraph::with_channels(&["task", "result"])
     .with_checkpointer(checkpointer);
 ```
 
+### What a Checkpoint Records
+
+A checkpoint stores the accumulated state, the step number, and the **frontier** —
+the nodes that still have to run. It is written after the frontier advances, so
+resuming never re-executes a node that already completed and never double-applies
+its updates. A run that finishes checkpoints an empty frontier, so resuming a
+completed thread returns the final state rather than restarting the graph.
+
+Two cases deliberately checkpoint the frontier that was *executing* rather than
+the next one, because the interrupted node has not produced its updates yet and
+must run again on resume:
+
+| Situation | Frontier saved |
+|-----------|----------------|
+| Super-step completed | The next nodes to run |
+| Run finished | Empty |
+| Interrupt raised (blocking or streaming) | The nodes that were executing |
+
+Streamed runs checkpoint on the same schedule as blocking runs, including when an
+interrupt ends the stream, so a human-in-the-loop pause is resumable in either
+execution mode.
+
 ### Checkpoint History (Time Travel)
 
 Checkpoints also enable **durable resume** — if a graph execution crashes or the process restarts, execution resumes from the last persisted checkpoint rather than starting over. Use `SqliteCheckpointer` or `PostgresCheckpointer` for crash-safe persistence.
@@ -1206,6 +1228,21 @@ while let Some(event) = stream.next().await {
 | `Updates` | Stream only state changes |
 | `Messages` | Stream message-type updates |
 | `Debug` | Stream all internal events |
+
+`Messages` mode reads tokens from `Node::execute_stream` as they are produced.
+Each node runs **once** per super-step in this mode: the node reports its state
+updates on the stream as a `StreamEvent::Updates` event, and the executor applies
+those rather than executing the node a second time to collect them. This matters
+most for `AgentNode`, where a second execution would mean a second billed model
+call per node.
+
+> **Important:** a custom `Node` that overrides `execute_stream` must yield a
+> `StreamEvent::Updates` event carrying its state updates. Without it the node
+> streams events but contributes no state in `Messages` mode. The default
+> `execute_stream`, which wraps `execute`, does this for you.
+
+Timeout policies apply to the streamed execution itself. For a stream,
+`idle_timeout` means no event was produced within the limit.
 
 ## ADK Integration
 
