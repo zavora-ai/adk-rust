@@ -11,7 +11,7 @@ use crate::session::ContextMutationOutcome;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::RwLock;
 
 /// Internal state machine tracking the resumability status of the RealtimeRunner.
@@ -135,6 +135,26 @@ pub trait EventHandler: Send + Sync {
     }
 
     /// Called on any error.
+    /// Called when the provider transport ends and [`RealtimeRunner::run`] is returning.
+    ///
+    /// The runner does **not** reconnect automatically. Reconnection is deliberate: it
+    /// requires deciding what context to replay and, on Gemini, whether a resumption token
+    /// is still valid. Without this hook `run` returned `Ok(())` on transport loss, which a
+    /// caller could not tell apart from a graceful [`RealtimeRunner::close`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// async fn on_disconnect(&self) -> adk_realtime::Result<()> {
+    ///     tracing::warn!("realtime transport ended; reconnecting");
+    ///     self.reconnect.notify_one();
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn on_disconnect(&self) -> Result<()> {
+        Ok(())
+    }
+
     async fn on_error(&self, _error: &RealtimeError) -> Result<()> {
         Ok(())
     }
@@ -146,6 +166,14 @@ pub struct NoOpEventHandler;
 
 #[async_trait]
 impl EventHandler for NoOpEventHandler {}
+
+/// A tool call the run loop still has to dispatch.
+#[derive(Debug, Clone)]
+struct PendingToolCall {
+    call_id: String,
+    name: String,
+    arguments: String,
+}
 
 /// Configuration for the RealtimeRunner.
 #[derive(Clone)]
@@ -273,6 +301,8 @@ impl RealtimeRunnerBuilder {
             config.tools = Some(tool_defs);
         }
 
+        let max_concurrent_tools = self.runner_config.max_concurrent_tools.max(1);
+
         Ok(RealtimeRunner {
             model,
             config: Arc::new(RwLock::new(config)),
@@ -282,6 +312,9 @@ impl RealtimeRunnerBuilder {
             session: Arc::new(RwLock::new(None)),
             state: Arc::new(RwLock::new(RunnerState::Idle)),
             pending_tool_response: AtomicBool::new(false),
+            tool_permits: Arc::new(tokio::sync::Semaphore::new(max_concurrent_tools)),
+            outstanding_tools: Arc::new(AtomicUsize::new(0)),
+            response_closed_awaiting_tools: Arc::new(AtomicBool::new(false)),
         })
     }
 }
@@ -334,6 +367,14 @@ pub struct RealtimeRunner {
     /// Set when tool output(s) have been sent for the in-flight response and a
     /// single follow-up `create_response` is owed once that response finishes.
     pending_tool_response: AtomicBool,
+    /// Bounds how many tool handlers run at once, from
+    /// [`RunnerConfig::max_concurrent_tools`].
+    tool_permits: Arc<tokio::sync::Semaphore>,
+    /// Tool calls dispatched for the current response and not yet finished.
+    outstanding_tools: Arc<AtomicUsize>,
+    /// Set when the dispatching response closed while tool calls were still running, so
+    /// the follow-up `create_response` is owed by whichever tool finishes last.
+    response_closed_awaiting_tools: Arc<AtomicBool>,
 }
 
 impl RealtimeRunner {
@@ -749,14 +790,38 @@ impl RealtimeRunner {
 
     /// Run the event loop, processing events until disconnected.
     pub async fn run(&self) -> Result<()> {
+        use futures::stream::{FuturesUnordered, StreamExt};
+
+        // Tool handlers run as futures on this set rather than inline, so reading the next
+        // provider event never waits for a tool. `max_concurrent_tools` bounds how many
+        // are past their permit acquisition at once.
+        let mut running_tools = FuturesUnordered::new();
+
         loop {
             let session = self.session_handle().await?;
             let old_session_id = session.session_id().to_string();
-            let event = session.next_event().await;
+
+            // With no tools in flight there is nothing to drain, and polling an empty
+            // `FuturesUnordered` in a `select!` would spin.
+            let event = if running_tools.is_empty() {
+                session.next_event().await
+            } else {
+                tokio::select! {
+                    biased;
+                    Some(finished) = running_tools.next() => {
+                        let () = finished?;
+                        continue;
+                    }
+                    event = session.next_event() => event,
+                }
+            };
 
             match event {
                 Some(Ok(event)) => {
-                    self.handle_event(event).await?;
+                    if let Some(call) = self.handle_event(event).await? {
+                        self.outstanding_tools.fetch_add(1, Ordering::AcqRel);
+                        running_tools.push(self.run_tool_call(call));
+                    }
                 }
                 Some(Err(e)) => {
                     self.event_handler.on_error(&e).await?;
@@ -771,7 +836,14 @@ impl RealtimeRunner {
                         // A new session handle was installed concurrently. Continue polling.
                         continue;
                     }
-                    // It was a real disconnect.
+                    // A real disconnect. Let dispatched tools finish so their output and
+                    // the follow-up response are not dropped mid-flight.
+                    while let Some(finished) = running_tools.next().await {
+                        finished?;
+                    }
+                    // Surfaced distinctly: `run` returning `Ok(())` alone cannot be told
+                    // apart from a graceful `close`.
+                    self.event_handler.on_disconnect().await?;
                     break;
                 }
             }
@@ -779,8 +851,29 @@ impl RealtimeRunner {
         Ok(())
     }
 
+    /// Run one dispatched tool call under the configured concurrency bound.
+    ///
+    /// The permit is acquired inside the future so queueing a call never blocks the event
+    /// loop; the bound applies to execution, not to admission.
+    async fn run_tool_call(&self, call: PendingToolCall) -> Result<()> {
+        let permit = Arc::clone(&self.tool_permits).acquire_owned().await;
+        let result = self.execute_tool_call(&call.call_id, &call.name, &call.arguments).await;
+        drop(permit);
+
+        // The follow-up response is owed once *every* dispatched tool is in and the
+        // dispatching response has closed, whichever happens last. Before tools ran
+        // concurrently, ordering was implicit: `ResponseDone` could not arrive until the
+        // inline await returned. It can now, so the last tool to finish issues it.
+        if self.outstanding_tools.fetch_sub(1, Ordering::AcqRel) == 1
+            && self.response_closed_awaiting_tools.swap(false, Ordering::AcqRel)
+        {
+            self.respond_after_tools().await?;
+        }
+        result
+    }
+
     /// Process a single event.
-    async fn handle_event(&self, event: ServerEvent) -> Result<()> {
+    async fn handle_event(&self, event: ServerEvent) -> Result<Option<PendingToolCall>> {
         // Track state transitions before forwarding the event
         match &event {
             ServerEvent::ResponseCreated { .. } => {
@@ -823,7 +916,9 @@ impl RealtimeRunner {
             }
             ServerEvent::FunctionCallDone { call_id, name, arguments, .. } => {
                 if self.runner_config.auto_execute_tools {
-                    self.execute_tool_call(&call_id, &name, &arguments).await?;
+                    // Returned rather than awaited: the run loop dispatches it so event
+                    // intake — audio deltas included — continues while the tool runs.
+                    return Ok(Some(PendingToolCall { call_id, name, arguments }));
                 }
             }
             ServerEvent::SessionUpdated { session, .. } => {
@@ -846,7 +941,7 @@ impl RealtimeRunner {
                 // Ignore other events
             }
         }
-        Ok(())
+        Ok(None)
     }
 
     /// Safely transitions the runner back to Idle and executes any queued resumptions.
@@ -949,6 +1044,38 @@ impl RealtimeRunner {
         Ok(())
     }
 
+    /// The system instruction the next connection will use.
+    ///
+    /// Exposed so callers and tests can confirm what context a session was actually created
+    /// with, rather than inferring it from log lines.
+    pub async fn instruction(&self) -> Option<String> {
+        self.config.read().await.instruction.clone()
+    }
+
+    /// Prepends a context block to the system instruction before connecting.
+    ///
+    /// The integration layer uses this to carry prior conversation history and recalled memory
+    /// into the provider session. Call it before [`RealtimeRunner::connect`]: providers read
+    /// the instruction at session creation, so a later change needs `update_session`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// runner.prepend_instruction_context("Previously discussed: the refund policy.").await;
+    /// runner.connect().await?;
+    /// ```
+    pub async fn prepend_instruction_context(&self, block: &str) {
+        if block.is_empty() {
+            return;
+        }
+
+        let mut config = self.config.write().await;
+        config.instruction = Some(match config.instruction.take() {
+            Some(existing) if !existing.is_empty() => format!("{block}\n\n{existing}"),
+            _ => block.to_string(),
+        });
+    }
+
     /// Trigger the single follow-up response owed after a tool-dispatching turn.
     ///
     /// Call this when a response finishes (`ResponseDone`). If tool output(s)
@@ -958,6 +1085,15 @@ impl RealtimeRunner {
     /// than once per tool call. Gemini's `create_response` is a no-op, so this is
     /// safely uniform across providers. No-op when nothing is pending.
     pub async fn respond_after_tools(&self) -> Result<()> {
+        // Tools run concurrently with event intake, so this can be reached before their
+        // output is in. Defer to the last tool to finish rather than firing a response the
+        // model cannot yet answer — or, worse, dropping it because
+        // `pending_tool_response` is not set yet.
+        if self.outstanding_tools.load(Ordering::Acquire) > 0 {
+            self.response_closed_awaiting_tools.store(true, Ordering::Release);
+            return Ok(());
+        }
+
         if self.pending_tool_response.swap(false, Ordering::AcqRel)
             && let Ok(session) = self.session_handle().await
         {
@@ -1160,10 +1296,19 @@ mod runner_tests {
         *runner.session.write().await =
             Some(Arc::new(RecordingSession { counts: counts.clone() }) as Arc<dyn RealtimeSession>);
 
-        // One model response dispatching two tool calls, then ending.
-        runner.handle_event(function_call("c1", "get_weather")).await.unwrap();
-        runner.handle_event(function_call("c2", "get_time")).await.unwrap();
-        runner.handle_event(response_done()).await.unwrap();
+        // One model response dispatching two tool calls, then ending. Driven through
+        // `run`, because dispatch is the run loop's job now — `handle_event` returns the
+        // call rather than awaiting it, so event intake is not blocked by a tool.
+        let scripted = Arc::new(ScriptedSession::new(
+            counts.clone(),
+            vec![
+                function_call("c1", "get_weather"),
+                function_call("c2", "get_time"),
+                response_done(),
+            ],
+        ));
+        *runner.session.write().await = Some(scripted as Arc<dyn RealtimeSession>);
+        runner.run().await.unwrap();
 
         assert_eq!(counts.tool_output.load(Ordering::SeqCst), 2, "both outputs sent");
         assert_eq!(counts.create_response.load(Ordering::SeqCst), 1, "exactly one response");
@@ -1190,5 +1335,347 @@ mod runner_tests {
         runner.handle_event(response_done()).await.unwrap();
         assert_eq!(counts.create_response.load(Ordering::SeqCst), 0);
         assert_eq!(counts.tool_output.load(Ordering::SeqCst), 0);
+    }
+
+    // ── Bounded concurrent tool dispatch ──────────────────────────────────
+    //
+    // `RunnerConfig::max_concurrent_tools` defaulted to four and was read by nothing: no
+    // semaphore, no scheduler. `FunctionCallDone` was awaited inline inside `handle_event`,
+    // which the run loop awaited before reading the next event, so tool calls ran strictly
+    // one at a time *and* stalled audio and every other event for the duration.
+
+    /// A session that replays a scripted event sequence, then reports disconnect.
+    struct ScriptedSession {
+        counts: Arc<Counts>,
+        events: parking_lot::Mutex<std::collections::VecDeque<ServerEvent>>,
+    }
+
+    impl ScriptedSession {
+        fn new(counts: Arc<Counts>, events: Vec<ServerEvent>) -> Self {
+            Self { counts, events: parking_lot::Mutex::new(events.into()) }
+        }
+    }
+
+    #[async_trait]
+    impl RealtimeSession for ScriptedSession {
+        fn session_id(&self) -> &str {
+            "scripted-session"
+        }
+        fn is_connected(&self) -> bool {
+            true
+        }
+        async fn send_audio(&self, _audio: &AudioChunk) -> Result<()> {
+            Ok(())
+        }
+        async fn send_audio_base64(&self, _audio: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn send_text(&self, _text: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn send_tool_response(&self, _response: ToolResponse) -> Result<()> {
+            self.counts.tool_response.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        async fn send_tool_output(&self, _response: ToolResponse) -> Result<()> {
+            self.counts.tool_output.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        async fn commit_audio(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn clear_audio(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn create_response(&self) -> Result<()> {
+            self.counts.create_response.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        async fn interrupt(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn send_event(&self, _event: ClientEvent) -> Result<()> {
+            Ok(())
+        }
+        async fn next_event(&self) -> Option<Result<ServerEvent>> {
+            let event = self.events.lock().pop_front();
+            event.map(Ok)
+        }
+        fn events(&self) -> Pin<Box<dyn futures::Stream<Item = Result<ServerEvent>> + Send + '_>> {
+            Box::pin(futures::stream::empty())
+        }
+        async fn close(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn mutate_context(&self, _config: RealtimeConfig) -> Result<ContextMutationOutcome> {
+            Ok(ContextMutationOutcome::Applied)
+        }
+    }
+
+    /// A tool that reports how many copies of itself run at once.
+    struct ConcurrencyProbe {
+        in_flight: Arc<AtomicUsize>,
+        peak: Arc<AtomicUsize>,
+        barrier: Option<Arc<tokio::sync::Barrier>>,
+    }
+
+    #[async_trait]
+    impl ToolHandler for ConcurrencyProbe {
+        async fn execute(&self, _call: &ToolCall) -> Result<serde_json::Value> {
+            let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(now, Ordering::SeqCst);
+
+            match &self.barrier {
+                // Every participant must be running for this to return, so it can only
+                // complete if the dispatcher truly overlaps them.
+                Some(barrier) => {
+                    barrier.wait().await;
+                }
+                None => {
+                    tokio::task::yield_now().await;
+                }
+            }
+
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(serde_json::json!({ "ok": true }))
+        }
+    }
+
+    fn audio_delta() -> ServerEvent {
+        ServerEvent::AudioDelta {
+            event_id: "evt".into(),
+            response_id: "resp".into(),
+            item_id: "item".into(),
+            output_index: 0,
+            content_index: 0,
+            delta: vec![1, 2, 3],
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_calls_overlap_up_to_the_configured_bound() {
+        let counts = Arc::new(Counts::default());
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        // Only satisfiable if all three run at once, which serial dispatch cannot do.
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+
+        let probe = || ConcurrencyProbe {
+            in_flight: Arc::clone(&in_flight),
+            peak: Arc::clone(&peak),
+            barrier: Some(Arc::clone(&barrier)),
+        };
+
+        let runner = RealtimeRunner::builder()
+            .model(Arc::new(MockModel) as BoxedModel)
+            .runner_config(RunnerConfig {
+                auto_execute_tools: true,
+                auto_respond_tools: true,
+                max_concurrent_tools: 3,
+            })
+            .tool(tool_def("a"), probe())
+            .tool(tool_def("b"), probe())
+            .tool(tool_def("c"), probe())
+            .build()
+            .unwrap();
+
+        let scripted = Arc::new(ScriptedSession::new(
+            Arc::clone(&counts),
+            vec![function_call("c1", "a"), function_call("c2", "b"), function_call("c3", "c")],
+        ));
+        *runner.session.write().await = Some(scripted as Arc<dyn RealtimeSession>);
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), runner.run())
+            .await
+            .expect("serial dispatch cannot satisfy a three-way barrier")
+            .unwrap();
+
+        assert_eq!(peak.load(Ordering::SeqCst), 3, "all three tools must overlap");
+        assert_eq!(counts.tool_output.load(Ordering::SeqCst), 3, "every output is sent");
+    }
+
+    #[tokio::test]
+    async fn the_bound_caps_how_many_tools_overlap() {
+        let counts = Arc::new(Counts::default());
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+
+        let probe = || ConcurrencyProbe {
+            in_flight: Arc::clone(&in_flight),
+            peak: Arc::clone(&peak),
+            barrier: None,
+        };
+
+        let runner = RealtimeRunner::builder()
+            .model(Arc::new(MockModel) as BoxedModel)
+            .runner_config(RunnerConfig {
+                auto_execute_tools: true,
+                auto_respond_tools: true,
+                max_concurrent_tools: 2,
+            })
+            .tool(tool_def("a"), probe())
+            .tool(tool_def("b"), probe())
+            .tool(tool_def("c"), probe())
+            .tool(tool_def("d"), probe())
+            .build()
+            .unwrap();
+
+        let scripted = Arc::new(ScriptedSession::new(
+            Arc::clone(&counts),
+            vec![
+                function_call("c1", "a"),
+                function_call("c2", "b"),
+                function_call("c3", "c"),
+                function_call("c4", "d"),
+            ],
+        ));
+        *runner.session.write().await = Some(scripted as Arc<dyn RealtimeSession>);
+
+        runner.run().await.unwrap();
+
+        assert!(
+            peak.load(Ordering::SeqCst) <= 2,
+            "the bound was exceeded: peak {}",
+            peak.load(Ordering::SeqCst)
+        );
+        assert_eq!(counts.tool_output.load(Ordering::SeqCst), 4, "all four still complete");
+    }
+
+    /// A tool that blocks until an audio event has been handled.
+    struct WaitsForAudio {
+        audio_seen: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl ToolHandler for WaitsForAudio {
+        async fn execute(&self, _call: &ToolCall) -> Result<serde_json::Value> {
+            self.audio_seen.notified().await;
+            Ok(serde_json::json!({ "ok": true }))
+        }
+    }
+
+    /// Signals the tool once audio is delivered.
+    struct AudioSignaller {
+        audio_seen: Arc<tokio::sync::Notify>,
+        audio_events: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl EventHandler for AudioSignaller {
+        async fn on_audio(&self, _audio: &[u8], _item_id: &str) -> Result<()> {
+            self.audio_events.fetch_add(1, Ordering::SeqCst);
+            self.audio_seen.notify_waiters();
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn audio_keeps_flowing_while_a_tool_runs() {
+        let counts = Arc::new(Counts::default());
+        let audio_seen = Arc::new(tokio::sync::Notify::new());
+        let audio_events = Arc::new(AtomicUsize::new(0));
+
+        let runner = RealtimeRunner::builder()
+            .model(Arc::new(MockModel) as BoxedModel)
+            .tool(tool_def("slow"), WaitsForAudio { audio_seen: Arc::clone(&audio_seen) })
+            .event_handler(AudioSignaller {
+                audio_seen: Arc::clone(&audio_seen),
+                audio_events: Arc::clone(&audio_events),
+            })
+            .build()
+            .unwrap();
+
+        // The tool can only finish once the audio delta *after* it has been handled, so
+        // this sequence completes only if event intake continues during tool execution.
+        let scripted = Arc::new(ScriptedSession::new(
+            Arc::clone(&counts),
+            vec![function_call("c1", "slow"), audio_delta(), response_done()],
+        ));
+        *runner.session.write().await = Some(scripted as Arc<dyn RealtimeSession>);
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), runner.run())
+            .await
+            .expect("a tool awaiting a later event deadlocks when dispatch blocks intake")
+            .unwrap();
+
+        assert_eq!(audio_events.load(Ordering::SeqCst), 1, "the audio delta was handled");
+        assert_eq!(counts.tool_output.load(Ordering::SeqCst), 1, "the tool still reported output");
+    }
+
+    #[tokio::test]
+    async fn the_follow_up_response_waits_for_tools_that_outlive_the_response() {
+        let counts = Arc::new(Counts::default());
+        let audio_seen = Arc::new(tokio::sync::Notify::new());
+        let audio_events = Arc::new(AtomicUsize::new(0));
+
+        let runner = RealtimeRunner::builder()
+            .model(Arc::new(MockModel) as BoxedModel)
+            .tool(tool_def("slow"), WaitsForAudio { audio_seen: Arc::clone(&audio_seen) })
+            .event_handler(AudioSignaller {
+                audio_seen: Arc::clone(&audio_seen),
+                audio_events: Arc::clone(&audio_events),
+            })
+            .build()
+            .unwrap();
+
+        // `ResponseDone` arrives while the tool is still running — impossible before
+        // dispatch was concurrent, and the case that would silently drop the follow-up
+        // response, since `pending_tool_response` is only set once output is sent.
+        let scripted = Arc::new(ScriptedSession::new(
+            Arc::clone(&counts),
+            vec![function_call("c1", "slow"), response_done(), audio_delta()],
+        ));
+        *runner.session.write().await = Some(scripted as Arc<dyn RealtimeSession>);
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), runner.run())
+            .await
+            .expect("run must finish")
+            .unwrap();
+
+        assert_eq!(counts.tool_output.load(Ordering::SeqCst), 1, "the output was sent");
+        assert_eq!(
+            counts.create_response.load(Ordering::SeqCst),
+            1,
+            "exactly one follow-up response, issued after the last tool finished"
+        );
+    }
+
+    /// Records terminal disconnects.
+    #[derive(Default)]
+    struct DisconnectWatcher {
+        disconnects: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl EventHandler for DisconnectWatcher {
+        async fn on_disconnect(&self) -> Result<()> {
+            self.disconnects.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_terminal_disconnect_is_surfaced_once() {
+        let counts = Arc::new(Counts::default());
+        let disconnects = Arc::new(AtomicUsize::new(0));
+
+        let runner = RealtimeRunner::builder()
+            .model(Arc::new(MockModel) as BoxedModel)
+            .event_handler(DisconnectWatcher { disconnects: Arc::clone(&disconnects) })
+            .build()
+            .unwrap();
+
+        let scripted = Arc::new(ScriptedSession::new(Arc::clone(&counts), vec![response_done()]));
+        *runner.session.write().await = Some(scripted as Arc<dyn RealtimeSession>);
+
+        // `run` returns `Ok(())` on transport loss, which on its own is indistinguishable
+        // from a graceful `close`.
+        runner.run().await.unwrap();
+
+        assert_eq!(
+            disconnects.load(Ordering::SeqCst),
+            1,
+            "transport loss must be reported exactly once"
+        );
     }
 }

@@ -91,6 +91,11 @@ pub struct IntegrationConfig {
     pub inject_memory_context: bool,
     /// Maximum memory entries to inject into system instruction.
     pub max_memory_injection: usize,
+    /// Maximum prior conversation turns carried into the provider session.
+    ///
+    /// Bounded because the instruction is sent at session creation and counts against the
+    /// model's context. Zero disables history injection while leaving memory injection alone.
+    pub max_history_injection: usize,
 }
 
 impl Default for IntegrationConfig {
@@ -100,6 +105,7 @@ impl Default for IntegrationConfig {
             store_to_memory: true,
             inject_memory_context: true,
             max_memory_injection: 10,
+            max_history_injection: 20,
         }
     }
 }
@@ -110,6 +116,7 @@ use std::sync::Arc;
 
 use std::collections::HashMap;
 
+use adk_core::Content;
 use adk_memory::MemoryService;
 use adk_plugin::EnhancedPluginManager;
 use adk_session::SessionService;
@@ -167,6 +174,42 @@ pub struct IntegratedRealtimeRunner {
     pub(crate) adk_tools: HashMap<String, Arc<dyn adk_core::Tool>>,
 }
 
+/// Renders the most recent `limit` turns as bounded `role: text` lines.
+///
+/// The instruction is sent once at session creation and counts against the model's context, so
+/// this keeps the newest turns, drops anything without text, and truncates long turns rather
+/// than carrying a transcript of unbounded size.
+fn summarize_turns(turns: &[Content], limit: usize) -> Vec<String> {
+    /// Longest rendered form of a single turn.
+    const MAX_TURN_CHARS: usize = 400;
+
+    if limit == 0 {
+        return Vec::new();
+    }
+
+    turns
+        .iter()
+        .rev()
+        .take(limit)
+        .filter_map(|turn| {
+            let text: String = turn.parts.iter().filter_map(|part| part.text()).collect();
+            if text.trim().is_empty() {
+                return None;
+            }
+
+            let mut end = text.len().min(MAX_TURN_CHARS);
+            while end < text.len() && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            let rendered = if end < text.len() { format!("{}…", &text[..end]) } else { text };
+            Some(format!("{}: {rendered}", turn.role))
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
 impl IntegratedRealtimeRunner {
     /// Creates a new [`IntegratedRealtimeRunnerBuilder`].
     pub fn builder() -> builder::IntegratedRealtimeRunnerBuilder {
@@ -198,7 +241,14 @@ impl IntegratedRealtimeRunner {
     /// runner.connect().await?;
     /// ```
     pub async fn connect(&self) -> Result<()> {
-        // 1. Load session history if session_service is configured
+        // Context is collected first, then injected into the provider config as one block.
+        // Previously the session was fetched into `_session` and dropped, and the memory
+        // branch logged "injecting memory entries" next to a comment saying injection was a
+        // future enhancement — so a resumed session began with neither, while the log said
+        // otherwise.
+        let mut context_sections: Vec<String> = Vec::new();
+
+        // 1. Prior conversation history.
         if let Some(ref session_service) = self.session_service {
             let get_req = adk_session::GetRequest {
                 app_name: self.identity.app_name.clone(),
@@ -208,11 +258,24 @@ impl IntegratedRealtimeRunner {
                 after: None,
             };
             match session_service.get(get_req).await {
-                Ok(_session) => {
+                Ok(session) => {
+                    let history: Vec<Content> = session
+                        .events()
+                        .all()
+                        .into_iter()
+                        .filter_map(|event| event.llm_response.content)
+                        .collect();
+                    let carried = summarize_turns(&history, self.config.max_history_injection);
                     tracing::debug!(
                         session_id = %self.identity.session_id,
+                        turns.available = history.len(),
+                        turns.carried = carried.len(),
                         "loaded prior session history"
                     );
+                    if !carried.is_empty() {
+                        context_sections
+                            .push(format!("Earlier in this conversation:\n{}", carried.join("\n")));
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -224,7 +287,7 @@ impl IntegratedRealtimeRunner {
             }
         }
 
-        // 2. Query MemoryService at session start if inject_memory_context is enabled
+        // 2. Recalled memory.
         if self.config.inject_memory_context
             && let Some(ref memory_service) = self.memory_service
         {
@@ -240,14 +303,21 @@ impl IntegratedRealtimeRunner {
                 .await
             {
                 Ok(response) => {
-                    if !response.memories.is_empty() {
-                        tracing::debug!(
-                            count = response.memories.len(),
-                            "injecting memory entries into session context"
-                        );
-                        // Memory entries are available for system instruction enrichment.
-                        // Actual injection into the system instruction happens via
-                        // update_session in a future enhancement.
+                    let recalled = summarize_turns(
+                        &response
+                            .memories
+                            .iter()
+                            .map(|entry| entry.content.clone())
+                            .collect::<Vec<Content>>(),
+                        self.config.max_memory_injection,
+                    );
+                    tracing::debug!(
+                        count = recalled.len(),
+                        "carrying memory entries into the session instruction"
+                    );
+                    if !recalled.is_empty() {
+                        context_sections
+                            .push(format!("Relevant recalled context:\n{}", recalled.join("\n")));
                     }
                 }
                 Err(e) => {
@@ -257,6 +327,10 @@ impl IntegratedRealtimeRunner {
                     );
                 }
             }
+        }
+
+        if !context_sections.is_empty() {
+            self.runner.prepend_instruction_context(&context_sections.join("\n\n")).await;
         }
 
         // 3. Connect the underlying runner — this is the only error that propagates
@@ -335,6 +409,14 @@ impl IntegratedRealtimeRunner {
     /// );
     /// runner.update_session(update).await?;
     /// ```
+    /// The system instruction the provider session was created with.
+    ///
+    /// Includes any prior-history and recalled-memory context carried in by
+    /// [`IntegratedRealtimeRunner::connect`].
+    pub async fn instruction(&self) -> Option<String> {
+        self.runner.instruction().await
+    }
+
     pub async fn update_session(&self, config: SessionUpdateConfig) -> Result<()> {
         self.runner.update_session(config).await
     }
@@ -753,6 +835,7 @@ mod session_persistence_tests {
                 persist_transcripts: true,
                 store_to_memory: false,
                 inject_memory_context: false,
+                max_history_injection: 20,
                 max_memory_injection: 0,
             })
             .build()
@@ -1234,6 +1317,7 @@ mod session_persistence_tests {
                 persist_transcripts: true,
                 store_to_memory: false,
                 inject_memory_context: false,
+                max_history_injection: 20,
                 max_memory_injection: 0,
             },
             adk_tools: HashMap::new(),
@@ -1524,6 +1608,7 @@ mod graceful_degradation_tests {
                         store_to_memory: true,
                         inject_memory_context: true,
                         max_memory_injection: 10,
+                        max_history_injection: 20,
                     },
                     adk_tools: HashMap::new(),
                 };
@@ -1574,6 +1659,7 @@ mod graceful_degradation_tests {
                 persist_transcripts: true,
                 store_to_memory: false,
                 inject_memory_context: false,
+                max_history_injection: 20,
                 max_memory_injection: 0,
             },
             adk_tools: HashMap::new(),
