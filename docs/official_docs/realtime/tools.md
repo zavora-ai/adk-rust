@@ -134,3 +134,31 @@ example is a headless probe that exercises single-tool, parallel-tool, and
 calculator turns on both providers.
 
 Next: [Multimodal →](multimodal.md)
+
+## Which tools are governed
+
+`IntegratedRealtimeRunner` routes tool calls by how the tool was registered:
+
+| Registered as | Dispatch | Policy applied |
+|---------------|----------|----------------|
+| `adk_tool(...)` — an ADK `Tool` | The integration policy pipeline | Configured plugins, transcript recording, tool-event persistence |
+| A native realtime handler | `RealtimeRunner` dispatch | None — the handler is trusted by construction |
+
+An ADK tool previously reached the provider through a `ToolBridgeAdapter`, which creates a
+context and calls `Tool::execute` with no plugins, callbacks, or confirmation. A tool governed
+in the standard agent loop therefore ran ungoverned in realtime. The native-handler bypass is
+now the explicit exception rather than the default for everything.
+
+### Plugin failures fail closed
+
+If the `before_tool_call` pipeline returns an error, the tool is **refused**:
+
+```json
+{ "error": "tool guarded was refused: its before-tool plugin pipeline failed (...). Execution is refused rather than proceeding without policy." }
+```
+
+> **Important:** this path previously logged the plugin error as non-fatal and then executed
+> the tool. Authorization, redaction, and policy live in before-tool plugins, so a broken guard
+> became no guard.
+
+After-tool plugin errors leave the tool's own result in place, since the tool has already run.

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-realtime: integrated ADK tools run through the policy pipeline, and plugin failures
+  fail closed.** The live `next_event` path called `RealtimeRunner::dispatch_tool_call`, which
+  invokes the `ToolBridgeAdapter` directly — the adapter builds a context and calls
+  `Tool::execute` with no plugin pipeline, no callbacks, and no confirmation. A tool controlled
+  in the standard agent loop therefore ran uncontrolled in realtime, and the richer
+  `execute_tool_with_plugins` was unreachable from the live path. ADK tools are now dispatched
+  through it; a name that is not a registered ADK tool falls through to native-handler dispatch,
+  making that bypass explicit rather than universal. The `before_tool_call` error branch also
+  logged "non-fatal" and then executed the tool anyway — authorization, redaction, and policy
+  live in before-tool plugins, so a broken guard became no guard. It now refuses the tool and
+  returns the failure to the model.
+
 - **adk-core/adk-auth: secret access from tools is authorizable and audited.**
   `SecretService` and `SecretProvider` received only a secret *name*. Once a provider
   was attached to an invocation, policy collapsed to whatever the backing cloud

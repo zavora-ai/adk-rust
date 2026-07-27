@@ -108,6 +108,8 @@ impl Default for IntegrationConfig {
 
 use std::sync::Arc;
 
+use std::collections::HashMap;
+
 use adk_memory::MemoryService;
 use adk_plugin::EnhancedPluginManager;
 use adk_session::SessionService;
@@ -157,6 +159,12 @@ pub struct IntegratedRealtimeRunner {
     pub(crate) identity: SessionIdentity,
     /// Integration-layer configuration.
     pub(crate) config: IntegrationConfig,
+    /// The ADK tools by name, so the live path can run them through the policy pipeline.
+    ///
+    /// The builder wrapped each one in a `ToolBridgeAdapter` for the inner runner and then
+    /// dropped the originals, which is why the active path could only reach the adapter — and
+    /// the adapter applies no confirmation, callbacks, or plugins.
+    pub(crate) adk_tools: HashMap<String, Arc<dyn adk_core::Tool>>,
 }
 
 impl IntegratedRealtimeRunner {
@@ -379,7 +387,7 @@ impl IntegratedRealtimeRunner {
             // bridged ADK tools and native handlers registered on the builder run,
             // and (with `auto_respond_tools`) the result is sent back to the model.
             if let ServerEvent::FunctionCallDone { call_id, name, arguments, .. } = server_event
-                && let Err(e) = self.runner.dispatch_tool_call(call_id, name, arguments).await
+                && let Err(e) = self.dispatch_with_policy(call_id, name, arguments).await
             {
                 tracing::warn!(
                     tool = %name,
@@ -510,6 +518,50 @@ impl IntegratedRealtimeRunner {
     /// are non-fatal: logged and swallowed, with execution falling through to
     /// direct tool invocation.
     #[allow(dead_code)] // Will be wired in event loop handling
+    /// Dispatches one provider tool call, preferring the policy pipeline.
+    ///
+    /// An ADK tool registered on this builder runs through `execute_tool_with_plugins`, which
+    /// applies the configured plugin pipeline, records the call for the transcript, and
+    /// persists the tool event. Previously the live path called
+    /// `RealtimeRunner::dispatch_tool_call`, which invokes the `ToolBridgeAdapter` directly —
+    /// the adapter creates a context and calls `Tool::execute` with no plugins, callbacks, or
+    /// confirmation, so a tool governed in the standard agent loop ran ungoverned here.
+    ///
+    /// A name that is not a registered ADK tool is a native handler, and falls through to the
+    /// runner's own dispatch. That bypass is now explicit rather than the default.
+    async fn dispatch_with_policy(&self, call_id: &str, name: &str, arguments: &str) -> Result<()> {
+        let Some(tool) = self.adk_tools.get(name).cloned() else {
+            tracing::debug!(
+                tool = %name,
+                "no ADK tool by this name; dispatching as a native handler"
+            );
+            return self.runner.dispatch_tool_call(call_id, name, arguments).await;
+        };
+
+        let call = crate::events::ToolCall {
+            call_id: call_id.to_string(),
+            name: name.to_string(),
+            arguments: serde_json::from_str(arguments)
+                .unwrap_or(serde_json::Value::Object(Default::default())),
+        };
+
+        let result = self.execute_tool_with_plugins(&tool, &call).await?;
+        self.runner.send_tool_result(call_id, result).await
+    }
+
+    /// Runs one tool through the policy pipeline, for conformance tests.
+    ///
+    /// Exposed so the governed path can be asserted directly rather than only through a live
+    /// provider session, which is why this defect had no coverage.
+    #[doc(hidden)]
+    pub async fn execute_tool_with_plugins_for_test(
+        &self,
+        tool: &Arc<dyn adk_core::Tool>,
+        call: &crate::events::ToolCall,
+    ) -> Result<Value> {
+        self.execute_tool_with_plugins(tool, call).await
+    }
+
     pub(crate) async fn execute_tool_with_plugins(
         &self,
         tool: &Arc<dyn adk_core::Tool>,
@@ -556,11 +608,21 @@ impl IntegratedRealtimeRunner {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "before_tool_call plugin error (non-fatal)");
-                    // Fallback: execute tool directly
-                    tool.execute(ctx as Arc<dyn adk_core::ToolContext>, call.arguments.clone())
-                        .await
-                        .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+                    // Fail closed. A before-tool plugin is where authorization, redaction, and
+                    // policy live, so executing the tool when that pipeline fails turns a
+                    // broken guard into no guard. The model receives the error instead.
+                    tracing::error!(
+                        tool = tool.name(),
+                        error = %e,
+                        "before_tool_call plugin failed; refusing the tool"
+                    );
+                    serde_json::json!({
+                        "error": format!(
+                            "tool {} was refused: its before-tool plugin pipeline failed ({e}). \
+                             Execution is refused rather than proceeding without policy.",
+                            tool.name()
+                        )
+                    })
                 }
             }
         } else {
@@ -1034,6 +1096,7 @@ mod session_persistence_tests {
                 session_id: "test-session".to_string(),
             },
             config: IntegrationConfig::default(),
+            adk_tools: HashMap::new(),
         }
     }
 
@@ -1173,6 +1236,7 @@ mod session_persistence_tests {
                 inject_memory_context: false,
                 max_memory_injection: 0,
             },
+            adk_tools: HashMap::new(),
         };
 
         // 5. Start a turn in the aggregator so record_tool_call has somewhere to attach
@@ -1461,6 +1525,7 @@ mod graceful_degradation_tests {
                         inject_memory_context: true,
                         max_memory_injection: 10,
                     },
+                    adk_tools: HashMap::new(),
                 };
 
                 // Process events through the aggregator — this is the path that
@@ -1511,6 +1576,7 @@ mod graceful_degradation_tests {
                 inject_memory_context: false,
                 max_memory_injection: 0,
             },
+            adk_tools: HashMap::new(),
         };
 
         // Process a UserUtteranceComplete event — should not panic even

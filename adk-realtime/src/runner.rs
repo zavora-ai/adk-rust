@@ -722,6 +722,31 @@ impl RealtimeRunner {
         self.execute_tool_call(call_id, name, arguments).await
     }
 
+    /// Sends a tool result the caller produced, honouring `auto_respond_tools`.
+    ///
+    /// Used by the integration layer, which runs ADK tools through its own policy pipeline and
+    /// then needs the result delivered exactly as `execute_tool_call` would deliver it: the
+    /// output is sent now, and the single follow-up `create_response` is deferred until the
+    /// dispatching response closes, so several parallel calls produce one response.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = my_policy_pipeline.run(&call).await?;
+    /// runner.send_tool_result(&call.call_id, result).await?;
+    /// ```
+    pub async fn send_tool_result(&self, call_id: &str, output: serde_json::Value) -> Result<()> {
+        if !self.runner_config.auto_respond_tools {
+            return Ok(());
+        }
+
+        if let Ok(session) = self.session_handle().await {
+            session.send_tool_output(ToolResponse { call_id: call_id.to_string(), output }).await?;
+            self.pending_tool_response.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+
     /// Run the event loop, processing events until disconnected.
     pub async fn run(&self) -> Result<()> {
         loop {
