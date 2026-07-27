@@ -924,6 +924,38 @@ impl RealtimeRunner {
         Ok(())
     }
 
+    /// The system instruction the next connection will use.
+    ///
+    /// Exposed so callers and tests can confirm what context a session was actually created
+    /// with, rather than inferring it from log lines.
+    pub async fn instruction(&self) -> Option<String> {
+        self.config.read().await.instruction.clone()
+    }
+
+    /// Prepends a context block to the system instruction before connecting.
+    ///
+    /// The integration layer uses this to carry prior conversation history and recalled memory
+    /// into the provider session. Call it before [`RealtimeRunner::connect`]: providers read
+    /// the instruction at session creation, so a later change needs `update_session`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// runner.prepend_instruction_context("Previously discussed: the refund policy.").await;
+    /// runner.connect().await?;
+    /// ```
+    pub async fn prepend_instruction_context(&self, block: &str) {
+        if block.is_empty() {
+            return;
+        }
+
+        let mut config = self.config.write().await;
+        config.instruction = Some(match config.instruction.take() {
+            Some(existing) if !existing.is_empty() => format!("{block}\n\n{existing}"),
+            _ => block.to_string(),
+        });
+    }
+
     /// Trigger the single follow-up response owed after a tool-dispatching turn.
     ///
     /// Call this when a response finishes (`ResponseDone`). If tool output(s)
