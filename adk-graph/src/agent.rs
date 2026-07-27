@@ -131,8 +131,10 @@ impl Agent for GraphAgent {
         // Map context to input state
         let input = (self.input_mapper)(ctx.as_ref());
 
-        // Create execution config from context
-        let config = ExecutionConfig::new(ctx.session_id());
+        // Create execution config from context, carrying the invocation so an
+        // `AgentNode` inside the graph presents this run's identity, services, and
+        // cancellation rather than a synthetic standalone context.
+        let config = ExecutionConfig::new(ctx.session_id()).with_parent_context(ctx.clone());
 
         // Execute graph
         let graph = self.graph.clone();

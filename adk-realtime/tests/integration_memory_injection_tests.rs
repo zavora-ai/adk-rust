@@ -129,6 +129,7 @@ async fn test_memory_injection_enabled_queries_memory_on_connect() {
             store_to_memory: false,
             inject_memory_context: true,
             max_memory_injection: 10,
+            max_history_injection: 20,
         })
         .build()
         .expect("builder should succeed");
@@ -165,6 +166,7 @@ async fn test_memory_injection_disabled_does_not_query_memory_on_connect() {
             store_to_memory: false,
             inject_memory_context: false,
             max_memory_injection: 10,
+            max_history_injection: 20,
         })
         .build()
         .expect("builder should succeed");
@@ -189,6 +191,7 @@ async fn test_memory_injection_with_no_memory_service_configured() {
             store_to_memory: false,
             inject_memory_context: true,
             max_memory_injection: 10,
+            max_history_injection: 20,
         })
         .build()
         .expect("builder should succeed");
@@ -197,4 +200,120 @@ async fn test_memory_injection_with_no_memory_service_configured() {
 
     // Should fail from the mock transport, not from missing memory service.
     assert!(result.is_err(), "connect should fail due to mock transport");
+}
+
+// ─── Injection, not just retrieval ───────────────────────────────────────────
+//
+// `connect` fetched the prior session into `_session` and dropped it, and logged "injecting
+// memory entries into session context" next to a comment saying injection was a future
+// enhancement. A resumed session therefore began with neither history nor memory while the
+// logs said otherwise, and the tests above only proved the *query* happened.
+
+#[tokio::test]
+async fn recalled_memory_reaches_the_system_instruction() {
+    let entries = vec![MemoryEntry {
+        content: Content::new("model").with_text("User prefers concise answers"),
+        author: "assistant".to_string(),
+        timestamp: Utc::now(),
+    }];
+    let memory_service = Arc::new(TrackingMemoryService::new(entries));
+
+    let runner = IntegratedRealtimeRunnerBuilder::new()
+        .model(mock_model())
+        .identity("test-app", "user-1", "session-1")
+        .memory_service(memory_service.clone())
+        .integration_config(IntegrationConfig {
+            persist_transcripts: false,
+            store_to_memory: false,
+            inject_memory_context: true,
+            max_memory_injection: 10,
+            max_history_injection: 20,
+        })
+        .build()
+        .expect("builder should succeed");
+
+    // The transport fails, but injection happens before the connection attempt, so the
+    // instruction the session *would* have been created with is observable.
+    let _ = runner.connect().await;
+
+    let instruction = runner.instruction().await.unwrap_or_default();
+    assert!(
+        instruction.contains("User prefers concise answers"),
+        "recalled memory must reach the provider instruction, not just the logs: {instruction:?}"
+    );
+    assert!(
+        instruction.contains("Relevant recalled context"),
+        "the carried block must be labelled so the model can tell it from the task: {instruction:?}"
+    );
+}
+
+#[tokio::test]
+async fn nothing_is_injected_when_memory_injection_is_disabled() {
+    let entries = vec![MemoryEntry {
+        content: Content::new("model").with_text("User prefers concise answers"),
+        author: "assistant".to_string(),
+        timestamp: Utc::now(),
+    }];
+    let memory_service = Arc::new(TrackingMemoryService::new(entries));
+
+    let runner = IntegratedRealtimeRunnerBuilder::new()
+        .model(mock_model())
+        .identity("test-app", "user-1", "session-1")
+        .memory_service(memory_service.clone())
+        .integration_config(IntegrationConfig {
+            persist_transcripts: false,
+            store_to_memory: false,
+            inject_memory_context: false,
+            max_memory_injection: 10,
+            max_history_injection: 20,
+        })
+        .build()
+        .expect("builder should succeed");
+
+    let _ = runner.connect().await;
+
+    let instruction = runner.instruction().await.unwrap_or_default();
+    assert!(
+        !instruction.contains("User prefers concise answers"),
+        "the opt-out must be respected: {instruction:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_injection_bound_is_respected() {
+    // More entries than the bound allows; the instruction must carry at most the bound.
+    let entries: Vec<MemoryEntry> = (0..10)
+        .map(|index| MemoryEntry {
+            content: Content::new("model").with_text(format!("fact number {index}")),
+            author: "assistant".to_string(),
+            timestamp: Utc::now(),
+        })
+        .collect();
+    let memory_service = Arc::new(TrackingMemoryService::new(entries));
+
+    let runner = IntegratedRealtimeRunnerBuilder::new()
+        .model(mock_model())
+        .identity("test-app", "user-1", "session-1")
+        .memory_service(memory_service.clone())
+        .integration_config(IntegrationConfig {
+            persist_transcripts: false,
+            store_to_memory: false,
+            inject_memory_context: true,
+            max_memory_injection: 3,
+            max_history_injection: 20,
+        })
+        .build()
+        .expect("builder should succeed");
+
+    let _ = runner.connect().await;
+
+    let instruction = runner.instruction().await.unwrap_or_default();
+    let carried =
+        (0..10).filter(|index| instruction.contains(&format!("fact number {index}"))).count();
+    assert!(
+        carried <= 3,
+        "the instruction is sent once and counts against context, so the bound must hold: \
+         carried {carried}"
+    );
+    assert!(carried > 0, "something must be carried: {instruction:?}");
 }
