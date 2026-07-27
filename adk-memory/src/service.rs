@@ -107,8 +107,23 @@ pub trait MemoryService: Send + Sync {
         Ok(())
     }
 
-    /// Add session entries scoped to a project.
-    /// Default delegates to `add_session` (global).
+    /// Whether this backend keeps project-scoped entries isolated.
+    ///
+    /// Returns `false` by default. A backend that implements the project methods
+    /// below overrides this to `true`, so a caller can tell isolation apart from a
+    /// backend that has no project support rather than discovering it from data.
+    fn supports_project_scoping(&self) -> bool {
+        false
+    }
+
+    /// Adds session entries scoped to a project.
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns an error. Discarding `project_id` and
+    /// writing globally would make entries intended for one project visible to
+    /// everything else under the same app and user, with nothing in the return value
+    /// to say so, so a backend without project support refuses the write instead.
     async fn add_session_to_project(
         &self,
         app_name: &str,
@@ -117,12 +132,16 @@ pub trait MemoryService: Send + Sync {
         project_id: &str,
         entries: Vec<MemoryEntry>,
     ) -> Result<()> {
-        let _ = project_id;
-        self.add_session(app_name, user_id, session_id, entries).await
+        let _ = (app_name, user_id, session_id, project_id, entries);
+        Err(project_scoping_unsupported("add_session_to_project"))
     }
 
-    /// Add a single entry scoped to a project.
-    /// Default delegates to `add_entry` (global).
+    /// Adds a single entry scoped to a project.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error by default, for the reason given on
+    /// [`MemoryService::add_session_to_project`].
     async fn add_entry_to_project(
         &self,
         app_name: &str,
@@ -130,12 +149,16 @@ pub trait MemoryService: Send + Sync {
         project_id: &str,
         entry: MemoryEntry,
     ) -> Result<()> {
-        let _ = project_id;
-        self.add_entry(app_name, user_id, entry).await
+        let _ = (app_name, user_id, project_id, entry);
+        Err(project_scoping_unsupported("add_entry_to_project"))
     }
 
-    /// Delete entries matching a query within a specific project.
-    /// Default delegates to `delete_entries` (global).
+    /// Deletes entries matching a query within a specific project.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error by default. Falling back to a global delete would remove
+    /// entries outside the named project, which is worse than refusing.
     async fn delete_entries_in_project(
         &self,
         app_name: &str,
@@ -143,8 +166,8 @@ pub trait MemoryService: Send + Sync {
         project_id: &str,
         query: &str,
     ) -> Result<u64> {
-        let _ = project_id;
-        self.delete_entries(app_name, user_id, query).await
+        let _ = (app_name, user_id, project_id, query);
+        Err(project_scoping_unsupported("delete_entries_in_project"))
     }
 
     /// Delete all entries for a specific project.
@@ -153,4 +176,13 @@ pub trait MemoryService: Send + Sync {
         let _ = (app_name, user_id, project_id);
         Err(adk_core::AdkError::memory("delete_project not implemented"))
     }
+}
+
+/// The error a backend without project support returns from a project method.
+fn project_scoping_unsupported(method: &str) -> adk_core::AdkError {
+    adk_core::AdkError::memory(format!(
+        "this memory backend does not implement project scoping, so `{method}` cannot honour \
+         the project boundary; use a backend whose `supports_project_scoping` returns true, or \
+         call the global method explicitly if global scope is intended"
+    ))
 }

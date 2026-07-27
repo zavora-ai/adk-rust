@@ -9,6 +9,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-core/adk-memory: project-scoped memory no longer falls back to global
+  scope.** `add_session_to_project`, `add_entry_to_project`, and
+  `delete_entries_in_project` had default implementations that discarded `project_id`
+  and called their global equivalents, and `Memory::search_in_project` and
+  `Memory::add_to_project` did the same. A backend therefore compiled as
+  project-aware without implementing a single project method: the call succeeded
+  while operating in global scope, and neither the type system nor the return value
+  said so. Data intended for one project became visible to everything under the same
+  app and user, and a project-scoped delete removed entries outside the project.
+
+  Those defaults now return an error naming the method and the reason. Six built-in
+  backends (in-memory, SQLite, PostgreSQL, Redis, MongoDB, Neo4j) implement all four
+  project methods and now advertise `supports_project_scoping() == true`.
+  `GraphMemoryService` implements none of them and therefore refuses project calls it
+  previously answered in global scope — the behaviour change is the fix.
+  `MemoryServiceAdapter` reports the capability of the backend it wraps.
+- **adk-devtools: workspace containment was bypassable through symlinks.**
+  `Workspace::resolve` normalized a requested path lexically and checked
+  `starts_with(root)`. A symlink sitting lexically under the root satisfies that
+  check while pointing anywhere on the host, and ordinary file I/O follows it, so
+  `read_file`, `write_file`, and `edit_file` could reach host files outside the
+  advertised workspace. A symlinked parent directory redirected creation and writes
+  the same way. The existing containment test covered `..` traversal only.
+
+  Containment is now enforced against the resolved path: the deepest existing
+  ancestor of the target is canonicalized, resolving every link along the way, and
+  the result must still be inside the root. That covers both a symlinked final
+  component and a symlinked parent directory, including creation of a file that does
+  not exist yet under a redirected directory. A symlink whose target stays inside the
+  workspace keeps working, because repositories legitimately contain internal links
+  and refusing them would break ordinary work without improving containment.
+
+  This is a check, not a lock. A symlink planted between the check and the
+  subsequent open would still be followed; closing that window needs
+  descriptor-relative traversal with platform no-follow semantics, which the
+  documentation now states plainly.
+- **adk-server: UI routes bypassed configured authentication.** The session,
+  artifact, and debug routers received the authentication layer; `ui_api_router` was
+  merged without it. With an extractor configured, an unauthenticated caller could
+  create and mutate MCP-UI bridge state under any chosen `(app_name, user_id,
+  session_id)` tuple, poll another user's notifications, and list, read, or overwrite
+  globally registered UI resources — including replacing the HTML text of an existing
+  resource URI.
+
+  All `/api/ui/*` routes now carry the same authentication layer as the other
+  routers. Bridge handlers substitute the authenticated user for the user named in
+  the request body, so one authenticated caller can no longer address another's
+  bridge state. A registered UI resource records the user that registered it; only
+  that user may read or replace it, and a read of another user's resource answers 404
+  rather than disclosing that the URI exists.
+
+  Servers with no extractor configured are unchanged: there is no authenticated
+  identity to bind, so routes stay open and resources stay globally visible.
+
 - **Dependency advisories resolved.** Bumped `surrealdb` (optional `adk-rag`
   backend) to 3.2.1, fixing GHSA-cc8f-fcx3-gpjr (high: arbitrary file read via
   `DEFINE ANALYZER` mapper filter) plus four related medium advisories. Bumped
@@ -57,7 +111,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `adk-core` | New public fields: `RunConfig::{tool_confirmation_handler, runtime_toolsets}` | Struct literals must add the fields; prefer `RunConfig::builder()` |
   | `adk-core` | New variant `Part::EmbeddedResource` (`Part` is not `#[non_exhaustive]`) | Exhaustive `match` must add an arm |
   | `adk-core` | `RunConfig` and `RunConfigBuilder` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code holding them across `catch_unwind` |
+  | `adk-core` | `Memory::search_in_project` and `Memory::add_to_project` now return an error by default instead of silently operating globally; new `Memory::supports_project_scoping` | A custom `Memory` that relied on the fallback must implement the project methods or accept the error |
+  | `adk-memory` | `MemoryService::{add_session_to_project, add_entry_to_project, delete_entries_in_project}` now return an error by default; new `MemoryService::supports_project_scoping` | A custom backend must implement them; `GraphMemoryService` now refuses project calls it previously answered globally |
+  | `adk-core` | `RunConfig::tool_confirmation_decisions` is now keyed by **function call ID** instead of tool name | Approvals keyed by tool name are no longer found, so the call stays unconfirmed; key by `ToolConfirmationRequest::function_call_id` |
+  | `adk-core` | New public field `RunConfig::tool_confirmation_fingerprints` | Struct literals must add the field; prefer `RunConfig::builder()` |
   | `adk-graph` | New public field `StateGraph::deferred_configs` | Struct literals must add the field |
+  | `adk-runner` | `MutableSession::conversation_history_for_agent_impl` now takes two parameters (an `agent_name` and a `branch`) instead of one | Direct callers must pass the invocation branch; pass `""` for unscoped behaviour |
   | `adk-realtime` | `ClientEvent` and `ServerEvent` are now `#[non_exhaustive]` | Downstream `match` needs a wildcard arm; the enums can no longer be constructed exhaustively outside the crate |
   | `adk-realtime` | `ServerEvent::Unknown` discriminant changed 21 → 23 | Affects code depending on the numeric discriminant |
   | `adk-realtime` | New public field `RealtimeConfig::affective_dialog` | Struct literals must add the field |
@@ -334,6 +393,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to appear in the prompt when JSON Output is on, or the API can return empty
   content, so the adapter adds that mention when the conversation does not already
   contain it.
+- **adk-agent: tool progress is bounded.** Each tool batch created a
+  `tokio::sync::mpsc::unbounded_channel`, and `emit_progress` sent into it with no
+  backpressure and no aggregate limit. A tool producing output faster than the
+  client consumed it — a compiler log, a shell command, a runaway loop — grew the
+  queue until it was drained or the process ran out of memory, and a slow SSE
+  consumer made it worse.
+
+  The queue is now bounded at 256 events, a chunk is capped at 8 KiB (truncated on
+  a character boundary, so multi-byte text is never split), and a call may forward
+  1 MiB of progress in total. A tool that outruns its consumer waits up to 100 ms
+  for space and then drops the chunk, so a stalled consumer slows the tool briefly
+  but can never stall it indefinitely. Whenever output is dropped, exactly one
+  progress event carrying `[adk: tool progress truncated]` is emitted for that
+  call, so a gap is visible rather than silent. Final tool results are unaffected.
+- **adk-core/adk-agent: tool approvals are scoped to one exact call.** Live
+  decisions from a `ToolConfirmationHandler` were tracked by function-call ID, but
+  static decisions in `RunConfig::tool_confirmation_decisions` were looked up by
+  **tool name**. One `delete_file` approval therefore authorized every
+  `delete_file` call evaluated against that map, whatever its arguments, and two
+  calls to the same tool in one turn could not receive different decisions. A
+  decision intended for one action could be replayed onto a materially different
+  one, which weakens the authorization boundary precisely in the resumed and
+  web-driven flows that rely on the static map.
+
+  Static decisions are now keyed by function-call ID, matching the live path and
+  the ID already reported on `ToolConfirmationRequest`. An unrecognized key means
+  "no decision", so the call stays pending rather than executing.
+
+  The new `RunConfig::tool_confirmation_fingerprints` optionally binds a decision
+  to the arguments it was granted for, using the new
+  `adk_core::tool_call_fingerprint`. This defends the case where a call ID is
+  replayed with different arguments after a round trip through something
+  untrusted, such as a browser. A mismatch is treated as unconfirmed. The
+  fingerprint is canonical over object key order, so re-serialized arguments still
+  match.
+
+  Consumers updated to the call-keyed contract: `adk-acp`'s permission bridge
+  (whose own module documentation already claimed call-level correlation while the
+  code keyed by name), and both confirmation gates in `adk-agent`'s CodeAct agent.
+- **adk-runner: runs and persistence writes are keyed by full identity.** Two
+  defects with the same root cause — the identity triple was resolved and then
+  discarded.
+
+  Active runs were tracked in a `HashMap<String, CancellationToken>` keyed by the
+  raw session ID. Because a session ID is only unique within an app and user,
+  `(app-a, user-a, shared-id)` and `(app-b, user-b, shared-id)` collided inside one
+  `Runner`, and two concurrent runs for one identity overwrote each other's token.
+  The drop guard then removed the key unconditionally, so a finishing run could
+  deregister a different run that was still going. Runs are now keyed by a unique
+  run ID carrying the full identity, and cleanup removes only the entry it
+  inserted. `Runner::interrupt(session_id)` now cancels every run for that session
+  rather than whichever registered last; the new `Runner::interrupt_identity`
+  targets one exact identity, and `Runner::active_runs` reports identities.
+  Registration was also eager while cleanup was lazy inside the stream generator,
+  so a stream dropped before its first poll leaked its registration permanently;
+  the guard is now created eagerly.
+
+  Separately, the Runner resolved sessions with the full triple but persisted every
+  event through `append_event(session_id, event)`. All five write sites now use
+  `append_event_for_identity`, so a backend whose natural key is composite can bind
+  each event to its tenant.
+- **adk-graph: checkpoints recorded finished work as pending, and streamed runs
+  never checkpointed at all.** Three defects in `PregelExecutor`:
+
+  1. `run` saved its checkpoint *before* advancing the frontier, so the stored
+     `pending_nodes` were the nodes that had just completed. Resuming re-executed
+     them and re-applied their updates, which is wrong for any node that is not
+     idempotent — counters, accumulators, appends, and external side effects.
+     Checkpoints are now written after the frontier advances, and a finished run
+     records an empty frontier so resuming a completed thread returns the final
+     state instead of restarting the graph. Interrupts deliberately keep saving
+     the executing frontier, because an interrupted node still owes its updates.
+  2. `run_stream` saved no checkpoints, and its interrupt path returned without
+     saving one — so a streamed run could not be resumed and a streamed
+     human-in-the-loop interrupt was unrecoverable. Streamed runs now checkpoint
+     on the same schedule as blocking runs, including on interrupt.
+  3. In `StreamMode::Messages` the executor drained `execute_stream` for events
+     and then called `execute` again to obtain state updates, running every node
+     twice per super-step. For `AgentNode` that meant two billed model calls per
+     node, and the streamed tokens came from a different execution than the state
+     that was kept. Nodes now report their updates on the stream as
+     `StreamEvent::Updates`, and the executor applies those from the single
+     execution.
+
+  `Node::execute_stream` therefore carries a new contract: an implementation must
+  yield a `StreamEvent::Updates` event with its state updates. The default
+  implementation does this, so nodes built from closures are unaffected. A custom
+  override that does not will stream events but contribute no state in `Messages`
+  mode. `AgentNode::execute_stream` now applies its output mapper, which it
+  previously never did. Timeout policies now apply to the streamed execution
+  itself, where `idle_timeout` means no event was produced within the limit.
+- **adk-agent: provider errors are no longer reported as successful turns.**
+  `LlmResponse` carries `interrupted`, `error_code`, and `error_message`, and a
+  provider adapter can report a terminal failure inside an otherwise successful
+  stream item — `adk-anthropic`'s `from_stream_error`, the OpenAI Responses error
+  event, and the OpenAI websocket transport all do. `LlmAgent` copied content,
+  finish reason, usage, and provider metadata onto its events but not those three
+  fields, and never inspected them, so a failed turn arrived as an ordinary event
+  with no content and the run completed successfully. Callers, persistence, retry
+  policy, and telemetry could not distinguish a provider failure from a model that
+  simply said nothing.
+
+  Those fields now travel with both partial and final events, and a terminal
+  `error_code` ends the run with an `AdkError` coded `model.provider_error`,
+  carrying the provider's own code in the error details under
+  `provider_error_code`. The event is emitted *before* the failure so the failed
+  turn stays observable and persisted rather than vanishing into an error.
+  `interrupted` is recorded but is not treated as terminal, and truncation is
+  unaffected: a response cut short by a token limit reports
+  `finish_reason: MaxTokens` and no error code.
 
 - **adk-agent/adk-tool: workflow context wrappers no longer drop cancellation,
   secrets, and shared state.** Each wrapper re-implements `InvocationContext` and

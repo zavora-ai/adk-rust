@@ -737,6 +737,10 @@ impl MemoryService for PostgresMemoryService {
         Ok(result.rows_affected())
     }
 
+    fn supports_project_scoping(&self) -> bool {
+        true
+    }
+
     #[instrument(skip_all, fields(app_name = %app_name, user_id = %user_id, session_id = %session_id, project_id = %project_id))]
     async fn add_session_to_project(
         &self,
