@@ -44,6 +44,7 @@ pub mod runtime;
 pub mod schema_normalization;
 pub mod sequence;
 pub mod session_loop;
+pub mod state_store;
 pub mod testing;
 pub mod types;
 pub mod usage;
@@ -61,5 +62,8 @@ pub use runtime::{AgentHandle, EnvironmentConfig, ManagedAgentRuntime, SessionHa
 pub use schema_normalization::{normalize_for_provider, representative_mcp_schema};
 pub use sequence::SequenceCounter;
 pub use session_loop::SessionLoop;
+pub use state_store::{
+    Durability, InMemoryManagedStateStore, ManagedSessionState, ManagedStateStore,
+};
 pub use testing::{ScriptedLlm, ScriptedToolCall, ScriptedTurn};
 pub use usage::{SessionUsageTracker, UsageReport};

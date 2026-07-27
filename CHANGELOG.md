@@ -174,6 +174,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **adk-managed: managed state has a store seam that reports its own durability.**
+  `CheckpointManager` held events in a `Vec` and run state in a field while documenting
+  `checkpoint` as "atomically persist" with a guarantee that "replay will see a consistent view
+  after any crash", and describing a load as returning "everything needed to reconstruct a
+  session after a restart". Neither held: both operated on in-memory fields with no transaction
+  against any persistent store, so a crash lost event history, sequence position, parked-tool
+  state, and lifecycle status. The new `ManagedStateStore` trait carries a `Durability`
+  (`ProcessLocal` or `CrashDurable`) that a caller can check instead of inferring durability from
+  the presence of checkpointing. `InMemoryManagedStateStore` is the shipped backend, named as
+  such and reporting `ProcessLocal`; `CheckpointManager::with_store`, `flush`, and `restore`
+  connect a manager to one. A crash-durable implementation is not provided — the seam and the
+  honest reporting come first, so callers requiring resume-after-restart can detect its absence.
+
 - **adk-computer-use: governed computer-use orchestration crate.** First-party
   ADK-Rust graph, wire contracts, scope authorization, cancellation bridge, and
   tamper-evident evaluation receipts for the `computer-use-mcp` desktop-automation

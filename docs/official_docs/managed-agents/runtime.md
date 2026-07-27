@@ -279,3 +279,50 @@ cargo run --manifest-path examples/managed_runtime_hello/Cargo.toml
 ```
 
 This runs fixture F-1 end-to-end with `ScriptedLlm` (no API key required).
+
+## Managed state durability
+
+Managed session state — the event log, sequence position, parked tool calls, and lifecycle
+status — lives in a `ManagedStateStore`. The store reports its own guarantee:
+
+| Durability | Meaning |
+|------------|---------|
+| `ProcessLocal` | Replay and resume work while the process runs. A crash loses the state, and another process cannot resume the session. |
+| `CrashDurable` | State is written to a backing store before the write is acknowledged, so another process can reconstruct the session. |
+
+**Only `InMemoryManagedStateStore` ships, and it is `ProcessLocal`.** Check the guarantee rather
+than inferring it from the presence of checkpointing:
+
+```rust
+use adk_managed::{Durability, InMemoryManagedStateStore, ManagedStateStore};
+
+let store = InMemoryManagedStateStore::new();
+assert_eq!(store.durability(), Durability::ProcessLocal);
+assert!(!store.durability().survives_process_loss());
+```
+
+### Checkpointing versus flushing
+
+`CheckpointManager::checkpoint` records an event and the new run state together, so replay never
+sees one without the other. That is a write to the manager's own fields. `flush` writes the
+snapshot to the configured store, and `restore` rebuilds a manager from it:
+
+```rust
+use adk_managed::{CheckpointManager, InMemoryManagedStateStore, ManagedStateStore};
+use std::sync::Arc;
+
+# async fn example() -> Result<(), adk_managed::types::RuntimeError> {
+let store: Arc<dyn ManagedStateStore> = Arc::new(InMemoryManagedStateStore::new());
+let manager = CheckpointManager::new("session-1".to_string()).with_store(Arc::clone(&store));
+manager.flush().await?;
+
+let restored = CheckpointManager::restore("session-1".to_string(), store).await?;
+# Ok(())
+# }
+```
+
+> **Important:** `checkpoint` was documented as "atomically persist" with a guarantee that
+> "replay will see a consistent view after any crash", and loading was described as returning
+> "everything needed to reconstruct a session after a restart". Neither held: both operated on
+> in-memory fields with no transaction against any persistent store. With the shipped store,
+> `restore` in a new process finds nothing.
