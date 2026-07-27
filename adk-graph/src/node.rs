@@ -192,7 +192,7 @@ pub trait Node: Send + Sync {
 
     /// Rejects a node that cannot execute, before the graph runs.
     ///
-    /// Called for every node by [`StateGraph::compile`], so a configuration whose
+    /// Called for every node by [`StateGraph::compile`](crate::graph::StateGraph::compile), so a configuration whose
     /// backend is unavailable fails while the graph is being built rather than
     /// part-way through a run, when earlier nodes may already have had side effects.
     ///
