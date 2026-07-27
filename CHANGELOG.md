@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-devtools: `bash` no longer inherits the agent's environment, and a timeout takes
+  descendants with it.** `BashTool` ran `sh -c` with only `current_dir` set. It never
+  called `env_clear`, so a model-directed command could read the parent environment — an
+  agent process routinely holds provider API keys — with nothing more than `env`. A
+  timeout called `start_kill` on the direct child, so anything `sh` had started (a
+  background build, a spawned server) kept running after the tool returned.
+
+  The command now receives only `PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, `TERM`,
+  `USER`, and `SHELL`; `Workspace::inherit_env(true)` restores the previous behaviour and
+  `env_allowlist` replaces the set. The child leads its own process group and a timeout
+  signals the group, so descendants are killed too. Goal-mode `--until` checks in the CLI
+  run under the same policy, so a check cannot see credentials the agent cannot.
+
+  The surface is no longer described as sandboxed. A working directory is not an OS
+  boundary: `bash` can still use absolute paths and reach the network, and nothing limits
+  memory or CPU. The CLI help, README, and coding-agent docs now say what is enforced —
+  path containment for file tools, environment isolation, bounded output and time — and
+  what is not.
+
 - **adk-core/adk-auth: secret access from tools is authorizable and audited.**
   `SecretService` and `SecretProvider` received only a secret *name*. Once a provider
   was attached to an invocation, policy collapsed to whatever the backing cloud
