@@ -193,6 +193,13 @@ impl StateGraph {
             return Err(GraphError::NoEntryPoint);
         }
 
+        // Reject a node that cannot execute. A configuration whose backend is
+        // unavailable should fail here, not part-way through a run when earlier nodes
+        // may already have had side effects.
+        for node in self.nodes.values() {
+            node.validate()?;
+        }
+
         // Check all node references exist
         for edge in &self.edges {
             match edge {

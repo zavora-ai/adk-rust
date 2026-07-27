@@ -18,6 +18,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error, `payload.bytes`, and a correlation `payload.digest`, with `payload.raw` set to
   `<redacted>`. The new `record-payloads` feature on `adk-realtime` restores bounded raw
   recording for diagnosis, matching the flag `adk-agent` already uses for trace payloads.
+- **adk-devtools: `bash` no longer inherits the agent's environment, and a timeout takes
+  descendants with it.** `BashTool` ran `sh -c` with only `current_dir` set. It never
+  called `env_clear`, so a model-directed command could read the parent environment — an
+  agent process routinely holds provider API keys — with nothing more than `env`. A
+  timeout called `start_kill` on the direct child, so anything `sh` had started (a
+  background build, a spawned server) kept running after the tool returned.
+
+  The command now receives only `PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, `TERM`,
+  `USER`, and `SHELL`; `Workspace::inherit_env(true)` restores the previous behaviour and
+  `env_allowlist` replaces the set. The child leads its own process group and a timeout
+  signals the group, so descendants are killed too. Goal-mode `--until` checks in the CLI
+  run under the same policy, so a check cannot see credentials the agent cannot.
+
+  The surface is no longer described as sandboxed. A working directory is not an OS
+  boundary: `bash` can still use absolute paths and reach the network, and nothing limits
+  memory or CPU. The CLI help, README, and coding-agent docs now say what is enforced —
+  path containment for file tools, environment isolation, bounded output and time — and
+  what is not.
 - **adk-realtime: integrated ADK tools run through the policy pipeline, and plugin failures
   fail closed.** The live `next_event` path called `RealtimeRunner::dispatch_tool_call`, which
   invokes the `ToolBridgeAdapter` directly — the adapter builds a context and calls
@@ -239,6 +257,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `adk-memory` | `MemoryService::{add_session_to_project, add_entry_to_project, delete_entries_in_project}` now return an error by default; new `MemoryService::supports_project_scoping` | A custom backend must implement them; `GraphMemoryService` now refuses project calls it previously answered globally |
   | `adk-core` | `RunConfig::tool_confirmation_decisions` is now keyed by **function call ID** instead of tool name | Approvals keyed by tool name are no longer found, so the call stays unconfirmed; key by `ToolConfirmationRequest::function_call_id` |
   | `adk-core` | New public field `RunConfig::tool_confirmation_fingerprints` | Struct literals must add the field; prefer `RunConfig::builder()` |
+  | `adk-graph` | `TimeTravelHandle::replay` renamed to `state_history` | Rename the call; behaviour is unchanged, and it never re-executed anything despite the old name |
+  | `adk-graph` | New public field `ExecutionConfig::parent_context` | Struct literals must add the field; prefer `ExecutionConfig::new` plus `with_parent_context` |
   | `adk-graph` | New public field `StateGraph::deferred_configs` | Struct literals must add the field |
   | `adk-runner` | `MutableSession::conversation_history_for_agent_impl` now takes two parameters (an `agent_name` and a `branch`) instead of one | Direct callers must pass the invocation branch; pass `""` for unscoped behaviour |
   | `adk-realtime` | `ClientEvent` and `ServerEvent` are now `#[non_exhaustive]` | Downstream `match` needs a wildcard arm; the enums can no longer be constructed exhaustively outside the crate |
@@ -502,6 +522,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-graph: an action node whose backend does not exist is rejected when the graph is
+  built.** Database actions validated a connection and then returned an error explaining
+  that no driver is integrated; email monitor and send did the same; JavaScript and
+  TypeScript code execution is a placeholder; and a node needing an unenabled feature
+  failed the same way. A workflow could deserialize, validate, and compile, then fail
+  only when that node executed — after earlier nodes had already had their side effects.
+
+  `Node::validate` is a new defaulted trait method, and `StateGraph::compile` calls it
+  for every node, so an unavailable configuration is refused up front with the node name
+  and the reason. `ActionNodeExecutor` reports database nodes, email nodes, JS/TS code
+  nodes, and feature-gated nodes whose feature is off. Rust code nodes and every
+  implemented action are unaffected. A custom node can take part by overriding
+  `validate`. The node-type table in the docs now marks what is not implemented instead
+  of listing it as available.
+- **adk-graph: an agent inside a graph keeps the caller's runtime.** `AgentNode` built a
+  `GraphInvocationContext` from scratch for every run: it hardcoded
+  `user_id = "graph_user"`, `app_name = "graph_app"`, and branch `main`, used a default
+  `RunConfig`, returned `None` for artifacts and memory, and let every optional
+  capability fall back to its default — so secrets, shared state, cancellation, scopes,
+  and request metadata all disappeared. An identity-dependent tool saw a synthetic
+  principal inside a graph and the real one outside it, and `Runner::interrupt` could
+  not reach an agent running as a node.
+
+  `ExecutionConfig::with_parent_context` carries the invocation into the graph, and
+  `GraphAgent` sets it automatically, so identity, scopes, request metadata, secrets,
+  memory, artifacts, shared state, cancellation, and `RunConfig` all reach the agent.
+  The branch is deliberately *derived* as `{caller_branch}.{agent_name}` so a node's
+  events stay attributable. A graph invoked directly, with no parent, keeps the
+  synthetic identity — that is now an explicit standalone mode rather than the only
+  behaviour. Node conversation history remains scoped to the node's own graph session.
+
+- **adk-graph: `TimeTravelHandle::replay` is renamed to `state_history`.** Its rustdoc
+  said it "re-executes the graph", and the module described replaying. The
+  implementation listed checkpoints, sorted and filtered them, and returned stored
+  `(step, state)` pairs — it never invoked a node. Callers could have treated stored
+  snapshots as a fresh replay. The method now says what it does: it reads checkpoints
+  and executes nothing, and `fork_at` plus a normal invoke is the way to actually re-run
+  from a point in history. `adk graph replay` keeps its name but no longer claims to
+  replay; its output states that nothing was re-executed.
 - **adk-managed: sessions belong to an owner, and ignored environment configuration is
   refused.** `start_session` named its environment argument `_env` and never read it, so a
   caller supplying environment variables or a working directory received a session that
