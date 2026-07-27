@@ -1068,6 +1068,8 @@ impl AgentToolContext {
             request = request.with_purpose(purpose);
         }
         self.parent_ctx.get_secret_for(&request).await
+    }
+
     /// Forwards one progress chunk under this call's budget.
     ///
     /// The policy is bounded and lossy by design: memory is capped, and output that
