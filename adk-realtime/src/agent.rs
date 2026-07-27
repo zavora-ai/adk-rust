@@ -915,39 +915,24 @@ impl Agent for RealtimeAgent {
                                         RealtimeToolContext::new(ctx.clone(), call_id.clone())
                                     );
 
-                                    // Execute before_tool callbacks
-                                    let tool_cb_ctx = Arc::new(ToolCallbackContext::new(
-                                        ctx.clone(),
-                                        name.clone(),
+                                    let cb_ctx: Arc<dyn CallbackContext> =
+                                        Arc::new(ToolCallbackContext::new(
+                                            ctx.clone(),
+                                            name.clone(),
+                                            args.clone(),
+                                        ));
+
+                                    let result = execute_tool_with_callbacks(
+                                        tool.as_ref(),
+                                        tool_ctx.clone(),
+                                        cb_ctx,
                                         args.clone(),
-                                    ));
-                                    for callback in before_tool_callbacks.as_ref() {
-                                        if let Err(e) = callback(tool_cb_ctx.clone() as Arc<dyn CallbackContext>).await {
-                                            let error_result = serde_json::json!({ "error": e.to_string() });
-                                            (error_result, EventActions::default())
-                                        } else {
-                                            continue;
-                                        };
-                                    }
+                                        before_tool_callbacks.as_ref(),
+                                        after_tool_callbacks.as_ref(),
+                                    )
+                                    .await;
 
-                                    let result = match tool.execute(tool_ctx.clone(), args.clone()).await {
-                                        Ok(r) => r,
-                                        Err(e) => serde_json::json!({ "error": e.to_string() }),
-                                    };
-
-                                    let actions = tool_ctx.actions();
-
-                                    // Execute after_tool callbacks
-                                    let tool_cb_ctx = Arc::new(ToolCallbackContext::new(
-                                        ctx.clone(),
-                                        name.clone(),
-                                        args.clone(),
-                                    ));
-                                    for callback in after_tool_callbacks.as_ref() {
-                                        let _ = callback(tool_cb_ctx.clone() as Arc<dyn CallbackContext>).await;
-                                    }
-
-                                    (result, actions)
+                                    (result, tool_ctx.actions())
                                 } else {
                                     (
                                         serde_json::json!({ "error": format!("Tool {} not found", name) }),
@@ -1054,6 +1039,84 @@ impl Agent for RealtimeAgent {
 }
 
 /// Tool context for realtime agent tool execution.
+/// Runs one tool through its before- and after-tool callbacks.
+///
+/// The callback contract matches the standard agent loop, which the realtime path did not
+/// honour: a before-callback returning `Ok(Some(content))` substitutes a result and the tool
+/// does **not** run, `Ok(None)` allows it, and an error refuses it and skips the after
+/// callbacks. Previously the loop evaluated `(error_result, EventActions::default())` as a
+/// discarded expression statement and fell through to `tool.execute`, so a gate could neither
+/// deny nor substitute — it reported a decision while the tool ran regardless. After-callback
+/// results were dropped by `let _ =`.
+async fn execute_tool_with_callbacks(
+    tool: &dyn Tool,
+    tool_ctx: Arc<dyn ToolContext>,
+    cb_ctx: Arc<dyn CallbackContext>,
+    args: serde_json::Value,
+    before_tool_callbacks: &[BeforeToolCallback],
+    after_tool_callbacks: &[AfterToolCallback],
+) -> serde_json::Value {
+    let mut short_circuit: Option<serde_json::Value> = None;
+    let mut run_after_tool_callbacks = true;
+
+    for callback in before_tool_callbacks {
+        match callback(cb_ctx.clone()).await {
+            Ok(Some(content)) => {
+                short_circuit = Some(content_to_tool_result(&content));
+                break;
+            }
+            Ok(None) => continue,
+            Err(e) => {
+                short_circuit = Some(serde_json::json!({ "error": e.to_string() }));
+                run_after_tool_callbacks = false;
+                break;
+            }
+        }
+    }
+
+    let mut result = match short_circuit {
+        Some(result) => result,
+        None => match tool.execute(tool_ctx, args).await {
+            Ok(value) => value,
+            Err(e) => serde_json::json!({ "error": e.to_string() }),
+        },
+    };
+
+    if run_after_tool_callbacks {
+        for callback in after_tool_callbacks {
+            match callback(cb_ctx.clone()).await {
+                Ok(Some(modified)) => {
+                    result = content_to_tool_result(&modified);
+                    break;
+                }
+                Ok(None) => continue,
+                Err(e) => {
+                    result = serde_json::json!({ "error": e.to_string() });
+                    break;
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Turns a callback's substitute `Content` into the result sent back to the provider.
+///
+/// A callback returns `Content` because that is what the standard agent loop puts on the
+/// event stream. The realtime transport wants a JSON tool result, so a function response is
+/// unwrapped to its payload and anything else is carried as its text.
+fn content_to_tool_result(content: &Content) -> serde_json::Value {
+    for part in &content.parts {
+        if let Part::FunctionResponse { function_response, .. } = part {
+            return function_response.response.clone();
+        }
+    }
+
+    let text: String = content.parts.iter().filter_map(|part| part.text()).collect();
+    serde_json::json!({ "result": text })
+}
+
 struct RealtimeToolContext {
     parent_ctx: Arc<dyn InvocationContext>,
     function_call_id: String,
@@ -1102,6 +1165,12 @@ impl CallbackContext for RealtimeToolContext {
     fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
         self.parent_ctx.artifacts()
     }
+
+    /// Shared state from the parent context, so realtime tools coordinate with the rest of
+    /// the run rather than seeing `None`.
+    fn shared_state(&self) -> Option<Arc<adk_core::SharedState>> {
+        self.parent_ctx.shared_state()
+    }
 }
 
 #[async_trait]
@@ -1124,5 +1193,356 @@ impl ToolContext for RealtimeToolContext {
         } else {
             Ok(vec![])
         }
+    }
+
+    /// The caller's scopes, from the parent context.
+    ///
+    /// Without this the trait default returned an empty list, so a scope-checking tool saw an
+    /// unauthenticated caller in realtime and behaved differently than in the standard loop.
+    fn user_scopes(&self) -> Vec<String> {
+        self.parent_ctx.user_scopes()
+    }
+
+    /// Secrets resolved through the parent context.
+    ///
+    /// The trait default returns `None`, which a tool cannot distinguish from a secret that is
+    /// genuinely absent.
+    async fn get_secret(&self, name: &str) -> Result<Option<String>> {
+        self.parent_ctx.get_secret(name).await
+    }
+}
+
+#[cfg(test)]
+mod tool_safety_tests {
+    //! A before-tool callback must be able to stop a tool, and a realtime tool must see the
+    //! same capabilities it sees in the standard loop.
+    //!
+    //! The dispatch loop built `(error_result, EventActions::default())` as a discarded
+    //! expression statement and then fell through to `tool.execute`, so a denying callback
+    //! reported a decision that had no effect. After-callback results were dropped with
+    //! `let _ =`. `RealtimeToolContext` implemented only the required methods, inheriting
+    //! `user_scopes() -> vec![]`, `get_secret() -> None`, and `shared_state() -> None`, so a
+    //! scope- or secret-checking tool behaved differently in realtime than under a Runner.
+
+    use super::*;
+    use adk_core::{RunConfig, SharedState, State};
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Counts how many times it is executed.
+    struct CountingTool {
+        executions: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Tool for CountingTool {
+        fn name(&self) -> &str {
+            "counting"
+        }
+        fn description(&self) -> &str {
+            "counts executions"
+        }
+        async fn execute(
+            &self,
+            _ctx: Arc<dyn ToolContext>,
+            _args: serde_json::Value,
+        ) -> Result<serde_json::Value> {
+            self.executions.fetch_add(1, Ordering::SeqCst);
+            Ok(serde_json::json!({ "ran": true }))
+        }
+    }
+
+    /// The minimum context the callback path needs.
+    struct TestToolContext {
+        actions: Mutex<EventActions>,
+        content: Content,
+    }
+
+    impl TestToolContext {
+        fn new() -> Self {
+            Self { actions: Mutex::new(EventActions::default()), content: Content::new("user") }
+        }
+    }
+
+    #[async_trait]
+    impl ReadonlyContext for TestToolContext {
+        fn invocation_id(&self) -> &str {
+            "inv"
+        }
+        fn agent_name(&self) -> &str {
+            "agent"
+        }
+        fn user_id(&self) -> &str {
+            "user"
+        }
+        fn app_name(&self) -> &str {
+            "app"
+        }
+        fn session_id(&self) -> &str {
+            "session"
+        }
+        fn branch(&self) -> &str {
+            ""
+        }
+        fn user_content(&self) -> &Content {
+            &self.content
+        }
+    }
+
+    #[async_trait]
+    impl CallbackContext for TestToolContext {
+        fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+            None
+        }
+    }
+
+    #[async_trait]
+    impl ToolContext for TestToolContext {
+        fn function_call_id(&self) -> &str {
+            "call-1"
+        }
+        fn actions(&self) -> EventActions {
+            self.actions.lock().unwrap().clone()
+        }
+        fn set_actions(&self, actions: EventActions) {
+            *self.actions.lock().unwrap() = actions;
+        }
+        async fn search_memory(&self, _query: &str) -> Result<Vec<MemoryEntry>> {
+            Ok(vec![])
+        }
+    }
+
+    /// Runs the tool through the callback gate with the supplied callbacks.
+    async fn dispatch(
+        before: Vec<BeforeToolCallback>,
+        after: Vec<AfterToolCallback>,
+        executions: Arc<AtomicUsize>,
+    ) -> serde_json::Value {
+        let tool = CountingTool { executions };
+        let ctx = Arc::new(TestToolContext::new());
+        execute_tool_with_callbacks(
+            &tool,
+            ctx.clone() as Arc<dyn ToolContext>,
+            ctx as Arc<dyn CallbackContext>,
+            serde_json::json!({}),
+            &before,
+            &after,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_before_callback_error_prevents_execution() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let before: Vec<BeforeToolCallback> =
+            vec![Box::new(|_ctx| Box::pin(async { Err(AdkError::tool("denied by policy")) }))];
+
+        let result = dispatch(before, vec![], Arc::clone(&executions)).await;
+
+        assert_eq!(executions.load(Ordering::SeqCst), 0, "a refused tool must not run: {result}");
+        assert!(
+            result["error"].as_str().unwrap_or_default().contains("denied by policy"),
+            "the refusal reason must reach the provider: {result}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_before_callback_substitution_prevents_execution() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let before: Vec<BeforeToolCallback> = vec![Box::new(|_ctx| {
+            Box::pin(async {
+                Ok(Some(Content {
+                    role: "function".to_string(),
+                    parts: vec![Part::FunctionResponse {
+                        function_response: adk_core::FunctionResponseData::new(
+                            "counting",
+                            serde_json::json!({ "cached": true }),
+                        ),
+                        id: None,
+                    }],
+                }))
+            })
+        })];
+
+        let result = dispatch(before, vec![], Arc::clone(&executions)).await;
+
+        assert_eq!(
+            executions.load(Ordering::SeqCst),
+            0,
+            "a substituted result must not run the tool"
+        );
+        assert_eq!(result, serde_json::json!({ "cached": true }));
+    }
+
+    #[tokio::test]
+    async fn a_permitting_callback_lets_the_tool_run() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let before: Vec<BeforeToolCallback> = vec![Box::new(|_ctx| Box::pin(async { Ok(None) }))];
+
+        let result = dispatch(before, vec![], Arc::clone(&executions)).await;
+
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+        assert_eq!(result, serde_json::json!({ "ran": true }));
+    }
+
+    #[tokio::test]
+    async fn an_after_callback_error_becomes_the_result() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let after: Vec<AfterToolCallback> =
+            vec![Box::new(|_ctx| Box::pin(async { Err(AdkError::tool("post-check failed")) }))];
+
+        let result = dispatch(vec![], after, Arc::clone(&executions)).await;
+
+        assert_eq!(executions.load(Ordering::SeqCst), 1, "the tool ran, as it should have");
+        assert!(
+            result["error"].as_str().unwrap_or_default().contains("post-check failed"),
+            "an after-callback failure must not be dropped: {result}"
+        );
+    }
+
+    #[tokio::test]
+    async fn after_callbacks_are_skipped_when_a_before_callback_refuses() {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let after_ran = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&after_ran);
+
+        let before: Vec<BeforeToolCallback> =
+            vec![Box::new(|_ctx| Box::pin(async { Err(AdkError::tool("refused")) }))];
+        let after: Vec<AfterToolCallback> = vec![Box::new(move |_ctx| {
+            let counter = Arc::clone(&counter);
+            Box::pin(async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(None)
+            })
+        })];
+
+        let result = dispatch(before, after, Arc::clone(&executions)).await;
+
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        assert_eq!(after_ran.load(Ordering::SeqCst), 0, "matching the standard loop's ordering");
+        assert!(result["error"].as_str().unwrap_or_default().contains("refused"), "{result}");
+    }
+
+    // ── Context capabilities ──────────────────────────────────────────
+
+    struct TestState;
+    impl State for TestState {
+        fn get(&self, _key: &str) -> Option<serde_json::Value> {
+            None
+        }
+        fn set(&mut self, _key: String, _value: serde_json::Value) {}
+        fn all(&self) -> HashMap<String, serde_json::Value> {
+            HashMap::new()
+        }
+    }
+
+    struct TestSession;
+    impl adk_core::Session for TestSession {
+        fn id(&self) -> &str {
+            "session"
+        }
+        fn app_name(&self) -> &str {
+            "app"
+        }
+        fn user_id(&self) -> &str {
+            "user"
+        }
+        fn state(&self) -> &dyn State {
+            &TestState
+        }
+        fn conversation_history(&self) -> Vec<Content> {
+            Vec::new()
+        }
+    }
+
+    /// A parent context carrying the capabilities a tool should still see in realtime.
+    struct CapableParent {
+        content: Content,
+        config: RunConfig,
+        session: TestSession,
+        shared: Arc<SharedState>,
+    }
+
+    #[async_trait]
+    impl ReadonlyContext for CapableParent {
+        fn invocation_id(&self) -> &str {
+            "inv"
+        }
+        fn agent_name(&self) -> &str {
+            "agent"
+        }
+        fn user_id(&self) -> &str {
+            "user"
+        }
+        fn app_name(&self) -> &str {
+            "app"
+        }
+        fn session_id(&self) -> &str {
+            "session"
+        }
+        fn branch(&self) -> &str {
+            ""
+        }
+        fn user_content(&self) -> &Content {
+            &self.content
+        }
+    }
+
+    #[async_trait]
+    impl CallbackContext for CapableParent {
+        fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+            None
+        }
+
+        fn shared_state(&self) -> Option<Arc<SharedState>> {
+            Some(Arc::clone(&self.shared))
+        }
+    }
+
+    #[async_trait]
+    impl InvocationContext for CapableParent {
+        fn agent(&self) -> Arc<dyn Agent> {
+            unreachable!("not used by these tests")
+        }
+        fn memory(&self) -> Option<Arc<dyn adk_core::Memory>> {
+            None
+        }
+        fn session(&self) -> &dyn adk_core::Session {
+            &self.session
+        }
+        fn run_config(&self) -> &RunConfig {
+            &self.config
+        }
+        fn end_invocation(&self) {}
+        fn ended(&self) -> bool {
+            false
+        }
+        fn user_scopes(&self) -> Vec<String> {
+            vec!["repo:write".to_string()]
+        }
+        async fn get_secret(&self, name: &str) -> Result<Option<String>> {
+            Ok(Some(format!("secret-for-{name}")))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_realtime_tool_context_preserves_parent_capabilities() {
+        let parent = Arc::new(CapableParent {
+            content: Content::new("user"),
+            config: RunConfig::default(),
+            session: TestSession,
+            shared: Arc::new(SharedState::new()),
+        }) as Arc<dyn InvocationContext>;
+
+        let ctx = RealtimeToolContext::new(parent, "call-1".to_string());
+
+        assert_eq!(
+            ctx.user_scopes(),
+            vec!["repo:write".to_string()],
+            "an empty scope list makes an authenticated caller look anonymous"
+        );
+        assert_eq!(ctx.get_secret("api_key").await.unwrap().as_deref(), Some("secret-for-api_key"));
+        assert!(ctx.shared_state().is_some(), "shared state must reach realtime tools");
+        assert_eq!(ctx.app_name(), "app", "identity still delegates");
     }
 }

@@ -66,7 +66,7 @@ pub use tool::SandboxTool;
 pub use types::{ExecRequest, ExecResult, Language};
 
 #[cfg(feature = "process")]
-pub use process::{ProcessBackend, ProcessConfig};
+pub use process::{IsolationClass, ProcessBackend, ProcessConfig};
 
 #[cfg(feature = "wasm")]
 pub use wasm::WasmBackend;
