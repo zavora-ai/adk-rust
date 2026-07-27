@@ -354,6 +354,61 @@ let extractor = JwtRequestContextExtractor::builder()
 
 The extractor validates the Bearer token, maps `user_id` with `ClaimsMapper`, and forwards JWT `scope` / `scp` claims into `RequestContext.scopes`.
 
+## Secret Providers
+
+Tools reach runtime secrets through `ToolContext::get_secret` and
+`InvocationContext::get_secret`. Behind those is `adk_auth::secrets::SecretProvider`,
+with cloud implementations behind feature flags:
+
+| Provider | Feature |
+|----------|---------|
+| AWS Secrets Manager | `aws-secrets` |
+| Azure Key Vault | `azure-keyvault` |
+| GCP Secret Manager | `gcp-secrets` |
+
+Attach one to a run by wrapping it as a `SecretService`:
+
+```rust
+use adk_auth::secrets::{CachedSecretProvider, SecretProvider, SecretServiceAdapter};
+use std::sync::Arc;
+use std::time::Duration;
+
+// Any SecretProvider — here wrapped in the cache
+let cached = Arc::new(CachedSecretProvider::new(provider, Duration::from_secs(300)));
+let service = Arc::new(SecretServiceAdapter::new(cached));
+```
+
+### Caching
+
+`CachedSecretProvider` serves a value for its TTL, then refetches. It is bounded and
+revocable:
+
+| Control | Behaviour |
+|---------|-----------|
+| `with_max_entries(n)` | At most `n` names cached; the least recently used is dropped when full. Defaults to 128; `0` disables caching |
+| `invalidate(name)` | Drops one secret immediately — use this when a secret is rotated so the old value is not served for the rest of its TTL |
+| `invalidate_all()` | Drops everything |
+| `purge_expired()` | Drops expired entries without waiting for them to be read again |
+
+A bound matters when secret names are derived from input: without one, the cache can
+grow for the lifetime of the process.
+
+### What the cache does and does not guarantee
+
+A TTL controls what the cache **returns**, not how long a value stays in process
+memory. Entries are zeroized when they expire, are evicted, or are invalidated, which
+shortens residency to roughly the TTL. That is a reduction, not erasure — a `String`
+may already have been reallocated, copied by the allocator, swapped to disk, or
+captured in a core dump. Debug output for the cache is redacted so a diagnostic print
+cannot leak a value.
+
+> **Important:** the provider interface takes only a secret *name*. There is no
+> per-tool grant, namespace, or access audit at the ADK layer, so any tool holding a
+> context can request any name the backing credentials can read. Scope the cloud
+> credentials themselves — one IAM identity per deployment with access to only the
+> secrets that deployment needs — and treat provider-side audit logs as the record of
+> access.
+
 ## Error Handling
 
 ```rust

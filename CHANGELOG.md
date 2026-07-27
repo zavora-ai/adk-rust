@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-auth: the secret cache is now bounded, revocable, and cleared.**
+  `CachedSecretProvider` stored values in an unbounded `HashMap` and checked the TTL
+  only when the same name was read again. Expired entries were never removed, a
+  rotated secret could not be dropped before its TTL elapsed, there was no capacity
+  limit, and values were not cleared on drop. The TTL therefore governed what the
+  cache *returned* while a value requested once stayed resident for the lifetime of
+  the process, and many distinct names could grow the cache without bound.
+
+  New controls: `with_max_entries` (default 128, least-recently-used eviction, `0`
+  disables caching), `invalidate`, `invalidate_all`, and `purge_expired`. Entries are
+  zeroized on drop, and `Debug` for the cache is redacted so a diagnostic print cannot
+  leak a value.
+
+  This shortens residency to roughly the TTL rather than closing the window: a
+  `String` may already have been reallocated, copied by the allocator, swapped, or
+  captured in a core dump. The documentation states that, and also states plainly that
+  the provider interface takes only a secret name — there is no per-tool grant or
+  access audit at the ADK layer, so the cloud credentials remain the real boundary.
+  Secret providers were previously absent from the official documentation entirely.
+
 - **Dependency advisories resolved.** Bumped `surrealdb` (optional `adk-rag`
   backend) to 3.2.1, fixing GHSA-cc8f-fcx3-gpjr (high: arbitrary file read via
   `DEFINE ANALYZER` mapper filter) plus four related medium advisories. Bumped
