@@ -97,7 +97,7 @@ cargo nextest run --workspace
 
 ### Prerequisites
 
-- Rust 1.94.0+ (edition 2024)
+- Rust 1.95.0+ (edition 2024)
 - For browser examples: Chrome/Chromium
 - For `openai-webrtc` feature: cmake (audiopus builds Opus from source)
 - For mistral.rs: see [adk-mistralrs section](#adk-mistralrs)
@@ -504,7 +504,7 @@ If your change is purely internal refactoring with no behavior change, existing 
 
 ### Rust Conventions
 
-- Edition 2024, MSRV 1.94.0
+- Edition 2024, MSRV 1.95.0
 - `thiserror` for library error types
 - `async-trait` for async trait methods
 - `Arc<T>` for shared ownership across async boundaries

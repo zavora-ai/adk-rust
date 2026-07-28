@@ -5,7 +5,7 @@
 [![docs.rs](https://docs.rs/adk-rust/badge.svg)](https://docs.rs/adk-rust)
 [![Wiki](https://img.shields.io/badge/docs-Wiki-blue)](https://github.com/zavora-ai/adk-rust/wiki)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-![Rust](https://img.shields.io/badge/rust-1.94%2B-orange.svg)
+![Rust](https://img.shields.io/badge/rust-1.95%2B-orange.svg)
 [![GitHub Discussions](https://img.shields.io/github/discussions/zavora-ai/adk-rust?style=flat&logo=github&color=5865F2)](https://github.com/zavora-ai/adk-rust/discussions)
 
 > **v2.0.0 release candidate — unpublished.** The 41-crate v2 workspace is being stabilized; v2 has not been published to crates.io. The candidate targets the official `rmcp 2.2` MCP SDK (protocol `2025-11-25`) with effective HTTP configuration, official `agent-client-protocol` 1.2 for ACP with exact capability publication, the new `adk-computer-use` governed desktop-automation layer, `adk-devtools` coding-agent tools, and live async tool confirmation keyed by function-call ID. See the [migration guide](docs/official_docs/migration/1.0-to-2.0.md) for the planned breaking changes and [CHANGELOG](CHANGELOG.md) for full details.
@@ -275,7 +275,7 @@ Use `cargo adk build` to verify compilation without deploying.
 
 ### Manual installation
 
-Requires Rust 1.94 or later (Rust 2024 edition). Add to your `Cargo.toml`:
+Requires Rust 1.95 or later (Rust 2024 edition). Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]

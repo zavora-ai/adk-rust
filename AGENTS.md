@@ -4,7 +4,7 @@ Rust Agent Development Kit — a modular workspace of publishable crates for bui
 
 ## Dev environment
 
-- Rust 1.94.0+, edition 2024. Use `make setup` or `devenv shell` to bootstrap.
+- Rust 1.95.0+, edition 2024. Use `make setup` or `devenv shell` to bootstrap.
 - `sccache` is the compilation cache. Set `RUSTC_WRAPPER=sccache` in your shell profile.
 - On Linux, `wild` is the linker (configured in `.cargo/config.toml`). macOS uses the default linker.
 - Copy `.env.example` to `.env` for API keys. Never commit `.env` files or secrets.
