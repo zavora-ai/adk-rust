@@ -182,7 +182,9 @@ impl MemoryService for InMemoryMemoryService {
                 sessions.values().flatten().map(|stored| stored.entry.clone()).collect()
             })
             .unwrap_or_default();
-        entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        // Newest first. `Reverse` keeps this a key-based sort, which clippy prefers, without
+        // flipping the comparison by hand.
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.timestamp));
         entries.truncate(limit);
         Ok(entries)
     }

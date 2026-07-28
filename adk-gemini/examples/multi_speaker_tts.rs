@@ -77,46 +77,43 @@ Alice: I couldn't agree more. It's remarkable how far AI-generated speech has co
                     for (j, part) in parts.iter().enumerate() {
                         match part {
                             // Look for inline data with audio MIME type
-                            Part::InlineData { inline_data } => {
-                                if inline_data.mime_type.starts_with("audio/") {
-                                    info!("📄 Found audio data: {}", inline_data.mime_type);
+                            Part::InlineData { inline_data }
+                                if inline_data.mime_type.starts_with("audio/") =>
+                            {
+                                info!("📄 Found audio data: {}", inline_data.mime_type);
 
-                                    // Decode base64 audio data
-                                    match general_purpose::STANDARD.decode(&inline_data.data) {
-                                        Ok(audio_bytes) => {
-                                            let filename =
-                                                format!("multi_speaker_dialogue_{}_{}.pcm", i, j);
+                                // Decode base64 audio data
+                                match general_purpose::STANDARD.decode(&inline_data.data) {
+                                    Ok(audio_bytes) => {
+                                        let filename =
+                                            format!("multi_speaker_dialogue_{}_{}.pcm", i, j);
 
-                                            // Save audio to file
-                                            match File::create(&filename) {
-                                                Ok(mut file) => {
-                                                    if let Err(e) = file.write_all(&audio_bytes) {
-                                                        error!(
-                                                            "❌ Error writing audio file: {}",
-                                                            e
-                                                        );
-                                                    } else {
-                                                        info!(
-                                                            "💾 Multi-speaker audio saved as: {}",
-                                                            filename
-                                                        );
-                                                        info!(
-                                                            "🎧 Play with: aplay {} (Linux) or afplay {} (macOS)",
-                                                            filename, filename
-                                                        );
-                                                        info!(
-                                                            "👥 Features Alice (Puck voice) and Bob (Charon voice)"
-                                                        );
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    error!("❌ Error creating audio file: {}", e)
+                                        // Save audio to file
+                                        match File::create(&filename) {
+                                            Ok(mut file) => {
+                                                if let Err(e) = file.write_all(&audio_bytes) {
+                                                    error!("❌ Error writing audio file: {}", e);
+                                                } else {
+                                                    info!(
+                                                        "💾 Multi-speaker audio saved as: {}",
+                                                        filename
+                                                    );
+                                                    info!(
+                                                        "🎧 Play with: aplay {} (Linux) or afplay {} (macOS)",
+                                                        filename, filename
+                                                    );
+                                                    info!(
+                                                        "👥 Features Alice (Puck voice) and Bob (Charon voice)"
+                                                    );
                                                 }
                                             }
+                                            Err(e) => {
+                                                error!("❌ Error creating audio file: {}", e)
+                                            }
                                         }
-                                        Err(e) => {
-                                            error!("❌ Error decoding base64 audio: {}", e)
-                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("❌ Error decoding base64 audio: {}", e)
                                     }
                                 }
                             }

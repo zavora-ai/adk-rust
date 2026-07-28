@@ -1,2 +1,11 @@
 [toolchain]
-channel = "1.94.0"
+# Single source of truth for the toolchain: rustup reads this locally, and
+# devenv reads the same file through `languages.rust.toolchainFile`, so CI and
+# local builds cannot drift.
+#
+# 1.95 rather than the newest stable: it is the lowest version that satisfies
+# every constraint — adk-codeact-monty needs 1.95, and a fresh resolution of the
+# aws-secrets dependencies needs 1.95.1 — while still leaving consumers on 1.95
+# able to build the published crates.
+channel = "1.95.0"
+components = ["rustc", "cargo", "clippy", "rustfmt", "rust-analyzer"]

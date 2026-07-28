@@ -316,11 +316,9 @@ impl CompiledGraph {
         for edge in &self.edges {
             match edge {
                 Edge::Direct { source, target: EdgeTarget::Node(n) }
-                    if executed.contains(source) =>
+                    if executed.contains(source) && !next.contains(n) =>
                 {
-                    if !next.contains(n) {
-                        next.push(n.clone());
-                    }
+                    next.push(n.clone());
                 }
                 Edge::Conditional { source, router, targets } if executed.contains(source) => {
                     let route = router(state);
@@ -342,10 +340,8 @@ impl CompiledGraph {
     pub fn leads_to_end(&self, executed: &[String], state: &State) -> bool {
         for edge in &self.edges {
             match edge {
-                Edge::Direct { source, target } if executed.contains(source) => {
-                    if target.is_end() {
-                        return true;
-                    }
+                Edge::Direct { source, target } if executed.contains(source) && target.is_end() => {
+                    return true;
                 }
                 Edge::Conditional { source, router, targets } if executed.contains(source) => {
                     let route = router(state);

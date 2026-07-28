@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     # Core packages (publishable to crates.io)
     "adk-core",
@@ -120,7 +120,7 @@ opt-level = 2
 [workspace.package]
 version = "2.0.0"
 edition = "2024"
-rust-version = "1.94.0"
+rust-version = "1.95"
 license = "Apache-2.0"
 authors = ["James Karanja Maina <james.karanja@zavora.ai>"]
 homepage = "https://www.zavora.ai"

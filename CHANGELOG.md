@@ -323,6 +323,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **OpenAI integrations now use `async-openai` 0.41.** Chat Completions,
   Responses, and Realtime integrations adopt the current 0.41 types and
   transport dependencies.
+- **Toolchain pinned to Rust 1.95.0.** `rust-toolchain.toml` is now the single source: rustup
+  reads it locally and devenv reads the same file through `languages.rust.toolchainFile`, so a
+  devenv shell and a plain `cargo` invocation cannot drift. The workspace resolver moves to `3`
+  and `rust-version` to `1.95`; `Cargo.lock` is unchanged by the resolver bump. Five new 1.95
+  clippy lints are fixed — three `collapsible_match`, one `iter_kv_map`, and one `sort_by_key`
+  that needed `Reverse` because the sort is descending. 1.95 also clears the AWS SDK MSRV floor,
+  so `cargo update` no longer breaks the `bedrock` feature.
+
 - **MCP now uses official `rmcp 2.2` and MCP `2025-11-25` protocol types.**
   ADK-Rust re-exports its aligned SDK for advanced transports and server
   authoring. Sampling remains an opt-in deprecated-compatibility feature under

@@ -141,10 +141,8 @@ fn save_generated_images(
         if let Some(parts) = &candidate.content.parts {
             for part in parts.iter() {
                 match part {
-                    adk_gemini::Part::Text { text, .. } => {
-                        if !text.trim().is_empty() {
-                            info!(text = text.trim(), prefix = prefix, "model text response");
-                        }
+                    adk_gemini::Part::Text { text, .. } if !text.trim().is_empty() => {
+                        info!(text = text.trim(), prefix = prefix, "model text response");
                     }
                     adk_gemini::Part::InlineData { inline_data } => {
                         image_count += 1;

@@ -914,12 +914,12 @@ impl RealtimeRunner {
                 self.respond_after_tools().await?;
                 self.check_resumption_queue().await?;
             }
-            ServerEvent::FunctionCallDone { call_id, name, arguments, .. } => {
-                if self.runner_config.auto_execute_tools {
-                    // Returned rather than awaited: the run loop dispatches it so event
-                    // intake — audio deltas included — continues while the tool runs.
-                    return Ok(Some(PendingToolCall { call_id, name, arguments }));
-                }
+            ServerEvent::FunctionCallDone { call_id, name, arguments, .. }
+                if self.runner_config.auto_execute_tools =>
+            {
+                // Returned rather than awaited: the run loop dispatches it so event
+                // intake — audio deltas included — continues while the tool runs.
+                return Ok(Some(PendingToolCall { call_id, name, arguments }));
             }
             ServerEvent::SessionUpdated { session, .. } => {
                 // Check if the generic session update contains a resumption token

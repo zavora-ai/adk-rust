@@ -65,8 +65,8 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
                     for (j, part) in parts.iter().enumerate() {
                         match part {
                             // Look for inline data with audio MIME type
-                            Part::InlineData { inline_data } => {
-                                if inline_data.mime_type.starts_with("audio/") {
+                            Part::InlineData { inline_data }
+                                if inline_data.mime_type.starts_with("audio/") => {
                                     info!(mime_type = inline_data.mime_type, "found audio data");
 
                                     // Decode base64 audio data using the new API
@@ -89,8 +89,7 @@ async fn do_main() -> Result<(), Box<dyn std::error::Error>> {
                                         },
                                         Err(e) => error!(error = %e, "error decoding base64 audio"),
                                     }
-                                }
-                            },
+                                },
                             // Display any text content
                             Part::Text { text, thought, thought_signature: _ } => {
                                 if thought.unwrap_or(false) {

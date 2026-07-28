@@ -30,7 +30,9 @@
   # --------------------------------------------------------------------------
   languages.rust = {
     enable = true;
-    channel = "stable";
+    # Read the same file rustup reads, so a devenv shell and a plain `cargo`
+    # invocation always agree. `channel`/`version` cannot be combined with this.
+    toolchainFile = ./rust-toolchain.toml;
   };
 
   languages.javascript = {
