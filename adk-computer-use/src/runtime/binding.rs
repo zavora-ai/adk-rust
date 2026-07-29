@@ -94,11 +94,60 @@ pub fn validate_lease(
             lease.lease_id, lease.state
         )));
     }
-    if lease.action_budget == 0 {
+    // Remaining budget, not total. Checking `action_budget == 0` accepted a lease whose budget
+    // was fully consumed — `action_budget: 1, actions_used: 1` passed while authorizing nothing.
+    if lease.actions_used >= lease.action_budget {
         return Err(ComputerUseError::IdentityMismatch(format!(
-            "control lease {} has no remaining action budget",
-            lease.lease_id
+            "control lease {} has no remaining action budget: {} of {} used",
+            lease.lease_id, lease.actions_used, lease.action_budget
         )));
+    }
+
+    // An expired lease is a well-formed object that authorizes nothing. Rejecting an
+    // unparseable timestamp is deliberate: a lease whose expiry cannot be read is a lease
+    // whose validity cannot be established.
+    match chrono::DateTime::parse_from_rfc3339(&lease.expires_at) {
+        Ok(expires_at) => {
+            if expires_at <= chrono::Utc::now() {
+                return Err(ComputerUseError::IdentityMismatch(format!(
+                    "control lease {} expired at {}",
+                    lease.lease_id, lease.expires_at
+                )));
+            }
+        }
+        Err(e) => {
+            return Err(ComputerUseError::IdentityMismatch(format!(
+                "control lease {} has an unreadable expiry {:?}: {e}",
+                lease.lease_id, lease.expires_at
+            )));
+        }
+    }
+
+    // Target boundaries. A lease scoped to one application must not authorize an action against
+    // another, which is the whole point of scoping it.
+    if let Some(target) = &envelope.target {
+        if !lease.boundaries.app_ids.is_empty()
+            && !lease.boundaries.app_ids.contains(&target.app_id)
+        {
+            return Err(mismatch(
+                OBJECT,
+                "boundaries.app_ids",
+                &target.app_id,
+                &format!("{:?}", lease.boundaries.app_ids),
+            ));
+        }
+
+        if let Some(window_id) = &target.window_id
+            && !lease.boundaries.window_ids.is_empty()
+            && !lease.boundaries.window_ids.contains(window_id)
+        {
+            return Err(mismatch(
+                OBJECT,
+                "boundaries.window_ids",
+                &format!("{window_id}"),
+                &format!("{:?}", lease.boundaries.window_ids),
+            ));
+        }
     }
 
     Ok(())

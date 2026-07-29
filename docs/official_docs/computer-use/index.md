@@ -15,7 +15,7 @@ Each response is bound back to the request that produced it:
 
 | Response | Checked against the envelope |
 |----------|------------------------------|
-| `ControlLease` | `session_id`, `principal_id`, `agent_id`, `execution_mode`, plus active state and remaining action budget |
+| `ControlLease` | `session_id`, `principal_id`, `agent_id`, `execution_mode`, active state, **unexpired** `expires_at`, **remaining** budget (`actions_used < action_budget`), and target within `boundaries` |
 | `TargetReservation` | `session_id`, `principal_id`, `agent_id`, `execution_group_id` |
 | `ExecutionReceipt` | `session_id`, `action_id`, and `action_digest` against the envelope's `args_digest` |
 
@@ -70,3 +70,23 @@ declaring only existence, an explicit `verification.satisfied: true` is required
 
 Absence of evidence is never treated as evidence of success. If `computer-use-mcp` verifies
 before issuing a receipt, that is its contract; this adapter does not assume it.
+
+### Lease limits
+
+A lease is refused unless all of these hold:
+
+| Check | Rejected when |
+|-------|---------------|
+| Expiry | `expires_at` is in the past, or cannot be parsed as RFC 3339 |
+| Remaining budget | `actions_used >= action_budget` |
+| Target boundary | the envelope's `target.app_id` is absent from a non-empty `boundaries.app_ids` |
+| Window boundary | the envelope's `target.window_id` is absent from a non-empty `boundaries.window_ids` |
+
+Empty boundaries mean "not scoped" and authorize any target — absence of a restriction is not a
+restriction to nothing.
+
+> **Important:** the first version of this validator checked `action_budget == 0`, which is the
+> *total* budget, so a lease with `action_budget: 1, actions_used: 1` passed while authorizing
+> nothing. It also never read `expires_at` or `boundaries`, so an expired lease and a lease scoped
+> to a different application were both accepted. An unparseable expiry is rejected rather than
+> ignored: a lease whose validity cannot be established is not valid.

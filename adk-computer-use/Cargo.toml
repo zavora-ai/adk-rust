@@ -21,6 +21,8 @@ adk-eval.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Lease expiry is an RFC 3339 timestamp that must be compared, not merely stored.
+chrono.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
@@ -30,7 +32,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 proptest = "1.5"
-chrono.workspace = true
 # Path-only (no version) on purpose: a versioned internal dev-dependency has to be
 # published before this crate can be, which constrains — and can deadlock — the
 # release order. Cargo strips path-only dev-dependencies when packaging.
