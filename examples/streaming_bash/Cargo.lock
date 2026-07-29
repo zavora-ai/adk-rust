@@ -54,6 +54,7 @@ dependencies = [
  "adk-core",
  "async-trait",
  "glob",
+ "libc",
  "regex",
  "serde",
  "serde_json",
