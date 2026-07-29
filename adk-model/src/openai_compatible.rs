@@ -321,7 +321,7 @@ pub(crate) fn build_request_json(
             let json_schema = ResponseFormatJsonSchema {
                 name: request.model.replace(['-', '.', '/'], "_"),
                 description: None,
-                schema: Some(schema_with_strict),
+                schema: schema_with_strict,
                 strict: Some(true),
             };
             request_builder.response_format(ResponseFormat::JsonSchema { json_schema });

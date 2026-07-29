@@ -5,17 +5,18 @@ Offline validation for [issue #395](https://github.com/zavora-ai/adk-rust/issues
 
 ## The bug
 
-`async-openai` 0.33's `ImageUrl.detail` has no `#[serde(skip_serializing_if)]`,
-so a `None` serializes as an explicit `"detail": null`. The official OpenAI API
-tolerates it, but stricter OpenAI-compatible gateways validate `detail` against
-`{auto, low, high}` and reject `null` with HTTP 400:
+Older `async-openai` releases serialized an unset `ImageUrl.detail` as an
+explicit `"detail": null`. The official OpenAI API tolerates it, but stricter
+OpenAI-compatible gateways validate `detail` against `{auto, low, high}` and
+reject `null` with HTTP 400:
 
 ```
 image_url.detail
   Input should be 'auto', 'low' or 'high' [type=literal_error, input_value=None]
 ```
 
-The fix makes `adk-model` emit the API default `"auto"` instead of `None`.
+`adk-model` emits the API default `"auto"` explicitly, keeping the request
+stable across `async-openai` versions.
 
 ## What this example does
 

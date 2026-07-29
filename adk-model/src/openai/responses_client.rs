@@ -156,38 +156,28 @@ pub(super) fn map_openai_error(e: async_openai::error::OpenAIError) -> AdkError 
     let error_string = e.to_string();
 
     if let async_openai::error::OpenAIError::ApiError(ref api_err) = e {
-        // Try to extract status code from the error code or message
-        let (category, code, status) = if api_err.code.as_deref().is_some_and(|c| c.contains("401"))
-            || error_string.contains("401")
-        {
-            (ErrorCategory::Unauthorized, "model.openai_responses.unauthorized", Some(401u16))
-        } else if api_err.code.as_deref().is_some_and(|c| c.contains("429"))
-            || error_string.contains("429")
-            || error_string.contains("rate")
-        {
-            (ErrorCategory::RateLimited, "model.openai_responses.rate_limited", Some(429u16))
-        } else if error_string.contains("500")
-            || error_string.contains("502")
-            || error_string.contains("503")
-            || error_string.contains("504")
-            || error_string.contains("529")
-        {
-            (ErrorCategory::Unavailable, "model.openai_responses.unavailable", None)
-        } else {
-            (ErrorCategory::Internal, "model.openai_responses.api_error", None)
+        let status_code = api_err.status_code.as_u16();
+        let (category, code) = match status_code {
+            401 => (ErrorCategory::Unauthorized, "model.openai_responses.unauthorized"),
+            403 => (ErrorCategory::Forbidden, "model.openai_responses.forbidden"),
+            404 => (ErrorCategory::NotFound, "model.openai_responses.not_found"),
+            408 => (ErrorCategory::Timeout, "model.openai_responses.timeout"),
+            429 => (ErrorCategory::RateLimited, "model.openai_responses.rate_limited"),
+            500 | 502 | 503 | 504 | 529 => {
+                (ErrorCategory::Unavailable, "model.openai_responses.unavailable")
+            }
+            400..=499 => (ErrorCategory::InvalidInput, "model.openai_responses.invalid_request"),
+            _ => (ErrorCategory::Internal, "model.openai_responses.api_error"),
         };
 
-        let mut err = AdkError::new(
+        return AdkError::new(
             ErrorComponent::Model,
             category,
             code,
             format!("OpenAI Responses API error: {api_err}"),
         )
-        .with_provider("openai-responses");
-        if let Some(sc) = status {
-            err = err.with_upstream_status(sc);
-        }
-        return err;
+        .with_provider("openai-responses")
+        .with_upstream_status(status_code);
     }
 
     // Reqwest / network errors → Unavailable (retryable)
@@ -434,6 +424,51 @@ impl Llm for OpenAIResponsesClient {
 mod tests {
     use super::*;
     use crate::openai::config::OpenAIResponsesConfig;
+    use async_openai::error::{ApiError, ApiErrorResponse, OpenAIError};
+
+    fn api_error(status_code: u16) -> OpenAIError {
+        OpenAIError::ApiError(ApiErrorResponse {
+            status_code: reqwest::StatusCode::from_u16(status_code)
+                .expect("status code should be valid"),
+            api_error: ApiError {
+                message: "upstream error".to_string(),
+                r#type: None,
+                param: None,
+                code: None,
+            },
+        })
+    }
+
+    #[test]
+    fn maps_api_error_statuses() {
+        let cases = [
+            (400, ErrorCategory::InvalidInput, "model.openai_responses.invalid_request", false),
+            (401, ErrorCategory::Unauthorized, "model.openai_responses.unauthorized", false),
+            (403, ErrorCategory::Forbidden, "model.openai_responses.forbidden", false),
+            (404, ErrorCategory::NotFound, "model.openai_responses.not_found", false),
+            (408, ErrorCategory::Timeout, "model.openai_responses.timeout", true),
+            (418, ErrorCategory::InvalidInput, "model.openai_responses.invalid_request", false),
+            (429, ErrorCategory::RateLimited, "model.openai_responses.rate_limited", true),
+            (500, ErrorCategory::Unavailable, "model.openai_responses.unavailable", true),
+            (503, ErrorCategory::Unavailable, "model.openai_responses.unavailable", true),
+            (529, ErrorCategory::Unavailable, "model.openai_responses.unavailable", true),
+            (599, ErrorCategory::Internal, "model.openai_responses.api_error", false),
+        ];
+
+        for (status, category, code, retryable) in cases {
+            let error = map_openai_error(api_error(status));
+
+            assert_eq!(
+                (
+                    error.category,
+                    error.code,
+                    error.is_retryable(),
+                    error.details.upstream_status_code,
+                ),
+                (category, code, retryable, Some(status))
+            );
+        }
+    }
 
     #[test]
     fn test_new_rejects_empty_api_key_without_open_responses_mode() {
