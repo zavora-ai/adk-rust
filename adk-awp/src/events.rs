@@ -26,7 +26,12 @@ pub struct AwpEvent {
 }
 
 /// A webhook subscription for AWP events.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// The HMAC secret never leaves this process: it is skipped on serialization and redacted in
+/// `Debug`. Listing subscriptions previously returned every subscriber's signing secret in the
+/// response body, which let anyone who could read the list forge signed deliveries to that
+/// endpoint.
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventSubscription {
     /// Unique subscription identifier.
@@ -38,7 +43,27 @@ pub struct EventSubscription {
     /// Event types this subscription listens for.
     pub event_types: Vec<String>,
     /// Shared secret for HMAC-SHA256 signing.
+    ///
+    /// Skipped on serialization so it cannot reach an HTTP response. Deserialization still
+    /// accepts it, defaulting to empty, so a stored subscription can be loaded.
+    #[serde(skip_serializing, default)]
     pub secret: String,
+}
+
+impl std::fmt::Debug for EventSubscription {
+    /// Redacts the signing secret.
+    ///
+    /// The derived implementation printed it, so any `tracing` call that captured a
+    /// subscription would have written a live credential to the logs.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EventSubscription")
+            .field("id", &self.id)
+            .field("subscriber", &self.subscriber)
+            .field("callback_url", &self.callback_url)
+            .field("event_types", &self.event_types)
+            .field("secret", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Trait for managing event subscriptions and delivering events.
