@@ -445,12 +445,20 @@ pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> 
 
     if let Some(base_url) = a2a_base_url {
         let a2a_controller = A2aController::new(config.clone(), base_url);
-        let a2a_router = Router::new()
+        // Discovery stays public — an agent card is meant to be fetched by unknown peers.
+        // The JSON-RPC routes execute agent and tool work, so they carry the same
+        // authentication as every other mutation surface. They were previously merged at the
+        // root, outside the layer applied to `/api`, so anyone who could reach the port could
+        // drive the agent and incur its costs.
+        let a2a_discovery = Router::new()
             .route("/.well-known/agent.json", get(controllers::a2a::get_agent_card))
+            .with_state(a2a_controller.clone());
+        let a2a_rpc = Router::new()
             .route("/a2a", post(controllers::a2a::handle_jsonrpc))
             .route("/a2a/stream", post(controllers::a2a::handle_jsonrpc_stream))
-            .with_state(a2a_controller);
-        app = app.merge(a2a_router);
+            .with_state(a2a_controller)
+            .layer(auth_layer.clone());
+        app = app.merge(a2a_discovery).merge(a2a_rpc);
     }
 
     let cors_layer = build_cors_layer(&config);
@@ -762,7 +770,7 @@ impl ServerBuilder {
             let shutdown_router = Router::new()
                 .route("/shutdown", post(handle_shutdown))
                 .with_state(handle.token.clone())
-                .layer(auth_layer);
+                .layer(auth_layer.clone());
             api_router = api_router.merge(shutdown_router);
             Some(handle)
         } else {
@@ -785,12 +793,16 @@ impl ServerBuilder {
 
         if let Some(base_url) = &self.a2a_base_url {
             let a2a_controller = A2aController::new(config.clone(), base_url);
-            let a2a_router = Router::new()
+            // Same split as `create_app_with_a2a`: discovery is public, RPC is authenticated.
+            let a2a_discovery = Router::new()
                 .route("/.well-known/agent.json", get(controllers::a2a::get_agent_card))
+                .with_state(a2a_controller.clone());
+            let a2a_rpc = Router::new()
                 .route("/a2a", post(controllers::a2a::handle_jsonrpc))
                 .route("/a2a/stream", post(controllers::a2a::handle_jsonrpc_stream))
-                .with_state(a2a_controller);
-            app = app.merge(a2a_router);
+                .with_state(a2a_controller)
+                .layer(auth_layer.clone());
+            app = app.merge(a2a_discovery).merge(a2a_rpc);
         }
 
         let cors_layer = build_cors_layer(config);

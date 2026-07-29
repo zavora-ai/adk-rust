@@ -16,6 +16,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `expires_at` or `boundaries`, so an expired lease and a lease scoped to a different application
   were accepted as well. All three are now checked, and an expiry that cannot be parsed is
   rejected rather than skipped.
+- **adk-awp: subscription HMAC secrets no longer leave the process.** `EventSubscription`
+  serialized `secret` as a plain field and `GET /awp/events/subscriptions` returned
+  `Json(subs)`, so listing subscriptions disclosed every subscriber's signing key — on an
+  endpoint with no authentication, meaning anyone who could reach it could collect the keys and
+  forge signed webhook deliveries. The field is now `skip_serializing`, and a hand-written
+  `Debug` redacts it so capturing a subscription in a `tracing` call cannot write a live
+  credential to the logs. The secret remains available in-process for signing.
+- **adk-awp: management routes are separated from the public ones.** `awp_routes` mounted
+  discovery, manifest, health, A2A, and subscription CRUD as one unauthenticated router. The new
+  `awp_public_routes` and `awp_management_routes` let an auth layer be applied to the half that
+  creates, enumerates, and deletes webhook destinations. `awp_routes` still returns everything
+  for local development, and its rustdoc says why that is not a production shape.
+- **adk-server: A2A JSON-RPC routes now sit behind the configured authentication layer.**
+  `/a2a` and `/a2a/stream` were merged at the router root, outside the layer applied to `/api`,
+  in both `create_app_with_a2a` and `ServerBuilder::build`. A deployment that authenticated every
+  other mutation surface still allowed any client that could reach the port to drive the agent,
+  call its tools, and incur the cost. Discovery (`/.well-known/agent.json`) stays public, since
+  peers fetch the card before they hold a credential, and with no extractor configured the routes
+  remain open so existing deployments are unaffected.
+- **adk-server: `A2aServer` binds loopback by default.** The builder defaulted to
+  `0.0.0.0:8080`, publishing an agent-executing server to every interface on `build()`. It now
+  defaults to `127.0.0.1:8080`; `bind_addr` opts into a wider bind. The generated `a2a-server`
+  scaffold does the same and reads `BIND_HOST`.
+- **adk-server: `--features a2a-v1` and `--all-features` compile again.** Two test initializers
+  for `RemoteA2aV1Config` omitted the `streaming` field, so both configurations failed to build —
+  which also meant the A2A v1 surface had no executing test coverage.
 
 - **adk-computer-use: security-relevant MCP responses are bound to the request that produced
   them.** `ControlLease`, `TargetReservation`, and `ExecutionReceipt` were deserialized and
@@ -585,6 +611,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entries, so no plan update is emitted today.
 
 ### Fixed
+
+- **adk-auth: the `sso` feature compiles and is gated by CI again.** No workflow built
+  `adk-auth --features sso`, so its SSO/OAuth surface had drifted out of the clippy gate and
+  failed `-D warnings` on four `collapsible_if` lints. `jsonwebtoken` moves to 11, whose
+  `Algorithm` is `#[non_exhaustive]`; the validator now rejects unrecognised algorithms rather
+  than matching exhaustively. `adk-auth --features sso` joins the feature-coverage matrix.
 
 - **adk-sandbox: sandboxed compilation uses the caller's toolchain.** The compile phase passed
   `RUSTUP_HOME` and `CARGO_HOME` into the sandbox but not `RUSTUP_TOOLCHAIN`. `rustc` on `PATH` is

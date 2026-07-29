@@ -119,10 +119,10 @@ impl JwksCache {
         let total_keys = jwks.keys.len();
         self.keys.clear();
         for key in jwks.keys.into_iter().take(self.max_keys) {
-            if let Some(kid) = &key.kid {
-                if let Ok(decoding_key) = key.to_decoding_key() {
-                    self.keys.insert(kid.clone(), decoding_key);
-                }
+            if let Some(kid) = &key.kid
+                && let Ok(decoding_key) = key.to_decoding_key()
+            {
+                self.keys.insert(kid.clone(), decoding_key);
             }
         }
 

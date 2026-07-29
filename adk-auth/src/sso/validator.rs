@@ -139,6 +139,14 @@ impl JwtValidatorBuilder {
                         "algorithm '{algorithm:?}' is not supported with JWKS-based validation. Use an RSA or EC algorithm instead."
                     )));
                 }
+                // `jsonwebtoken::Algorithm` is `#[non_exhaustive]`, so a future release can add
+                // an algorithm this validator has never vetted. Rejecting is the only safe
+                // default: falling through would let an unreviewed algorithm validate tokens.
+                unvetted => {
+                    return Err(TokenError::ValidationError(format!(
+                        "algorithm '{unvetted:?}' is not recognised by this validator. Use an RSA or EC algorithm instead."
+                    )));
+                }
             }
         }
 

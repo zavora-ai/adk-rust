@@ -55,6 +55,6 @@ pub use health::{HealthState, HealthStateMachine, HealthStateSnapshot};
 pub use loader::BusinessContextLoader;
 pub use manifest::build_manifest;
 pub use rate_limit::{InMemoryRateLimiter, RateLimitConfig, RateLimiter};
-pub use router::awp_routes;
+pub use router::{awp_management_routes, awp_public_routes, awp_routes};
 pub use state::{AwpState, AwpStateBuilder};
 pub use trust::{DefaultTrustAssigner, TrustLevelAssigner};

@@ -2390,7 +2390,11 @@ async fn main() -> anyhow::Result<()> {{
     let app = create_app(config);
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
-    let addr = format!("0.0.0.0:{{}}", port);
+    // Loopback by default. Set BIND_HOST=0.0.0.0 to expose this agent, and configure
+    // authentication before you do: the A2A JSON-RPC routes run agent and tool work — and
+    // incur its cost — on behalf of whoever calls them.
+    let host = std::env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let addr = format!("{{host}}:{{port}}");
     println!("ADK agent server running on http://{{addr}}");
     println!("  POST /chat          — send messages");
     println!("  GET  /health        — health check");
@@ -2474,7 +2478,11 @@ async fn main() -> anyhow::Result<()> {{
     );
 {yaml_commented_code}
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
-    let addr = format!("0.0.0.0:{{}}", port);
+    // Loopback by default. Set BIND_HOST=0.0.0.0 to expose this agent, and configure
+    // authentication before you do: the A2A JSON-RPC routes run agent and tool work — and
+    // incur its cost — on behalf of whoever calls them.
+    let host = std::env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let addr = format!("{{host}}:{{port}}");
 
     let server = A2aServer::builder()
         .agent(agent)
