@@ -67,27 +67,27 @@ impl ClaimsMapper {
 
         // Check groups claim
         for group in &claims.groups {
-            if let Some(role) = self.group_to_role.get(group) {
-                if !roles.contains(role) {
-                    roles.push(role.clone());
-                }
+            if let Some(role) = self.group_to_role.get(group)
+                && !roles.contains(role)
+            {
+                roles.push(role.clone());
             }
         }
 
         // Check roles claim (some providers use this)
         for role in &claims.roles {
-            if let Some(mapped_role) = self.group_to_role.get(role) {
-                if !roles.contains(mapped_role) {
-                    roles.push(mapped_role.clone());
-                }
+            if let Some(mapped_role) = self.group_to_role.get(role)
+                && !roles.contains(mapped_role)
+            {
+                roles.push(mapped_role.clone());
             }
         }
 
         // Add default role if no roles matched
-        if roles.is_empty() {
-            if let Some(default) = &self.default_role {
-                roles.push(default.clone());
-            }
+        if roles.is_empty()
+            && let Some(default) = &self.default_role
+        {
+            roles.push(default.clone());
         }
 
         roles

@@ -578,6 +578,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-auth: the `sso` feature compiles and is gated by CI again.** No workflow built
+  `adk-auth --features sso`, so its SSO/OAuth surface had drifted out of the clippy gate and
+  failed `-D warnings` on four `collapsible_if` lints. `jsonwebtoken` moves to 11, whose
+  `Algorithm` is `#[non_exhaustive]`; the validator now rejects unrecognised algorithms rather
+  than matching exhaustively. `adk-auth --features sso` joins the feature-coverage matrix.
+
 - **adk-sandbox: sandboxed compilation uses the caller's toolchain.** The compile phase passed
   `RUSTUP_HOME` and `CARGO_HOME` into the sandbox but not `RUSTUP_TOOLCHAIN`. `rustc` on `PATH` is
   usually a rustup shim, so without it the shim ignored the caller's selection and resolved

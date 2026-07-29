@@ -40,7 +40,7 @@ hex = { workspace = true }
 axum = { version = "0.8", optional = true }
 
 # SSO dependencies (optional)
-jsonwebtoken = { version = "10", features = ["aws_lc_rs"], optional = true }
+jsonwebtoken = { version = "11", features = ["aws_lc_rs"], optional = true }
 reqwest = { workspace = true, features = ["json"], optional = true }
 dashmap = { version = "6", optional = true }
 base64 = { version = "0.22", optional = true }
