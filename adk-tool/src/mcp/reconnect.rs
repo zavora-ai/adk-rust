@@ -48,6 +48,13 @@ pub fn should_refresh_connection(error: &str) -> bool {
     false
 }
 
+/// Replay of `tools/call` after an ambiguous connection failure is opt-in.
+///
+/// A transport failure after the request was transmitted does not prove the call did not run.
+/// Flipping this to `true` silently re-enables duplicate external writes — a payment, message,
+/// or deletion executing more than once. See #504.
+pub(crate) const DEFAULT_RETRY_TOOL_CALLS: bool = false;
+
 pub(crate) fn should_retry_mcp_operation(
     error: &str,
     attempt: u32,
@@ -197,7 +204,7 @@ where
             client: Arc::new(Mutex::new(Some(client))),
             factory,
             config: RefreshConfig::default(),
-            retry_tool_calls: false,
+            retry_tool_calls: DEFAULT_RETRY_TOOL_CALLS,
         }
     }
 
@@ -209,7 +216,7 @@ where
             client: Arc::new(Mutex::new(None)),
             factory,
             config: RefreshConfig::default(),
-            retry_tool_calls: false,
+            retry_tool_calls: DEFAULT_RETRY_TOOL_CALLS,
         }
     }
 

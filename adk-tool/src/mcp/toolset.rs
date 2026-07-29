@@ -6,7 +6,7 @@
 // The McpToolset connects to an MCP server, discovers available tools,
 // and exposes them as ADK-compatible tools for use with LlmAgent.
 
-use super::reconnect::should_retry_mcp_operation;
+use super::reconnect::{DEFAULT_RETRY_TOOL_CALLS, should_retry_mcp_operation};
 use super::task::{McpTaskConfig, TaskError, TaskStatus};
 use super::{ConnectionFactory, RefreshConfig, should_refresh_connection};
 use adk_core::{AdkError, ReadonlyContext, Result, Tool, ToolContext, Toolset};
@@ -238,7 +238,7 @@ where
             task_config: McpTaskConfig::default(),
             connection_factory: None,
             refresh_config: RefreshConfig::default(),
-            retry_tool_calls: false,
+            retry_tool_calls: DEFAULT_RETRY_TOOL_CALLS,
             resource_subscriptions: Arc::new(RwLock::new(BTreeSet::new())),
         }
     }
@@ -1304,6 +1304,20 @@ mod tests {
     fn test_should_retry_mcp_operation_non_reconnectable_error() {
         let config = RefreshConfig::default().with_max_attempts(3);
         assert!(!should_retry_mcp_operation("invalid arguments for tool", 0, &config, true, true));
+    }
+
+    /// The default must stay off.
+    ///
+    /// The opt-in *is* the security boundary of #504. The other tests pass `false` explicitly,
+    /// so they verify the gate honours the flag but not that the flag starts closed — flipping
+    /// every constructor to `true` left the whole suite green. This is the guard for that.
+    #[test]
+    fn tool_call_replay_is_disabled_by_default() {
+        let config = RefreshConfig::default();
+        assert!(
+            !should_retry_mcp_operation("EOF", 0, &config, true, DEFAULT_RETRY_TOOL_CALLS),
+            "a connection-level error must not replay tools/call under the default; see #504"
+        );
     }
 
     #[test]
