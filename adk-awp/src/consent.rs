@@ -2,7 +2,7 @@
 //!
 //! Provides two implementations:
 //! - [`InMemoryConsentService`] — ephemeral, for development and testing
-//! - [`FileConsentService`] — JSON file-backed, for production (GDPR/KPA compliance)
+//! - [`FileConsentService`] — durable local JSON storage
 
 use std::path::{Path, PathBuf};
 

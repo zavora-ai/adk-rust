@@ -31,11 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forge signed webhook deliveries. The field is now `skip_serializing`, and a hand-written
   `Debug` redacts it so capturing a subscription in a `tracing` call cannot write a live
   credential to the logs. The secret remains available in-process for signing.
-- **adk-awp: management routes are separated from the public ones.** `awp_routes` mounted
-  discovery, manifest, health, A2A, and subscription CRUD as one unauthenticated router. The new
-  `awp_public_routes` and `awp_management_routes` let an auth layer be applied to the half that
-  creates, enumerates, and deletes webhook destinations. `awp_routes` still returns everything
-  for local development, and its rustdoc says why that is not a production shape.
+- **adk-awp: public execution and management boundaries now fail closed.** `/awp/a2a` returned
+  `200 acknowledged` without dispatching a message, so callers were told work succeeded when no
+  agent ran. `AwpA2aHandler` now supplies application dispatch; the unconfigured endpoint returns
+  `503`, message IDs and bodies are bounded, and public routes apply the configured rate limiter.
+  `DefaultTrustAssigner` no longer treats an unverified authorization header as known identity.
+  `awp_routes` now returns only public routes; subscription CRUD requires the explicit
+  `awp_management_routes` router and an application auth layer. Malformed version headers return
+  `400` instead of silently becoming the current version. Subscription configuration now requires
+  bounded fields, HTTPS callback URLs, and signing secrets of at least 32 bytes. The no-op
+  `webhook-delivery` feature is removed; the in-memory service signs and logs deliveries, while
+  production HTTP delivery stays behind the `EventSubscriptionService` interface.
 - **adk-server: A2A JSON-RPC routes now sit behind the configured authentication layer.**
   `/a2a` and `/a2a/stream` were merged at the router root, outside the layer applied to `/api`,
   in both `create_app_with_a2a` and `ServerBuilder::build`. A deployment that authenticated every

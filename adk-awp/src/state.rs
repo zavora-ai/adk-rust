@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use awp_types::BusinessContext;
+use awp_types::{BusinessContext, TrustLevel};
 
+use crate::a2a::{AwpA2aHandler, UnconfiguredA2aHandler};
 use crate::consent::{ConsentService, InMemoryConsentService};
 use crate::events::{EventSubscriptionService, InMemoryEventSubscriptionService};
 use crate::health::HealthStateMachine;
@@ -26,13 +27,17 @@ pub struct AwpState {
     pub health: Arc<HealthStateMachine>,
     /// Trust level assigner.
     pub trust_assigner: Arc<dyn TrustLevelAssigner>,
+    /// Trust levels this deployment advertises in discovery.
+    pub supported_trust_levels: Vec<TrustLevel>,
+    /// Application-provided A2A message dispatcher.
+    pub a2a_handler: Arc<dyn AwpA2aHandler>,
 }
 
-/// Builder for [`AwpState`] with sensible defaults.
+/// Builder for [`AwpState`] with fail-closed defaults.
 ///
-/// Only `business_context` is required. All services default to their
-/// in-memory implementations. The builder wires `HealthStateMachine` to
-/// the event service automatically.
+/// Only `business_context` is required. Services default to their in-memory
+/// implementations, the builder wires `HealthStateMachine` to the event
+/// service automatically, and A2A dispatch rejects requests until configured.
 ///
 /// # Example
 ///
@@ -49,6 +54,8 @@ pub struct AwpStateBuilder {
     consent_service: Option<Arc<dyn ConsentService>>,
     event_service: Option<Arc<dyn EventSubscriptionService>>,
     trust_assigner: Option<Arc<dyn TrustLevelAssigner>>,
+    supported_trust_levels: Option<Vec<TrustLevel>>,
+    a2a_handler: Option<Arc<dyn AwpA2aHandler>>,
 }
 
 impl AwpStateBuilder {
@@ -60,6 +67,8 @@ impl AwpStateBuilder {
             consent_service: None,
             event_service: None,
             trust_assigner: None,
+            supported_trust_levels: None,
+            a2a_handler: None,
         }
     }
 
@@ -89,6 +98,25 @@ impl AwpStateBuilder {
         self
     }
 
+    /// Set the trust levels advertised by the discovery document.
+    ///
+    /// The fail-closed default advertises only [`TrustLevel::Anonymous`].
+    /// Include higher levels only when the configured
+    /// [`TrustLevelAssigner`] verifies them.
+    pub fn supported_trust_levels(mut self, levels: impl IntoIterator<Item = TrustLevel>) -> Self {
+        self.supported_trust_levels = Some(levels.into_iter().collect());
+        self
+    }
+
+    /// Set the application dispatcher for `POST /awp/a2a`.
+    ///
+    /// Without a handler, the endpoint fails closed with `503 Service
+    /// Unavailable`; it never acknowledges work that was not dispatched.
+    pub fn a2a_handler(mut self, handler: Arc<dyn AwpA2aHandler>) -> Self {
+        self.a2a_handler = Some(handler);
+        self
+    }
+
     /// Build the [`AwpState`], wiring the health state machine to the event service.
     pub fn build(self) -> AwpState {
         let event_service =
@@ -103,6 +131,11 @@ impl AwpStateBuilder {
             health: Arc::new(HealthStateMachine::new(event_service.clone())),
             event_service,
             trust_assigner: self.trust_assigner.unwrap_or_else(|| Arc::new(DefaultTrustAssigner)),
+            supported_trust_levels: self
+                .supported_trust_levels
+                .filter(|levels| !levels.is_empty())
+                .unwrap_or_else(|| vec![TrustLevel::Anonymous]),
+            a2a_handler: self.a2a_handler.unwrap_or_else(|| Arc::new(UnconfiguredA2aHandler)),
         }
     }
 }
@@ -138,6 +171,7 @@ mod tests {
     fn test_builder_defaults() {
         let state = AwpState::builder(test_context()).build();
         assert_eq!(state.business_context.load().site_name, "Test");
+        assert_eq!(state.supported_trust_levels, vec![TrustLevel::Anonymous]);
     }
 
     #[test]
@@ -183,7 +217,9 @@ mod tests {
             .consent_service(Arc::new(InMemoryConsentService::new()))
             .event_service(Arc::new(InMemoryEventSubscriptionService::new()))
             .trust_assigner(Arc::new(DefaultTrustAssigner))
+            .supported_trust_levels([TrustLevel::Anonymous, TrustLevel::Known])
             .build();
         assert_eq!(state.business_context.load().site_name, "Test");
+        assert_eq!(state.supported_trust_levels, vec![TrustLevel::Anonymous, TrustLevel::Known]);
     }
 }

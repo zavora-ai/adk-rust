@@ -674,28 +674,63 @@ cargo run --manifest-path examples/realtime_tools/Cargo.toml -- probe openai
 Make any website or service natively accessible to AI agents using the `awp-types` and `adk-awp` crates:
 
 ```rust
-use adk_awp::{AwpState, BusinessContextLoader, awp_routes};
+use std::sync::Arc;
+
+use adk_awp::{AwpA2aHandler, AwpState, BusinessContextLoader, awp_routes};
+use async_trait::async_trait;
+use awp_types::AwpError;
+use axum::http::{HeaderMap, header};
+use serde_json::{Value, json};
+
+struct ApplicationA2a {
+    bearer_token: Arc<str>,
+}
+
+#[async_trait]
+impl AwpA2aHandler for ApplicationA2a {
+    async fn handle(&self, headers: HeaderMap, message: Value) -> Result<Value, AwpError> {
+        let expected = format!("Bearer {}", self.bearer_token);
+        if !headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value == expected)
+        {
+            return Err(AwpError::Unauthorized("invalid A2A credential".to_string()));
+        }
+        Ok(json!({ "status": "processed", "messageId": message["id"] }))
+    }
+}
 
 // Load business context from TOML
 let loader = BusinessContextLoader::from_file("business.toml".as_ref())?;
 
-// Build AWP state with sensible defaults (rate limiting, consent, health, events)
-let state = AwpState::builder(loader.context_ref()).build();
+// Install application-specific, authenticated A2A dispatch.
+let a2a_token: Arc<str> = std::env::var("AWP_A2A_TOKEN")?.into();
+let state = AwpState::builder(loader.context_ref())
+    .a2a_handler(Arc::new(ApplicationA2a { bearer_token: a2a_token }))
+    .build();
 
-// Merge AWP routes into your Axum app — 7 endpoints, version negotiation included
+// The safe default router excludes privileged subscription management.
 let app = axum::Router::new()
     .merge(awp_routes(state))
     .merge(your_custom_routes);
+
+let listener = tokio::net::TcpListener::bind("127.0.0.1:3456").await?;
+axum::serve(
+    listener,
+    app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+)
+.await?;
 ```
 
 **AWP Endpoints**:
 - `GET /.well-known/awp.json` — Discovery document (entry point for agents)
 - `GET /awp/manifest` — JSON-LD capability manifest
 - `GET /awp/health` — Health state (Healthy/Degrading/Degraded)
-- `POST /awp/events/subscribe` — Webhook subscriptions with HMAC-SHA256 signing
-- `POST /awp/a2a` — Agent-to-agent message handling
+- `POST /awp/a2a` — Application-provided agent-to-agent dispatch
+- `awp_management_routes()` — Explicit subscription CRUD; apply application auth before merging
 
-**Features**: Trust levels (Anonymous/Known/Partner/Internal), per-trust-level rate limiting, consent management (in-memory or file-backed), health state machine with event emission, version negotiation, business context hot-reload.
+**Features**: Fail-closed trust defaults, per-trust-level rate limiting, bounded A2A requests, consent storage, HMAC signing, health state transitions, version negotiation, and business context hot-reload.
 
 **Run the AWP example**:
 ```bash

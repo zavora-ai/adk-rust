@@ -27,7 +27,6 @@ arc-swap = "1"
 hmac = "0.12"
 sha2 = { workspace = true }
 hex = { workspace = true }
-reqwest = { workspace = true, optional = true }
 dashmap = "6"
 tracing = { workspace = true }
 thiserror = { workspace = true }
@@ -44,4 +43,3 @@ tempfile = "3"
 
 [features]
 default = []
-webhook-delivery = ["dep:reqwest"]

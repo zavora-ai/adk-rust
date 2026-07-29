@@ -3,10 +3,10 @@
 //! Demonstrates an AWP-compliant agent server that:
 //!
 //! 1. Loads a `business.toml` configuration file (full AWP schema)
-//! 2. Serves all AWP protocol endpoints (discovery, manifest, health, events, A2A)
+//! 2. Serves public AWP endpoints and separately authenticated management routes
 //! 3. Runs an LLM agent whose instructions are derived from the business context
 //! 4. Applies version negotiation middleware on all routes
-//! 5. Exercises every endpoint with an HTTP client to verify compliance
+//! 5. Exercises every endpoint with an HTTP client to verify the boundaries
 //!
 //! ## AWP Endpoints Served
 //!
@@ -34,16 +34,17 @@ use std::sync::Arc;
 
 use adk_agent::LlmAgentBuilder;
 use adk_awp::{
-    AwpState, BusinessContextLoader, DefaultTrustAssigner, HealthStateMachine,
-    InMemoryConsentService, InMemoryEventSubscriptionService, InMemoryRateLimiter, awp_routes,
+    AwpA2aHandler, AwpState, BusinessContextLoader, InMemoryEventSubscriptionService,
+    awp_management_routes, awp_routes,
 };
 use adk_core::Content;
 use adk_model::GeminiModel;
 use adk_runner::Runner;
 use adk_session::InMemorySessionService;
 use axum::Json;
-use axum::extract::State;
-use axum::http::StatusCode;
+use axum::extract::{Request, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::Deserialize;
@@ -59,6 +60,45 @@ struct AppState {
     session_service: Arc<InMemorySessionService>,
 }
 
+async fn run_question(state: &AppState, question: &str) -> Result<String, String> {
+    use adk_session::{CreateRequest, SessionService};
+    use futures::StreamExt;
+
+    let user_content = Content::new("user").with_text(question);
+    let session_id = format!("session-{}", uuid::Uuid::new_v4());
+
+    state
+        .session_service
+        .create(CreateRequest {
+            app_name: "awp-agent".into(),
+            user_id: "visitor".into(),
+            session_id: Some(session_id.clone()),
+            state: Default::default(),
+        })
+        .await
+        .map_err(|error| format!("session create error: {error}"))?;
+
+    let mut event_stream = state
+        .runner
+        .run_str("visitor", &session_id, user_content)
+        .await
+        .map_err(|error| format!("runner error: {error}"))?;
+
+    let mut response_text = String::new();
+    while let Some(event) = event_stream.next().await {
+        let event = event.map_err(|error| format!("stream error: {error}"))?;
+        if let Some(content) = event.content() {
+            for part in &content.parts {
+                if let adk_core::Part::Text { text, .. } = part {
+                    response_text.push_str(text);
+                }
+            }
+        }
+    }
+
+    Ok(response_text)
+}
+
 // ---------------------------------------------------------------------------
 // Custom route: POST /ask — send a question to the LLM agent
 // ---------------------------------------------------------------------------
@@ -69,67 +109,77 @@ struct AskRequest {
 }
 
 async fn ask_agent(State(state): State<AppState>, Json(body): Json<AskRequest>) -> Response {
-    use adk_session::{CreateRequest, SessionService};
-    use futures::StreamExt;
-
-    let user_content = Content::new("user").with_text(&body.question);
-    let session_id_str = format!("session-{}", uuid::Uuid::new_v4());
-
-    // Create the session first — the runner requires it to exist
-    if let Err(e) = state
-        .session_service
-        .create(CreateRequest {
-            app_name: "awp-agent".into(),
-            user_id: "visitor".into(),
-            session_id: Some(session_id_str.clone()),
-            state: Default::default(),
-        })
-        .await
-    {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("session create error: {e}")})),
-        )
-            .into_response();
-    }
-
-    // Run the agent
-    let mut event_stream =
-        match state.runner.run_str("visitor", &session_id_str, user_content).await {
-            Ok(s) => s,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": format!("runner error: {e}")})),
-                )
-                    .into_response();
-            }
-        };
-
-    // Collect the final agent response
-    let mut response_text = String::new();
-    while let Some(event) = event_stream.next().await {
-        match event {
-            Ok(ev) => {
-                if let Some(content) = ev.content() {
-                    for part in &content.parts {
-                        if let adk_core::Part::Text { text, .. } = part {
-                            response_text.push_str(text);
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": format!("stream error: {e}")})),
-                )
-                    .into_response();
-            }
+    match run_question(&state, &body.question).await {
+        Ok(answer) => Json(serde_json::json!({ "answer": answer })).into_response(),
+        Err(error) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": error })))
+                .into_response()
         }
     }
+}
 
-    Json(serde_json::json!({ "answer": response_text })).into_response()
+#[derive(Clone)]
+struct AgentA2aHandler {
+    state: AppState,
+    bearer_token: Arc<str>,
+}
+
+#[async_trait::async_trait]
+impl AwpA2aHandler for AgentA2aHandler {
+    async fn handle(
+        &self,
+        headers: HeaderMap,
+        message: serde_json::Value,
+    ) -> Result<serde_json::Value, awp_types::AwpError> {
+        let expected = format!("Bearer {}", self.bearer_token);
+        let authorized = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value == expected);
+        if !authorized {
+            return Err(awp_types::AwpError::Unauthorized(
+                "a valid application A2A credential is required".to_string(),
+            ));
+        }
+
+        let question = message
+            .pointer("/payload/query")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                awp_types::AwpError::InvalidRequest(
+                    "payload.query must be a non-empty string".to_string(),
+                )
+            })?;
+        let answer = run_question(&self.state, question)
+            .await
+            .map_err(awp_types::AwpError::InternalError)?;
+
+        Ok(serde_json::json!({
+            "status": "processed",
+            "messageId": message["id"],
+            "answer": answer,
+        }))
+    }
+}
+
+async fn require_management_auth(
+    State(token): State<Arc<str>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let expected = format!("Bearer {token}");
+    let authorized = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == expected);
+
+    if authorized {
+        next.run(request).await
+    } else {
+        StatusCode::UNAUTHORIZED.into_response()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -236,16 +286,16 @@ async fn main() -> anyhow::Result<()> {
 
     let app_state = AppState { runner, session_service };
 
-    // --- Step 4: Build AWP state with all protocol services ---
-    let event_service = Arc::new(InMemoryEventSubscriptionService::new());
-    let awp_state = AwpState {
-        business_context: loader.context_ref(),
-        rate_limiter: Arc::new(InMemoryRateLimiter::new()),
-        consent_service: Arc::new(InMemoryConsentService::new()),
-        event_service: event_service.clone(),
-        health: Arc::new(HealthStateMachine::new(event_service)),
-        trust_assigner: Arc::new(DefaultTrustAssigner),
-    };
+    // --- Step 4: Build AWP state with real, authenticated A2A dispatch ---
+    let a2a_token: Arc<str> = uuid::Uuid::new_v4().to_string().into();
+    let management_token: Arc<str> = uuid::Uuid::new_v4().to_string().into();
+    let awp_state = AwpState::builder(loader.context_ref())
+        .event_service(Arc::new(InMemoryEventSubscriptionService::new()))
+        .a2a_handler(Arc::new(AgentA2aHandler {
+            state: app_state.clone(),
+            bearer_token: a2a_token.clone(),
+        }))
+        .build();
 
     // --- Step 5: Build the Axum router ---
     // AWP routes carry their own AwpState. Custom routes use AppState.
@@ -256,7 +306,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/products", get(list_products))
         .with_state(app_state);
 
-    let app = axum::Router::new().merge(awp_routes(awp_state)).merge(custom_routes);
+    let management_routes = awp_management_routes(awp_state.clone()).layer(from_fn_with_state(
+        management_token.clone(),
+        require_management_auth,
+    ));
+    let app = axum::Router::new()
+        .merge(awp_routes(awp_state))
+        .merge(management_routes)
+        .merge(custom_routes);
 
     // --- Step 6: Start the server ---
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -264,7 +321,12 @@ async fn main() -> anyhow::Result<()> {
     println!("🚀 AWP server listening on http://{addr}\n");
 
     let server = tokio::spawn(async move {
-        axum::serve(listener, app).await.ok();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .ok();
     });
 
     // --- Step 7: Exercise all AWP endpoints ---
@@ -321,14 +383,23 @@ async fn main() -> anyhow::Result<()> {
         "subscriber": "test-client",
         "callbackUrl": "https://example.com/webhook",
         "eventTypes": ["health.changed"],
-        "secret": "test-secret-key"
+        "secret": "test-secret-key-at-least-32-bytes"
     });
-    let resp = client.post(format!("{base}/awp/events/subscribe")).json(&sub_body).send().await?;
+    let resp = client
+        .post(format!("{base}/awp/events/subscribe"))
+        .bearer_auth(&*management_token)
+        .json(&sub_body)
+        .send()
+        .await?;
     println!("POST /awp/events/subscribe → {}", resp.status());
     let sub_resp: serde_json::Value = resp.json().await?;
     println!("  subscription id: {}", sub_resp["id"]);
 
-    let resp = client.get(format!("{base}/awp/events/subscriptions")).send().await?;
+    let resp = client
+        .get(format!("{base}/awp/events/subscriptions"))
+        .bearer_auth(&*management_token)
+        .send()
+        .await?;
     println!("GET /awp/events/subscriptions → {}", resp.status());
     let subs: serde_json::Value = resp.json().await?;
     println!("  count: {}\n", subs.as_array().map(|a| a.len()).unwrap_or(0));
@@ -342,10 +413,16 @@ async fn main() -> anyhow::Result<()> {
         "messageType": "request",
         "payload": {"query": "What products do you sell?"}
     });
-    let resp = client.post(format!("{base}/awp/a2a")).json(&a2a_body).send().await?;
+    let resp = client
+        .post(format!("{base}/awp/a2a"))
+        .bearer_auth(&*a2a_token)
+        .json(&a2a_body)
+        .send()
+        .await?;
     println!("POST /awp/a2a → {}", resp.status());
     let a2a_resp: serde_json::Value = resp.json().await?;
-    println!("  status: {}\n", a2a_resp["status"]);
+    println!("  status: {}", a2a_resp["status"]);
+    println!("  answer: {}\n", a2a_resp["answer"]);
 
     // 7g. Product catalog
     println!("── Business API ───────────────────────────────");

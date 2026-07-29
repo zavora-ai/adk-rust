@@ -1,16 +1,16 @@
 # Agentic Web Protocol (AWP)
 
-ADK-Rust implements the [Agentic Web Protocol (AWP)](https://agenticwebprotocol.com) — a protocol for making websites and services natively accessible to AI agents. The implementation spans two crates: `awp-types` (pure protocol types) and `adk-awp` (full protocol implementation with Axum routes).
+ADK-Rust provides [Agentic Web Protocol (AWP)](https://agenticwebprotocol.com) types and Axum integration for making websites and services accessible to AI agents. The implementation spans two crates: `awp-types` (pure protocol types) and `adk-awp` (routes, middleware, and service interfaces). Applications supply agent dispatch, authentication, authorization, and durable webhook delivery.
 
 ## Overview
 
-AWP enables any website to declare its capabilities, policies, and business context in a machine-readable format. AI agents can discover these capabilities, negotiate protocol versions, subscribe to events, and interact through typed A2A messages — all while respecting trust levels and rate limits.
+AWP enables any website to declare its capabilities, policies, and business context in a machine-readable format. AI agents can discover these capabilities, negotiate protocol versions, subscribe to events, and interact through typed A2A messages. `adk-awp` enforces body and rate limits at its HTTP boundary; application handlers enforce identity and capability authorization.
 
 Use AWP when:
 - You want AI agents to discover and interact with your service programmatically
-- You need trust-level-based access control (Anonymous, Known, Partner, Internal)
+- You need trust-level metadata and a hook for application-enforced access control
 - You want to serve both human visitors and AI agents from the same endpoints
-- You need event-driven webhooks with HMAC-SHA256 signing
+- You need event subscriptions and HMAC-SHA256 signing primitives
 - You want a health state machine for service monitoring
 
 ## Architecture
@@ -40,7 +40,7 @@ sequenceDiagram
     
     ExtAgent->>Events: POST /awp/events/subscribe
     Events-->>ExtAgent: {subscription_id, webhook_url}
-    Note over Events,ExtAgent: Future events delivered via<br/>HMAC-SHA256 signed webhooks
+    Note over Events,ExtAgent: The application delivery service sends<br/>HMAC-SHA256 signed webhooks
 ```
 
 ### Application Layout
@@ -54,8 +54,8 @@ sequenceDiagram
 │  │  (adk-agent) │  │  ├ /.well-known/awp.json │ │
 │  │              │  │  ├ /awp/manifest          │ │
 │  │  Instructions│  │  ├ /awp/health            │ │
-│  │  derived from│  │  ├ /awp/events/*          │ │
-│  │  business.   │  │  └ /awp/a2a              │ │
+│  │  derived from│  │  └ /awp/a2a              │ │
+│  │  business.   │  │  auth + management routes│ │
 │  │  toml        │  │                           │ │
 │  └──────────────┘  └──────────────────────────┘ │
 │         ▲                      ▲                 │
@@ -72,7 +72,7 @@ sequenceDiagram
 | Crate | Purpose | Dependencies |
 |-------|---------|-------------|
 | `awp-types` | Protocol types (enums, structs, errors) | Zero `adk-*` deps — `serde`, `uuid`, `chrono`, `thiserror` only |
-| `adk-awp` | Full implementation (routes, middleware, services) | `awp-types`, `adk-core`, `axum` 0.8, `tokio`, `dashmap` |
+| `adk-awp` | Routes, middleware, service interfaces, and in-memory implementations | `awp-types`, `adk-core`, `axum` 0.8, `tokio`, `dashmap` |
 
 The split means any Rust project can depend on `awp-types` without pulling in the ADK tree.
 
@@ -134,50 +134,77 @@ hours = "Mon-Fri 9-5 EST"
 
 ```rust
 use std::sync::Arc;
-use adk_awp::{
-    AwpState, BusinessContextLoader, DefaultTrustAssigner,
-    HealthStateMachine, InMemoryConsentService,
-    InMemoryEventSubscriptionService, InMemoryRateLimiter,
-    awp_routes,
-};
 
-// Load business context
+use adk_awp::{AwpA2aHandler, AwpState, BusinessContextLoader, awp_routes};
+use async_trait::async_trait;
+use awp_types::AwpError;
+use axum::http::{HeaderMap, header};
+use serde_json::{Value, json};
+
+struct ApplicationA2a {
+    bearer_token: Arc<str>,
+}
+
+#[async_trait]
+impl AwpA2aHandler for ApplicationA2a {
+    async fn handle(&self, headers: HeaderMap, message: Value) -> Result<Value, AwpError> {
+        let expected = format!("Bearer {}", self.bearer_token);
+        let authorized = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value == expected);
+        if !authorized {
+            return Err(AwpError::Unauthorized("invalid A2A credential".to_string()));
+        }
+        // Authorize the requested capability and dispatch to the application agent.
+        Ok(json!({ "status": "processed", "messageId": message["id"] }))
+    }
+}
+
 let loader = BusinessContextLoader::from_file("business.toml".as_ref())?;
+let a2a_token: Arc<str> = std::env::var("AWP_A2A_TOKEN")?.into();
+let state = AwpState::builder(loader.context_ref())
+    .a2a_handler(Arc::new(ApplicationA2a { bearer_token: a2a_token }))
+    .build();
 
-// Build AWP state with all protocol services
-let event_service = Arc::new(InMemoryEventSubscriptionService::new());
-let state = AwpState {
-    business_context: loader.context_ref(),
-    rate_limiter: Arc::new(InMemoryRateLimiter::new()),
-    consent_service: Arc::new(InMemoryConsentService::new()),
-    event_service: event_service.clone(),
-    health: Arc::new(HealthStateMachine::new(event_service)),
-    trust_assigner: Arc::new(DefaultTrustAssigner),
-};
-
-// Merge AWP routes into your Axum app
 let app = axum::Router::new()
     .merge(awp_routes(state))
     .merge(your_custom_routes);
 
-// Serve
-let listener = tokio::net::TcpListener::bind("0.0.0.0:3456").await?;
-axum::serve(listener, app).await?;
+let listener = tokio::net::TcpListener::bind("127.0.0.1:3456").await?;
+axum::serve(
+    listener,
+    app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+)
+.await?;
 ```
 
-This registers all AWP endpoints with version negotiation middleware applied automatically.
+This registers the four public AWP endpoints with version negotiation, rate
+limiting, and a 64 KiB A2A body limit. Without an `AwpA2aHandler`,
+`POST /awp/a2a` returns `503` and never acknowledges work that was not
+dispatched. `ConnectInfo` supplies the peer address used to isolate anonymous
+rate-limit buckets; without it, unknown callers intentionally share one bucket.
 
-## AWP Endpoints
+## Public AWP endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/.well-known/awp.json` | Discovery document — entry point for agents |
 | GET | `/awp/manifest` | JSON-LD capability manifest |
 | GET | `/awp/health` | Health state (Healthy/Degrading/Degraded) |
+| POST | `/awp/a2a` | Application-provided A2A dispatch |
+
+## Authenticated management endpoints
+
+`awp_management_routes()` returns subscription management separately and
+without an authentication layer. Apply the application's auth middleware
+before merging it:
+
+| Method | Path | Description |
+|--------|------|-------------|
 | POST | `/awp/events/subscribe` | Create a webhook subscription |
 | GET | `/awp/events/subscriptions` | List all subscriptions |
 | DELETE | `/awp/events/subscriptions/{id}` | Delete a subscription |
-| POST | `/awp/a2a` | Agent-to-agent message handler |
 
 ## Discovery Document
 
@@ -192,7 +219,7 @@ The discovery document at `/.well-known/awp.json` is auto-generated from your `b
   "a2aEndpointUrl": "https://myshop.example.com/awp/a2a",
   "eventsEndpointUrl": "https://myshop.example.com/awp/events/subscribe",
   "healthEndpointUrl": "https://myshop.example.com/awp/health",
-  "supportedTrustLevels": ["anonymous", "known", "partner", "internal"]
+  "supportedTrustLevels": ["anonymous"]
 }
 ```
 
@@ -230,26 +257,48 @@ AWP uses four trust levels with increasing access:
 
 Trust levels are ordered: `Anonymous < Known < Partner < Internal`. Each capability in `business.toml` declares its minimum `access_level`.
 
+`DefaultTrustAssigner` classifies every request as `Anonymous`. A bearer or API
+key header is not trusted until an application verifier validates it. Higher
+trust levels therefore require a custom assigner.
+
+Configure `.supported_trust_levels(...)` alongside that assigner so discovery
+advertises only levels the deployment can verify.
+
 ### Custom Trust Assignment
 
 Implement the `TrustLevelAssigner` trait for custom logic:
 
 ```rust
+use std::sync::Arc;
+
+use adk_awp::TrustLevelAssigner;
 use async_trait::async_trait;
 use awp_types::TrustLevel;
-use axum::http::HeaderMap;
-use adk_awp::TrustLevelAssigner;
+use axum::http::{HeaderMap, header};
 
-struct MyTrustAssigner;
+struct MyTrustAssigner {
+    bearer_token: Arc<str>,
+}
 
 #[async_trait]
 impl TrustLevelAssigner for MyTrustAssigner {
     async fn assign(&self, headers: &HeaderMap) -> TrustLevel {
-        // Your JWT validation, allowlist checks, etc.
-        TrustLevel::Known
+        let expected = format!("Bearer {}", self.bearer_token);
+        if headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value == expected)
+        {
+            TrustLevel::Known
+        } else {
+            TrustLevel::Anonymous
+        }
     }
 }
 ```
+
+Use the same verified identity and scope source as the rest of the application
+when assigning `Partner` or `Internal`.
 
 ## Rate Limiting
 
@@ -268,7 +317,6 @@ Rejected requests receive HTTP 429 with a `Retry-After` header.
 
 ```rust
 use std::collections::HashMap;
-use std::time::Duration;
 use awp_types::TrustLevel;
 use adk_awp::{InMemoryRateLimiter, RateLimitConfig};
 
@@ -282,7 +330,7 @@ limits.insert(TrustLevel::Known, RateLimitConfig {
     window_secs: 60,
 });
 
-let limiter = InMemoryRateLimiter::with_config(limits, Duration::from_secs(60));
+let limiter = InMemoryRateLimiter::with_config(limits);
 ```
 
 ## Version Negotiation
@@ -292,28 +340,40 @@ All AWP routes include version negotiation middleware:
 - Clients send `AWP-Version: 1.1` header (optional — defaults to current version)
 - Server checks major version compatibility
 - Compatible requests proceed; incompatible requests get HTTP 406
+- Malformed version values get HTTP 400
 - Response includes `AWP-Version: 1.0` header
 
 ## Event Subscriptions
 
-Agents can subscribe to AWP events via webhooks:
+Subscription management is a privileged surface. Mount
+`awp_management_routes()` behind authentication before accepting these
+requests. Callback URLs must be absolute HTTPS URLs and signing secrets must
+contain at least 32 bytes:
 
 ```bash
 # Subscribe
 curl -X POST http://localhost:3456/awp/events/subscribe \
+  -H "Authorization: Bearer $AWP_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "subscriber": "my-agent",
     "callbackUrl": "https://my-agent.example/webhook",
     "eventTypes": ["health.changed"],
-    "secret": "my-webhook-secret"
+    "secret": "replace-with-at-least-32-random-bytes"
   }'
 
 # List subscriptions
-curl http://localhost:3456/awp/events/subscriptions
+curl -H "Authorization: Bearer $AWP_ADMIN_TOKEN" \
+  http://localhost:3456/awp/events/subscriptions
 ```
 
-Webhook deliveries include an `X-AWP-Signature` header with HMAC-SHA256 signature:
+`InMemoryEventSubscriptionService` signs and logs matching deliveries but
+performs no network I/O. Production applications implement
+`EventSubscriptionService` with destination validation, a durable queue,
+bounded retries, and their HTTP client.
+
+An HTTP delivery implementation can carry an `X-AWP-Signature` header with the
+HMAC-SHA256 signature:
 
 ```
 X-AWP-Signature: sha256=<hex_digest>
@@ -349,9 +409,12 @@ health.report_healthy().await?;
 
 Invalid transitions (e.g., Healthy → Degraded) return an error.
 
-## Consent Framework
+## Consent Storage
 
-AWP includes a consent service for GDPR/privacy compliance:
+AWP includes a consent storage interface. Regulatory compliance also requires
+application-specific notice, lawful basis, retention, access controls, and
+deletion policy; selecting a storage implementation does not establish
+compliance:
 
 ```rust
 use adk_awp::InMemoryConsentService;
@@ -485,17 +548,20 @@ cargo run
 The example:
 1. Loads `business.toml` with products, policies, and brand voice
 2. Creates an LLM agent with instructions derived from the business context
-3. Serves all AWP endpoints + a `/ask` endpoint for the agent
-4. Exercises every endpoint and prints compliance verification
+3. Installs authenticated A2A dispatch to that agent
+4. Mounts management routes behind a separate demo credential
+5. Exercises every endpoint and prints protocol verification
 
 ## Best Practices
 
 1. **Start with a minimal `business.toml`** — only `site_name`, `site_description`, `domain`, capabilities, and policies are required
-2. **Use trust levels** — set `access_level` on capabilities to control who can access what
+2. **Enforce capability authorization** — `access_level` is manifest metadata; the application handler must enforce it
 3. **Enable hot-reload** in production — call `loader.watch()` for zero-downtime config updates
-4. **Implement custom `TrustLevelAssigner`** — the default only distinguishes Anonymous vs Known
-5. **Subscribe to health events** — monitor service state transitions via webhooks
-6. **Verify webhook signatures** — always validate `X-AWP-Signature` on incoming webhooks
+4. **Implement custom `TrustLevelAssigner`** — the default intentionally assigns only `Anonymous`
+5. **Authenticate management routes** — never expose subscription CRUD from an unprotected router
+6. **Install real A2A dispatch** — the fail-closed default returns `503`
+7. **Use durable event delivery** — implement destination policy, queueing, and bounded retries
+8. **Verify webhook signatures** — validate `X-AWP-Signature` on incoming webhooks
 
 ## Related
 

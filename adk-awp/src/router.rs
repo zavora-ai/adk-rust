@@ -1,11 +1,12 @@
 //! AWP route registration for Axum.
 
 use axum::Router;
-use axum::middleware::from_fn;
+use axum::extract::DefaultBodyLimit;
+use axum::middleware::{from_fn, from_fn_with_state};
 use axum::routing::{delete, get, post};
 
 use crate::handlers;
-use crate::middleware::version_negotiation;
+use crate::middleware::{enforce_rate_limit, version_negotiation};
 use crate::state::AwpState;
 
 /// Build an Axum [`Router`] with the publicly reachable AWP endpoints.
@@ -15,8 +16,9 @@ use crate::state::AwpState;
 /// - `GET  /awp/health` — health state
 /// - `POST /awp/a2a` — A2A message handler
 ///
-/// These are safe to expose: discovery, manifest, and health are read-only descriptions of the
-/// service, and agents fetch them before they hold any credential.
+/// Discovery, manifest, and health are read-only descriptions of the service.
+/// The configured [`crate::AwpA2aHandler`] remains responsible for
+/// application authentication and capability authorization.
 ///
 /// Subscription management is **not** included — see [`awp_management_routes`].
 pub fn awp_public_routes(state: AwpState) -> Router {
@@ -24,7 +26,8 @@ pub fn awp_public_routes(state: AwpState) -> Router {
         .route("/.well-known/awp.json", get(handlers::discovery))
         .route("/awp/manifest", get(handlers::manifest))
         .route("/awp/health", get(handlers::health))
-        .route("/awp/a2a", post(handlers::a2a_message))
+        .route("/awp/a2a", post(handlers::a2a_message).layer(DefaultBodyLimit::max(64 * 1024)))
+        .layer(from_fn_with_state(state.clone(), enforce_rate_limit))
         .layer(from_fn(version_negotiation))
         .with_state(state)
 }
@@ -52,20 +55,22 @@ pub fn awp_public_routes(state: AwpState) -> Router {
 /// alongside it.
 pub fn awp_management_routes(state: AwpState) -> Router {
     Router::new()
-        .route("/awp/events/subscribe", post(handlers::subscribe))
+        .route(
+            "/awp/events/subscribe",
+            post(handlers::subscribe).layer(DefaultBodyLimit::max(64 * 1024)),
+        )
         .route("/awp/events/subscriptions", get(handlers::list_subscriptions))
         .route("/awp/events/subscriptions/{id}", delete(handlers::delete_subscription))
+        .layer(from_fn_with_state(state.clone(), enforce_rate_limit))
         .layer(from_fn(version_negotiation))
         .with_state(state)
 }
 
-/// Build an Axum [`Router`] with every AWP endpoint, management included.
+/// Build the safe default AWP [`Router`].
 ///
-/// # Authentication
-///
-/// The management routes carry no authentication. Prefer composing
-/// [`awp_public_routes`] with [`awp_management_routes`] so an auth layer can be applied to the
-/// half that needs it; this function exists for local development and tests.
+/// This is an alias for [`awp_public_routes`]. Subscription management is
+/// excluded because it requires an application authentication layer. Merge
+/// [`awp_management_routes`] explicitly after applying that layer.
 pub fn awp_routes(state: AwpState) -> Router {
-    Router::new().merge(awp_public_routes(state.clone())).merge(awp_management_routes(state))
+    awp_public_routes(state)
 }

@@ -3,18 +3,20 @@
 //! These tests spin up an in-process Axum server with all AWP routes and
 //! verify protocol compliance against the endpoints.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use adk_awp::{
-    AwpState, BusinessContextLoader, DefaultTrustAssigner, HealthStateMachine,
-    InMemoryConsentService, InMemoryEventSubscriptionService, InMemoryRateLimiter, awp_routes,
+    AwpA2aHandler, AwpState, BusinessContextLoader, InMemoryEventSubscriptionService,
+    InMemoryRateLimiter, RateLimitConfig, awp_management_routes, awp_routes,
 };
 use arc_swap::ArcSwap;
 use awp_types::{
-    AwpDiscoveryDocument, BusinessCapability, BusinessContext, BusinessPolicy, CURRENT_VERSION,
-    CapabilityManifest, TrustLevel,
+    AwpDiscoveryDocument, AwpError, BusinessCapability, BusinessContext, BusinessPolicy,
+    CURRENT_VERSION, CapabilityManifest, TrustLevel,
 };
 use axum::body::Body;
+use axum::http::HeaderMap;
 use axum::http::{Request, StatusCode};
 use tower::util::ServiceExt;
 
@@ -49,20 +51,35 @@ fn sample_context() -> BusinessContext {
     ctx
 }
 
-fn build_state(ctx: BusinessContext) -> AwpState {
-    let event_service = Arc::new(InMemoryEventSubscriptionService::new());
-    AwpState {
-        business_context: Arc::new(ArcSwap::from_pointee(ctx)),
-        rate_limiter: Arc::new(InMemoryRateLimiter::new()),
-        consent_service: Arc::new(InMemoryConsentService::new()),
-        event_service: event_service.clone(),
-        health: Arc::new(HealthStateMachine::new(event_service)),
-        trust_assigner: Arc::new(DefaultTrustAssigner),
+struct TestA2aHandler;
+
+#[async_trait::async_trait]
+impl AwpA2aHandler for TestA2aHandler {
+    async fn handle(
+        &self,
+        _headers: HeaderMap,
+        message: serde_json::Value,
+    ) -> Result<serde_json::Value, AwpError> {
+        Ok(serde_json::json!({
+            "status": "processed",
+            "messageId": message["id"],
+        }))
     }
 }
 
+fn build_state(ctx: BusinessContext) -> AwpState {
+    AwpState::builder(Arc::new(ArcSwap::from_pointee(ctx)))
+        .event_service(Arc::new(InMemoryEventSubscriptionService::new()))
+        .a2a_handler(Arc::new(TestA2aHandler))
+        .build()
+}
+
 fn app() -> axum::Router {
-    awp_routes(build_state(sample_context()))
+    let state = build_state(sample_context());
+    axum::Router::new()
+        .merge(awp_routes(state.clone()))
+        // Test-only composition: production callers apply authentication here.
+        .merge(awp_management_routes(state))
 }
 
 // --- 1. Discovery document ---
@@ -90,6 +107,7 @@ async fn test_discovery_document_contains_version_and_urls() {
     assert!(doc.a2a_endpoint_url.contains("/awp/a2a"));
     assert!(doc.events_endpoint_url.contains("/awp/events"));
     assert!(doc.health_endpoint_url.contains("/awp/health"));
+    assert_eq!(doc.supported_trust_levels, vec![TrustLevel::Anonymous]);
 }
 
 // --- 2. Capability manifest ---
@@ -184,7 +202,7 @@ async fn test_event_subscription_create() {
         "subscriber": "test",
         "callbackUrl": "https://example.com/webhook",
         "eventTypes": ["health.changed"],
-        "secret": "test-secret"
+        "secret": "test-secret-at-least-32-bytes-long"
     });
     let response = app()
         .oneshot(
@@ -203,6 +221,35 @@ async fn test_event_subscription_create() {
 }
 
 #[tokio::test]
+async fn test_event_subscription_rejects_insecure_or_weak_configuration() {
+    for body in [
+        serde_json::json!({
+            "subscriber": "test",
+            "callbackUrl": "http://example.com/webhook",
+            "eventTypes": ["health.changed"],
+            "secret": "test-secret-at-least-32-bytes-long"
+        }),
+        serde_json::json!({
+            "subscriber": "test",
+            "callbackUrl": "https://example.com/webhook",
+            "eventTypes": ["health.changed"],
+            "secret": "short"
+        }),
+    ] {
+        let response = app()
+            .oneshot(
+                Request::post("/awp/events/subscribe")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
 async fn test_event_subscription_list() {
     let response = app()
         .oneshot(Request::get("/awp/events/subscriptions").body(Body::empty()).unwrap())
@@ -218,7 +265,7 @@ async fn test_event_subscription_list() {
 // --- 7. A2A message handler ---
 
 #[tokio::test]
-async fn test_a2a_message_acknowledged() {
+async fn test_a2a_message_is_dispatched() {
     let body = serde_json::json!({
         "id": "msg-123",
         "sender": "agent-a",
@@ -240,7 +287,99 @@ async fn test_a2a_message_acknowledged() {
 
     let resp_body = axum::body::to_bytes(response.into_body(), 8192).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
-    assert_eq!(json["status"], "acknowledged");
+    assert_eq!(json["status"], "processed");
+    assert_eq!(json["messageId"], "msg-123");
+}
+
+#[tokio::test]
+async fn test_unconfigured_a2a_handler_fails_closed() {
+    let state = AwpState::builder(Arc::new(ArcSwap::from_pointee(sample_context()))).build();
+    let body = serde_json::json!({ "id": "msg-123" });
+    let response = awp_routes(state)
+        .oneshot(
+            Request::post("/awp/a2a")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn test_a2a_requires_a_bounded_message_id() {
+    for body in [
+        serde_json::json!({ "payload": {} }),
+        serde_json::json!({ "id": " ".repeat(4), "payload": {} }),
+        serde_json::json!({ "id": "x".repeat(257), "payload": {} }),
+    ] {
+        let response = awp_routes(build_state(sample_context()))
+            .oneshot(
+                Request::post("/awp/a2a")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
+async fn test_a2a_body_is_limited_to_64_kib() {
+    let body = serde_json::json!({
+        "id": "msg-large",
+        "payload": "x".repeat(70 * 1024),
+    });
+    let response = awp_routes(build_state(sample_context()))
+        .oneshot(
+            Request::post("/awp/a2a")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn test_public_routes_apply_the_configured_rate_limit() {
+    let limits = HashMap::from([(
+        TrustLevel::Anonymous,
+        RateLimitConfig { max_requests: 1, window_secs: 60 },
+    )]);
+    let state = AwpState::builder(Arc::new(ArcSwap::from_pointee(sample_context())))
+        .rate_limiter(Arc::new(InMemoryRateLimiter::with_config(limits)))
+        .a2a_handler(Arc::new(TestA2aHandler))
+        .build();
+    let app = awp_routes(state);
+
+    let first = app
+        .clone()
+        .oneshot(Request::get("/awp/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let second =
+        app.oneshot(Request::get("/awp/health").body(Body::empty()).unwrap()).await.unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(second.headers().contains_key("Retry-After"));
+}
+
+#[tokio::test]
+async fn test_safe_default_router_excludes_management_routes() {
+    let response = awp_routes(build_state(sample_context()))
+        .oneshot(Request::get("/awp/events/subscriptions").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 // --- 8. HMAC signing ---

@@ -2,6 +2,7 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use uuid::Uuid;
@@ -15,7 +16,8 @@ use crate::state::AwpState;
 /// GET `/.well-known/awp.json` — serve the AWP discovery document.
 pub async fn discovery(State(state): State<AwpState>) -> impl IntoResponse {
     let ctx = state.business_context.load();
-    let doc = generate_discovery_document(&ctx);
+    let mut doc = generate_discovery_document(&ctx);
+    doc.supported_trust_levels = state.supported_trust_levels.clone();
     Json(doc)
 }
 
@@ -55,6 +57,10 @@ pub async fn subscribe(
         secret: body.secret,
     };
 
+    if let Err(error) = subscription.validate() {
+        return AwpErrorResponse(error).into_response();
+    }
+
     match state.event_service.create(subscription.clone()).await {
         Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
         Err(e) => AwpErrorResponse(e).into_response(),
@@ -77,21 +83,33 @@ pub async fn delete_subscription(State(state): State<AwpState>, Path(id): Path<U
     }
 }
 
-/// POST `/awp/a2a` — handle an A2A message.
-///
-/// Currently returns a placeholder acknowledgment. Full A2A routing will be
-/// integrated with `adk-server`'s A2A handler in a future task.
+/// POST `/awp/a2a` — dispatch an A2A message through the configured handler.
 pub async fn a2a_message(
-    State(_state): State<AwpState>,
+    State(state): State<AwpState>,
+    headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    let id = body.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "status": "acknowledged",
-            "messageId": id,
-        })),
-    )
-        .into_response()
+    let Some(object) = body.as_object() else {
+        return AwpErrorResponse(awp_types::AwpError::InvalidRequest(
+            "A2A message body must be a JSON object".to_string(),
+        ))
+        .into_response();
+    };
+    let Some(message_id) = object.get("id").and_then(serde_json::Value::as_str) else {
+        return AwpErrorResponse(awp_types::AwpError::InvalidRequest(
+            "A2A message id must be a string".to_string(),
+        ))
+        .into_response();
+    };
+    if message_id.trim().is_empty() || message_id.len() > 256 {
+        return AwpErrorResponse(awp_types::AwpError::InvalidRequest(
+            "A2A message id must contain 1 to 256 bytes".to_string(),
+        ))
+        .into_response();
+    }
+
+    match state.a2a_handler.handle(headers, body).await {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(error) => AwpErrorResponse(error).into_response(),
+    }
 }

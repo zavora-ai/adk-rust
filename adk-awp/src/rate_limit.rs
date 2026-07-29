@@ -1,11 +1,12 @@
 //! Per-trust-level sliding window rate limiter.
 
 use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use awp_types::TrustLevel;
 use dashmap::DashMap;
+use tokio::time::Instant;
 
 /// Trait for checking whether a request should be rate-limited.
 #[async_trait]
@@ -39,7 +40,6 @@ pub struct RateLimitConfig {
 pub struct InMemoryRateLimiter {
     windows: DashMap<String, VecDeque<Instant>>,
     limits: HashMap<TrustLevel, RateLimitConfig>,
-    window_size: Duration,
 }
 
 impl InMemoryRateLimiter {
@@ -51,15 +51,12 @@ impl InMemoryRateLimiter {
         limits.insert(TrustLevel::Partner, RateLimitConfig { max_requests: 600, window_secs: 60 });
         // Internal is unlimited — no entry in the map
 
-        Self { windows: DashMap::new(), limits, window_size: Duration::from_secs(60) }
+        Self { windows: DashMap::new(), limits }
     }
 
-    /// Create a rate limiter with custom limits and window size.
-    pub fn with_config(
-        limits: HashMap<TrustLevel, RateLimitConfig>,
-        window_size: Duration,
-    ) -> Self {
-        Self { windows: DashMap::new(), limits, window_size }
+    /// Create a rate limiter with custom per-trust-level limits.
+    pub fn with_config(limits: HashMap<TrustLevel, RateLimitConfig>) -> Self {
+        Self { windows: DashMap::new(), limits }
     }
 }
 
@@ -80,7 +77,8 @@ impl RateLimiter for InMemoryRateLimiter {
 
         let composite_key = format!("{trust_level}:{key}");
         let now = Instant::now();
-        let window_start = now - self.window_size;
+        let window_size = Duration::from_secs(config.window_secs.max(1));
+        let window_start = now - window_size;
 
         let mut entry = self.windows.entry(composite_key).or_default();
         let deque = entry.value_mut();
@@ -93,7 +91,7 @@ impl RateLimiter for InMemoryRateLimiter {
         if deque.len() as u64 >= config.max_requests {
             // Calculate retry-after from the oldest entry in the window
             let oldest = deque.front().copied().unwrap_or(now);
-            let expires_at = oldest + self.window_size;
+            let expires_at = oldest + window_size;
             let retry_after = expires_at.duration_since(now).as_secs().max(1);
             return Err(retry_after);
         }
@@ -159,11 +157,25 @@ mod tests {
     async fn test_custom_config() {
         let mut limits = HashMap::new();
         limits.insert(TrustLevel::Anonymous, RateLimitConfig { max_requests: 2, window_secs: 1 });
-        let limiter = InMemoryRateLimiter::with_config(limits, Duration::from_secs(1));
+        let limiter = InMemoryRateLimiter::with_config(limits);
 
         assert!(limiter.check("c", TrustLevel::Anonymous).await.is_ok());
         assert!(limiter.check("c", TrustLevel::Anonymous).await.is_ok());
         assert!(limiter.check("c", TrustLevel::Anonymous).await.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_each_limit_uses_its_configured_window() {
+        let limits = HashMap::from([(
+            TrustLevel::Anonymous,
+            RateLimitConfig { max_requests: 1, window_secs: 2 },
+        )]);
+        let limiter = InMemoryRateLimiter::with_config(limits);
+
+        limiter.check("c", TrustLevel::Anonymous).await.unwrap();
+        assert!(limiter.check("c", TrustLevel::Anonymous).await.is_err());
+        tokio::time::advance(Duration::from_secs(3)).await;
+        assert!(limiter.check("c", TrustLevel::Anonymous).await.is_ok());
     }
 
     #[tokio::test]

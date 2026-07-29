@@ -14,24 +14,17 @@ pub trait TrustLevelAssigner: Send + Sync {
     async fn assign(&self, headers: &HeaderMap) -> TrustLevel;
 }
 
-/// Default trust assigner that checks for `Authorization` headers.
+/// Fail-closed default trust assigner.
 ///
-/// - No credentials → [`TrustLevel::Anonymous`]
-/// - `Bearer` or `ApiKey` token present → [`TrustLevel::Known`]
-///
-/// Replace with `adk-auth` integration for full JWT scope extraction
-/// (Partner/Internal levels) when available.
+/// Every request is anonymous because the presence of an `Authorization`
+/// header does not prove that its credential is valid. Install a custom
+/// implementation backed by `adk-auth` or another verifier before assigning
+/// `Known`, `Partner`, or `Internal` trust.
 pub struct DefaultTrustAssigner;
 
 #[async_trait]
 impl TrustLevelAssigner for DefaultTrustAssigner {
-    async fn assign(&self, headers: &HeaderMap) -> TrustLevel {
-        if let Some(auth) = headers.get("Authorization")
-            && let Ok(val) = auth.to_str()
-            && (val.starts_with("Bearer ") || val.starts_with("ApiKey "))
-        {
-            return TrustLevel::Known;
-        }
+    async fn assign(&self, _headers: &HeaderMap) -> TrustLevel {
         TrustLevel::Anonymous
     }
 }
@@ -48,19 +41,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bearer_token_is_known() {
+    async fn test_unverified_bearer_token_is_anonymous() {
         let assigner = DefaultTrustAssigner;
         let mut headers = HeaderMap::new();
         headers.insert("Authorization", "Bearer some-token-here".parse().unwrap());
-        assert_eq!(assigner.assign(&headers).await, TrustLevel::Known);
+        assert_eq!(assigner.assign(&headers).await, TrustLevel::Anonymous);
     }
 
     #[tokio::test]
-    async fn test_api_key_is_known() {
+    async fn test_unverified_api_key_is_anonymous() {
         let assigner = DefaultTrustAssigner;
         let mut headers = HeaderMap::new();
         headers.insert("Authorization", "ApiKey my-api-key".parse().unwrap());
-        assert_eq!(assigner.assign(&headers).await, TrustLevel::Known);
+        assert_eq!(assigner.assign(&headers).await, TrustLevel::Anonymous);
     }
 
     #[tokio::test]

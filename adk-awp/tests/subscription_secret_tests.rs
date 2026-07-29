@@ -16,7 +16,7 @@ fn subscription() -> EventSubscription {
         subscriber: "partner".to_string(),
         callback_url: "https://partner.test/hook".to_string(),
         event_types: vec!["order.created".to_string()],
-        secret: "super-secret-hmac-key".to_string(),
+        secret: "super-secret-hmac-key-32-bytes!!".to_string(),
     }
 }
 
@@ -70,7 +70,7 @@ async fn the_secret_is_still_usable_in_process_for_signing() {
     let found = listed.iter().find(|s| s.id == id).expect("subscription must be stored");
 
     assert_eq!(
-        found.secret, "super-secret-hmac-key",
+        found.secret, created.secret,
         "the secret must remain available in-process for HMAC signing"
     );
 }
