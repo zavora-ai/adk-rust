@@ -18,6 +18,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
+/// Replay of `tools/call` is opt-in. Changing this default silently re-enables
+/// duplicate external writes; see #504.
+pub(crate) const DEFAULT_RETRY_TOOL_CALLS: bool = false;
+
 /// Errors that should trigger a connection refresh
 pub fn should_refresh_connection(error: &str) -> bool {
     let error_lower = error.to_lowercase();
@@ -197,7 +201,7 @@ where
             client: Arc::new(Mutex::new(Some(client))),
             factory,
             config: RefreshConfig::default(),
-            retry_tool_calls: false,
+            retry_tool_calls: DEFAULT_RETRY_TOOL_CALLS,
         }
     }
 
@@ -209,7 +213,7 @@ where
             client: Arc::new(Mutex::new(None)),
             factory,
             config: RefreshConfig::default(),
-            retry_tool_calls: false,
+            retry_tool_calls: DEFAULT_RETRY_TOOL_CALLS,
         }
     }
 
@@ -527,6 +531,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_call_replay_is_disabled_by_default() {
+        const {
+            assert!(!DEFAULT_RETRY_TOOL_CALLS, "opt-in is the security boundary of #504");
+        }
+    }
 
     #[test]
     fn test_should_refresh_connection() {

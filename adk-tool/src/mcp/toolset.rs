@@ -6,7 +6,7 @@
 // The McpToolset connects to an MCP server, discovers available tools,
 // and exposes them as ADK-compatible tools for use with LlmAgent.
 
-use super::reconnect::should_retry_mcp_operation;
+use super::reconnect::{DEFAULT_RETRY_TOOL_CALLS, should_retry_mcp_operation};
 use super::task::{McpTaskConfig, TaskError, TaskStatus};
 use super::{ConnectionFactory, RefreshConfig, should_refresh_connection};
 use adk_core::{AdkError, ReadonlyContext, Result, Tool, ToolContext, Toolset};
@@ -238,7 +238,7 @@ where
             task_config: McpTaskConfig::default(),
             connection_factory: None,
             refresh_config: RefreshConfig::default(),
-            retry_tool_calls: false,
+            retry_tool_calls: DEFAULT_RETRY_TOOL_CALLS,
             resource_subscriptions: Arc::new(RwLock::new(BTreeSet::new())),
         }
     }
