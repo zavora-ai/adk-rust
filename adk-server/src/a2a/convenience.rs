@@ -116,7 +116,7 @@ impl A2aServer {
 /// # Defaults
 ///
 /// - Session service: [`InMemorySessionService`]
-/// - Bind address: `0.0.0.0:8080`
+/// - Bind address: `127.0.0.1:8080` (loopback; call `bind_addr` to expose it)
 /// - Agent card name: from `agent.name()`
 /// - Agent card description: from `agent.description()`
 /// - Agent card version: `"1.0.0"`
@@ -140,7 +140,10 @@ impl Default for A2aServerBuilder {
         Self {
             agent: None,
             session_service: None,
-            bind_addr: "0.0.0.0:8080".to_string(),
+            // Loopback, not every interface. An A2A server executes agent and tool work, so
+            // exposing it beyond this host is a decision the operator should make explicitly
+            // — the previous default published it to the network on `build()`.
+            bind_addr: "127.0.0.1:8080".to_string(),
             agent_card_name: None,
             agent_card_description: None,
             agent_card_version: None,
@@ -446,7 +449,9 @@ mod tests {
     #[test]
     fn test_builder_defaults() {
         let builder = A2aServer::builder();
-        assert_eq!(builder.bind_addr, "0.0.0.0:8080");
+        // Loopback, deliberately. An A2A server runs agent and tool work, so publishing it
+        // to every interface is an explicit `bind_addr` call, not a default.
+        assert_eq!(builder.bind_addr, "127.0.0.1:8080");
         assert!(builder.streaming_enabled);
         assert!(!builder.push_notifications_enabled);
         assert!(builder.agent.is_none());
@@ -482,7 +487,7 @@ mod tests {
         let result = A2aServer::builder().agent(agent).build();
         assert!(result.is_ok());
         let app = result.unwrap();
-        assert_eq!(app.bind_addr(), "0.0.0.0:8080");
+        assert_eq!(app.bind_addr(), "127.0.0.1:8080", "the default must stay on loopback");
     }
 
     #[test]

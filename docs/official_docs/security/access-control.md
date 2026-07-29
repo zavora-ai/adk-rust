@@ -511,3 +511,24 @@ match provider.validate(token).await {
 ---
 
 **Previous**: [← Evaluation](../evaluation/evaluation.md) | **Next**: [Tool Authorization →](tool-authorization.md)
+
+## A2A endpoints
+
+| Route | Authentication |
+|-------|----------------|
+| `GET /.well-known/agent.json` | **public** — peers fetch the card before they hold a credential |
+| `POST /a2a` | required, when a `RequestContextExtractor` is configured |
+| `POST /a2a/stream` | required, when a `RequestContextExtractor` is configured |
+
+The JSON-RPC routes execute agent and tool work, so they carry the same layer as the session,
+artifact, and debug routers. With no extractor configured there is no credential to demand and
+the routes stay open, so adding the gate does not break an existing deployment.
+
+> **Important:** these routes were previously merged at the router root, outside the layer
+> applied to `/api`. A deployment that authenticated every other mutation surface still let any
+> client that could reach the port drive the agent and incur its cost. This applied to both
+> `create_app_with_a2a` and `ServerBuilder::build`.
+
+`A2aServer::builder()` binds `127.0.0.1:8080` by default. Call `bind_addr` to expose it, and
+configure an extractor before you do. The generated `a2a-server` scaffold follows the same rule
+and reads `BIND_HOST` to opt into a wider bind.

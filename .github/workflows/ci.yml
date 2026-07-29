@@ -173,6 +173,10 @@ jobs:
           - { package: adk-managed, features: memory }
           - { package: adk-audio, features: fx }
           - { package: adk-rag, features: lancedb }
+          # adk-auth's SSO/OAuth surface: gated behind `sso`, so `--workspace` without
+          # feature flags never compiled it. It had drifted out of the clippy gate, and a
+          # jsonwebtoken major bump broke it while every required check stayed green.
+          - { package: adk-auth, features: sso }
     steps:
     - uses: actions/checkout@v7
 
