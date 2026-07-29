@@ -373,7 +373,8 @@ async fn main() -> anyhow::Result<()> {
 
     let caps = backend.capabilities();
     println!("  Backend capabilities:");
-    println!("    Filesystem isolation: {}", caps.enforced_limits.filesystem_isolation);
+    println!("    Filesystem writes:    {}", caps.enforced_limits.filesystem_write_isolation);
+    println!("    Filesystem reads:     {}", caps.enforced_limits.filesystem_read_isolation);
     println!("    Network isolation:    {}", caps.enforced_limits.network_isolation);
     println!("    Timeout enforcement:  {}", caps.enforced_limits.timeout);
 

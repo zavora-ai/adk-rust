@@ -271,6 +271,40 @@ jobs:
       if: always()
       run: echo "### 🧪 doctests (workspace + adk-rust --features full) completed" >> "$GITHUB_STEP_SUMMARY"
 
+  # ── Standalone examples: compile every examples/* crate ────────
+  # The standalone examples are separate workspaces, so the workspace build does
+  # not catch public-API breakage or stale example lockfiles. Run the four
+  # shards before merge; each shard shares one target directory across its
+  # examples to avoid rebuilding common ADK crates.
+  examples-compile:
+    name: examples-compile (${{ matrix.shard }}/4)
+    needs: fmt
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-key: pr-examples-compile-${{ matrix.shard }}
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake protobuf-compiler libdbus-1-dev libasound2-dev libudev-dev
+
+    - name: Compile standalone examples (shard ${{ matrix.shard }} of 4)
+      run: bash scripts/check-examples-compile.sh ${{ matrix.shard }} 4
+
+    - name: Examples summary
+      if: always()
+      shell: bash
+      run: echo "### 📦 standalone example compile, shard ${{ matrix.shard }} of 4" >> "$GITHUB_STEP_SUMMARY"
+
   # ── Scaffolds: cargo-adk generated projects compile ────────────
   templates:
     needs: fmt

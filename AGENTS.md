@@ -32,16 +32,16 @@ expensive axes move to a later tier.
   set: `fmt` (prerequisite gate), `clippy --workspace --all-targets -D warnings`,
   `nextest --workspace` (Linux, runs at most once), `feature-coverage` for
   feature-gated modules default builds skip (e.g. `adk-agent --features codeact`),
-  `docs` (`cargo doc --workspace --no-deps` plus doctests), `templates`,
-  compile-only `macos`/`windows` builds, and `semver` (stable strict, everything
-  else warn-only).
+  `docs` (`cargo doc --workspace --no-deps` plus doctests), standalone examples
+  (4 shards), `templates`, compile-only `macos`/`windows` builds, and `semver`
+  (stable strict, everything else warn-only).
 - **Merge tier** (`ci-merge.yml`, on `push: main`) — cross-platform
   `nextest --workspace` on macOS/Windows, the out-of-workspace Monty build, and
   doc-example compilation. Runs post-merge; not branch-protection-required.
 - **Nightly tier** (`ci-nightly.yml`, on `schedule`) — the feature-combination
   matrix (clippy with `-D warnings`), `cargo-audit`/`cargo-deny` supply-chain
-  checks, standalone `examples/*` compilation (4 shards), and `#[ignore]`
-  integration tests gated on available secrets. Not branch-protection-required.
+  checks, and `#[ignore]` integration tests gated on available secrets. Not
+  branch-protection-required.
 
 Only the PR tier gates merges. See CONTRIBUTING.md ("Branch Protection — Required
 Status Checks") for the authoritative required-check set.
@@ -458,7 +458,7 @@ cargo nextest run -p adk-realtime --features full            # with features
 ## Documentation
 
 - When making a change that adds or changes an API, ensure that `docs/official_docs/` is up to date.
-- Documented examples (Cargo snippets, feature names, and package/example references in `README.md` and `docs/official_docs/`) are validated in CI by `scripts/check-doc-examples.sh` against `cargo metadata`. Compile coverage comes from the workspace example crates and cargo-adk templates, so if you change a public API, keep those in sync.
+- Documented examples (Cargo snippets, feature names, and package/example references in `README.md` and `docs/official_docs/`) are validated in CI by `scripts/check-doc-examples.sh` against `cargo metadata`. The PR tier compiles the standalone example workspaces and cargo-adk templates, so if you change a public API, keep those in sync.
 - Update the crate's `README.md` if capabilities changed.
 - Update `CHANGELOG.md` for user-facing changes.
 

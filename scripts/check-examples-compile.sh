@@ -23,8 +23,8 @@ cd "$ROOT" || exit 1
 SHARD_INDEX="${1:-0}"
 SHARD_TOTAL="${2:-1}"
 
-# adk-codeact-monty requires rustc 1.95 (the workspace is pinned to 1.94), so
-# examples/codeact_monty_agent is built by its own workflow on that toolchain.
+# The Monty example pulls a large git dependency and belongs to the separately
+# cached out-of-workspace Monty build in ci-merge.yml/codeact-monty.yml.
 SKIP_EXAMPLES=("examples/codeact_monty_agent")
 
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target/examples-check}"

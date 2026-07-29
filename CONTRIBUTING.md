@@ -292,7 +292,7 @@ expensive axes just move to a later tier.
 
 | Tier | Trigger | Checks | Blocks merge? |
 |------|---------|--------|---------------|
-| **PR** | pull request (`ci.yml` + `semver.yml`) | `fmt` (prerequisite gate), `clippy --workspace -D warnings`, `nextest --workspace` on Linux (at most once), `feature-coverage` (feature-gated modules like `adk-agent --features codeact`), `docs` (single `cargo doc --workspace --no-deps`), `templates`, compile-only `macos`/`windows` builds, `semver` (stable strict, beta warn-only) | Yes — this is the required-check set |
+| **PR** | pull request (`ci.yml` + `semver.yml`) | `fmt` (prerequisite gate), `clippy --workspace -D warnings`, `nextest --workspace` on Linux (at most once), `feature-coverage` (feature-gated modules like `adk-agent --features codeact`), docs and doctests, standalone examples (4 shards), `templates`, compile-only `macos`/`windows` builds, `semver` (stable strict, beta warn-only) | Yes — this is the required-check set |
 | **Merge** | `push: main` (`ci-merge.yml`) | cross-platform `nextest --workspace` on macOS/Windows, out-of-workspace Monty build, doc-example compilation | No — runs post-merge |
 | **Nightly** | `schedule` (`ci-nightly.yml`) | feature-combination matrix, `cargo-audit`/`cargo-deny` supply-chain, `#[ignore]` integration tests gated on secrets | No — runs on a schedule |
 
@@ -326,22 +326,30 @@ name is the job name (matrix jobs include the matrix value in parentheses):
 | `clippy` | `ci.yml` | `clippy` |
 | `test` | `ci.yml` | `test` |
 | `feature-coverage (adk-agent, codeact)` | `ci.yml` | `feature-coverage` (matrix) |
+| `feature-coverage (adk-agent, ambient)` | `ci.yml` | `feature-coverage` (matrix) |
 | `feature-coverage (adk-model, openrouter)` | `ci.yml` | `feature-coverage` (matrix) |
 | `feature-coverage (adk-sandbox, wasm)` | `ci.yml` | `feature-coverage` (matrix) |
+| `feature-coverage (adk-sandbox, sandbox-linux)` | `ci.yml` | `feature-coverage` (matrix) |
+| `feature-coverage (adk-realtime, integration)` | `ci.yml` | `feature-coverage` (matrix) |
+| `feature-coverage (adk-managed, memory)` | `ci.yml` | `feature-coverage` (matrix) |
 | `feature-coverage (adk-audio, fx)` | `ci.yml` | `feature-coverage` (matrix) |
 | `feature-coverage (adk-rag, lancedb)` | `ci.yml` | `feature-coverage` (matrix) |
+| `feature-coverage (adk-auth, sso)` | `ci.yml` | `feature-coverage` (matrix) |
+| `feature-coverage (adk-server, a2a-v1)` | `ci.yml` | `feature-coverage` (matrix) |
 | `docs` | `ci.yml` | `docs` |
+| `examples-compile (0/4)` | `ci.yml` | `examples-compile` (matrix) |
+| `examples-compile (1/4)` | `ci.yml` | `examples-compile` (matrix) |
+| `examples-compile (2/4)` | `ci.yml` | `examples-compile` (matrix) |
+| `examples-compile (3/4)` | `ci.yml` | `examples-compile` (matrix) |
 | `templates` | `ci.yml` | `templates` |
 | `macos` | `ci.yml` | `macos` (compile-only build) |
 | `windows` | `ci.yml` | `windows` (compile-only build) |
 | `semver` | `semver.yml` | `semver` (stable-tier strict; beta is warn-only within the same job) |
 
 Notes:
-- `feature-coverage` is a matrix job; its context includes the matrix value, so
-  add each entry that exists. Today the entries are `adk-agent, codeact`,
-  `adk-model, openrouter`, `adk-sandbox, wasm`, `adk-audio, fx`, and
-  `adk-rag, lancedb`. If you append matrix entries, add their contexts here and
-  to branch protection.
+- Matrix-job contexts include the matrix value. If you append a
+  `feature-coverage` entry or change the four `examples-compile` shards, update
+  both this table and branch protection.
 - `semver` is a single job that runs the strict stable-crate check (which can fail
   the job) and a warn-only beta/experimental check (which never fails). Requiring
   the `semver` job therefore requires only the stable-tier semver gate, keeping the
@@ -380,11 +388,21 @@ gh api -X PUT repos/zavora-ai/adk-rust/branches/main/protection \
       { "context": "clippy" },
       { "context": "test" },
       { "context": "feature-coverage (adk-agent, codeact)" },
+      { "context": "feature-coverage (adk-agent, ambient)" },
       { "context": "feature-coverage (adk-model, openrouter)" },
       { "context": "feature-coverage (adk-sandbox, wasm)" },
+      { "context": "feature-coverage (adk-sandbox, sandbox-linux)" },
+      { "context": "feature-coverage (adk-realtime, integration)" },
+      { "context": "feature-coverage (adk-managed, memory)" },
       { "context": "feature-coverage (adk-audio, fx)" },
       { "context": "feature-coverage (adk-rag, lancedb)" },
+      { "context": "feature-coverage (adk-auth, sso)" },
+      { "context": "feature-coverage (adk-server, a2a-v1)" },
       { "context": "docs" },
+      { "context": "examples-compile (0/4)" },
+      { "context": "examples-compile (1/4)" },
+      { "context": "examples-compile (2/4)" },
+      { "context": "examples-compile (3/4)" },
       { "context": "templates" },
       { "context": "macos" },
       { "context": "windows" },
@@ -484,7 +502,7 @@ cargo test --workspace --doc
 - Unit tests: `#[cfg(test)]` modules in source files
 - Integration tests: `tests/*.rs` in each crate
 - Property tests: `tests/*_property_tests.rs` using `proptest` (100+ iterations)
-- Doc examples: Cargo snippets, feature names, and package/example references in `README.md` and `docs/official_docs/` are validated against `cargo metadata` by `scripts/check-doc-examples.sh`. Compile coverage comes from the workspace example crates and cargo-adk templates.
+- Doc examples: Cargo snippets, feature names, and package/example references in `README.md` and `docs/official_docs/` are validated against `cargo metadata` by `scripts/check-doc-examples.sh`. The PR tier compiles the standalone example workspaces and cargo-adk templates.
 
 ### Writing Tests for New Code
 

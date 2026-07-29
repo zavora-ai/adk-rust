@@ -127,14 +127,13 @@ jobs:
         cache-key: features-${{ matrix.name }}
         neutralize-wild: ${{ matrix.neutralize-wild }}
 
-    # espeak-ng is required by `espeak-rs`, pulled in by adk-audio's `kokoro`
-    # backend (part of `all-onnx`). Installed unconditionally so adding a matrix
-    # entry stays a one-line change.
+    # espeak-ng is required by adk-audio's `kokoro` backend. glib is required by
+    # the WebRTC transport in adk-realtime's `full` feature.
     - name: Install system dependencies (Linux)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake protobuf-compiler libespeak-ng-dev
+        sudo apt-get install -y cmake protobuf-compiler libespeak-ng-dev libglib2.0-dev
 
     - name: Install system dependencies (macOS)
       if: runner.os == 'macOS'
@@ -187,45 +186,6 @@ jobs:
       if: always()
       shell: bash
       run: echo "### 🔐 supply-chain checks (cargo audit + cargo deny) completed" >> "$GITHUB_STEP_SUMMARY"
-
-  # ── Standalone examples: compile every examples/* crate ────────
-  # Each example under examples/ is its own workspace with its own Cargo.lock and
-  # path dependencies back into this repo. Nothing else in CI compiles them:
-  # `cargo check --workspace` cannot see them (they are in the root manifest's
-  # `exclude`/outside `members`), and scripts/check-doc-examples.sh only validates
-  # that documented commands resolve in cargo metadata. A public API change can
-  # therefore break the adoption surface silently.
-  #
-  # Nightly tier because this is ~96 separate crate graphs. Sharded so each job
-  # stays within a sensible runtime; the script shares one CARGO_TARGET_DIR per
-  # shard so the ADK crates compile once per shard rather than once per example.
-  examples-compile:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [0, 1, 2, 3]
-    steps:
-    - uses: actions/checkout@v7
-
-    - name: Setup Rust
-      uses: ./.github/actions/setup-rust
-      with:
-        cache-key: examples-compile-${{ matrix.shard }}
-        neutralize-wild: 'true'
-
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake protobuf-compiler
-
-    - name: Compile standalone examples (shard ${{ matrix.shard }} of 4)
-      run: bash scripts/check-examples-compile.sh ${{ matrix.shard }} 4
-
-    - name: Examples summary
-      if: always()
-      shell: bash
-      run: echo "### 📦 standalone example compile, shard ${{ matrix.shard }} of 4" >> "$GITHUB_STEP_SUMMARY"
 
   # ── Integration tests: #[ignore]d tests gated on secrets ───────
   # Requirement 2.3 (scheduled integration coverage). The workspace marks tests

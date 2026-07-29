@@ -19,7 +19,8 @@
 use std::sync::Arc;
 
 use adk_managed::{
-    DefaultManagedAgentRuntime, ManagedAgentRuntime, ModelResolver, ScriptedLlm, ScriptedTurn,
+    DefaultManagedAgentRuntime, ManagedAgentRuntime, ManagedOwner, ModelResolver, ScriptedLlm,
+    ScriptedTurn,
     resolver::ResolverResult,
     types::{ContentBlock, ManagedAgentDef, ModelRef, SessionEvent, UserEvent},
 };
@@ -54,7 +55,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The ScriptedLlm returns pre-defined responses in FIFO order.
     // No API key, no network calls, fully deterministic.
     let scripted_turns = vec![ScriptedTurn {
-        text: Some("Hello! I'm a managed agent running on ADK-Rust. How can I help you today?".to_string()),
+        text: Some(
+            "Hello! I'm a managed agent running on ADK-Rust. How can I help you today?".to_string(),
+        ),
         tool_calls: vec![],
     }];
     let scripted_llm = Arc::new(ScriptedLlm::new("scripted-hello-model", scripted_turns));
@@ -65,10 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let resolver = Arc::new(MockResolver { llm: scripted_llm });
     let session_service = Arc::new(InMemorySessionService::new());
 
-    let runtime = DefaultManagedAgentRuntime::new(
-        resolver,
-        session_service,
-    );
+    let runtime = DefaultManagedAgentRuntime::new(resolver, session_service);
 
     println!("✓ Created DefaultManagedAgentRuntime (InMemory sessions)");
 
@@ -84,7 +84,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✓ Registered agent: {:?}", agent_handle);
 
     // ─── Step 4: Start a session ─────────────────────────────────────────
-    let session_handle = runtime.start_session(&agent_handle, None).await?;
+    let owner = ManagedOwner::new("managed-runtime-hello", "demo-user")?;
+    let session_handle = runtime.start_session(&agent_handle, &owner, None).await?;
     println!("✓ Started session: {:?}", session_handle);
 
     // Check initial status (should be Queued)
@@ -96,9 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ─── Step 6: Send a user message ─────────────────────────────────────
     let user_event = UserEvent::Message {
-        content: vec![ContentBlock::Text {
-            text: "Hello, agent!".to_string(),
-        }],
+        content: vec![ContentBlock::Text { text: "Hello, agent!".to_string() }],
     };
     runtime.send_event(&session_handle, user_event).await?;
     println!("✓ Sent user message: \"Hello, agent!\"");
@@ -159,11 +158,7 @@ fn print_event(index: usize, event: &SessionEvent) {
             let text: String = content
                 .iter()
                 .filter_map(|block| {
-                    if let ContentBlock::Text { text } = block {
-                        Some(text.as_str())
-                    } else {
-                        None
-                    }
+                    if let ContentBlock::Text { text } = block { Some(text.as_str()) } else { None }
                 })
                 .collect::<Vec<_>>()
                 .join("");
