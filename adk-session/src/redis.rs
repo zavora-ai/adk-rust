@@ -270,6 +270,7 @@ impl SessionService for RedisSessionService {
 
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id, session_id = %req.session_id))]
     async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
+        req.try_identity()?;
         let session_k = session_key(&req.app_name, &req.user_id, &req.session_id);
 
         let exists: bool = self
@@ -278,7 +279,7 @@ impl SessionService for RedisSessionService {
             .await
             .map_err(|e| adk_core::AdkError::session(format!("redis exists failed: {e}")))?;
         if !exists {
-            return Err(adk_core::AdkError::session("session not found"));
+            return Err(crate::service::session_not_found(&req));
         }
 
         let raw: HashMap<String, String> = self

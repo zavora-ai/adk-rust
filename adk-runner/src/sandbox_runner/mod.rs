@@ -1,11 +1,11 @@
 //! Sandbox runner lifecycle management.
 //!
-//! This module provides [`SandboxRunner`], a wrapper around the standard [`Runner`](crate::Runner)
-//! that manages the full sandbox lifecycle: provision → start → bind tools → run → stop → snapshot.
+//! This module provides [`SandboxRunner`], a wrapper around the standard [`Runner`]
+//! that manages the full sandbox lifecycle: provision → start → bind tools → run → snapshot → stop.
 //!
 //! # Overview
 //!
-//! The `SandboxRunner` extracts a [`SandboxConfig`](adk_sandbox::workspace::SandboxConfig) from
+//! The `SandboxRunner` extracts a [`SandboxConfig`] from
 //! the agent, provisions a workspace, binds shell and filesystem tools based on enabled
 //! capabilities, delegates execution to the inner runner, and guarantees cleanup (stop) even
 //! on failure.
@@ -19,22 +19,71 @@
 //!
 //! let runner = Runner::new(config)?;
 //! let sandbox_runner = SandboxRunner::new(runner);
-//! let result = sandbox_runner.run(&sandbox_config, "user_1", "session_1").await?;
+//! let content = adk_core::Content::new("user").with_text("list the files");
+//! let result = sandbox_runner
+//!     .run(&sandbox_config, "user_1", "session_1", content)
+//!     .await?;
 //! ```
 
 pub mod binding;
 pub mod tools;
 
 use crate::Runner;
+use adk_core::{AdkError, AppName, Event, SessionId, UserId};
 use adk_sandbox::SandboxError;
 use adk_sandbox::workspace::{SandboxConfig, SnapshotId};
+use serde_json::{Value, json};
 use std::sync::Arc;
+
+use futures::StreamExt;
 use tracing::{info, warn};
+
+/// Exposes the tools bound to a live sandbox session as a [`Toolset`].
+///
+/// The tools hold the session handle, so they are valid only for the run that created them and
+/// are injected per-invocation rather than attached to the agent.
+struct SandboxToolset {
+    tools: Vec<Arc<dyn adk_core::Tool>>,
+}
+
+#[async_trait::async_trait]
+impl adk_core::Toolset for SandboxToolset {
+    fn name(&self) -> &str {
+        "sandbox"
+    }
+
+    async fn tools(
+        &self,
+        _ctx: Arc<dyn adk_core::ReadonlyContext>,
+    ) -> adk_core::Result<Vec<Arc<dyn adk_core::Tool>>> {
+        Ok(self.tools.clone())
+    }
+}
+
+fn attach_cleanup_failure(primary: &mut AdkError, stage: &'static str, cleanup: &AdkError) {
+    let failure = json!({
+        "stage": stage,
+        "component": cleanup.component.to_string(),
+        "category": cleanup.category.to_string(),
+        "code": cleanup.code,
+        "message": cleanup.message,
+    });
+    let entry = primary
+        .details
+        .metadata
+        .entry("sandbox.cleanupErrors".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if let Value::Array(failures) = entry {
+        failures.push(failure);
+    } else {
+        *entry = Value::Array(vec![failure]);
+    }
+}
 
 /// Runner wrapper that manages the sandbox lifecycle around agent execution.
 ///
-/// Provisions the workspace, binds tools, delegates to the inner Runner,
-/// and cleans up (stop + optional snapshot) on completion or failure.
+/// Provisions the workspace, binds tools, delegates to the inner Runner, snapshots when
+/// configured, and stops the sandbox on completion or failure.
 pub struct SandboxRunner {
     inner: Runner,
 }
@@ -57,26 +106,49 @@ impl SandboxRunner {
     /// 2. Starts the sandbox session
     /// 3. Binds tools based on enabled capabilities
     /// 4. Runs the agent loop via the inner Runner
-    /// 5. Stops the session (always, even on failure)
-    /// 6. Optionally snapshots the workspace
+    /// 5. Optionally snapshots the workspace while the session is live
+    /// 6. Stops the session (always after a handle has been provisioned)
     ///
     /// # Stop Guarantee
     ///
-    /// The `stop` method is **always** called on the sandbox client, regardless
-    /// of whether the agent loop succeeds or fails. This ensures resources are
-    /// cleaned up even in error scenarios.
+    /// The `stop` method is called on the sandbox client after every successful provision,
+    /// regardless of whether start, execution, or snapshotting succeeds. This ensures resources
+    /// are cleaned up in error scenarios.
+    ///
+    /// Error precedence follows lifecycle order: an execution error takes precedence over a
+    /// snapshot error, which takes precedence over a stop error. Later cleanup failures are
+    /// retained in the returned error's `sandbox.cleanupErrors` metadata.
     ///
     /// # Errors
     ///
-    /// Returns an error if provisioning or starting the session fails (without
-    /// entering the agent loop), or if the agent loop itself fails (after
-    /// cleanup has been performed).
+    /// Returns an error if identity validation, session lookup or creation, provisioning,
+    /// starting, agent execution, snapshotting, or stopping fails. Cleanup completes before an
+    /// execution error is returned.
     pub async fn run(
         &self,
         config: &SandboxConfig,
         user_id: &str,
         session_id: &str,
+        user_content: adk_core::Content,
     ) -> Result<SandboxRunResult, adk_core::AdkError> {
+        // Validate caller-controlled identity before any session or sandbox side effect.
+        let app_name = AppName::try_from(self.inner.app_name())?;
+        let user_id = UserId::try_from(user_id)?;
+        let session_id = SessionId::try_from(session_id)?;
+
+        let get_request = adk_session::GetRequest {
+            app_name: app_name.to_string(),
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            num_recent_events: None,
+            after: None,
+        };
+        let create_session = match self.inner.session_service().get(get_request).await {
+            Ok(_) => false,
+            Err(error) if error.is_not_found() => true,
+            Err(error) => return Err(error),
+        };
+
         // 1. Provision workspace from manifest
         info!("provisioning sandbox workspace");
         let handle =
@@ -87,31 +159,62 @@ impl SandboxRunner {
         let session = match config.client.start(&handle).await {
             Ok(s) => s,
             Err(e) => {
-                // If start fails, attempt to stop/cleanup the provisioned session
-                let _ = config.client.stop(&handle).await;
-                return Err(adk_core::AdkError::from(e));
+                let mut primary = AdkError::from(e);
+                if let Err(cleanup) = config.client.stop(&handle).await {
+                    warn!(
+                        session_handle = %handle.0,
+                        error = %cleanup,
+                        "failed to stop sandbox after start failure"
+                    );
+                    attach_cleanup_failure(&mut primary, "stop", &AdkError::from(cleanup));
+                }
+                return Err(primary);
             }
         };
 
         // 3. Bind tools based on capabilities
         let session_arc = Arc::from(session);
-        let _bound_tools =
+        let bound_tools =
             binding::bind_tools(session_arc, &config.capabilities, config.command_timeout);
         info!(
             capabilities = ?config.capabilities,
-            tool_count = _bound_tools.len(),
+            tool_count = bound_tools.len(),
             "bound sandbox tools"
         );
 
-        // 4. Run agent loop with session timeout
-        // NOTE: The inner Runner doesn't yet support dynamic tool injection.
-        // The bound tools are prepared here; actual agent loop integration will
-        // be completed when the agent builder supports injecting tools at runtime.
-        // For now, we simulate the agent loop step as a placeholder.
+        // 4. Run the agent loop with the sandbox tools injected, under the session timeout.
+        //
+        // The tools exist only while this session is live, so they are supplied per-invocation
+        // through `runtime_toolsets` rather than baked into the agent.
+        let mut run_config = self.inner.run_config().clone();
+        run_config
+            .runtime_toolsets
+            .push(adk_core::RuntimeToolset::new(Arc::new(SandboxToolset { tools: bound_tools })));
+
         let agent_loop_future = async {
-            // Use the user_id and session_id for future agent loop integration
-            let _ = (user_id, session_id);
-            Ok::<(), adk_core::AdkError>(())
+            if create_session {
+                self.inner
+                    .session_service()
+                    .create(adk_session::CreateRequest {
+                        app_name: app_name.to_string(),
+                        user_id: user_id.to_string(),
+                        session_id: Some(session_id.to_string()),
+                        state: std::collections::HashMap::new(),
+                    })
+                    .await?;
+            }
+
+            let mut events = self
+                .inner
+                .run_with_config(user_id, session_id, user_content, Some(run_config))
+                .await?;
+            // Drain the stream so the agent runs to completion before the session is stopped;
+            // returning early would tear the sandbox down underneath the agent.
+            let mut buffered_events = Vec::new();
+            while let Some(event) = events.next().await {
+                buffered_events.push(event?);
+            }
+            Ok::<Vec<Event>, adk_core::AdkError>(buffered_events)
         };
 
         let agent_loop_result =
@@ -126,47 +229,66 @@ impl SandboxRunner {
                     timeout = ?config.session_timeout,
                     "sandbox session timed out"
                 );
-                Err(adk_core::AdkError::from(SandboxError::SessionTimeout {
-                    timeout: config.session_timeout,
-                }))
+                Err::<Vec<Event>, adk_core::AdkError>(adk_core::AdkError::from(
+                    SandboxError::SessionTimeout { timeout: config.session_timeout },
+                ))
             }
         };
 
-        // 5. Stop session — ALWAYS called, regardless of agent loop outcome
-        info!(session_handle = %handle.0, "stopping sandbox session");
-        if let Err(e) = config.client.stop(&handle).await {
-            warn!(
-                session_handle = %handle.0,
-                error = %e,
-                "failed to stop sandbox session during cleanup"
-            );
-        }
-
-        // 6. Handle agent loop result — propagate error after cleanup
-        agent_loop_result?;
-
-        // 7. Optionally snapshot
-        let snapshot_id = if config.snapshot_on_stop {
+        // 5. Snapshot while the live session still owns the workspace.
+        let (snapshot_id, snapshot_error) = if config.snapshot_on_stop {
             info!(session_handle = %handle.0, "snapshotting sandbox workspace");
             match config.client.snapshot(&handle).await {
                 Ok(id) => {
                     info!(snapshot_id = %id.0, "sandbox snapshot created");
-                    Some(id)
+                    (Some(id), None)
                 }
-                Err(e) => {
+                Err(error) => {
                     warn!(
                         session_handle = %handle.0,
-                        error = %e,
-                        "sandbox snapshot failed, continuing without snapshot"
+                        error = %error,
+                        "failed to snapshot sandbox during cleanup"
                     );
-                    None
+                    (None, Some(AdkError::from(error)))
                 }
             }
         } else {
-            None
+            (None, None)
         };
 
-        Ok(SandboxRunResult { snapshot_id })
+        // 6. Stop session — always called, regardless of agent or snapshot outcome.
+        info!(session_handle = %handle.0, "stopping sandbox session");
+        let stop_error = match config.client.stop(&handle).await {
+            Ok(()) => None,
+            Err(error) => {
+                warn!(
+                    session_handle = %handle.0,
+                    error = %error,
+                    "failed to stop sandbox session during cleanup"
+                );
+                Some(AdkError::from(error))
+            }
+        };
+
+        match (agent_loop_result, snapshot_error, stop_error) {
+            (Err(mut primary), snapshot_error, stop_error) => {
+                if let Some(error) = snapshot_error.as_ref() {
+                    attach_cleanup_failure(&mut primary, "snapshot", error);
+                }
+                if let Some(error) = stop_error.as_ref() {
+                    attach_cleanup_failure(&mut primary, "stop", error);
+                }
+                Err(primary)
+            }
+            (Ok(_), Some(mut primary), stop_error) => {
+                if let Some(error) = stop_error.as_ref() {
+                    attach_cleanup_failure(&mut primary, "stop", error);
+                }
+                Err(primary)
+            }
+            (Ok(_), None, Some(primary)) => Err(primary),
+            (Ok(events), None, None) => Ok(SandboxRunResult { snapshot_id, events }),
+        }
     }
 }
 
@@ -175,4 +297,9 @@ impl SandboxRunner {
 pub struct SandboxRunResult {
     /// The snapshot ID if snapshot-on-stop was enabled.
     pub snapshot_id: Option<SnapshotId>,
+    /// Agent events in the order they were emitted.
+    ///
+    /// Events are buffered because the sandbox is stopped before this result is returned. This
+    /// keeps tool-bearing event streams from outliving the sandbox session they depend on.
+    pub events: Vec<Event>,
 }

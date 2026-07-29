@@ -8,7 +8,8 @@ Demonstrates the full sandbox-agent-harness lifecycle — Manifest definition, w
 - **SandboxConfig construction** — capabilities, timeouts, and snapshot settings
 - **LocalUnixClient** — default backend using local filesystem and child processes
 - **DockerClient** — optional Docker-based isolation via `--docker` flag
-- **Tool binding** — automatic binding of `exec_command`, `write_file`, and `list_dir` tools
+- **Tool binding** — `SandboxRunner` injects `exec_command`, `write_file`, and `list_dir` only
+  while the sandbox session is live
 - **LLM agent loop** — Gemini-powered agent that creates, compiles, and runs a Rust project
 - **Snapshot/resume** — optional workspace persistence and verification via `--snapshot` flag
 - **Lifecycle observability** — structured output with section banners and phase tracking
@@ -133,14 +134,16 @@ The example prints structured output with section banners for each lifecycle pha
   Snapshot on stop: false
 
 ════════════════════════════════════════════════════════════
-  Phase 3: Provisioning Workspace
+  Phase 3: Agent and Runner Construction
 ════════════════════════════════════════════════════════════
-  ...
+  Building LlmAgent with Gemini model...
+  ✅ Agent built: sandbox-workspace-agent
+  ✅ Runner and SandboxRunner constructed
 
 ════════════════════════════════════════════════════════════
-  Phase 4: Agent Execution
+  Phase 4: Managed Sandbox Execution
 ════════════════════════════════════════════════════════════
-  Running agent loop...
+  Provisioning, running, snapshotting, and cleaning up...
 
   🔧 Tool call: list_dir
   🔧 Tool call: write_file
@@ -159,16 +162,18 @@ The example prints structured output with section banners for each lifecycle pha
   Phase 5: Results
 ════════════════════════════════════════════════════════════
   ✅ Agent execution completed successfully
+  ✅ Sandbox session stopped
+  Snapshot disabled
 
 ════════════════════════════════════════════════════════════
   Summary
 ════════════════════════════════════════════════════════════
   ✓ Manifest definition
   ✓ SandboxConfig construction
-  ✓ Provisioning
-  ✓ Agent execution
+  ✓ Runner construction
+  ✓ Managed sandbox execution
   ✓ Stop/cleanup
-  ✗ Snapshot
+  ✓ Snapshot
 ```
 
 When `--snapshot` is enabled, an additional phase appears:
@@ -204,7 +209,7 @@ When `--snapshot` is enabled, an additional phase appears:
 ┌─────────────────────────────────────────────┐
 │  SandboxRunner                              │
 │  Lifecycle: provision → start → bind →      │
-│             agent loop → stop → snapshot    │
+│             agent loop → snapshot → stop    │
 └──────────────┬──────────────────────────────┘
                │
        ┌───────┴───────┐

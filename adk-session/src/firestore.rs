@@ -405,6 +405,7 @@ impl SessionService for FirestoreSessionService {
     }
 
     async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
+        req.try_identity()?;
         let sessions_parent = self.sessions_parent(&req.app_name)?;
 
         // Read session document
@@ -418,7 +419,13 @@ impl SessionService for FirestoreSessionService {
             .one(&req.session_id)
             .await
             .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-            .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
+            .ok_or_else(|| crate::service::session_not_found(&req))?;
+        if session_doc.app_name != req.app_name
+            || session_doc.user_id != req.user_id
+            || session_doc.session_id != req.session_id
+        {
+            return Err(crate::service::session_not_found(&req));
+        }
 
         // Read events subcollection ordered by timestamp
         let events_parent = self.events_parent(&req.app_name, &req.session_id)?;

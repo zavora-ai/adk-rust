@@ -262,14 +262,13 @@ async fn append_event(
         .and_then(Value::as_object)
         .and_then(|actions| actions.get("stateDelta"))
         .and_then(Value::as_object)
+        && let Some(session) = db.sessions.get_mut(&name)
     {
-        if let Some(session) = db.sessions.get_mut(&name) {
-            for (key, value) in actions {
-                session.state.insert(key.clone(), value.clone());
-            }
-            if let Some(timestamp) = event_map.get("timestamp").and_then(Value::as_str) {
-                session.update_time = timestamp.to_string();
-            }
+        for (key, value) in actions {
+            session.state.insert(key.clone(), value.clone());
+        }
+        if let Some(timestamp) = event_map.get("timestamp").and_then(Value::as_str) {
+            session.update_time = timestamp.to_string();
         }
     }
 

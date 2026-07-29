@@ -11,8 +11,8 @@
 //! provision(manifest) → SessionHandle
 //!     start(handle) → Box<dyn SandboxSession>
 //!         ... operations ...
+//!         snapshot(handle) → SnapshotId
 //!     stop(handle)
-//!     snapshot(handle) → SnapshotId
 //! resume(snapshot_id) → SessionHandle
 //! ```
 

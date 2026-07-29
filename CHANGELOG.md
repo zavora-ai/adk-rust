@@ -626,6 +626,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-runner: `SandboxRunner::run` runs the agent instead of reporting a completed run that
+  did nothing.** The method provisioned the workspace, started a session, bound tools, then
+  executed a placeholder future and returned `Ok`. It now drives the inner `Runner` with the
+  bound sandbox tools injected through `RunConfig::runtime_toolsets`, returns the buffered events,
+  snapshots the live workspace when configured, and always stops the sandbox before returning.
+  Identity validation happens before side effects; session creation occurs only for a structured
+  not-found result; and execution, snapshot, and stop failures follow deterministic precedence
+  with later cleanup failures retained as error metadata. **Breaking:** `SandboxRunner::run` takes
+  a `user_content: Content` argument — an agent loop cannot run without input — and
+  `SandboxRunResult` now includes the emitted events.
+- **adk-runner: `Runner::run_with_config` supplies a per-invocation `RunConfig`.** Needed for
+  tools that exist only for the duration of one run. `Runner::run` delegates to it with `None`.
+  New accessors expose the runner's application name, session service, and base run config.
+- **adk-session: missing sessions have one structured contract across every backend.**
+  `SessionService::get` returns `session.not_found` with the `NotFound` category only when a
+  valid `(app_name, user_id, session_id)` identity has no matching record. SQLite and PostgreSQL
+  use `fetch_optional`, so query failures are no longer misreported as missing sessions. The
+  Firestore backend also verifies the stored user before returning a session.
 - **adk-server: `message/stream` drives the agent instead of emitting synthetic events.**
   The handler created a task, transitioned `Working` then `Completed`, and never invoked the
   Runner, so a streaming client received a task that reported success and produced no output.

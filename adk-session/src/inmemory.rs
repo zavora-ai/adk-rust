@@ -48,16 +48,12 @@ impl InMemorySessionService {
         state_utils::merge_states(app, user, session)
     }
 
-    /// Build an [`AdkIdentity`] from raw string fields, returning a session
-    /// error if any field fails validation.
+    /// Builds an [`AdkIdentity`] from raw string fields.
     fn make_identity(app_name: &str, user_id: &str, session_id: &str) -> Result<AdkIdentity> {
         Ok(AdkIdentity::new(
-            AppName::try_from(app_name)
-                .map_err(|e| adk_core::AdkError::session(format!("invalid app_name: {e}")))?,
-            UserId::try_from(user_id)
-                .map_err(|e| adk_core::AdkError::session(format!("invalid user_id: {e}")))?,
-            SessionId::try_from(session_id)
-                .map_err(|e| adk_core::AdkError::session(format!("invalid session_id: {e}")))?,
+            AppName::try_from(app_name)?,
+            UserId::try_from(user_id)?,
+            SessionId::try_from(session_id)?,
         ))
     }
 
@@ -155,9 +151,8 @@ impl SessionService for InMemorySessionService {
         let identity = Self::make_identity(&req.app_name, &req.user_id, &req.session_id)?;
 
         let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
-        let data = sessions
-            .get(&identity)
-            .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
+        let data =
+            sessions.get(&identity).ok_or_else(|| crate::service::session_not_found(&req))?;
 
         let app_state_lock = self.app_state.read().unwrap_or_else(|e| e.into_inner());
         let app_state = app_state_lock.get(&req.app_name).cloned().unwrap_or_default();

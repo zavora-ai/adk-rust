@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use adk_agent::LlmAgentBuilder;
@@ -6,10 +5,9 @@ use adk_core::{Agent, Content};
 use adk_model::gemini::GeminiModel;
 use adk_runner::Runner;
 use adk_runner::sandbox_runner::SandboxRunner;
-use adk_sandbox::workspace::{ManifestEntry, SandboxSession};
-use adk_session::{CreateRequest, InMemorySessionService, SessionService};
+use adk_sandbox::workspace::ManifestEntry;
+use adk_session::InMemorySessionService;
 use clap::Parser;
-use futures::StreamExt;
 use tracing_subscriber::EnvFilter;
 
 mod config;
@@ -91,9 +89,6 @@ async fn main() -> anyhow::Result<()> {
             ManifestEntry::GitRepo { url, path, .. } => {
                 println!("    🔗 {path} (from {url})");
             }
-            _ => {
-                println!("    ❓ (unknown entry type)");
-            }
         }
     }
 
@@ -105,140 +100,56 @@ async fn main() -> anyhow::Result<()> {
     println!("  Command timeout: {:?}", sandbox_config.command_timeout);
     println!("  Snapshot on stop: {}", sandbox_config.snapshot_on_stop);
 
-    // ─── Phase 3: Provisioning Workspace ────────────────────────────────────────
-    banner("Phase 3: Provisioning Workspace");
-    println!("  Provisioning workspace from manifest...");
-
-    let handle = sandbox_config
-        .client
-        .provision(&sandbox_config.manifest)
-        .await
-        .map_err(|e| anyhow::anyhow!("Provisioning failed: {e}"))?;
-
-    println!("  ✅ SessionHandle: {}", handle.0);
-
-    // Start the session
-    println!("  Starting sandbox session...");
-    let session: Box<dyn SandboxSession> = sandbox_config
-        .client
-        .start(&handle)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to start session: {e}"))?;
-
-    // Bind tools based on capabilities
-    let session_arc: Arc<dyn SandboxSession> = Arc::from(session);
-    let bound_tools = adk_runner::sandbox_runner::binding::bind_tools(
-        Arc::clone(&session_arc),
-        &sandbox_config.capabilities,
-        sandbox_config.command_timeout,
-    );
-
-    println!("  ✅ Bound {} tool(s):", bound_tools.len());
-    for tool in &bound_tools {
-        println!("    🔧 {}", tool.name());
-    }
-
-    // ─── Phase 4: Agent Execution ───────────────────────────────────────────────
-    banner("Phase 4: Agent Execution");
+    // ─── Phase 3: Agent and Runner Construction ─────────────────────────────────
+    banner("Phase 3: Agent and Runner Construction");
     println!("  Building LlmAgent with Gemini model...");
 
     let model = GeminiModel::new(&api_key, "gemini-2.5-flash")
         .map_err(|e| anyhow::anyhow!("Failed to create Gemini model: {e}"))?;
 
-    let mut agent_builder = LlmAgentBuilder::new("sandbox-workspace-agent")
+    let agent = LlmAgentBuilder::new("sandbox-workspace-agent")
         .model(Arc::new(model))
-        .instruction(AGENT_INSTRUCTIONS);
-
-    for t in bound_tools {
-        agent_builder = agent_builder.tool(t);
-    }
-
-    let agent = agent_builder.build().map_err(|e| anyhow::anyhow!("Failed to build agent: {e}"))?;
+        .instruction(AGENT_INSTRUCTIONS)
+        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to build agent: {e}"))?;
 
     println!("  ✅ Agent built: {}", agent.name());
 
-    // Create session service and session
-    let session_service: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
-    session_service
-        .create(CreateRequest {
-            app_name: "sandbox-workspace-agent".to_string(),
-            user_id: "demo-user".to_string(),
-            session_id: Some("session-1".to_string()),
-            state: HashMap::new(),
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to create session: {e}"))?;
-
-    // Build the Runner
     let runner = Runner::builder()
         .app_name("sandbox-workspace-agent")
         .agent(Arc::new(agent))
-        .session_service(session_service)
+        .session_service(Arc::new(InMemorySessionService::new()))
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to build runner: {e}"))?;
 
-    // Create SandboxRunner wrapping the Runner (demonstrates the intended API)
     let sandbox_runner = SandboxRunner::new(runner);
-
     println!("  ✅ Runner and SandboxRunner constructed");
-    println!("  Running agent loop...\n");
 
-    // Run the agent via the inner runner with a user message
+    // ─── Phase 4: Managed Sandbox Execution ─────────────────────────────────────
+    banner("Phase 4: Managed Sandbox Execution");
+    println!("  Provisioning, running, snapshotting, and cleaning up...\n");
     let user_content =
         Content::new("user").with_text("Create the Rust hello-world project as instructed.");
+    let result = sandbox_runner
+        .run(&sandbox_config, "demo-user", "session-1", user_content)
+        .await
+        .map_err(|error| anyhow::anyhow!("Sandbox run failed after lifecycle cleanup: {error}"))?;
 
-    let run_result = sandbox_runner.inner().run_str("demo-user", "session-1", user_content).await;
-
-    // Process events from the agent loop
-    let agent_succeeded = match run_result {
-        Ok(mut event_stream) => {
-            let mut success = true;
-            while let Some(event_result) = event_stream.next().await {
-                match event_result {
-                    Ok(event) => print_event(&event),
-                    Err(e) => {
-                        println!("  ❌ Event error: {e}");
-                        success = false;
-                    }
-                }
-            }
-            success
-        }
-        Err(e) => {
-            println!("  ❌ Agent execution failed: {e}");
-            false
-        }
-    };
-
-    // ─── Always stop the session (cleanup guarantee) ────────────────────────────
-    println!("\n  Stopping sandbox session...");
-    if let Err(e) = sandbox_config.client.stop(&handle).await {
-        println!("  ⚠️  Stop failed (non-fatal): {e}");
-    } else {
-        println!("  ✅ Session stopped");
+    for event in &result.events {
+        print_event(event);
     }
+    let snapshot_id = result.snapshot_id;
 
     // ─── Phase 5: Results ───────────────────────────────────────────────────────
     banner("Phase 5: Results");
-    if agent_succeeded {
-        println!("  ✅ Agent execution completed successfully");
+    println!("  ✅ Agent execution completed successfully");
+    println!("  ✅ Sandbox session stopped");
+    if let Some(id) = snapshot_id.as_ref() {
+        println!("  ✅ SnapshotId: {}", id.0);
+    } else if sandbox_config.snapshot_on_stop {
+        println!("  ❌ Snapshot was requested but not returned");
     } else {
-        println!("  ❌ Agent execution failed");
-    }
-
-    // Snapshot if enabled
-    let mut snapshot_id = None;
-    if sandbox_config.snapshot_on_stop {
-        println!("  📸 Creating snapshot...");
-        match sandbox_config.client.snapshot(&handle).await {
-            Ok(id) => {
-                println!("  ✅ SnapshotId: {}", id.0);
-                snapshot_id = Some(id);
-            }
-            Err(e) => {
-                println!("  ⚠️  Snapshot failed: {e}");
-            }
-        }
+        println!("  Snapshot disabled");
     }
 
     // ─── Phase 6: Snapshot/Resume Verification (optional) ───────────────────────
@@ -261,8 +172,11 @@ async fn main() -> anyhow::Result<()> {
                                 }
                                 Err(e) => println!("  ⚠️  list_dir failed: {e}"),
                             }
-                            // Stop the resumed session
-                            let _ = sandbox_config.client.stop(&resumed_handle).await;
+                            if let Err(error) =
+                                sandbox_config.client.stop(&resumed_handle).await
+                            {
+                                println!("  ⚠️  Failed to stop resumed session: {error}");
+                            }
                         }
                         Err(e) => println!("  ❌ Failed to start resumed session: {e}"),
                     }
@@ -278,8 +192,8 @@ async fn main() -> anyhow::Result<()> {
     let phases: Vec<(&str, bool)> = vec![
         ("Manifest definition", true),
         ("SandboxConfig construction", true),
-        ("Provisioning", true),
-        ("Agent execution", agent_succeeded),
+        ("Runner construction", true),
+        ("Managed sandbox execution", true),
         ("Stop/cleanup", true),
         ("Snapshot", !args.snapshot || snapshot_id.is_some()),
     ];

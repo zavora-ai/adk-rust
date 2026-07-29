@@ -111,11 +111,11 @@ impl MongoSessionService {
 
         if max_applied == 0 {
             let existing = self.detect_existing_tables().await?;
-            if existing {
-                if let Some(&(version, description)) = Self::MONGO_SESSION_MIGRATIONS.first() {
-                    self.record_migration(version, description).await?;
-                    max_applied = version;
-                }
+            if existing
+                && let Some(&(version, description)) = Self::MONGO_SESSION_MIGRATIONS.first()
+            {
+                self.record_migration(version, description).await?;
+                max_applied = version;
             }
         }
 
@@ -417,11 +417,12 @@ impl SessionService for MongoSessionService {
 
     #[instrument(skip_all, fields(app_name = %req.app_name, user_id = %req.user_id, session_id = %req.session_id))]
     async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
+        req.try_identity()?;
         let sess_coll = self.db.collection::<Document>("sessions");
         let session_doc = sess_coll
             .find_one(doc! { "app_name": &req.app_name, "user_id": &req.user_id, "session_id": &req.session_id })
             .await.map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
-            .ok_or_else(|| adk_core::AdkError::session("session not found"))?;
+            .ok_or_else(|| crate::service::session_not_found(&req))?;
 
         let state = session_doc.get_document("state").map(bson_to_state).unwrap_or_default();
         let updated_at = session_doc

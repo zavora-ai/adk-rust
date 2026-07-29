@@ -1910,8 +1910,6 @@ dependencies = [
  "anyhow",
  "clap",
  "dotenvy",
- "futures",
- "serde",
  "serde_json",
  "tokio",
  "tracing",

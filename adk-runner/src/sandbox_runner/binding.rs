@@ -1,18 +1,14 @@
 //! Tool binding logic per sandbox capability.
 //!
 //! This module provides the [`bind_tools`] function that creates the appropriate
-//! set of tools based on the enabled [`Capability`](adk_sandbox::workspace::Capability)
+//! set of tools based on the enabled [`Capability`]
 //! set from the agent's [`SandboxConfig`](adk_sandbox::workspace::SandboxConfig).
 //!
 //! # Binding Rules
 //!
-//! - [`Capability::Shell`](adk_sandbox::workspace::Capability::Shell) →
-//!   binds [`ExecCommandTool`](super::tools::ExecCommandTool)
-//! - [`Capability::Filesystem`](adk_sandbox::workspace::Capability::Filesystem) →
-//!   binds [`ReadFileTool`](super::tools::ReadFileTool),
-//!   [`WriteFileTool`](super::tools::WriteFileTool),
-//!   [`ListDirTool`](super::tools::ListDirTool),
-//!   [`ApplyPatchTool`](super::tools::ApplyPatchTool)
+//! - [`Capability::Shell`] → binds [`ExecCommandTool`]
+//! - [`Capability::Filesystem`] → binds [`ReadFileTool`], [`WriteFileTool`], [`ListDirTool`],
+//!   [`ApplyPatchTool`]
 
 use super::tools::{ApplyPatchTool, ExecCommandTool, ListDirTool, ReadFileTool, WriteFileTool};
 use adk_sandbox::workspace::{Capability, SandboxSession};

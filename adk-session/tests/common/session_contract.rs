@@ -21,6 +21,33 @@ pub async fn assert_session_contract_with_users(
     user_1: &str,
     user_2: &str,
 ) {
+    let missing = service
+        .get(GetRequest {
+            app_name: app_name.to_string(),
+            user_id: user_1.to_string(),
+            session_id: "contract-missing".to_string(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .err()
+        .expect("a missing session must return an error");
+    assert!(missing.is_not_found());
+    assert_eq!(missing.code, "session.not_found");
+
+    let invalid = service
+        .get(GetRequest {
+            app_name: app_name.to_string(),
+            user_id: String::new(),
+            session_id: "contract-invalid".to_string(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .err()
+        .expect("an invalid session identity must return an error");
+    assert_eq!(invalid.category, adk_core::ErrorCategory::InvalidInput);
+
     let mut initial_state = HashMap::new();
     initial_state.insert("app:locale".to_string(), json!("en-US"));
     initial_state.insert("user:name".to_string(), json!("alice"));
@@ -151,8 +178,11 @@ pub async fn assert_session_contract_with_users(
             num_recent_events: None,
             after: None,
         })
-        .await;
-    assert!(wrong_user_get.is_err());
+        .await
+        .err()
+        .expect("a session owned by another user must not be returned");
+    assert!(wrong_user_get.is_not_found());
+    assert_eq!(wrong_user_get.code, "session.not_found");
 
     let sessions_user2 = service
         .list(ListRequest {
@@ -239,6 +269,9 @@ pub async fn assert_session_contract_with_users(
             num_recent_events: None,
             after: None,
         })
-        .await;
-    assert!(deleted_get.is_err());
+        .await
+        .err()
+        .expect("a deleted session must return an error");
+    assert!(deleted_get.is_not_found());
+    assert_eq!(deleted_get.code, "session.not_found");
 }

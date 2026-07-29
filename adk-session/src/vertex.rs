@@ -411,27 +411,16 @@ impl SessionService for VertexAiSessionService {
     }
 
     async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
-        if req.app_name.trim().is_empty()
-            || req.user_id.trim().is_empty()
-            || req.session_id.trim().is_empty()
-        {
-            return Err(Self::session_error(format!(
-                "app_name, user_id, and session_id are required, got app_name: '{}' user_id: '{}' session_id: '{}'",
-                req.app_name, req.user_id, req.session_id,
-            )));
-        }
+        req.try_identity()?;
 
         let session_name = self.session_name_from_app(&req.app_name, &req.session_id)?;
         let payload = self
             .fetch_session(&session_name)
             .await?
-            .ok_or_else(|| Self::session_error("session not found"))?;
+            .ok_or_else(|| crate::service::session_not_found(&req))?;
 
         if payload.user_id != req.user_id {
-            return Err(Self::session_error(format!(
-                "session '{}' does not belong to user '{}'",
-                req.session_id, req.user_id,
-            )));
+            return Err(crate::service::session_not_found(&req));
         }
 
         self.remember_session_scope(&req.session_id, &req.app_name, &req.user_id);

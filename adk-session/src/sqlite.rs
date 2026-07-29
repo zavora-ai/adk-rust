@@ -232,13 +232,15 @@ impl SessionService for SqliteSessionService {
     }
 
     async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>> {
+        req.try_identity()?;
         let row = sqlx::query("SELECT state, updated_at FROM sessions WHERE app_name = ? AND user_id = ? AND session_id = ?")
             .bind(&req.app_name)
             .bind(&req.user_id)
             .bind(&req.session_id)
-            .fetch_one(&self.pool)
+            .fetch_optional(&self.pool)
             .await
-            .map_err(|_| adk_core::AdkError::session("session not found"))?;
+            .map_err(|e| adk_core::AdkError::session(format!("query failed: {e}")))?
+            .ok_or_else(|| crate::service::session_not_found(&req))?;
 
         let state: HashMap<String, Value> = serde_json::from_str(row.get("state"))
             .map_err(|e| adk_core::AdkError::session(format!("deserialize failed: {}", e)))?;

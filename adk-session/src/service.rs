@@ -1,6 +1,6 @@
 use crate::{Event, Session};
-use adk_core::Result;
 use adk_core::identity::{AdkIdentity, AppName, SessionId, UserId};
+use adk_core::{AdkError, ErrorComponent, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -106,6 +106,18 @@ impl GetRequest {
     }
 }
 
+/// Builds the canonical error returned when a session identity has no matching record.
+pub(crate) fn session_not_found(req: &GetRequest) -> AdkError {
+    AdkError::not_found(
+        ErrorComponent::Session,
+        "session.not_found",
+        format!(
+            "session '{}' was not found for app '{}' and user '{}'",
+            req.session_id, req.app_name, req.user_id
+        ),
+    )
+}
+
 /// Request to list sessions for a given app and user.
 #[derive(Debug, Clone)]
 pub struct ListRequest {
@@ -206,7 +218,18 @@ impl DeleteRequest {
 pub trait SessionService: Send + Sync {
     /// Create a new session and return it.
     async fn create(&self, req: CreateRequest) -> Result<Box<dyn Session>>;
-    /// Retrieve an existing session by its identifiers.
+    /// Retrieves an existing session by its complete identity.
+    ///
+    /// Implementations address sessions by the full `(app_name, user_id, session_id)` tuple.
+    /// When that valid identity has no matching record, implementations return an
+    /// [`AdkError`] with code `session.not_found` and a
+    /// [`NotFound`](adk_core::ErrorCategory::NotFound) category. Backend and transport failures
+    /// must not be reported as not-found errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-input error when an identifier fails validation, `session.not_found`
+    /// when no matching session exists, or a backend-specific error when retrieval fails.
     async fn get(&self, req: GetRequest) -> Result<Box<dyn Session>>;
     /// List sessions for a given app and user.
     async fn list(&self, req: ListRequest) -> Result<Vec<Box<dyn Session>>>;
