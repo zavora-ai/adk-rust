@@ -89,6 +89,7 @@ dependencies = [
  "adk-graph",
  "adk-tool",
  "async-trait",
+ "chrono",
  "rmcp",
  "serde",
  "serde_json",
