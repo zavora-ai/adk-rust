@@ -229,6 +229,43 @@ fn truncate_utf8(bytes: Vec<u8>, max_bytes: usize) -> String {
     std::str::from_utf8(&bytes[..end]).unwrap_or("").to_string()
 }
 
+/// Reads `reader` to EOF, accumulating at most `cap` bytes.
+///
+/// Bytes past `cap` are read and discarded rather than left in the pipe. Stopping the read
+/// would block the child on a full pipe buffer and stall it until the execution timeout, so
+/// the drain continues even though the data is thrown away.
+///
+/// Returns the retained bytes and whether anything was discarded.
+async fn read_capped<R>(mut reader: R, cap: usize) -> std::io::Result<(Vec<u8>, bool)>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+
+    let mut retained = Vec::new();
+    let mut chunk = [0u8; 8192];
+    let mut discarded = false;
+
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            break;
+        }
+        let room = cap.saturating_sub(retained.len());
+        if room == 0 {
+            discarded = true;
+            continue;
+        }
+        let take = room.min(read);
+        retained.extend_from_slice(&chunk[..take]);
+        if take < read {
+            discarded = true;
+        }
+    }
+
+    Ok((retained, discarded))
+}
+
 #[async_trait]
 impl SandboxBackend for ProcessBackend {
     fn name(&self) -> &str {
@@ -506,15 +543,48 @@ impl ProcessBackend {
             drop(stdin_handle);
         }
 
-        // Wait with timeout
-        let output = tokio::time::timeout(request.timeout, child.wait_with_output()).await;
+        // Read both pipes concurrently with the cap applied as the bytes arrive. Buffering the
+        // whole output first and truncating afterwards let a process allocate without bound
+        // before the limit was consulted, so the cap did not limit memory at all.
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+        let stdout_reader = tokio::spawn(async move {
+            match stdout_pipe {
+                Some(pipe) => read_capped(pipe, MAX_OUTPUT_BYTES).await,
+                None => Ok((Vec::new(), false)),
+            }
+        });
+        let stderr_reader = tokio::spawn(async move {
+            match stderr_pipe {
+                Some(pipe) => read_capped(pipe, MAX_OUTPUT_BYTES).await,
+                None => Ok((Vec::new(), false)),
+            }
+        });
+
+        let output = tokio::time::timeout(request.timeout, async {
+            let status = child.wait().await?;
+            let (stdout, stdout_discarded) =
+                stdout_reader.await.map_err(std::io::Error::other)??;
+            let (stderr, stderr_discarded) =
+                stderr_reader.await.map_err(std::io::Error::other)??;
+            Ok::<_, std::io::Error>((status, stdout, stdout_discarded, stderr, stderr_discarded))
+        })
+        .await;
         let duration = start.elapsed();
 
         match output {
-            Ok(Ok(output)) => {
-                let exit_code = output.status.code().unwrap_or(-1);
-                let stdout = truncate_utf8(output.stdout, MAX_OUTPUT_BYTES);
-                let stderr = truncate_utf8(output.stderr, MAX_OUTPUT_BYTES);
+            Ok(Ok((status, stdout_bytes, stdout_discarded, stderr_bytes, stderr_discarded))) => {
+                let exit_code = status.code().unwrap_or(-1);
+                if stdout_discarded || stderr_discarded {
+                    tracing::warn!(
+                        max_output_bytes = MAX_OUTPUT_BYTES,
+                        stdout.truncated = stdout_discarded,
+                        stderr.truncated = stderr_discarded,
+                        "sandbox output exceeded the cap and was truncated"
+                    );
+                }
+                let stdout = truncate_utf8(stdout_bytes, MAX_OUTPUT_BYTES);
+                let stderr = truncate_utf8(stderr_bytes, MAX_OUTPUT_BYTES);
 
                 Span::current().record("exit_code", exit_code);
                 Span::current().record("duration_ms", duration.as_millis() as u64);
@@ -696,6 +766,47 @@ mod tests {
             matches!(result, Err(SandboxError::InvalidRequest(_))),
             "expected InvalidRequest, got: {result:?}"
         );
+    }
+
+    /// `read_capped` must retain at most `cap` bytes regardless of how much arrives.
+    ///
+    /// This is the property the streaming read exists for, and it is not observable from
+    /// `ExecResult`: `truncate_utf8` caps the *reported* string either way, so an end-to-end
+    /// test passes even when the whole stream was buffered first. Asserting on the retained
+    /// buffer is what distinguishes bounded memory from a bounded report.
+    #[tokio::test]
+    async fn read_capped_retains_at_most_the_cap() {
+        let cap = 4_096;
+        // 256x the cap, so a buffering implementation would allocate 1 MiB here.
+        let source = vec![b'x'; cap * 256];
+
+        let (retained, discarded) = read_capped(&source[..], cap).await.expect("reads");
+
+        assert_eq!(retained.len(), cap, "retained buffer must stop at the cap");
+        assert!(discarded, "the overflow must be reported as discarded");
+    }
+
+    /// Everything is retained when the stream is smaller than the cap, and nothing is flagged.
+    #[tokio::test]
+    async fn read_capped_retains_everything_under_the_cap() {
+        let source = vec![b'y'; 100];
+
+        let (retained, discarded) = read_capped(&source[..], 4_096).await.expect("reads");
+
+        assert_eq!(retained, source);
+        assert!(!discarded);
+    }
+
+    /// A stream landing exactly on the cap is not reported as truncated.
+    #[tokio::test]
+    async fn read_capped_handles_the_exact_boundary() {
+        let cap = 8_192;
+        let source = vec![b'z'; cap];
+
+        let (retained, discarded) = read_capped(&source[..], cap).await.expect("reads");
+
+        assert_eq!(retained.len(), cap);
+        assert!(!discarded, "reaching the cap exactly discards nothing");
     }
 
     #[test]

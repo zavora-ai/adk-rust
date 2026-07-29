@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-sandbox: the process output cap now bounds memory instead of only the report.**
+  `ProcessBackend::execute` called `child.wait_with_output()`, which buffers a process's entire
+  stdout and stderr, and applied the 1 MiB `MAX_OUTPUT_BYTES` limit afterwards. A sandboxed
+  process writing gigabytes allocated gigabytes; the cap limited only what was returned. Both
+  pipes are now read concurrently with the limit applied as bytes arrive. Reading continues past
+  the cap and discards the excess, because stopping would block the child on a full pipe until
+  the execution timeout. Truncation is logged.
+
 - **adk-computer-use: lease validation enforces expiry, remaining budget, and target
   boundaries.** `validate_lease` checked session, principal, agent, execution mode, and
   `state == "active"`, plus `action_budget == 0` — the *total* budget, so a lease with
