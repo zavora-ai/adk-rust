@@ -136,16 +136,16 @@ impl AgentRegistryStore for InMemoryAgentRegistryStore {
 
 /// Check whether an agent card matches the given filter criteria.
 fn matches_filter(card: &AgentCard, filter: &AgentFilter) -> bool {
-    if let Some(prefix) = &filter.name_prefix {
-        if !card.name.starts_with(prefix.as_str()) {
-            return false;
-        }
+    if let Some(prefix) = &filter.name_prefix
+        && !card.name.starts_with(prefix.as_str())
+    {
+        return false;
     }
 
-    if let Some(tag) = &filter.tag {
-        if !card.tags.contains(tag) {
-            return false;
-        }
+    if let Some(tag) = &filter.tag
+        && !card.tags.contains(tag)
+    {
+        return false;
     }
 
     // version_range is reserved for future use — currently a no-op

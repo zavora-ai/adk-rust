@@ -227,15 +227,15 @@ impl TaskStore for InMemoryTaskStore {
         let mut results: Vec<TaskStoreEntry> = tasks
             .values()
             .filter(|entry| {
-                if let Some(ref ctx) = params.context_id {
-                    if entry.context_id != *ctx {
-                        return false;
-                    }
+                if let Some(ref ctx) = params.context_id
+                    && entry.context_id != *ctx
+                {
+                    return false;
                 }
-                if let Some(ref state) = params.state {
-                    if entry.status.state != *state {
-                        return false;
-                    }
+                if let Some(ref state) = params.state
+                    && entry.status.state != *state
+                {
+                    return false;
                 }
                 true
             })

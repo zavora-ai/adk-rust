@@ -177,6 +177,9 @@ jobs:
           # feature flags never compiled it. It had drifted out of the clippy gate, and a
           # jsonwebtoken major bump broke it while every required check stayed green.
           - { package: adk-auth, features: sso }
+          # adk-server's A2A v1 surface: gated behind `a2a-v1`, so `--workspace` without feature
+          # flags never compiled it. 11 clippy failures had accumulated unseen.
+          - { package: adk-server, features: a2a-v1 }
     steps:
     - uses: actions/checkout@v7
 

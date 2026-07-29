@@ -199,10 +199,10 @@ fn interpolate_option_field(
     path: &str,
     errors: &mut Vec<InterpolationError>,
 ) {
-    if let Some(value) = field {
-        if value.contains("${") {
-            *value = resolve_placeholders(value, path, errors);
-        }
+    if let Some(value) = field
+        && value.contains("${")
+    {
+        *value = resolve_placeholders(value, path, errors);
     }
 }
 

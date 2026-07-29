@@ -1,6 +1,6 @@
 # Agent-to-Agent (A2A) Protocol
 
-ADK-Rust implements the [A2A Protocol v1.0.0](https://google.github.io/A2A/) for cross-network agent communication. The implementation lives in `adk-server` behind the `a2a-v1` feature flag and covers all 11 JSON-RPC operations, REST bindings, agent card discovery, and version negotiation. Wire types are provided by [`a2a-protocol-types`](https://crates.io/crates/a2a-protocol-types) — the Foundation-verified Rust A2A SDK by [@tomtom215](https://github.com/tomtom215) ([a2a-rust](https://github.com/tomtom215/a2a-rust)).
+ADK-Rust implements the [A2A Protocol v1.0.0](https://google.github.io/A2A/) for cross-network agent communication. The implementation lives in `adk-server` behind the `a2a-v1` feature flag and covers all 11 JSON-RPC operations, REST bindings, agent card discovery, and version negotiation. See [Operation coverage](#operation-coverage) for the one operation whose semantics are narrower than the specification allows. Wire types are provided by [`a2a-protocol-types`](https://crates.io/crates/a2a-protocol-types) — the Foundation-verified Rust A2A SDK by [@tomtom215](https://github.com/tomtom215) ([a2a-rust](https://github.com/tomtom215/a2a-rust)).
 
 ## Overview
 
@@ -147,7 +147,7 @@ axum::serve(listener, app).await?;
 
 This exposes:
 - `GET /.well-known/agent-card.json` — Agent card with ETag caching
-- `POST /jsonrpc` — JSON-RPC endpoint (all 11 v1 operations)
+- `POST /jsonrpc` — JSON-RPC endpoint (all 11 v1 operations; see [Operation coverage](#operation-coverage))
 - REST routes for all operations
 - `A2A-Version` header negotiation on all routes
 
@@ -340,3 +340,46 @@ The client validates: agent card discovery, SendMessage (both agents with real L
 ---
 
 **Previous**: [← Server](server.md) | **Next**: [Evaluation →](../evaluation/evaluation.md)
+
+## Operation coverage
+
+All 11 v1 JSON-RPC operations are dispatched and implemented.
+
+| Operation | Status |
+|-----------|--------|
+| `SendMessage` | Drives the agent, records its output as an artifact |
+| `SendStreamingMessage` | Drives the agent, streams artifact chunks as they are produced |
+| `GetTask`, `ListTasks` | Full |
+| `CancelTask` | Full |
+| `SubscribeToTask` (`tasks/resubscribe`) | **Snapshot only** — see below |
+| `CreateTaskPushNotificationConfig`, `GetTaskPushNotificationConfig`, `ListTaskPushNotificationConfigs`, `DeleteTaskPushNotificationConfig` | Full |
+| `GetExtendedAgentCard` | Full |
+
+### `SubscribeToTask` is a snapshot
+
+The operation returns the task and its current status, then closes the stream. It does **not**
+deliver subsequent updates, so a client must not wait on it for progress.
+
+A live re-attach requires a per-task event queue that outlives the originating request. The
+reference implementations get this from their A2A SDKs — adk-python and adk-go both delegate
+`tasks/resubscribe` entirely to the SDK's queue manager, and neither implements it in ADK code.
+This server is hand-rolled on `a2a-protocol-types`, which provides wire types rather than a
+server runtime, so the queue does not exist yet.
+
+Use `SendStreamingMessage` when live updates are required.
+
+### Streaming event contract
+
+`SendStreamingMessage` translates agent events as they arrive:
+
+| Agent event | A2A event |
+|-------------|-----------|
+| first, before output | `Task`, then `TaskStatusUpdateEvent` — `Working` |
+| content, `partial = true` | `TaskArtifactUpdateEvent` — `append`, not last chunk |
+| content, `partial = false` | `TaskArtifactUpdateEvent` — final chunk |
+| stream ends | `TaskStatusUpdateEvent` — `Completed` |
+| stream errors | `TaskStatusUpdateEvent` — `Failed` |
+
+All chunks of one response share an artifact ID so a client can reassemble them. The joined text
+is persisted, so a later `GetTask` returns what was streamed. This matches the contract
+adk-python and adk-go implement over their SDKs.

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use a2a_protocol_types::artifact::{Artifact, ArtifactId};
-use a2a_protocol_types::events::{StreamResponse, TaskStatusUpdateEvent};
+use a2a_protocol_types::events::{StreamResponse, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
 use a2a_protocol_types::task::{Task, TaskState};
 use a2a_protocol_types::{AgentCard, Message, TaskPushNotificationConfig};
 use futures::StreamExt;
@@ -25,6 +25,7 @@ use super::convert::internal_task_to_wire;
 use super::error::A2aError;
 use super::executor::V1Executor;
 use super::push::PushNotificationSender;
+use super::stream::wrap_artifact_event;
 use super::task_store::{ListTasksParams, TaskStore};
 
 /// Validates an ID string (messageId or taskId).
@@ -151,51 +152,46 @@ impl RequestHandler {
         }
 
         // Multi-turn resume: check if contextId matches an existing INPUT_REQUIRED task
-        if let Some(ref ctx_id) = msg.context_id {
-            if let Some(existing) = self.task_store.find_task_by_context(&ctx_id.0).await? {
-                if existing.status.state == TaskState::InputRequired {
-                    // Resume the existing task
-                    let task_id = existing.id.clone();
-                    let context_id = existing.context_id.clone();
+        if let Some(ref ctx_id) = msg.context_id
+            && let Some(existing) = self.task_store.find_task_by_context(&ctx_id.0).await?
+            && existing.status.state == TaskState::InputRequired
+        {
+            // Resume the existing task
+            let task_id = existing.id.clone();
+            let context_id = existing.context_id.clone();
 
-                    // Transition from INPUT_REQUIRED to Working
-                    self.executor
-                        .transition_state(&task_id, &context_id, TaskState::Working, None)
-                        .await?;
+            // Transition from INPUT_REQUIRED to Working
+            self.executor.transition_state(&task_id, &context_id, TaskState::Working, None).await?;
 
-                    // Append the new message to history
-                    self.task_store.add_history_message(&task_id, msg.clone()).await?;
+            // Append the new message to history
+            self.task_store.add_history_message(&task_id, msg.clone()).await?;
 
-                    // Run the agent if a runner config is available
-                    if let Some(runner_config) = &self.runner_config {
-                        match self.run_agent(runner_config, &task_id, &context_id, &msg).await {
-                            Ok(()) => {}
-                            Err(e) => {
-                                let _ = self
-                                    .executor
-                                    .fail_task(&task_id, &context_id, &e.to_string())
-                                    .await;
-                                let entry = self.task_store.get_task(&task_id).await?;
-                                return internal_task_to_wire(&entry);
-                            }
-                        }
+            // Run the agent if a runner config is available
+            if let Some(runner_config) = &self.runner_config {
+                match self.run_agent(runner_config, &task_id, &context_id, &msg).await {
+                    Ok(()) => {}
+                    Err(e) => {
+                        let _ =
+                            self.executor.fail_task(&task_id, &context_id, &e.to_string()).await;
+                        let entry = self.task_store.get_task(&task_id).await?;
+                        return internal_task_to_wire(&entry);
                     }
-
-                    // Transition to COMPLETED
-                    self.executor
-                        .transition_state(&task_id, &context_id, TaskState::Completed, None)
-                        .await?;
-
-                    // Record idempotency mapping
-                    self.idempotency_map.write().await.insert(message_id, task_id.clone());
-
-                    let entry = self.task_store.get_task(&task_id).await?;
-                    return internal_task_to_wire(&entry);
                 }
-                // If task is in a terminal state or other non-INPUT_REQUIRED state,
-                // fall through to create a new task (existing behavior)
             }
+
+            // Transition to COMPLETED
+            self.executor
+                .transition_state(&task_id, &context_id, TaskState::Completed, None)
+                .await?;
+
+            // Record idempotency mapping
+            self.idempotency_map.write().await.insert(message_id, task_id.clone());
+
+            let entry = self.task_store.get_task(&task_id).await?;
+            return internal_task_to_wire(&entry);
         }
+        // If task is in a terminal state or other non-INPUT_REQUIRED state,
+        // fall through to create a new task (existing behavior)
 
         let task_id = uuid::Uuid::new_v4().to_string();
         let context_id = msg
@@ -238,13 +234,15 @@ impl RequestHandler {
     }
 
     /// Runs the agent through the ADK Runner and records the response as an artifact.
-    async fn run_agent(
-        &self,
+    /// Builds the session, converts the inbound message, and starts the agent.
+    ///
+    /// Both the buffered (`message/send`) and streaming (`message/stream`) paths use this, so
+    /// they cannot drift: streaming yields from the same stream the buffered path drains.
+    async fn start_agent(
         runner_config: &Arc<adk_runner::RunnerConfig>,
-        task_id: &str,
         context_id: &str,
         msg: &Message,
-    ) -> Result<(), A2aError> {
+    ) -> Result<adk_core::EventStream, A2aError> {
         use adk_core::{SessionId, UserId};
         use adk_session::{CreateRequest, GetRequest};
 
@@ -328,7 +326,7 @@ impl RequestHandler {
             .build()
             .map_err(|e| A2aError::Internal { message: format!("runner create: {e}") })?;
 
-        let mut event_stream = runner
+        runner
             .run(
                 UserId::new(&user_id).map_err(|e| A2aError::Internal { message: e.to_string() })?,
                 SessionId::new(&session_id)
@@ -336,9 +334,19 @@ impl RequestHandler {
                 content,
             )
             .await
-            .map_err(|e| A2aError::Internal { message: format!("runner run: {e}") })?;
+            .map_err(|e| A2aError::Internal { message: format!("runner run: {e}") })
+    }
 
-        // Collect LLM response text from events
+    /// Runs the agent to completion and records its output as a single artifact.
+    async fn run_agent(
+        &self,
+        runner_config: &Arc<adk_runner::RunnerConfig>,
+        task_id: &str,
+        context_id: &str,
+        msg: &Message,
+    ) -> Result<(), A2aError> {
+        let mut event_stream = Self::start_agent(runner_config, context_id, msg).await?;
+
         let mut response_text = String::new();
         while let Some(result) = event_stream.next().await {
             match result {
@@ -357,7 +365,6 @@ impl RequestHandler {
             }
         }
 
-        // Record the response as an artifact if we got any text
         if !response_text.is_empty() {
             let artifact = Artifact::new(
                 ArtifactId::new(uuid::Uuid::new_v4().to_string()),
@@ -371,12 +378,26 @@ impl RequestHandler {
 
     /// Sends a streaming message, returning a stream of SSE events.
     ///
-    /// Creates a task, yields status update events as the task progresses.
-    /// This is a placeholder — actual Runner streaming integration comes later.
+    /// Drives the agent and translates its events as they arrive:
+    ///
+    /// | Agent event | A2A event |
+    /// |-------------|-----------|
+    /// | first, before any output | `Task`, then `TaskStatusUpdateEvent` — `Working` |
+    /// | content with `partial = true` | `TaskArtifactUpdateEvent` — `append`, not last chunk |
+    /// | content with `partial = false` | `TaskArtifactUpdateEvent` — final chunk |
+    /// | stream ends | `TaskStatusUpdateEvent` — `Completed` |
+    /// | stream errors | `TaskStatusUpdateEvent` — `Failed` |
+    ///
+    /// Chunks of one response share an artifact ID so a client can reassemble them, which is the
+    /// same contract adk-python and adk-go implement over their A2A SDKs.
+    ///
+    /// With no runner configured the task is created and completed without agent output, which
+    /// keeps discovery-only deployments working.
     ///
     /// # Errors
     ///
-    /// Returns an error if task creation fails.
+    /// Returns an error if task creation fails. Failures once streaming has begun are reported
+    /// as a `Failed` status event, since the response has already started.
     pub async fn message_stream(
         &self,
         msg: Message,
@@ -415,6 +436,9 @@ impl RequestHandler {
         // Create task
         self.executor.create_task(&task_id, &context_id).await?;
 
+        // Keep a copy for the agent: `add_history_message` takes ownership.
+        let msg_for_agent = msg.clone();
+
         // Add the incoming message to history
         self.task_store.add_history_message(&task_id, msg).await?;
 
@@ -428,12 +452,12 @@ impl RequestHandler {
         let executor = self.executor.clone();
         let tid = task_id.clone();
         let cid = context_id.clone();
+        let runner_config = self.runner_config.clone();
+        let stream_msg = msg_for_agent;
 
         let stream = async_stream::stream! {
-            // Emit Task as first SSE event
             yield Ok(StreamResponse::Task(first_task));
 
-            // Transition to WORKING
             match executor.transition_state(&tid, &cid, TaskState::Working, None).await {
                 Ok(event) => yield Ok(StreamResponse::StatusUpdate(event)),
                 Err(e) => {
@@ -442,7 +466,84 @@ impl RequestHandler {
                 }
             }
 
-            // Transition to COMPLETED (placeholder — Runner integration later)
+            if let Some(config) = runner_config {
+                let started = Self::start_agent(&config, &cid, &stream_msg).await;
+                let mut event_stream = match started {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        // The agent never started, so nothing partial was emitted. Report the
+                        // task as failed rather than completing a task that did no work.
+                        if let Ok(event) = executor
+                            .transition_state(&tid, &cid, TaskState::Failed, None)
+                            .await
+                        {
+                            yield Ok(StreamResponse::StatusUpdate(event));
+                        }
+                        yield Err(e);
+                        return;
+                    }
+                };
+
+                // One artifact ID for the whole response so a client can join the chunks.
+                let artifact_id = uuid::Uuid::new_v4().to_string();
+                let mut chunks_sent = false;
+                let mut full_text = String::new();
+
+                while let Some(result) = event_stream.next().await {
+                    match result {
+                        Ok(event) => {
+                            let Some(content) = &event.llm_response.content else { continue };
+                            let text: String =
+                                content.parts.iter().filter_map(|p| p.text()).collect();
+                            if text.is_empty() {
+                                continue;
+                            }
+                            full_text.push_str(&text);
+
+                            let partial = event.llm_response.partial;
+                            let artifact = Artifact::new(
+                                ArtifactId::new(artifact_id.clone()),
+                                vec![a2a_protocol_types::Part::text(&text)],
+                            );
+                            yield Ok(wrap_artifact_event(TaskArtifactUpdateEvent {
+                                task_id: a2a_protocol_types::TaskId::new(tid.clone()),
+                                context_id: a2a_protocol_types::ContextId::new(cid.clone()),
+                                artifact,
+                                append: Some(chunks_sent),
+                                last_chunk: Some(!partial),
+                                metadata: None,
+                            }));
+                            chunks_sent = true;
+                        }
+                        Err(e) => {
+                            if let Ok(event) = executor
+                                .transition_state(&tid, &cid, TaskState::Failed, None)
+                                .await
+                            {
+                                yield Ok(StreamResponse::StatusUpdate(event));
+                            }
+                            yield Err(A2aError::Internal {
+                                message: format!("agent error: {e}"),
+                            });
+                            return;
+                        }
+                    }
+                }
+
+                // Persist the joined text so `tasks/get` returns the same artifact a
+                // non-streaming caller would have received.
+                if !full_text.is_empty() {
+                    let artifact = Artifact::new(
+                        ArtifactId::new(artifact_id),
+                        vec![a2a_protocol_types::Part::text(&full_text)],
+                    );
+                    if let Err(e) = executor.record_artifact(&tid, &cid, artifact).await {
+                        yield Err(e);
+                        return;
+                    }
+                }
+            }
+
             match executor.transition_state(&tid, &cid, TaskState::Completed, None).await {
                 Ok(event) => yield Ok(StreamResponse::StatusUpdate(event)),
                 Err(e) => yield Err(e),
@@ -518,14 +619,20 @@ impl RequestHandler {
         entries.iter().map(internal_task_to_wire).collect()
     }
 
-    /// Subscribes to task updates via SSE.
+    /// Returns the current state of a task as a short stream, then closes.
     ///
-    /// Placeholder — returns a stream that yields the current task status.
-    /// Full SSE subscription will be implemented in a later task.
+    /// > **Important:** this is a point-in-time snapshot, not a live subscription. It emits the
+    /// > task and its current status and then ends; it does not deliver subsequent updates. A
+    /// > client that needs live updates should use `message/stream`, which streams the agent's
+    /// > events as they are produced.
+    ///
+    /// A real re-attach would require a per-task event queue that outlives the request, which
+    /// the A2A SDKs in adk-python and adk-go provide and this hand-rolled server does not yet.
     ///
     /// # Errors
     ///
-    /// Returns [`A2aError::TaskNotFound`] if the task does not exist.
+    /// Returns [`A2aError::TaskNotFound`] if the task does not exist, or
+    /// [`A2aError::TaskNotCancelable`] if the task already reached a terminal state.
     pub async fn tasks_subscribe(
         &self,
         task_id: &str,
@@ -684,6 +791,202 @@ mod tests {
         AgentCapabilities, AgentCard, AgentInterface, AgentSkill, MessageId, MessageRole, Part,
         TaskPushNotificationConfig,
     };
+
+    // ── message/stream must carry real agent output ────────────────────────
+    //
+    // The handler used to create a task and transition Working -> Completed without invoking the
+    // Runner, so a client saw a task reporting success that produced nothing. Both reference ADK
+    // implementations drive the runner and translate its events; these assert that contract.
+
+    /// Reads the text out of an A2A part, or `None` for non-text content.
+    fn part_text(part: &a2a_protocol_types::Part) -> Option<&str> {
+        match &part.content {
+            a2a_protocol_types::PartContent::Text(text) => Some(text.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Emits `chunks` as partial events then a final one, the shape a streaming model produces.
+    struct ChunkingAgent {
+        chunks: Vec<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl adk_core::Agent for ChunkingAgent {
+        fn name(&self) -> &str {
+            "chunking_agent"
+        }
+
+        fn description(&self) -> &str {
+            "emits partial text chunks"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn adk_core::Agent>] {
+            &[]
+        }
+
+        async fn run(
+            &self,
+            _ctx: Arc<dyn adk_core::InvocationContext>,
+        ) -> adk_core::Result<adk_core::EventStream> {
+            let chunks = self.chunks.clone();
+            let last = chunks.len().saturating_sub(1);
+            let events: Vec<adk_core::Result<adk_core::Event>> = chunks
+                .into_iter()
+                .enumerate()
+                .map(|(i, text)| {
+                    let mut event = adk_core::Event::new("chunking_agent");
+                    event.llm_response.content =
+                        Some(adk_core::Content::new("model").with_text(&text));
+                    event.llm_response.partial = i < last;
+                    Ok(event)
+                })
+                .collect();
+            Ok(Box::pin(futures::stream::iter(events)))
+        }
+    }
+
+    /// Fails immediately, to check the terminal state is not reported as success.
+    struct FailingAgent;
+
+    #[async_trait::async_trait]
+    impl adk_core::Agent for FailingAgent {
+        fn name(&self) -> &str {
+            "failing_agent"
+        }
+
+        fn description(&self) -> &str {
+            "fails immediately"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn adk_core::Agent>] {
+            &[]
+        }
+
+        async fn run(
+            &self,
+            _ctx: Arc<dyn adk_core::InvocationContext>,
+        ) -> adk_core::Result<adk_core::EventStream> {
+            Ok(Box::pin(futures::stream::iter(vec![Err(adk_core::AdkError::model(
+                "upstream exploded",
+            ))])))
+        }
+    }
+
+    fn handler_with_agent(agent: Arc<dyn adk_core::Agent>) -> (RequestHandler, Arc<dyn TaskStore>) {
+        let store: Arc<dyn TaskStore> = Arc::new(InMemoryTaskStore::new());
+        let executor = Arc::new(V1Executor::new(store.clone()));
+        let cached = Arc::new(RwLock::new(CachedAgentCard::new(make_test_agent_card())));
+        let runner_config = Arc::new(
+            adk_runner::Runner::builder()
+                .app_name("a2a-stream-test")
+                .agent(agent)
+                .session_service(Arc::new(adk_session::InMemorySessionService::new()))
+                .build_config(),
+        );
+        let handler = RequestHandler::with_runner(
+            executor,
+            store.clone(),
+            Arc::new(NoOpPushNotificationSender),
+            cached,
+            runner_config,
+        );
+        (handler, store)
+    }
+
+    #[tokio::test]
+    async fn stream_delivers_agent_text_as_artifact_chunks() {
+        let (handler, _store) = handler_with_agent(Arc::new(ChunkingAgent {
+            chunks: vec!["Hel".into(), "lo ".into(), "world".into()],
+        }));
+
+        let mut stream = handler.message_stream(make_test_message()).await.expect("stream starts");
+        let mut artifacts = Vec::new();
+        let mut states = Vec::new();
+        while let Some(item) = stream.next().await {
+            match item.expect("no stream error") {
+                StreamResponse::ArtifactUpdate(e) => artifacts.push(e),
+                StreamResponse::StatusUpdate(e) => states.push(e.status.state),
+                _ => {}
+            }
+        }
+
+        assert_eq!(artifacts.len(), 3, "one artifact event per agent chunk");
+        let joined: String =
+            artifacts.iter().flat_map(|e| e.artifact.parts.iter().filter_map(part_text)).collect();
+        assert_eq!(joined, "Hello world", "the agent's text must reach the client");
+        assert_eq!(states, vec![TaskState::Working, TaskState::Completed]);
+    }
+
+    #[tokio::test]
+    async fn stream_chunks_share_one_artifact_id_and_mark_the_last() {
+        let (handler, _store) =
+            handler_with_agent(Arc::new(ChunkingAgent { chunks: vec!["a".into(), "b".into()] }));
+
+        let mut stream = handler.message_stream(make_test_message()).await.expect("stream starts");
+        let mut artifacts = Vec::new();
+        while let Some(item) = stream.next().await {
+            if let StreamResponse::ArtifactUpdate(e) = item.expect("no error") {
+                artifacts.push(e);
+            }
+        }
+
+        assert_eq!(artifacts.len(), 2);
+        assert_eq!(
+            artifacts[0].artifact.id, artifacts[1].artifact.id,
+            "a client joins chunks by artifact ID, so they must match"
+        );
+        assert_eq!(artifacts[0].append, Some(false), "the first chunk starts the artifact");
+        assert_eq!(artifacts[1].append, Some(true), "later chunks append");
+        assert_eq!(artifacts[0].last_chunk, Some(false));
+        assert_eq!(artifacts[1].last_chunk, Some(true), "the final chunk must be marked");
+    }
+
+    #[tokio::test]
+    async fn stream_failure_does_not_report_a_completed_task() {
+        let (handler, _store) = handler_with_agent(Arc::new(FailingAgent));
+
+        let mut stream = handler.message_stream(make_test_message()).await.expect("stream starts");
+        let mut states = Vec::new();
+        let mut saw_error = false;
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(StreamResponse::StatusUpdate(e)) => states.push(e.status.state),
+                Ok(_) => {}
+                Err(_) => saw_error = true,
+            }
+        }
+
+        assert!(saw_error, "the agent error must surface to the caller");
+        assert!(
+            states.contains(&TaskState::Failed),
+            "terminal state must be Failed, got {states:?}"
+        );
+        assert!(
+            !states.contains(&TaskState::Completed),
+            "a failed run must never report Completed: {states:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn streamed_text_is_persisted_for_tasks_get() {
+        let (handler, store) = handler_with_agent(Arc::new(ChunkingAgent {
+            chunks: vec!["one ".into(), "two".into()],
+        }));
+
+        let mut stream = handler.message_stream(make_test_message()).await.expect("stream starts");
+        let mut task_id = None;
+        while let Some(item) = stream.next().await {
+            if let Ok(StreamResponse::Task(t)) = item {
+                task_id = Some(t.id.0.clone());
+            }
+        }
+
+        let entry = store.get_task(&task_id.expect("task event")).await.expect("task exists");
+        let text: String =
+            entry.artifacts.iter().flat_map(|a| a.parts.iter().filter_map(part_text)).collect();
+        assert_eq!(text, "one two", "a later tasks/get must see what was streamed");
+    }
 
     fn make_handler() -> RequestHandler {
         let store = Arc::new(InMemoryTaskStore::new());

@@ -280,12 +280,12 @@ impl AgentConfigLoader {
         }
 
         // Validate temperature range if provided
-        if let Some(temp) = def.model.temperature {
-            if !(0.0..=2.0).contains(&temp) {
-                return Err(adk_core::AdkError::config(format!(
-                    "field 'model.temperature' must be between 0.0 and 2.0, got {temp} in '{path_display}'"
-                )));
-            }
+        if let Some(temp) = def.model.temperature
+            && !(0.0..=2.0).contains(&temp)
+        {
+            return Err(adk_core::AdkError::config(format!(
+                "field 'model.temperature' must be between 0.0 and 2.0, got {temp} in '{path_display}'"
+            )));
         }
 
         Ok(())
@@ -407,12 +407,12 @@ fn collect_yaml_files(dir: &Path) -> adk_core::Result<Vec<PathBuf>> {
             ))
         })?;
         let path = entry.path();
-        if path.is_file() {
-            if let Some(ext) = path.extension() {
-                let ext = ext.to_string_lossy().to_lowercase();
-                if ext == "yaml" || ext == "yml" {
-                    files.push(path);
-                }
+        if path.is_file()
+            && let Some(ext) = path.extension()
+        {
+            let ext = ext.to_string_lossy().to_lowercase();
+            if ext == "yaml" || ext == "yml" {
+                files.push(path);
             }
         }
     }

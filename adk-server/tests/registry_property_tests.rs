@@ -100,15 +100,15 @@ fn arb_agent_filter() -> impl Strategy<Value = AgentFilter> {
 
 /// Reference implementation of filter matching (mirrors store.rs logic).
 fn card_matches_filter(card: &AgentCard, filter: &AgentFilter) -> bool {
-    if let Some(prefix) = &filter.name_prefix {
-        if !card.name.starts_with(prefix.as_str()) {
-            return false;
-        }
+    if let Some(prefix) = &filter.name_prefix
+        && !card.name.starts_with(prefix.as_str())
+    {
+        return false;
     }
-    if let Some(tag) = &filter.tag {
-        if !card.tags.contains(tag) {
-            return false;
-        }
+    if let Some(tag) = &filter.tag
+        && !card.tags.contains(tag)
+    {
+        return false;
     }
     true
 }

@@ -198,24 +198,23 @@ pub fn validate_webhook_url(url: &str) -> Result<(), A2aError> {
     }
 
     // Check if host is an IP address
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_private_or_loopback(&ip) {
-            return Err(A2aError::InvalidParams {
-                message: format!("webhook URL must not target private/loopback address: {ip}"),
-            });
-        }
+    if let Ok(ip) = host.parse::<IpAddr>()
+        && is_private_or_loopback(&ip)
+    {
+        return Err(A2aError::InvalidParams {
+            message: format!("webhook URL must not target private/loopback address: {ip}"),
+        });
     }
 
     // Also check bracketed IPv6 (e.g., [::1])
     let trimmed = host.trim_start_matches('[').trim_end_matches(']');
-    if trimmed != host {
-        if let Ok(ip) = trimmed.parse::<IpAddr>() {
-            if is_private_or_loopback(&ip) {
-                return Err(A2aError::InvalidParams {
-                    message: format!("webhook URL must not target private/loopback address: {ip}"),
-                });
-            }
-        }
+    if trimmed != host
+        && let Ok(ip) = trimmed.parse::<IpAddr>()
+        && is_private_or_loopback(&ip)
+    {
+        return Err(A2aError::InvalidParams {
+            message: format!("webhook URL must not target private/loopback address: {ip}"),
+        });
     }
 
     Ok(())

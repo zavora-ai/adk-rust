@@ -262,17 +262,17 @@ pub fn adk_message_to_wire(
     if let Some(ref meta) = msg.metadata {
         let mut clean_meta = meta.clone();
 
-        if let Some(ext_val) = clean_meta.remove("_a2a_extensions") {
-            if let Ok(exts) = serde_json::from_value::<Vec<String>>(ext_val) {
-                extensions = Some(exts);
-            }
+        if let Some(ext_val) = clean_meta.remove("_a2a_extensions")
+            && let Ok(exts) = serde_json::from_value::<Vec<String>>(ext_val)
+        {
+            extensions = Some(exts);
         }
 
-        if let Some(ref_val) = clean_meta.remove("_a2a_reference_task_ids") {
-            if let Ok(ids) = serde_json::from_value::<Vec<String>>(ref_val) {
-                reference_task_ids =
-                    Some(ids.into_iter().map(a2a_protocol_types::TaskId::new).collect());
-            }
+        if let Some(ref_val) = clean_meta.remove("_a2a_reference_task_ids")
+            && let Ok(ids) = serde_json::from_value::<Vec<String>>(ref_val)
+        {
+            reference_task_ids =
+                Some(ids.into_iter().map(a2a_protocol_types::TaskId::new).collect());
         }
 
         if !clean_meta.is_empty() {

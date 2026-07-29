@@ -612,6 +612,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-server: `message/stream` drives the agent instead of emitting synthetic events.**
+  The handler created a task, transitioned `Working` then `Completed`, and never invoked the
+  Runner, so a streaming client received a task that reported success and produced no output.
+  It now streams `TaskArtifactUpdateEvent`s as the agent produces them, keyed to one artifact ID
+  with `append`/`lastChunk` derived from each event's `partial` flag, and reports `Failed` when
+  the agent errors. The joined text is persisted so a later `tasks/get` returns what was
+  streamed. `tasks/resubscribe` is documented as the snapshot it is rather than implying a live
+  re-attach.
+- **adk-server: `--features a2a-v1` passes clippy and is gated by CI.** No workflow built the
+  feature, so 11 `collapsible_if` failures had accumulated in the A2A v1 surface unseen.
+  `adk-server --features a2a-v1` joins the feature-coverage matrix.
+
 - **adk-auth: the `sso` feature compiles and is gated by CI again.** No workflow built
   `adk-auth --features sso`, so its SSO/OAuth surface had drifted out of the clippy gate and
   failed `-D warnings` on four `collapsible_if` lints. `jsonwebtoken` moves to 11, whose

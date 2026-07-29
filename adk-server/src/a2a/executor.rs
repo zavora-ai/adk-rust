@@ -231,15 +231,15 @@ impl Executor {
 
         // --- Interceptor: after delegation ---
         #[cfg(feature = "a2a-interceptors")]
-        if let Some(chain) = &self.config.interceptor_chain {
-            if let Some(ctx) = &interceptor_ctx {
-                let mut response_value =
-                    serde_json::to_value(&results).unwrap_or(serde_json::Value::Null);
-                chain
-                    .run_after(ctx, &mut response_value)
-                    .await
-                    .map_err(|e| adk_core::AdkError::agent(e.to_string()))?;
-            }
+        if let Some(chain) = &self.config.interceptor_chain
+            && let Some(ctx) = &interceptor_ctx
+        {
+            let mut response_value =
+                serde_json::to_value(&results).unwrap_or(serde_json::Value::Null);
+            chain
+                .run_after(ctx, &mut response_value)
+                .await
+                .map_err(|e| adk_core::AdkError::agent(e.to_string()))?;
         }
 
         Ok(results)

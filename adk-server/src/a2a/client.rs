@@ -649,10 +649,10 @@ pub mod v1_client {
             // Try to extract supported versions from ErrorInfo metadata
             if let Some(data_arr) = data.and_then(|d| d.as_array()) {
                 for info in data_arr {
-                    if let Some(meta) = info.get("metadata") {
-                        if let Some(versions) = meta.get("supported").and_then(|v| v.as_str()) {
-                            supported = versions.split(", ").map(String::from).collect();
-                        }
+                    if let Some(meta) = info.get("metadata")
+                        && let Some(versions) = meta.get("supported").and_then(|v| v.as_str())
+                    {
+                        supported = versions.split(", ").map(String::from).collect();
                     }
                 }
             }
