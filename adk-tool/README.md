@@ -301,6 +301,20 @@ The refresher handles these error conditions automatically:
 - Session not found (server restart)
 - Connection reset
 
+Discovery calls reconnect and retry automatically. `tools/call` does not replay
+by default because a lost response can leave a mutating tool's external result
+uncertain. Opt in only for read-only tools or operations protected by a stable
+provider idempotency guarantee:
+
+```rust
+let refresher = ConnectionRefresher::new(client, Arc::new(factory))
+    .with_tool_call_retries();
+
+let toolset = McpToolset::new(client)
+    .with_connection_factory(Arc::new(factory))
+    .with_tool_call_retries();
+```
+
 ### Google Search
 
 ```rust
