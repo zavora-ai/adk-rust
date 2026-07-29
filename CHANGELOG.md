@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-server: A2A JSON-RPC routes now sit behind the configured authentication layer.**
+  `/a2a` and `/a2a/stream` were merged at the router root, outside the layer applied to `/api`,
+  in both `create_app_with_a2a` and `ServerBuilder::build`. A deployment that authenticated every
+  other mutation surface still allowed any client that could reach the port to drive the agent,
+  call its tools, and incur the cost. Discovery (`/.well-known/agent.json`) stays public, since
+  peers fetch the card before they hold a credential, and with no extractor configured the routes
+  remain open so existing deployments are unaffected.
+- **adk-server: `A2aServer` binds loopback by default.** The builder defaulted to
+  `0.0.0.0:8080`, publishing an agent-executing server to every interface on `build()`. It now
+  defaults to `127.0.0.1:8080`; `bind_addr` opts into a wider bind. The generated `a2a-server`
+  scaffold does the same and reads `BIND_HOST`.
+- **adk-server: `--features a2a-v1` and `--all-features` compile again.** Two test initializers
+  for `RemoteA2aV1Config` omitted the `streaming` field, so both configurations failed to build —
+  which also meant the A2A v1 surface had no executing test coverage.
+
 - **adk-computer-use: security-relevant MCP responses are bound to the request that produced
   them.** `ControlLease`, `TargetReservation`, and `ExecutionReceipt` were deserialized and
   returned straight into graph state. Typed deserialization proves shape, not provenance, and

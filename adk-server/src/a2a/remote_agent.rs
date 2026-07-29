@@ -917,6 +917,8 @@ pub mod v1_remote {
                 name: "my-agent".to_string(),
                 description: "My remote agent".to_string(),
                 agent_card: card,
+                // The wire default: let the card decide rather than forcing a mode.
+                streaming: None,
             });
             assert_eq!(agent.name(), "my-agent");
             assert_eq!(agent.description(), "My remote agent");
@@ -929,6 +931,8 @@ pub mod v1_remote {
                 name: "test".to_string(),
                 description: "test".to_string(),
                 agent_card: card,
+                // The wire default: let the card decide rather than forcing a mode.
+                streaming: None,
             });
             assert!(agent.sub_agents().is_empty());
         }
