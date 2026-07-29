@@ -97,11 +97,19 @@ async fn a_compile_error_is_still_reported_as_a_failed_execution() {
 
 #[tokio::test]
 async fn a_working_program_still_runs() {
-    // Guards against the compile rerouting breaking ordinary execution.
+    // Guards against the compile rerouting breaking ordinary execution. The
+    // compiler receives a small toolchain allowlist, while the produced binary
+    // starts again from the cleared runtime environment.
     let backend = ProcessBackend::default();
     let result = backend
         .execute(rust_request(
-            r#"fn main() { println!("hello from rust"); }"#,
+            r#"
+fn main() {
+    println!("hello from rust");
+    println!("compile_lib={}", option_env!("LIB").is_some());
+    println!("runtime_lib={}", std::env::var_os("LIB").is_some());
+}
+"#,
             Duration::from_secs(120),
         ))
         .await
@@ -109,4 +117,15 @@ async fn a_working_program_still_runs() {
 
     assert_eq!(result.exit_code, 0, "stderr was: {}", result.stderr);
     assert!(result.stdout.contains("hello from rust"));
+    assert!(
+        result.stdout.contains("runtime_lib=false"),
+        "the MSVC library path leaked into the produced program: {}",
+        result.stdout
+    );
+    #[cfg(windows)]
+    assert!(
+        result.stdout.contains("compile_lib=true"),
+        "rustc did not receive the MSVC library path: {}",
+        result.stdout
+    );
 }

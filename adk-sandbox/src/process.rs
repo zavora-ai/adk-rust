@@ -51,6 +51,26 @@ use crate::types::{ExecRequest, ExecResult, Language};
 /// Maximum output size in bytes (1 MB).
 const MAX_OUTPUT_BYTES: usize = 1_024 * 1_024;
 
+/// Host variables exposed only while compiling Rust on non-Windows platforms.
+const NON_WINDOWS_TOOLCHAIN_ENV_KEYS: &[&str] = &[
+    "PATH",
+    "DEVELOPER_DIR",
+    "SDKROOT",
+    "HOME",
+    "TMPDIR",
+    "RUSTUP_HOME",
+    "CARGO_HOME",
+    "RUSTUP_TOOLCHAIN",
+];
+
+/// Host variables exposed only while compiling Rust with the MSVC toolchain.
+///
+/// `LIB` is the linker's library search path. The remaining Windows-specific
+/// values support temporary files, system DLL discovery, and rustup's default
+/// toolchain location without copying the full developer-shell environment.
+const WINDOWS_TOOLCHAIN_ENV_KEYS: &[&str] =
+    &["PATH", "LIB", "SystemRoot", "TEMP", "TMP", "USERPROFILE", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"];
+
 /// Configuration for [`ProcessBackend`].
 ///
 /// Provides paths to language runtimes. Defaults use bare command names
@@ -442,9 +462,10 @@ impl ProcessBackend {
 
     /// Variables a compiler needs to find its own tools.
     ///
-    /// `rustc` shells out to a linker — `cc`, and `xcrun` on macOS — and resolves them
-    /// through the environment. With the environment cleared it cannot link at all, so
-    /// compilation gets these passed through from the caller when they are set.
+    /// `rustc` shells out to a platform linker and resolves it through the environment.
+    /// The MSVC linker also reads `LIB` to find the Windows and C runtime libraries.
+    /// With the environment cleared it cannot link at all, so compilation gets a small
+    /// platform-specific allowlist from the caller when those values are set.
     ///
     /// This widens what the compile phase can see compared with the run phase. An OS
     /// enforcer is what constrains it; see [`ProcessBackend::isolation`].
@@ -455,19 +476,12 @@ impl ProcessBackend {
         // caller intended, or — when the pinned one is not installed — tries to download it and
         // fails against the sandbox's network denial, reporting "syncing channel updates" from
         // what looks like a compile error.
-        [
-            "PATH",
-            "DEVELOPER_DIR",
-            "SDKROOT",
-            "HOME",
-            "TMPDIR",
-            "RUSTUP_HOME",
-            "CARGO_HOME",
-            "RUSTUP_TOOLCHAIN",
-        ]
-        .iter()
-        .filter_map(|key| std::env::var(key).ok().map(|value| ((*key).to_string(), value)))
-        .collect()
+        let keys =
+            if cfg!(windows) { WINDOWS_TOOLCHAIN_ENV_KEYS } else { NON_WINDOWS_TOOLCHAIN_ENV_KEYS };
+
+        keys.iter()
+            .filter_map(|key| std::env::var(key).ok().map(|value| ((*key).to_string(), value)))
+            .collect()
     }
 
     /// Shared execution logic, with `extra_env` applied below policy and request values.
@@ -877,5 +891,22 @@ mod tests {
         assert_eq!(config.rustc_path, "rustc");
         assert_eq!(config.python_path, "python3");
         assert_eq!(config.node_path, "node");
+    }
+
+    #[test]
+    fn windows_compiler_environment_is_a_minimal_allowlist() {
+        assert_eq!(
+            WINDOWS_TOOLCHAIN_ENV_KEYS,
+            &[
+                "PATH",
+                "LIB",
+                "SystemRoot",
+                "TEMP",
+                "TMP",
+                "USERPROFILE",
+                "RUSTUP_HOME",
+                "RUSTUP_TOOLCHAIN",
+            ]
+        );
     }
 }
