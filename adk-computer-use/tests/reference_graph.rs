@@ -2,8 +2,8 @@ use adk_computer_use::{
     ActionClass, ActionEnvelope, ActionPostcondition, ActionPreview, CancellationBridge,
     ComputerUseError, ComputerUseRuntime, ControlLease, ExecutionCapability, ExecutionMode,
     ExecutionReceipt, LeaseBoundaries, PolicyDecision, ReceiptStatus, ScopeAuthorizer,
-    TargetReservation, TargetReservationScope, VerificationOutcome, build_reference_graph,
-    build_reference_graph_with_checkpointer,
+    TargetEvidence, TargetReservation, TargetReservationScope, VerificationOutcome,
+    build_reference_graph, build_reference_graph_with_checkpointer,
 };
 use adk_graph::{ExecutionConfig, GraphError, MemoryCheckpointer, State};
 use async_trait::async_trait;
@@ -21,6 +21,15 @@ struct FakeRuntime {
     max_observation_concurrency: AtomicUsize,
     fail_after_first_commit: AtomicBool,
     fail_before_first_effect: AtomicBool,
+    fail_acquire: AtomicBool,
+    fail_verify: AtomicBool,
+    fail_release: AtomicBool,
+    expired_envelope: AtomicBool,
+    expire_during_acquire: AtomicBool,
+    wrong_lease_session: AtomicBool,
+    wrong_receipt_digest: AtomicBool,
+    wrong_reservation_intent: AtomicBool,
+    declared_postcondition: Option<ActionPostcondition>,
     receipts: Mutex<HashMap<String, ExecutionReceipt>>,
     last_approval_grant: Mutex<Option<String>>,
     cancellation_log: Mutex<Vec<String>>,
@@ -37,12 +46,26 @@ impl FakeRuntime {
             max_observation_concurrency: AtomicUsize::new(0),
             fail_after_first_commit: AtomicBool::new(false),
             fail_before_first_effect: AtomicBool::new(false),
+            fail_acquire: AtomicBool::new(false),
+            fail_verify: AtomicBool::new(false),
+            fail_release: AtomicBool::new(false),
+            expired_envelope: AtomicBool::new(false),
+            expire_during_acquire: AtomicBool::new(false),
+            wrong_lease_session: AtomicBool::new(false),
+            wrong_receipt_digest: AtomicBool::new(false),
+            wrong_reservation_intent: AtomicBool::new(false),
+            declared_postcondition: None,
             receipts: Mutex::new(HashMap::new()),
             last_approval_grant: Mutex::new(None),
             cancellation_log: Mutex::new(Vec::new()),
             reservations: AtomicUsize::new(0),
             releases: AtomicUsize::new(0),
         }
+    }
+
+    fn with_postcondition(mut self, postcondition: ActionPostcondition) -> Self {
+        self.declared_postcondition = Some(postcondition);
+        self
     }
 
     async fn observe(&self, kind: &str) -> Value {
@@ -54,6 +77,18 @@ impl FakeRuntime {
     }
 
     fn preview(&self) -> ActionPreview {
+        let proposed_at = if self.expired_envelope.load(Ordering::SeqCst) {
+            "2019-01-01T00:00:00Z".into()
+        } else {
+            "2026-07-13T10:00:00Z".into()
+        };
+        let expires_at = if self.expired_envelope.load(Ordering::SeqCst) {
+            "2020-01-01T00:01:00Z".into()
+        } else if self.expire_during_acquire.load(Ordering::SeqCst) {
+            (chrono::Utc::now() + chrono::Duration::milliseconds(100)).to_rfc3339()
+        } else {
+            "2099-01-01T00:01:00Z".into()
+        };
         ActionPreview {
             envelope: ActionEnvelope {
                 action_id: "action-1".into(),
@@ -65,16 +100,31 @@ impl FakeRuntime {
                 operation: "write_clipboard".into(),
                 action_class: ActionClass::EditReversible,
                 requested_mode: ExecutionMode::Background,
-                target: None,
+                target: Some(TargetEvidence {
+                    platform: "test".into(),
+                    app_id: "app.reference".into(),
+                    pid: None,
+                    window_id: None,
+                    window_title_digest: None,
+                    display_id: None,
+                    role: None,
+                    label_digest: None,
+                    bounds: None,
+                    observation_id: "observation-1".into(),
+                    screenshot_hash: None,
+                    ui_tree_revision: None,
+                    confidence: 1.0,
+                    captured_at: "2026-07-13T10:00:00Z".into(),
+                }),
                 target_sensitivity: None,
                 resource: None,
                 provenance: None,
                 data_labels: vec!["private".into()],
-                postcondition: None,
+                postcondition: self.declared_postcondition.clone(),
                 reversible: true,
                 external_side_effect: false,
-                proposed_at: "2026-07-13T10:00:00Z".into(),
-                expires_at: "2026-07-13T10:01:00Z".into(),
+                proposed_at,
+                expires_at,
                 args_digest: "digest-1".into(),
             },
             executable: self.blocker.is_none(),
@@ -128,17 +178,27 @@ impl ComputerUseRuntime for FakeRuntime {
         &self,
         envelope: &ActionEnvelope,
     ) -> Result<ControlLease, ComputerUseError> {
+        if self.fail_acquire.swap(false, Ordering::SeqCst) {
+            return Err(ComputerUseError::Runtime("injected lease failure".into()));
+        }
+        if self.expire_during_acquire.load(Ordering::SeqCst) {
+            sleep(Duration::from_millis(200)).await;
+        }
         Ok(ControlLease {
             lease_id: "lease-1".into(),
             revision: 1,
-            session_id: envelope.session_id.clone(),
+            session_id: if self.wrong_lease_session.load(Ordering::SeqCst) {
+                "another-session".into()
+            } else {
+                envelope.session_id.clone()
+            },
             principal_id: envelope.principal_id.clone(),
             agent_id: envelope.agent_id.clone(),
             kind: "cooperative".into(),
             execution_mode: envelope.requested_mode,
             state: "active".into(),
             acquired_at: None,
-            expires_at: "2026-07-13T10:01:00Z".into(),
+            expires_at: "2099-01-01T00:01:00Z".into(),
             action_budget: 1,
             actions_used: 0,
             boundaries: LeaseBoundaries::default(),
@@ -153,15 +213,22 @@ impl ComputerUseRuntime for FakeRuntime {
         Ok(Some(TargetReservation {
             reservation_id: "reservation-1".into(),
             revision: 1,
-            intent_id: envelope.action_id.clone(),
+            intent_id: if self.wrong_reservation_intent.load(Ordering::SeqCst) {
+                "another-action".into()
+            } else {
+                envelope.action_id.clone()
+            },
             session_id: envelope.session_id.clone(),
             principal_id: envelope.principal_id.clone(),
             execution_group_id: envelope.execution_group_id.clone(),
             agent_id: envelope.agent_id.clone(),
-            scope: TargetReservationScope { app_id: "app.reference".into(), window_id: None },
+            scope: TargetReservationScope {
+                app_id: envelope.target.as_ref().unwrap().app_id.clone(),
+                window_id: envelope.target.as_ref().unwrap().window_id.clone(),
+            },
             state: "active".into(),
             acquired_at: "2026-07-13T10:00:00Z".into(),
-            expires_at: "2026-07-13T10:01:00Z".into(),
+            expires_at: "2099-01-01T00:01:00Z".into(),
             terminal_reason: None,
         }))
     }
@@ -171,6 +238,9 @@ impl ComputerUseRuntime for FakeRuntime {
         _reservation: &TargetReservation,
     ) -> Result<(), ComputerUseError> {
         self.releases.fetch_add(1, Ordering::SeqCst);
+        if self.fail_release.load(Ordering::SeqCst) {
+            return Err(ComputerUseError::Runtime("injected reservation cleanup failure".into()));
+        }
         Ok(())
     }
 
@@ -193,7 +263,11 @@ impl ComputerUseRuntime for FakeRuntime {
             receipt_id: "receipt-1".into(),
             session_id: envelope.session_id.clone(),
             action_id: envelope.action_id.clone(),
-            action_digest: envelope.args_digest.clone(),
+            action_digest: if self.wrong_receipt_digest.load(Ordering::SeqCst) {
+                "wrong-digest".into()
+            } else {
+                envelope.args_digest.clone()
+            },
             attempt: 1,
             status: ReceiptStatus::Committed,
             created_at: None,
@@ -213,6 +287,9 @@ impl ComputerUseRuntime for FakeRuntime {
         receipt: &ExecutionReceipt,
         postcondition: Option<&ActionPostcondition>,
     ) -> Result<VerificationOutcome, ComputerUseError> {
+        if self.fail_verify.swap(false, Ordering::SeqCst) {
+            return Err(ComputerUseError::Runtime("injected verification failure".into()));
+        }
         if receipt.status != ReceiptStatus::Committed {
             return Ok(VerificationOutcome::Failed {
                 reason: format!("receipt status is {:?}", receipt.status),
@@ -425,6 +502,246 @@ async fn approval_resume_rejects_a_changed_policy_digest_before_mutation() {
 }
 
 #[tokio::test]
+async fn approval_resume_rejects_ambiguous_runtime_and_grant_authority() {
+    let runtime = Arc::new(FakeRuntime::new(Some("approval_required")));
+    let graph = build_reference_graph_with_checkpointer(
+        runtime.clone(),
+        authorizer(),
+        Some(Arc::new(MemoryCheckpointer::new())),
+    )
+    .unwrap();
+    let checkpoint_id = match graph
+        .invoke(input(), ExecutionConfig::new("thread-ambiguous-approval"))
+        .await
+        .unwrap_err()
+    {
+        GraphError::Interrupted(value) => value.checkpoint_id,
+        other => panic!("expected interrupt, got {other:?}"),
+    };
+    let mut resumed_input = State::new();
+    resumed_input.insert(
+        "approval".into(),
+        json!({
+            "actionDigest": "digest-1",
+            "policyDigest": "policy-1",
+            "grantId": "grant-exact",
+            "runtimeApproved": true
+        }),
+    );
+
+    let error = graph
+        .invoke(
+            resumed_input,
+            ExecutionConfig::new("thread-ambiguous-approval").with_resume_from(&checkpoint_id),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("does not match"), "{error}");
+    assert_eq!(runtime.reservations.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn approval_resume_cannot_replace_the_checkpointed_preview() {
+    let runtime = Arc::new(FakeRuntime::new(Some("approval_required")));
+    let graph = build_reference_graph_with_checkpointer(
+        runtime.clone(),
+        authorizer(),
+        Some(Arc::new(MemoryCheckpointer::new())),
+    )
+    .unwrap();
+    let checkpoint_id = match graph
+        .invoke(input(), ExecutionConfig::new("thread-preview-replacement"))
+        .await
+        .unwrap_err()
+    {
+        GraphError::Interrupted(value) => value.checkpoint_id,
+        other => panic!("expected interrupt, got {other:?}"),
+    };
+
+    let mut changed_preview = runtime.preview();
+    changed_preview.envelope.action_id = "action-2".into();
+    changed_preview.envelope.args_digest = "digest-2".into();
+    changed_preview.policy.policy_digest = "policy-2".into();
+    let changed_preview = serde_json::to_value(changed_preview).unwrap();
+    let mut resumed_input = State::new();
+    resumed_input.insert("preview".into(), changed_preview.clone());
+    resumed_input.insert("preview_history".into(), json!([changed_preview]));
+    resumed_input.insert(
+        "approval".into(),
+        json!({
+            "actionDigest": "digest-2",
+            "policyDigest": "policy-2",
+            "grantId": "grant-replacement"
+        }),
+    );
+
+    let error = graph
+        .invoke(
+            resumed_input,
+            ExecutionConfig::new("thread-preview-replacement").with_resume_from(&checkpoint_id),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("preview history"), "{error}");
+    assert_eq!(runtime.reservations.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn graph_rejects_an_expired_preview_before_reservation_or_mutation() {
+    let runtime = Arc::new(FakeRuntime::new(None));
+    runtime.expired_envelope.store(true, Ordering::SeqCst);
+    let graph = build_reference_graph(runtime.clone(), authorizer()).unwrap();
+
+    let error =
+        graph.invoke(input(), ExecutionConfig::new("thread-expired-envelope")).await.unwrap_err();
+
+    assert!(error.to_string().contains("expired"), "{error}");
+    assert_eq!(runtime.reservations.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn graph_rechecks_envelope_expiry_immediately_before_mutation() {
+    let runtime = Arc::new(FakeRuntime::new(None));
+    runtime.expire_during_acquire.store(true, Ordering::SeqCst);
+    let graph = build_reference_graph(runtime.clone(), authorizer()).unwrap();
+
+    let error =
+        graph.invoke(input(), ExecutionConfig::new("thread-expired-at-execute")).await.unwrap_err();
+
+    assert!(error.to_string().contains("expired"), "{error}");
+    assert_eq!(runtime.reservations.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn graph_rejects_a_mismatched_generic_runtime_reservation_and_releases_it() {
+    let runtime = Arc::new(FakeRuntime::new(None));
+    runtime.wrong_reservation_intent.store(true, Ordering::SeqCst);
+    let graph = build_reference_graph(runtime.clone(), authorizer()).unwrap();
+
+    let error =
+        graph.invoke(input(), ExecutionConfig::new("thread-wrong-reservation")).await.unwrap_err();
+
+    assert!(error.to_string().contains("intent_id"), "{error}");
+    assert_eq!(runtime.reservations.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn graph_rejects_a_mismatched_generic_runtime_lease_and_releases_reservation() {
+    let runtime = Arc::new(FakeRuntime::new(None));
+    runtime.wrong_lease_session.store(true, Ordering::SeqCst);
+    let graph = build_reference_graph(runtime.clone(), authorizer()).unwrap();
+
+    let error =
+        graph.invoke(input(), ExecutionConfig::new("thread-wrong-lease")).await.unwrap_err();
+
+    assert!(error.to_string().contains("session_id"), "{error}");
+    assert_eq!(runtime.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn graph_rejects_a_mismatched_generic_runtime_receipt_and_releases_reservation() {
+    let runtime = Arc::new(FakeRuntime::new(None));
+    runtime.wrong_receipt_digest.store(true, Ordering::SeqCst);
+    let graph = build_reference_graph(runtime.clone(), authorizer()).unwrap();
+
+    let error =
+        graph.invoke(input(), ExecutionConfig::new("thread-wrong-receipt")).await.unwrap_err();
+
+    assert!(error.to_string().contains("action_digest"), "{error}");
+    assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime.releases.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn graph_verifies_the_postcondition_from_the_preview_envelope() {
+    let runtime =
+        Arc::new(FakeRuntime::new(None).with_postcondition(ActionPostcondition::Filesystem {
+            path: "/tmp/report.txt".into(),
+            exists: true,
+            content_digest: Some("expected-digest".into()),
+        }));
+    let graph = build_reference_graph(runtime, authorizer()).unwrap();
+
+    let output = graph.invoke(input(), ExecutionConfig::new("thread-postcondition")).await.unwrap();
+
+    assert_eq!(output.get("verified"), Some(&json!(true)));
+    assert_eq!(output.get("committed"), Some(&json!(true)));
+}
+
+#[tokio::test]
+async fn graph_releases_reservation_when_lease_acquisition_fails() {
+    let runtime = Arc::new(FakeRuntime::new(None));
+    runtime.fail_acquire.store(true, Ordering::SeqCst);
+    let graph = build_reference_graph(runtime.clone(), authorizer()).unwrap();
+
+    let error =
+        graph.invoke(input(), ExecutionConfig::new("thread-lease-failure")).await.unwrap_err();
+
+    assert!(error.to_string().contains("injected lease failure"), "{error}");
+    assert_eq!(runtime.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn graph_releases_reservation_when_verification_fails() {
+    let runtime = Arc::new(FakeRuntime::new(None));
+    runtime.fail_verify.store(true, Ordering::SeqCst);
+    let graph = build_reference_graph(runtime.clone(), authorizer()).unwrap();
+
+    let error =
+        graph.invoke(input(), ExecutionConfig::new("thread-verify-failure")).await.unwrap_err();
+
+    assert!(error.to_string().contains("injected verification failure"), "{error}");
+    assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime.releases.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn graph_reports_primary_and_cleanup_failures_deterministically() {
+    let runtime = Arc::new(FakeRuntime::new(None));
+    runtime.fail_acquire.store(true, Ordering::SeqCst);
+    runtime.fail_release.store(true, Ordering::SeqCst);
+    let graph = build_reference_graph(runtime.clone(), authorizer()).unwrap();
+
+    let error =
+        graph.invoke(input(), ExecutionConfig::new("thread-double-failure")).await.unwrap_err();
+    let message = error.to_string();
+
+    assert!(message.contains("primary failure"), "{message}");
+    assert!(message.contains("injected lease failure"), "{message}");
+    assert!(message.contains("cleanup also failed"), "{message}");
+    assert!(message.contains("injected reservation cleanup failure"), "{message}");
+    assert_eq!(runtime.releases.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn graph_reports_cleanup_failure_after_successful_verification() {
+    let runtime = Arc::new(FakeRuntime::new(None));
+    runtime.fail_release.store(true, Ordering::SeqCst);
+    let graph = build_reference_graph(runtime.clone(), authorizer()).unwrap();
+
+    let error =
+        graph.invoke(input(), ExecutionConfig::new("thread-cleanup-failure")).await.unwrap_err();
+    let message = error.to_string();
+
+    assert!(message.contains("target reservation cleanup failed"), "{message}");
+    assert!(message.contains("injected reservation cleanup failure"), "{message}");
+    assert!(!message.contains("primary failure"), "{message}");
+    assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime.releases.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn cancellation_bridge_revokes_runtime_before_interrupting_adk() {
     let runtime = Arc::new(FakeRuntime::new(None));
     let runtime_for_interrupt = runtime.clone();
@@ -457,6 +774,7 @@ async fn graph_retry_after_post_commit_crash_does_not_duplicate_mutation() {
     assert_eq!(output.get("committed"), Some(&json!(true)));
     assert_eq!(output.get("verified"), Some(&json!(false)));
     assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime.releases.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
@@ -475,4 +793,5 @@ async fn graph_retry_after_pre_effect_crash_executes_exactly_once() {
     assert_eq!(output.get("committed"), Some(&json!(true)));
     assert_eq!(output.get("verified"), Some(&json!(false)));
     assert_eq!(runtime.physical_mutations.load(Ordering::SeqCst), 1);
+    assert_eq!(runtime.releases.load(Ordering::SeqCst), 2);
 }

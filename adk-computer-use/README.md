@@ -27,6 +27,12 @@ by wrapping every action in the same fixed, predictable control flow:
 - **Approval is bound to the action.** When you resume after approval, the action
   is pinned to the exact action and policy digests it was approved for. An
   approval for one action cannot authorize a different action.
+- **Authority is rechecked at mutation time.** Envelope expiry, approval
+  authority, reservation scope, lease validity, and receipt identity are checked
+  again immediately around the single executor call.
+- **Reservations have deterministic cleanup.** Once acquired, a reservation is
+  released after verification and on every later error path. When the primary
+  operation and cleanup both fail, the returned error records both.
 - **Identity cannot be forged.** The principal and tenant come from `adk-auth`,
   not from model output or graph state, so a prompt cannot change who you are
   mid-run.
@@ -62,7 +68,8 @@ flowchart TD
 
 Read top to bottom: observe in parallel, join the results, preview, branch to
 approval when required, acquire the one-writer lease, perform the single mutation,
-then verify it happened.
+then verify it happened. The reservation is released after verification and on
+every error after it is acquired.
 
 ## What's included
 
@@ -85,8 +92,10 @@ whole graph with no server, no desktop, and no specific OS:
 cargo run -p adk-computer-use --example minimal_graph
 ```
 
-You'll see the observations join, the action take the "allowed" route, a committed
-receipt, and `verified: true`. In code:
+You'll see the observations join, the action take the "allowed" route, and a
+committed receipt. The example declares no postcondition, so it reports
+`committed: true` and `verified: false` rather than claiming an observation it
+did not make. In code:
 
 ```rust,no_run
 use std::sync::Arc;
@@ -104,7 +113,8 @@ let mut input = State::new();
 input.insert("proposed_action".into(), json!({ "tool": "write_clipboard" }));
 
 let result = graph.invoke(input, ExecutionConfig::new("demo")).await?;
-assert_eq!(result.get("verified"), Some(&json!(true)));
+assert_eq!(result.get("committed"), Some(&json!(true)));
+assert_eq!(result.get("verified"), Some(&json!(false)));
 # Ok(())
 # }
 ```

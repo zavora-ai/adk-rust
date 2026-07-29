@@ -1,17 +1,190 @@
+use crate::runtime::binding::{
+    validate_envelope_freshness, validate_lease, validate_receipt, validate_reservation,
+};
 use crate::{
-    ActionClass, ActionEnvelope, ActionPreview, ComputerUseAuthContext, ComputerUseRuntime,
-    ControlLease, ExecutionMode, ExecutionReceipt, ScopeAuthorizer, TargetReservation,
-    VerificationOutcome,
+    ActionClass, ActionPreview, ComputerUseAuthContext, ComputerUseRuntime, ControlLease,
+    ExecutionMode, ExecutionReceipt, ScopeAuthorizer, TargetReservation, VerificationOutcome,
 };
 use adk_graph::{
-    Checkpointer, CompiledGraph, DeferredNodeConfig, END, GraphError, MergeStrategy, NodeOutput,
-    START, StateGraph,
+    Channel, Checkpointer, CompiledGraph, DeferredNodeConfig, END, GraphError, MergeStrategy,
+    NodeOutput, START, StateGraph, StateSchema,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
 
 fn node_error(node: &str, message: impl Into<String>) -> GraphError {
     GraphError::NodeExecutionFailed { node: node.to_string(), message: message.into() }
+}
+
+fn preview_route(preview: &ActionPreview) -> &'static str {
+    if preview.executable {
+        "allowed"
+    } else if preview.blocker.as_deref() == Some("approval_required") {
+        "approval"
+    } else {
+        "blocked"
+    }
+}
+
+fn reservation_from_state(
+    value: Option<&Value>,
+    node: &str,
+) -> Result<Option<TargetReservation>, GraphError> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => serde_json::from_value(value.clone())
+            .map(Some)
+            .map_err(|error| node_error(node, format!("invalid target reservation: {error}"))),
+    }
+}
+
+fn validate_preview_history(
+    preview: &ActionPreview,
+    history: Option<&Value>,
+    node: &str,
+) -> Result<(), GraphError> {
+    let history = history
+        .and_then(Value::as_array)
+        .ok_or_else(|| node_error(node, "missing append-only preview history"))?;
+    if history.len() != 1 {
+        return Err(node_error(
+            node,
+            format!(
+                "append-only preview history contains {} entries instead of exactly one; \
+                 resumed state may have attempted to replace the approved preview",
+                history.len()
+            ),
+        ));
+    }
+    let original: ActionPreview = serde_json::from_value(history[0].clone())
+        .map_err(|error| node_error(node, format!("invalid preview history: {error}")))?;
+    if original != *preview {
+        return Err(node_error(node, "preview changed after policy evaluation; refusing mutation"));
+    }
+    Ok(())
+}
+
+fn validate_execution_approval(
+    preview: &ActionPreview,
+    route: Option<&str>,
+    approval: Option<&Value>,
+    approval_grant_id: Option<&str>,
+    approved_action_digest: Option<&str>,
+    approved_policy_digest: Option<&str>,
+) -> Result<(), GraphError> {
+    let expected_route = preview_route(preview);
+    if route != Some(expected_route) {
+        return Err(node_error(
+            "execute",
+            "preview route changed after policy evaluation; refusing mutation",
+        ));
+    }
+
+    match expected_route {
+        "allowed" => {
+            if approval_grant_id.is_some()
+                || approved_action_digest.is_some()
+                || approved_policy_digest.is_some()
+            {
+                return Err(node_error(
+                    "execute",
+                    "an allowed preview carried stale approval authority",
+                ));
+            }
+        }
+        "approval" => {
+            let approval = approval.and_then(Value::as_object).ok_or_else(|| {
+                node_error("execute", "approval state is missing before mutation")
+            })?;
+            let action_digest = approval.get("actionDigest").and_then(Value::as_str);
+            let policy_digest = approval.get("policyDigest").and_then(Value::as_str);
+            if action_digest != Some(preview.envelope.args_digest.as_str())
+                || policy_digest != Some(preview.policy.policy_digest.as_str())
+                || approved_action_digest != action_digest
+                || approved_policy_digest != policy_digest
+            {
+                return Err(node_error(
+                    "execute",
+                    "approval no longer matches the exact preview action and policy digests",
+                ));
+            }
+
+            let supplied_grant = approval.get("grantId").and_then(Value::as_str);
+            let runtime_approved =
+                approval.get("runtimeApproved").and_then(Value::as_bool).unwrap_or(false);
+            let exact_grant = supplied_grant.is_some()
+                && supplied_grant == approval_grant_id
+                && !runtime_approved;
+            let runtime_holds_grant =
+                supplied_grant.is_none() && approval_grant_id.is_none() && runtime_approved;
+            if !exact_grant && !runtime_holds_grant {
+                return Err(node_error(
+                    "execute",
+                    "approval authority changed after the digest-bound approval step",
+                ));
+            }
+        }
+        _ => {
+            return Err(node_error("execute", "a blocked preview reached the mutation node"));
+        }
+    }
+
+    Ok(())
+}
+
+async fn release_on_error<T>(
+    runtime: &Arc<dyn ComputerUseRuntime>,
+    reservation: Option<&TargetReservation>,
+    node: &str,
+    result: Result<T, GraphError>,
+) -> Result<T, GraphError> {
+    let Err(primary) = result else {
+        return result;
+    };
+    let Some(reservation) = reservation else {
+        return Err(primary);
+    };
+    match runtime.release_target(reservation).await {
+        Ok(()) => Err(primary),
+        Err(cleanup) => Err(node_error(
+            node,
+            format!(
+                "primary failure: {primary}; target reservation cleanup also failed for {}: \
+                 {cleanup}",
+                reservation.reservation_id
+            ),
+        )),
+    }
+}
+
+async fn release_after_terminal<T>(
+    runtime: &Arc<dyn ComputerUseRuntime>,
+    reservation: Option<&TargetReservation>,
+    node: &str,
+    result: Result<T, GraphError>,
+) -> Result<T, GraphError> {
+    let Some(reservation) = reservation else {
+        return result;
+    };
+    match (result, runtime.release_target(reservation).await) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Ok(_), Err(cleanup)) => Err(node_error(
+            node,
+            format!(
+                "target reservation cleanup failed for {}: {cleanup}",
+                reservation.reservation_id
+            ),
+        )),
+        (Err(primary), Ok(())) => Err(primary),
+        (Err(primary), Err(cleanup)) => Err(node_error(
+            node,
+            format!(
+                "primary failure: {primary}; target reservation cleanup also failed for {}: \
+                 {cleanup}",
+                reservation.reservation_id
+            ),
+        )),
+    }
 }
 
 /// Build the flagship deterministic ADK graph.
@@ -41,22 +214,31 @@ pub fn build_reference_graph_with_checkpointer(
     let execute_runtime = runtime.clone();
     let verify_runtime = runtime;
 
-    StateGraph::with_channels(&[
-        "proposed_action",
-        "capabilities",
-        "visual_evidence",
-        "semantic_evidence",
-        "observations_joined",
-        "preview",
-        "route",
-        "approval",
-        "approval_grant_id",
-        "reservation",
-        "lease",
-        "receipt",
-        "verified",
-        "result",
-    ])
+    StateGraph::new({
+        let mut schema = StateSchema::simple(&[
+            "proposed_action",
+            "capabilities",
+            "visual_evidence",
+            "semantic_evidence",
+            "observations_joined",
+            "preview",
+            "route",
+            "approval",
+            "approval_grant_id",
+            "approved_action_digest",
+            "approved_policy_digest",
+            "reservation",
+            "lease",
+            "receipt",
+            "verified",
+            "result",
+        ]);
+        // A resumed caller cannot overwrite an append-only channel. Supplying another preview
+        // creates a second entry, and the approval/execute checks fail closed unless exactly
+        // the original runtime preview remains.
+        schema.channels.insert("preview_history".into(), Channel::list("preview_history"));
+        schema
+    })
     .add_node_fn("discover", move |_| {
         let runtime = capability_runtime.clone();
         async move {
@@ -121,15 +303,13 @@ pub fn build_reference_graph_with_checkpointer(
                 .preview_action(proposed)
                 .await
                 .map_err(|error| node_error("preview", error.to_string()))?;
-            let route = if preview.executable {
-                "allowed"
-            } else if preview.blocker.as_deref() == Some("approval_required") {
-                "approval"
-            } else {
-                "blocked"
-            };
+            validate_envelope_freshness(&preview.envelope)
+                .map_err(|error| node_error("preview", error.to_string()))?;
+            let route = preview_route(&preview);
+            let preview = serde_json::to_value(preview)?;
             Ok(NodeOutput::new()
-                .with_update("preview", serde_json::to_value(preview)?)
+                .with_update("preview", preview.clone())
+                .with_update("preview_history", preview)
                 .with_update("route", json!(route)))
         }
     })
@@ -139,6 +319,7 @@ pub fn build_reference_graph_with_checkpointer(
                 .cloned()
                 .ok_or_else(|| node_error("request_approval", "missing preview"))?,
         )?;
+        validate_preview_history(&preview, ctx.get("preview_history"), "request_approval")?;
         let approval = ctx.get("approval").and_then(Value::as_object);
         let approved_digest =
             approval.and_then(|value| value.get("actionDigest")).and_then(Value::as_str);
@@ -157,17 +338,22 @@ pub fn build_reference_graph_with_checkpointer(
                 "computer-use action requires scoped approval",
                 serde_json::to_value(&preview)?,
             )),
-            (Some(digest), Some(policy), Some(grant_id), _)
+            (Some(digest), Some(policy), Some(grant_id), false)
                 if digest == preview.envelope.args_digest
                     && policy == preview.policy.policy_digest =>
             {
-                Ok(NodeOutput::new().with_update("approval_grant_id", json!(grant_id)))
+                Ok(NodeOutput::new()
+                    .with_update("approval_grant_id", json!(grant_id))
+                    .with_update("approved_action_digest", json!(digest))
+                    .with_update("approved_policy_digest", json!(policy)))
             }
             (Some(digest), Some(policy), None, true)
                 if digest == preview.envelope.args_digest
                     && policy == preview.policy.policy_digest =>
             {
-                Ok(NodeOutput::new())
+                Ok(NodeOutput::new()
+                    .with_update("approved_action_digest", json!(digest))
+                    .with_update("approved_policy_digest", json!(policy)))
             }
             _ => Err(node_error(
                 "request_approval",
@@ -192,121 +378,165 @@ pub fn build_reference_graph_with_checkpointer(
                     .cloned()
                     .ok_or_else(|| node_error("reserve_target", "missing preview"))?,
             )?;
+            validate_preview_history(&preview, ctx.get("preview_history"), "reserve_target")?;
             let reservation = runtime
                 .reserve_target(&preview.envelope)
                 .await
                 .map_err(|error| node_error("reserve_target", error.to_string()))?;
-            Ok(NodeOutput::new().with_update("reservation", serde_json::to_value(reservation)?))
+            if let Some(reservation) = reservation.as_ref() {
+                let validation = validate_reservation(reservation, &preview.envelope)
+                    .map_err(|error| node_error("reserve_target", error.to_string()));
+                release_on_error(&runtime, Some(reservation), "reserve_target", validation).await?;
+            }
+            let serialized = serde_json::to_value(&reservation)
+                .map_err(|error| node_error("reserve_target", error.to_string()));
+            let serialized =
+                release_on_error(&runtime, reservation.as_ref(), "reserve_target", serialized)
+                    .await?;
+            Ok(NodeOutput::new().with_update("reservation", serialized))
         }
     })
     .add_node_fn("acquire_lease", move |ctx| {
         let runtime = lease_runtime.clone();
         async move {
-            let preview: ActionPreview = serde_json::from_value(
-                ctx.get("preview")
-                    .cloned()
-                    .ok_or_else(|| node_error("acquire_lease", "missing preview"))?,
-            )?;
-            let lease = runtime
-                .acquire_lease(&preview.envelope)
-                .await
+            let reservation = reservation_from_state(ctx.get("reservation"), "acquire_lease")?;
+            let result = async {
+                let preview: ActionPreview = serde_json::from_value(
+                    ctx.get("preview")
+                        .cloned()
+                        .ok_or_else(|| node_error("acquire_lease", "missing preview"))?,
+                )
                 .map_err(|error| node_error("acquire_lease", error.to_string()))?;
-            Ok(NodeOutput::new().with_update("lease", serde_json::to_value(lease)?))
+                let lease = runtime
+                    .acquire_lease(&preview.envelope)
+                    .await
+                    .map_err(|error| node_error("acquire_lease", error.to_string()))?;
+                validate_lease(&lease, &preview.envelope)
+                    .map_err(|error| node_error("acquire_lease", error.to_string()))?;
+                let lease = serde_json::to_value(lease)
+                    .map_err(|error| node_error("acquire_lease", error.to_string()))?;
+                Ok(NodeOutput::new().with_update("lease", lease))
+            }
+            .await;
+            release_on_error(&runtime, reservation.as_ref(), "acquire_lease", result).await
         }
     })
     .add_node_fn("execute", move |ctx| {
         let runtime = execute_runtime.clone();
         let authorizer = authorizer.clone();
         async move {
-            let preview: ActionPreview = serde_json::from_value(
-                ctx.get("preview")
-                    .cloned()
-                    .ok_or_else(|| node_error("execute", "missing preview"))?,
-            )?;
-            let lease: ControlLease = serde_json::from_value(
-                ctx.get("lease").cloned().ok_or_else(|| node_error("execute", "missing lease"))?,
-            )?;
-            let envelope = &preview.envelope;
-            let auth = ComputerUseAuthContext {
-                principal_id: envelope.principal_id.clone(),
-                tenant_id: authorizer.verified_tenant_id().map(str::to_owned),
-                session_id: envelope.session_id.clone(),
-                execution_group_id: envelope.execution_group_id.clone().unwrap_or_default(),
-                requested_mode: envelope.requested_mode,
-                action_class: envelope.action_class,
-                target_app: envelope.target.as_ref().map(|target| target.app_id.clone()),
-                target_window: envelope
-                    .target
-                    .as_ref()
-                    .and_then(|target| target.window_id.as_ref())
-                    .map(|value| match value {
-                        Value::String(value) => value.clone(),
-                        value => value.to_string(),
-                    }),
-                policy_digest: preview.policy.policy_digest.clone(),
-            };
-            authorizer
-                .authorize(&auth)
-                .map_err(|error| node_error("execute", error.to_string()))?;
-            let receipt = runtime
-                .execute_action(
-                    envelope,
-                    &lease,
-                    ctx.get("approval_grant_id").and_then(Value::as_str),
+            let reservation = reservation_from_state(ctx.get("reservation"), "execute")?;
+            let result = async {
+                let preview: ActionPreview = serde_json::from_value(
+                    ctx.get("preview")
+                        .cloned()
+                        .ok_or_else(|| node_error("execute", "missing preview"))?,
                 )
-                .await
                 .map_err(|error| node_error("execute", error.to_string()))?;
-            Ok(NodeOutput::new().with_update("receipt", serde_json::to_value(receipt)?))
+                let lease: ControlLease = serde_json::from_value(
+                    ctx.get("lease")
+                        .cloned()
+                        .ok_or_else(|| node_error("execute", "missing lease"))?,
+                )
+                .map_err(|error| node_error("execute", error.to_string()))?;
+                let envelope = &preview.envelope;
+                validate_preview_history(&preview, ctx.get("preview_history"), "execute")?;
+                validate_envelope_freshness(envelope)
+                    .map_err(|error| node_error("execute", error.to_string()))?;
+                validate_lease(&lease, envelope)
+                    .map_err(|error| node_error("execute", error.to_string()))?;
+                if let Some(reservation) = reservation.as_ref() {
+                    validate_reservation(reservation, envelope)
+                        .map_err(|error| node_error("execute", error.to_string()))?;
+                }
+                validate_execution_approval(
+                    &preview,
+                    ctx.get("route").and_then(Value::as_str),
+                    ctx.get("approval"),
+                    ctx.get("approval_grant_id").and_then(Value::as_str),
+                    ctx.get("approved_action_digest").and_then(Value::as_str),
+                    ctx.get("approved_policy_digest").and_then(Value::as_str),
+                )?;
+                let auth = ComputerUseAuthContext {
+                    principal_id: envelope.principal_id.clone(),
+                    tenant_id: authorizer.verified_tenant_id().map(str::to_owned),
+                    session_id: envelope.session_id.clone(),
+                    execution_group_id: envelope.execution_group_id.clone().unwrap_or_default(),
+                    requested_mode: envelope.requested_mode,
+                    action_class: envelope.action_class,
+                    target_app: envelope.target.as_ref().map(|target| target.app_id.clone()),
+                    target_window: envelope
+                        .target
+                        .as_ref()
+                        .and_then(|target| target.window_id.as_ref())
+                        .map(|value| match value {
+                            Value::String(value) => value.clone(),
+                            value => value.to_string(),
+                        }),
+                    policy_digest: preview.policy.policy_digest.clone(),
+                };
+                authorizer
+                    .authorize(&auth)
+                    .map_err(|error| node_error("execute", error.to_string()))?;
+                let receipt = runtime
+                    .execute_action(
+                        envelope,
+                        &lease,
+                        ctx.get("approval_grant_id").and_then(Value::as_str),
+                    )
+                    .await
+                    .map_err(|error| node_error("execute", error.to_string()))?;
+                validate_receipt(&receipt, envelope, &envelope.args_digest)
+                    .map_err(|error| node_error("execute", error.to_string()))?;
+                let receipt = serde_json::to_value(receipt)
+                    .map_err(|error| node_error("execute", error.to_string()))?;
+                Ok(NodeOutput::new().with_update("receipt", receipt))
+            }
+            .await;
+            release_on_error(&runtime, reservation.as_ref(), "execute", result).await
         }
     })
     .add_node_fn("verify", move |ctx| {
         let runtime = verify_runtime.clone();
         async move {
-            let receipt: ExecutionReceipt = serde_json::from_value(
-                ctx.get("receipt")
-                    .cloned()
-                    .ok_or_else(|| node_error("verify", "missing receipt"))?,
-            )?;
-            // The postcondition comes from the envelope the action was approved against, so
-            // verification is evaluated against what was promised rather than against nothing.
-            let postcondition = ctx
-                .get("envelope")
-                .and_then(|value| serde_json::from_value::<ActionEnvelope>(value.clone()).ok())
-                .and_then(|envelope| envelope.postcondition);
-
-            let outcome = runtime
-                .verify(&receipt, postcondition.as_ref())
-                .await
+            let reservation = reservation_from_state(ctx.get("reservation"), "verify")?;
+            let result = async {
+                let receipt: ExecutionReceipt = serde_json::from_value(
+                    ctx.get("receipt")
+                        .cloned()
+                        .ok_or_else(|| node_error("verify", "missing receipt"))?,
+                )
                 .map_err(|error| node_error("verify", error.to_string()))?;
-            if let Some(reservation) = ctx.get("reservation")
-                && !reservation.is_null()
-            {
-                let reservation: TargetReservation = serde_json::from_value(reservation.clone())?;
-                runtime
-                    .release_target(&reservation)
+                let preview: ActionPreview = serde_json::from_value(
+                    ctx.get("preview")
+                        .cloned()
+                        .ok_or_else(|| node_error("verify", "missing preview"))?,
+                )
+                .map_err(|error| node_error("verify", error.to_string()))?;
+                let outcome = runtime
+                    .verify(&receipt, preview.envelope.postcondition.as_ref())
                     .await
                     .map_err(|error| node_error("verify", error.to_string()))?;
-            }
-            // `verified` is true only when the postcondition was observed. A committed action
-            // with no evidence reports `committed_unverified` and carries the reason, instead
-            // of being labelled completed.
-            let detail = match &outcome {
-                VerificationOutcome::Verified => None,
-                VerificationOutcome::CommittedUnverified { reason }
-                | VerificationOutcome::Failed { reason } => Some(reason.clone()),
-            };
+                let detail = match &outcome {
+                    VerificationOutcome::Verified => None,
+                    VerificationOutcome::CommittedUnverified { reason }
+                    | VerificationOutcome::Failed { reason } => Some(reason.clone()),
+                };
 
-            Ok(NodeOutput::new()
-                .with_update("verified", json!(outcome.is_verified()))
-                .with_update("committed", json!(outcome.is_committed()))
-                .with_update(
-                    "result",
-                    json!({
-                        "status": outcome.status(),
-                        "receiptId": receipt.receipt_id,
-                        "verificationDetail": detail,
-                    }),
-                ))
+                Ok(NodeOutput::new()
+                    .with_update("verified", json!(outcome.is_verified()))
+                    .with_update("committed", json!(outcome.is_committed()))
+                    .with_update(
+                        "result",
+                        json!({
+                            "status": outcome.status(),
+                            "receiptId": receipt.receipt_id,
+                            "verificationDetail": detail,
+                        }),
+                    ))
+            }
+            .await;
+            release_after_terminal(&runtime, reservation.as_ref(), "verify", result).await
         }
     })
     .add_edge(START, "discover")

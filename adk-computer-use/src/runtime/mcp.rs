@@ -1,5 +1,7 @@
 use crate::runtime::VerificationOutcome;
-use crate::runtime::binding::{validate_lease, validate_receipt, validate_reservation};
+use crate::runtime::binding::{
+    validate_envelope_freshness, validate_lease, validate_receipt, validate_reservation,
+};
 use crate::{
     ActionEnvelope, ActionPreview, ComputerUseError, ComputerUseRuntime, ControlLease,
     ExecutionReceipt, SessionDeletionResult, SessionFollowUp, SessionFollowUpPage,
@@ -63,7 +65,13 @@ where
 {
     toolset: Arc<McpToolset<S>>,
     config: ComputerUseMcpConfig,
-    proposed: Mutex<HashMap<String, Map<String, Value>>>,
+    proposed: Mutex<HashMap<String, ProposedAction>>,
+}
+
+#[derive(Clone)]
+struct ProposedAction {
+    arguments: Map<String, Value>,
+    preview: ActionPreview,
 }
 
 impl<S> ComputerUseMcpRuntime<S>
@@ -389,7 +397,10 @@ where
                 "preview principal does not match authenticated ADK identity".into(),
             ));
         }
-        self.proposed.lock().await.insert(preview.envelope.action_id.clone(), args);
+        self.proposed.lock().await.insert(
+            preview.envelope.action_id.clone(),
+            ProposedAction { arguments: args, preview: preview.clone() },
+        );
         Ok(preview)
     }
 
@@ -475,10 +486,19 @@ where
         lease: &ControlLease,
         approval_grant_id: Option<&str>,
     ) -> Result<ExecutionReceipt, ComputerUseError> {
-        let mut args =
+        validate_envelope_freshness(envelope)?;
+        validate_lease(lease, envelope)?;
+        let proposed =
             self.proposed.lock().await.get(&envelope.action_id).cloned().ok_or_else(|| {
                 ComputerUseError::Runtime("missing exact proposed action for execution".into())
             })?;
+        if proposed.preview.envelope != *envelope {
+            return Err(ComputerUseError::IdentityMismatch(format!(
+                "action envelope {} changed after preview; exact preview binding is required",
+                envelope.action_id
+            )));
+        }
+        let mut args = proposed.arguments;
         args.insert("action_id".into(), json!(envelope.action_id));
         args.insert("lease_id".into(), json!(lease.lease_id));
         if let Some(grant) = approval_grant_id {

@@ -12,7 +12,9 @@
 //! occurred — so a committed action whose effect did not happen was reported as completed,
 //! from a node the reference graph labels "verify".
 
-use adk_computer_use::runtime::binding::{validate_lease, validate_receipt, validate_reservation};
+use adk_computer_use::runtime::binding::{
+    validate_envelope_freshness, validate_lease, validate_receipt, validate_reservation,
+};
 use adk_computer_use::{
     ActionClass, ActionEnvelope, ActionPostcondition, ControlLease, ExecutionMode,
     ExecutionReceipt, LeaseBoundaries, ReceiptStatus, TargetReservation, TargetReservationScope,
@@ -30,7 +32,7 @@ fn envelope() -> ActionEnvelope {
         operation: "click".into(),
         action_class: ActionClass::EditReversible,
         requested_mode: ExecutionMode::Foreground,
-        target: None,
+        target: Some(target_for("app-1")),
         target_sensitivity: None,
         postcondition: None,
         reversible: true,
@@ -72,7 +74,7 @@ fn reservation() -> TargetReservation {
     TargetReservation {
         reservation_id: "res-1".into(),
         revision: 1,
-        intent_id: "intent-1".into(),
+        intent_id: "action-1".into(),
         session_id: "session-1".into(),
         principal_id: "principal-1".into(),
         execution_group_id: Some("group-1".into()),
@@ -178,6 +180,59 @@ fn a_reservation_for_another_session_or_principal_or_group_is_rejected() {
 }
 
 #[test]
+fn a_reservation_for_another_intent_is_rejected() {
+    let mut reservation = reservation();
+    reservation.intent_id = "action-2".into();
+
+    let error = validate_reservation(&reservation, &envelope()).expect_err("must reject");
+    assert!(error.to_string().contains("intent_id"), "{error}");
+}
+
+#[test]
+fn an_inactive_or_expired_reservation_is_rejected() {
+    let mut inactive = reservation();
+    inactive.state = "released".into();
+    let error = validate_reservation(&inactive, &envelope()).expect_err("must reject");
+    assert!(error.to_string().contains("not active"), "{error}");
+
+    let mut expired = reservation();
+    expired.expires_at = "2020-01-01T00:00:00Z".into();
+    let error = validate_reservation(&expired, &envelope()).expect_err("must reject");
+    assert!(error.to_string().contains("expired"), "{error}");
+}
+
+#[test]
+fn a_reservation_with_an_unreadable_expiry_is_rejected() {
+    let mut reservation = reservation();
+    reservation.expires_at = "later".into();
+
+    let error = validate_reservation(&reservation, &envelope()).expect_err("must reject");
+    assert!(error.to_string().contains("unreadable expiry"), "{error}");
+}
+
+#[test]
+fn a_reservation_for_another_target_scope_is_rejected() {
+    let mut wrong_app = reservation();
+    wrong_app.scope.app_id = "app-2".into();
+    let error = validate_reservation(&wrong_app, &envelope()).expect_err("must reject");
+    assert!(error.to_string().contains("scope.app_id"), "{error}");
+
+    let mut envelope = envelope();
+    envelope.target.as_mut().unwrap().window_id = Some(serde_json::json!(42));
+    let error = validate_reservation(&reservation(), &envelope).expect_err("must reject");
+    assert!(error.to_string().contains("scope.window_id"), "{error}");
+}
+
+#[test]
+fn a_reservation_without_target_evidence_is_rejected() {
+    let mut envelope = envelope();
+    envelope.target = None;
+
+    let error = validate_reservation(&reservation(), &envelope).expect_err("must reject");
+    assert!(error.to_string().contains("without target evidence"), "{error}");
+}
+
+#[test]
 fn a_correctly_bound_receipt_is_accepted() {
     let envelope = envelope();
     assert!(validate_receipt(&receipt(), &envelope, &envelope.args_digest).is_ok());
@@ -211,6 +266,35 @@ fn a_receipt_for_another_session_is_rejected() {
     let mut receipt = receipt();
     receipt.session_id = "session-2".into();
     assert!(validate_receipt(&receipt, &envelope, &envelope.args_digest).is_err());
+}
+
+#[test]
+fn a_current_action_envelope_is_accepted() {
+    assert!(validate_envelope_freshness(&envelope()).is_ok());
+}
+
+#[test]
+fn an_expired_or_malformed_action_envelope_is_rejected() {
+    let mut expired = envelope();
+    expired.proposed_at = "2019-01-01T00:00:00Z".into();
+    expired.expires_at = "2020-01-01T00:00:00Z".into();
+    let error = validate_envelope_freshness(&expired).expect_err("must reject");
+    assert!(error.to_string().contains("expired"), "{error}");
+
+    let mut malformed = envelope();
+    malformed.proposed_at = "eventually".into();
+    let error = validate_envelope_freshness(&malformed).expect_err("must reject");
+    assert!(error.to_string().contains("unreadable proposed_at"), "{error}");
+}
+
+#[test]
+fn a_non_positive_action_validity_window_is_rejected() {
+    let mut envelope = envelope();
+    envelope.proposed_at = "2099-01-01T00:00:01Z".into();
+    envelope.expires_at = "2099-01-01T00:00:00Z".into();
+
+    let error = validate_envelope_freshness(&envelope).expect_err("must reject");
+    assert!(error.to_string().contains("non-positive validity window"), "{error}");
 }
 
 // ── CU-02: committed is not verified ──────────────────────────────────

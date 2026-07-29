@@ -79,8 +79,14 @@ impl VerificationOutcome {
 /// exactly one [`execute_action`](Self::execute_action),
 /// [`verify`](Self::verify), and [`release_target`](Self::release_target).
 ///
+/// The reference graph validates leases, reservations, receipts, envelope expiry, and
+/// approval bindings independently of the implementation. After a reservation is accepted,
+/// it calls [`release_target`](Self::release_target) on every later success or error path.
+///
 /// Implementations must treat the runtime (not graph or model state) as
-/// authoritative for policy, identity, lease ownership, and idempotency.
+/// authoritative for policy, identity, lease ownership, exact preview binding, and
+/// idempotency. Implementations that expose these methods outside the reference graph must
+/// enforce the same invariants at that direct-call boundary.
 ///
 /// # Errors
 ///
@@ -112,6 +118,9 @@ pub trait ComputerUseRuntime: Send + Sync {
         Ok(None)
     }
     /// Release a previously acquired [`TargetReservation`].
+    ///
+    /// The graph reports cleanup failures, including when another operation already failed,
+    /// so implementations should return an error instead of hiding an uncertain release.
     async fn release_target(
         &self,
         _reservation: &TargetReservation,

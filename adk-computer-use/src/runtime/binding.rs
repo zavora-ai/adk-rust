@@ -12,6 +12,50 @@
 use crate::contracts::{ActionEnvelope, ControlLease, ExecutionReceipt, TargetReservation};
 use crate::error::ComputerUseError;
 
+/// Verifies that an action envelope is inside its runtime-declared validity window.
+///
+/// The runtime owns the validity duration. ADK only enforces that both timestamps are
+/// readable, that the interval is ordered, and that execution happens before `expires_at`.
+/// This check belongs immediately before mutation because an approval interrupt or lease
+/// acquisition can consume the rest of an otherwise-valid preview window.
+///
+/// # Errors
+///
+/// Returns [`ComputerUseError::IdentityMismatch`] when either timestamp is unreadable,
+/// `expires_at` is not later than `proposed_at`, or the envelope has expired.
+pub fn validate_envelope_freshness(envelope: &ActionEnvelope) -> Result<(), ComputerUseError> {
+    let proposed_at =
+        chrono::DateTime::parse_from_rfc3339(&envelope.proposed_at).map_err(|error| {
+            ComputerUseError::IdentityMismatch(format!(
+                "action envelope {} has an unreadable proposed_at {:?}: {error}",
+                envelope.action_id, envelope.proposed_at
+            ))
+        })?;
+    let expires_at =
+        chrono::DateTime::parse_from_rfc3339(&envelope.expires_at).map_err(|error| {
+            ComputerUseError::IdentityMismatch(format!(
+                "action envelope {} has an unreadable expires_at {:?}: {error}",
+                envelope.action_id, envelope.expires_at
+            ))
+        })?;
+
+    if expires_at <= proposed_at {
+        return Err(ComputerUseError::IdentityMismatch(format!(
+            "action envelope {} has a non-positive validity window: proposed_at is {} and \
+             expires_at is {}",
+            envelope.action_id, envelope.proposed_at, envelope.expires_at
+        )));
+    }
+    if expires_at <= chrono::Utc::now() {
+        return Err(ComputerUseError::IdentityMismatch(format!(
+            "action envelope {} expired at {}",
+            envelope.action_id, envelope.expires_at
+        )));
+    }
+
+    Ok(())
+}
+
 /// Reports a mismatch between what was requested and what came back.
 fn mismatch(object: &str, field: &str, expected: &str, actual: &str) -> ComputerUseError {
     ComputerUseError::IdentityMismatch(format!(
@@ -153,12 +197,13 @@ pub fn validate_lease(
     Ok(())
 }
 
-/// Verifies a reservation belongs to this session, principal, agent, and action.
+/// Verifies a reservation belongs to this action and is active, current, and target-bound.
 ///
 /// # Errors
 ///
 /// Returns [`ComputerUseError::IdentityMismatch`] when any bound field disagrees with
-/// `envelope`.
+/// `envelope`, the reservation is not active, its expiry cannot be established, or it has
+/// expired.
 pub fn validate_reservation(
     reservation: &TargetReservation,
     envelope: &ActionEnvelope,
@@ -188,6 +233,50 @@ pub fn validate_reservation(
         envelope.execution_group_id.as_deref(),
         reservation.execution_group_id.as_deref(),
     )?;
+
+    if reservation.intent_id != envelope.action_id {
+        return Err(mismatch(OBJECT, "intent_id", &envelope.action_id, &reservation.intent_id));
+    }
+    if !reservation.state.eq_ignore_ascii_case("active") {
+        return Err(ComputerUseError::IdentityMismatch(format!(
+            "target reservation {} is in state {:?}, not active",
+            reservation.reservation_id, reservation.state
+        )));
+    }
+    match chrono::DateTime::parse_from_rfc3339(&reservation.expires_at) {
+        Ok(expires_at) => {
+            if expires_at <= chrono::Utc::now() {
+                return Err(ComputerUseError::IdentityMismatch(format!(
+                    "target reservation {} expired at {}",
+                    reservation.reservation_id, reservation.expires_at
+                )));
+            }
+        }
+        Err(error) => {
+            return Err(ComputerUseError::IdentityMismatch(format!(
+                "target reservation {} has an unreadable expiry {:?}: {error}",
+                reservation.reservation_id, reservation.expires_at
+            )));
+        }
+    }
+
+    let target = envelope.target.as_ref().ok_or_else(|| {
+        ComputerUseError::IdentityMismatch(format!(
+            "target reservation {} was returned for action {} without target evidence",
+            reservation.reservation_id, envelope.action_id
+        ))
+    })?;
+    if reservation.scope.app_id != target.app_id {
+        return Err(mismatch(OBJECT, "scope.app_id", &target.app_id, &reservation.scope.app_id));
+    }
+    if reservation.scope.window_id != target.window_id {
+        return Err(mismatch(
+            OBJECT,
+            "scope.window_id",
+            &format!("{:?}", target.window_id),
+            &format!("{:?}", reservation.scope.window_id),
+        ));
+    }
 
     Ok(())
 }

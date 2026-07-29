@@ -47,6 +47,7 @@ impl ComputerUseRuntime for InProcessRuntime {
         &self,
         _proposed_action: Value,
     ) -> Result<ActionPreview, ComputerUseError> {
+        let proposed_at = chrono::Utc::now();
         Ok(ActionPreview {
             envelope: ActionEnvelope {
                 action_id: "action-1".into(),
@@ -66,8 +67,8 @@ impl ComputerUseRuntime for InProcessRuntime {
                 postcondition: None,
                 reversible: true,
                 external_side_effect: false,
-                proposed_at: "2026-07-13T10:00:00Z".into(),
-                expires_at: "2026-07-13T10:01:00Z".into(),
+                proposed_at: proposed_at.to_rfc3339(),
+                expires_at: (proposed_at + chrono::Duration::seconds(30)).to_rfc3339(),
                 args_digest: "digest-1".into(),
             },
             executable: true,
@@ -105,7 +106,7 @@ impl ComputerUseRuntime for InProcessRuntime {
             execution_mode: envelope.requested_mode,
             state: "active".into(),
             acquired_at: None,
-            expires_at: "2026-07-13T10:01:00Z".into(),
+            expires_at: (chrono::Utc::now() + chrono::Duration::seconds(30)).to_rfc3339(),
             action_budget: 1,
             actions_used: 0,
             boundaries: LeaseBoundaries::default(),

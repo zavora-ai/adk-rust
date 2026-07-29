@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **adk-computer-use: the reference graph now enforces execution-time bindings and
+  deterministic reservation cleanup.** Generic `ComputerUseRuntime` implementations could
+  return a well-formed lease, reservation, or receipt without the graph applying the binding
+  validators used by the MCP adapter. The graph now validates each response before storing it
+  and revalidates the envelope, lease, reservation, approval route, action digest, and policy
+  digest immediately before the single mutation. Reservations bind the exact action intent,
+  active state, expiry, and app/window scope. Every post-reservation terminal path attempts
+  release; a primary failure remains primary, and a cleanup failure is reported alongside it.
+  The checkpointed preview is append-only, so resume input cannot replace it while supplying a
+  matching forged approval. Verification now reads the postcondition from the stored preview
+  envelope rather than a nonexistent `envelope` state channel. The MCP adapter also retains the
+  exact preview envelope and rejects direct execution if it changes.
+
 - **adk-sandbox: the process output cap now bounds memory instead of only the report.**
   `ProcessBackend::execute` called `child.wait_with_output()`, which buffers a process's entire
   stdout and stderr, and applied the 1 MiB `MAX_OUTPUT_BYTES` limit afterwards. A sandboxed
