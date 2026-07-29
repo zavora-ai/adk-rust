@@ -43,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for `RemoteA2aV1Config` omitted the `streaming` field, so both configurations failed to build —
   which also meant the A2A v1 surface had no executing test coverage.
 
+- **adk-tool: MCP tool-call replay now requires explicit opt-in.** A transport
+  failure after request transmission can leave a mutating tool's external
+  result uncertain. `ConnectionRefresher` and `McpToolset` no longer replay
+  `tools/call` by default after reconnecting; callers may opt in with
+  `with_tool_call_retries()` for read-only or provider-idempotent operations.
+  Discovery and resource retries retain their existing reconnect behavior.
 - **adk-computer-use: security-relevant MCP responses are bound to the request that produced
   them.** `ControlLease`, `TargetReservation`, and `ExecutionReceipt` were deserialized and
   returned straight into graph state. Typed deserialization proves shape, not provenance, and

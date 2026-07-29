@@ -48,6 +48,19 @@ pub fn should_refresh_connection(error: &str) -> bool {
     false
 }
 
+pub(crate) fn should_retry_mcp_operation(
+    error: &str,
+    attempt: u32,
+    refresh_config: &RefreshConfig,
+    has_connection_factory: bool,
+    replay_allowed: bool,
+) -> bool {
+    replay_allowed
+        && has_connection_factory
+        && attempt < refresh_config.max_attempts
+        && should_refresh_connection(error)
+}
+
 /// Result of an operation with retry information
 #[derive(Debug, Clone)]
 pub struct RetryResult<T> {
@@ -144,9 +157,14 @@ where
 ///
 /// let refresher = ConnectionRefresher::new(initial_client, Arc::new(factory));
 ///
-/// // Operations automatically retry on connection failure
+/// // Read-only discovery automatically retries on connection failure.
 /// let tools = refresher.list_tools().await?;
-/// let result = refresher.call_tool(params).await?;
+///
+/// // Tool calls are not replayed unless the caller explicitly opts in.
+/// let result = refresher
+///     .with_tool_call_retries()
+///     .call_tool(params)
+///     .await?;
 /// ```
 pub struct ConnectionRefresher<S, F>
 where
@@ -159,6 +177,8 @@ where
     factory: Arc<F>,
     /// Configuration for refresh behavior
     config: RefreshConfig,
+    /// Whether ambiguous tool-call outcomes may be replayed after reconnection.
+    retry_tool_calls: bool,
 }
 
 impl<S, F> ConnectionRefresher<S, F>
@@ -177,6 +197,7 @@ where
             client: Arc::new(Mutex::new(Some(client))),
             factory,
             config: RefreshConfig::default(),
+            retry_tool_calls: false,
         }
     }
 
@@ -184,7 +205,12 @@ where
     ///
     /// The first operation will trigger a connection.
     pub fn lazy(factory: Arc<F>) -> Self {
-        Self { client: Arc::new(Mutex::new(None)), factory, config: RefreshConfig::default() }
+        Self {
+            client: Arc::new(Mutex::new(None)),
+            factory,
+            config: RefreshConfig::default(),
+            retry_tool_calls: false,
+        }
     }
 
     /// Set the refresh configuration.
@@ -196,6 +222,24 @@ where
     /// Set the maximum number of reconnection attempts.
     pub fn with_max_attempts(mut self, attempts: u32) -> Self {
         self.config.max_attempts = attempts;
+        self
+    }
+
+    /// Allow `tools/call` to be replayed after reconnecting.
+    ///
+    /// A transport failure after request transmission is an ambiguous outcome:
+    /// a mutating tool may have completed its external effect before the
+    /// response was lost. Enable this only for read-only tools or operations
+    /// protected by a stable provider idempotency guarantee.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let refresher = ConnectionRefresher::new(client, Arc::new(factory))
+    ///     .with_tool_call_retries();
+    /// ```
+    pub fn with_tool_call_retries(mut self) -> Self {
+        self.retry_tool_calls = true;
         self
     }
 
@@ -321,7 +365,11 @@ where
         }
     }
 
-    /// Call a tool on the MCP server with automatic reconnection.
+    /// Call a tool on the MCP server.
+    ///
+    /// Tool calls are not replayed by default after an ambiguous connection
+    /// failure. Use [`Self::with_tool_call_retries`] only when the operation is
+    /// known to be replay-safe.
     pub async fn call_tool(
         &self,
         params: CallToolRequestParams,
@@ -339,6 +387,13 @@ where
                         let error_str = e.to_string();
                         if !should_refresh_connection(&error_str) {
                             return Err(error_str);
+                        }
+                        if !self.retry_tool_calls {
+                            return Err(format!(
+                                "MCP tool call result is uncertain and was not replayed: \
+                                 {error_str}. Enable tool-call retries only for replay-safe \
+                                 operations"
+                            ));
                         }
                         if self.config.log_reconnections {
                             warn!(error = %error_str, tool = %params.name, "call_tool failed, will retry with reconnection");

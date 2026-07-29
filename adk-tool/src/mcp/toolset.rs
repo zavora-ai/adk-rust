@@ -6,6 +6,7 @@
 // The McpToolset connects to an MCP server, discovers available tools,
 // and exposes them as ADK-compatible tools for use with LlmAgent.
 
+use super::reconnect::should_retry_mcp_operation;
 use super::task::{McpTaskConfig, TaskError, TaskStatus};
 use super::{ConnectionFactory, RefreshConfig, should_refresh_connection};
 use adk_core::{AdkError, ReadonlyContext, Result, Tool, ToolContext, Toolset};
@@ -109,15 +110,20 @@ fn call_tool_result_to_adk_value(
 /// Type alias for tool filter predicate
 pub type ToolFilter = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
-fn should_retry_mcp_operation(
+fn mcp_tool_call_error(
+    tool_name: &str,
     error: &str,
-    attempt: u32,
-    refresh_config: &RefreshConfig,
     has_connection_factory: bool,
-) -> bool {
-    has_connection_factory
-        && attempt < refresh_config.max_attempts
-        && should_refresh_connection(error)
+    replay_allowed: bool,
+) -> AdkError {
+    if has_connection_factory && !replay_allowed && should_refresh_connection(error) {
+        AdkError::tool(format!(
+            "MCP tool '{tool_name}' result is uncertain and was not replayed: {error}. \
+             Enable tool-call retries only for replay-safe operations"
+        ))
+    } else {
+        AdkError::tool(format!("Failed to call MCP tool '{tool_name}': {error}"))
+    }
 }
 
 /// Returns `true` when the `ServiceError` wraps an MCP `MethodNotFound` (-32601)
@@ -179,6 +185,8 @@ where
     connection_factory: Option<DynConnectionFactory<S>>,
     /// Reconnection/retry configuration.
     refresh_config: RefreshConfig,
+    /// Whether ambiguous tool-call outcomes may be replayed after reconnection.
+    retry_tool_calls: bool,
     /// Resource subscriptions restored after an automatic connection refresh.
     resource_subscriptions: Arc<RwLock<BTreeSet<String>>>,
 }
@@ -195,6 +203,7 @@ where
             task_config: self.task_config.clone(),
             connection_factory: self.connection_factory.clone(),
             refresh_config: self.refresh_config.clone(),
+            retry_tool_calls: self.retry_tool_calls,
             resource_subscriptions: Arc::clone(&self.resource_subscriptions),
         }
     }
@@ -229,6 +238,7 @@ where
             task_config: McpTaskConfig::default(),
             connection_factory: None,
             refresh_config: RefreshConfig::default(),
+            retry_tool_calls: false,
             resource_subscriptions: Arc::new(RwLock::new(BTreeSet::new())),
         }
     }
@@ -287,6 +297,26 @@ where
     /// Configure MCP reconnect/retry behavior.
     pub fn with_refresh_config(mut self, config: RefreshConfig) -> Self {
         self.refresh_config = config;
+        self
+    }
+
+    /// Allow MCP tool calls to be replayed after reconnecting.
+    ///
+    /// A transport failure after request transmission is an ambiguous outcome:
+    /// a mutating tool may have completed its external effect before the
+    /// response was lost. Enable this only for read-only tools or operations
+    /// protected by a stable provider idempotency guarantee. Discovery and
+    /// resource operations keep their normal reconnect behavior without this.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let toolset = McpToolset::new(client)
+    ///     .with_connection_factory(Arc::new(factory))
+    ///     .with_tool_call_retries();
+    /// ```
+    pub fn with_tool_call_retries(mut self) -> Self {
+        self.retry_tool_calls = true;
         self
     }
 
@@ -386,6 +416,7 @@ where
                         attempt,
                         &self.refresh_config,
                         self.connection_factory.is_some(),
+                        self.retry_tool_calls,
                     ) =>
                 {
                     if self.refresh_config.retry_delay_ms > 0 {
@@ -395,16 +426,22 @@ where
                         .await;
                     }
                     if !self.try_refresh_connection().await? {
-                        return Err(AdkError::tool(format!(
-                            "Failed to call MCP tool '{name}': {error}"
-                        )));
+                        return Err(mcp_tool_call_error(
+                            name,
+                            &error,
+                            self.connection_factory.is_some(),
+                            self.retry_tool_calls,
+                        ));
                     }
                     attempt += 1;
                 }
                 Err(error) => {
-                    return Err(AdkError::tool(format!(
-                        "Failed to call MCP tool '{name}': {error}"
-                    )));
+                    return Err(mcp_tool_call_error(
+                        name,
+                        &error,
+                        self.connection_factory.is_some(),
+                        self.retry_tool_calls,
+                    ));
                 }
             }
         };
@@ -631,6 +668,7 @@ where
                         attempt,
                         &self.refresh_config,
                         has_connection_factory,
+                        true,
                     ) {
                         return Err(AdkError::tool(format!("Failed to list MCP tools: {error}")));
                     }
@@ -697,6 +735,7 @@ where
                 client: self.client.clone(),
                 connection_factory: self.connection_factory.clone(),
                 refresh_config: self.refresh_config.clone(),
+                retry_tool_calls: self.retry_tool_calls,
                 task_support,
                 server_supports_tasks,
                 task_config: self.task_config.clone(),
@@ -886,6 +925,7 @@ where
     client: Arc<Mutex<RunningService<RoleClient, S>>>,
     connection_factory: Option<DynConnectionFactory<S>>,
     refresh_config: RefreshConfig,
+    retry_tool_calls: bool,
     /// Per-tool task contract published by the MCP server.
     task_support: TaskSupport,
     /// Whether the negotiated server capabilities permit task-augmented tool calls.
@@ -936,11 +976,14 @@ where
                         attempt,
                         &self.refresh_config,
                         has_connection_factory,
+                        self.retry_tool_calls,
                     ) {
-                        return Err(AdkError::tool(format!(
-                            "Failed to call MCP tool '{}': {error}",
-                            self.name
-                        )));
+                        return Err(mcp_tool_call_error(
+                            &self.name,
+                            &error,
+                            has_connection_factory,
+                            self.retry_tool_calls,
+                        ));
                     }
 
                     let retry_attempt = attempt + 1;
@@ -962,10 +1005,12 @@ where
                     }
 
                     if !self.try_refresh_connection().await? {
-                        return Err(AdkError::tool(format!(
-                            "Failed to call MCP tool '{}': {error}",
-                            self.name
-                        )));
+                        return Err(mcp_tool_call_error(
+                            &self.name,
+                            &error,
+                            has_connection_factory,
+                            self.retry_tool_calls,
+                        ));
                     }
                     attempt += 1;
                 }
@@ -1239,26 +1284,40 @@ mod tests {
     #[test]
     fn test_should_retry_mcp_operation_reconnectable_errors() {
         let config = RefreshConfig::default().with_max_attempts(3);
-        assert!(should_retry_mcp_operation("EOF", 0, &config, true));
-        assert!(should_retry_mcp_operation("connection reset by peer", 1, &config, true));
+        assert!(should_retry_mcp_operation("EOF", 0, &config, true, true));
+        assert!(should_retry_mcp_operation("connection reset by peer", 1, &config, true, true));
     }
 
     #[test]
     fn test_should_retry_mcp_operation_stops_at_max_attempts() {
         let config = RefreshConfig::default().with_max_attempts(2);
-        assert!(!should_retry_mcp_operation("EOF", 2, &config, true));
+        assert!(!should_retry_mcp_operation("EOF", 2, &config, true, true));
     }
 
     #[test]
     fn test_should_retry_mcp_operation_requires_factory() {
         let config = RefreshConfig::default().with_max_attempts(3);
-        assert!(!should_retry_mcp_operation("EOF", 0, &config, false));
+        assert!(!should_retry_mcp_operation("EOF", 0, &config, false, true));
     }
 
     #[test]
     fn test_should_retry_mcp_operation_non_reconnectable_error() {
         let config = RefreshConfig::default().with_max_attempts(3);
-        assert!(!should_retry_mcp_operation("invalid arguments for tool", 0, &config, true));
+        assert!(!should_retry_mcp_operation("invalid arguments for tool", 0, &config, true, true));
+    }
+
+    #[test]
+    fn test_should_retry_mcp_operation_requires_explicit_replay() {
+        let config = RefreshConfig::default().with_max_attempts(3);
+        assert!(!should_retry_mcp_operation("EOF", 0, &config, true, false));
+    }
+
+    #[test]
+    fn test_ambiguous_tool_call_error_explains_no_replay() {
+        let error = mcp_tool_call_error("create_record", "EOF", true, false);
+        let message = error.to_string();
+        assert!(message.contains("result is uncertain and was not replayed"));
+        assert!(message.contains("replay-safe operations"));
     }
 
     #[test]
