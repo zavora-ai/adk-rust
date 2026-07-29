@@ -74,6 +74,12 @@ pub struct ProcessConfig {
     pub python_path: String,
     /// Path to the Node.js runtime. Default: `"node"`.
     pub node_path: String,
+    /// Maximum bytes retained from each of stdout and stderr. Default: 1 MiB.
+    ///
+    /// The limit is applied as the pipes are read, so it bounds memory rather than only the
+    /// reported output. Excess is drained and discarded, and the returned text carries a
+    /// truncation notice.
+    pub max_output_bytes: usize,
 }
 
 impl Default for ProcessConfig {
@@ -82,6 +88,7 @@ impl Default for ProcessConfig {
             rustc_path: "rustc".to_string(),
             python_path: "python3".to_string(),
             node_path: "node".to_string(),
+            max_output_bytes: MAX_OUTPUT_BYTES,
         }
     }
 }
@@ -227,6 +234,18 @@ fn truncate_utf8(bytes: Vec<u8>, max_bytes: usize) -> String {
         end -= 1;
     }
     std::str::from_utf8(&bytes[..end]).unwrap_or("").to_string()
+}
+
+/// Appends a truncation notice when output was discarded.
+///
+/// A model that receives silently-cut output has no way to know it is incomplete, so the notice
+/// travels with the data rather than only appearing in a log. Mirrors the convention in
+/// adk-python's `tools/environment` toolset.
+fn note_truncation(mut text: String, discarded: bool) -> String {
+    if discarded {
+        text.push_str("\n... (truncated: output exceeded the configured limit)");
+    }
+    text
 }
 
 /// Reads `reader` to EOF, accumulating at most `cap` bytes.
@@ -546,17 +565,18 @@ impl ProcessBackend {
         // Read both pipes concurrently with the cap applied as the bytes arrive. Buffering the
         // whole output first and truncating afterwards let a process allocate without bound
         // before the limit was consulted, so the cap did not limit memory at all.
+        let cap = self.config.max_output_bytes;
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
         let stdout_reader = tokio::spawn(async move {
             match stdout_pipe {
-                Some(pipe) => read_capped(pipe, MAX_OUTPUT_BYTES).await,
+                Some(pipe) => read_capped(pipe, cap).await,
                 None => Ok((Vec::new(), false)),
             }
         });
         let stderr_reader = tokio::spawn(async move {
             match stderr_pipe {
-                Some(pipe) => read_capped(pipe, MAX_OUTPUT_BYTES).await,
+                Some(pipe) => read_capped(pipe, cap).await,
                 None => Ok((Vec::new(), false)),
             }
         });
@@ -577,14 +597,15 @@ impl ProcessBackend {
                 let exit_code = status.code().unwrap_or(-1);
                 if stdout_discarded || stderr_discarded {
                     tracing::warn!(
-                        max_output_bytes = MAX_OUTPUT_BYTES,
+                        max_output_bytes = cap,
                         stdout.truncated = stdout_discarded,
                         stderr.truncated = stderr_discarded,
                         "sandbox output exceeded the cap and was truncated"
                     );
                 }
-                let stdout = truncate_utf8(stdout_bytes, MAX_OUTPUT_BYTES);
-                let stderr = truncate_utf8(stderr_bytes, MAX_OUTPUT_BYTES);
+                let cap = self.config.max_output_bytes;
+                let stdout = note_truncation(truncate_utf8(stdout_bytes, cap), stdout_discarded);
+                let stderr = note_truncation(truncate_utf8(stderr_bytes, cap), stderr_discarded);
 
                 Span::current().record("exit_code", exit_code);
                 Span::current().record("duration_ms", duration.as_millis() as u64);

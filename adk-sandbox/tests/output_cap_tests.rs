@@ -31,8 +31,10 @@ async fn stdout_far_beyond_the_cap_is_capped() {
         .expect("the process runs to completion");
 
     assert_eq!(result.exit_code, 0, "stderr: {}", result.stderr);
+    // The payload is capped exactly; a truncation notice follows it.
+    let payload = result.stdout.split("\n... (truncated").next().expect("payload");
     assert_eq!(
-        result.stdout.len(),
+        payload.len(),
         CAP,
         "64 MiB in must retain exactly the cap; an empty result would also satisfy `<= CAP`"
     );
@@ -47,7 +49,8 @@ async fn stderr_far_beyond_the_cap_is_capped() {
         .await
         .expect("the process runs to completion");
 
-    assert_eq!(result.stderr.len(), CAP, "32 MiB in must retain exactly the cap");
+    let payload = result.stderr.split("\n... (truncated").next().expect("payload");
+    assert_eq!(payload.len(), CAP, "32 MiB in must retain exactly the cap");
 }
 
 /// A process producing more than the cap must still be reaped, not left blocked on a full pipe.
@@ -74,4 +77,37 @@ async fn small_output_is_returned_intact() {
 
     assert_eq!(result.stdout.trim(), "hello");
     assert_eq!(result.exit_code, 0);
+}
+
+/// Truncated output must say so, so a model is not handed a silent partial result.
+#[tokio::test]
+async fn truncated_output_carries_a_notice() {
+    let backend = ProcessBackend::new(ProcessConfig::default());
+    let result = backend
+        .execute(shell_request("yes 0123456789abcdef | head -c 4194304"))
+        .await
+        .expect("the process runs to completion");
+
+    assert!(
+        result.stdout.contains("truncated"),
+        "the output must state that it was cut; adk-python's environment toolset does the same"
+    );
+}
+
+/// A smaller configured cap is honoured.
+#[tokio::test]
+async fn the_cap_is_configurable() {
+    let config = ProcessConfig { max_output_bytes: 4_096, ..ProcessConfig::default() };
+    let backend = ProcessBackend::new(config);
+    let result = backend
+        .execute(shell_request("yes 0123456789abcdef | head -c 1048576"))
+        .await
+        .expect("the process runs to completion");
+
+    // The notice is appended after the capped payload, so allow for its length.
+    assert!(
+        result.stdout.len() < 4_096 + 128,
+        "a 4 KiB cap must bound the output, got {} bytes",
+        result.stdout.len()
+    );
 }
