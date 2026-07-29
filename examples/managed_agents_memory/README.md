@@ -4,7 +4,7 @@ Demonstrates creating a memory store, seeding it with content, running a session
 
 ## Prerequisites
 
-- Rust 1.94.0+
+- Rust 1.95.0+
 - An `ANTHROPIC_API_KEY` with Managed Agents beta access
 
 ## Setup

@@ -243,7 +243,7 @@ impl TaskStore for InMemoryTaskStore {
             .collect();
 
         // Sort by created_at for deterministic pagination
-        results.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        results.sort_by_key(|a| a.created_at);
 
         if let Some(page_size) = params.page_size {
             results.truncate(page_size as usize);

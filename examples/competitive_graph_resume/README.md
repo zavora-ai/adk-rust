@@ -10,7 +10,7 @@ Validation example for resume-from-checkpoint in `adk-graph`.
 
 ## Prerequisites
 
-- **Rust 1.94+** (edition 2024)
+- **Rust 1.95+** (edition 2024)
 - No API key required
 
 ## Run

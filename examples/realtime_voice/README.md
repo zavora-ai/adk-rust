@@ -92,7 +92,7 @@ configures its capture/playback contexts accordingly.
 
 ## Prerequisites
 
-- Rust 1.94.0+
+- Rust 1.95.0+
 - `OPENAI_API_KEY` (for OpenAI) and/or `GEMINI_API_KEY` / `GOOGLE_API_KEY` (for Gemini)
 - A modern browser with WebSocket + Web Audio API support and microphone access
 

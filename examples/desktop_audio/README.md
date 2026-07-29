@@ -4,7 +4,7 @@ Practical examples exercising the full `adk-audio` desktop audio pipeline: devic
 
 ## Prerequisites
 
-- **Rust 1.94+** (edition 2024)
+- **Rust 1.95+** (edition 2024)
 - **Audio hardware** — microphone and speakers (all examples except `config-validation`)
 - **GEMINI_API_KEY** — required for the `voice-agent` example ([get a key](https://aistudio.google.com/apikey))
 

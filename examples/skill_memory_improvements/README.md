@@ -10,7 +10,7 @@ Validation example covering the skill-discovery and memory APIs added by the ski
 
 ## Prerequisites
 
-- **Rust 1.94+** (edition 2024)
+- **Rust 1.95+** (edition 2024)
 - No API key required
 
 ## Run

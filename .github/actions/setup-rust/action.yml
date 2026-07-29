@@ -9,7 +9,7 @@ inputs:
   toolchain:
     description: 'Rust toolchain version to install.'
     required: false
-    default: '1.94.0'
+    default: '1.95.0'
   components:
     description: 'Comma-separated list of toolchain components (e.g. clippy,rustfmt).'
     required: false

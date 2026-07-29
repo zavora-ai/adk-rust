@@ -99,11 +99,11 @@ jobs:
   #     its pinned git dependency during quiet periods. It no longer carries a
   #     push-to-main trigger, so a Monty-touching merge is not built twice.
   #
-  # adk-codeact-monty is outside the root workspace: it needs rustc 1.95 (the
-  # workspace is pinned to 1.94) plus rustfmt + clippy. neutralize-wild is true
-  # because this is a plain Linux runner that does not provide the `wild` linker
-  # pinned in .cargo/config.toml. The cache is keyed on the Monty crate's own
-  # lockfile so a dependency change there is not masked by a stale workspace cache.
+  # adk-codeact-monty is outside the root workspace because it carries a Monty
+  # git dependency. neutralize-wild is true because this is a plain Linux runner
+  # that does not provide the `wild` linker pinned in .cargo/config.toml. The
+  # cache is keyed on the Monty crate's own lockfile so dependency changes are
+  # not masked by the workspace cache.
   out-of-workspace-monty:
     runs-on: ubuntu-latest
     steps:

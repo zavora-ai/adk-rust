@@ -27,7 +27,7 @@ What actually happened. Include error messages, stack traces, or logs.
 ## Environment
 
 - OS: [e.g., macOS 15, Ubuntu 24.04]
-- Rust version: [e.g., 1.94.0]
+- Rust version: [e.g., 1.95.0]
 - ADK-Rust version/commit: [e.g., v0.3.0 or commit hash]
 - Affected crate(s): [e.g., adk-gemini, adk-realtime]
 

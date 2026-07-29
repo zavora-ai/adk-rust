@@ -4,7 +4,7 @@ Create and run an A2A (Agent-to-Agent) protocol agent in under 5 minutes.
 
 ## Prerequisites
 
-- Rust 1.94.0 or later (`rustup update stable`)
+- Rust 1.95.0 or later (`rustup update stable`)
 - `cargo-adk` installed (`cargo install cargo-adk`)
 - A Google API key ([get one here](https://aistudio.google.com/app/apikey))
 

@@ -144,7 +144,7 @@ Faster than Python ADK
 
 - **Lock poison recovery** — one panicked task won't crash your service
 - **Security audit** — every advisory documented, `cargo audit` CI-integrated
-- **MSRV enforcement** — `rust-toolchain.toml` pins Rust 1.94
+- **MSRV enforcement** — `rust-toolchain.toml` pins Rust 1.95
 
 ---
 

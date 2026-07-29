@@ -63,7 +63,7 @@ lives entirely server-side.
 
 ## Prerequisites
 
-- Rust 1.94+
+- Rust 1.95+
 - `OPENAI_API_KEY` (for OpenAI) and/or `GEMINI_API_KEY` / `GOOGLE_API_KEY` (for Gemini)
 - A modern browser with WebSocket + Web Audio + microphone access
 

@@ -14,7 +14,7 @@ lists datasets, inspects table schemas, and executes SQL queries via the BigQuer
 
 ## Prerequisites
 
-- Rust 1.94+
+- Rust 1.95+
 - `GOOGLE_API_KEY` for the Gemini LLM provider
 - (Optional) A Google Cloud project with BigQuery enabled for live mode
 - (Optional) Application Default Credentials configured via `gcloud auth application-default login`

@@ -10,7 +10,7 @@ Drives `OpenAIResponsesClient` through the full ADK stack (Runner â†’ LlmAgent â
 
 ## Prerequisites
 
-- **Rust 1.94+** (edition 2024)
+- **Rust 1.95+** (edition 2024)
 - **`OPENAI_API_KEY`** environment variable set
 
 ## Run

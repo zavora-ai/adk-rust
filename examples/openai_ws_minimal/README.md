@@ -4,7 +4,7 @@ Demonstrates the lowest-level WebSocket transport for the OpenAI Responses API. 
 
 ## Prerequisites
 
-- Rust 1.94.0+
+- Rust 1.95.0+
 - `OPENAI_API_KEY` environment variable set
 - The `openai-ws` feature flag on `adk-model`
 

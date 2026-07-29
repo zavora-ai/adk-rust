@@ -10,7 +10,7 @@ Exercises the cron scheduling API from `adk-server`: create jobs, list them, and
 
 ## Prerequisites
 
-- **Rust 1.94+** (edition 2024)
+- **Rust 1.95+** (edition 2024)
 - Built with the adk-server `background` feature (already enabled in this example's manifest)
 
 ## Run

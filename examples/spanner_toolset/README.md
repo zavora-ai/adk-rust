@@ -14,7 +14,7 @@ lists tables, inspects table schemas, and executes SQL queries via the Cloud Spa
 
 ## Prerequisites
 
-- Rust 1.94+
+- Rust 1.95+
 - `GOOGLE_API_KEY` for the Gemini LLM provider
 - (Optional) A Google Cloud project with Cloud Spanner enabled for live mode
 - (Optional) Application Default Credentials configured via `gcloud auth application-default login`

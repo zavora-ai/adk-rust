@@ -9,7 +9,7 @@ Reproduction for GitHub issue #224: a built-in Google Search tool and a function
 
 ## Prerequisites
 
-- **Rust 1.94+** (edition 2024)
+- **Rust 1.95+** (edition 2024)
 - **`GOOGLE_API_KEY`** environment variable set
 
 ## Run

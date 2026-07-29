@@ -4,7 +4,7 @@ The simplest possible Anthropic Managed Agents session. Creates an agent, enviro
 
 ## Prerequisites
 
-- Rust 1.94.0+
+- Rust 1.95.0+
 - An `ANTHROPIC_API_KEY` with Managed Agents beta access
 
 ## Setup

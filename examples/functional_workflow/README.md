@@ -11,7 +11,7 @@ Demonstrates the Functional API from `adk-graph`: write a workflow as async func
 
 ## Prerequisites
 
-- **Rust 1.94+** (edition 2024)
+- **Rust 1.95+** (edition 2024)
 - Built with the adk-graph `functional` feature (already enabled in this example's manifest)
 
 ## Run

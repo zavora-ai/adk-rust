@@ -1,5 +1,4 @@
-# Monty (v0.0.18) requires rustc 1.95+, while the parent adk-rust workspace is
-# pinned to 1.94.0. This crate is its own workspace, so it overrides the
-# toolchain locally. Build from inside this directory (or with `cargo +1.95.0`).
+# This out-of-workspace crate keeps an explicit pin so its independent Monty
+# build uses the same supported toolchain as the root workspace.
 [toolchain]
 channel = "1.95.0"

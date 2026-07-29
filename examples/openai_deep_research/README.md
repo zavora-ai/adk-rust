@@ -6,7 +6,7 @@ Deep research models are designed for complex research tasks that require synthe
 
 ## Prerequisites
 
-- Rust 1.94.0+
+- Rust 1.95.0+
 - `OPENAI_API_KEY` environment variable set with a valid OpenAI API key
 - Access to deep research models (may require specific API tier)
 

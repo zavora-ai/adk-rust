@@ -6,7 +6,7 @@ Previously, non-ASCII characters in queries and skill metadata were silently dro
 
 ## Prerequisites
 
-- Rust 1.94+
+- Rust 1.95+
 - `GOOGLE_API_KEY` environment variable set (for Scenario 6 live demo)
 
 ## Running

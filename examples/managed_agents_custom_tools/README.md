@@ -4,7 +4,7 @@ Demonstrates defining a custom tool on a managed agent, handling `AgentCustomToo
 
 ## Prerequisites
 
-- Rust 1.94.0+
+- Rust 1.95.0+
 - An `ANTHROPIC_API_KEY` with Managed Agents beta access
 
 ## Setup

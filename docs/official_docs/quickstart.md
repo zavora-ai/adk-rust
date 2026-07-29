@@ -4,7 +4,7 @@ Create your first AI agent in under 5 minutes.
 
 ## Prerequisites
 
-- Rust 1.94.0 or later (`rustup update stable`)
+- Rust 1.95.0 or later (`rustup update stable`)
 - A Google API key ([get one here](https://aistudio.google.com/app/apikey))
 
 ## Step 1: Scaffold Your Project

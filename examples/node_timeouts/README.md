@@ -15,7 +15,7 @@ The example builds a four-node graph where each node demonstrates a different ti
 
 ## Prerequisites
 
-- **Rust 1.94+** (edition 2024)
+- **Rust 1.95+** (edition 2024)
 - **`GOOGLE_API_KEY`** environment variable set with a valid Gemini API key
 
 Set the API key in your shell or create a `.env` file:

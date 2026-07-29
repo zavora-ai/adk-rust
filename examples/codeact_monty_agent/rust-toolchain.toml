@@ -1,5 +1,4 @@
-# This example pulls in `monty` (via adk-codeact-monty), which requires rustc
-# 1.95+, while the parent adk-rust workspace is pinned to 1.94.0. As a standalone
-# workspace, it overrides the toolchain locally.
+# This standalone example keeps an explicit pin so its Monty dependency uses
+# the same supported toolchain as the root workspace.
 [toolchain]
 channel = "1.95.0"

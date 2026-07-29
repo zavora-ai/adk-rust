@@ -1028,8 +1028,8 @@ impl ChatStreamState {
 
     fn drain_chat_tool_calls(&mut self) -> Vec<Part> {
         self.pending_tool_calls
-            .iter()
-            .filter_map(|(_, pending)| {
+            .values()
+            .filter_map(|pending| {
                 let name = pending.name.clone()?;
                 let args = serde_json::from_str(&pending.arguments).ok()?;
                 Some(Part::FunctionCall {

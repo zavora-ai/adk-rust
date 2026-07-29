@@ -1,10 +1,9 @@
 name: CodeAct Monty
 
-# `adk-codeact-monty` is intentionally OUTSIDE the main workspace: it depends on
-# the Monty interpreter via a git dependency (not yet on crates.io) and requires
-# rustc 1.95+, while the workspace is pinned to 1.94. The main CI workflow does
-# not build it, so this workflow exercises it (and the CodeAct feature in
-# adk-agent) separately.
+# `adk-codeact-monty` is intentionally OUTSIDE the main workspace because it
+# depends on the Monty interpreter through a git dependency that is not yet on
+# crates.io. The main CI workflow does not build it, so this workflow exercises
+# it (and the CodeAct feature in adk-agent) separately.
 #
 # Tiering (see ci-pipeline-restructure spec):
 #   • codeact-feature — the lightweight in-workspace CodeAct check — runs on PRs

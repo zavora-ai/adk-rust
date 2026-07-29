@@ -18,7 +18,7 @@ This document provides comprehensive guidelines for developers contributing to A
 
 ### Prerequisites
 
-- **Rust**: 1.94.0 or higher (edition 2024, check with `rustc --version`)
+- **Rust**: 1.95.0 or higher (edition 2024, check with `rustc --version`)
 - **Cargo**: Latest stable
 - **Git**: For version control
 - **sccache** (recommended): Compilation cache that cuts rebuild times by ~70%

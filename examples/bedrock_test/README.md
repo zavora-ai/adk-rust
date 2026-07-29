@@ -10,7 +10,7 @@ Drives the Amazon Bedrock provider through the ADK stack, including prompt cachi
 
 ## Prerequisites
 
-- **Rust 1.94+** (edition 2024)
+- **Rust 1.95+** (edition 2024)
 - **`AWS_REGION (or AWS_DEFAULT_REGION)`** environment variable set
 
 Authentication uses the standard AWS credential chain — run `aws configure` first.

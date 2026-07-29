@@ -14,7 +14,7 @@ Demonstrates the Agent Registry REST API from ADK-Rust v1.0 for registering, dis
 
 ## Prerequisites
 
-- Rust 1.94+
+- Rust 1.95+
 - No LLM provider or API keys required
 
 ## Environment Variables

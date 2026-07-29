@@ -10,7 +10,7 @@ Live integration example for the native OpenRouter provider and its discovery AP
 
 ## Prerequisites
 
-- **Rust 1.94+** (edition 2024)
+- **Rust 1.95+** (edition 2024)
 - **`OPENROUTER_API_KEY`** environment variable set
 - Built with the adk-model `openrouter` feature (already enabled in this example's manifest)
 

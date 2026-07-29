@@ -10,7 +10,7 @@ End-to-end smoke test of the managed agent runtime against a scripted LLM, so it
 
 ## Prerequisites
 
-- **Rust 1.94+** (edition 2024)
+- **Rust 1.95+** (edition 2024)
 - Built with the adk-rust `managed-runtime` feature (already enabled in this example's manifest)
 
 ## Run

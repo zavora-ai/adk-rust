@@ -46,7 +46,7 @@ let builder = RealtimeAgentBuilder::new("my_agent")
 
 ## Prerequisites
 
-- Rust 1.94.0+
+- Rust 1.95.0+
 - No API keys or LLM provider required
 
 ## Environment Variables

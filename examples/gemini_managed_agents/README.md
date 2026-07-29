@@ -14,7 +14,7 @@ Four focused agents that do real work, built on the official [Managed Agents Qui
 
 ## Prerequisites
 
-- Rust 1.94.0+
+- Rust 1.95.0+
 - A `GOOGLE_API_KEY` with [Interactions API (Beta)](https://ai.google.dev/gemini-api/docs/interactions) access
 
 ## Setup

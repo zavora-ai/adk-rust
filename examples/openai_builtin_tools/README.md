@@ -8,7 +8,7 @@ This example covers two built-in tools:
 
 ## Prerequisites
 
-- Rust 1.94.0+
+- Rust 1.95.0+
 - `OPENAI_API_KEY` environment variable set with a valid OpenAI API key
 
 ## Running

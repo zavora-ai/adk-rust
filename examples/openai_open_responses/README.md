@@ -4,7 +4,7 @@ Demonstrates the **Open Responses mode** for provider-agnostic usage of the Resp
 
 ## Prerequisites
 
-- Rust 1.94.0+
+- Rust 1.95.0+
 - One of the following:
   - `OPENAI_API_KEY` environment variable set (for OpenAI)
   - A running Open Responses-compatible local server (LM Studio, Ollama, vLLM)

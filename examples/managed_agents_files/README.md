@@ -4,7 +4,7 @@ Demonstrates uploading a file via the Anthropic Files API, mounting it in a mana
 
 ## Prerequisites
 
-- Rust 1.94.0+
+- Rust 1.95.0+
 - An `ANTHROPIC_API_KEY` with Managed Agents and Files API beta access
 
 ## Setup

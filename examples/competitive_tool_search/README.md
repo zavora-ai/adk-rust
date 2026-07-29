@@ -9,7 +9,7 @@ Validation example for `ToolSearchConfig` filtering and realtime interruption mo
 
 ## Prerequisites
 
-- **Rust 1.94+** (edition 2024)
+- **Rust 1.95+** (edition 2024)
 - No API key required
 
 ## Run

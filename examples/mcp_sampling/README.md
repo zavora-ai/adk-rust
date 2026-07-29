@@ -52,7 +52,7 @@ let toolset = McpToolset::with_sampling_handler(transport, elicitation, sampling
 
 ## Prerequisites
 
-- Rust 1.94+
+- Rust 1.95+
 - `GOOGLE_API_KEY` environment variable set
 
 ## Environment Variables
