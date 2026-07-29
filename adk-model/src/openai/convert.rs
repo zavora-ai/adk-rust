@@ -50,10 +50,9 @@ pub fn content_to_message(content: &Content) -> ChatCompletionRequestMessage {
                                 Some(ChatCompletionRequestUserMessageContentPart::ImageUrl(
                                     ChatCompletionRequestMessageContentPartImage {
                                         // Emit an explicit "auto" (the API default) rather than
-                                        // leaving `detail` as `None`. async-openai 0.33's `ImageUrl`
-                                        // has no `skip_serializing_if`, so `None` serializes as an
-                                        // explicit `"detail": null`, which strict OpenAI-compatible
-                                        // gateways reject with HTTP 400. See issue #395.
+                                        // relying on dependency serialization defaults. This keeps
+                                        // requests compatible with strict OpenAI-compatible gateways
+                                        // that reject `"detail": null`. See issue #395.
                                         image_url: ImageUrl {
                                             url: file_uri.clone(),
                                             detail: Some(ImageDetail::Auto),
@@ -346,8 +345,8 @@ pub fn from_openai_response(resp: &CreateChatCompletionResponse) -> LlmResponse 
 /// Convert a raw OpenAI JSON response to ADK LlmResponse.
 ///
 /// Unlike [`from_openai_response`], this parses the raw JSON directly so it can
-/// extract fields that `async-openai` 0.33 does not model, such as
-/// `reasoning_content` returned by reasoning models (o3, gpt-5-mini, etc.).
+/// extract fields that `async-openai` does not model, such as `reasoning_content`
+/// returned by reasoning models (o3, gpt-5-mini, etc.).
 pub fn from_raw_openai_response(json: &serde_json::Value) -> LlmResponse {
     let choice = json.get("choices").and_then(|c| c.get(0));
 

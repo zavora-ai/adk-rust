@@ -156,23 +156,27 @@ pub(super) fn map_openai_error(e: async_openai::error::OpenAIError) -> AdkError 
     let error_string = e.to_string();
 
     if let async_openai::error::OpenAIError::ApiError(ref api_err) = e {
-        // Try to extract status code from the error code or message
-        let (category, code, status) = if api_err.code.as_deref().is_some_and(|c| c.contains("401"))
+        let status_code = api_err.status_code.as_u16();
+        let api_code = api_err.api_error.code.as_deref();
+        let (category, code, status) = if status_code == 401
+            || api_code.is_some_and(|code| code.contains("401"))
             || error_string.contains("401")
         {
             (ErrorCategory::Unauthorized, "model.openai_responses.unauthorized", Some(401u16))
-        } else if api_err.code.as_deref().is_some_and(|c| c.contains("429"))
+        } else if status_code == 429
+            || api_code.is_some_and(|code| code.contains("429"))
             || error_string.contains("429")
             || error_string.contains("rate")
         {
             (ErrorCategory::RateLimited, "model.openai_responses.rate_limited", Some(429u16))
-        } else if error_string.contains("500")
+        } else if matches!(status_code, 500 | 502 | 503 | 504 | 529)
+            || error_string.contains("500")
             || error_string.contains("502")
             || error_string.contains("503")
             || error_string.contains("504")
             || error_string.contains("529")
         {
-            (ErrorCategory::Unavailable, "model.openai_responses.unavailable", None)
+            (ErrorCategory::Unavailable, "model.openai_responses.unavailable", Some(status_code))
         } else {
             (ErrorCategory::Internal, "model.openai_responses.api_error", None)
         };
@@ -434,6 +438,47 @@ impl Llm for OpenAIResponsesClient {
 mod tests {
     use super::*;
     use crate::openai::config::OpenAIResponsesConfig;
+    use async_openai::error::{ApiError, ApiErrorResponse, OpenAIError};
+
+    fn api_error(status_code: u16) -> OpenAIError {
+        OpenAIError::ApiError(ApiErrorResponse {
+            status_code: reqwest::StatusCode::from_u16(status_code)
+                .expect("status code should be valid"),
+            api_error: ApiError {
+                message: "upstream error".to_string(),
+                r#type: None,
+                param: None,
+                code: None,
+            },
+        })
+    }
+
+    #[test]
+    fn maps_unauthorized_api_error() {
+        let error = map_openai_error(api_error(401));
+
+        assert_eq!(error.category, ErrorCategory::Unauthorized);
+        assert!(!error.is_retryable());
+        assert_eq!(error.details.upstream_status_code, Some(401));
+    }
+
+    #[test]
+    fn maps_rate_limited_api_error() {
+        let error = map_openai_error(api_error(429));
+
+        assert_eq!(error.category, ErrorCategory::RateLimited);
+        assert!(error.is_retryable());
+        assert_eq!(error.details.upstream_status_code, Some(429));
+    }
+
+    #[test]
+    fn maps_unavailable_api_error() {
+        let error = map_openai_error(api_error(503));
+
+        assert_eq!(error.category, ErrorCategory::Unavailable);
+        assert!(error.is_retryable());
+        assert_eq!(error.details.upstream_status_code, Some(503));
+    }
 
     #[test]
     fn test_new_rejects_empty_api_key_without_open_responses_mode() {

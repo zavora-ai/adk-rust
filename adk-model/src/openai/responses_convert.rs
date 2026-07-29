@@ -98,6 +98,7 @@ fn content_to_input_items(content: &Content) -> Vec<InputItem> {
                     call_id,
                     name: name.clone(),
                     arguments,
+                    namespace: None,
                     id: None,
                     status: None,
                 })));
@@ -245,6 +246,7 @@ pub fn convert_tools(tools: &HashMap<String, serde_json::Value>) -> Result<Vec<T
                     description,
                     parameters,
                     strict: None,
+                    defer_loading: None,
                 }))
             }
         })
@@ -281,6 +283,7 @@ fn convert_native_tool(
                 description,
                 parameters,
                 strict: None,
+                defer_loading: None,
             }))
         }
     }
@@ -961,10 +964,10 @@ mod tests {
     #[test]
     fn test_server_tool_parts_round_trip_as_openai_items() {
         let parts = output_item_to_parts(&OutputItem::WebSearchCall(WebSearchToolCall {
-            action: WebSearchToolCallAction::Search(WebSearchActionSearch {
+            action: Some(WebSearchToolCallAction::Search(WebSearchActionSearch {
                 query: "rust".to_string(),
                 sources: None,
-            }),
+            })),
             id: "ws_123".to_string(),
             status: WebSearchToolCallStatus::Completed,
         }));
@@ -1654,6 +1657,7 @@ mod tests {
                     "type": "shell_call_output",
                     "id": "sh_out_123",
                     "call_id": "call_sh_123",
+                    "status": "completed",
                     "output": [{
                         "stdout": "hello",
                         "stderr": "",

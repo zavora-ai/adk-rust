@@ -253,6 +253,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **OpenAI integrations now use `async-openai` 0.41.** Chat Completions,
+  Responses, and Realtime integrations adopt the current 0.41 types and
+  transport dependencies.
 - **MCP now uses official `rmcp 2.2` and MCP `2025-11-25` protocol types.**
   ADK-Rust re-exports its aligned SDK for advanced transports and server
   authoring. Sampling remains an opt-in deprecated-compatibility feature under
