@@ -1054,7 +1054,7 @@ mod tests {
             serde_json::json!({
                 "built_in_tools": [
                     {
-                        "type": "web_fetch_20250910"
+                        "type": "unsupported_tool_00000000"
                     }
                 ]
             }),
@@ -1164,11 +1164,7 @@ mod tests {
                 MessageStreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
                     delta: ContentBlockDelta::TextDelta(TextDelta { ref text }),
                     ..
-                }) => {
-                    if !text.is_empty() {
-                        responses.push(convert::from_text_delta(text));
-                    }
-                }
+                }) if !text.is_empty() => responses.push(convert::from_text_delta(text)),
                 _ => {}
             }
         }

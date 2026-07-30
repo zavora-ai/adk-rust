@@ -111,8 +111,8 @@ Available attributes (all optional, combine freely):
 
 | Attribute | Effect |
 |-----------|--------|
-| `read_only` | `is_read_only() → true` — included in concurrent batch under `Auto` strategy |
-| `concurrency_safe` | `is_concurrency_safe() → true` — explicitly safe for parallel dispatch |
+| `read_only` | `is_read_only() → true` — one of two signals required for concurrent `Auto` dispatch |
+| `concurrency_safe` | `is_concurrency_safe() → true` — one of two signals required for concurrent `Auto` dispatch |
 | `long_running` | `is_long_running() → true` — prevents LLM from re-calling a pending tool |
 
 Plain `#[tool]` without attributes keeps the defaults (all `false`), so existing code is unaffected.
@@ -554,7 +554,7 @@ cargo run
 3. **Return structured JSON** - Use clear field names
 4. **Keep tools focused** - Each tool should do one thing well
 5. **Use schemas** - For complex tools, define parameter schemas
-6. **Mark read-only tools** - Use `.with_read_only(true)` for tools with no side effects so `Auto` dispatch can run them concurrently
+6. **Mark safe read-only tools** - Set both `.with_read_only(true)` and `.with_concurrency_safe(true)` so `Auto` dispatch can include them in its concurrent subset
 
 ---
 
@@ -567,8 +567,8 @@ Mark tools as read-only or concurrency-safe to enable smarter dispatch:
 let lookup = FunctionTool::new("lookup", "Look up data", |_ctx, args| async move {
     Ok(json!({"result": "cached data"}))
 })
-.with_read_only(true)        // Safe for concurrent execution in Auto mode
-.with_concurrency_safe(true); // Explicitly safe for parallel dispatch
+.with_read_only(true)
+.with_concurrency_safe(true); // Auto mode requires both signals
 
 // A mutation tool (defaults: read_only=false, concurrency_safe=false)
 let update = FunctionTool::new("update", "Update record", |_ctx, args| async move {
@@ -576,7 +576,7 @@ let update = FunctionTool::new("update", "Update record", |_ctx, args| async mov
 });
 ```
 
-When `ToolExecutionStrategy::Auto` is active, the dispatch loop runs all `is_read_only() == true` tools concurrently first, then executes the remaining tools sequentially. This reduces latency when an LLM returns multiple tool calls in a single response.
+When `ToolExecutionStrategy::Auto` is active, the dispatch loop first runs calls concurrently when their selected tools return `true` from both `is_read_only()` and `is_concurrency_safe()`. It then executes all remaining calls sequentially. `ToolExecutionStrategy::Parallel` is an explicit override that bypasses these signals, so its caller owns concurrency safety.
 
 ---
 

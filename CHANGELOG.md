@@ -656,6 +656,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **adk-session: the Vertex AI backend follows the Session API wire contract and
+  preserves complete ADK events.** Create and append requests now send the
+  GA `v1` `Session` and `SessionEvent` bodies directly, create/delete operations
+  are polled to completion with bounded backoff, list filtering uses `user_id`,
+  caller-supplied logical session IDs retain the core identity rules, and their
+  deterministic derived remote IDs follow the service validation rules.
+  Canonical Vertex content preserves text, thought signatures, inline/file
+  data, top-level media `displayName`, function calls/responses, and bounded
+  `mediaResolution` objects through its sidecar. GA `v1`
+  function-call/response IDs and empty or noncanonical Base64 thought-signature
+  bytes use lossless raw persistence because their canonical proto messages
+  cannot preserve those values. `rawEvent` exposes Google ADK-compatible replay
+  fields and stores the complete Rust event under the versioned `_adkRust`
+  envelope. Arbitrary Struct values remain opaque and retain every original
+  key/value when the reserved envelope is removed; malformed pre-existing
+  `_adkRust` values fail closed, and incompatible Google-shaped projections
+  fall back to opaque preservation. Logical session IDs are isolated by the
+  complete app/user/session identity through deterministic remote IDs and a
+  protected state marker.
+  Without a fixed engine, `app_name` must be a canonical nonzero numeric engine
+  ID; fixed shared engines require an explicit per-app opt-in before accessing
+  unmarked pre-v2 sessions. Vertex user IDs are limited to 128 Unicode scalar
+  values. Global and multi-region locations use their documented endpoints,
+  custom endpoints are origin-only and redirect-disabled, and create/delete
+  long-running-operation responses validate their GA protobuf `Any` type URLs.
+  Encoded request bodies, decoded response bodies, and aggregate pagination
+  default to 64 MiB byte budgets, complete pagination has a 120-second deadline,
+  nested JSON/Vertex Struct values are bounded, and recent-event
+  limits/timestamp filters are applied server-side. Transport failures and
+  unresolved polling or successful-response validation after mutation
+  transmission return non-retryable create/delete/append outcome-ambiguity
+  codes with reconciliation guidance. Terminal LRO errors remain known
+  `operation_failed` results with category-derived retry hints. Proto3-omitted
+  empty optional scalars and Struct-normalized schema version `1.0` restore
+  exact private scalar presence; safe integer/double-normalized Vertex Struct
+  values compare semantically without discarding preserved canonical
+  extensions.
+  **Breaking:** `VertexAiSessionService::with_credentials()` now returns
+  `Result<Self>` because endpoint validation and bounded HTTP-client construction
+  can fail.
+  `vertex-session` is now available through the `adk-rust` umbrella crate and
+  joins the PR feature-coverage gate.
+- **adk-acp: session replay preserves message roles and multimodal content.**
+  `session/load` now emits stored user content as `UserMessageChunk` and
+  model/agent content as `AgentMessageChunk`. Image and audio bytes, file
+  references, embedded resources, and multimodal function results use their
+  native ACP content blocks instead of disappearing during replay. Inbound
+  Base64 binary content is bounded before decode allocation and checked against
+  the core 10 MiB limit after decoding. Outbound URI-less inline data maps only to
+  matching `image/*` and `audio/*` ACP blocks instead of mislabeling other MIME
+  types as images. The load regression test specifies expected roles and
+  ordering independently of the production mapper.
+- **adk-agent: automatic tool dispatch now requires both safety signals.**
+  `ToolExecutionStrategy::Auto` previously ran every read-only tool concurrently
+  without consulting `is_concurrency_safe()`. A read-only tool backed by a
+  stateful cursor, cache, or non-thread-safe client could therefore race. `Auto`
+  now includes a call in its concurrent subset only when the selected tool is
+  both read-only and concurrency-safe, then executes the remaining calls
+  sequentially. `Parallel` remains an explicit caller override that bypasses
+  metadata, with caller-owned safety.
 - **adk-runner: `SandboxRunner::run` runs the agent instead of reporting a completed run that
   did nothing.** The method provisioned the workspace, started a session, bound tools, then
   executed a placeholder future and returned `Ok`. It now drives the inner `Runner` with the
@@ -737,7 +797,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   maintained independently. `scripts/check-doc-versions.sh` skips `CHANGELOG.md` and never
   looked at the banner or the roadmap, so nothing detected drift between them. The new
   `scripts/check-release-consistency.sh` derives all three from the workspace version and runs
-  in the PR-tier `docs` job. Its `--release` mode additionally requires a `v<version>` tag so a
+  in the PR-tier `templates` job. Its `--release` mode additionally requires a `v<version>` tag so a
   published artifact can be attributed to an exact commit; outside release mode it reports the
   commit a release would be cut from. There is currently **no `v2.0.0` tag**, which is why a
   defect cannot be attributed to the published artifact from this repository alone.

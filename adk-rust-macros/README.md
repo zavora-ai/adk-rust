@@ -62,8 +62,8 @@ async fn generate_report(args: ReportArgs) -> Result<serde_json::Value, adk_tool
 
 | Attribute | Effect |
 |-----------|--------|
-| `read_only` | `is_read_only() → true` — included in concurrent batch under `Auto` strategy |
-| `concurrency_safe` | `is_concurrency_safe() → true` — explicitly safe for parallel dispatch |
+| `read_only` | `is_read_only() → true` — one of two signals required for concurrent `Auto` dispatch |
+| `concurrency_safe` | `is_concurrency_safe() → true` — one of two signals required for concurrent `Auto` dispatch |
 | `long_running` | `is_long_running() → true` — prevents LLM from re-calling a pending tool |
 
 Plain `#[tool]` without attributes keeps the defaults (all `false`), so existing code is unaffected.

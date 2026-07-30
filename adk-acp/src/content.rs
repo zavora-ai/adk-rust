@@ -13,6 +13,7 @@
 //! | `Image { data, mime_type, uri? }`      | `Part::InlineData { mime_type, data }` (uri dropped) |
 //! | `Audio { data, mime_type }`            | `Part::InlineData { mime_type, data }`          |
 //! | `ResourceLink`                         | `Part::Text` (human-readable reference)         |
+//! | `ResourceLink` (outbound)              | `Part::FileData { mime_type, file_uri }`        |
 //! | `Resource { resource: Text }`          | `Part::EmbeddedResource(Text)`                  |
 //! | `Resource { resource: Blob }`          | `Part::EmbeddedResource(Blob)` (base64 decode)  |
 //!
@@ -20,7 +21,10 @@
 //! on the wire and decoded to raw bytes internally. Text embedded resources are
 //! preserved verbatim without base64 encoding.
 
-use adk_core::{BlobResourceContents, Content, EmbeddedResource, Part, TextResourceContents};
+use adk_core::{
+    BlobResourceContents, Content, EmbeddedResource, MAX_INLINE_DATA_SIZE, Part,
+    TextResourceContents,
+};
 use agent_client_protocol::schema::v1::{
     AudioContent, BlobResourceContents as AcpBlobResourceContents, ContentBlock,
     EmbeddedResource as AcpEmbeddedResource, EmbeddedResourceResource, ImageContent, ResourceLink,
@@ -30,16 +34,19 @@ use base64::{Engine as _, engine::general_purpose};
 
 use crate::error::AcpError;
 
+const MAX_BASE64_ENCODED_SIZE: usize = MAX_INLINE_DATA_SIZE.div_ceil(3) * 4;
+
 /// Convert an inbound ACP [`ContentBlock`] into an [`adk_core::Part`].
 ///
 /// Binary content (image, audio, and blob embedded resources) is base64-decoded
-/// to raw bytes. Text and text embedded resources are preserved verbatim.
+/// to raw bytes and limited to [`MAX_INLINE_DATA_SIZE`]. Text and text embedded
+/// resources are preserved verbatim.
 ///
 /// # Errors
 ///
-/// Returns [`AcpError::Protocol`] if a base64 payload is malformed, if a binary
-/// embedded resource exceeds the maximum inline size, or if the content block
-/// type is not supported by this mapping.
+/// Returns [`AcpError::Protocol`] if a base64 payload is malformed, if binary
+/// content exceeds the maximum inline size, or if the content block type is not
+/// supported by this mapping.
 ///
 /// # Example
 ///
@@ -74,12 +81,16 @@ pub fn block_to_part(block: &ContentBlock) -> Result<Part, AcpError> {
 /// Convert an outbound [`adk_core::Part`] into an ACP [`ContentBlock`].
 ///
 /// Returns [`None`] for parts that have no ACP content-block representation
-/// (function calls, thinking traces, file references, and server-tool parts),
+/// (function calls, thinking traces, and server-tool parts),
 /// leaving the caller to map those to the appropriate `SessionUpdate` variant.
 ///
 /// Binary inline data is re-encoded as base64. An inline-data part with an
-/// `audio/*` MIME type maps to an [`AudioContent`] block; any other MIME type
-/// maps to an [`ImageContent`] block.
+/// `audio/*` MIME type maps to an [`AudioContent`] block and an `image/*` MIME
+/// type maps to an [`ImageContent`] block. Other inline MIME types and binary
+/// payloads larger than [`MAX_INLINE_DATA_SIZE`] have no safe ACP content-block
+/// representation and return [`None`]. File-data parts map to
+/// [`ResourceLink`]s, preserving their URI and MIME type without fetching
+/// external content.
 ///
 /// # Example
 ///
@@ -94,15 +105,27 @@ pub fn block_to_part(block: &ContentBlock) -> Result<Part, AcpError> {
 pub fn part_to_block(part: &Part) -> Option<ContentBlock> {
     match part {
         Part::Text { text } => Some(ContentBlock::Text(TextContent::new(text.clone()))),
-        Part::InlineData { mime_type, data } => {
+        Part::InlineData { data, .. } if data.len() > MAX_INLINE_DATA_SIZE => None,
+        Part::InlineData { mime_type, data } if mime_type.starts_with("audio/") => {
             let encoded = general_purpose::STANDARD.encode(data);
-            if mime_type.starts_with("audio/") {
-                Some(ContentBlock::Audio(AudioContent::new(encoded, mime_type.clone())))
-            } else {
-                Some(ContentBlock::Image(ImageContent::new(encoded, mime_type.clone())))
-            }
+            Some(ContentBlock::Audio(AudioContent::new(encoded, mime_type.clone())))
         }
-        Part::EmbeddedResource { resource } => Some(embedded_resource_to_block(resource)),
+        Part::InlineData { mime_type, data } if mime_type.starts_with("image/") => {
+            let encoded = general_purpose::STANDARD.encode(data);
+            Some(ContentBlock::Image(ImageContent::new(encoded, mime_type.clone())))
+        }
+        Part::InlineData { .. } => None,
+        Part::FileData { mime_type, file_uri } => {
+            let name = file_uri
+                .rsplit('/')
+                .find(|segment| !segment.is_empty())
+                .unwrap_or(file_uri)
+                .to_string();
+            Some(ContentBlock::ResourceLink(
+                ResourceLink::new(name, file_uri.clone()).mime_type(Some(mime_type.clone())),
+            ))
+        }
+        Part::EmbeddedResource { resource } => embedded_resource_to_block(resource),
         _ => None,
     }
 }
@@ -111,8 +134,8 @@ pub fn part_to_block(part: &Part) -> Option<ContentBlock> {
 /// it in a prompt.
 ///
 /// Each [`Part`] is routed through [`part_to_block`]. Parts that have no ACP
-/// content-block representation (function calls, thinking traces, file
-/// references, and server-tool parts) map to [`None`] and are skipped, so text
+/// content-block representation (function calls, thinking traces, and
+/// server-tool parts) map to [`None`] and are skipped, so text
 /// and other representable content is always transmitted rather than dropped.
 ///
 /// This is the client-direction counterpart to the server prompt parser: it lets
@@ -170,12 +193,13 @@ fn embedded_resource_to_part(resource: &AcpEmbeddedResource) -> Result<Part, Acp
 }
 
 /// Map an outbound [`adk_core::EmbeddedResource`] to an ACP embedded-resource block.
-fn embedded_resource_to_block(resource: &EmbeddedResource) -> ContentBlock {
+fn embedded_resource_to_block(resource: &EmbeddedResource) -> Option<ContentBlock> {
     let inner = match resource {
         EmbeddedResource::Text(text) => EmbeddedResourceResource::TextResourceContents(
             AcpTextResourceContents::new(text.text.clone(), text.uri.clone())
                 .mime_type(text.mime_type.clone()),
         ),
+        EmbeddedResource::Blob(blob) if blob.data.len() > MAX_INLINE_DATA_SIZE => return None,
         EmbeddedResource::Blob(blob) => {
             let encoded = general_purpose::STANDARD.encode(&blob.data);
             EmbeddedResourceResource::BlobResourceContents(
@@ -184,19 +208,51 @@ fn embedded_resource_to_block(resource: &EmbeddedResource) -> ContentBlock {
             )
         }
     };
-    ContentBlock::Resource(AcpEmbeddedResource::new(inner))
+    Some(ContentBlock::Resource(AcpEmbeddedResource::new(inner)))
 }
 
-/// Decode a base64 payload, mapping failures to a protocol error.
+/// Decode a base64 payload with an allocation bound derived from the core inline-data limit.
 fn decode_base64(data: &str) -> Result<Vec<u8>, AcpError> {
-    general_purpose::STANDARD
+    if data.len() > MAX_BASE64_ENCODED_SIZE {
+        return Err(AcpError::Protocol(format!(
+            "base64 content encoded length {} exceeds the maximum {MAX_BASE64_ENCODED_SIZE} characters for a {MAX_INLINE_DATA_SIZE}-byte decoded payload",
+            data.len(),
+        )));
+    }
+
+    let decoded = general_purpose::STANDARD
         .decode(data)
-        .map_err(|error| AcpError::Protocol(format!("invalid base64 content: {error}")))
+        .map_err(|error| AcpError::Protocol(format!("invalid base64 content: {error}")))?;
+    if decoded.len() > MAX_INLINE_DATA_SIZE {
+        return Err(AcpError::Protocol(format!(
+            "decoded base64 content size {} exceeds the maximum {MAX_INLINE_DATA_SIZE} bytes",
+            decoded.len(),
+        )));
+    }
+    Ok(decoded)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_binary_part_size(part: Part, expected: usize) {
+        match part {
+            Part::InlineData { data, .. } => assert_eq!(data.len(), expected),
+            Part::EmbeddedResource { resource: EmbeddedResource::Blob(blob) } => {
+                assert_eq!(blob.data.len(), expected);
+            }
+            other => panic!("expected binary part, got {other:?}"),
+        }
+    }
+
+    fn assert_decoded_oversize_rejected(block: &ContentBlock) {
+        let error = block_to_part(block).expect_err("oversized binary content must be rejected");
+        assert!(
+            error.to_string().contains("decoded base64 content size"),
+            "unexpected error: {error}",
+        );
+    }
 
     #[test]
     fn text_block_maps_to_text_part() {
@@ -281,9 +337,83 @@ mod tests {
     }
 
     #[test]
-    fn invalid_base64_image_is_rejected() {
-        let block = ContentBlock::Image(ImageContent::new("not*base64", "image/png"));
-        assert!(block_to_part(&block).is_err());
+    fn malformed_base64_is_rejected_for_every_binary_block() {
+        let image = ContentBlock::Image(ImageContent::new("not*base64", "image/png"));
+        assert!(block_to_part(&image).is_err());
+
+        let audio = ContentBlock::Audio(AudioContent::new("not*base64", "audio/wav"));
+        assert!(block_to_part(&audio).is_err());
+
+        let blob = EmbeddedResourceResource::BlobResourceContents(AcpBlobResourceContents::new(
+            "not*base64",
+            "file:///data.bin",
+        ));
+        assert!(block_to_part(&ContentBlock::Resource(AcpEmbeddedResource::new(blob))).is_err());
+    }
+
+    #[test]
+    fn binary_blocks_accept_the_exact_inline_data_limit() {
+        let image = ContentBlock::Image(ImageContent::new(
+            general_purpose::STANDARD.encode(vec![0_u8; MAX_INLINE_DATA_SIZE]),
+            "image/png",
+        ));
+        assert_binary_part_size(
+            block_to_part(&image).expect("image at the limit maps"),
+            MAX_INLINE_DATA_SIZE,
+        );
+
+        let audio = ContentBlock::Audio(AudioContent::new(
+            general_purpose::STANDARD.encode(vec![0_u8; MAX_INLINE_DATA_SIZE]),
+            "audio/wav",
+        ));
+        assert_binary_part_size(
+            block_to_part(&audio).expect("audio at the limit maps"),
+            MAX_INLINE_DATA_SIZE,
+        );
+
+        let blob = EmbeddedResourceResource::BlobResourceContents(AcpBlobResourceContents::new(
+            general_purpose::STANDARD.encode(vec![0_u8; MAX_INLINE_DATA_SIZE]),
+            "file:///data.bin",
+        ));
+        assert_binary_part_size(
+            block_to_part(&ContentBlock::Resource(AcpEmbeddedResource::new(blob)))
+                .expect("blob at the limit maps"),
+            MAX_INLINE_DATA_SIZE,
+        );
+    }
+
+    #[test]
+    fn binary_blocks_reject_a_decoded_payload_over_the_inline_data_limit() {
+        let image = ContentBlock::Image(ImageContent::new(
+            general_purpose::STANDARD.encode(vec![0_u8; MAX_INLINE_DATA_SIZE + 1]),
+            "image/png",
+        ));
+        assert_decoded_oversize_rejected(&image);
+
+        let audio = ContentBlock::Audio(AudioContent::new(
+            general_purpose::STANDARD.encode(vec![0_u8; MAX_INLINE_DATA_SIZE + 1]),
+            "audio/wav",
+        ));
+        assert_decoded_oversize_rejected(&audio);
+
+        let blob = EmbeddedResourceResource::BlobResourceContents(AcpBlobResourceContents::new(
+            general_purpose::STANDARD.encode(vec![0_u8; MAX_INLINE_DATA_SIZE + 1]),
+            "file:///data.bin",
+        ));
+        assert_decoded_oversize_rejected(&ContentBlock::Resource(AcpEmbeddedResource::new(blob)));
+    }
+
+    #[test]
+    fn impossible_encoded_size_is_rejected_before_base64_decode() {
+        let block = ContentBlock::Image(ImageContent::new(
+            "A".repeat(MAX_BASE64_ENCODED_SIZE + 1),
+            "image/png",
+        ));
+        let error = block_to_part(&block).expect_err("impossible encoded size must be rejected");
+        assert!(
+            error.to_string().contains("base64 content encoded length"),
+            "unexpected error: {error}",
+        );
     }
 
     #[test]
@@ -313,6 +443,44 @@ mod tests {
                 assert_eq!(general_purpose::STANDARD.decode(image.data).unwrap(), vec![9, 8, 7]);
             }
             other => panic!("expected image block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn outbound_binary_mapping_rejects_unsupported_or_oversized_payloads() {
+        let unsupported =
+            Part::InlineData { mime_type: "application/octet-stream".into(), data: vec![1, 2, 3] };
+        assert!(part_to_block(&unsupported).is_none());
+
+        let oversized = Part::InlineData {
+            mime_type: "image/png".into(),
+            data: vec![0; MAX_INLINE_DATA_SIZE + 1],
+        };
+        assert!(part_to_block(&oversized).is_none());
+
+        let oversized_blob = Part::EmbeddedResource {
+            resource: EmbeddedResource::Blob(BlobResourceContents {
+                uri: "file:///data.bin".into(),
+                mime_type: Some("application/octet-stream".into()),
+                data: vec![0; MAX_INLINE_DATA_SIZE + 1],
+            }),
+        };
+        assert!(part_to_block(&oversized_blob).is_none());
+    }
+
+    #[test]
+    fn file_data_part_maps_to_resource_link() {
+        let part = Part::FileData {
+            mime_type: "application/pdf".into(),
+            file_uri: "https://example.com/reports/quarterly.pdf".into(),
+        };
+        match part_to_block(&part) {
+            Some(ContentBlock::ResourceLink(link)) => {
+                assert_eq!(link.name, "quarterly.pdf");
+                assert_eq!(link.uri, "https://example.com/reports/quarterly.pdf");
+                assert_eq!(link.mime_type.as_deref(), Some("application/pdf"));
+            }
+            other => panic!("expected resource-link block, got {other:?}"),
         }
     }
 
@@ -347,6 +515,10 @@ mod tests {
         content.parts.push(Part::Text { text: "describe these".into() });
         content.parts.push(Part::InlineData { mime_type: "image/png".into(), data: vec![1, 2, 3] });
         content.parts.push(Part::InlineData { mime_type: "audio/wav".into(), data: vec![4, 5, 6] });
+        content.parts.push(Part::FileData {
+            mime_type: "application/pdf".into(),
+            file_uri: "file:///reports/result.pdf".into(),
+        });
         content.parts.push(Part::EmbeddedResource {
             resource: EmbeddedResource::Text(TextResourceContents::new(
                 "file:///notes.md",
@@ -363,11 +535,12 @@ mod tests {
         });
 
         let blocks = content_to_blocks(&content);
-        assert_eq!(blocks.len(), 4, "the function-call part must be skipped");
+        assert_eq!(blocks.len(), 5, "the function-call part must be skipped");
         assert!(matches!(blocks[0], ContentBlock::Text(_)));
         assert!(matches!(blocks[1], ContentBlock::Image(_)));
         assert!(matches!(blocks[2], ContentBlock::Audio(_)));
-        assert!(matches!(blocks[3], ContentBlock::Resource(_)));
+        assert!(matches!(blocks[3], ContentBlock::ResourceLink(_)));
+        assert!(matches!(blocks[4], ContentBlock::Resource(_)));
     }
 
     #[test]

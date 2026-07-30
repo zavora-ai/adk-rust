@@ -206,7 +206,19 @@ client share one implementation:
 - image and audio prompt content maps to `Part::InlineData`, preserving the MIME
   type and decoded bytes. The client prompt path also transmits non-text ADK
   content (embedded-resource, image, audio) as the matching ACP block instead of
-  dropping it.
+  dropping it. Stored user content replays as `UserMessageChunk`; model and
+  agent content replays as `AgentMessageChunk`. `Part::FileData` replays as a
+  resource link, while function-response inline/file parts appear in tool-call
+  result content.
+- Inbound image, audio, and binary-resource payloads are rejected before Base64
+  decoding when their encoded size cannot fit the core 10 MiB inline-data
+  limit, and the decoded size is checked again. Outbound inline data maps only
+  for `image/*` and `audio/*` MIME types; ACP has no lossless block for other
+  URI-less binary MIME types, so those parts are not emitted.
+- ACP image `uri` and content annotations have no corresponding fields in the
+  current `adk_core::Part` shapes, so an inbound image preserves its MIME type
+  and bytes but not those optional display hints. Extending the core content
+  model to retain them remains post-v2 work.
 - `UsageUpdate` notifications are emitted from ADK usage metadata (token counts,
   plus cost in USD when reported). Nothing is emitted when an event carries no
   usage metadata, and counts are never fabricated.

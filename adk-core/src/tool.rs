@@ -102,13 +102,18 @@ pub trait Tool: Send + Sync {
     }
 
     /// Indicates whether this tool performs no side effects.
-    /// Read-only tools may be executed concurrently in Auto mode.
+    ///
+    /// [`ToolExecutionStrategy::Auto`] includes a call in its concurrent subset
+    /// only when the selected tool is both read-only and concurrency-safe.
     fn is_read_only(&self) -> bool {
         false
     }
 
     /// Indicates whether this tool is safe for concurrent execution.
-    /// Used by the Parallel strategy to validate dispatch safety.
+    ///
+    /// [`ToolExecutionStrategy::Auto`] requires this signal in addition to
+    /// [`Tool::is_read_only`]. [`ToolExecutionStrategy::Parallel`] is an
+    /// explicit caller override and does not inspect either signal.
     fn is_concurrency_safe(&self) -> bool {
         false
     }
@@ -251,9 +256,13 @@ pub enum ToolExecutionStrategy {
     /// Execute tools one at a time in LLM-returned order. Default.
     #[default]
     Sequential,
-    /// Execute all tools concurrently via `join_all`.
+    /// Execute all tools concurrently without inspecting tool metadata.
+    ///
+    /// This is an explicit caller override. The caller is responsible for
+    /// ensuring every selected tool is safe to execute concurrently.
     Parallel,
-    /// Execute read-only tools concurrently, then mutable tools sequentially.
+    /// Execute calls whose tools report both read-only and concurrency-safe
+    /// concurrently, then execute all remaining calls sequentially.
     Auto,
 }
 

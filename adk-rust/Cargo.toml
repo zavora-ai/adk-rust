@@ -133,12 +133,13 @@ bedrock = ["models", "adk-model/bedrock"]
 azure-ai = ["models", "adk-model/azure-ai"]
 
 # Production backend features (forwarded to adk-session, adk-memory, adk-auth)
-# These require external infrastructure (PostgreSQL, Redis, MongoDB, Firestore, Neo4j) and are NOT included in `full`
+# These require external infrastructure (PostgreSQL, Redis, MongoDB, Firestore, Neo4j, Vertex AI) and are NOT included in `full`
 postgres-session = ["sessions", "adk-session/postgres"]
 redis-session = ["sessions", "adk-session/redis"]
 mongodb-session = ["sessions", "adk-session/mongodb"]
 firestore-session = ["sessions", "adk-session/firestore"]
 neo4j-session = ["sessions", "adk-session/neo4j"]
+vertex-session = ["sessions", "adk-session/vertex-session"]
 database-memory = ["memory", "adk-memory/database-memory"]
 sqlite-memory = ["memory", "adk-memory/sqlite-memory"]
 redis-memory = ["memory", "adk-memory/redis-memory"]

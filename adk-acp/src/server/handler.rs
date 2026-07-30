@@ -784,11 +784,11 @@ impl AcpSessionHandler {
     ///   [`SessionControls`] declares commands (Requirement 11.1); an agent that
     ///   declares none emits no such update (Requirement 11.4);
     /// - a [`SessionUpdate::SessionInfoUpdate`] **only when** the session carries
-    ///   a title under [`TITLE_STATE_KEY`] (Requirement 11.2); no title means no
+    ///   a title under `acp:title` (Requirement 11.2); no title means no
     ///   update (Requirement 11.4).
     ///
     /// The per-update helpers ([`emit_available_commands`](Self::emit_available_commands)
-    /// and [`emit_session_info`](Self::emit_session_info)) are reusable so a
+    /// and `emit_session_info`) are reusable so a
     /// future command-set or metadata change trigger emits the same
     /// notifications outside activation.
     pub async fn emit_session_activation_updates(

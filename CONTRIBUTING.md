@@ -292,7 +292,7 @@ expensive axes just move to a later tier.
 
 | Tier | Trigger | Checks | Blocks merge? |
 |------|---------|--------|---------------|
-| **PR** | pull request (`ci.yml` + `semver.yml`) | `fmt` (prerequisite gate), `clippy --workspace -D warnings`, `nextest --workspace` on Linux (at most once), `feature-coverage` (feature-gated modules like `adk-agent --features codeact`), docs and doctests, standalone examples (4 shards), `templates`, compile-only `macos`/`windows` builds, `semver` (stable strict, beta warn-only) | Yes — this is the required-check set |
+| **PR** | pull request (`ci.yml` + `semver.yml`) | `fmt` (prerequisite gate), `clippy --workspace -D warnings`, `nextest --workspace` on Linux (at most once), `feature-coverage` (feature-gated modules like `adk-agent --features codeact`), docs and doctests, standalone examples (4 shards), `templates`, a compile-only macOS build, a Windows workspace build with a targeted sandbox portability smoke, and `semver` (stable strict, beta warn-only) | Yes — this is the required-check set |
 | **Merge** | `push: main` (`ci-merge.yml`) | cross-platform `nextest --workspace` on macOS/Windows, out-of-workspace Monty build, doc-example compilation | No — runs post-merge |
 | **Nightly** | `schedule` (`ci-nightly.yml`) | feature-combination matrix, `cargo-audit`/`cargo-deny` supply-chain, `#[ignore]` integration tests gated on secrets | No — runs on a schedule |
 
@@ -336,6 +336,8 @@ name is the job name (matrix jobs include the matrix value in parentheses):
 | `feature-coverage (adk-rag, lancedb)` | `ci.yml` | `feature-coverage` (matrix) |
 | `feature-coverage (adk-auth, sso)` | `ci.yml` | `feature-coverage` (matrix) |
 | `feature-coverage (adk-server, a2a-v1)` | `ci.yml` | `feature-coverage` (matrix) |
+| `feature-coverage (adk-session, vertex-session)` | `ci.yml` | `feature-coverage` (matrix) |
+| `feature-coverage (adk-acp, server)` | `ci.yml` | `feature-coverage` (matrix) |
 | `docs` | `ci.yml` | `docs` |
 | `examples-compile (0/4)` | `ci.yml` | `examples-compile` (matrix) |
 | `examples-compile (1/4)` | `ci.yml` | `examples-compile` (matrix) |
@@ -343,7 +345,7 @@ name is the job name (matrix jobs include the matrix value in parentheses):
 | `examples-compile (3/4)` | `ci.yml` | `examples-compile` (matrix) |
 | `templates` | `ci.yml` | `templates` |
 | `macos` | `ci.yml` | `macos` (compile-only build) |
-| `windows` | `ci.yml` | `windows` (compile-only build) |
+| `windows` | `ci.yml` | `windows` (workspace build + sandbox portability smoke) |
 | `semver` | `semver.yml` | `semver` (stable-tier strict; beta is warn-only within the same job) |
 
 Notes:
@@ -398,6 +400,8 @@ gh api -X PUT repos/zavora-ai/adk-rust/branches/main/protection \
       { "context": "feature-coverage (adk-rag, lancedb)" },
       { "context": "feature-coverage (adk-auth, sso)" },
       { "context": "feature-coverage (adk-server, a2a-v1)" },
+      { "context": "feature-coverage (adk-session, vertex-session)" },
+      { "context": "feature-coverage (adk-acp, server)" },
       { "context": "docs" },
       { "context": "examples-compile (0/4)" },
       { "context": "examples-compile (1/4)" },

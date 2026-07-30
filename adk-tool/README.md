@@ -97,8 +97,8 @@ Mark tools as read-only or concurrency-safe for smarter dispatch:
 
 ```rust
 let lookup = FunctionTool::new("lookup", "Look up data", handler)
-    .with_read_only(true)        // safe for concurrent dispatch in Auto mode
-    .with_concurrency_safe(true);
+    .with_read_only(true)
+    .with_concurrency_safe(true); // both signals are required by Auto mode
 ```
 
 ### StatefulTool

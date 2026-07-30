@@ -21,6 +21,8 @@ chrono.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 reqwest = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["sync", "time"] }
 google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "chrono", "json"], optional = true }
 fred = { version = "10", optional = true }
@@ -34,6 +36,8 @@ base64 = { version = "0.22", optional = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
 axum = "0.8"
+futures.workspace = true
+http = "1"
 proptest = "1.5"
 
 [features]
@@ -45,5 +49,5 @@ redis = ["fred"]
 mongodb = ["dep:mongodb"]
 firestore = ["dep:firestore"]
 neo4j = ["dep:neo4rs"]
-vertex-session = ["google-cloud-auth", "reqwest"]
+vertex-session = ["base64", "google-cloud-auth", "reqwest", "sha2", "tokio"]
 encrypted-session = ["aes-gcm", "rand", "base64"]

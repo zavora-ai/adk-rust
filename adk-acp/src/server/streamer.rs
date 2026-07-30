@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use adk_core::{Content, Event, Part, UsageMetadata};
+use adk_core::{Content, Event, FunctionResponseData, Part, UsageMetadata};
 use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, Cost, Plan, PlanEntry, SessionUpdate, TextContent, ToolCall,
     ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
@@ -36,20 +36,24 @@ impl ResponseStreamer {
     fn map_content(content: &Content, updates: &mut Vec<SessionUpdate>) {
         for part in &content.parts {
             match part {
-                Part::Text { text } if !text.is_empty() => {
-                    updates.push(SessionUpdate::AgentMessageChunk(ContentChunk::new(
-                        ContentBlock::Text(TextContent::new(text.clone())),
-                    )));
+                Part::Text { text } if text.is_empty() => {}
+                Part::Text { .. }
+                | Part::InlineData { .. }
+                | Part::FileData { .. }
+                | Part::EmbeddedResource { .. } => {
+                    if let Some(block) = crate::content::part_to_block(part) {
+                        let chunk = ContentChunk::new(block);
+                        if content.role.eq_ignore_ascii_case("user") {
+                            updates.push(SessionUpdate::UserMessageChunk(chunk));
+                        } else {
+                            updates.push(SessionUpdate::AgentMessageChunk(chunk));
+                        }
+                    }
                 }
                 Part::Thinking { thinking, .. } if !thinking.is_empty() => {
                     updates.push(SessionUpdate::AgentThoughtChunk(ContentChunk::new(
                         ContentBlock::Text(TextContent::new(thinking.clone())),
                     )));
-                }
-                Part::EmbeddedResource { .. } => {
-                    if let Some(block) = crate::content::part_to_block(part) {
-                        updates.push(SessionUpdate::AgentMessageChunk(ContentChunk::new(block)));
-                    }
                 }
                 Part::FunctionCall { name, args, id, .. } => {
                     let call_id = id.clone().unwrap_or_else(|| format!("{name}-call"));
@@ -67,7 +71,7 @@ impl ResponseStreamer {
                         .kind(infer_tool_kind(&function_response.name))
                         .status(ToolCallStatus::Completed)
                         .raw_output(function_response.response.clone());
-                    let content = tool_result_content(&function_response.response);
+                    let content = tool_result_content(function_response);
                     if !content.is_empty() {
                         fields = fields.content(content);
                     }
@@ -100,23 +104,38 @@ fn map_usage(usage: &UsageMetadata) -> UsageUpdate {
     update
 }
 
-/// Render a tool result payload as ACP tool-call content.
+/// Render a tool result as ACP tool-call content.
 ///
 /// A JSON string payload is surfaced verbatim; any other JSON value is rendered
-/// as its compact JSON representation. A `null` or empty payload yields no
-/// content so the update omits the field.
-fn tool_result_content(response: &serde_json::Value) -> Vec<ToolCallContent> {
-    if response.is_null() {
-        return Vec::new();
+/// as its compact JSON representation. A `null` or empty payload contributes no
+/// text block. Inline binary parts and file references are appended as their
+/// native ACP image/audio and resource-link blocks.
+fn tool_result_content(response: &FunctionResponseData) -> Vec<ToolCallContent> {
+    let mut content = Vec::new();
+    if !response.response.is_null() {
+        let text = match &response.response {
+            serde_json::Value::String(value) => value.clone(),
+            other => other.to_string(),
+        };
+        if !text.is_empty() {
+            content.push(ToolCallContent::from(ContentBlock::Text(TextContent::new(text))));
+        }
     }
-    let text = match response {
-        serde_json::Value::String(value) => value.clone(),
-        other => other.to_string(),
-    };
-    if text.is_empty() {
-        return Vec::new();
+    for inline in &response.inline_data {
+        let part =
+            Part::InlineData { mime_type: inline.mime_type.clone(), data: inline.data.clone() };
+        if let Some(block) = crate::content::part_to_block(&part) {
+            content.push(ToolCallContent::from(block));
+        }
     }
-    vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(text)))]
+    for file in &response.file_data {
+        let part =
+            Part::FileData { mime_type: file.mime_type.clone(), file_uri: file.file_uri.clone() };
+        if let Some(block) = crate::content::part_to_block(&part) {
+            content.push(ToolCallContent::from(block));
+        }
+    }
+    content
 }
 
 /// Extract file locations a tool reports affecting from its JSON result.
@@ -235,6 +254,94 @@ mod tests {
     }
 
     #[test]
+    fn maps_text_to_message_chunk_for_its_stored_role() {
+        let mut user_event = Event::new("inv-user");
+        user_event.set_content(Content::new("user").with_text("stored request"));
+        assert_eq!(
+            ResponseStreamer::map_event(&user_event),
+            vec![SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new("stored request"),
+            )))],
+        );
+
+        let mut model_event = Event::new("inv-model");
+        model_event.set_content(Content::new("model").with_text("stored response"));
+        assert_eq!(
+            ResponseStreamer::map_event(&model_event),
+            vec![SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new("stored response"),
+            )))],
+        );
+
+        let mut agent_event = Event::new("inv-agent");
+        agent_event.set_content(Content::new("agent").with_text("agent response"));
+        assert_eq!(
+            ResponseStreamer::map_event(&agent_event),
+            vec![SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new("agent response"),
+            )))],
+        );
+    }
+
+    #[test]
+    fn replays_inline_image_and_audio_with_exact_wire_payloads() {
+        use agent_client_protocol::schema::v1::{AudioContent, ImageContent};
+
+        let mut event = Event::new("inv-media");
+        let mut content = Content::new("user");
+        content.parts.push(Part::InlineData {
+            mime_type: "image/png".into(),
+            data: vec![0x89, 0x50, 0x4e, 0x47],
+        });
+        content
+            .parts
+            .push(Part::InlineData { mime_type: "audio/mpeg".into(), data: vec![1, 2, 3, 4, 5] });
+        event.set_content(content);
+
+        assert_eq!(
+            ResponseStreamer::map_event(&event),
+            vec![
+                SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Image(
+                    ImageContent::new("iVBORw==", "image/png"),
+                ))),
+                SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Audio(
+                    AudioContent::new("AQIDBAU=", "audio/mpeg"),
+                ))),
+            ],
+        );
+    }
+
+    #[test]
+    fn replays_embedded_resource_as_role_aware_message_content() {
+        use adk_core::{EmbeddedResource, TextResourceContents};
+        use agent_client_protocol::schema::v1::{
+            EmbeddedResource as AcpEmbeddedResource, EmbeddedResourceResource,
+            TextResourceContents as AcpTextResourceContents,
+        };
+
+        let mut event = Event::new("inv-resource");
+        let mut content = Content::new("user");
+        content.parts.push(Part::EmbeddedResource {
+            resource: EmbeddedResource::Text(TextResourceContents::new(
+                "file:///notes.md",
+                Some("text/markdown".into()),
+                "# Notes",
+            )),
+        });
+        event.set_content(content);
+
+        assert_eq!(
+            ResponseStreamer::map_event(&event),
+            vec![SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Resource(
+                AcpEmbeddedResource::new(EmbeddedResourceResource::TextResourceContents(
+                    AcpTextResourceContents::new("# Notes", "file:///notes.md")
+                        .mime_type(Some("text/markdown".into())),
+                )),
+            )))],
+        );
+    }
+
+    #[test]
     fn maps_function_response_to_completed_tool_update() {
         let mut event = Event::new("inv-2");
         let mut content = Content::new("function");
@@ -249,6 +356,58 @@ mod tests {
 
         let updates = ResponseStreamer::map_event(&event);
         assert!(matches!(updates.as_slice(), [SessionUpdate::ToolCallUpdate(_)]));
+    }
+
+    #[test]
+    fn maps_function_response_media_and_files_to_tool_content() {
+        use adk_core::{FileDataPart, InlineDataPart};
+
+        let mut event = Event::new("inv-tool-media");
+        let mut content = Content::new("function");
+        content.parts.push(Part::FunctionResponse {
+            function_response: FunctionResponseData::with_multimodal(
+                "render_report",
+                serde_json::Value::Null,
+                vec![InlineDataPart {
+                    mime_type: "image/png".into(),
+                    data: vec![0x89, 0x50, 0x4e, 0x47],
+                }],
+                vec![FileDataPart {
+                    mime_type: "application/pdf".into(),
+                    file_uri: "https://example.com/reports/result.pdf".into(),
+                }],
+            ),
+            id: Some("call-media".into()),
+        });
+        event.set_content(content);
+
+        let updates = ResponseStreamer::map_event(&event);
+        let [SessionUpdate::ToolCallUpdate(update)] = updates.as_slice() else {
+            panic!("expected one tool-call update, got {updates:?}");
+        };
+        let tool_content = update.fields.content.as_ref().expect("multimodal content");
+        assert_eq!(tool_content.len(), 2);
+        match &tool_content[0] {
+            ToolCallContent::Content(content) => match &content.content {
+                ContentBlock::Image(image) => {
+                    assert_eq!(image.mime_type, "image/png");
+                    assert_eq!(image.data, "iVBORw==");
+                }
+                other => panic!("expected image content, got {other:?}"),
+            },
+            other => panic!("expected standard tool content, got {other:?}"),
+        }
+        match &tool_content[1] {
+            ToolCallContent::Content(content) => match &content.content {
+                ContentBlock::ResourceLink(link) => {
+                    assert_eq!(link.name, "result.pdf");
+                    assert_eq!(link.uri, "https://example.com/reports/result.pdf");
+                    assert_eq!(link.mime_type.as_deref(), Some("application/pdf"));
+                }
+                other => panic!("expected resource-link content, got {other:?}"),
+            },
+            other => panic!("expected standard tool content, got {other:?}"),
+        }
     }
 
     /// **Feature: acp-v1-full-support, Property 5: Usage fidelity**

@@ -1106,7 +1106,9 @@ impl LlmAgentBuilder {
     ///
     /// When set, this overrides the `RunConfig`'s `tool_execution_strategy`
     /// for this agent's dispatch loop. When `None` (the default), the
-    /// `RunConfig` value is used.
+    /// `RunConfig` value is used. [`ToolExecutionStrategy::Parallel`] is an
+    /// explicit override that bypasses tool safety metadata, so the caller owns
+    /// concurrency safety.
     pub fn tool_execution_strategy(mut self, strategy: ToolExecutionStrategy) -> Self {
         self.tool_execution_strategy = Some(strategy);
         self
@@ -3068,6 +3070,8 @@ impl Agent for LlmAgent {
                                 }
                                 ToolExecutionStrategy::Parallel => {
                                     use futures::StreamExt as _;
+                                    // Parallel is an explicit caller override. Tool
+                                    // safety metadata is intentionally not inspected.
                                     // All concurrency enforcement is handled by the
                                     // ToolConcurrencyManager semaphore inside ToolExecutor.
                                     // Use fc_parts.len() as buffer so all futures can start
@@ -3081,30 +3085,24 @@ impl Agent for LlmAgent {
                                     .await
                                 }
                                 ToolExecutionStrategy::Auto => {
-                                    // Partition by is_read_only()
-                                    let mut read_only_fcs = Vec::new();
-                                    let mut mutable_fcs = Vec::new();
-                                    for call in fc_parts {
-                                        let is_read_only = tool_map
-                                            .get(&call.name)
-                                            .map(|tool| tool.is_read_only())
-                                            .unwrap_or(false);
-                                        if is_read_only {
-                                            read_only_fcs.push(call);
-                                        } else {
-                                            mutable_fcs.push(call);
-                                        }
-                                    }
+                                    // A call may overlap another only when its tool is
+                                    // read-only *and* declares concurrency safety.
+                                    let (concurrent_fcs, sequential_fcs): (Vec<_>, Vec<_>) =
+                                        fc_parts.into_iter().partition(|call| {
+                                            tool_map.get(&call.name).is_some_and(|tool| {
+                                                tool.is_read_only() && tool.is_concurrency_safe()
+                                            })
+                                        });
                                     let mut all_results = Vec::new();
-                                    // Execute read-only tools concurrently first
+
                                     // Concurrency enforcement is handled by the semaphore
                                     // inside ToolExecutor.
-                                    if !read_only_fcs.is_empty() {
+                                    if !concurrent_fcs.is_empty() {
                                         use futures::StreamExt as _;
-                                        let buffer_size = read_only_fcs.len().max(1);
+                                        let buffer_size = concurrent_fcs.len().max(1);
                                         all_results.extend(
                                             futures::stream::iter(
-                                                read_only_fcs
+                                                concurrent_fcs
                                                     .into_iter()
                                                     .map(|call| executor.execute(call)),
                                             )
@@ -3113,8 +3111,9 @@ impl Agent for LlmAgent {
                                             .await,
                                         );
                                     }
-                                    // Then execute mutable tools sequentially
-                                    for call in mutable_fcs {
+
+                                    // Everything else runs one at a time.
+                                    for call in sequential_fcs {
                                         all_results.push(executor.execute(call).await);
                                     }
                                     all_results

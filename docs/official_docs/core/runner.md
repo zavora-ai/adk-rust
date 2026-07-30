@@ -296,8 +296,8 @@ Controls how multiple tool calls from a single LLM response are dispatched:
 | Strategy | Behavior |
 |----------|----------|
 | `Sequential` (default) | Execute tools one at a time in LLM-returned order |
-| `Parallel` | Execute all tools concurrently via `join_all` |
-| `Auto` | Execute read-only tools concurrently, then mutable tools sequentially |
+| `Parallel` | Execute all tools concurrently; the caller owns safety |
+| `Auto` | Execute the safe read-only subset concurrently, then all remaining calls sequentially |
 
 Set per-agent via `LlmAgentBuilder`:
 
@@ -307,12 +307,16 @@ use adk_core::ToolExecutionStrategy;
 let agent = LlmAgentBuilder::new("fast_agent")
     .model(model)
     .tool_execution_strategy(ToolExecutionStrategy::Auto)
-    .tool(Arc::new(search_tool.with_read_only(true)))
-    .tool(Arc::new(save_tool))  // mutable — runs after read-only batch
+    .tool(Arc::new(
+        search_tool
+            .with_read_only(true)
+            .with_concurrency_safe(true),
+    ))
+    .tool(Arc::new(save_tool)) // runs after the concurrent safe subset
     .build()?;
 ```
 
-In `Auto` mode, the dispatch loop queries each tool's `is_read_only()` method. Tools that return `true` run concurrently first, then the remaining tools run sequentially. Results are always reassembled in the original LLM-returned order regardless of strategy. Failed tools produce a JSON error response without aborting the batch.
+In `Auto` mode, the dispatch loop queries both `is_read_only()` and `is_concurrency_safe()`. Calls whose selected tools return `true` for both methods run concurrently first; all remaining calls then run sequentially. `Parallel` bypasses these metadata checks as an explicit caller override. Results are always reassembled in the original LLM-returned order regardless of strategy. Failed tools produce a JSON error response without aborting the batch.
 
 ```rust
 pub enum StreamingMode {

@@ -33,8 +33,9 @@ expensive axes move to a later tier.
   `nextest --workspace` (Linux, runs at most once), `feature-coverage` for
   feature-gated modules default builds skip (e.g. `adk-agent --features codeact`),
   `docs` (`cargo doc --workspace --no-deps` plus doctests), standalone examples
-  (4 shards), `templates`, compile-only `macos`/`windows` builds, and `semver`
-  (stable strict, everything else warn-only).
+  (4 shards), `templates`, a compile-only macOS build, a Windows workspace build
+  with a targeted sandbox portability smoke, and `semver` (stable strict,
+  everything else warn-only).
 - **Merge tier** (`ci-merge.yml`, on `push: main`) — cross-platform
   `nextest --workspace` on macOS/Windows, the out-of-workspace Monty build, and
   doc-example compilation. Runs post-merge; not branch-protection-required.
@@ -265,7 +266,8 @@ Four tiered presets control which crates are compiled:
 Domain add-ons are composable with any tier: `features = ["minimal", "audio"]`.
 
 Production backend features (require external infrastructure, NOT included in `full`):
-- `postgres-session`, `redis-session`, `mongodb-session`, `firestore-session`, `neo4j-session`
+- `postgres-session`, `redis-session`, `mongodb-session`, `firestore-session`, `neo4j-session`,
+  `vertex-session`
 - `sqlite-memory`, `database-memory`, `redis-memory`, `mongodb-memory`, `neo4j-memory`
 - `auth-bridge`
 - `managed-runtime` — Managed agent runtime (adk-managed): durable sessions, event streaming, provider parity

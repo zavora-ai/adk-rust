@@ -247,10 +247,8 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
 
     for block in &message.content {
         match block {
-            ContentBlock::Text(text_block) => {
-                if !text_block.text.is_empty() {
-                    parts.push(Part::Text { text: text_block.text.clone() });
-                }
+            ContentBlock::Text(text_block) if !text_block.text.is_empty() => {
+                parts.push(Part::Text { text: text_block.text.clone() });
             }
             ContentBlock::ToolUse(tool_use) => {
                 parts.push(Part::FunctionCall {
@@ -260,17 +258,15 @@ pub fn from_anthropic_message(message: &Message) -> (LlmResponse, HashMap<String
                     thought_signature: None,
                 });
             }
-            ContentBlock::Thinking(thinking_block) => {
-                if !thinking_block.thinking.is_empty() {
-                    parts.push(Part::Thinking {
-                        thinking: thinking_block.thinking.clone(),
-                        signature: if thinking_block.signature.is_empty() {
-                            None
-                        } else {
-                            Some(thinking_block.signature.clone())
-                        },
-                    });
-                }
+            ContentBlock::Thinking(thinking_block) if !thinking_block.thinking.is_empty() => {
+                parts.push(Part::Thinking {
+                    thinking: thinking_block.thinking.clone(),
+                    signature: if thinking_block.signature.is_empty() {
+                        None
+                    } else {
+                        Some(thinking_block.signature.clone())
+                    },
+                });
             }
             ContentBlock::ServerToolUse(server_tool_use) => {
                 if let Ok(val) = serde_json::to_value(server_tool_use) {

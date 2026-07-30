@@ -13,7 +13,9 @@
 //! tool-call id, so the client sees the exact call it is approving and the
 //! outcome is correlated to that call (Requirement 7.5, Property P8).
 //!
-//! The resume API ([`RunConfig::tool_confirmation_decisions`]) is keyed by
+//! The resume API
+//! ([`RunConfig::tool_confirmation_decisions`](adk_core::RunConfig::tool_confirmation_decisions))
+//! is keyed by
 //! *function-call ID*, so the decision the bridge derives is recorded against the
 //! exact call the client approved and cannot be replayed onto another call of the
 //! same tool. A confirmation request that carries no call ID is rejected rather

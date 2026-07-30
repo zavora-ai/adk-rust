@@ -157,6 +157,176 @@ ADK-Rust provides multiple session service implementations:
 | `FirestoreSessionService` | `firestore` | Google Cloud Firestore |
 | `VertexAiSessionService` | `vertex-session` | Vertex AI Session API |
 
+`vertex-session` is also forwarded by the `adk-rust` umbrella crate:
+
+```toml
+[dependencies]
+adk-rust = { version = "2.0.0", features = ["vertex-session"] }
+```
+
+### VertexAiSessionService
+
+`VertexAiSessionService` persists sessions through the GA `v1` Vertex AI Agent
+Engine Session API. It uses Application Default Credentials and accepts either
+a numeric reasoning-engine ID or its complete resource name:
+
+```rust
+use adk_session::{VertexAiSessionConfig, VertexAiSessionService};
+
+let config = VertexAiSessionConfig::new("my-project", "us-central1")
+    .with_reasoning_engine("1234567890");
+let service = VertexAiSessionService::new_with_adc(config)?;
+```
+
+#### Identity isolation
+
+The public session ID is always the ID supplied to `CreateRequest`, or a locally
+generated UUID when no ID is supplied. The backend derives the Vertex resource
+ID from the complete `(app_name, user_id, session_id)` tuple and persists a
+versioned identity marker in session state.
+
+| Property | Behavior |
+|----------|----------|
+| Logical ID | Preserved across create, get, list, append, and delete |
+| Remote ID | Deterministic 63-character `adk1-…` ID derived from the complete identity |
+| Identity marker | Stored as protected state and removed from public session state |
+| Shared reasoning engine | Sessions with the same logical ID remain isolated by app and user |
+| Reserved state | Create state and event state deltas cannot set the identity marker |
+
+The backend verifies both the marker and the computed resource ID before every
+identity-scoped operation. A missing or mismatched marker on a computed resource
+is treated as corruption rather than as another tenant's session.
+
+#### Legacy session migration
+
+Python ADK and pre-v2 sessions may use their logical ID directly and omit the
+identity marker. Compatibility depends on how the reasoning-engine parent is
+selected:
+
+| Configuration | Unmarked-session behavior |
+|---------------|---------------------------|
+| No fixed reasoning engine | Enabled only when `app_name` is the canonical nonzero numeric reasoning-engine ID without leading zeros |
+| Fixed reasoning engine | Disabled by default |
+| Fixed engine plus `allow_unmarked_sessions_for_app("app")` | Enabled only for that app |
+
+```rust
+use adk_session::{VertexAiSessionConfig, VertexAiSessionService};
+
+let config = VertexAiSessionConfig::new("my-project", "us-central1")
+    .with_reasoning_engine("1234567890");
+let service = VertexAiSessionService::new_with_adc(config)?
+    .allow_unmarked_sessions_for_app("legacy-app");
+```
+
+> **Important:** An unmarked session does not prove app ownership. Enable the
+> fixed-engine compatibility option only when the named app exclusively owns
+> the legacy sessions in that reasoning engine. Exact `user_id` matching still
+> applies. Marked-direct resources, the reserved `adk1-` namespace, and
+> computed/direct ambiguities fail closed.
+
+The legacy `append_event(session_id, event)` API also requires exactly one
+cached app/user scope. Call create, get, or list first, or use
+`append_event_for_identity()` directly. The cache is bounded, so a long-running
+process must get or list an older session again after its scope is evicted.
+
+#### Endpoints and event fidelity
+
+| Location | Default endpoint |
+|----------|------------------|
+| `global` | `https://aiplatform.googleapis.com` |
+| `us` | `https://aiplatform.us.rep.googleapis.com` |
+| `eu` | `https://aiplatform.eu.rep.googleapis.com` |
+| Regional location | `https://LOCATION-aiplatform.googleapis.com` |
+
+Custom endpoints must be trusted origins because they receive Google
+authorization headers and complete session/event payloads. Construction fails
+unless the endpoint is an HTTPS origin without userinfo, a path, query, or
+fragment; loopback HTTP is allowed for tests. Redirects are disabled.
+
+#### Production bounds
+
+| Boundary | Default |
+|----------|---------|
+| Vertex `user_id` | At most 128 Unicode scalar values |
+| Connect deadline | 10 seconds |
+| Credential-header deadline | 30 seconds |
+| HTTP request deadline | 120 seconds |
+| Long-running-operation polling | 120 seconds |
+| Encoded request body | 64 MiB per create/append request |
+| Decoded response body | 64 MiB per response and in aggregate across one paginated list operation |
+| Pagination elapsed time | 120 seconds for the complete list operation |
+| Page token | 64 KiB |
+| JSON and Vertex Struct nesting | 64 levels |
+
+`with_max_request_bytes()` changes the outbound body budget,
+`with_max_response_bytes()` changes both inbound body budgets, and
+`with_pagination_timeout()` changes the total list deadline. A high body limit
+weakens the default allocation protection; these limits apply independently to
+each request, response, or list operation rather than globally across
+concurrent calls. They are byte budgets, not total process-memory ceilings
+after JSON parsing and base64 decoding.
+`with_credentials()` is fallible because it validates the endpoint and builds
+the bounded, redirect-disabled HTTP client.
+
+Recent-event limits and timestamp lower bounds are pushed into `events.list`.
+The backend requests descending pages only until the recent-event bound is
+satisfied, then restores ascending chronological order. `num_recent_events = 0`
+does not call the event-list endpoint.
+
+Create, delete, and append HTTP `408`/`5xx`, transport/body, malformed `2xx`,
+or invalid successful-result failures can occur after the service commits the
+mutation. They return
+`session.vertex.{create,delete,append}_outcome_ambiguous` with
+`retry.should_retry = false`. After create or delete returns an operation name,
+poll transport/status failures and malformed or invalid successful responses
+use the same non-retryable ambiguity contract and include the operation name.
+Inspect the target session, operation, or event list before any manual retry.
+A terminal `done: true` operation error is a known failed result instead: it
+retains `session.vertex.operation_failed` and its category-derived retry hint.
+
+Direct HTTP `4xx` rejections other than `408` remain definitive; `429` is
+retryable. Any poll failure after an operation is accepted, including `429`, is
+ambiguous and non-retryable. The backend does not throttle or retry internally;
+use the current [Vertex AI
+quotas](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/quotas)
+to size application-level concurrency and retry policy.
+
+Run the ignored GA `v1` canary only against an existing reasoning engine with
+Application Default Credentials configured. It creates and deletes one session
+and one representative event; it never creates or deletes the engine.
+
+```bash
+ADK_VERTEX_LIVE_TEST=1 \
+GOOGLE_CLOUD_PROJECT=PROJECT_ID \
+GOOGLE_CLOUD_LOCATION=LOCATION \
+GOOGLE_CLOUD_REASONING_ENGINE_ID=REASONING_ENGINE_ID \
+cargo test -p adk-session --features vertex-session \
+  --test session_contract_vertex test_vertex_live_ga_v1_canary \
+  -- --ignored --exact --nocapture
+```
+
+Canonical Vertex content, Google ADK `rawEvent` fields, and arbitrary
+`rawEvent` Struct values round-trip without silent data loss. Arbitrary Struct
+values remain opaque: reappend preserves every original key and value and adds
+the reserved `_adkRust` envelope, so removing that envelope yields the original
+Struct. A pre-existing malformed `_adkRust` key fails closed. Google ADK
+projection is best-effort even when a Struct has a non-empty string `id`,
+numeric `timestamp`, and string `invocationId` and `author`; incompatible
+content, actions, metadata, or optional fields do not reject the canonical
+SessionEvent.
+
+The GA `v1` `FunctionCall` and `FunctionResponse` wire messages have no `id`.
+ID-bearing ADK function parts and empty or noncanonical Base64 thought-signature
+bytes use the lossless private `rawEvent` path. `Part.mediaResolution` accepts a
+bounded JSON object on any otherwise-valid canonical part. Top-level
+`inlineData`/`fileData` `displayName` values are accepted from the deployed GA
+wire. ADK projection omits these provider-only fields, while the canonical
+sidecar preserves them across reappend. Private-envelope validation accepts
+integer or Struct-normalized `1.0` schema versions, treats omitted proto3
+default scalar fields as equivalent to their empty private values, compares
+safe integer/double-normalized Vertex Struct values semantically, and restores
+exact private scalar presence.
+
 ### InMemorySessionService
 
 Stores sessions in memory. Ideal for development, testing, and single-instance deployments.
@@ -630,7 +800,7 @@ service.append_event_for_identity(AppendEventRequest {
 }).await?;
 
 // Typed get and delete
-let session = service.get_for_identity(&identity, None, None).await?;
+let session = service.get_for_identity(&identity).await?;
 service.delete_for_identity(&identity).await?;
 ```
 

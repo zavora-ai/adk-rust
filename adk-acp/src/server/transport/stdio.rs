@@ -737,10 +737,7 @@ mod tests {
     /// **Validates: Requirements 5.1, 5.4**
     #[tokio::test]
     async fn session_load_replays_history_in_chronological_order() {
-        use crate::server::streamer::ResponseStreamer;
-
         let (agent, session_service) = mock_agent_and_session();
-        let session_service_probe = session_service.clone();
         let config = AcpServerConfigBuilder::new()
             .agent(agent)
             .session_service(session_service)
@@ -762,97 +759,90 @@ mod tests {
             "Deterministic ACP test agent".into(),
             server_channel,
         );
-        let client = Client
-            .builder()
-            .on_receive_notification(
-                async move |notification: SessionNotification, _connection: ConnectionTo<Agent>| {
-                    updates_for_client.lock().expect("updates lock").push(notification.update);
-                    Ok(())
-                },
-                agent_client_protocol::on_receive_notification!(),
-            )
-            .connect_with(client_channel, move |connection: ConnectionTo<Agent>| {
-                let updates = updates.clone();
-                let session_service_probe = session_service_probe.clone();
-                async move {
-                    let initialized = connection
-                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                        .block_task()
-                        .await?;
-                    assert!(
-                        initialized.agent_capabilities.load_session,
-                        "load_session capability must be advertised"
-                    );
+        let client =
+            Client
+                .builder()
+                .on_receive_notification(
+                    async move |notification: SessionNotification,
+                                _connection: ConnectionTo<Agent>| {
+                        updates_for_client.lock().expect("updates lock").push(notification.update);
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .connect_with(client_channel, move |connection: ConnectionTo<Agent>| {
+                    let updates = updates.clone();
+                    async move {
+                        let initialized = connection
+                            .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                            .block_task()
+                            .await?;
+                        assert!(
+                            initialized.agent_capabilities.load_session,
+                            "load_session capability must be advertised"
+                        );
 
-                    let cwd = std::env::current_dir().expect("absolute cwd");
-                    let session = connection
-                        .send_request(NewSessionRequest::new(cwd.clone()))
-                        .block_task()
-                        .await?;
-                    let prompt = connection
-                        .send_request(PromptRequest::new(
-                            session.session_id.clone(),
-                            vec![ContentBlock::Text(TextContent::new("hello"))],
-                        ))
-                        .block_task()
-                        .await?;
-                    assert_eq!(prompt.stop_reason, StopReason::EndTurn);
+                        let cwd = std::env::current_dir().expect("absolute cwd");
+                        let session = connection
+                            .send_request(NewSessionRequest::new(cwd.clone()))
+                            .block_task()
+                            .await?;
+                        let prompt = connection
+                            .send_request(PromptRequest::new(
+                                session.session_id.clone(),
+                                vec![ContentBlock::Text(TextContent::new("hello"))],
+                            ))
+                            .block_task()
+                            .await?;
+                        assert_eq!(prompt.stop_reason, StopReason::EndTurn);
 
-                    // Compute the expected replay order directly from the stored
-                    // events. `session/load` must reproduce exactly this ordered
-                    // sequence of updates.
-                    let persisted = session_service_probe
-                        .get(adk_session::GetRequest {
-                            app_name: "test-agent".to_string(),
-                            user_id: "acp-client".to_string(),
-                            session_id: session.session_id.to_string(),
-                            num_recent_events: None,
-                            after: None,
-                        })
-                        .await
-                        .expect("persisted session");
-                    let expected: Vec<String> = persisted
-                        .events()
-                        .all()
-                        .iter()
-                        .flat_map(ResponseStreamer::map_event)
-                        .filter_map(|update| message_chunk_text(&update))
-                        .collect();
-                    assert!(
-                        expected.iter().any(|text| text == "mock response"),
-                        "stored history must contain the agent's response"
-                    );
+                        // Drop the connection's active session so it can be loaded
+                        // fresh, then clear the updates captured during the prompt
+                        // turn so only replay updates remain.
+                        connection
+                            .send_request(CloseSessionRequest::new(session.session_id.clone()))
+                            .block_task()
+                            .await?;
+                        updates.lock().expect("updates lock").clear();
 
-                    // Drop the connection's active session so it can be loaded
-                    // fresh, then clear the updates captured during the prompt
-                    // turn so only replay updates remain.
-                    connection
-                        .send_request(CloseSessionRequest::new(session.session_id.clone()))
-                        .block_task()
-                        .await?;
-                    updates.lock().expect("updates lock").clear();
+                        connection
+                            .send_request(LoadSessionRequest::new(
+                                session.session_id.clone(),
+                                cwd.clone(),
+                            ))
+                            .block_task()
+                            .await?;
 
-                    connection
-                        .send_request(LoadSessionRequest::new(
-                            session.session_id.clone(),
-                            cwd.clone(),
-                        ))
-                        .block_task()
-                        .await?;
-
-                    // All replay notifications are delivered before the load
-                    // response returns, so the captured order matches the
-                    // stored chronological order exactly.
-                    let replayed: Vec<String> = updates
-                        .lock()
-                        .expect("updates lock")
-                        .iter()
-                        .filter_map(message_chunk_text)
-                        .collect();
-                    assert_eq!(replayed, expected, "replay must match stored order");
-                    Ok(())
-                }
-            });
+                        // All replay notifications are delivered before the load
+                        // response returns, so the captured order matches the
+                        // stored chronological order exactly.
+                        let replayed: Vec<(&str, String)> = updates
+                            .lock()
+                            .expect("updates lock")
+                            .iter()
+                            .filter_map(|update| match update {
+                                SessionUpdate::UserMessageChunk(chunk) => match &chunk.content {
+                                    ContentBlock::Text(text) => Some(("user", text.text.clone())),
+                                    _ => None,
+                                },
+                                SessionUpdate::AgentMessageChunk(chunk) => match &chunk.content {
+                                    ContentBlock::Text(text) => Some(("agent", text.text.clone())),
+                                    _ => None,
+                                },
+                                _ => None,
+                            })
+                            .collect();
+                        assert_eq!(
+                            replayed,
+                            vec![
+                                ("user", "hello".to_string()),
+                                ("agent", "mock response".to_string()),
+                            ],
+                            "load must replay the stored user turn before the agent response",
+                        );
+                        Ok(())
+                    }
+                });
 
         let server_task = tokio::spawn(server);
         tokio::time::timeout(std::time::Duration::from_secs(5), client)

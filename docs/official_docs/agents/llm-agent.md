@@ -625,19 +625,27 @@ use adk_core::ToolExecutionStrategy;
 let agent = LlmAgentBuilder::new("fast_agent")
     .model(Arc::new(model))
     .instruction("You are a research assistant. Use multiple tools in parallel.")
-    // Read-only tools run concurrently, mutable tools run sequentially
+    // Auto requires both safety signals for concurrent inclusion
     .tool_execution_strategy(ToolExecutionStrategy::Auto)
-    .tool(Arc::new(search_tool.with_read_only(true)))
-    .tool(Arc::new(lookup_tool.with_read_only(true)))
-    .tool(Arc::new(save_tool))  // mutable — runs after read-only batch
+    .tool(Arc::new(
+        search_tool
+            .with_read_only(true)
+            .with_concurrency_safe(true),
+    ))
+    .tool(Arc::new(
+        lookup_tool
+            .with_read_only(true)
+            .with_concurrency_safe(true),
+    ))
+    .tool(Arc::new(save_tool)) // runs after the concurrent safe subset
     .build()?;
 ```
 
 Three strategies are available:
 
 - `Sequential` (default) — tools execute one at a time in LLM order
-- `Parallel` — all tools execute concurrently via `join_all`
-- `Auto` — read-only tools (`is_read_only() == true`) run concurrently first, then mutable tools run sequentially
+- `Parallel` — all tools execute concurrently; this explicit override bypasses safety metadata, so the caller owns safety
+- `Auto` — calls whose tools are both read-only and concurrency-safe run concurrently first; all remaining calls then run sequentially
 
 Results are always returned in the original LLM order regardless of strategy. Failed tools produce a JSON error response without aborting the batch.
 

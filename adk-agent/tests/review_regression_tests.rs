@@ -11,7 +11,9 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 #[cfg(feature = "guardrails")]
 use adk_agent::guardrails::{Guardrail, GuardrailResult, GuardrailSet, Severity};
@@ -243,6 +245,144 @@ impl Tool for IdCapturingTool {
     }
 }
 
+struct ConcurrencyProbeTool {
+    active: Arc<AtomicUsize>,
+    max_active: Arc<AtomicUsize>,
+    concurrency_safe: bool,
+}
+
+impl ConcurrencyProbeTool {
+    fn new(concurrency_safe: bool) -> Self {
+        Self {
+            active: Arc::new(AtomicUsize::new(0)),
+            max_active: Arc::new(AtomicUsize::new(0)),
+            concurrency_safe,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for ConcurrencyProbeTool {
+    fn name(&self) -> &str {
+        "concurrency_probe"
+    }
+
+    fn description(&self) -> &str {
+        "Records concurrent executions"
+    }
+
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        self.concurrency_safe
+    }
+
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_active.fetch_max(active, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        self.active.fetch_sub(1, Ordering::SeqCst);
+        Ok(json!({ "active": active }))
+    }
+}
+
+async fn max_concurrent_tool_calls(
+    strategy: adk_core::ToolExecutionStrategy,
+    concurrency_safe: bool,
+) -> usize {
+    let model = Arc::new(RecordingModel::new(vec![
+        RecordingModel::function_calls(vec![
+            Part::FunctionCall {
+                name: "concurrency_probe".to_string(),
+                args: json!({}),
+                id: Some("call-a".to_string()),
+                thought_signature: None,
+            },
+            Part::FunctionCall {
+                name: "concurrency_probe".to_string(),
+                args: json!({}),
+                id: Some("call-b".to_string()),
+                thought_signature: None,
+            },
+        ]),
+        RecordingModel::text_response("done"),
+    ]));
+    let tool = Arc::new(ConcurrencyProbeTool::new(concurrency_safe));
+    let max_active = tool.max_active.clone();
+    let agent = LlmAgentBuilder::new("tool-agent")
+        .model(model)
+        .tool(tool)
+        .tool_execution_strategy(strategy)
+        .build()
+        .unwrap();
+
+    let stream = agent.run(Arc::new(TestContext::new("run tools"))).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), drain_stream(stream))
+        .await
+        .expect("tool dispatch timed out")
+        .unwrap();
+
+    max_active.load(Ordering::SeqCst)
+}
+
+#[derive(Default)]
+struct MixedDispatchState {
+    safe_active: AtomicUsize,
+    safe_started: AtomicUsize,
+    safe_max_active: AtomicUsize,
+    unsafe_active: AtomicUsize,
+    unsafe_started: AtomicUsize,
+    unsafe_max_active: AtomicUsize,
+    unsafe_started_while_safe_active: AtomicBool,
+}
+
+struct MixedDispatchTool {
+    name: &'static str,
+    concurrency_safe: bool,
+    state: Arc<MixedDispatchState>,
+}
+
+#[async_trait]
+impl Tool for MixedDispatchTool {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn description(&self) -> &str {
+        "Records mixed-batch execution phases"
+    }
+
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        self.concurrency_safe
+    }
+
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        if self.concurrency_safe {
+            self.state.safe_started.fetch_add(1, Ordering::SeqCst);
+            let active = self.state.safe_active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.state.safe_max_active.fetch_max(active, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            self.state.safe_active.fetch_sub(1, Ordering::SeqCst);
+        } else {
+            self.state.unsafe_started.fetch_add(1, Ordering::SeqCst);
+            if self.state.safe_active.load(Ordering::SeqCst) != 0 {
+                self.state.unsafe_started_while_safe_active.store(true, Ordering::SeqCst);
+            }
+            let active = self.state.unsafe_active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.state.unsafe_max_active.fetch_max(active, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            self.state.unsafe_active.fetch_sub(1, Ordering::SeqCst);
+        }
+        Ok(json!({ "ok": true }))
+    }
+}
+
 struct CountingTool {
     calls: Arc<Mutex<usize>>,
 }
@@ -390,6 +530,91 @@ async fn test_function_call_ids_are_unique_for_repeated_tool_calls() {
     assert_ne!(ids[0], ids[1]);
     assert!(ids[0].ends_with("_0"));
     assert!(ids[1].ends_with("_1"));
+}
+
+#[tokio::test]
+async fn test_auto_serializes_read_only_tool_without_concurrency_safety() {
+    let max_active = max_concurrent_tool_calls(adk_core::ToolExecutionStrategy::Auto, false).await;
+
+    assert_eq!(max_active, 1);
+}
+
+#[tokio::test]
+async fn test_auto_parallelizes_read_only_concurrency_safe_tool() {
+    let max_active = max_concurrent_tool_calls(adk_core::ToolExecutionStrategy::Auto, true).await;
+
+    assert_eq!(max_active, 2);
+}
+
+#[tokio::test]
+async fn test_auto_runs_safe_subset_before_sequential_unsafe_subset() {
+    let model = Arc::new(RecordingModel::new(vec![
+        RecordingModel::function_calls(vec![
+            Part::FunctionCall {
+                name: "unsafe_probe".to_string(),
+                args: json!({}),
+                id: Some("unsafe-a".to_string()),
+                thought_signature: None,
+            },
+            Part::FunctionCall {
+                name: "safe_probe".to_string(),
+                args: json!({}),
+                id: Some("safe-a".to_string()),
+                thought_signature: None,
+            },
+            Part::FunctionCall {
+                name: "safe_probe".to_string(),
+                args: json!({}),
+                id: Some("safe-b".to_string()),
+                thought_signature: None,
+            },
+            Part::FunctionCall {
+                name: "unsafe_probe".to_string(),
+                args: json!({}),
+                id: Some("unsafe-b".to_string()),
+                thought_signature: None,
+            },
+        ]),
+        RecordingModel::text_response("done"),
+    ]));
+    let state = Arc::new(MixedDispatchState::default());
+    let safe_tool = Arc::new(MixedDispatchTool {
+        name: "safe_probe",
+        concurrency_safe: true,
+        state: state.clone(),
+    });
+    let unsafe_tool = Arc::new(MixedDispatchTool {
+        name: "unsafe_probe",
+        concurrency_safe: false,
+        state: state.clone(),
+    });
+    let agent = LlmAgentBuilder::new("tool-agent")
+        .model(model)
+        .tool(safe_tool)
+        .tool(unsafe_tool)
+        .tool_execution_strategy(adk_core::ToolExecutionStrategy::Auto)
+        .build()
+        .unwrap();
+
+    let stream = agent.run(Arc::new(TestContext::new("run tools"))).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), drain_stream(stream))
+        .await
+        .expect("mixed tool dispatch timed out")
+        .unwrap();
+
+    assert_eq!(state.safe_started.load(Ordering::SeqCst), 2);
+    assert_eq!(state.safe_max_active.load(Ordering::SeqCst), 2);
+    assert_eq!(state.unsafe_started.load(Ordering::SeqCst), 2);
+    assert_eq!(state.unsafe_max_active.load(Ordering::SeqCst), 1);
+    assert!(!state.unsafe_started_while_safe_active.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn test_parallel_is_explicit_tool_metadata_override() {
+    let max_active =
+        max_concurrent_tool_calls(adk_core::ToolExecutionStrategy::Parallel, false).await;
+
+    assert_eq!(max_active, 2);
 }
 
 #[tokio::test]

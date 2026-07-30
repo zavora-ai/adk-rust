@@ -65,7 +65,7 @@ pub trait Tool: Send + Sync {
 }
 ```
 
-`is_read_only()` and `is_concurrency_safe()` are used by the `ToolExecutionStrategy::Auto` dispatch mode to run read-only tools concurrently. Both default to `false` so existing implementations are unaffected.
+`ToolExecutionStrategy::Auto` includes a call in its concurrent subset only when the selected tool returns `true` from both `is_read_only()` and `is_concurrency_safe()`. It runs that safe subset first, then executes the remaining calls sequentially. Both methods default to `false`, so existing implementations remain sequential.
 
 ### Toolset
 
@@ -347,12 +347,12 @@ Controls how multiple tool calls from a single LLM response are dispatched:
 ```rust
 pub enum ToolExecutionStrategy {
     Sequential,  // One at a time, in order (default)
-    Parallel,    // All concurrently via join_all
-    Auto,        // Read-only tools concurrently, then mutable sequentially
+    Parallel,    // All concurrently; caller owns safety
+    Auto,        // Safe read-only subset concurrently, then the rest sequentially
 }
 ```
 
-Set per-agent via `LlmAgentBuilder::tool_execution_strategy()`.
+Set per-agent via `LlmAgentBuilder::tool_execution_strategy()`. `Parallel` is an explicit override that does not inspect tool metadata.
 
 ## Related Crates
 

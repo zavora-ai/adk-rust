@@ -16,7 +16,7 @@ The example uses a realistic parallel research scenario where three branches eac
 
 ## Prerequisites
 
-- **Rust** 1.85+ (edition 2024)
+- **Rust** 1.95+ (edition 2024)
 - **`GOOGLE_API_KEY`** environment variable set with a valid Gemini API key
 
 Copy `.env.example` to `.env` and fill in your API key:

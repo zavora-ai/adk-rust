@@ -4,7 +4,8 @@ name: CI Merge
 # after a change lands — carrying the expensive coverage that was deliberately
 # kept off the per-PR path:
 #   • cross-platform-test — full macOS + Windows `nextest --workspace` (the PR
-#     tier only compile-checks those platforms; the test run lives here).
+#     tier compile-checks both and runs a targeted Windows sandbox smoke; the
+#     full platform test suites live here).
 #   • out-of-workspace crate builds and doc-example compilation are triggered on
 #     this same event (added by later tasks in this wave).
 # All Rust runner preparation goes through the shared setup-rust composite
@@ -34,10 +35,10 @@ jobs:
   # ── Cross-platform: full macOS + Windows test suite ────────────
   # Requirement 1.4 (full suite on Linux/macOS/Windows before release) and 2.2
   # (cross-platform tests on merge). Linux already runs the full nextest suite on
-  # every PR (ci.yml `test`); this job adds the macOS + Windows runs that were
-  # demoted to compile-only on PRs (task 4.3). setup-rust supplies the toolchain +
-  # build cache; neutralize-wild is false because the wild-linker strip is
-  # Linux-only.
+  # every PR (ci.yml `test`); this job adds the full macOS + Windows runs. The PR
+  # tier keeps compile builds for both platforms plus a targeted Windows sandbox
+  # smoke. setup-rust supplies the toolchain + build cache; neutralize-wild is
+  # false because the wild-linker strip is Linux-only.
   cross-platform-test:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -73,7 +74,7 @@ jobs:
         tool: cargo-nextest
 
     - name: Run tests
-      run: cargo nextest run --workspace
+      run: cargo nextest run --workspace --no-fail-fast
 
     - name: Test summary
       if: always()

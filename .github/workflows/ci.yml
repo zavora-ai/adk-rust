@@ -180,6 +180,10 @@ jobs:
           # adk-server's A2A v1 surface: gated behind `a2a-v1`, so `--workspace` without feature
           # flags never compiled it. 11 clippy failures had accumulated unseen.
           - { package: adk-server, features: a2a-v1 }
+          # Vertex AI sessions use an opt-in Google Cloud transport and wire contract.
+          - { package: adk-session, features: vertex-session }
+          # ACP replay and server transport behavior are gated behind the opt-in server feature.
+          - { package: adk-acp, features: server }
     steps:
     - uses: actions/checkout@v7
 
@@ -379,10 +383,10 @@ jobs:
       if: always()
       run: echo "### 🍎 macOS compile-only build passed" >> "$GITHUB_STEP_SUMMARY"
 
-  # ── Cross-platform: Windows compile-only build ─────────────────
-  # PR tier is compile-only; the full nextest run moves to the merge tier
-  # (ci-merge.yml). setup-rust supplies the toolchain + build cache;
-  # neutralize-wild is false because the wild-linker strip is Linux-only.
+  # ── Cross-platform: Windows build + portability smoke ──────────
+  # The full nextest run stays in the merge tier (ci-merge.yml). The focused
+  # output-cap suite runs here because its process scripts are platform-specific
+  # and must fail before merge when they stop working on Windows.
   windows:
     needs: fmt
     runs-on: windows-latest
@@ -406,6 +410,9 @@ jobs:
     - name: Build workspace
       run: cargo build --workspace
 
+    - name: Run sandbox output-cap portability smoke
+      run: cargo test -p adk-sandbox --test output_cap_tests
+
     - name: Build summary
       if: always()
-      run: echo "### 🪟 Windows compile-only build passed" >> $env:GITHUB_STEP_SUMMARY
+      run: echo "### 🪟 Windows build and sandbox portability smoke passed" >> $env:GITHUB_STEP_SUMMARY

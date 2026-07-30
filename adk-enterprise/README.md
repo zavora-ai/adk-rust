@@ -261,7 +261,7 @@ adk-enterprise/src/
 
 ## Requirements
 
-- **Rust 1.85+** (edition 2024)
+- **Rust 1.95+** (edition 2024)
 - **tokio** async runtime
 - Network access to the Enterprise platform (or self-hosted deployment)
 - API key (`adk_live_...` or `adk_test_...`)
