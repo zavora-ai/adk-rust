@@ -731,6 +731,17 @@ before/after code is in
 
 ### Changed
 
+- **The Runner-level context cache is documented as experimental.**
+  `RunnerConfig::context_cache_config` and `cache_capable` drive Gemini's explicit
+  `cachedContents` API from the Runner. That API requires the cache to **replace**
+  `system_instruction`, `tools`, and `tool_config`; sending a cache alongside any of them
+  is rejected with `INVALID_ARGUMENT`. The Runner selects a cache before the agent
+  resolves its tools, so it cannot assemble that request, and enabling these fields does
+  not produce cache hits. Both default to unset and prompt caching needs no Runner
+  configuration — Anthropic and Bedrock cache by default, OpenAI caches server-side, and
+  Gemini caches implicitly on 2.5/3.x — so no supported configuration changes behavior.
+  The Runner reference now states this, and guaranteed caching for Gemini is deferred to
+  the model integration where the other providers already handle it.
 - **OpenAI integrations now use `async-openai` 0.41.** Chat Completions,
   Responses, and Realtime integrations adopt the current 0.41 types and
   transport dependencies.

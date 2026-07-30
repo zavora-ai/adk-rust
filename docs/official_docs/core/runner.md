@@ -108,10 +108,34 @@ The builder requires three fields: `app_name`, `agent`, and `session_service`. E
 | `plugin_manager` | `Option<Arc<PluginManager>>` | No | Plugin lifecycle hooks |
 | `compaction_config` | `Option<EventsCompactionConfig>` | No | Context compaction settings |
 | `run_config` | `Option<RunConfig>` | No | Execution options |
-| `context_cache_config` | `Option<ContextCacheConfig>` | No | Prompt caching lifecycle |
-| `cache_capable` | `Option<Arc<dyn CacheCapable>>` | No | Cache-capable model reference |
+| `context_cache_config` | `Option<ContextCacheConfig>` | No | Runner-level context cache lifecycle (experimental — see below) |
+| `cache_capable` | `Option<Arc<dyn CacheCapable>>` | No | Cache-capable model reference (experimental — see below) |
 | `request_context` | `Option<RequestContext>` | No | Auth middleware context |
 | `cancellation_token` | `Option<CancellationToken>` | No | Cooperative cancellation |
+
+### Prompt caching
+
+**Caching is a provider-level concern and needs no Runner configuration.** Each
+provider integration handles it where the request is assembled:
+
+| Provider | Mechanism | Default |
+|----------|-----------|---------|
+| Anthropic / Bedrock | `cache_control` breakpoints | **on** (`AnthropicConfig::prompt_caching`, opt out with `with_prompt_caching(false)`) |
+| OpenAI | server-side prompt caching, `PromptCacheRetention` for retention | automatic |
+| Gemini | implicit caching on 2.5/3.x — a shared prefix earns a discount with no code change | automatic |
+
+Cache hits are observable without any extra wiring: the Gemini integration
+records `cachedContentTokenCount` on each response.
+
+> **`context_cache_config` and `cache_capable` are experimental and should be
+> left unset.** They drive Gemini's *explicit* `cachedContents` API from the
+> Runner. That API requires the cache to **replace** `system_instruction`,
+> `tools`, and `tool_config` — sending a cache alongside any of them is rejected
+> with `INVALID_ARGUMENT`. The Runner selects a cache before the agent resolves
+> its tools, so it cannot assemble that request, and enabling these fields does
+> not currently produce cache hits. Guaranteed (rather than best-effort) caching
+> for Gemini belongs in the model integration, alongside how the other providers
+> do it.
 
 ## Running Agents
 
