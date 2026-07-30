@@ -2,6 +2,7 @@
 edition = "2024"
 name = "adk-gemini"
 version.workspace = true
+rust-version.workspace = true
 build = false
 autolib = false
 autobins = false
