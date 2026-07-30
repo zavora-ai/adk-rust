@@ -25,14 +25,42 @@ fn shell_request(script: &str) -> ExecRequest {
     }
 }
 
+/// The executable as it must appear inside a shell command string.
+///
+/// On Windows the command reaches `cmd /C` through `Command::arg`, which escapes an
+/// embedded `"` as `\"`. `cmd.exe` does not read that escape, so it strips the outer pair
+/// and tries to run the remaining backslash-quoted text as a program name. The path is
+/// therefore passed **unquoted**, which is only representable when it contains no space —
+/// see [`helper_invocation_supported`].
 #[cfg(windows)]
 fn shell_executable(path: &Path) -> String {
-    format!("\"{}\"", path.display())
+    path.display().to_string()
 }
 
 #[cfg(not(windows))]
 fn shell_executable(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+/// Whether this platform can express an invocation of the helper.
+///
+/// Windows only: a path containing a space has no unquoted form, and a quoted one cannot
+/// survive `Command::arg` (see [`shell_executable`]). Such a checkout is skipped rather
+/// than reported as a cap failure it is not. Cargo target paths in CI contain no space.
+fn helper_invocation_supported() -> bool {
+    if !cfg!(windows) {
+        return true;
+    }
+    let exe = std::env::current_exe().expect("the test executable path is available");
+    !exe.display().to_string().contains(' ')
+}
+
+/// Emits the skip notice for a checkout whose path the shell cannot receive.
+fn skip_unsupported_path() {
+    eprintln!(
+        "skipped: the test executable path contains a space, which cmd.exe cannot be given \
+         unquoted; the output cap itself is unaffected"
+    );
 }
 
 fn helper_request(stream: &str, bytes: usize) -> ExecRequest {
@@ -92,6 +120,10 @@ fn output_producer() {
 /// 64 MiB of stdout is retained only up to the cap.
 #[tokio::test]
 async fn stdout_far_beyond_the_cap_is_capped() {
+    if !helper_invocation_supported() {
+        skip_unsupported_path();
+        return;
+    }
     let backend = ProcessBackend::new(ProcessConfig::default());
     // 64 MiB: large enough that buffering it all would be obvious, small enough to stay quick.
     let result = backend
@@ -112,6 +144,10 @@ async fn stdout_far_beyond_the_cap_is_capped() {
 /// The same bound applies to stderr.
 #[tokio::test]
 async fn stderr_far_beyond_the_cap_is_capped() {
+    if !helper_invocation_supported() {
+        skip_unsupported_path();
+        return;
+    }
     let backend = ProcessBackend::new(ProcessConfig::default());
     let result = backend
         .execute(helper_request("stderr", 32 * 1_024 * 1_024))
@@ -129,6 +165,10 @@ async fn stderr_far_beyond_the_cap_is_capped() {
 /// would hit the timeout rather than exiting cleanly.
 #[tokio::test]
 async fn a_process_exceeding_the_cap_still_exits_cleanly() {
+    if !helper_invocation_supported() {
+        skip_unsupported_path();
+        return;
+    }
     let backend = ProcessBackend::new(ProcessConfig::default());
     let result = backend
         .execute(helper_request("stdout-then-done", 8 * 1_024 * 1_024))
@@ -152,6 +192,10 @@ async fn small_output_is_returned_intact() {
 /// Truncated output must say so, so a model is not handed a silent partial result.
 #[tokio::test]
 async fn truncated_output_carries_a_notice() {
+    if !helper_invocation_supported() {
+        skip_unsupported_path();
+        return;
+    }
     let backend = ProcessBackend::new(ProcessConfig::default());
     let result = backend
         .execute(helper_request("stdout", 4 * 1_024 * 1_024))
@@ -167,6 +211,10 @@ async fn truncated_output_carries_a_notice() {
 /// A smaller configured cap is honoured.
 #[tokio::test]
 async fn the_cap_is_configurable() {
+    if !helper_invocation_supported() {
+        skip_unsupported_path();
+        return;
+    }
     let config = ProcessConfig { max_output_bytes: 4_096, ..ProcessConfig::default() };
     let backend = ProcessBackend::new(config);
     let result = backend
