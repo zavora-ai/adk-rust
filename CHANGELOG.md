@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0] - 2026-07-25
 
+### Breaking
+
+Major version bump. The complete list of public API breakage since
+1.0.0, as reported by `cargo semver-checks check-release --release-type minor`
+against the published 1.0.0 baseline, is below. A migration guide with
+before/after code is in
+[docs/official_docs/migration/1.0-to-2.0.md](docs/official_docs/migration/1.0-to-2.0.md).
+
+| Crate | Change | Downstream impact |
+|---|---|---|
+| `adk-acp` | `PermissionDecision::Allow` **removed**, replaced by `Select(String)`, `AllowOnce`, and `AllowAlways` | Code constructing or matching `Allow` must pick the intended variant |
+| `adk-acp` | New public fields: `PermissionRequest::{session_id, tool_call_id, kind, raw_input}`, `AcpAgentConfig::{mcp_servers, filesystem, terminal}`, `PermissionOption::kind` | Struct literals must add the fields; prefer `..Default::default()` |
+| `adk-acp` | New variants: `OutputChunk::{ToolUpdate, Usage}`, `PermissionPolicy::AsyncCustom` | Exhaustive `match` must add arms |
+| `adk-acp` | `AcpAgentConfig` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code storing it across `catch_unwind` |
+| `adk-computer-use` | `ComputerUseRuntime::verify` takes the action postcondition and returns `VerificationOutcome` instead of `bool` | Match the outcome; `is_verified()` is true only when the postcondition was observed, `is_committed()` covers "performed but unverified" |
+| `adk-agent` | `TriggerEvent` gains a public `principal` field | Add `principal: None` to struct literals; webhook events carry the verified principal |
+| `adk-agent` | `WebhookTrigger` binds loopback by default, requires a verifier for any wider address, and rejects non-JSON bodies | Call `with_bind_address` plus `with_verifier` to expose it; `accept_non_json()` restores the old body handling |
+| `adk-agent` | `WebhookTrigger` no longer `UnwindSafe`/`RefUnwindSafe` | It now holds a verifier behind `Arc<dyn ...>`; affects code storing it across `catch_unwind` |
+| `adk-managed` | `ManagedAgentRuntime::start_session` requires a `ManagedOwner`, and rejects an `EnvironmentConfig` it cannot honour | Pass an owner; supply `None` for `env` unless a sandboxed runtime is configured |
+| `adk-anthropic` | New variants: `ContentBlock::WebFetchToolResult`, `ToolUnionParam::WebFetch20250910`, `ServerTool::WebFetch20250910` | Exhaustive `match` must add arms |
+| `adk-core` | New public fields: `RunConfig::{tool_confirmation_handler, runtime_toolsets}` | Struct literals must add the fields; prefer `RunConfig::builder()` |
+| `adk-core` | New variant `Part::EmbeddedResource` (`Part` is not `#[non_exhaustive]`) | Exhaustive `match` must add an arm |
+| `adk-core` | `RunConfig` and `RunConfigBuilder` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code holding them across `catch_unwind` |
+| `adk-core` | `Memory::search_in_project` and `Memory::add_to_project` now return an error by default instead of silently operating globally; new `Memory::supports_project_scoping` | A custom `Memory` that relied on the fallback must implement the project methods or accept the error |
+| `adk-memory` | `MemoryService::{add_session_to_project, add_entry_to_project, delete_entries_in_project}` now return an error by default; new `MemoryService::supports_project_scoping` | A custom backend must implement them; `GraphMemoryService` now refuses project calls it previously answered globally |
+| `adk-core` | `RunConfig::tool_confirmation_decisions` is now keyed by **function call ID** instead of tool name | Approvals keyed by tool name are no longer found, so the call stays unconfirmed; key by `ToolConfirmationRequest::function_call_id` |
+| `adk-core` | New public field `RunConfig::tool_confirmation_fingerprints` | Struct literals must add the field; prefer `RunConfig::builder()` |
+| `adk-graph` | `TimeTravelHandle::replay` renamed to `state_history` | Rename the call; behaviour is unchanged, and it never re-executed anything despite the old name |
+| `adk-graph` | New public field `ExecutionConfig::parent_context` | Struct literals must add the field; prefer `ExecutionConfig::new` plus `with_parent_context` |
+| `adk-graph` | New public field `StateGraph::deferred_configs` | Struct literals must add the field |
+| `adk-runner` | `MutableSession::conversation_history_for_agent_impl` now takes two parameters (an `agent_name` and a `branch`) instead of one | Direct callers must pass the invocation branch; pass `""` for unscoped behaviour |
+| `adk-realtime` | `ClientEvent` and `ServerEvent` are now `#[non_exhaustive]` | Downstream `match` needs a wildcard arm; the enums can no longer be constructed exhaustively outside the crate |
+| `adk-realtime` | `ServerEvent::Unknown` discriminant changed 21 → 23 | Affects code depending on the numeric discriminant |
+| `adk-realtime` | New public field `RealtimeConfig::affective_dialog` | Struct literals must add the field |
+| `adk-sandbox` | `EnforcedLimits::filesystem_isolation` replaced by `filesystem_write_isolation` and `filesystem_read_isolation` | Read the field that matches what you need; the two are not equivalent on macOS |
+| `adk-telemetry` | `AdkSpanLayer::new` now takes one generic type parameter instead of none | Call sites passing explicit generics must be updated |
+| `adk-telemetry` | `AdkSpanLayer` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code holding it across `catch_unwind` |
+
 ### Security
 
 - **adk-computer-use: the reference graph now enforces execution-time bindings and
@@ -318,77 +356,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to 0.33 in `adk-telemetry` and `adk-auth`, fixing GHSA-w9wp-h8wv-79jx
   (unbounded memory allocation in W3C Baggage propagation).
 
-### Changed
-
-- **OpenAI integrations now use `async-openai` 0.41.** Chat Completions,
-  Responses, and Realtime integrations adopt the current 0.41 types and
-  transport dependencies.
-- **Toolchain pinned to Rust 1.95.0.** `rust-toolchain.toml` is now the single source: rustup
-  reads it locally and devenv reads the same file through `languages.rust.toolchainFile`, so a
-  devenv shell and a plain `cargo` invocation cannot drift. The workspace resolver moves to `3`
-  and `rust-version` to `1.95`; `Cargo.lock` is unchanged by the resolver bump. Five new 1.95
-  clippy lints are fixed — three `collapsible_match`, one `iter_kv_map`, and one `sort_by_key`
-  that needed `Reverse` because the sort is descending. 1.95 also clears the AWS SDK MSRV floor,
-  so `cargo update` no longer breaks the `bedrock` feature.
-
-- **MCP now uses official `rmcp 2.2` and MCP `2025-11-25` protocol types.**
-  ADK-Rust re-exports its aligned SDK for advanced transports and server
-  authoring. Sampling remains an opt-in deprecated-compatibility feature under
-  upstream SEP-2577. Downstream code that names `rmcp 1.x` content, elicitation,
-  or service types directly must migrate those annotations or import aligned
-  types through `adk_tool::mcp::rmcp`.
-- **MCP HTTP configuration is now effective.** Request timeouts, custom headers,
-  custom API-key headers, bearer or fixed client-credentials tokens, and bounded
-  expired-session recovery are applied to the Streamable HTTP client.
-- **MCP approval semantics are documented precisely.** `autoApprove` remains a
-  round-tripped configuration-compatibility field; it is not interpreted as
-  ADK-Rust authorization or human approval policy.
-- **adk-acp now uses the official `agent-client-protocol` 1.2 SDK while
-  negotiating stable wire protocol v1.** The client and server share the SDK's
-  typed JSON-RPC connection rather than maintaining a parallel wire model.
-- **ACP capability publication is now exact.** Unsupported media, remote
-  transports, and optional protocol features remain unadvertised. Stdio MCP is
-  accepted as required by stable v1; optional HTTP and SSE MCP are sent by the
-  client only when the external agent advertises them.
-- **ADK agent tool confirmation can be resolved live.** `RunConfig` accepts an
-  asynchronous `ToolConfirmationHandler`, and allow-once decisions are keyed by
-  exact function-call ID rather than tool name.
-- **Breaking:** major version bump. The complete list of public API breakage since
-  1.0.0, as reported by `cargo semver-checks check-release --release-type minor`
-  against the published 1.0.0 baseline, is below. A migration guide with
-  before/after code is in
-  [docs/official_docs/migration/1.0-to-2.0.md](docs/official_docs/migration/1.0-to-2.0.md).
-
-  | Crate | Change | Downstream impact |
-  |---|---|---|
-  | `adk-acp` | `PermissionDecision::Allow` **removed**, replaced by `Select(String)`, `AllowOnce`, and `AllowAlways` | Code constructing or matching `Allow` must pick the intended variant |
-  | `adk-acp` | New public fields: `PermissionRequest::{session_id, tool_call_id, kind, raw_input}`, `AcpAgentConfig::{mcp_servers, filesystem, terminal}`, `PermissionOption::kind` | Struct literals must add the fields; prefer `..Default::default()` |
-  | `adk-acp` | New variants: `OutputChunk::{ToolUpdate, Usage}`, `PermissionPolicy::AsyncCustom` | Exhaustive `match` must add arms |
-  | `adk-acp` | `AcpAgentConfig` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code storing it across `catch_unwind` |
-  | `adk-computer-use` | `ComputerUseRuntime::verify` takes the action postcondition and returns `VerificationOutcome` instead of `bool` | Match the outcome; `is_verified()` is true only when the postcondition was observed, `is_committed()` covers "performed but unverified" |
-  | `adk-agent` | `TriggerEvent` gains a public `principal` field | Add `principal: None` to struct literals; webhook events carry the verified principal |
-  | `adk-agent` | `WebhookTrigger` binds loopback by default, requires a verifier for any wider address, and rejects non-JSON bodies | Call `with_bind_address` plus `with_verifier` to expose it; `accept_non_json()` restores the old body handling |
-  | `adk-agent` | `WebhookTrigger` no longer `UnwindSafe`/`RefUnwindSafe` | It now holds a verifier behind `Arc<dyn ...>`; affects code storing it across `catch_unwind` |
-  | `adk-managed` | `ManagedAgentRuntime::start_session` requires a `ManagedOwner`, and rejects an `EnvironmentConfig` it cannot honour | Pass an owner; supply `None` for `env` unless a sandboxed runtime is configured |
-  | `adk-anthropic` | New variants: `ContentBlock::WebFetchToolResult`, `ToolUnionParam::WebFetch20250910`, `ServerTool::WebFetch20250910` | Exhaustive `match` must add arms |
-  | `adk-core` | New public fields: `RunConfig::{tool_confirmation_handler, runtime_toolsets}` | Struct literals must add the fields; prefer `RunConfig::builder()` |
-  | `adk-core` | New variant `Part::EmbeddedResource` (`Part` is not `#[non_exhaustive]`) | Exhaustive `match` must add an arm |
-  | `adk-core` | `RunConfig` and `RunConfigBuilder` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code holding them across `catch_unwind` |
-  | `adk-core` | `Memory::search_in_project` and `Memory::add_to_project` now return an error by default instead of silently operating globally; new `Memory::supports_project_scoping` | A custom `Memory` that relied on the fallback must implement the project methods or accept the error |
-  | `adk-memory` | `MemoryService::{add_session_to_project, add_entry_to_project, delete_entries_in_project}` now return an error by default; new `MemoryService::supports_project_scoping` | A custom backend must implement them; `GraphMemoryService` now refuses project calls it previously answered globally |
-  | `adk-core` | `RunConfig::tool_confirmation_decisions` is now keyed by **function call ID** instead of tool name | Approvals keyed by tool name are no longer found, so the call stays unconfirmed; key by `ToolConfirmationRequest::function_call_id` |
-  | `adk-core` | New public field `RunConfig::tool_confirmation_fingerprints` | Struct literals must add the field; prefer `RunConfig::builder()` |
-  | `adk-graph` | `TimeTravelHandle::replay` renamed to `state_history` | Rename the call; behaviour is unchanged, and it never re-executed anything despite the old name |
-  | `adk-graph` | New public field `ExecutionConfig::parent_context` | Struct literals must add the field; prefer `ExecutionConfig::new` plus `with_parent_context` |
-  | `adk-graph` | New public field `StateGraph::deferred_configs` | Struct literals must add the field |
-  | `adk-runner` | `MutableSession::conversation_history_for_agent_impl` now takes two parameters (an `agent_name` and a `branch`) instead of one | Direct callers must pass the invocation branch; pass `""` for unscoped behaviour |
-  | `adk-realtime` | `ClientEvent` and `ServerEvent` are now `#[non_exhaustive]` | Downstream `match` needs a wildcard arm; the enums can no longer be constructed exhaustively outside the crate |
-  | `adk-realtime` | `ServerEvent::Unknown` discriminant changed 21 → 23 | Affects code depending on the numeric discriminant |
-  | `adk-realtime` | New public field `RealtimeConfig::affective_dialog` | Struct literals must add the field |
-  | `adk-sandbox` | `EnforcedLimits::filesystem_isolation` replaced by `filesystem_write_isolation` and `filesystem_read_isolation` | Read the field that matches what you need; the two are not equivalent on macOS |
-  | `adk-telemetry` | `AdkSpanLayer::new` now takes one generic type parameter instead of none | Call sites passing explicit generics must be updated |
-  | `adk-telemetry` | `AdkSpanLayer` no longer `UnwindSafe`/`RefUnwindSafe` | Affects code holding it across `catch_unwind` |
-
 ### Added
 
 - **adk-managed: managed state has a store seam that reports its own durability.**
@@ -653,6 +620,150 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recorded (`acp:title`, set via `set_session_title`). A `Plan` `SessionUpdate`
   mapping exists but stays dormant until an ADK plan primitive surfaces plan
   entries, so no plan update is emitted today.
+
+- **adk-realtime: GA realtime providers + integration tool dispatch** — OpenAI
+  `gpt-realtime` and Gemini Live wired end-to-end through
+  `IntegratedRealtimeRunner`, with **server-side tool execution**, transcript and
+  memory integration, and a per-provider audio-rate handshake. Revives the
+  realtime stack after the preview-model shutdowns; verified live against both
+  providers.
+- **adk-realtime: multimodal video input** — new `RealtimeSession::send_video_frame`
+  (exposed on `RealtimeRunner` and `IntegratedRealtimeRunner`) sends image frames
+  to the model: Gemini Live as continuous `realtimeInput` media chunks, OpenAI
+  Realtime as `input_image` conversation items. Lets an agent see what the user
+  shows the camera. The default trait impl is a no-op, so other backends are
+  unaffected.
+- **adk-realtime: affective dialogue** — `RealtimeConfig::with_affective_dialog`
+  emits `enableAffectiveDialog` (inside `generationConfig`) for Gemini Live
+  native-audio models, so the model adapts its tone to the user's emotion.
+- **adk-memory: bi-temporal knowledge-graph memory** (`graph-memory` feature) —
+  `GraphMemoryService`, a SQLite-backed knowledge graph (entities, typed
+  relations, and time-stamped observations with `valid_from`/`valid_to`
+  supersession) implementing `MemoryService`. Serves a compact **profile card**
+  for prompt injection and records episodic turns off the hot path; recall is
+  token-based so `search` / `load_memory` actually retrieve relevant facts.
+- **adk-tool: knowledge-graph curation tools** (`graph-memory-tools` feature) —
+  agent-callable `remember` / `relate` write tools plus a `GraphMemoryToolset`,
+  so any `LlmAgent` can curate structured long-term memory (recall continues via
+  `LoadMemoryTool` over any `MemoryService`).
+- **adk-model: configurable parallel tool calls for OpenAI** — opt in/out of
+  `parallel_tool_calls` on the OpenAI client (#387).
+- **New examples**:
+  - `customer_service` — multimodal customer-support agent (camera vision, tone,
+    server-side `process_refund` / `connect_to_human` tools), OpenAI or Gemini.
+  - `live_translation` — real-time speech-to-speech translation via the dedicated
+    translation models (OpenAI `gpt-realtime-translate`, Gemini
+    `gemini-3.5-live-translate-preview`).
+  - `knowledge_graph_agent` — a plain text `LlmAgent` with KG memory that persists
+    across sessions.
+  - `realtime_tools` — headless function-calling demo over the GA realtime API.
+  - `realtime_voice` ("Mia") reworked to be backed by a real knowledge graph.
+  - All web-UI examples ship **system / light / dark** themes.
+- **adk-telemetry: direct SQLite span export** (`sqlite` feature; facade forwards
+  as `telemetry-sqlite`) — zero-infrastructure tracing with no collector or
+  backend to deploy (#373, export half):
+  - `SqliteSpanExporter` — spans flow to a dedicated writer thread over an
+    unbounded channel and commit in batched transactions (WAL); the traced code
+    path pays one channel send. `flush()` for graceful exit.
+  - `SqliteTraceReader` — query API (`sessions`, `session_trace`, `trace`,
+    `recent_spans`) over a single `spans` table with a JSON attributes column,
+    so any SQLite client works.
+  - `init_with_sqlite(service, path)` one-line initializer, and a `SpanSink`
+    trait so `AdkSpanLayer` can target any sink (the in-memory exporter is
+    unchanged).
+  - Runnable example: `examples/telemetry_sqlite_export` (agentic Gemini run
+    with a tool call, traced end-to-end and read back).
+- **cargo-adk: advertised templates implemented for real.** `tools`, `rag`,
+  `api`, `openai`, and `a2a` were aliases that silently produced a plain llm
+  agent when combined with any `--addon`; they are now real templates
+  (`tools` scaffolds a working `#[tool]` in `src/tools.rs`; `rag` wires an
+  embedding + vector-store pipeline with `RagTool`; `api` generates a REST
+  server — including the previously missing `axum` dependency; `openai`
+  defaults its provider; `a2a` resolves to the `a2a-server` pattern).
+- **cargo-adk: custom template directories.** `--template-dir` loads TOML
+  template manifests (documented in `TemplateRegistry::load_custom_dir`);
+  same-name templates override built-ins.
+- **cargo-adk: generated projects run out of the box.** Scaffolds end with an
+  interactive `Launcher` console when nothing else drives the agent, missing
+  API keys produce a friendly error instead of a panic, `--model` and
+  `--with-yaml` work on all templates, and `--provider` defaults to the
+  template's provider.
+- **Quality gates via lefthook** (#374): pre-commit runs fmt + clippy
+  (workspace, `-D warnings`) + shellcheck on staged scripts; pre-push runs the
+  full nextest suite. The devenv shell registers the hooks automatically;
+  lefthook is the single hook manager (devenv git-hooks integration retired).
+- **Shell-agnostic publishing: `cargo xtask publish`** (`--resume`,
+  `--dry-run`) — works from bash/zsh/PowerShell/cmd; the publish order is
+  computed from `cargo metadata` at runtime, replacing the hand-maintained
+  tier list. `publish.sh` remains as a thin bash wrapper.
+- **Release tooling and CI guards**: `scripts/bump-version.sh` (updates
+  Cargo.toml, docs, READMEs, and doc-comment snippets; never touches
+  CHANGELOG, lock files, or historical text), `scripts/check-doc-versions.sh`
+  (doc snippet versions must match the workspace version; documented adk-rust
+  features must exist), and `scripts/check-publish-order.sh` (a valid publish
+  order must exist; warns on versioned internal dev-deps).
+- **adk-anthropic**: added support for WebFetch to mirror the support
+  for WebSearch.
+- **Coding agent — a native, end-to-end coding-agent capability.**
+  - **adk-devtools** (new crate) — the inner-loop developer toolset
+    (`read_file`, `write_file`, `edit_file`, `glob`, `grep`, `bash`) as a
+    `DevToolset`, all scoped to a sandboxed `Workspace` (path containment,
+    read-only mode, bash timeout/output caps). `edit_file` requires a prior
+    `read_file` and a unique match by default.
+  - **adk-agent: `CodingAgent` harness** (`coding` feature) — one-call
+    `CodingAgent::builder()` that wires the dev toolset, a planning `write_todos`
+    tool, and a minimal coding prompt onto an `LlmAgent`; `coding.todos()`
+    surfaces the live plan. Default `adk-agent` build is unchanged (feature off).
+  - **adk-cli: native `code`, `goal`, and `ultracode` commands.** `code` runs a
+    one-shot task; `goal` is autonomous goal mode that loops plan → act → verify
+    against a `--until` success command, **durable & resumable** via an atomic
+    on-disk checkpoint (`<dir>/.adk/goal.json`, `--resume`); `ultracode` fans out
+    to parallel correctness/edge-case/style reviewers and revises until they
+    approve. Keys resolve non-interactively from the environment.
+  - **adk-graph: fan-in support on `StateGraph`** — new `add_deferred_node_fn`
+    and `mark_deferred` bring deferred fan-in nodes (run once, after all upstream
+    paths complete) to the core builder, at parity with `GraphAgentBuilder`.
+    Enables correct fan-out/fan-in (parallel branches + a single aggregator).
+  - **New examples**: `coding_agent` (demo / scenario `tour` / `multiturn` build),
+    `coding_graph` (ultra-review workflow), `coding_goal` (durable autonomous goal
+    loop) — each a real agent that self-verifies by running the produced code.
+  - Design: `docs/design/coding-agent.md`; guide: `docs/official_docs/coding-agent/`.
+
+### Changed
+
+- **OpenAI integrations now use `async-openai` 0.41.** Chat Completions,
+  Responses, and Realtime integrations adopt the current 0.41 types and
+  transport dependencies.
+- **Toolchain pinned to Rust 1.95.0.** `rust-toolchain.toml` is now the single source: rustup
+  reads it locally and devenv reads the same file through `languages.rust.toolchainFile`, so a
+  devenv shell and a plain `cargo` invocation cannot drift. The workspace resolver moves to `3`
+  and `rust-version` to `1.95`; `Cargo.lock` is unchanged by the resolver bump. Five new 1.95
+  clippy lints are fixed — three `collapsible_match`, one `iter_kv_map`, and one `sort_by_key`
+  that needed `Reverse` because the sort is descending. 1.95 also clears the AWS SDK MSRV floor,
+  so `cargo update` no longer breaks the `bedrock` feature.
+
+- **MCP now uses official `rmcp 2.2` and MCP `2025-11-25` protocol types.**
+  ADK-Rust re-exports its aligned SDK for advanced transports and server
+  authoring. Sampling remains an opt-in deprecated-compatibility feature under
+  upstream SEP-2577. Downstream code that names `rmcp 1.x` content, elicitation,
+  or service types directly must migrate those annotations or import aligned
+  types through `adk_tool::mcp::rmcp`.
+- **MCP HTTP configuration is now effective.** Request timeouts, custom headers,
+  custom API-key headers, bearer or fixed client-credentials tokens, and bounded
+  expired-session recovery are applied to the Streamable HTTP client.
+- **MCP approval semantics are documented precisely.** `autoApprove` remains a
+  round-tripped configuration-compatibility field; it is not interpreted as
+  ADK-Rust authorization or human approval policy.
+- **adk-acp now uses the official `agent-client-protocol` 1.2 SDK while
+  negotiating stable wire protocol v1.** The client and server share the SDK's
+  typed JSON-RPC connection rather than maintaining a parallel wire model.
+- **ACP capability publication is now exact.** Unsupported media, remote
+  transports, and optional protocol features remain unadvertised. Stdio MCP is
+  accepted as required by stable v1; optional HTTP and SSE MCP are sent by the
+  client only when the external agent advertises them.
+- **ADK agent tool confirmation can be resolved live.** `RunConfig` accepts an
+  asynchronous `ToolConfirmationHandler`, and allow-once decisions are keyed by
+  exact function-call ID rather than tool name.
 
 ### Fixed
 
@@ -1144,118 +1255,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `LlmResponseStream` consumers can now rely on `turn_complete` instead of
   scanning for `Part::FunctionCall`.
 
-### Added
-
-- **adk-realtime: GA realtime providers + integration tool dispatch** — OpenAI
-  `gpt-realtime` and Gemini Live wired end-to-end through
-  `IntegratedRealtimeRunner`, with **server-side tool execution**, transcript and
-  memory integration, and a per-provider audio-rate handshake. Revives the
-  realtime stack after the preview-model shutdowns; verified live against both
-  providers.
-- **adk-realtime: multimodal video input** — new `RealtimeSession::send_video_frame`
-  (exposed on `RealtimeRunner` and `IntegratedRealtimeRunner`) sends image frames
-  to the model: Gemini Live as continuous `realtimeInput` media chunks, OpenAI
-  Realtime as `input_image` conversation items. Lets an agent see what the user
-  shows the camera. The default trait impl is a no-op, so other backends are
-  unaffected.
-- **adk-realtime: affective dialogue** — `RealtimeConfig::with_affective_dialog`
-  emits `enableAffectiveDialog` (inside `generationConfig`) for Gemini Live
-  native-audio models, so the model adapts its tone to the user's emotion.
-- **adk-memory: bi-temporal knowledge-graph memory** (`graph-memory` feature) —
-  `GraphMemoryService`, a SQLite-backed knowledge graph (entities, typed
-  relations, and time-stamped observations with `valid_from`/`valid_to`
-  supersession) implementing `MemoryService`. Serves a compact **profile card**
-  for prompt injection and records episodic turns off the hot path; recall is
-  token-based so `search` / `load_memory` actually retrieve relevant facts.
-- **adk-tool: knowledge-graph curation tools** (`graph-memory-tools` feature) —
-  agent-callable `remember` / `relate` write tools plus a `GraphMemoryToolset`,
-  so any `LlmAgent` can curate structured long-term memory (recall continues via
-  `LoadMemoryTool` over any `MemoryService`).
-- **adk-model: configurable parallel tool calls for OpenAI** — opt in/out of
-  `parallel_tool_calls` on the OpenAI client (#387).
-- **New examples**:
-  - `customer_service` — multimodal customer-support agent (camera vision, tone,
-    server-side `process_refund` / `connect_to_human` tools), OpenAI or Gemini.
-  - `live_translation` — real-time speech-to-speech translation via the dedicated
-    translation models (OpenAI `gpt-realtime-translate`, Gemini
-    `gemini-3.5-live-translate-preview`).
-  - `knowledge_graph_agent` — a plain text `LlmAgent` with KG memory that persists
-    across sessions.
-  - `realtime_tools` — headless function-calling demo over the GA realtime API.
-  - `realtime_voice` ("Mia") reworked to be backed by a real knowledge graph.
-  - All web-UI examples ship **system / light / dark** themes.
-- **adk-telemetry: direct SQLite span export** (`sqlite` feature; facade forwards
-  as `telemetry-sqlite`) — zero-infrastructure tracing with no collector or
-  backend to deploy (#373, export half):
-  - `SqliteSpanExporter` — spans flow to a dedicated writer thread over an
-    unbounded channel and commit in batched transactions (WAL); the traced code
-    path pays one channel send. `flush()` for graceful exit.
-  - `SqliteTraceReader` — query API (`sessions`, `session_trace`, `trace`,
-    `recent_spans`) over a single `spans` table with a JSON attributes column,
-    so any SQLite client works.
-  - `init_with_sqlite(service, path)` one-line initializer, and a `SpanSink`
-    trait so `AdkSpanLayer` can target any sink (the in-memory exporter is
-    unchanged).
-  - Runnable example: `examples/telemetry_sqlite_export` (agentic Gemini run
-    with a tool call, traced end-to-end and read back).
-- **cargo-adk: advertised templates implemented for real.** `tools`, `rag`,
-  `api`, `openai`, and `a2a` were aliases that silently produced a plain llm
-  agent when combined with any `--addon`; they are now real templates
-  (`tools` scaffolds a working `#[tool]` in `src/tools.rs`; `rag` wires an
-  embedding + vector-store pipeline with `RagTool`; `api` generates a REST
-  server — including the previously missing `axum` dependency; `openai`
-  defaults its provider; `a2a` resolves to the `a2a-server` pattern).
-- **cargo-adk: custom template directories.** `--template-dir` loads TOML
-  template manifests (documented in `TemplateRegistry::load_custom_dir`);
-  same-name templates override built-ins.
-- **cargo-adk: generated projects run out of the box.** Scaffolds end with an
-  interactive `Launcher` console when nothing else drives the agent, missing
-  API keys produce a friendly error instead of a panic, `--model` and
-  `--with-yaml` work on all templates, and `--provider` defaults to the
-  template's provider.
-- **Quality gates via lefthook** (#374): pre-commit runs fmt + clippy
-  (workspace, `-D warnings`) + shellcheck on staged scripts; pre-push runs the
-  full nextest suite. The devenv shell registers the hooks automatically;
-  lefthook is the single hook manager (devenv git-hooks integration retired).
-- **Shell-agnostic publishing: `cargo xtask publish`** (`--resume`,
-  `--dry-run`) — works from bash/zsh/PowerShell/cmd; the publish order is
-  computed from `cargo metadata` at runtime, replacing the hand-maintained
-  tier list. `publish.sh` remains as a thin bash wrapper.
-- **Release tooling and CI guards**: `scripts/bump-version.sh` (updates
-  Cargo.toml, docs, READMEs, and doc-comment snippets; never touches
-  CHANGELOG, lock files, or historical text), `scripts/check-doc-versions.sh`
-  (doc snippet versions must match the workspace version; documented adk-rust
-  features must exist), and `scripts/check-publish-order.sh` (a valid publish
-  order must exist; warns on versioned internal dev-deps).
-- **adk-anthropic**: added support for WebFetch to mirror the support
-  for WebSearch.
-- **Coding agent — a native, end-to-end coding-agent capability.**
-  - **adk-devtools** (new crate) — the inner-loop developer toolset
-    (`read_file`, `write_file`, `edit_file`, `glob`, `grep`, `bash`) as a
-    `DevToolset`, all scoped to a sandboxed `Workspace` (path containment,
-    read-only mode, bash timeout/output caps). `edit_file` requires a prior
-    `read_file` and a unique match by default.
-  - **adk-agent: `CodingAgent` harness** (`coding` feature) — one-call
-    `CodingAgent::builder()` that wires the dev toolset, a planning `write_todos`
-    tool, and a minimal coding prompt onto an `LlmAgent`; `coding.todos()`
-    surfaces the live plan. Default `adk-agent` build is unchanged (feature off).
-  - **adk-cli: native `code`, `goal`, and `ultracode` commands.** `code` runs a
-    one-shot task; `goal` is autonomous goal mode that loops plan → act → verify
-    against a `--until` success command, **durable & resumable** via an atomic
-    on-disk checkpoint (`<dir>/.adk/goal.json`, `--resume`); `ultracode` fans out
-    to parallel correctness/edge-case/style reviewers and revises until they
-    approve. Keys resolve non-interactively from the environment.
-  - **adk-graph: fan-in support on `StateGraph`** — new `add_deferred_node_fn`
-    and `mark_deferred` bring deferred fan-in nodes (run once, after all upstream
-    paths complete) to the core builder, at parity with `GraphAgentBuilder`.
-    Enables correct fan-out/fan-in (parallel branches + a single aggregator).
-  - **New examples**: `coding_agent` (demo / scenario `tour` / `multiturn` build),
-    `coding_graph` (ultra-review workflow), `coding_goal` (durable autonomous goal
-    loop) — each a real agent that self-verifies by running the produced code.
-  - Design: `docs/design/coding-agent.md`; guide: `docs/official_docs/coding-agent/`.
-
-### Fixed
-
 - **adk-realtime: one `response.create` per turn for parallel tool calls** — the
   runner fired a response per tool, so two tools in one turn hit OpenAI's
   *"conversation already has an active response in progress"* and stalled the
@@ -1294,8 +1293,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (it is an agent-level example; adk-model no longer needs upward dev-deps),
   and clippy violations across feature-gated and test code fixed —
   adk-model now passes `--all-features --all-targets -D warnings`.
-
-### Fixed
 
 - **MCP tasks now use the official request flow.** Tool calls send task metadata,
   receive `CreateTaskResult`, poll `tasks/get`, fetch `tasks/result`, and cancel
