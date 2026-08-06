@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`adk-memory --features database-memory` compiles again.** `pgvector` accepts
+  `sqlx >= 0.8, < 0.10` and resolved to 0.9 while the workspace pinned 0.8, so
+  two semver-incompatible `sqlx` majors sat in one graph and `pgvector::Vector`
+  implemented the other `sqlx::Type`. The lockfile now holds a single `sqlx`
+  0.8.6. `adk-rag --features pgvector` and the three sqlx-backed backends join
+  the PR-tier feature-coverage matrix, which no job had built.
 - **Inline and file content metadata survives session persistence.**
   `Part::InlineData`, `Part::FileData`, `Part::FunctionResponse`, and multimodal
   function-response parts retain optional annotations; inline data also retains

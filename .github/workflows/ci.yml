@@ -170,6 +170,13 @@ jobs:
           # so default builds skip them entirely.
           - { package: adk-code, features: embedded-python }
           - { package: adk-tool, features: code-embedded-python }
+          # The sqlx-backed production backends. None were built by any job, so a
+          # second sqlx major entering the graph through pgvector went unnoticed:
+          # `adk-memory --features database-memory` stopped compiling entirely
+          # while every required check stayed green.
+          - { package: adk-memory, features: database-memory }
+          - { package: adk-rag, features: pgvector }
+          - { package: adk-session, features: postgres }
           # The umbrella's code-execution opt-ins (not part of any tier): the embedded
           # JS/Python live paths, persistent Docker, and the CodeActAgent + MontyRuntime
           # forward. `code-tools` itself is covered by the `full` builds in docs/examples.
