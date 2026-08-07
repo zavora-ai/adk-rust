@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use ollama_rs::Ollama;
 use ollama_rs::generation::chat::ChatMessage;
 use ollama_rs::generation::chat::request::ChatMessageRequest;
+use ollama_rs::generation::parameters::{FormatType, JsonStructure};
 use ollama_rs::generation::tools::{ToolFunctionInfo, ToolInfo, ToolType};
 use ollama_rs::models::ModelOptions;
 use schemars::Schema;
@@ -122,6 +123,33 @@ fn ollama_error_to_adk(msg: &str) -> AdkError {
     AdkError::new(ErrorComponent::Model, category, code, msg).with_provider("ollama")
 }
 
+/// Map a `serde_json::Value` to an Ollama `FormatType`. This is used for structured JSON output
+/// formatting.
+fn map_json_value_to_ollama_schema(value: &serde_json::Value) -> Result<FormatType> {
+    fn map_convertable_to_format_type(value: &serde_json::Value) -> Result<FormatType> {
+        let schema = schemars::Schema::try_from(value.clone()).map_err(|e| {
+            AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::InvalidInput,
+                "model.ollama.schema_conversion",
+                format!("Failed to convert JSON value to schema: {e}"),
+            )
+        })?;
+
+        Ok(FormatType::StructuredJson(Box::new(JsonStructure::new_for_schema(schema))))
+    }
+
+    // Only `objects` and `bools` can be converted to `scheamrs::Schema` for structured JSON
+    // output. Other types are treated as generic JSON.
+    let format_type = match value {
+        serde_json::Value::Object(_) => map_convertable_to_format_type(value)?,
+        serde_json::Value::Bool(_) => map_convertable_to_format_type(value)?,
+        _ => FormatType::Json,
+    };
+
+    Ok(format_type)
+}
+
 #[async_trait]
 impl Llm for OllamaModel {
     fn name(&self) -> &str {
@@ -170,6 +198,13 @@ impl Llm for OllamaModel {
         if !request.tools.is_empty() {
             let tools = self.convert_tools(&request.tools);
             chat_request = chat_request.tools(tools);
+        }
+
+        if let Some(config) = &request.config {
+            if let Some(response_schema) = &config.response_schema {
+                chat_request =
+                    chat_request.format(map_json_value_to_ollama_schema(response_schema)?);
+            }
         }
 
         let response_stream = try_stream! {
