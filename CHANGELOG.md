@@ -48,8 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now selectable per connection through `adk_tool::mcp::ClientLifecycleMode`. It
   stays opt-in because the SDK falls back to the legacy handshake only when a
   server refuses the probe with `METHOD_NOT_FOUND`, and applies no timeout to it.
-  A new `adk-tool/tests/mcp_protocol_compatibility_tests.rs` holds the contract:
-  the default path must send `initialize` first and advertise `2025-11-25`.
+  A new `adk-tool/tests/mcp_protocol_compatibility_tests.rs` holds the contract
+  across every revision the SDK knows: the default path must send `initialize`
+  first and advertise `2025-11-25`; a server pinned to `2024-11-05` stays
+  reachable; and `Discover` and `Auto` settle on `2026-07-28` against a server
+  that supports it. Two further tests run against external servers and are
+  `#[ignore]`d by default.
   Closes #552.
 
 

@@ -11,6 +11,7 @@
 #![cfg(feature = "mcp")]
 
 use adk_core::{Content, ReadonlyContext, Toolset as _};
+use adk_tool::SimpleToolContext;
 use adk_tool::mcp::McpToolset;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientJsonRpcMessage, ClientRequest, ContentBlock,
@@ -312,4 +313,302 @@ async fn auto_fails_when_discover_is_refused_with_another_error() {
         outcome.is_err(),
         "Auto only falls back on METHOD_NOT_FOUND, so this must fail: that is the reason Initialize stays the default"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Live tests against real external MCP servers.
+//
+// Ignored by default because each needs a server this repository does not ship.
+// Run them with:
+//
+//     cargo nextest run -p adk-tool --features mcp \
+//         -E 'binary(mcp_protocol_compatibility_tests)' --run-ignored all
+// ---------------------------------------------------------------------------
+
+/// Connects to a real MCP server built on rmcp 1.7, two major versions behind
+/// the SDK this crate now uses.
+///
+/// Set `ADK_TEST_MCP_SERVER` to the server binary and `ADK_TEST_MCP_SERVER_DIR`
+/// to the directory it must run from.
+#[tokio::test]
+#[ignore] // requires an external MCP server binary; see ADK_TEST_MCP_SERVER
+async fn a_real_rmcp_1_7_server_over_stdio_still_works() {
+    use rmcp::transport::TokioChildProcess;
+
+    let Ok(binary) = std::env::var("ADK_TEST_MCP_SERVER") else {
+        panic!("set ADK_TEST_MCP_SERVER to an MCP server binary");
+    };
+    let mut command = tokio::process::Command::new(&binary);
+    if let Ok(dir) = std::env::var("ADK_TEST_MCP_SERVER_DIR") {
+        command.current_dir(dir);
+    }
+
+    let client =
+        ().serve(TokioChildProcess::new(command).expect("spawn the MCP server"))
+            .await
+            .expect("a server two rmcp majors behind must still connect");
+
+    let info = client.peer_info().expect("peer info after the handshake").clone();
+    assert_eq!(
+        info.protocol_version,
+        ProtocolVersion::V_2025_11_25,
+        "the negotiated revision must be the one this client advertises"
+    );
+
+    let ctx = Arc::new(TestContext { content: Content::new("user") }) as Arc<dyn ReadonlyContext>;
+    let toolset = McpToolset::new(client);
+    let tools = toolset.tools(ctx).await.expect("list tools from a real server");
+    assert!(!tools.is_empty(), "the server published no tools");
+
+    let server = info
+        .server_info
+        .as_ref()
+        .map(|i| format!("{} {}", i.name, i.version))
+        .unwrap_or_else(|| "unnamed".to_string());
+    println!(
+        "server {}, protocol {}, {} tools: {}",
+        server,
+        info.protocol_version.as_str(),
+        tools.len(),
+        tools.iter().map(|tool| tool.name().to_string()).collect::<Vec<_>>().join(", ")
+    );
+}
+
+/// Connects to the Playwright MCP server, an implementation written in
+/// TypeScript rather than against rmcp at all.
+///
+/// Proves the client is not merely compatible with servers that share its SDK.
+#[tokio::test]
+#[ignore] // requires npx (Node.js)
+async fn a_server_from_another_implementation_still_works() {
+    use rmcp::transport::TokioChildProcess;
+
+    let mut command = tokio::process::Command::new("npx");
+    command.arg("-y").arg("@playwright/mcp@latest");
+
+    let client =
+        ().serve(TokioChildProcess::new(command).expect("spawn the Playwright MCP server"))
+            .await
+            .expect("a server outside the rmcp family must still connect");
+
+    let info = client.peer_info().expect("peer info after the handshake").clone();
+    let ctx = Arc::new(TestContext { content: Content::new("user") }) as Arc<dyn ReadonlyContext>;
+    let toolset = McpToolset::new(client);
+    let tools = toolset.tools(ctx).await.expect("list tools from the Playwright server");
+    assert!(!tools.is_empty(), "the server published no tools");
+
+    let server = info
+        .server_info
+        .as_ref()
+        .map(|i| format!("{} {}", i.name, i.version))
+        .unwrap_or_else(|| "unnamed".to_string());
+    println!(
+        "server {}, protocol {}, {} tools",
+        server,
+        info.protocol_version.as_str(),
+        tools.len()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Tests against a real rmcp server, rather than a hand-written peer.
+//
+// `ServerHandler`'s default `supported_protocol_versions()` returns every known
+// revision including `2026-07-28`, so a plain implementation is a dual-stack
+// server. These tests therefore exercise the SDK's own `server/discover`
+// handling and version selection, not a fixture of our own making.
+// ---------------------------------------------------------------------------
+
+/// A dual-stack server publishing one tool.
+#[derive(Clone, Default)]
+struct DualStackServer;
+
+impl rmcp::ServerHandler for DualStackServer {
+    fn get_info(&self) -> rmcp::model::ServerInfo {
+        rmcp::model::ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("dual-stack-server", "1.0.0"))
+    }
+
+    async fn list_tools(
+        &self,
+        _params: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        Ok(ListToolsResult::with_all_items(vec![test_tool()]))
+    }
+
+    async fn call_tool(
+        &self,
+        _params: CallToolRequestParams,
+        _context: rmcp::service::RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        Ok(CallToolResult::success(vec![ContentBlock::text("pong")]).into())
+    }
+}
+
+/// Spawns [`DualStackServer`] and returns the client end of the pipe.
+fn spawn_dual_stack_server() -> tokio::io::DuplexStream {
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    tokio::spawn(async move {
+        if let Ok(running) = DualStackServer.serve(server_io).await {
+            let _ = running.waiting().await;
+        }
+    });
+    client_io
+}
+
+/// The default handshake against a real dual-stack server settles on
+/// `2025-11-25`, and tools still load.
+///
+/// This is the case that matters most for existing deployments: a server that
+/// has moved on must not require the client to move with it.
+#[tokio::test]
+async fn the_default_handshake_against_a_dual_stack_server_negotiates_2025_11_25() {
+    let client = ().serve(spawn_dual_stack_server()).await.expect("connect");
+    let negotiated = client.peer_info().expect("peer info").protocol_version.clone();
+    assert_eq!(negotiated, ProtocolVersion::V_2025_11_25);
+
+    let ctx = Arc::new(TestContext { content: Content::new("user") }) as Arc<dyn ReadonlyContext>;
+    let tools = McpToolset::new(client).tools(ctx).await.expect("list tools");
+    assert_eq!(tools.len(), 1);
+}
+
+/// `Discover` reaches `2026-07-28` against a server that supports it.
+#[tokio::test]
+async fn discover_negotiates_2026_07_28_against_a_real_server() {
+    use rmcp::{ClientLifecycleMode, ClientServiceExt};
+
+    let client = ()
+        .serve_with_lifecycle(
+            spawn_dual_stack_server(),
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await
+        .expect("a 2026-07-28 server must accept the discover handshake");
+
+    let negotiated = client.peer_info().expect("peer info").protocol_version.clone();
+    assert_eq!(
+        negotiated,
+        ProtocolVersion::V_2026_07_28,
+        "Discover must settle on the new revision, not fall back"
+    );
+
+    let ctx = Arc::new(TestContext { content: Content::new("user") }) as Arc<dyn ReadonlyContext>;
+    let tools = McpToolset::new(client).tools(ctx).await.expect("list tools over discover");
+    assert_eq!(tools.len(), 1, "tools must load over the stateless path too");
+}
+
+/// `Auto` prefers the new handshake when the server answers the probe.
+#[tokio::test]
+async fn auto_uses_discover_when_the_server_supports_it() {
+    use rmcp::{ClientLifecycleMode, ClientServiceExt};
+
+    let client = ()
+        .serve_with_lifecycle(
+            spawn_dual_stack_server(),
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_11_25),
+            },
+        )
+        .await
+        .expect("Auto must succeed against a server that answers discover");
+
+    let negotiated = client.peer_info().expect("peer info").protocol_version.clone();
+    assert_eq!(
+        negotiated,
+        ProtocolVersion::V_2026_07_28,
+        "Auto must prefer the new revision when the server answers the probe"
+    );
+
+    let ctx = Arc::new(TestContext { content: Content::new("user") }) as Arc<dyn ReadonlyContext>;
+    let tools = McpToolset::new(client).tools(ctx).await.expect("list tools");
+    assert_eq!(tools.len(), 1);
+}
+
+/// A tool call over a `2026-07-28` connection returns its result inline.
+///
+/// Guards the `execute` inversion on the new revision, where the server is the
+/// party that decides whether a call becomes a task.
+#[tokio::test]
+async fn a_tool_call_over_2026_07_28_returns_its_result() {
+    use rmcp::{ClientLifecycleMode, ClientServiceExt};
+
+    let client = ()
+        .serve_with_lifecycle(
+            spawn_dual_stack_server(),
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await
+        .expect("connect over discover");
+
+    let ctx = Arc::new(TestContext { content: Content::new("user") }) as Arc<dyn ReadonlyContext>;
+    let tools = McpToolset::new(client).tools(ctx).await.expect("list tools");
+    let echo = tools.first().expect("one tool");
+    let output = echo
+        .execute(
+            Arc::new(SimpleToolContext::new("protocol-test")) as Arc<dyn adk_core::ToolContext>,
+            json!({ "text": "ping" }),
+        )
+        .await
+        .expect("the call must succeed over the new revision");
+
+    assert!(
+        output.to_string().contains("pong"),
+        "expected the server's content back, got {output}"
+    );
+}
+
+/// A server pinned to the oldest MCP revision, `2024-11-05`.
+///
+/// The dual-stack servers above accept the revision we ask for. This one cannot,
+/// so it exercises the other direction: the client must accept what an old
+/// server offers.
+#[derive(Clone, Default)]
+struct AncientServer;
+
+impl rmcp::ServerHandler for AncientServer {
+    fn get_info(&self) -> rmcp::model::ServerInfo {
+        let mut info =
+            rmcp::model::ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+                .with_server_info(Implementation::new("ancient-server", "0.1.0"));
+        info.protocol_version = ProtocolVersion::V_2024_11_05;
+        info
+    }
+
+    fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
+        std::borrow::Cow::Owned(vec![ProtocolVersion::V_2024_11_05])
+    }
+
+    async fn list_tools(
+        &self,
+        _params: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        Ok(ListToolsResult::with_all_items(vec![test_tool()]))
+    }
+}
+
+/// The client connects to a server that only knows `2024-11-05` and still
+/// loads its tools.
+#[tokio::test]
+async fn a_server_pinned_to_the_oldest_revision_still_works() {
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    tokio::spawn(async move {
+        if let Ok(running) = AncientServer.serve(server_io).await {
+            let _ = running.waiting().await;
+        }
+    });
+
+    let client = ().serve(client_io).await.expect("a 2024-11-05 server must still be reachable");
+    let negotiated = client.peer_info().expect("peer info").protocol_version.clone();
+    assert_eq!(negotiated, ProtocolVersion::V_2024_11_05);
+
+    let ctx = Arc::new(TestContext { content: Content::new("user") }) as Arc<dyn ReadonlyContext>;
+    let tools = McpToolset::new(client).tools(ctx).await.expect("list tools");
+    assert_eq!(tools.len(), 1);
 }
