@@ -689,11 +689,20 @@ impl<'a> PregelExecutor<'a> {
             }
         }
 
-        // Determine which nodes to execute (all if cache feature is disabled)
+        // Determine which nodes to execute (all if cache feature is disabled).
+        //
+        // Sorted so that a bounded dispatch admits nodes in a fixed order rather
+        // than whatever order the frontier happened to be built in.
         #[cfg(feature = "node-cache")]
-        let pending_for_execution = &nodes_to_execute;
+        let pending_for_execution = {
+            nodes_to_execute.sort();
+            &nodes_to_execute
+        };
         #[cfg(not(feature = "node-cache"))]
-        let pending_for_execution = &self.pending_nodes;
+        let pending_for_execution = {
+            self.pending_nodes.sort();
+            &self.pending_nodes
+        };
 
         // Execute all pending nodes in parallel
         let nodes: Vec<_> = pending_for_execution
@@ -733,8 +742,15 @@ impl<'a> PregelExecutor<'a> {
             })
             .collect();
 
-        let outputs: Vec<_> =
-            stream::iter(futures).buffer_unordered(pending_for_execution.len()).collect().await;
+        // Bound the dispatch. `buffer_unordered` polls futures in the order they
+        // are produced, and the frontier is sorted above, so admission order does
+        // not depend on which node finished first.
+        let concurrency = self
+            .graph
+            .max_concurrency
+            .map_or(pending_for_execution.len(), |limit| limit.min(pending_for_execution.len()))
+            .max(1);
+        let outputs: Vec<_> = stream::iter(futures).buffer_unordered(concurrency).collect().await;
 
         // Collect all updates and check for errors/interrupts
         let mut all_updates = Vec::new();

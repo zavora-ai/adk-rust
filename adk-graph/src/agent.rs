@@ -248,6 +248,7 @@ pub struct GraphAgentBuilder {
     interrupt_before: Vec<String>,
     interrupt_after: Vec<String>,
     recursion_limit: usize,
+    max_concurrency: Option<usize>,
     input_mapper: Option<InputMapper>,
     output_mapper: Option<OutputMapper>,
     before_callback: Option<BeforeAgentCallback>,
@@ -272,6 +273,7 @@ impl GraphAgentBuilder {
             interrupt_before: vec![],
             interrupt_after: vec![],
             recursion_limit: 50,
+            max_concurrency: None,
             input_mapper: None,
             output_mapper: None,
             before_callback: None,
@@ -396,6 +398,14 @@ impl GraphAgentBuilder {
     }
 
     /// Set recursion limit
+    /// Cap how many nodes execute concurrently within one super-step.
+    ///
+    /// See [`CompiledGraph::with_max_concurrency`](crate::graph::CompiledGraph::with_max_concurrency).
+    pub fn max_concurrency(mut self, limit: usize) -> Self {
+        self.max_concurrency = Some(limit.max(1));
+        self
+    }
+
     pub fn recursion_limit(mut self, limit: usize) -> Self {
         self.recursion_limit = limit;
         self
@@ -651,6 +661,7 @@ impl GraphAgentBuilder {
         compiled.interrupt_before = self.interrupt_before.into_iter().collect();
         compiled.interrupt_after = self.interrupt_after.into_iter().collect();
         compiled.recursion_limit = self.recursion_limit;
+        compiled.max_concurrency = self.max_concurrency;
         compiled.timeout_policies = self.timeout_policies;
         compiled.default_timeout = self.default_timeout;
         compiled.deferred_configs = self.deferred_configs;

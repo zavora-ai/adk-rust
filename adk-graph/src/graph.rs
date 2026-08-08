@@ -181,6 +181,7 @@ impl StateGraph {
             timeout_policies: HashMap::new(),
             default_timeout: None,
             deferred_configs: self.deferred_configs,
+            max_concurrency: None,
             #[cfg(feature = "node-cache")]
             cache_policies: HashMap::new(),
         })
@@ -301,6 +302,8 @@ pub struct CompiledGraph {
     pub(crate) default_timeout: Option<crate::timeout::TimeoutPolicy>,
     /// Deferred node configurations, keyed by node name.
     pub(crate) deferred_configs: HashMap<String, crate::deferred::DeferredNodeConfig>,
+    /// Ceiling on how many nodes execute at once. `None` runs the whole frontier.
+    pub(crate) max_concurrency: Option<usize>,
     /// Per-node cache policies, keyed by node name.
     #[cfg(feature = "node-cache")]
     pub(crate) cache_policies: HashMap<String, crate::cache::NodeCachePolicy>,
@@ -334,6 +337,19 @@ impl CompiledGraph {
     /// Set recursion limit for cycles
     pub fn with_recursion_limit(mut self, limit: usize) -> Self {
         self.recursion_limit = limit;
+        self
+    }
+
+    /// Cap how many nodes execute concurrently within one super-step.
+    ///
+    /// A wide fan-out otherwise dispatches its whole frontier at once, which can
+    /// exhaust a connection pool or trip a provider rate limit. Nodes beyond the
+    /// cap wait for a slot; the dispatch order is the frontier's, sorted, so it
+    /// does not depend on timing.
+    ///
+    /// Without this the frontier runs unbounded, which stays the default.
+    pub fn with_max_concurrency(mut self, limit: usize) -> Self {
+        self.max_concurrency = Some(limit.max(1));
         self
     }
 
