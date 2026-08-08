@@ -132,9 +132,10 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     println!("  called restock_warehouse directly, took {:?}", started.elapsed());
     println!("  result: {raw}");
-    println!(
-        "\n  The server answered with a task handle and the toolset polled\n           tasks/get until it completed. The marker in the text above comes from\n           the server's task branch, which it takes only for a client that\n           declared the extension."
-    );
+    println!("\n  The server answered with a task handle and the toolset polled");
+    println!("  tasks/get until it completed. The marker in the text above comes");
+    println!("  from the server's task branch, which it takes only for a client");
+    println!("  that declared the extension.");
 
     let Ok(api_key) = std::env::var("GOOGLE_API_KEY") else {
         println!("\nSet GOOGLE_API_KEY to run the agent against these tools.");
@@ -142,7 +143,10 @@ async fn main() -> anyhow::Result<()> {
     };
 
     println!("\n=== 5. An LlmAgent calling both tools ===\n");
-    let model = GeminiModel::new(&api_key, "gemini-2.5-flash")?;
+    let model_id = std::env::var("GEMINI_MODEL")
+        .unwrap_or_else(|_| "gemini-3.1-flash-lite-preview".to_string());
+    println!("  model: {model_id}\n");
+    let model = GeminiModel::new(&api_key, &model_id)?;
     let mut builder = LlmAgentBuilder::new("warehouse_agent")
         .description("Answers questions about warehouse stock.")
         .instruction(

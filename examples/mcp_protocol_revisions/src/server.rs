@@ -15,6 +15,9 @@
 //! The server never asks the client to use tasks. It decides per call.
 
 use rmcp::handler::server::router::tool::ToolRouter;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, CreateTaskResult,
@@ -43,6 +46,9 @@ pub struct RestockArgs {
 pub struct Warehouse {
     tool_router: ToolRouter<Warehouse>,
     tasks: TaskManager,
+    /// Real stock levels, so `count_stock` reflects what `restock_warehouse`
+    /// did. A stateless server makes the agent report a contradiction.
+    stock: Arc<Mutex<HashMap<String, u32>>>,
 }
 
 impl Default for Warehouse {
@@ -54,7 +60,11 @@ impl Default for Warehouse {
 #[tool_router]
 impl Warehouse {
     pub fn new() -> Self {
-        Self { tool_router: Self::tool_router(), tasks: TaskManager::new() }
+        Self {
+            tool_router: Self::tool_router(),
+            tasks: TaskManager::new(),
+            stock: Arc::new(Mutex::new(HashMap::from([("widgets".to_string(), 7)]))),
+        }
     }
 
     #[tool(description = "Count how many units of an item are in stock. Answers immediately.")]
@@ -62,7 +72,10 @@ impl Warehouse {
         &self,
         Parameters(StockArgs { item }): Parameters<StockArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(CallToolResult::success(vec![ContentBlock::text(format!("{item}: 7 units in stock"))]))
+        let units = self.stock.lock().expect("stock mutex").get(&item).copied().unwrap_or(0);
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "{item}: {units} units in stock"
+        ))]))
     }
 
     #[tool(description = "Restock an item. Takes about two seconds to complete.")]
@@ -71,9 +84,14 @@ impl Warehouse {
         Parameters(RestockArgs { item, units }): Parameters<RestockArgs>,
     ) -> Result<CallToolResult, McpError> {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let total = {
+            let mut stock = self.stock.lock().expect("stock mutex");
+            let entry = stock.entry(item.clone()).or_insert(0);
+            *entry += units;
+            *entry
+        };
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "{item}: added {units} units, now {} in stock",
-            7 + units
+            "{item}: added {units} units, now {total} in stock"
         ))]))
     }
 }
@@ -108,14 +126,21 @@ impl ServerHandler for Warehouse {
             ))
             .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
 
+            let stock = Arc::clone(&self.stock);
             let task = self.tasks.spawn(TaskOptions::default(), move |ctx| {
                 Box::pin(async move {
                     tokio::select! {
                         _ = ctx.cancelled() => Err(rmcp::task_manager::TaskExit::Cancelled),
                         _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
+                            let total = {
+                                let mut stock = stock.lock().expect("stock mutex");
+                                let entry = stock.entry(args.item.clone()).or_insert(0);
+                                *entry += args.units;
+                                *entry
+                            };
                             Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                                "{}: added {} units, now {} in stock (completed as a task)",
-                                args.item, args.units, 7 + args.units
+                                "{}: added {} units, now {total} in stock (completed as a task)",
+                                args.item, args.units
                             ))]))
                         }
                     }

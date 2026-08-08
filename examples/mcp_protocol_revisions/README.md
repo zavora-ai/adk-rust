@@ -18,6 +18,9 @@ cargo run --manifest-path examples/mcp_protocol_revisions/Cargo.toml --bin revis
 The agent section is skipped when `GOOGLE_API_KEY` is unset; everything before
 it still runs.
 
+The model defaults to `gemini-3.1-flash-lite-preview`. Override it with
+`GEMINI_MODEL`, for example `GEMINI_MODEL=gemini-3.1-pro-preview`.
+
 ## What it shows
 
 **1. The default handshake.** Connects with `ServiceExt::serve` and negotiates
