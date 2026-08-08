@@ -94,6 +94,6 @@ the server is an independently deployed service. Remote deployments also need
 authentication, request limits, session policy, observability, and an
 application-level health probe.
 
-See the official [`rmcp` documentation](https://docs.rs/rmcp/2.2.0/rmcp/) for
+See the official [`rmcp` documentation](https://docs.rs/rmcp/3.1.2/rmcp/) for
 server routers, resources, prompts, custom handlers, transports, authorization,
 and extension APIs.

@@ -19,7 +19,7 @@ adk-core = { path = "../../adk-core" }
 adk-rust = { path = "../../adk-rust", features = ["standard"] }
 adk-tool = { path = "../../adk-tool", features = ["mcp"] }
 adk-cli = { path = "../../adk-cli" }
-rmcp = { version = "2.2", features = [
+rmcp = { version = "3.1", features = [
     "server", "client",
     "transport-io", "transport-child-process",
     "macros", "schemars",

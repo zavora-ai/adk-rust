@@ -26,7 +26,7 @@ chrono.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
-rmcp = { version = "2.2", features = ["client"] }
+rmcp = { version = "3.1", features = ["client"] }
 uuid.workspace = true
 tracing.workspace = true
 

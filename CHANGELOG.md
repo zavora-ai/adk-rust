@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **MCP moves to the official `rmcp 3.1` SDK.** The client still advertises MCP
+  `2025-11-25`, so every existing server is unaffected: `rmcp 3.1` keeps
+  `ProtocolVersion::LATEST` at `2025-11-25`, and a `2026-07-28` server answers
+  the same handshake. `2026-07-28` adds a stateless `server/discover` handshake,
+  now selectable per connection through `adk_tool::mcp::ClientLifecycleMode`. It
+  stays opt-in because the SDK falls back to the legacy handshake only when a
+  server refuses the probe with `METHOD_NOT_FOUND`, and applies no timeout to it.
+  A new `adk-tool/tests/mcp_protocol_compatibility_tests.rs` holds the contract:
+  the default path must send `initialize` first and advertise `2025-11-25`.
+  Closes #552.
+
+### Breaking
+
+- **`ConnectionRefresher::call_tool` and `SimpleClient::call_tool` return
+  `CallToolResponse`** instead of `CallToolResult`. SEP-2663 lets a server answer
+  `tools/call` with a task, and SEP-2322 with a request for more input, so the
+  response now says which of the three happened. Both wrappers moved to rmcp's
+  `call_tool_once`: the `call_tool` helper fulfils input rounds through the local
+  handler on its own and rejects a task response outright, which would break every
+  server that materializes one. `McpToolset::execute` handles all three cases
+  internally, so agents built on `McpToolset` need no change.
+- **A tool no longer declares its own task contract.** SEP-2663 removed the
+  per-tool signal, so `Tool::is_long_running` on an MCP tool now answers per
+  connection: true when tasks are enabled and the server negotiated them. A
+  `CodeActAgent` that suspends on long-running tools suspends for any tool on a
+  task-capable server rather than only those that declared support.
+- **`rmcp::model::SamplingMessageContent` is now `SamplingMessageContentBlock`**
+  under the `mcp-sampling` feature. `adk-tool --features mcp-sampling` joins the
+  PR-tier feature-coverage matrix; nothing in the workspace enabled it, so its
+  only cover was an example crate.
+
 ### Fixed
 
 - **`adk-memory --features database-memory` compiles again.** `pgvector` accepts

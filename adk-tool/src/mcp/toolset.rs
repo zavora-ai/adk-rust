@@ -7,7 +7,7 @@
 // and exposes them as ADK-compatible tools for use with LlmAgent.
 
 use super::reconnect::{DEFAULT_RETRY_TOOL_CALLS, should_retry_mcp_operation};
-use super::task::{McpTaskConfig, TaskError, TaskStatus};
+use super::task::{McpTaskConfig, TaskError};
 use super::{ConnectionFactory, RefreshConfig, should_refresh_connection};
 use adk_core::{AdkError, ReadonlyContext, Result, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
@@ -15,12 +15,11 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rmcp::{
     RoleClient,
     model::{
-        CallToolRequest, CallToolRequestParams, CancelTaskParams, CancelTaskRequest, ClientRequest,
-        CompletionContext, CompletionInfo, ContentBlock, ErrorCode, GetPromptRequestParams,
-        GetPromptResult, GetTaskParams, GetTaskPayloadParams, GetTaskPayloadRequest,
-        GetTaskRequest, Prompt, ReadResourceRequestParams, Resource, ResourceContents,
-        ResourceTemplate, ServerResult, SubscribeRequestParams, TaskMetadata, TaskSupport,
-        ToolAnnotations, UnsubscribeRequestParams,
+        CallToolRequestParams, CallToolResponse, CancelTaskParams, CancelTaskRequest,
+        ClientRequest, CompletionContext, CompletionInfo, ContentBlock, ErrorCode,
+        GetPromptRequestParams, GetPromptResult, GetTaskParams, GetTaskRequest, Prompt,
+        ReadResourceRequestParams, Resource, ResourceContents, ResourceTemplate, ServerResult,
+        SubscribeRequestParams, TaskPayload, ToolAnnotations, UnsubscribeRequestParams,
     },
     service::RunningService,
 };
@@ -473,6 +472,10 @@ where
             .map_err(|e| AdkError::tool(format!("Failed to refresh MCP connection: {e}")))?;
 
         for uri in self.resource_subscriptions.read().await.iter() {
+            // `subscriptions/listen` replaces this in 2026-07-28, but we negotiate
+            // 2025-11-25, and `listen` also stops routing notifications through
+            // `ClientHandler`, which this crate's resource callbacks rely on.
+            #[allow(deprecated)]
             new_client.subscribe(SubscribeRequestParams::new(uri.clone())).await.map_err(
                 |error| {
                     AdkError::tool(format!(
@@ -630,6 +633,10 @@ where
     /// Subscribe to change notifications for a resource URI.
     pub async fn subscribe_resource(&self, uri: &str) -> Result<()> {
         let client = self.client.lock().await;
+        // `subscriptions/listen` replaces this in 2026-07-28, but we negotiate
+        // 2025-11-25, and `listen` also stops routing notifications through
+        // `ClientHandler`, which this crate's resource callbacks rely on.
+        #[allow(deprecated)]
         client.subscribe(SubscribeRequestParams::new(uri)).await.map_err(|error| {
             AdkError::tool(format!("failed to subscribe to MCP resource '{uri}': {error}"))
         })?;
@@ -640,6 +647,8 @@ where
     /// Remove a resource subscription created by [`subscribe_resource`](Self::subscribe_resource).
     pub async fn unsubscribe_resource(&self, uri: &str) -> Result<()> {
         let client = self.client.lock().await;
+        // Paired with `subscribe_resource`; see the note there.
+        #[allow(deprecated)]
         client.unsubscribe(UnsubscribeRequestParams::new(uri)).await.map_err(|error| {
             AdkError::tool(format!("failed to unsubscribe MCP resource '{uri}': {error}"))
         })?;
@@ -708,10 +717,7 @@ where
         let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
         let server_supports_tasks = {
             let client = self.client.lock().await;
-            client
-                .peer_info()
-                .and_then(|info| info.capabilities.tasks.as_ref().cloned())
-                .is_some_and(|tasks| tasks.supports_tools_call())
+            client.peer_info().is_some_and(|info| info.capabilities.supports_tasks())
         };
 
         for mcp_tool in mcp_tools {
@@ -731,8 +737,6 @@ where
                 schema = ?input_schema,
                 "registering MCP tool with raw schema"
             );
-            let task_support = mcp_tool.task_support();
-
             let adk_tool = McpTool {
                 name: tool_name,
                 description: mcp_tool.description.map(|d| d.to_string()).unwrap_or_default(),
@@ -743,7 +747,6 @@ where
                 refresh_config: self.refresh_config.clone(),
                 retry_tool_calls: self.retry_tool_calls,
                 annotations: mcp_tool.annotations,
-                task_support,
                 server_supports_tasks,
                 task_config: self.task_config.clone(),
             };
@@ -935,8 +938,6 @@ where
     retry_tool_calls: bool,
     /// Safety hints published by the MCP server for this tool.
     annotations: Option<ToolAnnotations>,
-    /// Per-tool task contract published by the MCP server.
-    task_support: TaskSupport,
     /// Whether the negotiated server capabilities permit task-augmented tool calls.
     server_supports_tasks: bool,
     /// Task configuration
@@ -964,10 +965,15 @@ where
         Ok(true)
     }
 
+    /// Sends `tools/call` and returns the response envelope unchanged.
+    ///
+    /// Uses `call_tool_once` rather than `call_tool`: the latter fulfils SEP-2322
+    /// `input_required` rounds on its own and rejects a task response outright,
+    /// which would break every server that materializes a task.
     async fn call_tool_with_retry(
         &self,
         params: CallToolRequestParams,
-    ) -> Result<rmcp::model::CallToolResult> {
+    ) -> Result<CallToolResponse> {
         let has_connection_factory = self.connection_factory.is_some();
         let (_, metadata_allows_replay) = mcp_tool_safety(self.annotations.as_ref());
         let replay_allowed = self.retry_tool_calls || metadata_allows_replay;
@@ -976,7 +982,7 @@ where
         loop {
             let call_result = {
                 let client = self.client.lock().await;
-                client.call_tool(params.clone()).await.map_err(|e| e.to_string())
+                client.call_tool_once(params.clone()).await.map_err(|e| e.to_string())
             };
 
             match call_result {
@@ -1046,29 +1052,6 @@ where
         }
     }
 
-    async fn fetch_task_result(&self, task_id: &str) -> std::result::Result<Value, TaskError> {
-        let request = ClientRequest::GetTaskPayloadRequest(GetTaskPayloadRequest::new(
-            GetTaskPayloadParams::new(task_id),
-        ));
-        match self.send_task_request(request).await? {
-            ServerResult::CallToolResult(result) => {
-                if result.is_error == Some(true) {
-                    return Err(TaskError::TaskFailed {
-                        task_id: task_id.to_string(),
-                        error: call_tool_result_to_adk_value(&result)
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|error| error),
-                    });
-                }
-                call_tool_result_to_adk_value(&result).map_err(TaskError::PollFailed)
-            }
-            ServerResult::CustomResult(result) => Ok(result.0),
-            response => Err(TaskError::PollFailed(format!(
-                "tasks/result returned an unexpected response: {response:?}"
-            ))),
-        }
-    }
-
     /// Poll a protocol-level MCP task until completion or timeout.
     async fn poll_task(
         &self,
@@ -1076,7 +1059,7 @@ where
     ) -> std::result::Result<Value, TaskError> {
         let task_id = initial_task.task_id;
         let mut poll_interval_ms =
-            initial_task.poll_interval.unwrap_or(self.task_config.poll_interval_ms).max(1);
+            initial_task.poll_interval_ms.unwrap_or(self.task_config.poll_interval_ms).max(1);
         let start = Instant::now();
         let mut attempts = 0u32;
 
@@ -1102,7 +1085,7 @@ where
             debug!(task_id, attempt = attempts, "polling MCP task status");
             let request =
                 ClientRequest::GetTaskRequest(GetTaskRequest::new(GetTaskParams::new(&task_id)));
-            let task = match self.send_task_request(request).await? {
+            let detailed = match self.send_task_request(request).await? {
                 ServerResult::GetTaskResult(result) => result.task,
                 response => {
                     return Err(TaskError::PollFailed(format!(
@@ -1110,25 +1093,43 @@ where
                     )));
                 }
             };
-            poll_interval_ms = task.poll_interval.unwrap_or(poll_interval_ms).max(1);
+            let (task, payload) = (detailed.task, detailed.payload);
+            poll_interval_ms = task.poll_interval_ms.unwrap_or(poll_interval_ms).max(1);
 
-            match task.status {
-                TaskStatus::Completed => {
+            match payload {
+                // SEP-2663 inlines the result in the status response, so a
+                // completed task needs no second round trip.
+                TaskPayload::Completed { result } => {
                     debug!(task_id, "MCP task completed successfully");
-                    return self.fetch_task_result(&task_id).await;
+                    let call_result: rmcp::model::CallToolResult =
+                        serde_json::from_value(Value::Object(result)).map_err(|error| {
+                            TaskError::PollFailed(format!(
+                                "tasks/get returned a result that is not a CallToolResult: {error}"
+                            ))
+                        })?;
+                    if call_result.is_error == Some(true) {
+                        return Err(TaskError::TaskFailed {
+                            task_id,
+                            error: call_tool_result_to_adk_value(&call_result)
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|error| error),
+                        });
+                    }
+                    return call_tool_result_to_adk_value(&call_result)
+                        .map_err(TaskError::PollFailed);
                 }
-                TaskStatus::Failed => {
+                TaskPayload::Failed { error } => {
                     return Err(TaskError::TaskFailed {
                         task_id,
                         error: task
                             .status_message
-                            .unwrap_or_else(|| "remote MCP task failed".to_string()),
+                            .unwrap_or_else(|| Value::Object(error).to_string()),
                     });
                 }
-                TaskStatus::Cancelled => {
+                TaskPayload::Cancelled => {
                     return Err(TaskError::Cancelled(task_id));
                 }
-                TaskStatus::InputRequired => {
+                TaskPayload::InputRequired { .. } => {
                     return Err(TaskError::InputRequired {
                         task_id,
                         message: task.status_message.unwrap_or_else(|| {
@@ -1136,7 +1137,7 @@ where
                         }),
                     });
                 }
-                TaskStatus::Working => {
+                TaskPayload::Working => {
                     debug!(task_id, "MCP task is still working");
                 }
                 _ => {
@@ -1162,8 +1163,11 @@ where
         &self.description
     }
 
+    /// SEP-2663 removed the per-tool task contract, so the server decides per
+    /// call whether to materialize a task. The remaining signal is therefore
+    /// per-connection: any call may return a task when both sides allow it.
     fn is_long_running(&self) -> bool {
-        self.task_support != TaskSupport::Forbidden
+        self.task_config.enable_tasks && self.server_supports_tasks
     }
 
     fn is_read_only(&self) -> bool {
@@ -1183,76 +1187,43 @@ where
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        // Determine if we should use task mode
-        let use_task_mode = match self.task_support {
-            TaskSupport::Required => {
-                if !self.server_supports_tasks {
-                    return Err(AdkError::tool(format!(
-                        "MCP tool '{}' requires task execution, but the server did not negotiate tasks.requests.tools.call",
-                        self.name
-                    )));
-                }
-                true
+        let mut params = CallToolRequestParams::new(self.name.clone());
+        if !(args.is_null() || args == json!({})) {
+            match args {
+                Value::Object(map) => params = params.with_arguments(map),
+                _ => return Err(AdkError::tool("Tool arguments must be an object")),
             }
-            TaskSupport::Optional => self.task_config.enable_tasks && self.server_supports_tasks,
-            TaskSupport::Forbidden => false,
-        };
-
-        if use_task_mode {
-            debug!(tool = self.name, "Executing tool in task mode (long-running)");
-
-            let mut params = CallToolRequestParams::new(self.name.clone());
-            if !(args.is_null() || args == json!({})) {
-                match args {
-                    Value::Object(map) => params = params.with_arguments(map),
-                    _ => return Err(AdkError::tool("Tool arguments must be an object")),
-                }
-            }
-            params = params.with_task(TaskMetadata::new());
-            let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
-            let task = match self.send_task_request(request).await {
-                Ok(ServerResult::CreateTaskResult(result)) => result.task,
-                Ok(response) => {
-                    return Err(AdkError::tool(format!(
-                        "MCP task call returned an unexpected response: {response:?}"
-                    )));
-                }
-                Err(error) => return Err(AdkError::tool(error.to_string())),
-            };
-
-            debug!(tool = self.name, task_id = task.task_id, "MCP task created");
-
-            let result = self
-                .poll_task(task)
-                .await
-                .map_err(|e| AdkError::tool(format!("Task execution failed: {e}")))?;
-
-            return Ok(result);
         }
 
-        // Standard synchronous execution
-        let result = self
-            .call_tool_with_retry({
-                let mut params = CallToolRequestParams::new(self.name.clone());
-                if !(args.is_null() || args == json!({})) {
-                    match args {
-                        Value::Object(map) => {
-                            params = params.with_arguments(map);
-                        }
-                        _ => {
-                            return Err(AdkError::tool("Tool arguments must be an object"));
-                        }
-                    }
-                }
-                params
-            })
-            .await?;
+        // SEP-2663 moved the task decision to the server, so one request shape
+        // covers both modes and the response says which one happened.
+        let result = match self.call_tool_with_retry(params).await? {
+            CallToolResponse::Complete(result) => result,
+            CallToolResponse::Task(created) => {
+                let task_id = created.task.task_id.clone();
+                debug!(tool = self.name, task_id, "MCP server materialized a task");
+                return self
+                    .poll_task(created.task)
+                    .await
+                    .map_err(|error| AdkError::tool(format!("Task execution failed: {error}")));
+            }
+            CallToolResponse::InputRequired(_) => {
+                return Err(AdkError::tool(format!(
+                    "MCP tool '{}' asked for mid-call input (SEP-2322), which this client does not \
+                     drive yet. Configure the server to complete the call in one round.",
+                    self.name
+                )));
+            }
+            response => {
+                return Err(AdkError::tool(format!(
+                    "MCP tool '{}' returned an unsupported response: {response:?}",
+                    self.name
+                )));
+            }
+        };
 
-        // Check for error response
         if result.is_error.unwrap_or(false) {
             let mut error_msg = format!("MCP tool '{}' execution failed", self.name);
-
-            // Extract error details from content
             for content in &result.content {
                 if let Some(text_content) = content.as_text() {
                     error_msg.push_str(": ");
@@ -1260,7 +1231,6 @@ where
                     break;
                 }
             }
-
             return Err(AdkError::tool(error_msg));
         }
 

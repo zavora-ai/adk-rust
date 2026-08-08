@@ -14,8 +14,7 @@ use std::sync::Arc;
 use futures::FutureExt;
 use rmcp::model::{
     ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationCapability,
-    ElicitationResponseNotificationParam, ElicitationSchema, FormElicitationCapability,
-    UrlElicitationCapability,
+    ElicitationSchema, FormElicitationCapability, UrlElicitationCapability,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleClient};
 use serde_json::Value;
@@ -204,7 +203,7 @@ impl rmcp::handler::client::ClientHandler for AdkClientHandler {
         _context: RequestContext<RoleClient>,
     ) -> Result<rmcp::model::CreateMessageResult, rmcp::ErrorData> {
         use crate::sampling::{SamplingContent, SamplingMessage, SamplingRequest};
-        use rmcp::model::{CreateMessageResult, Role, SamplingMessageContent};
+        use rmcp::model::{CreateMessageResult, Role, SamplingMessageContentBlock};
 
         let Some(ref sampling_handler) = self.sampling_handler else {
             return Err(rmcp::ErrorData::new(
@@ -228,10 +227,10 @@ impl rmcp::handler::client::ClientHandler for AdkClientHandler {
                     .content
                     .first()
                     .and_then(|c| match c {
-                        SamplingMessageContent::Text(t) => {
+                        SamplingMessageContentBlock::Text(t) => {
                             Some(SamplingContent::text(t.text.clone()))
                         }
-                        SamplingMessageContent::Image(img) => {
+                        SamplingMessageContentBlock::Image(img) => {
                             Some(SamplingContent::image(img.data.clone(), img.mime_type.clone()))
                         }
                         _ => None,
@@ -336,14 +335,6 @@ impl rmcp::handler::client::ClientHandler for AdkClientHandler {
                 }
             }
         }
-    }
-
-    async fn on_url_elicitation_notification_complete(
-        &self,
-        _params: ElicitationResponseNotificationParam,
-        _context: NotificationContext<RoleClient>,
-    ) {
-        tracing::debug!("received URL elicitation completion notification");
     }
 
     async fn on_resource_updated(

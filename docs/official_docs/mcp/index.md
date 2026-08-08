@@ -6,7 +6,9 @@ resources, prompt templates, and argument completion. The client discovers that
 catalog and communicates through negotiated protocol methods rather than a
 private integration.
 
-ADK-Rust 2 uses the official `rmcp 2.2` SDK and MCP `2025-11-25` types.
+ADK-Rust 2 uses the official `rmcp 3.1` SDK. The client negotiates MCP
+`2025-11-25` by default and reaches `2026-07-28` servers through their legacy
+handshake. See [rmcp compatibility](../tools/mcp-tools.md#rmcp-compatibility).
 
 ## Where ADK-Rust fits
 

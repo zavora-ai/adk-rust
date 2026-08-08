@@ -151,7 +151,7 @@ spends the major version on the breakage that had accumulated since 1.0.0.
 
 | Area | Change |
 |---|---|
-| MCP | Official `rmcp 2.2` SDK, protocol `2025-11-25` |
+| MCP | Official `rmcp 3.1` SDK, advertises protocol `2025-11-25` |
 | ACP | Official `agent-client-protocol` 1.2; `PermissionDecision::Allow` split into `AllowOnce`/`AllowAlways`/`Select` |
 | Tool authorization | `RunConfig` gained an async `ToolConfirmationHandler`; decisions key on function-call ID |
 | Realtime | `ClientEvent`/`ServerEvent` became `#[non_exhaustive]` so future protocol events are additive |

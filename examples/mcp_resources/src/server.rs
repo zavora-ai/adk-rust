@@ -16,9 +16,11 @@ use rmcp::{
     ErrorData as McpError, ServerHandler,
     handler::server::router::tool::ToolRouter,
     model::{
-        GetPromptRequestParams, GetPromptResult, ListPromptsResult, ListResourcesResult,
+        GetPromptRequestParams, GetPromptResponse, GetPromptResult, ListPromptsResult,
+        ListResourcesResult,
         PaginatedRequestParams, Prompt, PromptArgument, PromptMessage, ReadResourceRequestParams,
-        ReadResourceResult, Resource, ResourceContents, ResourceUpdatedNotificationParam, Role,
+        ReadResourceResponse, ReadResourceResult, Resource, ResourceContents,
+        ResourceUpdatedNotificationParam, Role,
         ServerCapabilities, ServerInfo,
     },
     service::{RequestContext, RoleServer},
@@ -108,10 +110,10 @@ impl ServerHandler for ResourceServer {
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
+    ) -> Result<ReadResourceResponse, McpError> {
         if request.uri == POLICY_URI {
             let text = self.policy.lock().expect("policy mutex poisoned").clone();
-            Ok(ReadResourceResult::new(vec![ResourceContents::text(text, POLICY_URI)]))
+            Ok(ReadResourceResult::new(vec![ResourceContents::text(text, POLICY_URI)]).into())
         } else {
             Err(McpError::resource_not_found(
                 "unknown resource URI",
@@ -140,7 +142,7 @@ impl ServerHandler for ResourceServer {
         &self,
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, McpError> {
+    ) -> Result<GetPromptResponse, McpError> {
         if request.name != "review_pr" {
             return Err(McpError::invalid_params("unknown prompt name", None));
         }
@@ -156,7 +158,8 @@ impl ServerHandler for ResourceServer {
              When asked, review the pull request titled: {pr_title}"
         );
         Ok(GetPromptResult::new(vec![PromptMessage::new_text(Role::User, text)])
-            .with_description("Policy-aware pull-request review prompt"))
+            .with_description("Policy-aware pull-request review prompt")
+            .into())
     }
 
     async fn subscribe(

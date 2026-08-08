@@ -36,7 +36,7 @@ tracing = { workspace = true }
 adk-runner = { workspace = true, optional = true }
 adk-session = { workspace = true, optional = true }
 adk-tool = { workspace = true, features = ["mcp"], optional = true }
-rmcp = { version = "2.2", features = ["client", "transport-child-process"], optional = true }
+rmcp = { version = "3.1", features = ["client", "transport-child-process"], optional = true }
 tokio-util = { version = "0.7", features = ["rt"], optional = true }
 uuid = { workspace = true, optional = true }
 async-stream = { workspace = true, optional = true }

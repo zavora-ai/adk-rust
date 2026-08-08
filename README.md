@@ -191,7 +191,7 @@ Built-in tools:
 
 **MCP Integration**: Connect agents to MCP tools, resources, prompts, completion,
 subscriptions, elicitation, and negotiated long-running tasks through the
-official `rmcp 2.2` SDK. Use the dynamic local-server registry to add, update,
+official `rmcp 3.1` SDK. Use the dynamic local-server registry to add, update,
 enable, disable, persist, monitor, and restart stdio servers while an application
 is running. See the [MCP guide](docs/official_docs/tools/mcp-tools.md).
 
@@ -1158,7 +1158,7 @@ The v2.0.0 contributors are credited at the top of this README. Earlier cycles:
 - **Coding agents** — `adk-devtools` (`read_file`/`write_file`/`edit_file`/`glob`/`grep`/`bash` over a sandboxed `Workspace`), the `CodingAgent` harness, and native `code` / `goal` / `ultracode` CLI commands — `goal` loops plan → act → verify and is durable and resumable.
 - **CodeAct** — `CodeAgent` (`codeact` feature) writes Python instead of emitting tool calls, over a pluggable `CodeRuntime` seam; the Monty-backed Python runtime ships in-repo as `adk-codeact-monty`.
 - **Governed computer use** — `adk-computer-use`: a deterministic graph over `computer-use-mcp` with digest-bound approval interrupts, single-executor mutation, and tamper-evident receipts.
-- **Official protocol SDKs** — MCP on `rmcp 2.2` (protocol `2025-11-25`) with dynamic server management; ACP on `agent-client-protocol` 1.2 with exact capability publication.
+- **Official protocol SDKs** — MCP on `rmcp 3.1` (advertising protocol `2025-11-25`, reaching `2026-07-28` servers) with dynamic server management; ACP on `agent-client-protocol` 1.2 with exact capability publication.
 - **Live tool authorization** — async tool confirmation keyed by function-call ID, resolved while the run is in flight.
 - **Composable template system** — 12 templates, 9 add-ons, 5 enterprise patterns via `cargo adk new --addon`, plus `cargo adk build` for compile-without-deploy verification.
 - **A2A simple scaffolding** — `A2aServer::quick_start`, `A2aServer::builder`, and `cargo adk new --template a2a-server`.

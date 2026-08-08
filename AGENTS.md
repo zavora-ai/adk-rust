@@ -241,7 +241,7 @@ adk-anthropic/   Dedicated Anthropic API client: streaming, adaptive thinking, p
                  multiagent orchestration, file mounting, self-hosted environments.
                  Files API (`files` feature): upload, download, list, get, delete.
 adk-tool/        Tool system: FunctionTool, StatefulTool, SimpleToolContext, MCP integration
-                 (rmcp 2.2), McpServerManager (lifecycle, health, auto-restart), MCP Resource
+                 (rmcp 3.1), McpServerManager (lifecycle, health, auto-restart), MCP Resource
                  API, MCP Elicitation, Google Search, built-in tool wrappers (Gemini/OpenAI/
                  Anthropic), Slack/BigQuery/Spanner toolsets
 adk-runner/      Agent execution runtime with event streaming, RunnerConfigBuilder (typestate),

@@ -10,7 +10,7 @@ publish = false
 adk-core = { path = "../../adk-core" }
 adk-tool = { path = "../../adk-tool", features = ["mcp"] }
 anyhow = "1.0"
-rmcp = { version = "2.2", features = ["transport-io", "schemars"] }
+rmcp = { version = "3.1", features = ["transport-io", "schemars"] }
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.40", features = ["full"] }
 serde_json = "1.0"

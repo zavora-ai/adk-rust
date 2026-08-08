@@ -21,8 +21,8 @@ elicitation, and the negotiated task lifecycle. For MCP server authoring and
 advanced protocol work, ADK-Rust re-exports the exact `rmcp` SDK version it
 uses.
 
-ADK-Rust 2 currently uses `rmcp 2.2`, the official Rust SDK aligned with the
-MCP `2025-11-25` specification.
+ADK-Rust 2 uses `rmcp 3.1`, the official Rust SDK. The client advertises MCP
+`2025-11-25` and connects to `2026-07-28` servers over their legacy handshake.
 
 ## Architecture
 
@@ -331,5 +331,5 @@ These limits are stated so that deployment decisions remain explicit.
 
 - [MCP specification 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25)
 - [Official Rust SDK (`rmcp`)](https://github.com/modelcontextprotocol/rust-sdk)
-- [`rmcp 2.2` API documentation](https://docs.rs/rmcp/2.2.0/rmcp/)
+- [`rmcp 3.1` API documentation](https://docs.rs/rmcp/3.1.2/rmcp/)
 - [Provider-aware schema normalization](schema-normalization.md)

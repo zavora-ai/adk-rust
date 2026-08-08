@@ -415,19 +415,58 @@ All composition utilities implement `Toolset` and work with any `Toolset` implem
 
 ## rmcp compatibility
 
-ADK-Rust 2 uses `rmcp 2.2`, the official Rust SDK aligned with MCP
-`2025-11-25`. `McpToolset::new(client)` remains the primary adapter. Advanced
-server authoring, transports, protocol extensions, and SDK types are available
-through `adk_tool::mcp::rmcp`, keeping them on the same version used internally.
+ADK-Rust 2 uses `rmcp 3.1`, the official Rust SDK. `McpToolset::new(client)`
+remains the primary adapter. Advanced server authoring, transports, protocol
+extensions, and SDK types are available through `adk_tool::mcp::rmcp`, keeping
+them on the same version used internally.
+
+### Protocol revisions
+
+The client advertises MCP `2025-11-25`, the same revision ADK-Rust 2 has always
+sent. A `2026-07-28` server still answers that handshake, so one client reaches
+both generations of server and no existing configuration changes behaviour.
+
+`2026-07-28` also adds a stateless `server/discover` handshake. It is opt-in,
+because a server that predates it is free to refuse an unknown method with
+something other than `METHOD_NOT_FOUND`, and the SDK treats only that one code
+as proof of a legacy peer. Select it per connection:
+
+| Mode | Sends first | Against an older server |
+|------|-------------|-------------------------|
+| `Initialize` (default) | `initialize` | Works |
+| `Auto` | `server/discover` | Falls back only on `METHOD_NOT_FOUND` |
+| `Discover` | `server/discover` | Fails; no fallback |
+
+```rust,ignore
+use adk_tool::mcp::{AdkClientHandler, ClientLifecycleMode, ClientServiceExt, McpToolset};
+use rmcp::model::ProtocolVersion;
+
+let client = AdkClientHandler::new(handler)
+    .serve_with_lifecycle(
+        transport,
+        ClientLifecycleMode::Auto {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            legacy_version: Some(ProtocolVersion::V_2025_11_25),
+        },
+    )
+    .await?;
+let toolset = McpToolset::new(client);
+```
+
+### Tasks
+
+SEP-2663 replaced the experimental task design. A tool no longer declares
+whether it supports task execution; the server decides per call, and the client
+reads the response to find out. `Tool::is_long_running` therefore reports per
+connection rather than per tool: it is true when tasks are enabled and the server
+negotiated them.
 
 Sampling, roots, and logging are deprecated upstream by SEP-2577. The
 `mcp-sampling` feature exists for compatible deployments and should not be the
 default design for a new system.
 
-When migrating code that imports `rmcp` types directly, align it to `rmcp 2.2`
-or import the SDK through `adk_tool::mcp::rmcp`. MCP 2.2 renamed several public
-content and elicitation types, so downstream type annotations may require
-updates even when `McpToolset::new(client)` itself is unchanged.
+When migrating code that imports `rmcp` types directly, align it to `rmcp 3.1`
+or import the SDK through `adk_tool::mcp::rmcp`.
 
 ## Related Crates
 

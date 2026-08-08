@@ -11,7 +11,7 @@
 
 use rmcp::{
     RoleClient,
-    model::{CallToolRequestParams, CallToolResult, Tool as McpTool},
+    model::{CallToolRequestParams, CallToolResponse, Tool as McpTool},
     service::RunningService,
 };
 use std::sync::Arc;
@@ -168,10 +168,17 @@ where
 /// let tools = refresher.list_tools().await?;
 ///
 /// // Tool calls are not replayed unless the caller explicitly opts in.
-/// let result = refresher
+/// // The server chooses whether to answer inline or with a task, so the
+/// // caller reads the response to find out which happened.
+/// let response = refresher
 ///     .with_tool_call_retries()
 ///     .call_tool(params)
-///     .await?;
+///     .await?
+///     .value;
+/// match response {
+///     CallToolResponse::Complete(result) => println!("{result:?}"),
+///     other => println!("not a plain result: {other:?}"),
+/// }
 /// ```
 pub struct ConnectionRefresher<S, F>
 where
@@ -380,7 +387,7 @@ where
     pub async fn call_tool(
         &self,
         params: CallToolRequestParams,
-    ) -> Result<RetryResult<CallToolResult>, String> {
+    ) -> Result<RetryResult<CallToolResponse>, String> {
         // Ensure we have a connection
         self.ensure_connected().await?;
 
@@ -388,7 +395,7 @@ where
         {
             let guard = self.client.lock().await;
             if let Some(ref client) = *guard {
-                match client.call_tool(params.clone()).await {
+                match client.call_tool_once(params.clone()).await {
                     Ok(result) => return Ok(RetryResult::ok(result)),
                     Err(e) => {
                         let error_str = e.to_string();
@@ -433,7 +440,7 @@ where
             // Retry operation
             let guard = self.client.lock().await;
             if let Some(ref client) = *guard {
-                match client.call_tool(params.clone()).await {
+                match client.call_tool_once(params.clone()).await {
                     Ok(result) => {
                         if self.config.log_reconnections {
                             debug!(attempt = attempt, tool = %params.name, "call_tool succeeded after reconnection");
@@ -452,7 +459,7 @@ where
         // Final attempt
         let guard = self.client.lock().await;
         if let Some(ref client) = *guard {
-            client.call_tool(params).await.map(RetryResult::ok).map_err(|e| e.to_string())
+            client.call_tool_once(params).await.map(RetryResult::ok).map_err(|e| e.to_string())
         } else {
             Err("No MCP client available".to_string())
         }
@@ -514,9 +521,12 @@ where
     }
 
     /// Call a tool on the MCP server.
-    pub async fn call_tool(&self, params: CallToolRequestParams) -> Result<CallToolResult, String> {
+    pub async fn call_tool(
+        &self,
+        params: CallToolRequestParams,
+    ) -> Result<CallToolResponse, String> {
         let client = self.client.lock().await;
-        client.call_tool(params).await.map_err(|e| e.to_string())
+        client.call_tool_once(params).await.map_err(|e| e.to_string())
     }
 
     /// Get the cancellation token.
