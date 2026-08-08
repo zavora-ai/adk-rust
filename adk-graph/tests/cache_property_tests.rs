@@ -28,7 +28,7 @@ fn arb_json_value() -> impl Strategy<Value = Value> {
         any::<bool>().prop_map(Value::from),
         any::<i64>().prop_map(Value::from),
         any::<f64>().prop_filter("must be finite", |f| f.is_finite()).prop_map(Value::from),
-        "[a-zA-Z0-9 ]{0,30}".prop_map(|s| Value::from(s)),
+        "[a-zA-Z0-9 ]{0,30}".prop_map(Value::from),
         Just(Value::Null),
     ]
 }

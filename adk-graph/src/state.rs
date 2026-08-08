@@ -221,6 +221,15 @@ pub struct Checkpoint {
     pub metadata: HashMap<String, Value>,
     /// Creation timestamp
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// The node whose static interrupt produced this checkpoint.
+    ///
+    /// A static interrupt is raised before the node runs, so the checkpoint holds
+    /// a frontier that still contains it. Without this marker the resumed run
+    /// reaches the same conclusion and raises the same interrupt, and the node
+    /// never executes. The executor clears the marker once that node has run, so
+    /// a cycle returning to the same gate asks again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleared_interrupt: Option<String>,
 }
 
 impl Checkpoint {
@@ -234,7 +243,14 @@ impl Checkpoint {
             pending_nodes,
             metadata: HashMap::new(),
             created_at: chrono::Utc::now(),
+            cleared_interrupt: None,
         }
+    }
+
+    /// Record the node whose static interrupt produced this checkpoint.
+    pub fn with_cleared_interrupt(mut self, node: impl Into<String>) -> Self {
+        self.cleared_interrupt = Some(node.into());
+        self
     }
 
     /// Add metadata to the checkpoint

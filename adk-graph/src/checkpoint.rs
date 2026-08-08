@@ -106,13 +106,21 @@ impl SqliteCheckpointer {
                 step INTEGER NOT NULL,
                 pending_nodes TEXT NOT NULL,
                 metadata TEXT,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                cleared_interrupt TEXT
             )
             "#,
         )
         .execute(&pool)
         .await
         .map_err(|e| GraphError::CheckpointError(e.to_string()))?;
+
+        // A database created before `cleared_interrupt` existed keeps its old
+        // shape under CREATE TABLE IF NOT EXISTS, so add the column separately
+        // and ignore the duplicate-column error on a database that already has it.
+        let _ = sqlx::query("ALTER TABLE graph_checkpoints ADD COLUMN cleared_interrupt TEXT")
+            .execute(&pool)
+            .await;
 
         sqlx::query(
             r#"
@@ -144,8 +152,8 @@ impl Checkpointer for SqliteCheckpointer {
 
         sqlx::query(
             r#"
-            INSERT INTO graph_checkpoints (id, thread_id, state, step, pending_nodes, metadata, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO graph_checkpoints (id, thread_id, state, step, pending_nodes, metadata, created_at, cleared_interrupt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&checkpoint.checkpoint_id)
@@ -155,6 +163,7 @@ impl Checkpointer for SqliteCheckpointer {
         .bind(&pending_json)
         .bind(&metadata_json)
         .bind(&created_at)
+        .bind(checkpoint.cleared_interrupt.as_deref())
         .execute(&self.pool)
         .await
         .map_err(|e| GraphError::CheckpointError(e.to_string()))?;
@@ -163,9 +172,9 @@ impl Checkpointer for SqliteCheckpointer {
     }
 
     async fn load(&self, thread_id: &str) -> Result<Option<Checkpoint>> {
-        let row: Option<(String, String, String, i64, String, String, String)> = sqlx::query_as(
+        let row: Option<(String, String, String, i64, String, String, String, Option<String>)> = sqlx::query_as(
             r#"
-            SELECT id, thread_id, state, step, pending_nodes, metadata, created_at
+            SELECT id, thread_id, state, step, pending_nodes, metadata, created_at, cleared_interrupt
             FROM graph_checkpoints
             WHERE thread_id = ?
             ORDER BY created_at DESC
@@ -178,7 +187,16 @@ impl Checkpointer for SqliteCheckpointer {
         .map_err(|e| GraphError::CheckpointError(e.to_string()))?;
 
         match row {
-            Some((id, thread_id, state, step, pending_nodes, metadata, created_at)) => {
+            Some((
+                id,
+                thread_id,
+                state,
+                step,
+                pending_nodes,
+                metadata,
+                created_at,
+                cleared_interrupt,
+            )) => {
                 let checkpoint = Checkpoint {
                     checkpoint_id: id,
                     thread_id,
@@ -189,6 +207,7 @@ impl Checkpointer for SqliteCheckpointer {
                     created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
                         .map_err(|e| GraphError::CheckpointError(e.to_string()))?
                         .with_timezone(&chrono::Utc),
+                    cleared_interrupt,
                 };
                 Ok(Some(checkpoint))
             }
@@ -197,9 +216,9 @@ impl Checkpointer for SqliteCheckpointer {
     }
 
     async fn load_by_id(&self, checkpoint_id: &str) -> Result<Option<Checkpoint>> {
-        let row: Option<(String, String, String, i64, String, String, String)> = sqlx::query_as(
+        let row: Option<(String, String, String, i64, String, String, String, Option<String>)> = sqlx::query_as(
             r#"
-            SELECT id, thread_id, state, step, pending_nodes, metadata, created_at
+            SELECT id, thread_id, state, step, pending_nodes, metadata, created_at, cleared_interrupt
             FROM graph_checkpoints
             WHERE id = ?
             "#,
@@ -210,7 +229,16 @@ impl Checkpointer for SqliteCheckpointer {
         .map_err(|e| GraphError::CheckpointError(e.to_string()))?;
 
         match row {
-            Some((id, thread_id, state, step, pending_nodes, metadata, created_at)) => {
+            Some((
+                id,
+                thread_id,
+                state,
+                step,
+                pending_nodes,
+                metadata,
+                created_at,
+                cleared_interrupt,
+            )) => {
                 let checkpoint = Checkpoint {
                     checkpoint_id: id,
                     thread_id,
@@ -221,6 +249,7 @@ impl Checkpointer for SqliteCheckpointer {
                     created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
                         .map_err(|e| GraphError::CheckpointError(e.to_string()))?
                         .with_timezone(&chrono::Utc),
+                    cleared_interrupt,
                 };
                 Ok(Some(checkpoint))
             }
@@ -229,9 +258,9 @@ impl Checkpointer for SqliteCheckpointer {
     }
 
     async fn list(&self, thread_id: &str) -> Result<Vec<Checkpoint>> {
-        let rows: Vec<(String, String, String, i64, String, String, String)> = sqlx::query_as(
+        let rows: Vec<(String, String, String, i64, String, String, String, Option<String>)> = sqlx::query_as(
             r#"
-            SELECT id, thread_id, state, step, pending_nodes, metadata, created_at
+            SELECT id, thread_id, state, step, pending_nodes, metadata, created_at, cleared_interrupt
             FROM graph_checkpoints
             WHERE thread_id = ?
             ORDER BY created_at ASC
@@ -243,7 +272,9 @@ impl Checkpointer for SqliteCheckpointer {
         .map_err(|e| GraphError::CheckpointError(e.to_string()))?;
 
         let mut checkpoints = Vec::with_capacity(rows.len());
-        for (id, thread_id, state, step, pending_nodes, metadata, created_at) in rows {
+        for (id, thread_id, state, step, pending_nodes, metadata, created_at, cleared_interrupt) in
+            rows
+        {
             checkpoints.push(Checkpoint {
                 checkpoint_id: id,
                 thread_id,
@@ -254,6 +285,7 @@ impl Checkpointer for SqliteCheckpointer {
                 created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
                     .map_err(|e| GraphError::CheckpointError(e.to_string()))?
                     .with_timezone(&chrono::Utc),
+                cleared_interrupt,
             });
         }
         Ok(checkpoints)

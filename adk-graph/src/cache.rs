@@ -190,13 +190,13 @@ impl LruCache {
     fn get(&mut self, key: &str, ttl: Option<Duration>) -> Option<Value> {
         if let Some((value, inserted_at)) = self.map.get(key) {
             // Check TTL expiration
-            if let Some(ttl) = ttl {
-                if inserted_at.elapsed() > ttl {
-                    // Entry expired — remove it
-                    self.map.remove(key);
-                    self.order.retain(|k| k != key);
-                    return None;
-                }
+            if let Some(ttl) = ttl
+                && inserted_at.elapsed() > ttl
+            {
+                // Entry expired — remove it
+                self.map.remove(key);
+                self.order.retain(|k| k != key);
+                return None;
             }
 
             let value = value.clone();
@@ -219,10 +219,10 @@ impl LruCache {
             self.order.push_back(key);
         } else {
             // Evict if at capacity
-            if self.map.len() >= self.max_entries {
-                if let Some(evicted) = self.order.pop_front() {
-                    self.map.remove(&evicted);
-                }
+            if self.map.len() >= self.max_entries
+                && let Some(evicted) = self.order.pop_front()
+            {
+                self.map.remove(&evicted);
             }
             self.order.push_back(key.clone());
             self.map.insert(key, (value, Instant::now()));

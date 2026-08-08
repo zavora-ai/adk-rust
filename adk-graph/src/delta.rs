@@ -635,7 +635,7 @@ impl<C: Checkpointer> DeltaCheckpointer<C> {
 
     /// Determine whether a given step should be a full snapshot.
     fn is_full_snapshot_step(&self, step: usize) -> bool {
-        step == 0 || (step as u32) % self.config.full_snapshot_interval == 0
+        step == 0 || (step as u32).is_multiple_of(self.config.full_snapshot_interval)
     }
 
     /// Reconstruct full state from a list of checkpoints starting from a full
@@ -1344,7 +1344,7 @@ mod tests {
 
         // Create 5 checkpoints (step 0 = full, steps 1-4 = delta)
         let states: Vec<State> =
-            (0..5).map(|i| make_state(&[("step", i as i64), ("data", i * 10)])).collect();
+            (0..5).map(|i| make_state(&[("step", i), ("data", i * 10)])).collect();
 
         for (step, state) in states.iter().enumerate() {
             let cp = Checkpoint::new("t1", state.clone(), step, vec![]);

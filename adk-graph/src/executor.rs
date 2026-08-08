@@ -38,6 +38,11 @@ pub struct PregelExecutor<'a> {
     pending_deferred: HashMap<String, FanInTracker>,
     /// Tracks when each deferred node first entered the pending state (for fan-in timeout).
     deferred_start_times: HashMap<String, Instant>,
+    /// The node whose static interrupt this run has already answered.
+    ///
+    /// Restored from the checkpoint on resume and cleared once that node has
+    /// executed, so the gate re-arms for a later arrival through a cycle.
+    cleared_interrupt: Option<String>,
     /// Per-node caches initialized from `CompiledGraph::cache_policies`.
     #[cfg(feature = "node-cache")]
     node_caches: HashMap<String, NodeCache>,
@@ -61,6 +66,7 @@ impl<'a> PregelExecutor<'a> {
             pending_nodes: vec![],
             pending_deferred: HashMap::new(),
             deferred_start_times: HashMap::new(),
+            cleared_interrupt: None,
             #[cfg(feature = "node-cache")]
             node_caches,
         }
@@ -94,6 +100,7 @@ impl<'a> PregelExecutor<'a> {
             self.state = checkpoint.state;
             self.pending_nodes = checkpoint.pending_nodes;
             self.step = checkpoint.step;
+            self.cleared_interrupt = checkpoint.cleared_interrupt;
 
             // Merge input on top of restored state
             for (key, value) in input {
@@ -129,9 +136,22 @@ impl<'a> PregelExecutor<'a> {
 
             // Handle interrupts
             if let Some(interrupt) = result.interrupt {
-                // The frontier saved here is deliberately the one that was
-                // executing: an interrupted node has not produced its updates,
-                // so resuming must run it again.
+                // Record the gate being answered so the resumed run executes
+                // this node rather than stopping at it again.
+                if let Interrupt::Before(node) = &interrupt {
+                    self.cleared_interrupt = Some(node.clone());
+                }
+                // `After` has the opposite timing: the node ran and its updates
+                // are applied, so the resume point is its successors. Saving the
+                // executing frontier would re-run it and re-raise the gate.
+                if matches!(interrupt, Interrupt::After(_)) {
+                    let next = self.graph.get_next_nodes(&result.executed_nodes, &self.state);
+                    self.pending_nodes =
+                        self.filter_deferred_nodes(next, &result.executed_nodes)?;
+                }
+                // For `Before`, the frontier saved is deliberately the one that
+                // was executing: the node produced no updates, so resuming must
+                // run it, which the marker above now permits.
                 let checkpoint_id = self.save_checkpoint().await?;
                 return Err(GraphError::Interrupted(Box::new(InterruptedExecution::new(
                     self.config.thread_id.clone(),
@@ -140,6 +160,14 @@ impl<'a> PregelExecutor<'a> {
                     self.state.clone(),
                     self.step,
                 ))));
+            }
+
+            // The gate re-arms once its node has run, so a cycle returning to
+            // the same node asks again.
+            if let Some(cleared) = &self.cleared_interrupt
+                && result.executed_nodes.iter().any(|n| n == cleared)
+            {
+                self.cleared_interrupt = None;
             }
 
             // Advance the frontier *before* checkpointing. A checkpoint records
@@ -342,6 +370,13 @@ impl<'a> PregelExecutor<'a> {
                         }
                     }
 
+                    // The gate re-arms once its node has run; see `run`.
+                    if let Some(cleared) = &self.cleared_interrupt
+                        && result.executed_nodes.iter().any(|n| n == cleared)
+                    {
+                        self.cleared_interrupt = None;
+                    }
+
                     self.pending_nodes = {
                         let next_candidates = self.graph.get_next_nodes(&result.executed_nodes, &self.state);
                         match self.filter_deferred_nodes(next_candidates, &result.executed_nodes) {
@@ -392,6 +427,22 @@ impl<'a> PregelExecutor<'a> {
 
                 // Handle interrupts
                 if let Some(interrupt) = result.interrupt {
+                    // Record the gate being answered; see `run`.
+                    if let Interrupt::Before(node) = &interrupt {
+                        self.cleared_interrupt = Some(node.clone());
+                    }
+                    // `After` resumes at the successors; see `run`.
+                    if matches!(interrupt, Interrupt::After(_)) {
+                        let next =
+                            self.graph.get_next_nodes(&result.executed_nodes, &self.state);
+                        match self.filter_deferred_nodes(next, &result.executed_nodes) {
+                            Ok(frontier) => self.pending_nodes = frontier,
+                            Err(error) => {
+                                yield Err(error);
+                                return;
+                            }
+                        }
+                    }
                     // Persist before reporting: without this the interrupt is
                     // unresumable, because resuming loads the checkpoint for the
                     // thread. The frontier saved is the one that was executing,
@@ -405,6 +456,13 @@ impl<'a> PregelExecutor<'a> {
                         &interrupt.to_string(),
                     ));
                     return;
+                }
+
+                // The gate re-arms once its node has run; see `run`.
+                if let Some(cleared) = &self.cleared_interrupt
+                    && result.executed_nodes.iter().any(|n| n == cleared)
+                {
+                    self.cleared_interrupt = None;
                 }
 
                 // Advance the frontier before checkpointing, so the checkpoint
@@ -566,9 +624,13 @@ impl<'a> PregelExecutor<'a> {
     async fn execute_super_step(&mut self) -> Result<SuperStepResult> {
         let mut result = SuperStepResult::default();
 
-        // Check for interrupt_before
+        // Check for interrupt_before. A node whose gate this run has already
+        // answered runs instead of interrupting again; without that a resume
+        // reaches the same conclusion and the node never executes.
         for node_name in &self.pending_nodes {
-            if self.graph.interrupt_before.contains(node_name) {
+            if self.graph.interrupt_before.contains(node_name)
+                && self.cleared_interrupt.as_deref() != Some(node_name.as_str())
+            {
                 return Ok(SuperStepResult {
                     interrupt: Some(Interrupt::Before(node_name.clone())),
                     ..Default::default()
@@ -739,12 +801,13 @@ impl<'a> PregelExecutor<'a> {
     /// Save a checkpoint
     async fn save_checkpoint(&self) -> Result<String> {
         if let Some(cp) = &self.graph.checkpointer {
-            let checkpoint = Checkpoint::new(
+            let mut checkpoint = Checkpoint::new(
                 &self.config.thread_id,
                 self.state.clone(),
                 self.step,
                 self.pending_nodes.clone(),
             );
+            checkpoint.cleared_interrupt = self.cleared_interrupt.clone();
             return cp.save(&checkpoint).await;
         }
         Ok(String::new())
