@@ -230,6 +230,20 @@ pub struct Checkpoint {
     /// a cycle returning to the same gate asks again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cleared_interrupt: Option<String>,
+    /// How many times each node has been attempted, for retry policies.
+    ///
+    /// Held here so a retry budget survives a resume. adk-python does not persist
+    /// its attempt count, so a resumed node there starts its budget again.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub attempts: HashMap<String, u32>,
+    /// Outputs of children invoked imperatively from a node body, keyed by child
+    /// path.
+    ///
+    /// A resumed parent re-runs from the top, so without this every child would
+    /// run again. Only successful outputs are recorded: a failed or interrupted
+    /// child must re-run.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub child_ledger: HashMap<String, Value>,
 }
 
 impl Checkpoint {
@@ -244,6 +258,8 @@ impl Checkpoint {
             metadata: HashMap::new(),
             created_at: chrono::Utc::now(),
             cleared_interrupt: None,
+            attempts: HashMap::new(),
+            child_ledger: HashMap::new(),
         }
     }
 

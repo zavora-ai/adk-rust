@@ -64,6 +64,10 @@ full = [
     "code",
     "sandbox",
     "code-tools",
+    "graph-functional",
+    "graph-node-cache",
+    "graph-delta",
+    "graph-time-travel",
 ]
 
 # Gemini Enterprise Agent Platform — every Vertex/EAP integration except
@@ -248,6 +252,19 @@ audio-all = ["audio", "adk-audio/all"]
 
 # Anthropic client crate (direct access to adk-anthropic types)
 anthropic-client = ["dep:adk-anthropic"]
+
+# Graph capability features (forwarded to adk-graph).
+#
+# `graph` alone enables adk-graph with default features, which are empty, so none
+# of the capabilities below were reachable through this crate at all.
+graph-functional = ["graph", "adk-graph/functional"]
+graph-node-cache = ["graph", "adk-graph/node-cache"]
+graph-delta = ["graph", "adk-graph/delta-checkpoint"]
+graph-time-travel = ["graph", "adk-graph/time-travel"]
+# These two need external infrastructure, so they stay out of `full` alongside
+# the other production backends.
+graph-sqlite = ["graph", "adk-graph/sqlite"]
+graph-redis-cache = ["graph", "adk-graph/redis-cache"]
 
 # Action node features (forwarded to adk-graph)
 action = ["graph", "dep:adk-action", "adk-graph/action"]

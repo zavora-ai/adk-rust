@@ -107,7 +107,9 @@ impl SqliteCheckpointer {
                 pending_nodes TEXT NOT NULL,
                 metadata TEXT,
                 created_at TEXT NOT NULL,
-                cleared_interrupt TEXT
+                cleared_interrupt TEXT,
+                attempts TEXT,
+                child_ledger TEXT
             )
             "#,
         )
@@ -118,9 +120,11 @@ impl SqliteCheckpointer {
         // A database created before `cleared_interrupt` existed keeps its old
         // shape under CREATE TABLE IF NOT EXISTS, so add the column separately
         // and ignore the duplicate-column error on a database that already has it.
-        let _ = sqlx::query("ALTER TABLE graph_checkpoints ADD COLUMN cleared_interrupt TEXT")
-            .execute(&pool)
-            .await;
+        for column in ["cleared_interrupt", "attempts", "child_ledger"] {
+            let _ = sqlx::query(&format!("ALTER TABLE graph_checkpoints ADD COLUMN {column} TEXT"))
+                .execute(&pool)
+                .await;
+        }
 
         sqlx::query(
             r#"
@@ -152,8 +156,8 @@ impl Checkpointer for SqliteCheckpointer {
 
         sqlx::query(
             r#"
-            INSERT INTO graph_checkpoints (id, thread_id, state, step, pending_nodes, metadata, created_at, cleared_interrupt)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO graph_checkpoints (id, thread_id, state, step, pending_nodes, metadata, created_at, cleared_interrupt, attempts, child_ledger)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&checkpoint.checkpoint_id)
@@ -164,6 +168,8 @@ impl Checkpointer for SqliteCheckpointer {
         .bind(&metadata_json)
         .bind(&created_at)
         .bind(checkpoint.cleared_interrupt.as_deref())
+        .bind(serde_json::to_string(&checkpoint.attempts).unwrap_or_else(|_| "{}".to_string()))
+        .bind(serde_json::to_string(&checkpoint.child_ledger).unwrap_or_else(|_| "{}".to_string()))
         .execute(&self.pool)
         .await
         .map_err(|e| GraphError::CheckpointError(e.to_string()))?;
@@ -172,9 +178,9 @@ impl Checkpointer for SqliteCheckpointer {
     }
 
     async fn load(&self, thread_id: &str) -> Result<Option<Checkpoint>> {
-        let row: Option<(String, String, String, i64, String, String, String, Option<String>)> = sqlx::query_as(
+        let row: Option<(String, String, String, i64, String, String, String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
             r#"
-            SELECT id, thread_id, state, step, pending_nodes, metadata, created_at, cleared_interrupt
+            SELECT id, thread_id, state, step, pending_nodes, metadata, created_at, cleared_interrupt, attempts, child_ledger
             FROM graph_checkpoints
             WHERE thread_id = ?
             ORDER BY created_at DESC
@@ -196,6 +202,8 @@ impl Checkpointer for SqliteCheckpointer {
                 metadata,
                 created_at,
                 cleared_interrupt,
+                attempts,
+                child_ledger,
             )) => {
                 let checkpoint = Checkpoint {
                     checkpoint_id: id,
@@ -208,6 +216,12 @@ impl Checkpointer for SqliteCheckpointer {
                         .map_err(|e| GraphError::CheckpointError(e.to_string()))?
                         .with_timezone(&chrono::Utc),
                     cleared_interrupt,
+                    attempts: attempts
+                        .and_then(|raw| serde_json::from_str(&raw).ok())
+                        .unwrap_or_default(),
+                    child_ledger: child_ledger
+                        .and_then(|raw| serde_json::from_str(&raw).ok())
+                        .unwrap_or_default(),
                 };
                 Ok(Some(checkpoint))
             }
@@ -216,9 +230,9 @@ impl Checkpointer for SqliteCheckpointer {
     }
 
     async fn load_by_id(&self, checkpoint_id: &str) -> Result<Option<Checkpoint>> {
-        let row: Option<(String, String, String, i64, String, String, String, Option<String>)> = sqlx::query_as(
+        let row: Option<(String, String, String, i64, String, String, String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
             r#"
-            SELECT id, thread_id, state, step, pending_nodes, metadata, created_at, cleared_interrupt
+            SELECT id, thread_id, state, step, pending_nodes, metadata, created_at, cleared_interrupt, attempts, child_ledger
             FROM graph_checkpoints
             WHERE id = ?
             "#,
@@ -238,6 +252,8 @@ impl Checkpointer for SqliteCheckpointer {
                 metadata,
                 created_at,
                 cleared_interrupt,
+                attempts,
+                child_ledger,
             )) => {
                 let checkpoint = Checkpoint {
                     checkpoint_id: id,
@@ -250,6 +266,12 @@ impl Checkpointer for SqliteCheckpointer {
                         .map_err(|e| GraphError::CheckpointError(e.to_string()))?
                         .with_timezone(&chrono::Utc),
                     cleared_interrupt,
+                    attempts: attempts
+                        .and_then(|raw| serde_json::from_str(&raw).ok())
+                        .unwrap_or_default(),
+                    child_ledger: child_ledger
+                        .and_then(|raw| serde_json::from_str(&raw).ok())
+                        .unwrap_or_default(),
                 };
                 Ok(Some(checkpoint))
             }
@@ -258,9 +280,9 @@ impl Checkpointer for SqliteCheckpointer {
     }
 
     async fn list(&self, thread_id: &str) -> Result<Vec<Checkpoint>> {
-        let rows: Vec<(String, String, String, i64, String, String, String, Option<String>)> = sqlx::query_as(
+        let rows: Vec<(String, String, String, i64, String, String, String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
             r#"
-            SELECT id, thread_id, state, step, pending_nodes, metadata, created_at, cleared_interrupt
+            SELECT id, thread_id, state, step, pending_nodes, metadata, created_at, cleared_interrupt, attempts, child_ledger
             FROM graph_checkpoints
             WHERE thread_id = ?
             ORDER BY created_at ASC
@@ -272,8 +294,18 @@ impl Checkpointer for SqliteCheckpointer {
         .map_err(|e| GraphError::CheckpointError(e.to_string()))?;
 
         let mut checkpoints = Vec::with_capacity(rows.len());
-        for (id, thread_id, state, step, pending_nodes, metadata, created_at, cleared_interrupt) in
-            rows
+        for (
+            id,
+            thread_id,
+            state,
+            step,
+            pending_nodes,
+            metadata,
+            created_at,
+            cleared_interrupt,
+            attempts,
+            child_ledger,
+        ) in rows
         {
             checkpoints.push(Checkpoint {
                 checkpoint_id: id,
@@ -286,6 +318,12 @@ impl Checkpointer for SqliteCheckpointer {
                     .map_err(|e| GraphError::CheckpointError(e.to_string()))?
                     .with_timezone(&chrono::Utc),
                 cleared_interrupt,
+                attempts: attempts
+                    .and_then(|raw| serde_json::from_str(&raw).ok())
+                    .unwrap_or_default(),
+                child_ledger: child_ledger
+                    .and_then(|raw| serde_json::from_str(&raw).ok())
+                    .unwrap_or_default(),
             });
         }
         Ok(checkpoints)

@@ -181,6 +181,19 @@ jobs:
           # so an rmcp rename broke the sampling handler while workspace clippy stayed at
           # zero. Named here so the coverage no longer depends on an example crate.
           - { package: adk-tool, features: mcp-sampling }
+          # No workspace member enables these four, so `--workspace` never compiled
+          # them and their only cover was a standalone example crate. Four clippy
+          # failures and two uncompilable doc examples sat on main as a result.
+          # `time-travel` is absent on purpose: adk-cli already enables it, so the
+          # workspace build reaches it.
+          - { package: adk-graph, features: functional }
+          - { package: adk-graph, features: sqlite }
+          - { package: adk-graph, features: node-cache }
+          - { package: adk-graph, features: delta-checkpoint }
+          # The umbrella forwards, because `graph` alone gives adk-graph its
+          # default features, which are empty.
+          - { package: adk-rust, features: graph-sqlite }
+          - { package: adk-rust, features: graph-functional }
           # The sqlx-backed production backends. None were built by any job, so a
           # second sqlx major entering the graph through pgvector went unnoticed:
           # `adk-memory --features database-memory` stopped compiling entirely
