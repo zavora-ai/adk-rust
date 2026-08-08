@@ -769,8 +769,9 @@ impl<'a> PregelExecutor<'a> {
                         }
                     }
 
-                    // Collect updates
-                    all_updates.push(output.updates);
+                    // Collect updates with their node, so application order can be
+                    // made independent of which future resolved first.
+                    all_updates.push((node_name.clone(), output.updates));
                 }
                 Err(e) => {
                     return Err(GraphError::NodeExecutionFailed {
@@ -781,10 +782,23 @@ impl<'a> PregelExecutor<'a> {
             }
         }
 
-        // Apply all updates atomically using reducers
-        for updates in all_updates {
-            for (key, value) in updates {
-                self.graph.schema.apply_update(&mut self.state, &key, value);
+        // Apply all updates atomically using reducers.
+        //
+        // `buffer_unordered` yields futures as they resolve, so the collected
+        // order follows timing. A non-commutative reducer — `Append` builds an
+        // array, so order is the result — would then give a different state for
+        // the same input depending on which node finished first. Sorting by
+        // (node, channel) makes the order total and timing-independent: node
+        // names are unique within a graph, and a node's own updates are held in a
+        // map whose iteration order is itself unspecified.
+        all_updates.sort_by(|(left, _), (right, _)| left.cmp(right));
+        for (_node, updates) in all_updates {
+            let mut keys: Vec<_> = updates.keys().cloned().collect();
+            keys.sort();
+            for key in keys {
+                if let Some(value) = updates.get(&key) {
+                    self.graph.schema.apply_update(&mut self.state, &key, value.clone());
+                }
             }
         }
 

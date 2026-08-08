@@ -1055,6 +1055,20 @@ let agent = GraphAgent::builder("stateful")
 | `Sum` | Add numeric values |
 | `Custom` | Custom merge function |
 
+### Update order
+
+Nodes in one super-step run concurrently and finish in whatever order their work
+takes. Their state updates are applied in **node-name order**, not in the order
+the nodes finished.
+
+The order matters whenever a reducer is not commutative. `Append` builds an
+array, so the order is the result; a `Custom` reducer may be order-sensitive too.
+Sorting by node name makes a run reproducible: the same graph and the same input
+give the same state, whatever the timing of a slow dependency.
+
+Where several channels are written by one node, they are applied in channel-name
+order. Channels do not interact, so this matters only for reading a trace.
+
 ## Checkpointing
 
 Enable persistent state for fault tolerance and human-in-the-loop:
