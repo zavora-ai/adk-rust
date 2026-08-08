@@ -83,6 +83,7 @@ pub mod retry;
 pub mod state;
 pub mod stream;
 pub mod timeout;
+pub mod tool;
 
 #[cfg(feature = "node-cache")]
 pub mod cache;

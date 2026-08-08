@@ -365,6 +365,18 @@ impl CompiledGraph {
         self
     }
 
+    /// A node by name, for a caller that needs to run one on its own.
+    pub fn node(&self, name: &str) -> Option<Arc<dyn Node>> {
+        self.nodes.get(name).cloned()
+    }
+
+    /// The declared state channel names, sorted.
+    pub fn state_channels(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.schema.channels.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
     /// The retry policy for a node, if one is configured.
     pub(crate) fn retry_policy_for(&self, node: &str) -> Option<&crate::retry::RetryPolicy> {
         self.retry_policies.get(node)

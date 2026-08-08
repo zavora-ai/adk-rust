@@ -74,3 +74,5 @@ full = ["sqlite", "action-full"]
 tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
 proptest = "1.5"
 adk-action = { path = "../adk-action" }
+# For `SimpleToolContext` when testing a graph exposed as a tool.
+adk-tool = { path = "../adk-tool" }
