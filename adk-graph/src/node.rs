@@ -95,12 +95,67 @@ pub struct NodeContext {
     /// Optional progress handle for idle timeout tracking.
     /// When present, calling [`report_progress()`](Self::report_progress) resets the idle timeout counter.
     progress_handle: Option<ProgressHandle>,
+    /// Set by the executor when this node may invoke other nodes.
+    children: Option<std::sync::Arc<crate::child::ChildInvoker>>,
 }
 
 impl NodeContext {
     /// Create a new node context
     pub fn new(state: State, config: ExecutionConfig, step: usize) -> Self {
-        Self { state, config, step, progress_handle: None }
+        Self { state, config, step, progress_handle: None, children: None }
+    }
+
+    /// The machinery for invoking other nodes, if this context has it.
+    pub(crate) fn child_invoker(&self) -> Option<std::sync::Arc<crate::child::ChildInvoker>> {
+        self.children.clone()
+    }
+
+    /// Attach the machinery for invoking other nodes.
+    pub(crate) fn set_child_invoker(
+        &mut self,
+        invoker: std::sync::Arc<crate::child::ChildInvoker>,
+    ) {
+        self.children = Some(invoker);
+    }
+
+    /// Invoke another node and await its output.
+    ///
+    /// The child sees this node's state with `input` merged over it, and returns
+    /// its updates as one object. Nothing is applied to the graph's state: the
+    /// caller decides what to do with the result.
+    ///
+    /// A child that already completed under the same identity is not run again
+    /// after a resume. See [`crate::child`] for how that identity is formed, and
+    /// why a resumable parent should pass its own run id.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphError::NodeNotFound`](crate::error::GraphError::NodeNotFound)
+    /// when no node has that name, whatever the child returns, and
+    /// [`GraphError::Interrupted`](crate::error::GraphError::Interrupted) when the
+    /// child pauses.
+    pub async fn run_node(&self, child: &str, input: Value) -> Result<Value> {
+        self.run_node_with(child, input, crate::child::RunNodeOptions::default()).await
+    }
+
+    /// Invoke another node with an explicit run id.
+    ///
+    /// # Errors
+    ///
+    /// As [`run_node`](Self::run_node), and additionally when this node was not
+    /// given the ability to invoke children.
+    pub async fn run_node_with(
+        &self,
+        child: &str,
+        input: Value,
+        options: crate::child::RunNodeOptions,
+    ) -> Result<Value> {
+        let invoker = self.children.as_ref().ok_or_else(|| {
+            crate::error::GraphError::InvalidGraph(
+                "this node cannot invoke other nodes: no child invoker was attached".to_string(),
+            )
+        })?;
+        invoker.run(child, input, options, self).await
     }
 
     /// Get a value from state
@@ -281,9 +336,14 @@ impl Node for FunctionNode {
     }
 
     async fn execute(&self, ctx: &NodeContext) -> Result<NodeOutput> {
+        // The closure takes an owned context, so everything the executor attached
+        // has to be carried across or the node silently loses it.
         let mut ctx_owned = NodeContext::new(ctx.state.clone(), ctx.config.clone(), ctx.step);
         if let Some(handle) = ctx.progress_handle() {
             ctx_owned.set_progress_handle(handle.clone());
+        }
+        if let Some(invoker) = ctx.child_invoker() {
+            ctx_owned.set_child_invoker(invoker);
         }
         (self.func)(ctx_owned).await
     }

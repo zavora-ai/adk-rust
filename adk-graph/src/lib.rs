@@ -71,6 +71,7 @@
 
 pub mod agent;
 pub mod checkpoint;
+pub mod child;
 pub mod deferred;
 pub mod edge;
 pub mod error;

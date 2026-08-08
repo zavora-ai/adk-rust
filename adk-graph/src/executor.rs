@@ -14,6 +14,7 @@ use crate::stream::{StreamEvent, StreamMode};
 use crate::timeout::{OnTimeout, ProgressHandle, execute_with_timeout, item_timeout_budget};
 use futures::stream::{self, StreamExt};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Result of a super-step execution
@@ -41,6 +42,9 @@ pub struct PregelExecutor<'a> {
     /// Attempts already spent per node, carried through a resume so a retry
     /// budget is not restarted.
     attempts: HashMap<String, u32>,
+    /// Outputs of children invoked imperatively, keyed by child path. Shared with
+    /// every node's invoker so a resumed parent serves finished children from it.
+    child_ledger: Arc<std::sync::Mutex<HashMap<String, serde_json::Value>>>,
     /// The node whose static interrupt this run has already answered.
     ///
     /// Restored from the checkpoint on resume and cleared once that node has
@@ -70,6 +74,7 @@ impl<'a> PregelExecutor<'a> {
             pending_deferred: HashMap::new(),
             deferred_start_times: HashMap::new(),
             attempts: HashMap::new(),
+            child_ledger: Arc::new(std::sync::Mutex::new(HashMap::new())),
             cleared_interrupt: None,
             #[cfg(feature = "node-cache")]
             node_caches,
@@ -106,6 +111,7 @@ impl<'a> PregelExecutor<'a> {
             self.step = checkpoint.step;
             self.cleared_interrupt = checkpoint.cleared_interrupt;
             self.attempts = checkpoint.attempts;
+            *self.child_ledger.lock().expect("child ledger") = checkpoint.child_ledger;
 
             // Merge input on top of restored state
             for (key, value) in input {
@@ -269,6 +275,11 @@ impl<'a> PregelExecutor<'a> {
                     for node_name in &self.pending_nodes {
                         if let Some(node) = self.graph.nodes.get(node_name) {
                             let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
+                            ctx.set_child_invoker(Arc::new(crate::child::ChildInvoker::new(
+                                self.graph.nodes.clone(),
+                                Arc::clone(&self.child_ledger),
+                                node_name.clone(),
+                            )));
 
                             // Attach progress handle if idle timeout is configured
                             let policy = self.graph.timeout_policy_for(node_name).cloned();
@@ -748,6 +759,17 @@ impl<'a> PregelExecutor<'a> {
             .zip(prior_attempts)
             .map(|((((name, node), policy), retry), spent)| {
                 let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
+                // A node body may invoke other nodes. The invoker carries the
+                // graph's nodes and the shared ledger, so a resumed parent serves
+                // children that already finished. These invocations are awaited
+                // inline by the parent and are deliberately outside the
+                // concurrency budget: counting them could deadlock, because the
+                // parent holds its own slot while waiting.
+                ctx.set_child_invoker(Arc::new(crate::child::ChildInvoker::new(
+                    self.graph.nodes.clone(),
+                    Arc::clone(&self.child_ledger),
+                    name.clone(),
+                )));
 
                 // Attach a ProgressHandle when idle timeout is configured
                 if let Some(ref p) = policy
@@ -902,6 +924,7 @@ impl<'a> PregelExecutor<'a> {
             );
             checkpoint.cleared_interrupt = self.cleared_interrupt.clone();
             checkpoint.attempts = self.attempts.clone();
+            checkpoint.child_ledger = self.child_ledger.lock().expect("child ledger").clone();
             return cp.save(&checkpoint).await;
         }
         Ok(String::new())
