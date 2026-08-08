@@ -157,14 +157,23 @@ impl Agent for GraphAgent {
                     }
                 }
                 Err(GraphError::Interrupted(interrupt)) => {
-                    // Create an interrupt event
+                    // The `Agent` trait yields events, so an interrupt cannot be
+                    // returned as an error without ending the invocation. Emit one
+                    // event carrying the structured pause so a caller can read the
+                    // node, the payload, and the checkpoint to resume from.
+                    let payload = crate::interrupt::GraphInterruptPayload::new(
+                        &interrupt.interrupt,
+                        &interrupt.thread_id,
+                        &interrupt.checkpoint_id,
+                    );
                     let mut event = Event::new("graph_interrupted");
-                    event.set_content(Content::new("assistant").with_text(format!(
-                        "Graph interrupted: {:?}\nThread: {}\nCheckpoint: {}",
-                        interrupt.interrupt,
-                        interrupt.thread_id,
-                        interrupt.checkpoint_id
-                    )));
+                    event.set_content(
+                        Content::new("assistant").with_text(interrupt.interrupt.to_string()),
+                    );
+                    event.provider_metadata.insert(
+                        crate::interrupt::INTERRUPT_METADATA_KEY.to_string(),
+                        payload.to_metadata_value(),
+                    );
                     yield Ok(event);
                 }
                 Err(e) => {
