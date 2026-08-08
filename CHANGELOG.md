@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handler on its own and rejects a task response outright, which would break every
   server that materializes one. `McpToolset::execute` handles all three cases
   internally, so agents built on `McpToolset` need no change.
+- **Task execution now needs the extension declared at handshake time.** SEP-2663
+  moved the declaration from the request to the client's capabilities: a server
+  must not answer with a task unless the client declared
+  `io.modelcontextprotocol/tasks`. Call
+  `AdkClientHandler::with_tasks()` when building the client;
+  `McpToolset::with_task_support` continues to set how the client polls. Under
+  rmcp 2.2 each call carried its own task metadata, so no handshake declaration
+  was needed. `examples/mcp_protocol_revisions` demonstrates both.
 - **A tool no longer declares its own task contract.** SEP-2663 removed the
   per-tool signal, so `Tool::is_long_running` on an MCP tool now answers per
   connection: true when tasks are enabled and the server negotiated them. A

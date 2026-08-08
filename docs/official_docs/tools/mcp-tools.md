@@ -23,6 +23,8 @@ uses.
 
 ADK-Rust 2 uses `rmcp 3.1`, the official Rust SDK. The client advertises MCP
 `2025-11-25` and connects to `2026-07-28` servers over their legacy handshake.
+`examples/mcp_protocol_revisions` demonstrates both revisions and the SEP-2663
+tasks extension against a bundled server.
 
 ## Architecture
 

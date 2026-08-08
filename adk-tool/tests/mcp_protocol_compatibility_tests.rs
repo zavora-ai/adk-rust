@@ -612,3 +612,123 @@ async fn a_server_pinned_to_the_oldest_revision_still_works() {
     let tools = McpToolset::new(client).tools(ctx).await.expect("list tools");
     assert_eq!(tools.len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// SEP-2663 tasks.
+//
+// A server must not return a task to a client that did not declare the
+// extension, so the declaration is what makes the whole task path reachable.
+// ---------------------------------------------------------------------------
+
+/// A server that answers `slow_tool` with a task, but only for a client that
+/// declared the extension. Mirrors the rule in the specification.
+#[derive(Clone, Default)]
+struct TaskServer {
+    tasks: Arc<rmcp::task_manager::TaskManager>,
+}
+
+impl rmcp::ServerHandler for TaskServer {
+    fn get_info(&self) -> rmcp::model::ServerInfo {
+        rmcp::model::ServerInfo::new(
+            ServerCapabilities::builder().enable_tools().enable_tasks().build(),
+        )
+        .with_server_info(Implementation::new("task-server", "1.0.0"))
+    }
+
+    async fn list_tools(
+        &self,
+        _params: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        Ok(ListToolsResult::with_all_items(vec![test_tool()]))
+    }
+
+    async fn call_tool(
+        &self,
+        _params: CallToolRequestParams,
+        context: rmcp::service::RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        let client_declared_tasks =
+            context.client_capabilities().is_some_and(|caps| caps.supports_tasks());
+        if !client_declared_tasks {
+            return Ok(CallToolResult::success(vec![ContentBlock::text("inline")]).into());
+        }
+
+        let task = self.tasks.spawn(rmcp::task_manager::TaskOptions::default(), |_ctx| {
+            Box::pin(
+                async move { Ok(CallToolResult::success(vec![ContentBlock::text("from a task")])) },
+            )
+        });
+        Ok(rmcp::model::CallToolResponse::Task(rmcp::model::CreateTaskResult::new(task)))
+    }
+
+    async fn get_task(
+        &self,
+        params: rmcp::model::GetTaskParams,
+        _context: rmcp::service::RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::GetTaskResult, rmcp::ErrorData> {
+        Ok(rmcp::model::GetTaskResult::new(self.tasks.get_task(&params.task_id)?))
+    }
+}
+
+fn spawn_task_server() -> tokio::io::DuplexStream {
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    tokio::spawn(async move {
+        if let Ok(running) = TaskServer::default().serve(server_io).await {
+            let _ = running.waiting().await;
+        }
+    });
+    client_io
+}
+
+/// Without the declaration the server answers inline, so the task path is
+/// unreachable however the toolset is configured.
+#[tokio::test]
+async fn a_client_that_does_not_declare_tasks_gets_an_inline_result() {
+    let client = ().serve(spawn_task_server()).await.expect("connect");
+    let ctx = Arc::new(TestContext { content: Content::new("user") }) as Arc<dyn ReadonlyContext>;
+    let tools = McpToolset::new(client)
+        .with_task_support(adk_tool::mcp::McpTaskConfig::enabled())
+        .tools(ctx)
+        .await
+        .expect("list tools");
+
+    let output = tools[0]
+        .execute(
+            Arc::new(SimpleToolContext::new("task-test")) as Arc<dyn adk_core::ToolContext>,
+            json!({}),
+        )
+        .await
+        .expect("call the tool");
+    assert!(output.to_string().contains("inline"), "got {output}");
+}
+
+/// With the declaration the server materializes a task, and the toolset polls
+/// it to completion.
+#[tokio::test]
+async fn a_declared_client_polls_a_server_materialized_task() {
+    let handler = adk_tool::mcp::AdkClientHandler::new(Arc::new(
+        adk_tool::mcp::AutoDeclineElicitationHandler,
+    ))
+    .with_tasks();
+
+    let client = handler.serve(spawn_task_server()).await.expect("connect");
+    let ctx = Arc::new(TestContext { content: Content::new("user") }) as Arc<dyn ReadonlyContext>;
+    let toolset =
+        McpToolset::new(client).with_task_support(adk_tool::mcp::McpTaskConfig::enabled());
+    let tools = toolset.tools(ctx).await.expect("list tools");
+
+    assert!(
+        tools[0].is_long_running(),
+        "with tasks declared on both sides the tool must report as long-running"
+    );
+
+    let output = tools[0]
+        .execute(
+            Arc::new(SimpleToolContext::new("task-test")) as Arc<dyn adk_core::ToolContext>,
+            json!({}),
+        )
+        .await
+        .expect("the task must be polled to completion");
+    assert!(output.to_string().contains("from a task"), "got {output}");
+}
