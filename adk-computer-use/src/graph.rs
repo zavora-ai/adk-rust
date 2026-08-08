@@ -283,7 +283,11 @@ pub fn build_reference_graph_with_checkpointer(
             }
             Ok(NodeOutput::new().with_update("observations_joined", json!(true)))
         },
-        DeferredNodeConfig { merge_strategy: MergeStrategy::Collect, fan_in_timeout: None },
+        DeferredNodeConfig {
+            merge_strategy: MergeStrategy::Collect,
+            fan_in_timeout: None,
+            ..Default::default()
+        },
     )
     .add_node_fn("plan", |ctx| async move {
         let proposed = ctx

@@ -478,6 +478,19 @@ impl GraphAgentBuilder {
     ///     })
     ///     .build()?;
     /// ```
+    /// Configure fan-in for a node already added with [`node`](Self::node).
+    ///
+    /// [`deferred_node`](Self::deferred_node) both adds and configures a node, so
+    /// a custom `Node` added through `node` had no way to set a merge strategy or
+    /// a fan-in timeout.
+    ///
+    /// A node reached by more than one unconditional edge is deferred
+    /// automatically; this overrides that default.
+    pub fn mark_deferred(mut self, name: &str, config: DeferredNodeConfig) -> Self {
+        self.deferred_configs.insert(name.to_string(), config);
+        self
+    }
+
     pub fn deferred_node<F, Fut>(mut self, name: &str, func: F, config: DeferredNodeConfig) -> Self
     where
         F: Fn(NodeContext) -> Fut + Send + Sync + 'static,

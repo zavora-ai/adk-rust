@@ -26,7 +26,11 @@ async fn deferred_node_barriers_until_all_upstreams_done() {
                     .with_update("join_runs", json!(runs))
                     .with_update("saw_both", json!(saw_both)))
             },
-            DeferredNodeConfig { merge_strategy: MergeStrategy::Collect, fan_in_timeout: None },
+            DeferredNodeConfig {
+                merge_strategy: MergeStrategy::Collect,
+                fan_in_timeout: None,
+                ..Default::default()
+            },
         )
         .add_edge(START, "a")
         .add_edge(START, "b")

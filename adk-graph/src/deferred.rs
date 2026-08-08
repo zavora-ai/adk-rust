@@ -25,6 +25,7 @@
 //! let config = DeferredNodeConfig {
 //!     merge_strategy: MergeStrategy::Collect,
 //!     fan_in_timeout: Some(Duration::from_secs(30)),
+//!     ..Default::default()
 //! };
 //!
 //! // Track upstream completions
@@ -133,6 +134,7 @@ impl fmt::Debug for MergeStrategy {
 /// let config = DeferredNodeConfig {
 ///     merge_strategy: MergeStrategy::MergeMap,
 ///     fan_in_timeout: Some(Duration::from_secs(60)),
+///     ..Default::default()
 /// };
 /// ```
 #[derive(Debug, Clone, Default)]
@@ -147,6 +149,14 @@ pub struct DeferredNodeConfig {
     ///   proceed with partial results. If zero paths have completed, return
     ///   `GraphError::FanInTimedOut`.
     pub fan_in_timeout: Option<Duration>,
+    /// How many predecessors must have arrived for `fan_in_timeout` to release
+    /// the node with partial results.
+    ///
+    /// `None` means one, which is the behaviour this field replaced. Set it to
+    /// the full predecessor count to require all of them even after a timeout, or
+    /// to any value between for an n-of-m join: release once that many branches
+    /// have answered and abandon the rest.
+    pub min_predecessors: Option<usize>,
 }
 
 /// Tracks which upstream paths have completed for a deferred node.

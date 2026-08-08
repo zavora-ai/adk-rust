@@ -68,7 +68,7 @@ impl StateGraph {
     ///     .add_node_fn("a", |_| async { Ok(Default::default()) })
     ///     .add_node_fn("b", |_| async { Ok(Default::default()) })
     ///     .add_deferred_node_fn("join", |_| async { Ok(Default::default()) },
-    ///         DeferredNodeConfig { merge_strategy: MergeStrategy::Collect, fan_in_timeout: None })
+    ///         DeferredNodeConfig { merge_strategy: MergeStrategy::Collect, ..Default::default() })
     ///     .add_edge("a", "join")
     ///     .add_edge("b", "join");
     /// ```
@@ -166,8 +166,9 @@ impl StateGraph {
     }
 
     /// Compile the graph for execution
-    pub fn compile(self) -> Result<CompiledGraph> {
+    pub fn compile(mut self) -> Result<CompiledGraph> {
         self.validate()?;
+        self.defer_unconditional_fan_in();
 
         Ok(CompiledGraph {
             schema: self.schema,
@@ -183,6 +184,52 @@ impl StateGraph {
             #[cfg(feature = "node-cache")]
             cache_policies: HashMap::new(),
         })
+    }
+
+    /// Mark any node reached by more than one unconditional edge as deferred.
+    ///
+    /// The frontier advances from whichever nodes finished in the last
+    /// super-step, so without this a join becomes eligible as soon as one
+    /// predecessor lands. On branches of unequal length it then runs once per
+    /// arriving predecessor, applying its updates repeatedly and reading a
+    /// half-built state.
+    ///
+    /// Only `Direct` and `Entry` edges count. A conditional predecessor may never
+    /// fire, and waiting for one that cannot arrive would deadlock the join. A
+    /// graph whose fan-in arrives through conditional edges therefore still needs
+    /// `mark_deferred` and a `fan_in_timeout`.
+    ///
+    /// An explicit configuration always wins, so a caller who wants the earlier
+    /// behaviour keeps it by configuring the node themselves.
+    fn defer_unconditional_fan_in(&mut self) {
+        let mut in_degree: HashMap<&str, usize> = HashMap::new();
+        for edge in &self.edges {
+            match edge {
+                Edge::Direct { target, .. } => {
+                    if let Some(name) = target.node_name() {
+                        *in_degree.entry(name).or_insert(0) += 1;
+                    }
+                }
+                Edge::Entry { targets } => {
+                    for target in targets {
+                        *in_degree.entry(target.as_str()).or_insert(0) += 1;
+                    }
+                }
+                // A conditional edge selects one target at run time, so its
+                // targets are not guaranteed arrivals.
+                Edge::Conditional { .. } => {}
+            }
+        }
+
+        let fan_ins: Vec<String> = in_degree
+            .into_iter()
+            .filter(|(name, degree)| *degree > 1 && self.nodes.contains_key(*name))
+            .map(|(name, _)| name.to_string())
+            .collect();
+
+        for name in fan_ins {
+            self.deferred_configs.entry(name).or_default();
+        }
     }
 
     /// Validate the graph structure

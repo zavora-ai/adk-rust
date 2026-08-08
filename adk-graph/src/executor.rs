@@ -554,7 +554,10 @@ impl<'a> PregelExecutor<'a> {
                         let received = tracker.received_count();
                         let expected = tracker.expected_count();
 
-                        if received > 0 {
+                        // `min_predecessors` decides how many arrivals are enough
+                        // to release the node once the timeout expires.
+                        let required = config.min_predecessors.unwrap_or(1).max(1);
+                        if received >= required {
                             // Proceed with partial results
                             tracing::warn!(
                                 node = %candidate,
@@ -571,7 +574,7 @@ impl<'a> PregelExecutor<'a> {
                             self.deferred_start_times.remove(&candidate);
                             ready_nodes.push(candidate);
                         } else {
-                            // Zero upstream paths completed — return error
+                            // Too few arrived to release the node.
                             self.pending_deferred.remove(&candidate);
                             self.deferred_start_times.remove(&candidate);
                             return Err(GraphError::FanInTimedOut {

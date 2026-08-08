@@ -166,7 +166,11 @@ fn build_graph(
                 .with_update("decision", json!(decision))
                 .with_update("notes", json!(notes.join("\n"))))
         },
-        DeferredNodeConfig { merge_strategy: MergeStrategy::Collect, fan_in_timeout: None },
+        DeferredNodeConfig {
+            merge_strategy: MergeStrategy::Collect,
+            fan_in_timeout: None,
+            ..Default::default()
+        },
     );
 
     graph = graph.add_node_fn("revise", {
