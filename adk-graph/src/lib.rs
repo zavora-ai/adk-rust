@@ -78,6 +78,7 @@ pub mod executor;
 pub mod graph;
 pub mod interrupt;
 pub mod node;
+pub mod retry;
 pub mod state;
 pub mod stream;
 pub mod timeout;

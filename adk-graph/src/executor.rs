@@ -38,6 +38,9 @@ pub struct PregelExecutor<'a> {
     pending_deferred: HashMap<String, FanInTracker>,
     /// Tracks when each deferred node first entered the pending state (for fan-in timeout).
     deferred_start_times: HashMap<String, Instant>,
+    /// Attempts already spent per node, carried through a resume so a retry
+    /// budget is not restarted.
+    attempts: HashMap<String, u32>,
     /// The node whose static interrupt this run has already answered.
     ///
     /// Restored from the checkpoint on resume and cleared once that node has
@@ -66,6 +69,7 @@ impl<'a> PregelExecutor<'a> {
             pending_nodes: vec![],
             pending_deferred: HashMap::new(),
             deferred_start_times: HashMap::new(),
+            attempts: HashMap::new(),
             cleared_interrupt: None,
             #[cfg(feature = "node-cache")]
             node_caches,
@@ -101,6 +105,7 @@ impl<'a> PregelExecutor<'a> {
             self.pending_nodes = checkpoint.pending_nodes;
             self.step = checkpoint.step;
             self.cleared_interrupt = checkpoint.cleared_interrupt;
+            self.attempts = checkpoint.attempts;
 
             // Merge input on top of restored state
             for (key, value) in input {
@@ -132,7 +137,23 @@ impl<'a> PregelExecutor<'a> {
             }
 
             // Execute super-step
-            let result = self.execute_super_step().await?;
+            let result = match self.execute_super_step().await {
+                Ok(result) => result,
+                Err(error) => {
+                    // Checkpoint before propagating, so a retry budget already
+                    // spent is not handed out again by the next invocation. The
+                    // frontier still holds the failed node, which is what makes
+                    // the run resumable at all.
+                    let any_retryable = self
+                        .pending_nodes
+                        .iter()
+                        .any(|node| self.graph.retry_policies.contains_key(node));
+                    if any_retryable {
+                        let _ = self.save_checkpoint().await;
+                    }
+                    return Err(error);
+                }
+            };
 
             // Handle interrupts
             if let Some(interrupt) = result.interrupt {
@@ -710,14 +731,22 @@ impl<'a> PregelExecutor<'a> {
             .filter_map(|name| self.graph.nodes.get(name).map(|n| (name.clone(), n.clone())))
             .collect();
 
-        // Look up timeout policies for each node before spawning futures
+        // Look up timeout and retry policies for each node before spawning futures
         let timeout_policies: Vec<_> =
             nodes.iter().map(|(name, _)| self.graph.timeout_policy_for(name).cloned()).collect();
+        let retry_policies: Vec<_> =
+            nodes.iter().map(|(name, _)| self.graph.retry_policy_for(name).cloned()).collect();
+        // Attempts already spent, so a resumed run continues its budget rather
+        // than starting again. adk-python does not persist this.
+        let prior_attempts: Vec<u32> =
+            nodes.iter().map(|(name, _)| self.attempts.get(name).copied().unwrap_or(0)).collect();
 
         let futures: Vec<_> = nodes
             .into_iter()
             .zip(timeout_policies)
-            .map(|((name, node), policy)| {
+            .zip(retry_policies)
+            .zip(prior_attempts)
+            .map(|((((name, node), policy), retry), spent)| {
                 let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
 
                 // Attach a ProgressHandle when idle timeout is configured
@@ -730,14 +759,37 @@ impl<'a> PregelExecutor<'a> {
                 let step = self.step;
                 async move {
                     let start = Instant::now();
-                    let output = match policy {
-                        Some(ref timeout_policy) => {
-                            execute_with_timeout(node.as_ref(), &ctx, timeout_policy).await
+                    let mut attempts = spent;
+                    let output = loop {
+                        let result = match policy {
+                            Some(ref timeout_policy) => {
+                                execute_with_timeout(node.as_ref(), &ctx, timeout_policy).await
+                            }
+                            None => node.execute(&ctx).await,
+                        };
+                        attempts += 1;
+
+                        let Err(ref error) = result else { break result };
+                        let Some(ref retry) = retry else { break result };
+                        if !retry.allows_another_attempt(attempts)
+                            || !retry.retry_on.should_retry(error)
+                        {
+                            break result;
                         }
-                        None => node.execute(&ctx).await,
+
+                        let delay = retry.delay_for_attempt(attempts);
+                        tracing::warn!(
+                            node = %name,
+                            attempt = attempts,
+                            max_attempts = retry.max_attempts,
+                            delay_ms = delay.as_millis(),
+                            error = %error,
+                            "node failed, retrying after backoff"
+                        );
+                        tokio::time::sleep(delay).await;
                     };
                     let duration_ms = start.elapsed().as_millis() as u64;
-                    (name, output, duration_ms, step)
+                    (name, output, duration_ms, step, attempts)
                 }
             })
             .collect();
@@ -755,7 +807,15 @@ impl<'a> PregelExecutor<'a> {
         // Collect all updates and check for errors/interrupts
         let mut all_updates = Vec::new();
 
-        for (node_name, output_result, duration_ms, step) in outputs {
+        for (node_name, output_result, duration_ms, step, attempts) in outputs {
+            // Record the budget spent, so a resumed run does not restart it. A
+            // node that finally succeeded keeps no entry: its budget is spent
+            // only while it is failing.
+            if output_result.is_err() {
+                self.attempts.insert(node_name.clone(), attempts);
+            } else {
+                self.attempts.remove(&node_name);
+            }
             result.executed_nodes.push(node_name.clone());
             result.events.push(StreamEvent::node_end(&node_name, step, duration_ms));
 
@@ -841,6 +901,7 @@ impl<'a> PregelExecutor<'a> {
                 self.pending_nodes.clone(),
             );
             checkpoint.cleared_interrupt = self.cleared_interrupt.clone();
+            checkpoint.attempts = self.attempts.clone();
             return cp.save(&checkpoint).await;
         }
         Ok(String::new())

@@ -182,6 +182,7 @@ impl StateGraph {
             default_timeout: None,
             deferred_configs: self.deferred_configs,
             max_concurrency: None,
+            retry_policies: HashMap::new(),
             #[cfg(feature = "node-cache")]
             cache_policies: HashMap::new(),
         })
@@ -304,6 +305,8 @@ pub struct CompiledGraph {
     pub(crate) deferred_configs: HashMap<String, crate::deferred::DeferredNodeConfig>,
     /// Ceiling on how many nodes execute at once. `None` runs the whole frontier.
     pub(crate) max_concurrency: Option<usize>,
+    /// Per-node retry policies, keyed by node name.
+    pub(crate) retry_policies: HashMap<String, crate::retry::RetryPolicy>,
     /// Per-node cache policies, keyed by node name.
     #[cfg(feature = "node-cache")]
     pub(crate) cache_policies: HashMap<String, crate::cache::NodeCachePolicy>,
@@ -351,6 +354,20 @@ impl CompiledGraph {
     pub fn with_max_concurrency(mut self, limit: usize) -> Self {
         self.max_concurrency = Some(limit.max(1));
         self
+    }
+
+    /// Attach a retry policy to one node.
+    ///
+    /// A node with no policy is attempted once, which is the behaviour of a graph
+    /// that configures none.
+    pub fn with_node_retry(mut self, node: &str, policy: crate::retry::RetryPolicy) -> Self {
+        self.retry_policies.insert(node.to_string(), policy);
+        self
+    }
+
+    /// The retry policy for a node, if one is configured.
+    pub(crate) fn retry_policy_for(&self, node: &str) -> Option<&crate::retry::RetryPolicy> {
+        self.retry_policies.get(node)
     }
 
     /// Get the effective timeout policy for a node.
