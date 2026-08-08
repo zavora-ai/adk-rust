@@ -82,9 +82,18 @@ For bidirectional WebSocket sessions:
 
 - one dedicated `writer_task` MUST own the sink
 - all outbound messages MUST go through a bounded `tokio::sync::mpsc`
-- `close()` MUST send `Message::Close(...)` through that channel and await writer shutdown
+- `close()` MUST offer `Message::Close(...)` to that channel **without waiting for queue space**, and MUST bound its wait for writer shutdown, abandoning the task when the grace period expires
 
 You MUST NOT allow multiple methods to write directly to the sink through a shared mutex.
+
+Teardown MUST terminate even when the peer never reads. A peer that has stopped
+draining TCP stalls the in-flight write for as long as it likes, so both of the
+obvious "graceful" choices reintroduce the hang the writer task exists to remove:
+blocking to enqueue the close frame waits for space in a queue the peer is not
+draining, and an unbounded `handle.await` waits for a task that cannot exit until
+that same write completes. Offer the frame, wait a bounded grace period, then drop
+the sink — which closes the connection at the transport level, the outcome a
+graceful close was asking for anyway.
 
 **References**
 - **PROJECT RULE:** this is an architectural rule for this repository, not a literal sentence from one upstream doc.

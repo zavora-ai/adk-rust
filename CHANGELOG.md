@@ -7,19 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **MCP moves to the official `rmcp 3.1` SDK.** The client still advertises MCP
-  `2025-11-25`, so every existing server is unaffected: `rmcp 3.1` keeps
-  `ProtocolVersion::LATEST` at `2025-11-25`, and a `2026-07-28` server answers
-  the same handshake. `2026-07-28` adds a stateless `server/discover` handshake,
-  now selectable per connection through `adk_tool::mcp::ClientLifecycleMode`. It
-  stays opt-in because the SDK falls back to the legacy handshake only when a
-  server refuses the probe with `METHOD_NOT_FOUND`, and applies no timeout to it.
-  A new `adk-tool/tests/mcp_protocol_compatibility_tests.rs` holds the contract:
-  the default path must send `initialize` first and advertise `2025-11-25`.
-  Closes #552.
-
 ### Breaking
 
 - **`ConnectionRefresher::call_tool` and `SimpleClient::call_tool` return
@@ -39,6 +26,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under the `mcp-sampling` feature. `adk-tool --features mcp-sampling` joins the
   PR-tier feature-coverage matrix; nothing in the workspace enabled it, so its
   only cover was an example crate.
+
+### Added
+
+- **`gemini-agent-platform` / `gemini-agent-platform-full` umbrella meta-features.** One
+  switch that pulls in every Gemini Enterprise Agent Platform (Vertex/EAP)
+  integration, composable with any tier preset:
+  `features = ["standard", "gemini-agent-platform"]`. The base variant covers
+  `gemini-vertex`, `vertex-session`, and `gcp-secrets` (growing as later
+  platform integrations land) and excludes realtime transports — the right
+  default for ReasoningEngine BYOC deployments. `gemini-agent-platform-full` adds
+  `vertex-live` (Vertex AI Live API, which pulls in the adk-realtime stack).
+  Deploy-time tooling is host-side and excluded from both.
+
+### Changed
+
+- **MCP moves to the official `rmcp 3.1` SDK.** The client still advertises MCP
+  `2025-11-25`, so every existing server is unaffected: `rmcp 3.1` keeps
+  `ProtocolVersion::LATEST` at `2025-11-25`, and a `2026-07-28` server answers
+  the same handshake. `2026-07-28` adds a stateless `server/discover` handshake,
+  now selectable per connection through `adk_tool::mcp::ClientLifecycleMode`. It
+  stays opt-in because the SDK falls back to the legacy handshake only when a
+  server refuses the probe with `METHOD_NOT_FOUND`, and applies no timeout to it.
+  A new `adk-tool/tests/mcp_protocol_compatibility_tests.rs` holds the contract:
+  the default path must send `initialize` first and advertise `2025-11-25`.
+  Closes #552.
+
 
 ### Fixed
 

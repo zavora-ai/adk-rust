@@ -117,6 +117,18 @@ jobs:
             os: macos-latest
             neutralize-wild: 'false'
             command: cargo check -p adk-mistralrs --features metal
+          # Gemini Enterprise Agent Platform meta-features on the umbrella crate.
+          # `gemini-agent-platform` also runs in the PR-tier feature-coverage matrix; the
+          # `-full` variant compiles the adk-realtime stack (vertex-live) and is
+          # nightly-only to keep PR-tier feedback fast.
+          - name: umbrella-gemini-agent-platform
+            os: ubuntu-latest
+            neutralize-wild: 'true'
+            command: cargo clippy -p adk-rust --no-default-features --features minimal,gemini-agent-platform --all-targets -- -D warnings
+          - name: umbrella-gemini-agent-platform-full
+            os: ubuntu-latest
+            neutralize-wild: 'true'
+            command: cargo clippy -p adk-rust --no-default-features --features minimal,gemini-agent-platform-full --all-targets -- -D warnings
     steps:
     - uses: actions/checkout@v7
 

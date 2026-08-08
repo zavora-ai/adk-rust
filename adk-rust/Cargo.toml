@@ -66,6 +66,41 @@ full = [
     "code-tools",
 ]
 
+# Gemini Enterprise Agent Platform — every Vertex/EAP integration except
+# realtime transports. The right default for ReasoningEngine BYOC deployments
+# (request/response + SSE agents). Composable with any tier:
+#   features = ["minimal", "gemini-agent-platform"]
+# Excluded: deploy-time tooling (host-side, not part of the agent container)
+# and `vertex-live` (build weight — see `gemini-agent-platform-full`).
+# Growth rule: every PR that introduces a Vertex/EAP feature flag appends it
+# here (or to `gemini-agent-platform-full` if it pulls in a realtime transport).
+gemini-agent-platform = [
+    # existing integrations (Wave 0 initial content)
+    "gemini-vertex",  # Vertex model backend (adk-model → adk-gemini/vertex)
+    "vertex-session", # managed Sessions (adk-session)
+    "gcp-secrets",    # GCP Secret Manager (adk-auth)
+    # target end-state — appended by the PR that introduces each flag:
+    # "agent-engine",           class-method runtime contract (adk-server)
+    # "vertex-memory",          Memory Bank (adk-memory)
+    # "example-store",          Example Store (adk-tool)
+    # "gcs-artifacts",          GCS artifact backend (adk-artifact)
+    # "gcp-telemetry",          Cloud Trace/Logging transport (adk-telemetry)
+    # "vertex-sandbox",         managed code-execution sandbox (adk-code)
+    # "vertex-eval",            Gen AI Evaluation bridge (adk-eval)
+    # "vertex-rag",             RAG Engine retrieval (adk-rag)
+    # "agent-retrieval",        Agent Retrieval store (adk-rag)
+    # "vertex-agent-registry",  Agent Registry discovery (adk-tool)
+    # "vertex-remote-engine",   remote ReasoningEngine sub-agents (adk-server)
+    # "vertex-skill-registry",  Skill Registry consumption (adk-skill)
+]
+
+# gemini-agent-platform + realtime: adds the Vertex AI Live API (bidirectional
+# audio/video), which pulls in the adk-realtime WebSocket/audio stack.
+gemini-agent-platform-full = [
+    "gemini-agent-platform",
+    "vertex-live", # Vertex AI Live API (adk-realtime)
+]
+
 # CLI launcher support
 cli = ["dep:adk-cli", "runner", "server", "sessions", "telemetry"]
 cli-openai = ["cli", "adk-cli/openai"]
