@@ -24,6 +24,8 @@
 //! assert!(!store.durability().survives_process_loss());
 //! ```
 
+use serde::{Deserialize, Serialize};
+
 use crate::checkpoint::RunState;
 use crate::types::{RuntimeError, SessionEvent};
 use async_trait::async_trait;
@@ -56,7 +58,7 @@ impl Durability {
 ///
 /// Not `PartialEq`: `SessionEvent` is `#[non_exhaustive]` and not comparable, so compare the
 /// `run_state` and event count rather than whole snapshots.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManagedSessionState {
     /// Events recorded for the session, in order.
     pub events: Vec<SessionEvent>,
@@ -224,5 +226,119 @@ mod tests {
             "process-local state does not cross process boundaries"
         );
         assert!(second.session_ids().await.unwrap().is_empty());
+    }
+}
+
+/// Records each session as one JSON file under a directory.
+///
+/// The first store here that reports [`Durability::CrashDurable`]: a write is fsynced
+/// through a temporary file and a rename, so another process can reconstruct a session
+/// after loss. `InMemoryManagedStateStore` cannot, and says so.
+///
+/// One file per session rather than one file for all of them, so two sessions being
+/// checkpointed at once do not contend, and a corrupt write can only lose the session
+/// it belonged to.
+///
+/// # Example
+///
+/// ```no_run
+/// use adk_managed::state_store::{Durability, FileManagedStateStore, ManagedStateStore};
+///
+/// let store = FileManagedStateStore::new("/var/lib/adk/sessions");
+/// assert_eq!(store.durability(), Durability::CrashDurable);
+/// ```
+#[derive(Debug)]
+pub struct FileManagedStateStore {
+    root: std::path::PathBuf,
+}
+
+impl FileManagedStateStore {
+    /// Records sessions under `root`, creating it on the first write.
+    pub fn new(root: impl Into<std::path::PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    /// The file holding one session.
+    ///
+    /// The id is percent-style escaped, so an id containing a path separator cannot
+    /// write outside `root`.
+    fn path_for(&self, session_id: &str) -> std::path::PathBuf {
+        let safe: String = session_id
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        self.root.join(format!("{safe}.json"))
+    }
+
+    fn failed(action: &str, error: impl std::fmt::Display) -> RuntimeError {
+        RuntimeError::CheckpointFailed {
+            message: format!("could not {action} session state: {error}"),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ManagedStateStore for FileManagedStateStore {
+    fn durability(&self) -> Durability {
+        Durability::CrashDurable
+    }
+
+    async fn save(&self, session_id: &str, state: ManagedSessionState) -> Result<(), RuntimeError> {
+        // `std::fs` rather than `tokio::fs`: this crate does not enable tokio's `fs`
+        // feature, and relying on another crate in the workspace to enable it would
+        // break the moment this crate is built alone. A snapshot is small.
+        use std::io::Write;
+
+        let path = self.path_for(session_id);
+        let text = serde_json::to_vec_pretty(&state).map_err(|e| Self::failed("encode", e))?;
+        std::fs::create_dir_all(&self.root)
+            .map_err(|e| Self::failed("create the directory for", e))?;
+
+        // Written beside the target, synced, then renamed. The sync is what lets this
+        // store claim CrashDurable: the trait forbids acknowledging a write that is not
+        // yet persisted, and the rename means a reader sees a whole snapshot or none.
+        let temporary = path.with_extension("json.tmp");
+        let mut file = std::fs::File::create(&temporary)
+            .map_err(|e| Self::failed("open a temporary file for", e))?;
+        file.write_all(&text).map_err(|e| Self::failed("write", e))?;
+        file.sync_all().map_err(|e| Self::failed("sync", e))?;
+        drop(file);
+        std::fs::rename(&temporary, &path).map_err(|e| Self::failed("commit", e))
+    }
+
+    async fn load(&self, session_id: &str) -> Result<Option<ManagedSessionState>, RuntimeError> {
+        match std::fs::read(self.path_for(session_id)) {
+            Ok(bytes) => {
+                serde_json::from_slice(&bytes).map(Some).map_err(|e| Self::failed("decode", e))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(Self::failed("read", error)),
+        }
+    }
+
+    async fn delete(&self, session_id: &str) -> Result<(), RuntimeError> {
+        match std::fs::remove_file(self.path_for(session_id)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(Self::failed("delete", error)),
+        }
+    }
+
+    async fn session_ids(&self) -> Result<Vec<String>, RuntimeError> {
+        let entries = match std::fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(Self::failed("list", error)),
+        };
+        let mut ids = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| Self::failed("list", e))?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if let Some(id) = name.strip_suffix(".json") {
+                ids.push(id.to_string());
+            }
+        }
+        ids.sort();
+        Ok(ids)
     }
 }

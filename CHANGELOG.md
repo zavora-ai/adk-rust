@@ -119,6 +119,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     rest from both the map and the records, because a store that persists every
     finished run forever is a leak that only appears after weeks. A run still in
     flight is never discarded.
+  - **`FileManagedStateStore`.** The first `ManagedStateStore` reporting
+    `Durability::CrashDurable`, so a managed session can be reconstructed after
+    process loss. One JSON file per session, synced and renamed, so an acknowledged
+    write is persisted and a reader never sees a partial snapshot. Session ids are
+    escaped, so an id containing a path separator cannot write outside the root.
+    `InMemoryManagedStateStore` remains, and still reports `ProcessLocal`.
   - **Umbrella features.** `graph-functional`, `graph-node-cache`, `graph-delta`,
     `graph-time-travel`, `graph-sqlite`, and `graph-redis-cache` on `adk-rust`
     forward to `adk-graph`, which has no default features. The first four are in
