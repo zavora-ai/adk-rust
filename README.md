@@ -11,7 +11,7 @@
 A production-ready Rust framework for building AI agents. Model-agnostic, type-safe
 and async, across 42 crates for agent orchestration.
 
-> **v2.0.0 is a major release with breaking changes.** Coming from 1.x, read the
+> **v2.0.0 Released!** A major release with breaking changes. Coming from 1.x, read the
 > [migration guide](docs/official_docs/migration/1.0-to-2.0.md) — six APIs changed
 > shape, and the fan-in default changed behaviour without an API change. The
 > [CHANGELOG](CHANGELOG.md) has the full entry.
@@ -377,8 +377,8 @@ per-platform tool matrix and the CI cost tiers.
 
 ## Project
 
-- [ROADMAP.md](ROADMAP.md) — the authoritative roadmap, and why both orchestration
-  APIs are supported
+- [ROADMAP.md](ROADMAP.md) — **v2.0.0** (current). The authoritative roadmap, and
+  why both orchestration APIs are supported
 - [CHANGELOG.md](CHANGELOG.md) — every release
 - [CONTRIBUTORS.md](CONTRIBUTORS.md) — the people who built this
 - [STABILITY.md](STABILITY.md) — crate stability tiers and the deprecation policy
