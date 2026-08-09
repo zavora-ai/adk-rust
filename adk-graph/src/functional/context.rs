@@ -66,8 +66,7 @@ pub struct TaskContext {
     /// Iteration counters for loop checkpoint keying.
     /// Maps task_name -> current iteration index.
     iteration_counters: HashMap<String, usize>,
-    /// Pending dynamic route targets set by `route_to()`.
-    /// Consumed by the executor to populate `EventActions.route`.
+    /// Route targets set by `route_to`, read back by `take_pending_route`.
     pending_route: Option<Vec<String>>,
     /// Values supplied for interrupt sites, keyed by continuation key.
     ///
@@ -379,28 +378,63 @@ impl TaskContext {
         self.iteration_counters.clear();
     }
 
-    // ─── Route Dispatch ──────────────────────────────────────────────────
+    // ─── Route Hand-off ──────────────────────────────────────────────────
 
-    /// Set dynamic route targets for this task's output.
+    /// Records the task names this task chose, for its caller to read.
     ///
-    /// The execution framework will dispatch to these named tasks
-    /// instead of following the declared order. The pending route is
-    /// consumed by the executor after the task completes and used to
-    /// populate `EventActions.route`.
+    /// Nothing in this crate acts on the value. The functional API runs your
+    /// own control flow: `#[entrypoint]` calls your function once, and the
+    /// awaits inside it are the order of execution. So a task states its
+    /// choice here and the surrounding code reads it with
+    /// [`Self::take_pending_route`] and calls what it names.
+    ///
+    /// For routing the framework performs, build the workflow with
+    /// [`StateGraph::add_conditional_edges`](crate::graph::StateGraph::add_conditional_edges),
+    /// which resolves a route key against declared targets and dispatches to
+    /// them.
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```
+    /// use std::collections::HashMap;
+    /// use std::sync::Arc;
+    ///
+    /// use adk_graph::checkpoint::{Checkpointer, MemoryCheckpointer};
+    /// use adk_graph::functional::{ExecutionLog, TaskContext};
+    /// use tokio::sync::{RwLock, broadcast};
+    /// use tokio_util::sync::CancellationToken;
+    ///
+    /// # fn main() {
+    /// let (event_tx, _rx) = broadcast::channel(8);
+    /// let mut ctx = TaskContext::new(
+    ///     "thread-1".to_string(),
+    ///     HashMap::new(),
+    ///     Arc::new(MemoryCheckpointer::new()) as Arc<dyn Checkpointer>,
+    ///     event_tx,
+    ///     Arc::new(RwLock::new(ExecutionLog::new())),
+    ///     CancellationToken::new(),
+    ///     None,
+    /// );
+    ///
+    /// // A task states which branches it chose.
     /// ctx.route_to(&["process_a", "process_b"]);
+    ///
+    /// // The surrounding code reads the choice and calls those tasks itself.
+    /// let chosen = ctx.take_pending_route().expect("a route was set");
+    /// assert_eq!(chosen, vec!["process_a".to_string(), "process_b".to_string()]);
+    ///
+    /// // Reading it clears it, so the next task starts with no choice pending.
+    /// assert_eq!(ctx.take_pending_route(), None);
+    /// # }
     /// ```
     pub fn route_to(&mut self, targets: &[&str]) {
         self.pending_route = Some(targets.iter().map(|s| s.to_string()).collect());
     }
 
-    /// Consume and return the pending route targets, if any.
+    /// Takes the task names recorded by [`Self::route_to`], clearing them.
     ///
-    /// Used by the executor to retrieve the route set by `route_to()`
-    /// and clear the pending state.
+    /// Returns `None` when no task set a route. Call this from the code that
+    /// sequences your tasks; nothing in this crate calls it for you.
     pub fn take_pending_route(&mut self) -> Option<Vec<String>> {
         self.pending_route.take()
     }
