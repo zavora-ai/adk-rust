@@ -261,15 +261,20 @@ with the release***
 <details>
 <summary>Episode highlights</summary>
 
-- **On its own** — what an agent does between one instruction and the next
-- **Carrying on** — durable resume: a run that survives the process it started in
-- **Without being asked** — imperative invocation, and deciding at run time how much
-  work there is
-- **When the problem changed** — routing from inside a node, and handing control back
-  to a parent graph
-- **The unglamorous half** — retries, timeouts, concurrency bounds, bounded growth
-- **What happens at forty** — where the design stops being obvious
-- **What it costs** — the honest tradeoffs, including what is still missing
+- **The Numbers** — 42 crates, 4,300+ tests, 104 runnable examples, 568 μs agent-loop
+  overhead against LangGraph's 1,228 ms
+- **Agents That Survive** — SQLite checkpointers, delta checkpoints, and a pause that
+  resumes in a fresh process that shares only the database file
+- **Subgraphs** — a graph as a node, nested three deep, with channel mismatches caught
+  when the parent compiles rather than as an absent value at run time
+- **Deciding At Run Time** — `run_node_with` for work whose size comes from state, and
+  `with_goto` for a node that picks its own successor with no edge declared
+- **The Unglamorous Half** — retries with capped backoff, concurrency bounds, node
+  timeouts, and checkpoint retention so a week-long thread stops growing
+- **Governed Computer Use** — approval interrupts bound to a digest, so what you
+  approved is what runs
+- **What It Costs** — no automatic crash recovery, an unbounded child ledger, and why
+  we kept two orchestration APIs when the other ADKs deprecated one
 
 </details>
 
