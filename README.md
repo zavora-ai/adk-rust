@@ -215,8 +215,72 @@ Each row links to its guide and a runnable example.
 | Guardrails, RBAC, SSO, audit logging | [security](docs/official_docs/security/access-control.md) | — |
 | Observability — OpenTelemetry tracing, structured logging | [observability](docs/official_docs/observability/telemetry.md) | — |
 
-Scaffold any of it: `cargo adk new my-agent --template graph --addon telemetry`.
-Run `cargo adk templates` and `cargo adk addons` for the full list.
+### Scaffold a project
+
+```bash
+cargo install cargo-adk
+
+cargo adk new my-agent                       # basic Gemini agent (alias for --template llm)
+cargo adk new my-agent --template tools      # agent with #[tool] custom tools
+cargo adk new my-agent --template rag        # RAG with vector search
+cargo adk new my-agent --template api        # REST server
+cargo adk new my-agent --template graph      # graph workflow with checkpoints
+cargo adk new my-agent --template realtime   # realtime voice agent
+
+# Compose addons with any template
+cargo adk new my-agent --template tools --addon telemetry --addon sessions
+cargo adk new my-agent --addon mcp --addon guardrails
+
+cd my-agent
+cp .env.example .env    # add your API key
+cargo run
+```
+
+**Agent types** — the core agent structure.
+
+| Template | What you get |
+|----------|--------------|
+| `llm` (alias `basic`) | Single LLM agent with tool calling |
+| `tools` | LLM agent with `#[tool]` custom tools |
+| `sequential` | Multi-agent pipeline executing in order |
+| `parallel` | Parallel execution with result aggregation |
+| `loop` | Iterates until a condition is met |
+| `conditional` | Routes based on LLM decisions |
+| `graph` | Graph workflow with checkpoints and durable execution |
+| `realtime` | Bidirectional audio and video streaming |
+| `rag` | Vector search over a knowledge base |
+| `api` | REST server exposing the agent over HTTP |
+| `openai` | OpenAI-powered agent |
+| `custom` | Manual `Agent` trait implementation |
+
+**Enterprise patterns** — pre-composed, several capabilities already wired together.
+
+| Template | What you get |
+|----------|--------------|
+| `production` | LLM agent with server, auth, sessions and telemetry |
+| `multi-agent` | Supervisor over sub-agents, with telemetry |
+| `pipeline` | Sequential data processing with session state |
+| `chatbot` | Conversational agent with memory and an HTTP interface |
+| `a2a-server` (alias `a2a`) | A2A protocol server with session management |
+| `managed-agents` | Anthropic Managed Agents session with SSE streaming |
+
+**Addons** — composable with any template, and with each other.
+
+| Addon | Adds |
+|-------|------|
+| `telemetry` | OpenTelemetry tracing |
+| `auth` | API key and JWT authentication |
+| `sessions` | Session state management |
+| `memory` | Semantic memory and RAG |
+| `mcp` | MCP tool integration |
+| `guardrails` | Input and output validation |
+| `eval` | Evaluation framework |
+| `browser` | Browser automation |
+| `server` | HTTP server with A2A |
+
+`cargo adk build` compiles the project without deploying, and `cargo adk validate`
+checks an agent definition without building. `cargo adk templates` and
+`cargo adk addons` print these lists.
 
 ## Crates
 
