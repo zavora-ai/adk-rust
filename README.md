@@ -11,10 +11,10 @@
 A production-ready Rust framework for building AI agents. Model-agnostic, type-safe
 and async, across 42 crates you compose to taste.
 
-> **v2.0.0 is a release candidate and is not on crates.io yet.** The snippets below
-> name `2.0.0`; until the crates are published, depend on this repository by path or
-> git. See the [migration guide](docs/official_docs/migration/1.0-to-2.0.md) for the
-> breaking changes and the [CHANGELOG](CHANGELOG.md) for the full entry.
+> **v2.0.0 is a major release with breaking changes.** Coming from 1.x, read the
+> [migration guide](docs/official_docs/migration/1.0-to-2.0.md) — six APIs changed
+> shape, and the fan-in default changed behaviour without an API change. The
+> [CHANGELOG](CHANGELOG.md) has the full entry.
 
 ## Start
 
