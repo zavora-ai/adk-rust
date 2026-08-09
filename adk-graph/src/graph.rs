@@ -301,7 +301,7 @@ impl StateGraph {
 /// Turns a node failure into state and a route, instead of ending the run.
 ///
 /// Called after the node's retry budget is spent. Returning a
-/// [`NodeOutput`](crate::node::NodeOutput) lets the handler record what happened
+/// [`crate::node::NodeOutput`] lets the handler record what happened
 /// and name a recovery node with
 /// [`with_goto`](crate::node::NodeOutput::with_goto). Returning `Err` ends the
 /// run as before.
@@ -321,9 +321,9 @@ pub type NodeErrorHandler =
 /// use adk_graph::timeout::TimeoutPolicy;
 /// use std::time::Duration;
 ///
-/// let defaults = NodeDefaults::new()
-///     .with_retry(RetryPolicy::new(3))
-///     .with_timeout(TimeoutPolicy::new(Duration::from_secs(30)));
+/// let defaults = NodeDefaults::new().with_retry(RetryPolicy::new(3)).with_timeout(
+///     TimeoutPolicy { run_timeout: Some(Duration::from_secs(30)), ..Default::default() },
+/// );
 /// # let _ = defaults;
 /// ```
 #[derive(Clone, Default)]
@@ -458,7 +458,7 @@ impl CompiledGraph {
     /// is the fallback for a name the schema does not hold. A graph that declared
     /// a list channel and then wrote a near-miss name keeps only the last value
     /// and reports nothing. Enforcement turns that into
-    /// [`GraphError::UndeclaredChannel`](crate::error::GraphError::UndeclaredChannel).
+    /// [`crate::error::GraphError::UndeclaredChannel`].
     ///
     /// A graph that declares no channels accepts any name even under
     /// enforcement, because there is nothing to check against.
