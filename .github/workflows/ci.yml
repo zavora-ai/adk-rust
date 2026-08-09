@@ -161,7 +161,11 @@ jobs:
           # never compiled them and no job ever *ran* their tests. The nightly `full`
           # clippy build compiles them but executes nothing.
           - { package: adk-realtime, features: openai }
-          - { package: adk-managed, features: memory }
+          # `full` rather than `memory`: the entry used to name `memory` alone, which
+          # looked like coverage while leaving `sandbox` unbuilt. adk-sandbox renamed a
+          # field of EnforcedLimits in #485 and a call site behind `sandbox` kept the old
+          # name for two releases, because nothing compiled it.
+          - { package: adk-managed, features: full }
           - { package: adk-audio, features: fx }
           - { package: adk-rag, features: lancedb }
           # adk-auth's SSO/OAuth surface: gated behind `sso`, so `--workspace` without

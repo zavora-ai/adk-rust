@@ -713,7 +713,9 @@ mod tests {
                         timeout: true,
                         memory: false,
                         network_isolation: false,
-                        filesystem_isolation: false,
+                        // Read and write isolation are reported separately since #485.
+                        filesystem_write_isolation: false,
+                        filesystem_read_isolation: false,
                         environment_isolation: false,
                     },
                 }
