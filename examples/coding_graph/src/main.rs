@@ -91,7 +91,8 @@ async fn main() -> anyhow::Result<()> {
         assert slug.slugify('') == '', 'empty'\n\
         assert slug.slugify('a---b__c') == 'a-b-c', repr(slug.slugify('a---b__c'))\n\
         print('ok')\n";
-    let out = std::process::Command::new("python3").arg("-c").arg(check).current_dir(&root).output();
+    let out =
+        std::process::Command::new("python3").arg("-c").arg(check).current_dir(&root).output();
     match out {
         Ok(o) => {
             let stdout = String::from_utf8_lossy(&o.stdout);
@@ -229,7 +230,12 @@ fn build_graph(model: Arc<dyn Llm>, root: PathBuf) -> anyhow::Result<adk_graph::
                 .with_update("decision", json!(decision))
                 .with_update("notes", json!(notes.join("\n"))))
         },
-        DeferredNodeConfig { merge_strategy: MergeStrategy::Collect, fan_in_timeout: None },
+        DeferredNodeConfig {
+            merge_strategy: MergeStrategy::Collect,
+            fan_in_timeout: None,
+            // All reviewers must arrive; a quorum would revise on partial feedback.
+            min_predecessors: None,
+        },
     );
 
     // revise: a coding agent applies the synthesized feedback.
