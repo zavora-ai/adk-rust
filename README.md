@@ -1034,6 +1034,7 @@ Validated examples in this repo include:
 - `cargo run -p adk-realtime --example openai_session_update --features openai` — OpenAI Realtime session mutation.
 - `cargo run -p adk-realtime --example vertex_live_voice --features vertex-live` — Vertex AI Live voice session.
 - `cargo run --manifest-path examples/awp_agent/Cargo.toml` — Agentic Web Protocol server example.
+- `cargo run --manifest-path examples/graph_parity_openai/Cargo.toml` — an OpenAI review pipeline over `adk-graph`: the planner decides how many reviewers to run, the graph invokes them imperatively under a concurrency bound, and a resumed pause re-uses the completed reviews instead of paying for them twice.
 - `cargo run --manifest-path examples/multi_perspective_analysis/Cargo.toml` — three LLM analysts running concurrently under `ParallelAgent`, with per-branch timing.
 
 ## Development
