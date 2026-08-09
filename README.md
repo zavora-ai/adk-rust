@@ -9,7 +9,7 @@
 [![GitHub Discussions](https://img.shields.io/github/discussions/zavora-ai/adk-rust?style=flat&logo=github&color=5865F2)](https://github.com/zavora-ai/adk-rust/discussions)
 
 A production-ready Rust framework for building AI agents. Model-agnostic, type-safe
-and async, across 42 crates you compose to taste.
+and async, across 42 crates for agent orchestration.
 
 > **v2.0.0 is a major release with breaking changes.** Coming from 1.x, read the
 > [migration guide](docs/official_docs/migration/1.0-to-2.0.md) — six APIs changed
