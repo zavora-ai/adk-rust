@@ -40,8 +40,10 @@ adk-rust = "2.0.0"                                        # Gemini, agents, runn
 | `enterprise` | standard + realtime, browser, RAG, payments, AWP | Full-featured production |
 | `full` | enterprise + audio, code execution, sandbox | Everything |
 
-Domain add-ons compose with any tier: `features = ["minimal", "audio"]`. See
-[AGENTS.md](AGENTS.md#adk-rust-umbrella) for the full list.
+A tier is a starting point for ADK-Rust feature sets. Add any single capability on top of one
+without moving to the next tier, so `features = ["minimal", "audio"]` gives you the
+minimal build plus audio. [AGENTS.md](AGENTS.md#adk-rust-umbrella) lists every feature you can add
+this way.
 
 ## One agent, end to end
 
