@@ -242,3 +242,106 @@ async fn a_goto_is_honoured_on_the_streamed_path() {
         "the node the goto named must have run exactly once"
     );
 }
+
+/// An agent that answers with a fixed word, so the routing decision is the thing
+/// under test rather than a model's judgement.
+struct FixedAgent {
+    name: String,
+    answer: String,
+}
+
+#[async_trait::async_trait]
+impl adk_core::Agent for FixedAgent {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        "answers with a fixed word"
+    }
+    fn sub_agents(&self) -> &[Arc<dyn adk_core::Agent>] {
+        &[]
+    }
+    async fn run(
+        &self,
+        _ctx: Arc<dyn adk_core::InvocationContext>,
+    ) -> adk_core::Result<adk_core::EventStream> {
+        let mut event = adk_core::Event::new(&self.name);
+        event.set_content(adk_core::Content::new("model").with_text(&self.answer));
+        Ok(Box::pin(futures::stream::iter(vec![Ok(event)])))
+    }
+}
+
+#[tokio::test]
+async fn an_agent_node_routes_on_what_it_answered() {
+    use adk_graph::node::AgentNode;
+
+    let classifier =
+        Arc::new(FixedAgent { name: "classifier".to_string(), answer: "refund".to_string() });
+
+    let graph = StateGraph::with_channels(&["category", "handled"])
+        .add_node(
+            AgentNode::new(classifier as Arc<dyn adk_core::Agent>)
+                .with_input_mapper(|_state: &State| adk_core::Content::new("user").with_text("hi"))
+                .with_output_mapper(|events: &[adk_core::Event]| {
+                    let text: String = events
+                        .iter()
+                        .filter_map(|event| event.content())
+                        .flat_map(|content| content.parts.iter().filter_map(|part| part.text()))
+                        .collect();
+                    let mut updates = std::collections::HashMap::new();
+                    updates.insert("category".to_string(), json!(text.trim()));
+                    updates
+                })
+                // The agent's answer decides the branch. No edge declares it.
+                .with_goto_mapper(
+                    |updates: &std::collections::HashMap<String, serde_json::Value>| match updates
+                        .get("category")
+                        .and_then(|v| v.as_str())
+                    {
+                        Some("refund") => Some(vec!["refund_desk".to_string()]),
+                        Some(_) => Some(vec!["general_desk".to_string()]),
+                        None => None,
+                    },
+                ),
+        )
+        .add_node_fn("refund_desk", |_ctx| async move {
+            Ok(NodeOutput::new().with_update("handled", json!("refund_desk")))
+        })
+        .add_node_fn("general_desk", |_ctx| async move {
+            Ok(NodeOutput::new().with_update("handled", json!("general_desk")))
+        })
+        .add_edge(START, "classifier")
+        .add_edge("refund_desk", END)
+        .add_edge("general_desk", END)
+        .compile()
+        .unwrap();
+
+    let state = graph.invoke(State::new(), ExecutionConfig::new("agent-goto")).await.unwrap();
+    assert_eq!(state.get("category"), Some(&json!("refund")));
+    assert_eq!(state.get("handled"), Some(&json!("refund_desk")));
+}
+
+#[tokio::test]
+async fn an_agent_node_without_a_goto_mapper_follows_its_edges() {
+    use adk_graph::node::AgentNode;
+
+    let agent = Arc::new(FixedAgent { name: "plain".to_string(), answer: "x".to_string() });
+
+    let graph = StateGraph::with_channels(&["handled"])
+        .add_node(
+            AgentNode::new(agent as Arc<dyn adk_core::Agent>)
+                .with_input_mapper(|_state: &State| adk_core::Content::new("user").with_text("hi"))
+                .with_output_mapper(|_events: &[adk_core::Event]| std::collections::HashMap::new()),
+        )
+        .add_node_fn("next", |_ctx| async move {
+            Ok(NodeOutput::new().with_update("handled", json!("next")))
+        })
+        .add_edge(START, "plain")
+        .add_edge("plain", "next")
+        .add_edge("next", END)
+        .compile()
+        .unwrap();
+
+    let state = graph.invoke(State::new(), ExecutionConfig::new("agent-plain")).await.unwrap();
+    assert_eq!(state.get("handled"), Some(&json!("next")));
+}

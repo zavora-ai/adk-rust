@@ -417,6 +417,12 @@ pub type AgentInputMapper = Box<dyn Fn(&State) -> adk_core::Content + Send + Syn
 pub type AgentOutputMapper =
     Box<dyn Fn(&[adk_core::Event]) -> HashMap<String, Value> + Send + Sync>;
 
+/// Chooses an [`AgentNode`]'s successors from the updates it just produced.
+///
+/// Returning `None` leaves the node's declared edges in charge.
+pub type AgentGotoMapper =
+    Box<dyn Fn(&HashMap<String, Value>) -> Option<Vec<String>> + Send + Sync>;
+
 /// Wrapper to use an existing ADK Agent as a graph node
 pub struct AgentNode {
     name: String,
@@ -426,6 +432,8 @@ pub struct AgentNode {
     input_mapper: AgentInputMapper,
     /// Map agent events to state updates
     output_mapper: AgentOutputMapper,
+    /// Choose successors from the mapped updates, replacing declared edges.
+    goto_mapper: Option<AgentGotoMapper>,
 }
 
 impl AgentNode {
@@ -437,6 +445,7 @@ impl AgentNode {
             agent,
             input_mapper: Box::new(default_input_mapper),
             output_mapper: Box::new(default_output_mapper),
+            goto_mapper: None,
         }
     }
 
@@ -455,6 +464,38 @@ impl AgentNode {
         F: Fn(&[adk_core::Event]) -> HashMap<String, Value> + Send + Sync + 'static,
     {
         self.output_mapper = Box::new(mapper);
+        self
+    }
+
+    /// Chooses this node's successors from the updates the output mapper produced.
+    ///
+    /// An agent's answer often decides where control goes next. The output mapper
+    /// turns the agent's events into state; this turns that state into a route,
+    /// so the classification is parsed once.
+    ///
+    /// Returning `None` leaves the declared edges in charge. Returning targets
+    /// replaces them, exactly as [`NodeOutput::with_goto`] does for a plain node.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use adk_graph::node::AgentNode;
+    /// # use std::collections::HashMap;
+    /// # fn wire(node: AgentNode) -> AgentNode {
+    /// node.with_goto_mapper(|updates: &HashMap<String, serde_json::Value>| {
+    ///     match updates.get("category").and_then(|v| v.as_str()) {
+    ///         Some("refund") => Some(vec!["refund_desk".to_string()]),
+    ///         Some(_) => Some(vec!["general_desk".to_string()]),
+    ///         None => None,
+    ///     }
+    /// })
+    /// # }
+    /// ```
+    pub fn with_goto_mapper<F>(mut self, mapper: F) -> Self
+    where
+        F: Fn(&HashMap<String, Value>) -> Option<Vec<String>> + Send + Sync + 'static,
+    {
+        self.goto_mapper = Some(Box::new(mapper));
         self
     }
 }
@@ -538,9 +579,13 @@ impl Node for AgentNode {
 
         // Map events to state updates
         let updates = (self.output_mapper)(&events);
+        let goto = self.goto_mapper.as_ref().and_then(|mapper| mapper(&updates));
 
         // Convert agent events to stream events for tracing
         let mut output = NodeOutput::new().with_updates(updates);
+        if let Some(targets) = goto {
+            output = output.with_goto(targets);
+        }
         for event in &events {
             if let Ok(json) = serde_json::to_value(event) {
                 output = output.with_event(StreamEvent::custom(&self.name, "agent_event", json));
@@ -559,6 +604,7 @@ impl Node for AgentNode {
         let agent = self.agent.clone();
         let input_mapper = &self.input_mapper;
         let output_mapper = &self.output_mapper;
+        let goto_mapper = &self.goto_mapper;
         let parent_context = ctx.config.parent_context.clone();
         let thread_id = ctx.config.thread_id.clone();
         let content = (input_mapper)(&ctx.state);
@@ -622,10 +668,12 @@ impl Node for AgentNode {
             // Report state updates from this run. Without this the streaming
             // executor has no updates to apply and would have to run the agent
             // a second time to obtain them.
-            yield Ok(StreamEvent::Updates {
-                node: name.clone(),
-                updates: (output_mapper)(&all_events),
-            });
+            let updates = (output_mapper)(&all_events);
+            // Same route the plain path uses: this yields events, not a NodeOutput.
+            if let Some(targets) = goto_mapper.as_ref().and_then(|mapper| mapper(&updates)) {
+                yield Ok(StreamEvent::route_dispatched(&name, targets));
+            }
+            yield Ok(StreamEvent::Updates { node: name.clone(), updates });
         })
     }
 }
