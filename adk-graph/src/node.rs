@@ -328,11 +328,18 @@ pub trait Node: Send + Sync {
                     for event in output.events {
                         yield Ok(event);
                     }
-                    // A goto has no other way through: this path yields events, not
-                    // a NodeOutput, so the executor reads the route back off the
-                    // stream.
+                    // A goto and an interrupt have no other way through: this path
+                    // yields events, not a NodeOutput, so the executor reads both
+                    // back off the stream.
                     if let Some(targets) = output.goto {
                         yield Ok(StreamEvent::route_dispatched(&name, targets));
+                    }
+                    if let Some(interrupt) = output.interrupt {
+                        let (message, data) = match interrupt {
+                            crate::interrupt::Interrupt::Dynamic { message, data } => (message, data),
+                            other => (other.to_string(), None),
+                        };
+                        yield Ok(StreamEvent::node_interrupt(&name, &message, data));
                     }
                     yield Ok(StreamEvent::Updates { node: name, updates: output.updates });
                 }

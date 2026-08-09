@@ -52,6 +52,13 @@ pub enum StreamEvent {
     /// Execution was interrupted
     Interrupted { node: String, message: String },
 
+    /// A node asked to pause, reported by `Node::execute_stream`.
+    ///
+    /// The streamed path yields events rather than a `NodeOutput`, so a node's own
+    /// interrupt request needs a way through. The executor turns this into the
+    /// pause and does not forward it, so a caller sees only `Interrupted`.
+    NodeInterrupt { node: String, message: String, data: Option<serde_json::Value> },
+
     /// Execution resumed from a checkpoint
     Resumed { step: usize, pending_nodes: Vec<String> },
 
@@ -124,6 +131,11 @@ impl StreamEvent {
     /// Create an error event
     pub fn error(message: &str, node: Option<&str>) -> Self {
         Self::Error { message: message.to_string(), node: node.map(|s| s.to_string()) }
+    }
+
+    /// Create an event reporting that a node asked to pause.
+    pub fn node_interrupt(node: &str, message: &str, data: Option<serde_json::Value>) -> Self {
+        Self::NodeInterrupt { node: node.to_string(), message: message.to_string(), data }
     }
 
     /// Create a route dispatched event

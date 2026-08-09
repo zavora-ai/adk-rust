@@ -73,6 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Channel enforcement.** `with_strict_channels` fails the run when a node writes
     a channel the schema does not declare, which otherwise took the overwrite
     reducer silently.
+  - **`StreamEvent::NodeInterrupt`.** A node reporting a pause on the streamed
+    path. The executor converts it into the pause and does not forward it, so a
+    caller still sees only `Interrupted`.
   - **Umbrella features.** `graph-functional`, `graph-node-cache`, `graph-delta`,
     `graph-time-travel`, `graph-sqlite`, and `graph-redis-cache` on `adk-rust`
     forward to `adk-graph`, which has no default features. The first four are in
@@ -107,6 +110,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`StreamMode::Messages` ignored every interrupt and wrote no checkpoint.** That
+  mode runs nodes in its own loop to forward tokens as they arrive, and both
+  interrupt checks lived in `execute_super_step`, which the loop never calls. So
+  `interrupt_before`, `interrupt_after`, and a node's own
+  `NodeOutput::interrupt` were all silently skipped — an approval gate did not
+  hold — and a completed run left nothing to resume from. The checks now live in
+  `gate_before`/`gate_after`, which both paths call, a node's pause travels as
+  `StreamEvent::NodeInterrupt` because that path yields events and no
+  `NodeOutput`, and the loop checkpoints each super-step. `GraphAgent`'s
+  `Agent::run` uses `invoke` and was never affected.
 - **A static interrupt could not be resumed past.** `interrupt_before` re-armed on
   every resume, so the gated node never ran. `interrupt_after` had the same defect
   and needed the opposite fix, because that node has already applied its updates.

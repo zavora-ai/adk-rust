@@ -274,7 +274,16 @@ impl<'a> PregelExecutor<'a> {
                 if matches!(mode, StreamMode::Messages) {
                     let mut result = SuperStepResult::default();
 
+                    // The same gate `execute_super_step` applies. This loop does
+                    // not call it, so without this the mode ignored every gate.
+                    if let Some(interrupt) = self.gate_before(&self.pending_nodes) {
+                        result.interrupt = Some(interrupt);
+                    }
+
                     for node_name in &self.pending_nodes {
+                        if result.interrupt.is_some() {
+                            break;
+                        }
                         if let Some(node) = self.graph.nodes.get(node_name) {
                             let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
                             ctx.set_child_invoker(Arc::new(crate::child::ChildInvoker::new(
@@ -302,6 +311,7 @@ impl<'a> PregelExecutor<'a> {
                             let mut collected_events = Vec::new();
                             let mut streamed_updates = Vec::new();
                             let mut streamed_goto: Option<(String, Vec<String>)> = None;
+                            let mut streamed_interrupt: Option<Interrupt> = None;
                             let mut timed_out_after;
                             let mut attempt = 0;
 
@@ -351,6 +361,19 @@ impl<'a> PregelExecutor<'a> {
                                             {
                                                 streamed_goto =
                                                     Some((source.clone(), targets.clone()));
+                                            }
+                                            // As does a node asking to pause.
+                                            if let StreamEvent::NodeInterrupt {
+                                                ref message,
+                                                ref data,
+                                                ..
+                                            } = event
+                                            {
+                                                streamed_interrupt =
+                                                    Some(Interrupt::Dynamic {
+                                                        message: message.clone(),
+                                                        data: data.clone(),
+                                                    });
                                             }
                                             collected_events.push(event);
                                         }
@@ -402,6 +425,9 @@ impl<'a> PregelExecutor<'a> {
                             if let Some((source, targets)) = streamed_goto {
                                 result.goto.insert(source, targets);
                             }
+                            if let Some(interrupt) = streamed_interrupt {
+                                result.interrupt = Some(interrupt);
+                            }
 
                             for updates in streamed_updates {
                                 self.ensure_channels_declared(
@@ -422,6 +448,46 @@ impl<'a> PregelExecutor<'a> {
                         }
                     }
 
+                    // A node that arms a gate on completion stops the run here, unless
+                    // it already asked to pause itself.
+                    if result.interrupt.is_none()
+                        && let Some(interrupt) = self.gate_after(&result.executed_nodes)
+                    {
+                        result.interrupt = Some(interrupt);
+                    }
+
+                    // This branch returns rather than falling through to the shared
+                    // handling below, so the pause is reported here.
+                    if let Some(interrupt) = result.interrupt {
+                        if let Interrupt::Before(node) = &interrupt {
+                            self.cleared_interrupt = Some(node.clone());
+                        }
+                        // `After` resumes at the successors, because that node has
+                        // already applied its updates; see `run`.
+                        if matches!(interrupt, Interrupt::After(_)) {
+                            let next =
+                                self.next_frontier(&result.executed_nodes, &result.goto)?;
+                            match self.filter_deferred_nodes(next, &result.executed_nodes) {
+                                Ok(frontier) => self.pending_nodes = frontier,
+                                Err(error) => {
+                                    yield Err(error);
+                                    return;
+                                }
+                            }
+                        }
+                        // Persist before reporting: without this the pause cannot be
+                        // resumed and the work already done is lost.
+                        if let Err(error) = self.save_checkpoint().await {
+                            yield Err(error);
+                            return;
+                        }
+                        yield Ok(StreamEvent::interrupted(
+                            result.executed_nodes.first().map(|s| s.as_str()).unwrap_or("unknown"),
+                            &interrupt.to_string(),
+                        ));
+                        return;
+                    }
+
                     // The gate re-arms once its node has run; see `run`.
                     if let Some(cleared) = &self.cleared_interrupt
                         && result.executed_nodes.iter().any(|n| n == cleared)
@@ -440,6 +506,14 @@ impl<'a> PregelExecutor<'a> {
                         }
                     };
                     self.step += 1;
+
+                    // The other path checkpoints every super-step. This one did not,
+                    // so a run in this mode left no state to resume from and
+                    // `get_state` reported nothing.
+                    if let Err(e) = self.save_checkpoint().await {
+                        yield Err(e);
+                        return;
+                    }
                     continue;
                 }
 
@@ -696,18 +770,8 @@ impl<'a> PregelExecutor<'a> {
     async fn execute_super_step(&mut self) -> Result<SuperStepResult> {
         let mut result = SuperStepResult::default();
 
-        // Check for interrupt_before. A node whose gate this run has already
-        // answered runs instead of interrupting again; without that a resume
-        // reaches the same conclusion and the node never executes.
-        for node_name in &self.pending_nodes {
-            if self.graph.interrupt_before.contains(node_name)
-                && self.cleared_interrupt.as_deref() != Some(node_name.as_str())
-            {
-                return Ok(SuperStepResult {
-                    interrupt: Some(Interrupt::Before(node_name.clone())),
-                    ..Default::default()
-                });
-            }
+        if let Some(interrupt) = self.gate_before(&self.pending_nodes) {
+            return Ok(SuperStepResult { interrupt: Some(interrupt), ..Default::default() });
         }
 
         // --- Node cache: check for cache hits before executing ---
@@ -948,20 +1012,41 @@ impl<'a> PregelExecutor<'a> {
             }
         }
 
-        // Check for interrupt_after
-        for node_name in &result.executed_nodes {
-            if self.graph.interrupt_after.contains(node_name) {
-                return Ok(SuperStepResult {
-                    interrupt: Some(Interrupt::After(node_name.clone())),
-                    ..result
-                });
-            }
+        if let Some(interrupt) = self.gate_after(&result.executed_nodes) {
+            return Ok(SuperStepResult { interrupt: Some(interrupt), ..result });
         }
 
         Ok(result)
     }
 
     /// Save a checkpoint
+    /// Returns the gate a pending node arms, if any.
+    ///
+    /// A node whose gate this run has already answered runs instead of
+    /// interrupting again; without that a resume reaches the same conclusion and
+    /// the node never executes.
+    ///
+    /// Shared by both execution paths. `StreamMode::Messages` runs nodes in its
+    /// own loop, and when this check lived only in `execute_super_step` that mode
+    /// ignored every gate.
+    fn gate_before(&self, pending: &[String]) -> Option<Interrupt> {
+        pending
+            .iter()
+            .find(|node| {
+                self.graph.interrupt_before.contains(*node)
+                    && self.cleared_interrupt.as_deref() != Some(node.as_str())
+            })
+            .map(|node| Interrupt::Before(node.clone()))
+    }
+
+    /// Returns the gate an executed node arms, if any.
+    fn gate_after(&self, executed: &[String]) -> Option<Interrupt> {
+        executed
+            .iter()
+            .find(|node| self.graph.interrupt_after.contains(*node))
+            .map(|node| Interrupt::After(node.clone()))
+    }
+
     /// Computes the next frontier, letting a node's `goto` stand in for its edges.
     ///
     /// A node that named successors has its declared edges skipped, so a `goto`
