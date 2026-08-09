@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Retry & Reflect plugin for ADK-Rust — intercepts tool failures and injects structured reflection prompts"
+readme = "README.md"
 keywords = ["adk", "agent", "plugin", "retry", "reflection"]
 categories = ["development-tools", "asynchronous"]
 

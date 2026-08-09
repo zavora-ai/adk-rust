@@ -237,6 +237,48 @@ let config = ServerConfig::new(agent_loader, session_service)
 
 When configured, the extracted `RequestContext` flows into `InvocationContext`, making scopes available to tools via `ToolContext::user_scopes()`. Session and artifact endpoints enforce user_id authorization against the authenticated identity.
 
+### Background Runs and Cron (feature: `background`)
+
+Runs a workflow without holding the request open, and schedules one on a cron
+expression. Neither is compiled unless the feature is on.
+
+```rust
+use adk_server::background::{FileRunPersistence, RunRetention, RunStore};
+use std::sync::Arc;
+
+// Runs are held in memory. Attach persistence so a restart can still see them.
+let store = RunStore::new()
+    .with_persistence(Arc::new(FileRunPersistence::new("/var/lib/adk/runs.json")))
+    .with_retention(RunRetention::keep_finished(1000));
+
+// At startup, report what the last stop interrupted.
+for run_id in store.restore().await? {
+    tracing::warn!(run.id = %run_id, "this run did not finish before the last restart");
+}
+```
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/runs` | POST | Start a run, returning its id immediately |
+| `/runs/{id}` | GET | Read a run's status and result |
+| `/runs/{id}` | DELETE | Cancel a run |
+| `/cron` | POST / GET / PATCH / DELETE | Manage scheduled jobs |
+
+Cron jobs take a concurrency policy — `skip`, `allow` or `queue` — for what happens
+when the previous run is still going.
+
+**What survives a restart.** With a `RunPersistence` attached, run records do. A run
+that was still going cannot still be going, so `restore` returns it as `Failed` with
+a reason and gives it a live cancellation token. The graph state behind it is
+separate: a checkpointed `adk-graph` thread can still be resumed by its id.
+
+Finished runs are bounded by default — the newest 1000 — because a store that keeps
+every finished run forever is a leak that only appears after weeks.
+`RunRetention::unlimited()` opts out. A run still in flight is never discarded.
+
+`FileRunPersistence` writes one JSON file and is enough for a single node. A
+deployment across several needs a shared store; implement `RunPersistence` for one.
+
 ## API Endpoints
 
 ### Health

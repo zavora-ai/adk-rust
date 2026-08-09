@@ -16,11 +16,18 @@ Graph-based workflow orchestration for Rust Agent Development Kit (ADK-Rust) age
 - **AgentNode**: Wrap LLM agents as graph nodes with custom input/output mappers
 - **Cyclic Support**: Native support for loops and iterative reasoning (ReAct pattern)
 - **Conditional Routing**: Dynamic edge routing based on state
-- **Fan-out / fan-in**: parallel branches run concurrently in a super-step; declare an aggregator with `add_deferred_node_fn` (or `mark_deferred`) so it runs **once**, after all upstream paths complete
+- **Fan-out / fan-in**: parallel branches run concurrently in a super-step. A node with more than one incoming direct edge is deferred **automatically**, so it runs once after its branches arrive — branches of unequal length join correctly with no configuration. `mark_deferred` sets a `fan_in_timeout` or an *n*-of-*m* `min_predecessors` quorum
 - **State Management**: Typed state with reducers (overwrite, append, sum, custom)
 - **Checkpointing**: Persistent state after each step (memory, SQLite)
 - **Durable Resume**: Automatically resume from the last checkpoint after a crash — skips already-completed nodes
-- **Human-in-the-Loop**: Interrupt before/after nodes, dynamic interrupts
+- **Human-in-the-Loop**: Interrupt before/after nodes, dynamic interrupts. A pause is resumable, including one raised inside a subgraph
+- **Subgraphs**: run a compiled graph as a node with mapped channels (`SubgraphNode`). A pause inside pauses the parent, and a channel mapping that names a channel neither side declares fails when the parent **compiles**
+- **Routing from inside a node**: `NodeOutput::with_goto` names successors and replaces the node's declared edges; `AgentNode::with_goto_mapper` routes on what the agent answered; `with_goto_parent` hands control to a node of the parent graph
+- **Reliability**: per-node retry with capped backoff and jitter, a concurrency bound, per-node timeouts, graph-wide `NodeDefaults`, and `with_node_error_handler` to recover once a retry budget is spent
+- **Invoking a node directly**: `ctx.run_node_with` runs a node the graph has no edge to, sized from state, and records it so a resume does not pay for it twice
+- **As a tool**: `NodeTool` exposes a graph or a single node through the `Tool` trait, so an `LlmAgent` can call a whole graph
+- **Bounded growth**: `RetentionPolicy` limits how many checkpoints a thread keeps, by count or age
+- **Strictness, opt-in**: `with_strict_channels` fails the run when a node writes a channel the schema does not declare
 - **Streaming**: Multiple stream modes (values, updates, messages, debug)
 - **ADK Integration**: Full callback support, works with existing runners
 - **Functional API** (feature: `functional`): Write workflows as async functions with automatic checkpointing
@@ -389,6 +396,131 @@ Simple async functions for data processing:
     Ok(NodeOutput::new().with_update("result", result))
 })
 ```
+
+### SubgraphNode
+
+Run a compiled graph as a node. The inner graph keeps its own channels, edges and
+interrupt gates, and exchanges named channels with its parent.
+
+```rust
+use adk_graph::subgraph::SubgraphNode;
+use std::sync::Arc;
+
+let outer = StateGraph::with_channels(&["document", "size"])
+    .add_node(
+        SubgraphNode::new("measure", Arc::new(inner))
+            .with_input("document", "text")     // parent -> subgraph
+            .with_output("length", "size"),     // subgraph -> parent
+    )
+    .add_edge(START, "measure")
+    .add_edge("measure", END)
+    .compile()?;
+```
+
+Channels both schemas declare under one name pass through; `isolated()` requires
+every exchange to be named. A pause inside pauses the parent and resumes without
+re-running finished work. A mapping naming a channel neither side declares fails at
+`compile()`, as does a subgraph with an interrupt gate but no checkpointer — that
+one would re-enter at its first node and pay for its work twice.
+
+A node inside can hand control to its parent:
+
+```rust
+Ok(NodeOutput::new()
+    .with_update("reason", json!("no confident answer"))
+    .with_goto_parent(["escalate"]))
+```
+
+## Routing From Inside a Node
+
+A conditional edge fixes its targets when the graph is built. A goto does not, and
+may name any node in the graph:
+
+```rust
+// A plain node.
+Ok(NodeOutput::new().with_update("risk", json!(level)).with_goto([next]))
+
+// An LLM-backed node, routing on what it answered.
+AgentNode::new(classifier)
+    .with_output_mapper(category_from_events)
+    .with_goto_mapper(|updates| match updates.get("category").and_then(|v| v.as_str()) {
+        Some("refund") => Some(vec!["refund_desk".to_string()]),
+        Some(_) => Some(vec!["general_desk".to_string()]),
+        None => None,
+    })
+```
+
+A goto **replaces** that node's declared edges. Naming `END` stops the branch, and
+an unknown name fails the run with `GraphError::UnknownRouteTarget`.
+
+## Reliability and Limits
+
+Each of these is off by default, so an existing graph behaves as before.
+
+```rust
+use adk_graph::checkpoint::RetentionPolicy;
+use adk_graph::graph::NodeDefaults;
+use adk_graph::retry::RetryPolicy;
+
+let graph = graph
+    // Every node retries three times unless it says otherwise.
+    .with_node_defaults(NodeDefaults::new().with_retry(RetryPolicy::new(3)))
+    // This one gets ten.
+    .with_node_retry("call_model", RetryPolicy::new(10))
+    // At most four nodes at once, so a wide fan-out cannot trip a rate limit.
+    .with_max_concurrency(4)
+    // Recover instead of ending the run, once the retry budget is spent.
+    .with_node_error_handler("charge", |node, error, _state| {
+        Ok(NodeOutput::new()
+            .with_update("status", json!(format!("{node}: {error}")))
+            .with_goto(["compensate"]))
+    })
+    // Keep a long-lived thread from growing without bound.
+    .with_checkpoint_retention(RetentionPolicy::keep_last(50));
+```
+
+| Default | Value |
+|---------|-------|
+| Super-steps per run | 100 (`recursion_limit`) |
+| Retry when no policy is attached | one attempt |
+| `RetryPolicy::default()` | ten attempts, about 243s of backoff in total |
+| Concurrency | the whole frontier |
+| Checkpoints kept | every one, until a retention policy is set |
+
+An interrupt is never retried and never reaches an error handler: a pause is not a
+failure.
+
+## Invoking a Node Directly
+
+When the number of sub-tasks comes from state rather than the graph's shape:
+
+```rust
+use adk_graph::child::RunNodeOptions;
+
+let output = ctx
+    .run_node_with("reviewer", json!({ "aspect": aspect }), RunNodeOptions::with_run_id(aspect))
+    .await?;
+```
+
+The target needs no edge. Each completed child is recorded under
+`<parent>/<child>@<run_id>`, so a resumed run returns the recorded answer instead of
+executing the child again — which matters when the child costs a model call.
+
+## A Graph as a Tool
+
+```rust
+use adk_graph::tool::NodeTool;
+
+let desk = NodeTool::for_graph(Arc::new(graph))
+    .with_name("research_desk")
+    .with_description("Ask a research question. Pass it as `topic`.");
+
+let agent = LlmAgentBuilder::new("analyst").model(model).tool(Arc::new(desk)).build()?;
+```
+
+The parameter schema is derived from the graph's channels, so the tool description
+and the graph cannot drift apart. It reports itself long-running, so a graph that
+pauses travels the existing tool-confirmation path.
 
 ## State Management
 
