@@ -30,6 +30,18 @@ pub struct SuperStepResult {
     pub goto: HashMap<String, Vec<String>>,
 }
 
+/// What a completed run produced, and what it asks of its caller.
+#[derive(Debug, Clone)]
+pub struct GraphOutcome {
+    /// The final state.
+    pub state: State,
+    /// Nodes of the parent graph a node asked to run next, if any.
+    ///
+    /// Set by [`NodeOutput::with_goto_parent`](crate::node::NodeOutput::with_goto_parent).
+    /// A graph that is not a subgraph has no parent, so this is ignored.
+    pub goto_parent: Option<Vec<String>>,
+}
+
 /// Pregel-based executor for graphs
 pub struct PregelExecutor<'a> {
     graph: &'a CompiledGraph,
@@ -37,6 +49,8 @@ pub struct PregelExecutor<'a> {
     state: State,
     step: usize,
     pending_nodes: Vec<String>,
+    /// Parent nodes a node asked to run next; see `NodeOutput::with_goto_parent`.
+    goto_parent: Option<Vec<String>>,
     /// Tracks deferred nodes waiting for all upstream paths to complete.
     pending_deferred: HashMap<String, FanInTracker>,
     /// Tracks when each deferred node first entered the pending state (for fan-in timeout).
@@ -73,6 +87,7 @@ impl<'a> PregelExecutor<'a> {
             state: State::new(),
             step: 0,
             pending_nodes: vec![],
+            goto_parent: None,
             pending_deferred: HashMap::new(),
             deferred_start_times: HashMap::new(),
             attempts: HashMap::new(),
@@ -155,7 +170,7 @@ impl<'a> PregelExecutor<'a> {
                     let any_retryable = self
                         .pending_nodes
                         .iter()
-                        .any(|node| self.graph.retry_policies.contains_key(node));
+                        .any(|node| self.graph.retry_policy_for(node).is_some());
                     if any_retryable {
                         let _ = self.save_checkpoint().await;
                     }
@@ -979,16 +994,36 @@ impl<'a> PregelExecutor<'a> {
                     if let Some(targets) = output.goto {
                         result.goto.insert(node_name.clone(), targets);
                     }
+                    // A node handing control to the graph that holds this one. The
+                    // run finishes normally; the caller reads this from the outcome.
+                    if let Some(targets) = output.goto_parent {
+                        self.goto_parent = Some(targets);
+                    }
 
                     // Collect updates with their node, so application order can be
                     // made independent of which future resolved first.
                     all_updates.push((node_name.clone(), output.updates));
                 }
                 Err(e) => {
-                    return Err(GraphError::NodeExecutionFailed {
-                        node: node_name,
-                        message: e.to_string(),
-                    });
+                    // The retry budget is spent. A handler may record what
+                    // happened and name a recovery node instead of ending the run.
+                    // An interrupt never reaches here as a failure.
+                    match self.graph.error_handler_for(&node_name) {
+                        Some(handler) if !matches!(e, GraphError::Interrupted(_)) => {
+                            let recovery = handler(&node_name, &e, &self.state)?;
+                            if let Some(targets) = recovery.goto {
+                                result.goto.insert(node_name.clone(), targets);
+                            }
+                            result.executed_nodes.push(node_name.clone());
+                            all_updates.push((node_name, recovery.updates));
+                        }
+                        _ => {
+                            return Err(GraphError::NodeExecutionFailed {
+                                node: node_name,
+                                message: e.to_string(),
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -1133,8 +1168,22 @@ impl<'a> PregelExecutor<'a> {
 impl CompiledGraph {
     /// Execute the graph synchronously
     pub async fn invoke(&self, input: State, config: ExecutionConfig) -> Result<State> {
+        self.invoke_detailed(input, config).await.map(|outcome| outcome.state)
+    }
+
+    /// Executes and reports what the run asked of its caller.
+    ///
+    /// Only a graph run as a [`SubgraphNode`](crate::subgraph::SubgraphNode) has
+    /// anything to report beyond its state, so [`Self::invoke`] is the usual
+    /// entry point.
+    pub async fn invoke_detailed(
+        &self,
+        input: State,
+        config: ExecutionConfig,
+    ) -> Result<GraphOutcome> {
         let mut executor = PregelExecutor::new(self, config);
-        executor.run(input).await
+        let state = executor.run(input).await?;
+        Ok(GraphOutcome { state, goto_parent: executor.goto_parent })
     }
 
     /// Execute with streaming

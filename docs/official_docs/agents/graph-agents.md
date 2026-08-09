@@ -1385,6 +1385,56 @@ call per node.
 Timeout policies apply to the streamed execution itself. For a stream,
 `idle_timeout` means no event was produced within the limit.
 
+## Subgraphs
+
+A compiled graph runs as a node of another through `SubgraphNode`. The inner graph
+keeps its own channels, edges and interrupt gates, and exchanges named channels
+with its parent.
+
+```rust
+use adk_graph::subgraph::SubgraphNode;
+use std::sync::Arc;
+
+let outer = StateGraph::with_channels(&["document", "size"])
+    .add_node(
+        SubgraphNode::new("measure_doc", Arc::new(inner))
+            .with_input("document", "text")
+            .with_output("length", "size"),
+    )
+    .add_edge(START, "measure_doc")
+    .add_edge("measure_doc", END)
+    .compile()?;
+```
+
+| Rule | Behaviour |
+|------|-----------|
+| Shared names | A channel both schemas declare under one name passes through both ways. |
+| `isolated()` | Nothing passes implicitly; every exchange must be named. Worth it when the two graphs are maintained apart, because adding a channel to one then cannot silently start feeding the other. |
+| A pause inside | Pauses the parent, carrying the subgraph's name and the inner message. |
+| Threads | The subgraph runs on `<parent thread>/<node name>`, so two subgraphs of one parent cannot collide. |
+| A wrong channel name | Fails when the **parent compiles**, naming the channel and the side. |
+
+That last row is the difference worth knowing: both schemas are available before
+anything runs, so a mapping naming a channel neither side declares cannot reach a
+run and surface as an absent value. A subgraph that exchanges nothing at all is
+rejected the same way, because it could not affect its parent.
+
+### Handing control back to the parent
+
+A node inside a subgraph can end its own graph and name a node of the graph that
+holds it:
+
+```rust
+Ok(NodeOutput::new()
+    .with_update("reason", json!("no confident answer"))
+    .with_goto_parent(["escalate"]))
+```
+
+The subgraph finishes and projects its output channels as usual, then the parent
+continues at `escalate` rather than following the subgraph node's declared edges.
+The parent validates the target, because it is the only side that knows its own
+nodes.
+
 ## Reliability and Cost Controls
 
 Each of these is off by default, so a graph behaves as it did before you set one.
@@ -1469,6 +1519,37 @@ over a thread's checkpoint history: list the steps, read the state at one, or
 because every operation reads checkpoints, so a graph with no checkpointer reports
 `GraphError::CheckpointError` rather than panicking.
 
+### Graph-wide defaults
+
+Repeating the same retry across twenty nodes is easy to get wrong by omission.
+
+```rust
+use adk_graph::graph::NodeDefaults;
+
+let graph = graph
+    .with_node_defaults(NodeDefaults::new().with_retry(RetryPolicy::new(3)))
+    .with_node_retry("critical", RetryPolicy::new(10));
+```
+
+A per-node value always wins. `NodeDefaults` also carries a timeout and a failure
+handler.
+
+### Recovering from a node failure
+
+Once a node's retry budget is spent, a handler may record what happened and name a
+recovery node instead of ending the run:
+
+```rust
+let graph = graph.with_node_error_handler("charge", |node, error, _state| {
+    Ok(NodeOutput::new()
+        .with_update("status", json!(format!("{node} failed: {error}")))
+        .with_goto(["compensate"]))
+});
+```
+
+Returning `Err` ends the run as before. An interrupt never reaches a handler,
+because a pause is not a failure.
+
 ### Rejecting undeclared channels
 
 A channel the schema does not declare takes the overwrite reducer, because that is
@@ -1543,7 +1624,10 @@ The full graph gallery with real LLM integration lives in [adk-playground](https
 | Concurrency cap | `max_concurrency` in config | `with_max_concurrency` on the graph |
 | Node caching | `cache_policy` | `cache_policy` (`node-cache` feature) |
 | Deferred join | `defer=True` | Automatic for multiple direct predecessors, plus an *n*-of-*m* quorum |
-| Subgraph to parent hop | `Command(graph=Command.PARENT)` | Not implemented |
+| Subgraph as a node | `add_node("sub", compiled)` | `SubgraphNode`, with channel mapping checked when the parent compiles |
+| Subgraph to parent hop | `Command(graph=Command.PARENT)` | `NodeOutput::with_goto_parent` |
+| Graph-wide node defaults | `set_node_defaults` (≥1.2) | `with_node_defaults`, plus the pre-existing `default_timeout` |
+| Node failure handlers | `error_handler` (≥1.2) | `with_node_error_handler`, run once the retry budget is spent |
 
 Two differences are worth stating plainly. `run_node_with` returns the child's
 result inline and records it, so a resumed run does not pay for a completed child

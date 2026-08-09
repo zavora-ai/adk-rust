@@ -258,9 +258,17 @@ impl Node for SubgraphNode {
         let thread = self.child_thread(&ctx.config.thread_id);
         let config = ExecutionConfig::new(&thread);
 
-        match self.graph.invoke(input, config).await {
-            Ok(child_state) => {
-                Ok(NodeOutput::new().with_updates(self.project_out(&child_state, &parent_schema)))
+        match self.graph.invoke_detailed(input, config).await {
+            Ok(outcome) => {
+                let mut output = NodeOutput::new()
+                    .with_updates(self.project_out(&outcome.state, &parent_schema));
+                // A node inside asked for a node of this graph's parent. Becoming
+                // this node's own goto is what makes it happen, and it also means
+                // the parent validates the target, as it does for any goto.
+                if let Some(targets) = outcome.goto_parent {
+                    output = output.with_goto(targets);
+                }
+                Ok(output)
             }
             // A pause inside is a pause of the whole run. Reported with the
             // subgraph's name in front of the inner node, so a deep pause says

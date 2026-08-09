@@ -76,6 +76,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`StreamEvent::NodeInterrupt`.** A node reporting a pause on the streamed
     path. The executor converts it into the pause and does not forward it, so a
     caller still sees only `Interrupted`.
+  - **Subgraphs.** `SubgraphNode` runs a compiled graph as a node, exchanging
+    named channels. A pause inside pauses the parent. A channel mapping naming a
+    channel neither side declares fails when the parent compiles, through a new
+    `Node::validate_against(&parent_schema)` that `compile()` calls for every node.
+  - **`NodeOutput::with_goto_parent`.** A node inside a subgraph ends its own graph
+    and names a node of the graph that holds it, read from the new
+    `CompiledGraph::invoke_detailed`. The counterpart to LangGraph's
+    `Command(graph=Command.PARENT)`.
+  - **`CompiledGraph::with_node_defaults`.** One retry, timeout or failure handler
+    for every node that sets none; a per-node value wins. A graph-wide
+    `default_timeout` already existed on `GraphAgentBuilder`.
+  - **`CompiledGraph::with_node_error_handler`.** Once a node's retry budget is
+    spent, a handler may record the failure and name a recovery node instead of
+    ending the run. An interrupt never reaches it.
   - **Umbrella features.** `graph-functional`, `graph-node-cache`, `graph-delta`,
     `graph-time-travel`, `graph-sqlite`, and `graph-redis-cache` on `adk-rust`
     forward to `adk-graph`, which has no default features. The first four are in

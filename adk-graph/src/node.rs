@@ -231,6 +231,11 @@ pub struct NodeOutput {
     pub events: Vec<StreamEvent>,
     /// Nodes to run next, replacing this node's declared outgoing edges.
     pub goto: Option<Vec<String>>,
+    /// Nodes of the *parent* graph to run next, when this graph is a subgraph.
+    ///
+    /// A node deep in a nested graph can end its own graph and hand control to a
+    /// node of the graph that holds it.
+    pub goto_parent: Option<Vec<String>>,
 }
 
 impl NodeOutput {
@@ -260,6 +265,39 @@ impl NodeOutput {
     ///     .with_goto(["escalate"]);
     /// assert_eq!(output.goto.as_deref(), Some(&["escalate".to_string()][..]));
     /// ```
+    /// Names nodes of the *parent* graph to run next.
+    ///
+    /// Only meaningful inside a [`SubgraphNode`](crate::subgraph::SubgraphNode).
+    /// The subgraph finishes, its output channels are projected out as usual, and
+    /// the parent continues at the named nodes rather than following the
+    /// subgraph node's own edges. This is the counterpart to LangGraph's
+    /// `Command(goto=..., graph=Command.PARENT)`.
+    ///
+    /// A name the parent does not hold fails the run with
+    /// [`GraphError::UnknownRouteTarget`](crate::error::GraphError::UnknownRouteTarget),
+    /// checked by the parent, which is the only side that knows its own nodes.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::node::NodeOutput;
+    /// use serde_json::json;
+    ///
+    /// // Inside a subgraph: give up, and let the parent's escalation path run.
+    /// let output = NodeOutput::new()
+    ///     .with_update("reason", json!("no confident answer"))
+    ///     .with_goto_parent(["escalate"]);
+    /// assert_eq!(output.goto_parent.as_deref(), Some(&["escalate".to_string()][..]));
+    /// ```
+    pub fn with_goto_parent<I, S>(mut self, targets: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.goto_parent = Some(targets.into_iter().map(Into::into).collect());
+        self
+    }
+
     pub fn with_goto<I, S>(mut self, targets: I) -> Self
     where
         I: IntoIterator<Item = S>,

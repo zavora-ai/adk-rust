@@ -185,6 +185,9 @@ impl StateGraph {
             recursion_limit: 50,
             timeout_policies: HashMap::new(),
             default_timeout: None,
+            default_retry: None,
+            error_handlers: HashMap::new(),
+            default_error_handler: None,
             deferred_configs: self.deferred_configs,
             max_concurrency: None,
             retry_policies: HashMap::new(),
@@ -294,6 +297,82 @@ impl StateGraph {
     }
 }
 
+/// Turns a node failure into state and a route, instead of ending the run.
+///
+/// Called after the node's retry budget is spent. Returning a
+/// [`NodeOutput`](crate::node::NodeOutput) lets the handler record what happened
+/// and name a recovery node with
+/// [`with_goto`](crate::node::NodeOutput::with_goto). Returning `Err` ends the
+/// run as before.
+pub type NodeErrorHandler =
+    Arc<dyn Fn(&str, &GraphError, &State) -> Result<crate::node::NodeOutput> + Send + Sync>;
+
+/// Policies a graph applies to every node that does not set its own.
+///
+/// Repeating the same retry or timeout on twenty nodes is easy to get wrong by
+/// omission. A default states it once; a per-node value always wins.
+///
+/// # Example
+///
+/// ```
+/// use adk_graph::graph::NodeDefaults;
+/// use adk_graph::retry::RetryPolicy;
+/// use adk_graph::timeout::TimeoutPolicy;
+/// use std::time::Duration;
+///
+/// let defaults = NodeDefaults::new()
+///     .with_retry(RetryPolicy::new(3))
+///     .with_timeout(TimeoutPolicy::new(Duration::from_secs(30)));
+/// # let _ = defaults;
+/// ```
+#[derive(Clone, Default)]
+pub struct NodeDefaults {
+    /// Retry policy for a node with none of its own.
+    pub retry: Option<crate::retry::RetryPolicy>,
+    /// Timeout policy for a node with none of its own.
+    pub timeout: Option<crate::timeout::TimeoutPolicy>,
+    /// Failure handler for a node with none of its own.
+    pub error_handler: Option<NodeErrorHandler>,
+}
+
+impl std::fmt::Debug for NodeDefaults {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NodeDefaults")
+            .field("retry", &self.retry)
+            .field("timeout", &self.timeout)
+            .field("error_handler", &self.error_handler.as_ref().map(|_| "<handler>"))
+            .finish()
+    }
+}
+
+impl NodeDefaults {
+    /// An empty set of defaults, which changes nothing.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Applies this retry policy to every node that sets none.
+    pub fn with_retry(mut self, policy: crate::retry::RetryPolicy) -> Self {
+        self.retry = Some(policy);
+        self
+    }
+
+    /// Applies this timeout policy to every node that sets none.
+    pub fn with_timeout(mut self, policy: crate::timeout::TimeoutPolicy) -> Self {
+        self.timeout = Some(policy);
+        self
+    }
+
+    /// Applies this failure handler to every node that sets none.
+    pub fn with_error_handler<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(&str, &GraphError, &State) -> Result<crate::node::NodeOutput> + Send + Sync + 'static,
+    {
+        self.error_handler = Some(Arc::new(handler));
+        self
+    }
+}
+
 /// A compiled graph ready for execution
 pub struct CompiledGraph {
     pub(crate) schema: StateSchema,
@@ -307,6 +386,12 @@ pub struct CompiledGraph {
     pub(crate) timeout_policies: HashMap<String, crate::timeout::TimeoutPolicy>,
     /// Default timeout policy applied to all nodes without an explicit override.
     pub(crate) default_timeout: Option<crate::timeout::TimeoutPolicy>,
+    /// Retry policy for every node that sets none of its own.
+    pub(crate) default_retry: Option<crate::retry::RetryPolicy>,
+    /// Per-node failure handlers, keyed by node name.
+    pub(crate) error_handlers: HashMap<String, NodeErrorHandler>,
+    /// Failure handler for every node that sets none of its own.
+    pub(crate) default_error_handler: Option<NodeErrorHandler>,
     /// Deferred node configurations, keyed by node name.
     pub(crate) deferred_configs: HashMap<String, crate::deferred::DeferredNodeConfig>,
     /// Ceiling on how many nodes execute at once. `None` runs the whole frontier.
@@ -402,6 +487,66 @@ impl CompiledGraph {
         self
     }
 
+    /// Applies policies to every node that does not set its own.
+    ///
+    /// Repeating the same retry or timeout across twenty nodes is easy to get
+    /// wrong by omission. A per-node value always wins over the default.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::edge::{END, START};
+    /// use adk_graph::graph::{NodeDefaults, StateGraph};
+    /// use adk_graph::node::NodeOutput;
+    /// use adk_graph::retry::RetryPolicy;
+    ///
+    /// let graph = StateGraph::with_channels(&["value"])
+    ///     .add_node_fn("fetch", |_ctx| async move { Ok(NodeOutput::new()) })
+    ///     .add_edge(START, "fetch")
+    ///     .add_edge("fetch", END)
+    ///     .compile()?
+    ///     // Every node retries three times, unless it says otherwise.
+    ///     .with_node_defaults(NodeDefaults::new().with_retry(RetryPolicy::new(3)))
+    ///     // And this one gets five.
+    ///     .with_node_retry("fetch", RetryPolicy::new(5));
+    /// # let _ = graph;
+    /// # Ok::<(), adk_graph::error::GraphError>(())
+    /// ```
+    pub fn with_node_defaults(mut self, defaults: NodeDefaults) -> Self {
+        if let Some(retry) = defaults.retry {
+            self.default_retry = Some(retry);
+        }
+        if let Some(timeout) = defaults.timeout {
+            self.default_timeout = Some(timeout);
+        }
+        if let Some(handler) = defaults.error_handler {
+            self.default_error_handler = Some(handler);
+        }
+        self
+    }
+
+    /// Handles one node's failure instead of ending the run.
+    ///
+    /// Called once the node's retry budget is spent. The handler receives the node
+    /// name, the error, and the state as it stands, and returns the updates to
+    /// apply — typically recording what failed and naming a recovery node with
+    /// [`NodeOutput::with_goto`](crate::node::NodeOutput::with_goto). Returning
+    /// `Err` ends the run.
+    ///
+    /// An interrupt is never routed here: a pause is not a failure.
+    pub fn with_node_error_handler<F>(mut self, node: &str, handler: F) -> Self
+    where
+        F: Fn(&str, &GraphError, &State) -> Result<crate::node::NodeOutput> + Send + Sync + 'static,
+    {
+        self.error_handlers.insert(node.to_string(), Arc::new(handler));
+        self
+    }
+
+    /// The failure handler for a node, per-node first, then the graph default.
+    pub(crate) fn error_handler_for(&self, node: &str) -> Option<&NodeErrorHandler> {
+        self.error_handlers.get(node).or(self.default_error_handler.as_ref())
+    }
+
     /// Attach a retry policy to one node.
     ///
     /// A node with no policy is attempted once, which is the behaviour of a graph
@@ -423,9 +568,12 @@ impl CompiledGraph {
         names
     }
 
-    /// The retry policy for a node, if one is configured.
+    /// The retry policy for a node.
+    ///
+    /// The per-node policy wins; otherwise the graph's default applies. `None`
+    /// when neither is set, which means one attempt.
     pub(crate) fn retry_policy_for(&self, node: &str) -> Option<&crate::retry::RetryPolicy> {
-        self.retry_policies.get(node)
+        self.retry_policies.get(node).or(self.default_retry.as_ref())
     }
 
     /// Get the effective timeout policy for a node.
