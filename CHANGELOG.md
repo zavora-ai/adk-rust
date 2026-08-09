@@ -103,7 +103,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     file through a temporary and a rename, and `RunStore::restore` loads them at
     startup — reporting any run that was `Running` or `Queued` as `Failed`, because
     it cannot still be running. A restored run gets a live cancellation token. A
-    networked backend is a follow-up; the trait is the seam for one.
+    networked backend is a follow-up; the trait is the seam for one. Finished runs
+    are bounded by default — `RunRetention` keeps the newest 1000 and discards the
+    rest from both the map and the records, because a store that persists every
+    finished run forever is a leak that only appears after weeks. A run still in
+    flight is never discarded.
   - **Umbrella features.** `graph-functional`, `graph-node-cache`, `graph-delta`,
     `graph-time-travel`, `graph-sqlite`, and `graph-redis-cache` on `adk-rust`
     forward to `adk-graph`, which has no default features. The first four are in

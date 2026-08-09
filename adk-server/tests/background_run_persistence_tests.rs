@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use adk_server::background::{
-    BackgroundRun, FileRunPersistence, RunPersistence, RunStatus, RunStore,
+    BackgroundRun, FileRunPersistence, RunPersistence, RunRetention, RunStatus, RunStore,
 };
 use serde_json::json;
 
@@ -150,4 +150,81 @@ async fn an_update_replaces_the_record_rather_than_appending() {
 async fn a_missing_file_reads_as_no_runs() {
     let backend = FileRunPersistence::new(temp_path("absent"));
     assert!(backend.load_all().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_default_bounds_finished_runs() {
+    // The default must be bounded: a store that keeps every finished run forever
+    // is a leak that only shows up after weeks in production.
+    assert_eq!(RunRetention::default().max_finished, Some(1000));
+}
+
+#[tokio::test]
+async fn finished_runs_beyond_the_bound_are_discarded_oldest_first() {
+    let store = RunStore::new().with_retention(RunRetention::keep_finished(2));
+    for index in 0..5 {
+        let id = format!("r{index}");
+        store.insert(a_run(&id, RunStatus::Running)).await;
+        store.set_completed(&id, json!(index)).await;
+    }
+
+    assert!(store.get("r0").await.is_none(), "the oldest finished run went");
+    assert!(store.get("r1").await.is_none());
+    assert!(store.get("r2").await.is_none());
+    assert!(store.get("r3").await.is_some(), "the newest two are kept");
+    assert!(store.get("r4").await.is_some());
+}
+
+#[tokio::test]
+async fn a_run_in_flight_is_never_discarded_by_the_bound() {
+    let store = RunStore::new().with_retention(RunRetention::keep_finished(1));
+    store.insert(a_run("live", RunStatus::Running)).await;
+    for index in 0..4 {
+        let id = format!("done{index}");
+        store.insert(a_run(&id, RunStatus::Running)).await;
+        store.set_completed(&id, json!(index)).await;
+    }
+
+    assert!(
+        store.get("live").await.is_some(),
+        "a busy server must not lose an in-flight run to the bound"
+    );
+    assert!(store.get("done3").await.is_some(), "and the newest finished one stays");
+}
+
+#[tokio::test]
+async fn unlimited_retention_keeps_every_finished_run() {
+    let store = RunStore::new().with_retention(RunRetention::unlimited());
+    for index in 0..5 {
+        let id = format!("r{index}");
+        store.insert(a_run(&id, RunStatus::Running)).await;
+        store.set_completed(&id, json!(index)).await;
+    }
+    assert!(store.get("r0").await.is_some(), "asking for unbounded gives unbounded");
+}
+
+#[tokio::test]
+async fn the_persisted_file_is_bounded_too() {
+    // The bound on the map is not enough: if the record outlives the run, the file
+    // grows for the lifetime of the deployment.
+    let path = temp_path("bounded-file");
+    let _ = std::fs::remove_file(&path);
+    let backend = Arc::new(FileRunPersistence::new(&path));
+
+    let store = RunStore::new()
+        .with_persistence(backend.clone())
+        .with_retention(RunRetention::keep_finished(2));
+    for index in 0..6 {
+        let id = format!("r{index}");
+        store.insert(a_run(&id, RunStatus::Running)).await;
+        store.set_completed(&id, json!(index)).await;
+    }
+
+    let records = backend.load_all().await.unwrap();
+    assert_eq!(records.len(), 2, "the file holds only what the bound allows");
+    let mut ids: Vec<&str> = records.iter().map(|r| r.run_id.as_str()).collect();
+    ids.sort();
+    assert_eq!(ids, vec!["r4", "r5"], "and they are the newest two");
+
+    let _ = std::fs::remove_file(&path);
 }
