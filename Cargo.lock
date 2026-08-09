@@ -536,7 +536,9 @@ name = "adk-graph"
 version = "2.0.0"
 dependencies = [
  "adk-action",
+ "adk-agent",
  "adk-core",
+ "adk-tool",
  "async-stream",
  "async-trait",
  "blake3",
