@@ -192,6 +192,7 @@ impl StateGraph {
             max_concurrency: None,
             retry_policies: HashMap::new(),
             strict_channels: false,
+            retention: None,
             #[cfg(feature = "node-cache")]
             cache_policies: HashMap::new(),
         })
@@ -400,6 +401,8 @@ pub struct CompiledGraph {
     pub(crate) retry_policies: HashMap<String, crate::retry::RetryPolicy>,
     /// Whether a node writing an undeclared channel fails the run.
     pub(crate) strict_channels: bool,
+    /// How many checkpoints to keep per thread. `None` keeps every one.
+    pub(crate) retention: Option<crate::checkpoint::RetentionPolicy>,
     /// Per-node cache policies, keyed by node name.
     #[cfg(feature = "node-cache")]
     pub(crate) cache_policies: HashMap<String, crate::cache::NodeCachePolicy>,
@@ -484,6 +487,38 @@ impl CompiledGraph {
     /// ```
     pub fn with_strict_channels(mut self) -> Self {
         self.strict_channels = true;
+        self
+    }
+
+    /// Discards old checkpoints as the run proceeds.
+    ///
+    /// A thread otherwise accumulates one checkpoint per super-step for as long as
+    /// it lives, which costs storage and slows a `list`. The newest is always kept,
+    /// because it is the one a resume loads.
+    ///
+    /// Off by default, so an existing thread keeps its whole history and time
+    /// travel can still reach every step.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::checkpoint::{MemoryCheckpointer, RetentionPolicy};
+    /// use adk_graph::edge::{END, START};
+    /// use adk_graph::graph::StateGraph;
+    /// use adk_graph::node::NodeOutput;
+    ///
+    /// let graph = StateGraph::with_channels(&["value"])
+    ///     .add_node_fn("step", |_ctx| async move { Ok(NodeOutput::new()) })
+    ///     .add_edge(START, "step")
+    ///     .add_edge("step", END)
+    ///     .compile()?
+    ///     .with_checkpointer(MemoryCheckpointer::new())
+    ///     .with_checkpoint_retention(RetentionPolicy::keep_last(20));
+    /// # let _ = graph;
+    /// # Ok::<(), adk_graph::error::GraphError>(())
+    /// ```
+    pub fn with_checkpoint_retention(mut self, policy: crate::checkpoint::RetentionPolicy) -> Self {
+        self.retention = Some(policy);
         self
     }
 

@@ -1158,7 +1158,21 @@ impl<'a> PregelExecutor<'a> {
             checkpoint.cleared_interrupt = self.cleared_interrupt.clone();
             checkpoint.attempts = self.attempts.clone();
             checkpoint.child_ledger = self.child_ledger.lock().expect("child ledger").clone();
-            return cp.save(&checkpoint).await;
+            let id = cp.save(&checkpoint).await?;
+
+            // Trimmed as the run proceeds, so the cost stays proportional to the run
+            // and no external job is needed. After the save, so the newest counts.
+            if let Some(policy) = &self.graph.retention {
+                let removed = cp.prune(&self.config.thread_id, policy).await?;
+                if removed > 0 {
+                    tracing::debug!(
+                        thread_id = %self.config.thread_id,
+                        removed,
+                        "pruned old checkpoints"
+                    );
+                }
+            }
+            return Ok(id);
         }
         Ok(String::new())
     }

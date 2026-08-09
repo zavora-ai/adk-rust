@@ -9,6 +9,91 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// How many checkpoints to keep for a thread, and for how long.
+///
+/// A long-running thread accumulates one checkpoint per super-step. Without a
+/// policy that grows without bound, which costs storage and slows a `list`.
+///
+/// The newest checkpoint is never removed, whatever the policy says: it is the
+/// one a resume loads, so discarding it would end the thread.
+///
+/// # Example
+///
+/// ```
+/// use adk_graph::checkpoint::RetentionPolicy;
+/// use std::time::Duration;
+///
+/// // Keep the last 50 steps, and nothing older than a week.
+/// let policy = RetentionPolicy::keep_last(50).with_max_age(Duration::from_secs(7 * 24 * 3600));
+/// # let _ = policy;
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RetentionPolicy {
+    /// Keep at most this many checkpoints per thread, newest first.
+    pub max_per_thread: Option<usize>,
+    /// Remove checkpoints older than this.
+    pub max_age: Option<std::time::Duration>,
+}
+
+impl RetentionPolicy {
+    /// Keeps the newest `count` checkpoints for a thread.
+    ///
+    /// A count of zero is raised to one, because the newest is always kept.
+    pub fn keep_last(count: usize) -> Self {
+        Self { max_per_thread: Some(count.max(1)), max_age: None }
+    }
+
+    /// Removes checkpoints older than `age`.
+    pub fn max_age(age: std::time::Duration) -> Self {
+        Self { max_per_thread: None, max_age: Some(age) }
+    }
+
+    /// Adds an age limit to a count limit.
+    pub fn with_max_age(mut self, age: std::time::Duration) -> Self {
+        self.max_age = Some(age);
+        self
+    }
+
+    /// Adds a count limit to an age limit.
+    pub fn with_max_per_thread(mut self, count: usize) -> Self {
+        self.max_per_thread = Some(count.max(1));
+        self
+    }
+
+    /// Whether this policy would remove anything.
+    pub fn is_unlimited(&self) -> bool {
+        self.max_per_thread.is_none() && self.max_age.is_none()
+    }
+
+    /// Selects the checkpoint ids this policy discards, newest always kept.
+    ///
+    /// Shared by every backend so they cannot disagree about what to keep.
+    pub fn expired(&self, checkpoints: &[Checkpoint]) -> Vec<String> {
+        if self.is_unlimited() || checkpoints.len() <= 1 {
+            return Vec::new();
+        }
+        let mut ordered: Vec<&Checkpoint> = checkpoints.iter().collect();
+        // Newest first, so the one a resume loads is at index 0.
+        ordered.sort_by_key(|checkpoint| std::cmp::Reverse(checkpoint.created_at));
+
+        let cutoff = self.max_age.and_then(|age| {
+            chrono::Duration::from_std(age).ok().map(|age| chrono::Utc::now() - age)
+        });
+
+        ordered
+            .iter()
+            .enumerate()
+            .filter(|(index, checkpoint)| {
+                // Index 0 is the newest and is never discarded.
+                *index > 0
+                    && (self.max_per_thread.is_some_and(|max| *index >= max)
+                        || cutoff.is_some_and(|cutoff| checkpoint.created_at < cutoff))
+            })
+            .map(|(_, checkpoint)| checkpoint.checkpoint_id.clone())
+            .collect()
+    }
+}
+
 /// Checkpointer trait for persistence
 #[async_trait]
 pub trait Checkpointer: Send + Sync {
@@ -26,6 +111,18 @@ pub trait Checkpointer: Send + Sync {
 
     /// Delete checkpoints for a thread
     async fn delete(&self, thread_id: &str) -> Result<()>;
+
+    /// Removes the checkpoints a retention policy discards, keeping the newest.
+    ///
+    /// Returns how many were removed. The default keeps everything, so a backend
+    /// written before this existed is unaffected and a thread grows as before.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the backend cannot be read or written.
+    async fn prune(&self, _thread_id: &str, _policy: &RetentionPolicy) -> Result<usize> {
+        Ok(0)
+    }
 }
 
 /// In-memory checkpointer for development and testing
@@ -79,6 +176,18 @@ impl Checkpointer for MemoryCheckpointer {
         let mut store = self.checkpoints.write().await;
         store.remove(thread_id);
         Ok(())
+    }
+
+    async fn prune(&self, thread_id: &str, policy: &RetentionPolicy) -> Result<usize> {
+        let mut store = self.checkpoints.write().await;
+        let Some(thread) = store.get_mut(thread_id) else { return Ok(0) };
+        let expired = policy.expired(thread);
+        if expired.is_empty() {
+            return Ok(0);
+        }
+        let before = thread.len();
+        thread.retain(|checkpoint| !expired.contains(&checkpoint.checkpoint_id));
+        Ok(before - thread.len())
     }
 }
 
@@ -336,6 +445,24 @@ impl Checkpointer for SqliteCheckpointer {
             .await
             .map_err(|e| GraphError::CheckpointError(e.to_string()))?;
         Ok(())
+    }
+
+    async fn prune(&self, thread_id: &str, policy: &RetentionPolicy) -> Result<usize> {
+        // The policy decides, not the SQL, so both backends keep the same set.
+        let expired = policy.expired(&self.list(thread_id).await?);
+        if expired.is_empty() {
+            return Ok(0);
+        }
+        let mut removed = 0usize;
+        for checkpoint_id in &expired {
+            let result = sqlx::query("DELETE FROM graph_checkpoints WHERE id = ?")
+                .bind(checkpoint_id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| GraphError::CheckpointError(e.to_string()))?;
+            removed += result.rows_affected() as usize;
+        }
+        Ok(removed)
     }
 }
 

@@ -90,6 +90,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`CompiledGraph::with_node_error_handler`.** Once a node's retry budget is
     spent, a handler may record the failure and name a recovery node instead of
     ending the run. An interrupt never reaches it.
+  - **Checkpoint retention.** `CompiledGraph::with_checkpoint_retention` bounds how
+    many checkpoints a thread keeps, by count, by age, or both, pruned after each
+    save. The newest is never discarded, because it is the one a resume loads.
+    `Checkpointer::prune` has a default that keeps everything, so a custom backend
+    is unaffected. A long-running thread previously grew without bound; LangGraph
+    documents the same growth and advises an external cron job.
   - **Umbrella features.** `graph-functional`, `graph-node-cache`, `graph-delta`,
     `graph-time-travel`, `graph-sqlite`, and `graph-redis-cache` on `adk-rust`
     forward to `adk-graph`, which has no default features. The first four are in

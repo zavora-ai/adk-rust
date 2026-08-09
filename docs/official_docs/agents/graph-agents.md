@@ -1570,6 +1570,30 @@ let graph = graph.with_node_error_handler("charge", |node, error, _state| {
 Returning `Err` ends the run as before. An interrupt never reaches a handler,
 because a pause is not a failure.
 
+### Bounding checkpoint growth
+
+A thread accumulates one checkpoint per super-step. A run that lives for days
+therefore grows without bound, which costs storage and slows `list`.
+
+```rust
+use adk_graph::checkpoint::RetentionPolicy;
+use std::time::Duration;
+
+let graph = graph
+    .with_checkpoint_retention(
+        RetentionPolicy::keep_last(50).with_max_age(Duration::from_secs(7 * 24 * 3600)),
+    );
+```
+
+Pruning happens after each save, so the cost stays proportional to the run and no
+external job is needed. **The newest checkpoint is never discarded**, whatever the
+policy says, because it is the one a resume loads — `keep_last(0)` is raised to
+one, and a thread whose every checkpoint is past the age limit keeps one.
+
+Off by default, so an existing thread keeps its whole history and time travel can
+still reach every step. Set a policy when a thread is long-lived and you do not
+need to rewind far.
+
 ### Rejecting undeclared channels
 
 A channel the schema does not declare takes the overwrite reducer, because that is
