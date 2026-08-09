@@ -26,6 +26,8 @@ pub struct SuperStepResult {
     pub interrupt: Option<Interrupt>,
     /// Stream events generated
     pub events: Vec<StreamEvent>,
+    /// Nodes that named their own successors, keyed by node name.
+    pub goto: HashMap<String, Vec<String>>,
 }
 
 /// Pregel-based executor for graphs
@@ -172,7 +174,7 @@ impl<'a> PregelExecutor<'a> {
                 // are applied, so the resume point is its successors. Saving the
                 // executing frontier would re-run it and re-raise the gate.
                 if matches!(interrupt, Interrupt::After(_)) {
-                    let next = self.graph.get_next_nodes(&result.executed_nodes, &self.state)?;
+                    let next = self.next_frontier(&result.executed_nodes, &result.goto)?;
                     self.pending_nodes =
                         self.filter_deferred_nodes(next, &result.executed_nodes)?;
                 }
@@ -200,7 +202,7 @@ impl<'a> PregelExecutor<'a> {
             // Advance the frontier *before* checkpointing. A checkpoint records
             // what still has to run, so saving while `pending_nodes` still holds
             // the nodes that just finished would re-execute them on resume.
-            let next_candidates = self.graph.get_next_nodes(&result.executed_nodes, &self.state)?;
+            let next_candidates = self.next_frontier(&result.executed_nodes, &result.goto)?;
             self.pending_nodes =
                 self.filter_deferred_nodes(next_candidates, &result.executed_nodes)?;
             self.step += 1;
@@ -299,6 +301,7 @@ impl<'a> PregelExecutor<'a> {
                             };
                             let mut collected_events = Vec::new();
                             let mut streamed_updates = Vec::new();
+                            let mut streamed_goto: Option<(String, Vec<String>)> = None;
                             let mut timed_out_after;
                             let mut attempt = 0;
 
@@ -339,6 +342,15 @@ impl<'a> PregelExecutor<'a> {
                                             // execution that produced these events.
                                             if let StreamEvent::Updates { ref updates, .. } = event {
                                                 streamed_updates.push(updates.clone());
+                                            }
+                                            // A node that routed itself reports it here.
+                                            if let StreamEvent::RouteDispatched {
+                                                ref source,
+                                                ref targets,
+                                            } = event
+                                            {
+                                                streamed_goto =
+                                                    Some((source.clone(), targets.clone()));
                                             }
                                             collected_events.push(event);
                                         }
@@ -387,6 +399,10 @@ impl<'a> PregelExecutor<'a> {
                             result.events.push(StreamEvent::node_end(node_name, self.step, duration_ms));
                             result.events.extend(collected_events);
 
+                            if let Some((source, targets)) = streamed_goto {
+                                result.goto.insert(source, targets);
+                            }
+
                             for updates in streamed_updates {
                                 self.ensure_channels_declared(
                                     node_name,
@@ -414,7 +430,7 @@ impl<'a> PregelExecutor<'a> {
                     }
 
                     self.pending_nodes = {
-                        let next_candidates = self.graph.get_next_nodes(&result.executed_nodes, &self.state)?;
+                        let next_candidates = self.next_frontier(&result.executed_nodes, &result.goto)?;
                         match self.filter_deferred_nodes(next_candidates, &result.executed_nodes) {
                             Ok(nodes) => nodes,
                             Err(e) => {
@@ -470,7 +486,7 @@ impl<'a> PregelExecutor<'a> {
                     // `After` resumes at the successors; see `run`.
                     if matches!(interrupt, Interrupt::After(_)) {
                         let next =
-                            self.graph.get_next_nodes(&result.executed_nodes, &self.state)?;
+                            self.next_frontier(&result.executed_nodes, &result.goto)?;
                         match self.filter_deferred_nodes(next, &result.executed_nodes) {
                             Ok(frontier) => self.pending_nodes = frontier,
                             Err(error) => {
@@ -521,7 +537,7 @@ impl<'a> PregelExecutor<'a> {
                 }
 
                 self.pending_nodes = {
-                    let next_candidates = self.graph.get_next_nodes(&result.executed_nodes, &self.state)?;
+                    let next_candidates = self.next_frontier(&result.executed_nodes, &result.goto)?;
                     match self.filter_deferred_nodes(next_candidates, &result.executed_nodes) {
                         Ok(nodes) => nodes,
                         Err(e) => {
@@ -874,6 +890,7 @@ impl<'a> PregelExecutor<'a> {
                             interrupt: Some(interrupt),
                             executed_nodes: result.executed_nodes,
                             events: result.events,
+                            goto: result.goto,
                         });
                     }
 
@@ -890,6 +907,11 @@ impl<'a> PregelExecutor<'a> {
                             let ttl = self.graph.cache_policies.get(&node_name).and_then(|p| p.ttl);
                             cache.set(&cache_key, updates_value, ttl).await;
                         }
+                    }
+
+                    // A node that named its successors overrides its declared edges.
+                    if let Some(targets) = output.goto {
+                        result.goto.insert(node_name.clone(), targets);
                     }
 
                     // Collect updates with their node, so application order can be
@@ -940,6 +962,48 @@ impl<'a> PregelExecutor<'a> {
     }
 
     /// Save a checkpoint
+    /// Computes the next frontier, letting a node's `goto` stand in for its edges.
+    ///
+    /// A node that named successors has its declared edges skipped, so a `goto`
+    /// replaces an edge rather than adding to one. `END` is accepted and
+    /// contributes no successor, which is how a branch stops.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphError::UnknownRouteTarget`] when a `goto` names a node the
+    /// graph does not hold.
+    fn next_frontier(
+        &self,
+        executed: &[String],
+        goto: &HashMap<String, Vec<String>>,
+    ) -> Result<Vec<String>> {
+        // A node that routed itself does not also follow its declared edges.
+        let followed_edges: Vec<String> =
+            executed.iter().filter(|node| !goto.contains_key(*node)).cloned().collect();
+        let mut next = self.graph.get_next_nodes(&followed_edges, &self.state)?;
+
+        // Sorted, so a multi-target goto admits its nodes in a fixed order.
+        let mut routed: Vec<(&String, &Vec<String>)> = goto.iter().collect();
+        routed.sort_by_key(|(node, _)| node.as_str());
+
+        for (node, targets) in routed {
+            for target in targets {
+                if target == crate::edge::END {
+                    continue;
+                }
+                if self.graph.node(target).is_none() {
+                    return Err(GraphError::UnknownRouteTarget(format!(
+                        "node '{node}' routed to '{target}', which is not a node in this graph"
+                    )));
+                }
+                if !next.contains(target) {
+                    next.push(target.clone());
+                }
+            }
+        }
+        Ok(next)
+    }
+
     /// Rejects an update naming a channel the schema does not declare.
     ///
     /// Inert unless the graph asked for enforcement, and inert when the schema

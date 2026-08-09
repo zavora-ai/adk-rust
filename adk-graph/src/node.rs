@@ -214,12 +214,44 @@ pub struct NodeOutput {
     pub interrupt: Option<Interrupt>,
     /// Custom stream events
     pub events: Vec<StreamEvent>,
+    /// Nodes to run next, replacing this node's declared outgoing edges.
+    pub goto: Option<Vec<String>>,
 }
 
 impl NodeOutput {
     /// Create a new empty output
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Names the nodes to run next, replacing this node's declared edges.
+    ///
+    /// A conditional edge fixes its targets when the graph is built. This does
+    /// not: a node reads state and names any node in the graph, including one it
+    /// has no edge to. Naming [`END`](crate::edge::END) stops the branch.
+    ///
+    /// The declared edges from this node do not also fire. Setting no goto leaves
+    /// the declared edges in charge, which is the default.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::node::NodeOutput;
+    /// use serde_json::json;
+    ///
+    /// // Write state and choose the next node in one step.
+    /// let output = NodeOutput::new()
+    ///     .with_update("risk", json!("high"))
+    ///     .with_goto(["escalate"]);
+    /// assert_eq!(output.goto.as_deref(), Some(&["escalate".to_string()][..]));
+    /// ```
+    pub fn with_goto<I, S>(mut self, targets: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.goto = Some(targets.into_iter().map(Into::into).collect());
+        self
     }
 
     /// Add a state update
@@ -295,6 +327,12 @@ pub trait Node: Send + Sync {
                 Ok(output) => {
                     for event in output.events {
                         yield Ok(event);
+                    }
+                    // A goto has no other way through: this path yields events, not
+                    // a NodeOutput, so the executor reads the route back off the
+                    // stream.
+                    if let Some(targets) = output.goto {
+                        yield Ok(StreamEvent::route_dispatched(&name, targets));
                     }
                     yield Ok(StreamEvent::Updates { node: name, updates: output.updates });
                 }

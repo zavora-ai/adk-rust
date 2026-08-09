@@ -836,6 +836,39 @@ Dynamic routing based on state:
 )
 ```
 
+### Routing From Inside a Node
+
+A conditional edge fixes its targets when the graph is built. `NodeOutput::with_goto`
+does not: a node writes state and names its successors in the same step, and it may
+name any node in the graph, including one it has no edge to.
+
+```rust
+use adk_graph::node::NodeOutput;
+use serde_json::json;
+
+// The node decides where control goes, from what it just computed.
+async fn triage(ctx: &adk_graph::node::NodeContext) -> adk_graph::error::Result<NodeOutput> {
+    let amount = ctx.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let next = if amount > 10_000.0 { "escalate" } else { "auto_approve" };
+    Ok(NodeOutput::new().with_update("risk", json!(next)).with_goto([next]))
+}
+```
+
+| Behaviour | Rule |
+|-----------|------|
+| Declared edges | A node that sets a goto does not also follow its outgoing edges. The goto replaces them. |
+| Several targets | All named nodes run, admitted in sorted order. |
+| `END` | Naming `END` stops that branch. |
+| An unknown name | The run fails with `GraphError::UnknownRouteTarget`. |
+| No goto | The declared edges decide, which is the default. |
+
+The frontier a goto produces is checkpointed like any other, so a paused run
+resumes into the node the goto chose.
+
+> **Note:** use `add_conditional_edges` when the possible targets are known when
+> you build the graph — the edges then appear in a rendered diagram. Use a goto
+> when the choice belongs to the node.
+
 ### Router Helpers
 
 Use built-in routers for common patterns:
