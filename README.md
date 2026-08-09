@@ -8,7 +8,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.95%2B-orange.svg)
 [![GitHub Discussions](https://img.shields.io/github/discussions/zavora-ai/adk-rust?style=flat&logo=github&color=5865F2)](https://github.com/zavora-ai/adk-rust/discussions)
 
-> **v2.0.0 release candidate — unpublished.** The 42-crate v2 workspace is being stabilized; v2 has not been published to crates.io. The candidate targets the official `rmcp 2.2` MCP SDK (protocol `2025-11-25`) with effective HTTP configuration, official `agent-client-protocol` 1.2 for ACP with exact capability publication, the new `adk-computer-use` governed desktop-automation layer, `adk-devtools` coding-agent tools, and live async tool confirmation keyed by function-call ID. See the [migration guide](docs/official_docs/migration/1.0-to-2.0.md) for the planned breaking changes and [CHANGELOG](CHANGELOG.md) for full details.
+> **v2.0.0 release candidate — unpublished.** The 42-crate v2 workspace is being stabilized; v2 has not been published to crates.io. The candidate targets the official `rmcp 3.1` MCP SDK (advertising protocol `2025-11-25`, reaching `2026-07-28` servers) with effective HTTP configuration, official `agent-client-protocol` 1.2 for ACP with exact capability publication, the new `adk-computer-use` governed desktop-automation layer, `adk-devtools` coding-agent tools, and live async tool confirmation keyed by function-call ID. See the [migration guide](docs/official_docs/migration/1.0-to-2.0.md) for the planned breaking changes and [CHANGELOG](CHANGELOG.md) for full details.
 >
 > **Release transition:** This banner changes to “Released” only after all 42 v2.0.0 crates are available on crates.io. The roadmap marker then changes from “release candidate” to “current.”
 >
