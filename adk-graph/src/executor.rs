@@ -172,7 +172,7 @@ impl<'a> PregelExecutor<'a> {
                 // are applied, so the resume point is its successors. Saving the
                 // executing frontier would re-run it and re-raise the gate.
                 if matches!(interrupt, Interrupt::After(_)) {
-                    let next = self.graph.get_next_nodes(&result.executed_nodes, &self.state);
+                    let next = self.graph.get_next_nodes(&result.executed_nodes, &self.state)?;
                     self.pending_nodes =
                         self.filter_deferred_nodes(next, &result.executed_nodes)?;
                 }
@@ -200,7 +200,7 @@ impl<'a> PregelExecutor<'a> {
             // Advance the frontier *before* checkpointing. A checkpoint records
             // what still has to run, so saving while `pending_nodes` still holds
             // the nodes that just finished would re-execute them on resume.
-            let next_candidates = self.graph.get_next_nodes(&result.executed_nodes, &self.state);
+            let next_candidates = self.graph.get_next_nodes(&result.executed_nodes, &self.state)?;
             self.pending_nodes =
                 self.filter_deferred_nodes(next_candidates, &result.executed_nodes)?;
             self.step += 1;
@@ -414,7 +414,7 @@ impl<'a> PregelExecutor<'a> {
                     }
 
                     self.pending_nodes = {
-                        let next_candidates = self.graph.get_next_nodes(&result.executed_nodes, &self.state);
+                        let next_candidates = self.graph.get_next_nodes(&result.executed_nodes, &self.state)?;
                         match self.filter_deferred_nodes(next_candidates, &result.executed_nodes) {
                             Ok(nodes) => nodes,
                             Err(e) => {
@@ -470,7 +470,7 @@ impl<'a> PregelExecutor<'a> {
                     // `After` resumes at the successors; see `run`.
                     if matches!(interrupt, Interrupt::After(_)) {
                         let next =
-                            self.graph.get_next_nodes(&result.executed_nodes, &self.state);
+                            self.graph.get_next_nodes(&result.executed_nodes, &self.state)?;
                         match self.filter_deferred_nodes(next, &result.executed_nodes) {
                             Ok(frontier) => self.pending_nodes = frontier,
                             Err(error) => {
@@ -503,8 +503,25 @@ impl<'a> PregelExecutor<'a> {
 
                 // Advance the frontier before checkpointing, so the checkpoint
                 // records what still has to run rather than what just finished.
+                //
+                // Reported only on the debug stream, because building it evaluates
+                // each router a second time.
+                if matches!(mode, StreamMode::Debug) {
+                    match self.graph.route_dispatches(&result.executed_nodes, &self.state) {
+                        Ok(dispatches) => {
+                            for (source, targets) in dispatches {
+                                yield Ok(StreamEvent::route_dispatched(&source, targets));
+                            }
+                        }
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    }
+                }
+
                 self.pending_nodes = {
-                    let next_candidates = self.graph.get_next_nodes(&result.executed_nodes, &self.state);
+                    let next_candidates = self.graph.get_next_nodes(&result.executed_nodes, &self.state)?;
                     match self.filter_deferred_nodes(next_candidates, &result.executed_nodes) {
                         Ok(nodes) => nodes,
                         Err(e) => {

@@ -443,7 +443,13 @@ impl CompiledGraph {
     }
 
     /// Get next nodes after executing the given nodes
-    pub fn get_next_nodes(&self, executed: &[String], state: &State) -> Vec<String> {
+    /// # Errors
+    ///
+    /// Returns [`GraphError::UnknownRouteTarget`] when a router answers with a
+    /// key that is not among the declared targets. A route to `END` is declared,
+    /// so it is not an error; a key nobody declared is, because the branch would
+    /// otherwise stop and the run would report success having skipped the work.
+    pub fn get_next_nodes(&self, executed: &[String], state: &State) -> Result<Vec<String>> {
         let mut next = Vec::new();
 
         for edge in &self.edges {
@@ -455,18 +461,66 @@ impl CompiledGraph {
                 }
                 Edge::Conditional { source, router, targets } if executed.contains(source) => {
                     let route = router(state);
-                    if let Some(EdgeTarget::Node(n)) = targets.get(&route)
-                        && !next.contains(n)
-                    {
-                        next.push(n.clone());
+                    match targets.get(&route) {
+                        Some(EdgeTarget::Node(n)) if !next.contains(n) => next.push(n.clone()),
+                        // Declared, and either already queued or the end of this branch.
+                        Some(_) => {}
+                        None => {
+                            return Err(GraphError::UnknownRouteTarget(format!(
+                                "node '{source}' routed to '{route}', which is not a declared target. Declared: {declared:?}",
+                                declared = {
+                                    let mut keys: Vec<&str> =
+                                        targets.keys().map(String::as_str).collect();
+                                    keys.sort_unstable();
+                                    keys
+                                }
+                            )));
+                        }
                     }
-                    // If route leads to END or not found in targets, next will be empty for this path
                 }
                 _ => {}
             }
         }
 
-        next
+        Ok(next)
+    }
+
+    /// Reports the conditional dispatches the executed nodes produce.
+    ///
+    /// Only conditional edges appear: a direct edge involves no decision. Used
+    /// for [`StreamEvent::RouteDispatched`](crate::stream::StreamEvent::RouteDispatched),
+    /// and called only when a caller asked for the debug stream, so a router is
+    /// not evaluated again on the common path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphError::UnknownRouteTarget`] on an undeclared route key,
+    /// matching [`Self::get_next_nodes`].
+    pub fn route_dispatches(
+        &self,
+        executed: &[String],
+        state: &State,
+    ) -> Result<Vec<(String, Vec<String>)>> {
+        let mut dispatches = Vec::new();
+        for edge in &self.edges {
+            if let Edge::Conditional { source, router, targets } = edge
+                && executed.contains(source)
+            {
+                let route = router(state);
+                match targets.get(&route) {
+                    Some(EdgeTarget::Node(n)) => {
+                        dispatches.push((source.clone(), vec![n.clone()]));
+                    }
+                    Some(_) => dispatches.push((source.clone(), Vec::new())),
+                    None => {
+                        return Err(GraphError::UnknownRouteTarget(format!(
+                            "node '{source}' routed to '{route}', which is not a declared target"
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(dispatches)
     }
 
     /// Check if any of the executed nodes lead to END
@@ -598,11 +652,11 @@ mod tests {
         // Test routing
         let mut state = State::new();
         state.insert("next".to_string(), json!("path_a"));
-        let next = graph.get_next_nodes(&["router".to_string()], &state);
+        let next = graph.get_next_nodes(&["router".to_string()], &state).unwrap();
         assert_eq!(next, vec!["path_a".to_string()]);
 
         state.insert("next".to_string(), json!("path_b"));
-        let next = graph.get_next_nodes(&["router".to_string()], &state);
+        let next = graph.get_next_nodes(&["router".to_string()], &state).unwrap();
         assert_eq!(next, vec!["path_b".to_string()]);
     }
 }
