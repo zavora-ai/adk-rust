@@ -99,3 +99,17 @@ optimized_instructions.txt
 
 # Local Node reference server (not part of the workspace)
 examples/gpt-realtime-reference/
+
+# Episode 3 podcast assets — work in progress, and adk-rust-episode-3.mp4 alone is
+# ~900 MB, which exceeds GitHub's 100 MB per-file limit. Episodes 1 and 2 stay
+# tracked. Remove these lines when the episode is ready to publish.
+docs/podcast/Podcast.webp
+docs/podcast/adk-rust-episode-3.mp4
+docs/podcast/ep3-pilot.mp4
+docs/podcast/episode-3-narration.mp3
+docs/podcast/episode-3-script.md
+docs/podcast/episode-3-v2-launch-script.md
+docs/podcast/ep3-assets/
+docs/podcast/ep3-video/
+docs/podcast/slides-ep3/
+docs/podcast/pipeline/
