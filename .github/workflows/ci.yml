@@ -143,6 +143,10 @@ jobs:
           - { package: adk-agent, features: codeact }
           - { package: adk-model, features: openrouter }
           - { package: adk-sandbox, features: wasm }
+          # The background run store and its persistence are behind `background`, so a
+          # default --workspace build skips their tests entirely. Nothing compiled them
+          # when durable run records were added.
+          - { package: adk-server, features: background }
           # sandbox-linux is Linux-only *and* feature-gated, so nothing built it until a
           # container run found the bubblewrap probe could never succeed and that its
           # property tests did not compile.

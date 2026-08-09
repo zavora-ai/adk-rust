@@ -96,6 +96,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `Checkpointer::prune` has a default that keeps everything, so a custom backend
     is unaffected. A long-running thread previously grew without bound; LangGraph
     documents the same growth and advises an external cron job.
+  - **Background runs survive a restart.** `adk-server`'s `RunStore` held runs in
+    an in-memory map, so graph state survived a restart through a checkpointer but
+    the list of runs did not, and a restarted server could not report what had been
+    in flight. `RunPersistence` records them, `FileRunPersistence` writes one JSON
+    file through a temporary and a rename, and `RunStore::restore` loads them at
+    startup — reporting any run that was `Running` or `Queued` as `Failed`, because
+    it cannot still be running. A restored run gets a live cancellation token. A
+    networked backend is a follow-up; the trait is the seam for one.
   - **Umbrella features.** `graph-functional`, `graph-node-cache`, `graph-delta`,
     `graph-time-travel`, `graph-sqlite`, and `graph-redis-cache` on `adk-rust`
     forward to `adk-graph`, which has no default features. The first four are in
