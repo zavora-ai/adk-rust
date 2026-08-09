@@ -286,6 +286,7 @@ impl<'a> PregelExecutor<'a> {
                         }
                         if let Some(node) = self.graph.nodes.get(node_name) {
                             let mut ctx = NodeContext::new(self.state.clone(), self.config.clone(), self.step);
+                            ctx.set_parent_schema(Arc::new(self.graph.schema.clone()));
                             ctx.set_child_invoker(Arc::new(crate::child::ChildInvoker::new(
                                 self.graph.nodes.clone(),
                                 Arc::clone(&self.child_ledger),
@@ -870,6 +871,7 @@ impl<'a> PregelExecutor<'a> {
                 // inline by the parent and are deliberately outside the
                 // concurrency budget: counting them could deadlock, because the
                 // parent holds its own slot while waiting.
+                ctx.set_parent_schema(Arc::new(self.graph.schema.clone()));
                 ctx.set_child_invoker(Arc::new(crate::child::ChildInvoker::new(
                     self.graph.nodes.clone(),
                     Arc::clone(&self.child_ledger),

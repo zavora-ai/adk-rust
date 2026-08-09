@@ -167,6 +167,11 @@ impl StateGraph {
 
     /// Compile the graph for execution
     pub fn compile(mut self) -> Result<CompiledGraph> {
+        // A node with requirements on the graph that holds it states them now, so
+        // a mismatch cannot reach a run. `SubgraphNode` checks its channel map here.
+        for node in self.nodes.values() {
+            node.validate_against(&self.schema)?;
+        }
         self.validate()?;
         self.defer_unconditional_fan_in();
 

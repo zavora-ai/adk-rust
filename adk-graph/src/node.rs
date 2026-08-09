@@ -97,15 +97,30 @@ pub struct NodeContext {
     progress_handle: Option<ProgressHandle>,
     /// Set by the executor when this node may invoke other nodes.
     children: Option<std::sync::Arc<crate::child::ChildInvoker>>,
+    /// The schema of the graph running this node, for a node that projects state.
+    parent_schema: Option<std::sync::Arc<crate::state::StateSchema>>,
 }
 
 impl NodeContext {
     /// Create a new node context
     pub fn new(state: State, config: ExecutionConfig, step: usize) -> Self {
-        Self { state, config, step, progress_handle: None, children: None }
+        Self { state, config, step, progress_handle: None, children: None, parent_schema: None }
     }
 
     /// The machinery for invoking other nodes, if this context has it.
+    /// The schema of the graph running this node.
+    ///
+    /// Attached by the executor. A node that projects state between two schemas
+    /// needs it; most nodes do not.
+    pub fn parent_schema(&self) -> Option<std::sync::Arc<crate::state::StateSchema>> {
+        self.parent_schema.clone()
+    }
+
+    /// Attaches the running graph's schema.
+    pub fn set_parent_schema(&mut self, schema: std::sync::Arc<crate::state::StateSchema>) {
+        self.parent_schema = Some(schema);
+    }
+
     pub(crate) fn child_invoker(&self) -> Option<std::sync::Arc<crate::child::ChildInvoker>> {
         self.children.clone()
     }
@@ -307,6 +322,18 @@ pub trait Node: Send + Sync {
     /// # Errors
     ///
     /// Returns an error describing what is unavailable. The default accepts the node.
+    /// Checks this node against the schema of the graph that holds it.
+    ///
+    /// Called by [`StateGraph::compile`](crate::graph::StateGraph::compile) for
+    /// every node, so a node that has requirements on its parent states them
+    /// before anything runs. Defaults to accepting any parent.
+    ///
+    /// [`SubgraphNode`](crate::subgraph::SubgraphNode) uses this to reject a
+    /// channel mapping that names a channel neither side declares.
+    fn validate_against(&self, _parent: &crate::state::StateSchema) -> Result<()> {
+        Ok(())
+    }
+
     fn validate(&self) -> Result<()> {
         Ok(())
     }
@@ -389,6 +416,9 @@ impl Node for FunctionNode {
         }
         if let Some(invoker) = ctx.child_invoker() {
             ctx_owned.set_child_invoker(invoker);
+        }
+        if let Some(schema) = ctx.parent_schema() {
+            ctx_owned.set_parent_schema(schema);
         }
         (self.func)(ctx_owned).await
     }

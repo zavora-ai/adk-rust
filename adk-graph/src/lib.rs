@@ -82,6 +82,7 @@ pub mod node;
 pub mod retry;
 pub mod state;
 pub mod stream;
+pub mod subgraph;
 pub mod timeout;
 pub mod tool;
 

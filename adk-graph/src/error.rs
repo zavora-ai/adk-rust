@@ -70,6 +70,17 @@ pub enum GraphError {
         channel: String,
     },
 
+    /// A subgraph mapping names a channel the relevant side does not declare.
+    #[error("subgraph '{subgraph}' maps channel '{channel}', which the {side} does not declare")]
+    SubgraphChannelMismatch {
+        /// The subgraph node's name.
+        subgraph: String,
+        /// The channel that is not declared.
+        channel: String,
+        /// Which side is missing it, the parent or the subgraph.
+        side: String,
+    },
+
     /// Router returned unknown target
     #[error("Router returned unknown target: {0}")]
     UnknownRouteTarget(String),
@@ -141,6 +152,9 @@ impl From<GraphError> for adk_core::AdkError {
             GraphError::FanInTimedOut { .. } => (ErrorCategory::Timeout, "graph.fan_in_timed_out"),
             GraphError::SerializationError(_) => (ErrorCategory::Internal, "graph.serialization"),
             GraphError::CheckpointError(_) => (ErrorCategory::Internal, "graph.checkpoint"),
+            GraphError::SubgraphChannelMismatch { .. } => {
+                (ErrorCategory::InvalidInput, "graph.subgraph_channel_mismatch")
+            }
             GraphError::UndeclaredChannel { .. } => {
                 (ErrorCategory::InvalidInput, "graph.undeclared_channel")
             }
