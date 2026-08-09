@@ -23,10 +23,11 @@ to run on its own: carrying on after a crash, changing course when the problem
 changes, and the unglamorous half nobody demos. 42 crates. Subgraphs, durable
 resume, governed computer use.
 
-<img src="docs/podcast/episode-3-thumbnail.png" alt="Rust &amp; Beyond Episode 3: Agents That Act" width="100%">
+<a href="https://www.youtube.com/watch?v=RIh-M0W1CiQ">
+  <img src="docs/podcast/episode-3-thumbnail.png" alt="▶ Watch Episode 3: ADK-Rust v2.0.0 — Agents That Act" width="100%">
+</a>
 
-*~40 min · Hosts: James (Fenrir) &amp; Ada (Kore) · Video with slides · **link lands
-with the release***
+**▶️ [Watch on YouTube](https://www.youtube.com/watch?v=RIh-M0W1CiQ)** — *40 min 50 sec · Hosts: James (Fenrir) &amp; Ada (Kore) · Video with slides*
 
 > *"Show me."* — Ada, thirty seconds in, declining to be told about the visual
 > builder
