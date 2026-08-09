@@ -343,6 +343,12 @@ Require exactly these stable contexts in the `main` ruleset:
 | `pr-gate` | `ci.yml` | Aggregate of every PR-tier CI job below |
 | `semver` | `semver.yml` | `semver` (stable-tier strict; beta is warn-only within the same job) |
 
+> **Note:** branch protection also requires some `feature-coverage` entries by
+> their rendered name, such as `feature-coverage (adk-managed, memory)`. Renaming
+> or removing a matrix entry changes that name, and the old requirement then waits
+> forever for a status no job reports — which blocks every PR. Change the matrix
+> entry and the branch-protection entry together, or keep both entries.
+
 `pr-gate` covers `fmt`, `clippy`, Linux workspace tests, every
 `feature-coverage` matrix entry, docs and doctests, every standalone-example
 shard, templates, the macOS build, and the Windows build plus sandbox portability

@@ -161,10 +161,16 @@ jobs:
           # never compiled them and no job ever *ran* their tests. The nightly `full`
           # clippy build compiles them but executes nothing.
           - { package: adk-realtime, features: openai }
-          # `full` rather than `memory`: the entry used to name `memory` alone, which
-          # looked like coverage while leaving `sandbox` unbuilt. adk-sandbox renamed a
-          # field of EnforcedLimits in #485 and a call site behind `sandbox` kept the old
-          # name for two releases, because nothing compiled it.
+          # Two entries on purpose. `memory` alone looked like coverage while leaving
+          # `sandbox` unbuilt: adk-sandbox renamed a field of EnforcedLimits in #485 and
+          # a call site behind `sandbox` kept the old name for two releases, because
+          # nothing compiled it. `full` is sandbox + memory and closes that.
+          #
+          # `memory` stays because branch protection requires the check by its rendered
+          # name, `feature-coverage (adk-managed, memory)`. Removing the entry leaves
+          # that requirement waiting for a status no job will ever report, which blocks
+          # every PR. Drop it only together with the branch-protection entry.
+          - { package: adk-managed, features: memory }
           - { package: adk-managed, features: full }
           - { package: adk-audio, features: fx }
           - { package: adk-rag, features: lancedb }
