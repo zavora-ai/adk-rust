@@ -113,3 +113,8 @@ docs/podcast/ep3-assets/
 docs/podcast/ep3-video/
 docs/podcast/slides-ep3/
 docs/podcast/pipeline/
+
+# Local agent-skill install and stray capture artefacts.
+.agents/
+skills-lock.json
+site-home-current.png
