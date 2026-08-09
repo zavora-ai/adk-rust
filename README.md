@@ -77,7 +77,7 @@ Swap the provider by swapping the client. The agent, runner and tools are unchan
 | DeepSeek | `DeepSeekClient::chat(key)` | `deepseek` | `DEEPSEEK_API_KEY` |
 | Groq | `GroqClient::new(GroqConfig::llama70b(key))` | `groq` | `GROQ_API_KEY` |
 | Ollama | `OllamaModel::new(OllamaConfig::new(model))` | `ollama` | none |
-| Bedrock | via AWS SDK Converse | `bedrock` | `aws configure` |
+| Bedrock | `BedrockClient::new(BedrockConfig::new(region, model_id)).await?` | `bedrock` | AWS credential chain |
 | mistral.rs | `MistralRsModel::new(config)` | `adk-mistralrs` | none, local |
 
 Or let it choose: `adk_rust::run(instructions, input)` picks a provider from the
