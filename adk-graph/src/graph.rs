@@ -183,6 +183,7 @@ impl StateGraph {
             deferred_configs: self.deferred_configs,
             max_concurrency: None,
             retry_policies: HashMap::new(),
+            strict_channels: false,
             #[cfg(feature = "node-cache")]
             cache_policies: HashMap::new(),
         })
@@ -307,6 +308,8 @@ pub struct CompiledGraph {
     pub(crate) max_concurrency: Option<usize>,
     /// Per-node retry policies, keyed by node name.
     pub(crate) retry_policies: HashMap<String, crate::retry::RetryPolicy>,
+    /// Whether a node writing an undeclared channel fails the run.
+    pub(crate) strict_channels: bool,
     /// Per-node cache policies, keyed by node name.
     #[cfg(feature = "node-cache")]
     pub(crate) cache_policies: HashMap<String, crate::cache::NodeCachePolicy>,
@@ -353,6 +356,44 @@ impl CompiledGraph {
     /// Without this the frontier runs unbounded, which stays the default.
     pub fn with_max_concurrency(mut self, limit: usize) -> Self {
         self.max_concurrency = Some(limit.max(1));
+        self
+    }
+
+    /// Fail the run when a node writes a channel the schema does not declare.
+    ///
+    /// An undeclared channel otherwise takes the overwrite reducer, because that
+    /// is the fallback for a name the schema does not hold. A graph that declared
+    /// a list channel and then wrote a near-miss name keeps only the last value
+    /// and reports nothing. Enforcement turns that into
+    /// [`GraphError::UndeclaredChannel`](crate::error::GraphError::UndeclaredChannel).
+    ///
+    /// A graph that declares no channels accepts any name even under
+    /// enforcement, because there is nothing to check against.
+    ///
+    /// Off by default: a graph may legitimately declare the channels a caller
+    /// reads and let its nodes pass other values between themselves.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::edge::{END, START};
+    /// use adk_graph::graph::StateGraph;
+    /// use adk_graph::node::NodeOutput;
+    /// use serde_json::json;
+    ///
+    /// let graph = StateGraph::with_channels(&["total"])
+    ///     .add_node_fn("sum", |_ctx| async move {
+    ///         Ok(NodeOutput::new().with_update("total", json!(3)))
+    ///     })
+    ///     .add_edge(START, "sum")
+    ///     .add_edge("sum", END)
+    ///     .compile()
+    ///     .unwrap()
+    ///     .with_strict_channels();
+    /// # let _ = graph;
+    /// ```
+    pub fn with_strict_channels(mut self) -> Self {
+        self.strict_channels = true;
         self
     }
 

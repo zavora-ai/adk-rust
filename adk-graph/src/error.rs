@@ -55,6 +55,21 @@ pub enum GraphError {
     #[error("Checkpoint error: {0}")]
     CheckpointError(String),
 
+    /// A node wrote a channel the state schema does not declare.
+    ///
+    /// Only raised when channel enforcement is on. An undeclared channel
+    /// otherwise takes the overwrite reducer, which silently discards the
+    /// appends a list channel was meant to collect.
+    #[error(
+        "node '{node}' wrote undeclared channel '{channel}'. Declare it on the graph, or drop the write"
+    )]
+    UndeclaredChannel {
+        /// The node that produced the update.
+        node: String,
+        /// The channel name that is not declared.
+        channel: String,
+    },
+
     /// Router returned unknown target
     #[error("Router returned unknown target: {0}")]
     UnknownRouteTarget(String),
@@ -126,6 +141,9 @@ impl From<GraphError> for adk_core::AdkError {
             GraphError::FanInTimedOut { .. } => (ErrorCategory::Timeout, "graph.fan_in_timed_out"),
             GraphError::SerializationError(_) => (ErrorCategory::Internal, "graph.serialization"),
             GraphError::CheckpointError(_) => (ErrorCategory::Internal, "graph.checkpoint"),
+            GraphError::UndeclaredChannel { .. } => {
+                (ErrorCategory::InvalidInput, "graph.undeclared_channel")
+            }
             GraphError::UnknownRouteTarget(_) => {
                 (ErrorCategory::NotFound, "graph.unknown_route_target")
             }

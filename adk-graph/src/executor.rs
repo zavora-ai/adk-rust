@@ -388,6 +388,10 @@ impl<'a> PregelExecutor<'a> {
                             result.events.extend(collected_events);
 
                             for updates in streamed_updates {
+                                self.ensure_channels_declared(
+                                    node_name,
+                                    updates.keys().map(String::as_str),
+                                )?;
                                 for (key, value) in updates {
                                     self.graph.schema.apply_update(&mut self.state, &key, value);
                                 }
@@ -714,6 +718,10 @@ impl<'a> PregelExecutor<'a> {
 
                 // Reconstruct updates from the cached JSON value (a map of key -> value)
                 if let Some(updates_map) = cached_value.as_object() {
+                    self.ensure_channels_declared(
+                        node_name,
+                        updates_map.keys().map(String::as_str),
+                    )?;
                     for (key, value) in updates_map {
                         self.graph.schema.apply_update(&mut self.state, key, value.clone());
                     }
@@ -890,9 +898,10 @@ impl<'a> PregelExecutor<'a> {
         // names are unique within a graph, and a node's own updates are held in a
         // map whose iteration order is itself unspecified.
         all_updates.sort_by(|(left, _), (right, _)| left.cmp(right));
-        for (_node, updates) in all_updates {
+        for (node, updates) in all_updates {
             let mut keys: Vec<_> = updates.keys().cloned().collect();
             keys.sort();
+            self.ensure_channels_declared(&node, keys.iter().map(String::as_str))?;
             for key in keys {
                 if let Some(value) = updates.get(&key) {
                     self.graph.schema.apply_update(&mut self.state, &key, value.clone());
@@ -914,6 +923,27 @@ impl<'a> PregelExecutor<'a> {
     }
 
     /// Save a checkpoint
+    /// Rejects an update naming a channel the schema does not declare.
+    ///
+    /// Inert unless the graph asked for enforcement, and inert when the schema
+    /// declares no channels, so an existing graph is unaffected either way.
+    fn ensure_channels_declared<'k>(
+        &self,
+        node: &str,
+        keys: impl IntoIterator<Item = &'k str>,
+    ) -> Result<()> {
+        if !self.graph.strict_channels {
+            return Ok(());
+        }
+        match self.graph.schema.first_undeclared(keys) {
+            Some(channel) => Err(GraphError::UndeclaredChannel {
+                node: node.to_string(),
+                channel: channel.to_string(),
+            }),
+            None => Ok(()),
+        }
+    }
+
     async fn save_checkpoint(&self) -> Result<String> {
         if let Some(cp) = &self.graph.checkpointer {
             let mut checkpoint = Checkpoint::new(

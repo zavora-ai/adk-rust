@@ -114,6 +114,27 @@ impl StateSchema {
         self.channels.get(channel).map(|c| &c.reducer).unwrap_or(&Reducer::Overwrite)
     }
 
+    /// Returns the first of `keys` that this schema does not declare.
+    ///
+    /// Returns `None` when the schema declares no channels, because then there
+    /// is nothing to check against.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_graph::state::StateSchema;
+    ///
+    /// let schema = StateSchema::simple(&["kept"]);
+    /// assert_eq!(schema.first_undeclared(["kept"]), None);
+    /// assert_eq!(schema.first_undeclared(["kept", "typo"]), Some("typo"));
+    /// ```
+    pub fn first_undeclared<'a>(&self, keys: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+        if self.channels.is_empty() {
+            return None;
+        }
+        keys.into_iter().find(|key| !self.channels.contains_key(*key))
+    }
+
     /// Get the default value for a channel
     pub fn get_default(&self, channel: &str) -> Option<&Value> {
         self.channels.get(channel).and_then(|c| c.default.as_ref())
