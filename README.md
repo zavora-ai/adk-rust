@@ -16,6 +16,88 @@ and async, across 42 crates for agent orchestration.
 > shape, and the fan-in default changed behaviour without an API change. The
 > [CHANGELOG](CHANGELOG.md) has the full entry.
 
+### 🎬 Rust & Beyond Podcast — Episode 3: Agents That Act
+
+**ADK-Rust v2.0.0 — Agents That Act.** Eight chapters on what it takes for an agent
+to run on its own: carrying on after a crash, changing course when the problem
+changes, and the unglamorous half nobody demos. 42 crates. Subgraphs, durable
+resume, governed computer use.
+
+<img src="docs/podcast/episode-3-thumbnail.png" alt="Rust &amp; Beyond Episode 3: Agents That Act" width="100%">
+
+*~40 min · Hosts: James (Fenrir) &amp; Ada (Kore) · Video with slides · **link lands
+with the release***
+
+> *"Show me."* — Ada, thirty seconds in, declining to be told about the visual
+> builder
+
+<details>
+<summary>Episode highlights</summary>
+
+- **The Numbers** — 42 crates, 4,300+ tests, 104 runnable examples, 568 μs agent-loop
+  overhead against LangGraph's 1,228 ms
+- **Agents That Survive** — SQLite checkpointers, delta checkpoints, and a pause that
+  resumes in a fresh process that shares only the database file
+- **Subgraphs** — a graph as a node, nested three deep, with channel mismatches caught
+  when the parent compiles rather than as an absent value at run time
+- **Deciding At Run Time** — `run_node_with` for work whose size comes from state, and
+  `with_goto` for a node that picks its own successor with no edge declared
+- **The Unglamorous Half** — retries with capped backoff, concurrency bounds, node
+  timeouts, and checkpoint retention so a week-long thread stops growing
+- **Governed Computer Use** — approval interrupts bound to a digest, so what you
+  approved is what runs
+- **What It Costs** — no automatic crash recovery, an unbounded child ledger, and why
+  we kept two orchestration APIs when the other ADKs deprecated one
+
+</details>
+
+<details>
+<summary>Previous episodes</summary>
+
+#### 🎧 Episode 2: v1.0.0 — The Stable Foundation
+
+A deep-dive into what shipped, who built it, and where it was going. 39 crates.
+130K downloads. Semver stable.
+
+<a href="https://www.youtube.com/watch?v=tlqaE8qeHac">
+  <img src="docs/podcast/episode-2-thumbnail.jpg" alt="▶ Watch Episode 2: ADK-Rust v1.0.0 Launch" width="100%">
+</a>
+
+**▶️ [Watch on YouTube](https://www.youtube.com/watch?v=tlqaE8qeHac)** — *10 min 12 sec · Hosts: James (Fenrir) & Ada (Kore)*
+
+> *"We believe the next generation of software will be built by composing autonomous
+> agents, not by writing every line of logic by hand. And we believe Rust is the
+> right language for the runtime those agents live in."* — James
+
+#### 🎧 Episode 1: What is ADK-Rust?
+
+*2 min 21 sec · Generated entirely by ADK-Rust using Gemini 3.1 Flash TTS*
+
+</details>
+
+<details>
+<summary>How are these made?</summary>
+
+Episodes are generated using ADK-Rust's own audio capabilities — Chirp3-HD
+multi-speaker TTS synthesis via `adk-audio`. The script, slide deck (Marp), and
+synthesized audio segments are concatenated with ffmpeg into a video presentation.
+Zero manual voice recording.
+
+```bash
+# Episode 3 assets
+docs/podcast/episode-3-script.md      # Full script, eight chapters
+docs/podcast/episode-3-slides.md      # Marp slide deck
+docs/podcast/adk-rust-episode-3.mp4   # Final video
+docs/podcast/episode-3-narration.mp3  # Audio-only
+```
+
+The episode 3 video and slides are not in the repository: the video alone is about
+900 MB, over GitHub's 100 MB per-file limit. The script and the deck source are.
+
+</details>
+
+---
+
 ## Start
 
 ```bash
@@ -250,88 +332,6 @@ Related: [Google's ADK](https://google.github.io/adk-docs/) ·
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=zavora-ai/adk-rust&type=date&legend=top-left&sealed_token=6AOetBtcoajNSDMBcnL6e2WKdvDT5NhmcnWTFkbCxSxNUpeTftTDJCnRVRZ3e_V2NpUvpnu6Uc-xchE6feVfXQmq25R-PE22UAyBKbp4S9BrjB71dnXsQg" />
  </picture>
 </a>
-
----
-
-### 🎬 Rust & Beyond Podcast — Episode 3: Agents That Act
-
-**ADK-Rust v2.0.0 — Agents That Act.** Eight chapters on what it takes for an agent
-to run on its own: carrying on after a crash, changing course when the problem
-changes, and the unglamorous half nobody demos. 42 crates. Subgraphs, durable
-resume, governed computer use.
-
-<img src="docs/podcast/episode-3-thumbnail.png" alt="Rust &amp; Beyond Episode 3: Agents That Act" width="100%">
-
-*~40 min · Hosts: James (Fenrir) &amp; Ada (Kore) · Video with slides · **link lands
-with the release***
-
-> *"Show me."* — Ada, thirty seconds in, declining to be told about the visual
-> builder
-
-<details>
-<summary>Episode highlights</summary>
-
-- **The Numbers** — 42 crates, 4,300+ tests, 104 runnable examples, 568 μs agent-loop
-  overhead against LangGraph's 1,228 ms
-- **Agents That Survive** — SQLite checkpointers, delta checkpoints, and a pause that
-  resumes in a fresh process that shares only the database file
-- **Subgraphs** — a graph as a node, nested three deep, with channel mismatches caught
-  when the parent compiles rather than as an absent value at run time
-- **Deciding At Run Time** — `run_node_with` for work whose size comes from state, and
-  `with_goto` for a node that picks its own successor with no edge declared
-- **The Unglamorous Half** — retries with capped backoff, concurrency bounds, node
-  timeouts, and checkpoint retention so a week-long thread stops growing
-- **Governed Computer Use** — approval interrupts bound to a digest, so what you
-  approved is what runs
-- **What It Costs** — no automatic crash recovery, an unbounded child ledger, and why
-  we kept two orchestration APIs when the other ADKs deprecated one
-
-</details>
-
-<details>
-<summary>Previous episodes</summary>
-
-#### 🎧 Episode 2: v1.0.0 — The Stable Foundation
-
-A deep-dive into what shipped, who built it, and where it was going. 39 crates.
-130K downloads. Semver stable.
-
-<a href="https://www.youtube.com/watch?v=tlqaE8qeHac">
-  <img src="docs/podcast/episode-2-thumbnail.jpg" alt="▶ Watch Episode 2: ADK-Rust v1.0.0 Launch" width="100%">
-</a>
-
-**▶️ [Watch on YouTube](https://www.youtube.com/watch?v=tlqaE8qeHac)** — *10 min 12 sec · Hosts: James (Fenrir) & Ada (Kore)*
-
-> *"We believe the next generation of software will be built by composing autonomous
-> agents, not by writing every line of logic by hand. And we believe Rust is the
-> right language for the runtime those agents live in."* — James
-
-#### 🎧 Episode 1: What is ADK-Rust?
-
-*2 min 21 sec · Generated entirely by ADK-Rust using Gemini 3.1 Flash TTS*
-
-</details>
-
-<details>
-<summary>How are these made?</summary>
-
-Episodes are generated using ADK-Rust's own audio capabilities — Chirp3-HD
-multi-speaker TTS synthesis via `adk-audio`. The script, slide deck (Marp), and
-synthesized audio segments are concatenated with ffmpeg into a video presentation.
-Zero manual voice recording.
-
-```bash
-# Episode 3 assets
-docs/podcast/episode-3-script.md      # Full script, eight chapters
-docs/podcast/episode-3-slides.md      # Marp slide deck
-docs/podcast/adk-rust-episode-3.mp4   # Final video
-docs/podcast/episode-3-narration.mp3  # Audio-only
-```
-
-The episode 3 video and slides are not in the repository: the video alone is about
-900 MB, over GitHub's 100 MB per-file limit. The script and the deck source are.
-
-</details>
 
 ## License
 
