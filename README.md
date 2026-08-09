@@ -237,4 +237,4 @@ launch](https://www.youtube.com/watch?v=tlqaE8qeHac) · assets under
 
 ## License
 
-Apache 2.0, the same as Google's ADK.
+Apache 2.0. See [LICENSE](LICENSE).
