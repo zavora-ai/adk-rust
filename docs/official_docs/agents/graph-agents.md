@@ -1478,7 +1478,9 @@ let graph = graph.with_node_retry(
 ```
 
 The delay grows by `backoff_factor`, is capped at `max_delay`, and then has jitter
-applied. The default is one attempt, so a node without a policy behaves as before.
+applied. A node with **no policy runs once**, so retry stays opt-in. A policy from
+`RetryPolicy::default()` allows ten attempts, whose nine sleeps total about 243
+seconds — lower `max_attempts` where a caller is waiting on the answer.
 
 An interrupt is never retried, whatever `retry_on` says: a pause is not a failure.
 The attempt count is checkpointed, so a resumed run continues the budget rather

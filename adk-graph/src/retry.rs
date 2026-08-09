@@ -4,7 +4,8 @@
 //! for a call to a service that is briefly unavailable, so a policy can be
 //! attached per node to try again with a growing delay.
 //!
-//! Retry is off unless configured: [`RetryPolicy::default`] allows one attempt,
+//! Retry is off unless configured: a node with no policy runs once. A policy
+//! from [`RetryPolicy::default`] allows ten attempts,
 //! so a graph that sets no policy behaves exactly as before.
 //!
 //! # Example
@@ -90,10 +91,18 @@ pub struct RetryPolicy {
     pub retry_on: RetryOn,
 }
 
+/// Ten attempts, one second of initial delay, doubling to a sixty-second cap.
+///
+/// The nine sleeps between ten attempts total about 243 seconds, so a node that
+/// keeps failing takes roughly four minutes to give up, plus the time each attempt
+/// itself takes. Lower `max_attempts` where a caller is waiting.
+///
+/// Attaching no policy at all is still one attempt: this default applies only to a
+/// policy you construct.
 impl Default for RetryPolicy {
     fn default() -> Self {
         Self {
-            max_attempts: 1,
+            max_attempts: 10,
             initial_delay: Duration::from_secs(1),
             max_delay: Duration::from_secs(60),
             backoff_factor: 2.0,
@@ -190,11 +199,24 @@ fn pseudo_random_unit() -> f64 {
 mod tests {
     use super::*;
 
+    /// A constructed default retries; attaching no policy at all does not. The
+    /// second half of that is the executor's business, not this type's.
     #[test]
-    fn no_retry_by_default() {
+    fn a_default_policy_retries_ten_times() {
         let policy = RetryPolicy::default();
-        assert_eq!(policy.max_attempts, 1);
-        assert!(!policy.allows_another_attempt(1));
+        assert_eq!(policy.max_attempts, 10);
+        assert!(policy.allows_another_attempt(1), "a first failure is retried");
+        assert!(policy.allows_another_attempt(9), "and so is a ninth");
+        assert!(!policy.allows_another_attempt(10), "the tenth is the last");
+    }
+
+    /// The nine sleeps between ten attempts, so the wall-clock cost is stated in
+    /// one place rather than inferred from the backoff rules.
+    #[test]
+    fn the_default_gives_up_after_about_four_minutes() {
+        let policy = RetryPolicy::default().with_jitter(0.0);
+        let total: Duration = (1..policy.max_attempts).map(|n| policy.delay_for_attempt(n)).sum();
+        assert_eq!(total, Duration::from_secs(243));
     }
 
     #[test]

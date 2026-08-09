@@ -272,7 +272,7 @@ impl GraphAgentBuilder {
             checkpointer: None,
             interrupt_before: vec![],
             interrupt_after: vec![],
-            recursion_limit: 50,
+            recursion_limit: 100,
             max_concurrency: None,
             input_mapper: None,
             output_mapper: None,

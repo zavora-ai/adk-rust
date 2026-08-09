@@ -182,7 +182,7 @@ impl StateGraph {
             checkpointer: None,
             interrupt_before: HashSet::new(),
             interrupt_after: HashSet::new(),
-            recursion_limit: 50,
+            recursion_limit: 100,
             timeout_policies: HashMap::new(),
             default_timeout: None,
             default_retry: None,

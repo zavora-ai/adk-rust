@@ -47,6 +47,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PR-tier feature-coverage matrix; nothing in the workspace enabled it, so its
   only cover was an example crate.
 
+### Changed
+
+- **A graph's default `recursion_limit` is 100, up from 50.** `LlmAgent`'s tool loop
+  already allowed 100, so a graph stopped at half the budget an agent got, for no
+  stated reason. A cycle now runs twice as far before
+  `GraphError::RecursionLimitExceeded`.
+- **`RetryPolicy::default()` allows ten attempts, up from one.** One attempt made
+  the default a no-op. Ten attempts sleep about 243 seconds in total, so a node that
+  keeps failing takes roughly four minutes to give up; lower `max_attempts` where a
+  caller is waiting. Retry is still opt-in: a node with **no** policy runs once.
+
 ### Added
 
 - **`adk-graph` parity and reliability work.** Each item is off by default, so an
