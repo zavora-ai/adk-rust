@@ -1,0 +1,20 @@
+[package]
+name = "graph-resilient-research-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-agent = { path = "../../adk-agent" }
+adk-core = { path = "../../adk-core" }
+adk-graph = { path = "../../adk-graph", features = ["time-travel"] }
+adk-model = { path = "../../adk-model", features = ["openai"] }
+adk-runner = { path = "../../adk-runner" }
+adk-session = { path = "../../adk-session" }
+anyhow = "1.0"
+dotenvy = "0.15"
+futures = "0.3"
+serde_json = "1.0"
+tokio = { version = "1.40", features = ["full"] }
