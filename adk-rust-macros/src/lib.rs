@@ -612,7 +612,10 @@ pub fn entrypoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// # Attributes
 ///
-/// - `retry(max_attempts = N, backoff = "Xs")` — retry on failure with exponential backoff
+/// - `retry(max_attempts = N, backoff = "Xs")` — retry on failure, sleeping
+///   `backoff × attempt` between tries, so the delay grows linearly: `Xs`, `2Xs`,
+///   `3Xs`. For exponential growth, a cap, or jitter, attach an
+///   `adk_graph::retry::RetryPolicy` to a graph node instead
 /// - `rerun_on_resume` — always re-execute on workflow resume, skip cached results
 /// - `rerun_on_resume = true` / `rerun_on_resume = false` — explicit boolean form
 ///

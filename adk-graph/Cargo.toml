@@ -76,3 +76,5 @@ proptest = "1.5"
 adk-action = { path = "../adk-action" }
 # For `SimpleToolContext` when testing a graph exposed as a tool.
 adk-tool = { path = "../adk-tool" }
+# For composing SequentialAgent/ParallelAgent/LoopAgent as graph nodes.
+adk-agent = { path = "../adk-agent" }

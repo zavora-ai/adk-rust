@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`DeferredNodeConfig` gained a public `min_predecessors` field.** Every struct
+  literal needs `min_predecessors: None` to keep the previous behaviour, which is
+  to release the join when all direct predecessors have arrived. `Some(n)` releases
+  after *n* of them, for a quorum instead of a full join.
+- **`CompiledGraph::get_next_nodes` returns `Result<Vec<String>>`.** A router
+  answering with a key that is not among the declared targets previously stopped
+  that branch and the run reported success with the target never executed. It now
+  gives `GraphError::UnknownRouteTarget`, naming the key and listing the declared
+  ones. A route to `END` stays legal, because `END` is declared.
+- **`CompiledGraph::time_travel` returns `Result<TimeTravelHandle>`.** It used to
+  panic when the graph had no checkpointer. Add `?` at the call site.
+
 - **`ConnectionRefresher::call_tool` and `SimpleClient::call_tool` return
   `CallToolResponse`** instead of `CallToolResult`. SEP-2663 lets a server answer
   `tools/call` with a task, and SEP-2322 with a request for more input, so the
@@ -37,6 +49,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`adk-graph` parity and reliability work.** Each item is off by default, so an
+  existing graph behaves as it did:
+  - **Routing from inside a node.** `NodeOutput::with_goto` names the successors,
+    replacing that node's declared edges, so a node reaches a node it has no edge
+    to. `AgentNode::with_goto_mapper` derives the route from the updates its output
+    mapper produced, so an agent routes on its own answer. Naming `END` stops the
+    branch; an unknown name fails the run.
+  - **Per-node retry.** `RetryPolicy` with capped exponential backoff and jitter,
+    attached by `with_node_retry`. An interrupt is never retried. The attempt count
+    is checkpointed, so a resumed run continues the budget.
+  - **A concurrency bound.** `with_max_concurrency` caps how many nodes run at
+    once, admitting the frontier in sorted order.
+  - **Invoking a node directly.** `ctx.run_node_with(name, input, options)` runs a
+    node the graph has no edge to, sized from state. Completed children are
+    recorded under `<parent>/<child>@<run_id>`, so a resume returns the recorded
+    answer instead of paying for the child again.
+  - **A graph or a node as a tool.** `NodeTool::for_graph` and `for_node` expose
+    either through the `Tool` trait, reporting long-running so a graph pause travels
+    the existing tool-confirmation path.
+  - **An *n*-of-*m* join.** `DeferredNodeConfig::min_predecessors` releases a join
+    on a quorum.
+  - **Channel enforcement.** `with_strict_channels` fails the run when a node writes
+    a channel the schema does not declare, which otherwise took the overwrite
+    reducer silently.
+  - **Umbrella features.** `graph-functional`, `graph-node-cache`, `graph-delta`,
+    `graph-time-travel`, `graph-sqlite`, and `graph-redis-cache` on `adk-rust`
+    forward to `adk-graph`, which has no default features. The first four are in
+    `full`.
 - **`gemini-agent-platform` / `gemini-agent-platform-full` umbrella meta-features.** One
   switch that pulls in every Gemini Enterprise Agent Platform (Vertex/EAP)
   integration, composable with any tier preset:
@@ -66,6 +106,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Fixed
+
+- **A static interrupt could not be resumed past.** `interrupt_before` re-armed on
+  every resume, so the gated node never ran. `interrupt_after` had the same defect
+  and needed the opposite fix, because that node has already applied its updates.
+  A `cleared_interrupt` marker is now checkpointed, with a SQLite column, so the
+  durable backend keeps it too.
+- **A fan-in node ran once per arriving branch.** Branches of unequal length made
+  the join fire more than once. A node with more than one incoming direct edge is
+  now deferred automatically at compile time. Conditional predecessors are excluded
+  from the count, because a branch that never fires would stall the join.
+- **Parallel state updates depended on completion order.** Two nodes appending to
+  the same channel produced a different array depending on which finished first.
+  Updates now apply in sorted node order, and by sorted key within a node.
+- **An interrupt's data did not reach a caller through `GraphAgent`.** The pause is
+  now carried as a JSON payload under one reserved `provider_metadata` key, with
+  `GraphInterruptPayload::from_event` to read it back.
+- **`StreamEvent::RouteDispatched` was never emitted.** The debug stream now reports
+  one per conditional edge.
+
 
 - **`adk-memory --features database-memory` compiles again.** `pgvector` accepts
   `sqlx >= 0.8, < 0.10` and resolved to 0.9 while the workspace pinned 0.8, so

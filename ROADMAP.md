@@ -146,6 +146,28 @@ These capabilities form the foundation and are stable:
 
 ---
 
+## Two Orchestration APIs, Both Supported
+
+ADK-Rust keeps the workflow agents (`SequentialAgent`, `ParallelAgent`,
+`LoopAgent`) **and** `adk-graph`. Neither supersedes the other, and neither is
+deprecated.
+
+| | Workflow agents | `adk-graph` |
+|---|---|---|
+| Topology | Implied by the list of sub-agents | Declared as nodes and edges |
+| Control flow | Fixed when written | May depend on results at run time |
+| Durability | None beyond the session | Checkpointed per super-step |
+| Cost to adopt | One constructor | A state schema and a compile step |
+
+They compose in both directions: a workflow agent is an `AgentNode`, and
+`GraphAgent` is an `Agent` a workflow agent can hold. Tests in
+`adk-graph/tests/trio_composition_tests.rs` pin both, so neither API can become
+something the other cannot carry.
+
+This is a deliberate divergence from the other ADK implementations, where the
+classic orchestrators are deprecated in favour of a workflow engine. Short linear
+pipelines are common, and requiring a graph for them costs more than it returns.
+
 ## Benchmark Results (June 2026)
 
 Real measurements against `gemini-2.5-flash`:
