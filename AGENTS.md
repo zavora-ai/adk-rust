@@ -193,7 +193,10 @@ every `ci.yml` dependency and matrix entry succeeds. See CONTRIBUTING.md
   PSScriptAnalyzer on staged `*.ps1` via `scripts/lint-powershell.ps1` (skips
   itself when the module is not installed).
 - **pre-push** — `cargo check --workspace` (a fast compilation check, not the full
-  test suite). CI is the full-suite safety net, so the local gate stays quick.
+  test suite), plus `scripts/check-examples-compile.sh` over all four shards when
+  an example or a workspace crate it depends on has changed. The standalone
+  examples are outside the workspace, so nothing else compiles them. CI is the
+  full-suite safety net, so the local gate stays quick.
 
 ### AI Agent Workflow (`devenv`)
 

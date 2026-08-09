@@ -101,3 +101,30 @@ pre-push:
         - "rust-toolchain.toml"
       run: cargo check --workspace
       fail_text: "Workspace failed to compile. Fix build errors before pushing."
+
+    # The standalone examples are outside the workspace, so `cargo check
+    # --workspace` never compiles them and only CI's four example shards do. That
+    # let two breakages reach CI: a DeferredNodeConfig field addition fixed in
+    # seven places and missed in an eighth, and a lockfile that `--locked`
+    # rejected. This runs the same script CI runs, over every shard, and only when
+    # something an example depends on has changed.
+    #
+    # Globs include the workspace crates because an example depends on them by
+    # path: changing a public API or a manifest can break an example while the
+    # workspace itself still compiles.
+    examples:
+      tags: check
+      glob:
+        - "examples/**/*.rs"
+        - "examples/**/Cargo.toml"
+        - "examples/**/Cargo.lock"
+        - "adk-*/src/**/*.rs"
+        - "adk-*/Cargo.toml"
+        - "awp-*/Cargo.toml"
+        - "Cargo.toml"
+      run: |
+        set -e
+        for shard in 0 1 2 3; do
+          bash scripts/check-examples-compile.sh "$shard" 4
+        done
+      fail_text: "A standalone example failed to compile. CI's examples-compile job will fail too."
