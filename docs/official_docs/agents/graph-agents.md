@@ -1419,6 +1419,26 @@ anything runs, so a mapping naming a channel neither side declares cannot reach 
 run and surface as an absent value. A subgraph that exchanges nothing at all is
 rejected the same way, because it could not affect its parent.
 
+### Resuming a pause inside a subgraph
+
+Nothing extra is needed. Invoking the parent again on the same thread re-enters
+the subgraph, which finds its own checkpoint on `<parent thread>/<node name>` and
+continues from where it stopped. Work the subgraph finished before the pause is
+not repeated, and a pause several levels down resumes the same way — the message
+names each level it passed through.
+
+A subgraph that declares an interrupt gate but holds no checkpointer is rejected
+when the parent compiles: it would re-enter at its first node and pay for its
+finished work a second time.
+
+| Kind of pause | How the answer arrives |
+|---------------|------------------------|
+| `interrupt_before` / `interrupt_after` inside | Nothing to supply; the resume clears the gate that fired |
+| A node inside deciding for itself | The decision arrives as state, projected in through the channel mapping |
+
+Because both graphs hold real checkpointers, this survives a process restart: a
+fresh set of graph objects sharing only the databases resumes the same run.
+
 ### Handing control back to the parent
 
 A node inside a subgraph can end its own graph and name a node of the graph that

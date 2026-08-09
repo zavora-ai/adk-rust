@@ -232,6 +232,19 @@ impl Node for SubgraphNode {
             }
         }
 
+        // A subgraph that can pause but keeps no checkpoints cannot resume: the
+        // parent re-enters it and it starts from its first node, repeating whatever
+        // it had already done. Both facts are known now, so this is a compile
+        // error rather than work silently paid for twice.
+        if self.graph.can_pause() && !self.graph.has_checkpointer() {
+            return Err(GraphError::InvalidGraph(format!(
+                "subgraph '{}' has interrupt gates but no checkpointer, so a pause \
+                 inside it could not be resumed and its finished work would run \
+                 again. Add one with with_checkpointer",
+                self.name
+            )));
+        }
+
         // A subgraph that exchanges nothing cannot affect its parent, which is
         // almost always a naming mistake rather than an intention.
         if self.inputs.is_empty() && self.outputs.is_empty() && self.shared_with(parent).is_empty()

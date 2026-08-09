@@ -542,6 +542,19 @@ impl CompiledGraph {
         self
     }
 
+    /// Whether this graph holds a checkpointer.
+    pub fn has_checkpointer(&self) -> bool {
+        self.checkpointer.is_some()
+    }
+
+    /// Whether this graph declares any static interrupt gate.
+    ///
+    /// A dynamic interrupt cannot be seen from the graph, because a node decides
+    /// at run time, so this reports only the declared gates.
+    pub fn can_pause(&self) -> bool {
+        !self.interrupt_before.is_empty() || !self.interrupt_after.is_empty()
+    }
+
     /// The failure handler for a node, per-node first, then the graph default.
     pub(crate) fn error_handler_for(&self, node: &str) -> Option<&NodeErrorHandler> {
         self.error_handlers.get(node).or(self.default_error_handler.as_ref())
