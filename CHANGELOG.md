@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-08-09
+
 ### Breaking
 
 - **`DeferredNodeConfig` gained a public `min_predecessors` field.** Every struct
@@ -369,8 +371,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and per-step `print()` capture is capped at Monty's 10 MiB collector default
   (exceeding it raises `MemoryError` in the script). The crate stays
   `publish = false`.
-
-## [2.0.0] - 2026-07-25
 
 ### Breaking
 
@@ -3782,7 +3782,8 @@ Initial release - Published to crates.io.
 - Tokio async runtime
 - Google API key for Gemini
 
-[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/zavora-ai/adk-rust/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/zavora-ai/adk-rust/compare/v1.0.0...v2.0.0
 [0.3.0]: https://github.com/zavora-ai/adk-rust/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/zavora-ai/adk-rust/compare/v0.1.9...v0.2.0
 [0.1.9]: https://github.com/zavora-ai/adk-rust/compare/v0.1.7...v0.1.9
