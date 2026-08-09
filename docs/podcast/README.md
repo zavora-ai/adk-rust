@@ -6,6 +6,7 @@ AI-generated podcast series about ADK-Rust — two hosts, natural voices, zero m
 
 | # | Title | Duration | Date |
 |---|-------|----------|------|
+| 3 | Agents That Act — the v2.0.0 release | ~40:00 | 2026-08 |
 | 2 | [v1.0.0 — The Stable Foundation](https://www.youtube.com/watch?v=tlqaE8qeHac) | 10:12 | 2026-06-07 |
 | 1 | What is ADK-Rust? | 2:21 | 2026-03-14 |
 

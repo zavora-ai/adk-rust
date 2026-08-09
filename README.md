@@ -243,9 +243,9 @@ Related: [Google's ADK](https://google.github.io/adk-docs/) ·
 
 ### Podcast
 
-Two episodes on what shipped and where it is going, generated end to end by
-ADK-Rust's own audio stack. [Episode 2 — the v1.0.0
-launch](https://www.youtube.com/watch?v=tlqaE8qeHac) · assets under
+Episodes on what shipped and where it is going, generated end to end by ADK-Rust's
+own audio stack. Episode 3, *Agents That Act*, covers this release. [Episode 2 — the
+v1.0.0 launch](https://www.youtube.com/watch?v=tlqaE8qeHac) · index and assets under
 [`docs/podcast/`](docs/podcast/).
 
 ## License
