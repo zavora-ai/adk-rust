@@ -1,0 +1,17 @@
+[package]
+name = "graph-subgraph-claims-example"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+adk-agent = { path = "../../adk-agent" }
+adk-core = { path = "../../adk-core" }
+adk-graph = { path = "../../adk-graph" }
+adk-model = { path = "../../adk-model", features = ["openai"] }
+anyhow = "1.0"
+dotenvy = "0.15"
+serde_json = "1.0"
+tokio = { version = "1.40", features = ["full"] }
