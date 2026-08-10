@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`provider_from_env()` now consults the Vertex opt-in flags before any API
+  key.** A truthy `GOOGLE_GENAI_USE_ENTERPRISE` or `GOOGLE_GENAI_USE_VERTEXAI`
+  (`1` or a case-insensitive `true`) selects Gemini on Vertex AI — via
+  Application Default Credentials with `GOOGLE_CLOUD_PROJECT` and
+  `GOOGLE_CLOUD_LOCATION` — even when `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or
+  `GOOGLE_API_KEY` is set. Previously these flags were ignored and API-key
+  sniffing alone decided the provider. If you already set a `GOOGLE_GENAI_USE_*`
+  variable for another SDK (e.g. adk-python) and rely on `provider_from_env()`
+  picking Anthropic or OpenAI from an API key, unset the flag or set it to a
+  falsy value. `GOOGLE_GENAI_USE_ENTERPRISE` takes precedence when both flags
+  are set. When a flag is truthy but the `gemini-vertex` feature is not
+  compiled, `provider_from_env()` emits a `tracing` warning and falls through
+  to API-key detection; a truthy flag with `GOOGLE_CLOUD_PROJECT` /
+  `GOOGLE_CLOUD_LOCATION` missing is an error, not a Studio fallback.
+
+### Added
+
+- **`GeminiModel::from_env(model)`** — environment-driven construction: Vertex
+  AI via ADC when `GOOGLE_GENAI_USE_ENTERPRISE` / `GOOGLE_GENAI_USE_VERTEXAI`
+  is truthy (requires the `gemini-vertex` feature; errors when the feature is
+  missing or the Vertex target is incomplete), otherwise the Gemini API via
+  `GOOGLE_API_KEY` or `GEMINI_API_KEY`.
+- **`adk_model::gemini::vertex_env_requested()`** — reports whether the
+  environment opts in to the Vertex AI backend.
+- New docs page
+  [Vertex-Only Deployments](docs/official_docs/compliance/vertex-only-deployments.md)
+  — guaranteeing no `generativelanguage.googleapis.com` traffic for HIPAA and
+  data-residency workloads.
+
 ## [2.0.0] - 2026-08-09
 
 ### Breaking
