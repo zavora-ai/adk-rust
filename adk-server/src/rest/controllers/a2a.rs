@@ -69,7 +69,12 @@ impl A2aController {
     pub fn new(config: ServerConfig, base_url: &str) -> Self {
         let root_agent = config.agent_loader.root_agent();
         let invoke_url = format!("{}/a2a", base_url.trim_end_matches('/'));
-        let agent_card = build_agent_card(root_agent.as_ref(), &invoke_url);
+        let mut agent_card = build_agent_card(root_agent.as_ref(), &invoke_url);
+        if let Some(skill_index) = &config.skill_index {
+            let indexed = crate::a2a::agent_skills_from_index(skill_index);
+            tracing::debug!(skill.count = indexed.len(), "appending indexed skills to agent card");
+            agent_card.skills.extend(indexed);
+        }
 
         Self {
             config,
