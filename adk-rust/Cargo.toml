@@ -83,11 +83,11 @@ gemini-agent-platform = [
     "gemini-vertex",  # Vertex model backend (adk-model → adk-gemini/vertex)
     "vertex-session", # managed Sessions (adk-session)
     "gcp-secrets",    # GCP Secret Manager (adk-auth)
+    "gcs-artifacts",  # GCS artifact backend (adk-artifact)
     # target end-state — appended by the PR that introduces each flag:
     # "agent-engine",           class-method runtime contract (adk-server)
     # "vertex-memory",          Memory Bank (adk-memory)
     # "example-store",          Example Store (adk-tool)
-    # "gcs-artifacts",          GCS artifact backend (adk-artifact)
     # "gcp-telemetry",          Cloud Trace/Logging transport (adk-telemetry)
     # "vertex-sandbox",         managed code-execution sandbox (adk-code)
     # "vertex-eval",            Gen AI Evaluation bridge (adk-eval)
@@ -123,6 +123,8 @@ tools = ["dep:adk-tool"]
 skills = ["dep:adk-skill"]
 sessions = ["dep:adk-session"]
 artifacts = ["dep:adk-artifact"]
+# GCS artifact backend, blob-name compatible with adk-python (forwarded to adk-artifact)
+gcs-artifacts = ["artifacts", "adk-artifact/gcs"]
 memory = ["dep:adk-memory"]
 runner = ["dep:adk-runner"]
 server = ["dep:adk-server", "adk-server/a2a-v1"]

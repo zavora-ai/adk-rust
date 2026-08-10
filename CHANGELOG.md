@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **GCS artifact backend** (`adk-artifact`, feature `gcs`): `GcsArtifactService`
+  stores artifacts in a Google Cloud Storage bucket over the GCS JSON API with
+  ADC authentication, keeping byte-for-byte blob-name parity with adk-python's
+  `GcsArtifactService` (session-scoped and `user:`-namespaced layouts, `adkDisplayName`/
+  `adkIsText`/`adkFileUri`/`adkFileMimeType` object metadata, versions starting at 0).
+  Umbrella feature `gcs-artifacts`, included in the `gemini-agent-platform` meta-feature.
+
 ## [2.0.0] - 2026-08-09
 
 ### Breaking
