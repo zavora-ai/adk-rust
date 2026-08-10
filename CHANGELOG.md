@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`VertexAiSessionConfig::from_env()`** builds the config from
+  `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and
+  `GOOGLE_CLOUD_AGENT_ENGINE_ID` (the bare numeric engine ID) — the variables
+  the Vertex AI Agent Engine platform sets inside deployed containers. Missing
+  or blank variables produce an actionable invalid-input error naming each one.
+- **Vertex session expiration**: `VertexAiSessionConfig::with_ttl()` and
+  `with_expire_time()` send the `Session.expiration` oneof (`ttl` /
+  `expireTime` from `google/cloud/aiplatform/v1beta1/session.proto`) on
+  session create. Setting both members, or a TTL below the 24-hour minimum,
+  fails at service construction.
+
 ## [2.0.0] - 2026-08-09
 
 ### Breaking
