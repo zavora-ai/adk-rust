@@ -439,7 +439,7 @@ pub enum Error {
 
     /// The requested operation is not supported by the Vertex AI backend.
     #[snafu(display(
-        "operation '{operation}' is not supported with the google cloud sdk backend (PredictionService currently exposes generateContent/embedContent only)"
+        "operation '{operation}' is not supported with the google cloud vertex backend (files, batch, and interactions APIs are Studio-only)"
     ))]
     GoogleCloudUnsupported {
         /// The unsupported operation name.

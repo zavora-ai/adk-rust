@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **adk-gemini: cached content on Vertex AI.** `VertexBackend` implements the five
+  cached-content operations (create, get, update, list, delete) against the Vertex
+  REST endpoint `…/v1/projects/{project}/locations/{location}/cachedContents`,
+  including TTL refresh via `updateCachedContent` so the runner's cache-refresh
+  path works on Vertex. Studio-style model names (`models/{model}`) in create
+  payloads are normalized to full Vertex resource names. The Files API, batch
+  operations, and the Interactions API remain Studio-only on the Vertex backend.
+
 ## [2.0.0] - 2026-08-09
 
 ### Breaking
