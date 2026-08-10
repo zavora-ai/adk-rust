@@ -22,6 +22,10 @@ opentelemetry-otlp = { version = "0.32", features = ["metrics", "grpc-tonic"], o
 tracing-opentelemetry = { version = "0.33", optional = true }
 serde_json = { workspace = true, optional = true }
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+google-cloud-auth = { version = "1.8", optional = true, default-features = false, features = ["default-rustls-provider"] }
+http = { version = "1", optional = true }
+tokio = { workspace = true, optional = true, features = ["rt", "time"] }
+tonic = { version = "0.14", optional = true, default-features = false, features = ["channel", "tls-aws-lc", "tls-webpki-roots"] }
 
 [features]
 default = ["genai-semconv"]
@@ -29,12 +33,27 @@ genai-semconv = []
 otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 metrics = ["otlp"]
 json = ["tracing-subscriber/json"]
+# Telemetry to Google Cloud: OTLP trace export to telemetry.googleapis.com with
+# ADC-minted auth headers, GCP resource detection, and Cloud Logging JSON output.
+# The TLS features are required because the Google endpoint is HTTPS-only;
+# tls-aws-lc keeps the workspace-wide aws-lc-rs rustls provider.
+gcp = [
+    "otlp",
+    "json",
+    "google-cloud-auth",
+    "http",
+    "tokio",
+    "tonic",
+    "dep:serde_json",
+    "opentelemetry-otlp/tls-aws-lc",
+    "opentelemetry-otlp/tls-webpki-roots",
+]
 # Direct span export to a local SQLite file — zero-infrastructure tracing
 # (no collector or backend to deploy). rusqlite is pinned to the release that
 # shares libsqlite3-sys with the workspace's sqlx crates (`links` allows one).
 sqlite = ["dep:rusqlite", "dep:serde_json"]
 
 [dev-dependencies]
-tokio = { version = "1.0", features = ["rt", "macros", "time"] }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 proptest = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }

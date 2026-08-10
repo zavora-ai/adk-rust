@@ -183,6 +183,8 @@ jobs:
           - { package: adk-server, features: a2a-v1 }
           # Vertex AI sessions use an opt-in Google Cloud transport and wire contract.
           - { package: adk-session, features: vertex-session }
+          # Google Cloud telemetry export is an opt-in transport; no default build compiles it.
+          - { package: adk-telemetry, features: gcp }
           # ACP replay and server transport behavior are gated behind the opt-in server feature.
           - { package: adk-acp, features: server }
           # The Monty Python executors and the MontyPythonCodeTool live path: both gated,

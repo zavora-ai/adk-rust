@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Telemetry to Google Cloud** (`adk-telemetry` feature `gcp`, umbrella
+  `gcp-telemetry`, included in `gemini-agent-platform`). `init_with_gcp`
+  exports traces to `https://telemetry.googleapis.com` with per-request
+  `Authorization: Bearer` headers minted from Application Default Credentials
+  (refreshed in the background) plus `x-goog-user-project`. Resource
+  attributes (`service.name`, `gcp.project_id`,
+  `cloud.platform = gcp.agent_engine`) are detected from `K_SERVICE`,
+  `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_AGENT_ENGINE_ID`.
+  `init_json_logging` emits Cloud Logging structured JSON (severity mapping,
+  `logging.googleapis.com/trace` correlation). A collector-sidecar fallback is
+  documented in `docs/official_docs/observability/gcp.md`.
+
 ## [2.0.0] - 2026-08-09
 
 ### Breaking

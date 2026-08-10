@@ -121,6 +121,41 @@ for session in reader.sessions()? {
 }
 ```
 
+## Telemetry to Google Cloud (`gcp` feature)
+
+Export traces straight to Google Cloud Observability and emit Cloud
+Logging-parseable JSON logs. `adk-rust` forwards it as `gcp-telemetry`,
+and the `gemini-agent-platform` meta-feature includes it:
+
+```toml
+adk-telemetry = { version = "2.0.0", features = ["gcp"] }
+```
+
+```rust
+use adk_telemetry::init_with_gcp;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Requires GOOGLE_CLOUD_PROJECT and Application Default Credentials.
+    init_with_gcp("my-agent").await?;
+
+    // Your agent code here...
+
+    adk_telemetry::shutdown_telemetry();
+    Ok(())
+}
+```
+
+Spans go to `https://telemetry.googleapis.com` with per-request
+`Authorization: Bearer` headers minted from ADC (refreshed in the
+background), plus `x-goog-user-project`. Resource attributes
+(`service.name`, `gcp.project_id`, `cloud.platform = gcp.agent_engine`) are
+detected from `K_SERVICE`, `GOOGLE_CLOUD_PROJECT`, and
+`GOOGLE_CLOUD_AGENT_ENGINE_ID`. `init_json_logging()` installs the Cloud
+Logging JSON format standalone. See
+[docs/official_docs/observability/gcp.md](../docs/official_docs/observability/gcp.md)
+for the collector-sidecar fallback.
+
 ## Available Functions
 
 | Function | Description |
@@ -129,6 +164,8 @@ for session in reader.sessions()? {
 | `init_with_otlp(service_name, endpoint)` | OTLP export to collectors |
 | `init_with_adk_exporter(service_name)` | ADK-style span exporter |
 | `init_with_sqlite(service_name, db_path)` | Direct SQLite span export (`sqlite` feature) |
+| `init_with_gcp(service_name)` | OTLP trace export to Google Cloud with ADC auth (`gcp` feature) |
+| `init_json_logging()` | Cloud Logging structured JSON on stdout (`gcp` feature) |
 | `shutdown_telemetry()` | Flush and shutdown |
 
 ## Span Helpers
