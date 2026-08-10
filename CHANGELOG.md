@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **adk-rag: shared `VectorStore` contract test suite.** A new
+  `adk-rag/tests/common/vector_store_contract.rs` holds the behavioral contract
+  every vector store backend must satisfy — idempotent collection creation,
+  upsert-then-search round trips, descending-score ordering bounded by `top_k`,
+  deletion by ID, empty-input no-ops, metadata preservation, collection
+  isolation, and teardown — plus proptest search invariants. The suite runs
+  against InMemory, SurrealDB (embedded), and LanceDB (embedded, behind the
+  `lancedb` feature). LanceDB scopes out the upsert-replaces-by-ID assertion:
+  its `upsert` appends instead of replacing, a divergence the suite documents
+  rather than fixes.
+
 ## [2.0.0] - 2026-08-09
 
 ### Breaking
