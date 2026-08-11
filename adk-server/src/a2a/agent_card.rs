@@ -74,6 +74,10 @@ fn build_sub_agent_skills(agent: &dyn Agent) -> Vec<AgentSkill> {
 /// no version field — following the existing `sub_agent:{name}` prefixed-tag
 /// convention. Agent Registry keyword/prefix search indexes these entries.
 ///
+/// Wire via [`ServerBuilder::with_skill_index`](crate::ServerBuilder::with_skill_index)
+/// or `A2aServerBuilder::skill_index` (behind the `a2a-v1` feature) to have the
+/// served card include the entries.
+///
 /// # Example
 ///
 /// ```

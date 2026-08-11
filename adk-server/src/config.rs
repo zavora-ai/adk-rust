@@ -71,9 +71,6 @@ pub struct ServerConfig {
     pub backend_url: Option<String>,
     pub security: SecurityConfig,
     pub request_context_extractor: Option<Arc<dyn RequestContextExtractor>>,
-    /// Optional skill index whose entries are appended to the A2A agent card's
-    /// `skills[]` via [`agent_skills_from_index`](crate::a2a::agent_skills_from_index).
-    pub skill_index: Option<Arc<adk_skill::SkillIndex>>,
     /// Optional interceptor chain for A2A request/response middleware.
     ///
     /// When set, the chain is invoked before and after A2A executor processing.
@@ -102,7 +99,6 @@ impl ServerConfig {
             backend_url: None,
             security: SecurityConfig::default(),
             request_context_extractor: None,
-            skill_index: None,
             #[cfg(feature = "a2a-interceptors")]
             interceptor_chain: None,
             #[cfg(feature = "yaml-agent")]
@@ -150,16 +146,6 @@ impl ServerConfig {
     ) -> Self {
         self.context_cache_config = Some(context_cache_config);
         self.cache_capable = Some(cache_capable);
-        self
-    }
-
-    /// Attach a skill index whose entries are exposed on the A2A agent card.
-    ///
-    /// When set, the card served at `/.well-known/agent.json` appends one
-    /// `skills[]` entry per indexed skill, mapped by
-    /// [`agent_skills_from_index`](crate::a2a::agent_skills_from_index).
-    pub fn with_skill_index(mut self, skill_index: Arc<adk_skill::SkillIndex>) -> Self {
-        self.skill_index = Some(skill_index);
         self
     }
 

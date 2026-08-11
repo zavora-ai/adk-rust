@@ -12,9 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **adk-server**: `agent_skills_from_index` bridges an `adk_skill::SkillIndex` to A2A
   agent-card `skills[]` entries (skill name → `id` and `name`, description →
   `description`, tags → `tags`, version folded into `tags` as `version:{v}`).
-  `ServerConfig::with_skill_index` attaches an index so the card served at
-  `/.well-known/agent.json` includes those entries — the surface Agent Registry
-  keyword/prefix search indexes.
+  `ServerBuilder::with_skill_index` and `A2aServerBuilder::skill_index` attach an
+  index so the card served at `/.well-known/agent.json` includes those entries —
+  the surface Agent Registry keyword/prefix search indexes.
+  `A2aController::with_skill_index` is the underlying constructor.
 
 ## [2.0.0] - 2026-08-09
 
