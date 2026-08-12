@@ -1423,3 +1423,135 @@ pub async fn run_sse_compat(
 
     Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
 }
+
+/// POST /run - plain-JSON, non-streaming endpoint (Google ADK api_server parity)
+///
+/// Accepts the same JSON body as `POST /run_sse`, runs the agent to
+/// completion, and returns every produced event as a JSON array instead of
+/// an SSE stream. The `streaming` body field is ignored — the run always
+/// uses `StreamingMode::None`.
+pub async fn run_collect(
+    State(controller): State<RuntimeController>,
+    headers: HeaderMap,
+    Json(req): Json<RunSseRequest>,
+) -> Result<Json<Vec<adk_core::Event>>, RuntimeError> {
+    let app_name = req.app_name.clone();
+    let user_id = req.user_id.clone();
+    let session_id = req.session_id.clone();
+
+    info!(
+        app_name = %app_name,
+        user_id = %user_id,
+        session_id = %session_id,
+        "POST /run request received"
+    );
+
+    // Extract request context from auth middleware bridge if configured.
+    // This returns Err (401/500) when the extractor is present but auth
+    // fails, ensuring authorization checks are never bypassed.
+    let request_context =
+        extract_request_context(controller.config.request_context_extractor.as_deref(), &headers)
+            .await?;
+
+    // Explicit authenticated user override: when an auth extractor is
+    // configured and succeeds, the authenticated user_id takes precedence
+    // over the request body value. This prevents callers from impersonating
+    // other users via the JSON payload while keeping the body param as a
+    // fallback for unauthenticated deployments (no extractor configured).
+    let effective_user_id = request_context.as_ref().map_or(user_id, |rc| rc.user_id.clone());
+
+    let new_message = req
+        .new_message
+        .as_ref()
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "newMessage is required".to_string()))?;
+
+    // Build content from message parts (includes both text and inline_data)
+    let content = build_content_from_parts(&new_message.parts)?;
+
+    let state_delta = body_state_delta(req.state_delta.as_ref())?;
+
+    // Validate session exists or create it (same behavior as /run_sse)
+    let session_result = controller
+        .config
+        .session_service
+        .get(adk_session::GetRequest {
+            app_name: app_name.clone(),
+            user_id: effective_user_id.clone(),
+            session_id: session_id.clone(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await;
+
+    if session_result.is_err() {
+        controller
+            .config
+            .session_service
+            .create(adk_session::CreateRequest {
+                app_name: app_name.clone(),
+                user_id: effective_user_id.clone(),
+                session_id: Some(session_id.clone()),
+                state: state_delta.clone(),
+            })
+            .await
+            .map_err(adk_err_to_runtime)?;
+    } else {
+        apply_state_delta_to_session(
+            &controller.config.session_service,
+            &app_name,
+            &effective_user_id,
+            &session_id,
+            state_delta,
+        )
+        .await?;
+    }
+
+    // Load agent
+    let agent =
+        controller.config.agent_loader.load_agent(&app_name).await.map_err(adk_err_to_runtime)?;
+
+    // Create runner — always non-streaming for the plain-JSON endpoint
+    let mut runner_builder = adk_runner::Runner::builder()
+        .app_name(app_name)
+        .agent(agent)
+        .session_service(controller.config.session_service.clone())
+        .run_config(
+            adk_core::RunConfig::builder().streaming_mode(adk_core::StreamingMode::None).build(),
+        );
+    if let Some(ref artifact_service) = controller.config.artifact_service {
+        runner_builder = runner_builder.artifact_service(artifact_service.clone());
+    }
+    if let Some(ref memory_service) = controller.config.memory_service {
+        runner_builder = runner_builder.memory_service(memory_service.clone());
+    }
+    if let Some(ref compaction_config) = controller.config.compaction_config {
+        runner_builder = runner_builder.compaction_config(compaction_config.clone());
+    }
+    if let Some(ref context_cache_config) = controller.config.context_cache_config {
+        runner_builder = runner_builder.context_cache_config(context_cache_config.clone());
+    }
+    if let Some(ref cache_capable) = controller.config.cache_capable {
+        runner_builder = runner_builder.cache_capable(cache_capable.clone());
+    }
+    if let Some(request_context) = request_context {
+        runner_builder = runner_builder.request_context(request_context);
+    }
+    let runner = runner_builder.build().map_err(adk_err_to_runtime)?;
+
+    // Run agent to completion, collecting every event
+    let typed_user_id =
+        UserId::new(effective_user_id).map_err(|err| adk_err_to_runtime(err.into()))?;
+    let typed_session_id =
+        SessionId::new(session_id).map_err(|err| adk_err_to_runtime(err.into()))?;
+    let mut event_stream =
+        runner.run(typed_user_id, typed_session_id, content).await.map_err(adk_err_to_runtime)?;
+
+    let mut events = Vec::new();
+    while let Some(event) = event_stream.next().await {
+        events.push(event.map_err(adk_err_to_runtime)?);
+    }
+
+    info!(event_count = events.len(), "POST /run completed");
+
+    Ok(Json(events))
+}

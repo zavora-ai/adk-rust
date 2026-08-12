@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   index so the card served at `/.well-known/agent.json` includes those entries —
   the surface Agent Registry keyword/prefix search indexes.
   `A2aController::with_skill_index` is the underlying constructor.
+- **`POST /api/run` plain-JSON endpoint in `adk-server`.** Accepts the same body as
+  `/api/run_sse`, runs the agent to completion, and returns the collected events as a
+  JSON array — parity with Google ADK's `api_server` non-streaming `/run` route.
 
 ## [2.0.0] - 2026-08-09
 
