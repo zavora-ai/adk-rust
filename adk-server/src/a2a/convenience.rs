@@ -38,7 +38,7 @@ use axum::Router;
 
 use crate::a2a::types::{AgentCapabilities, AgentCard};
 use crate::config::ServerConfig;
-use crate::rest::create_app_with_a2a;
+use crate::rest::{ServerBuilder, create_app_with_a2a};
 
 /// Convenience wrapper for quickly starting an A2A-capable server.
 ///
@@ -133,6 +133,7 @@ pub struct A2aServerBuilder {
     agent_card_url: Option<String>,
     streaming_enabled: bool,
     push_notifications_enabled: bool,
+    skill_index: Option<Arc<adk_skill::SkillIndex>>,
 }
 
 impl Default for A2aServerBuilder {
@@ -150,6 +151,7 @@ impl Default for A2aServerBuilder {
             agent_card_url: None,
             streaming_enabled: true,
             push_notifications_enabled: false,
+            skill_index: None,
         }
     }
 }
@@ -227,6 +229,28 @@ impl A2aServerBuilder {
         self
     }
 
+    /// Expose the skills in `skill_index` on the served agent card.
+    ///
+    /// The card at `/.well-known/agent.json` appends one `skills[]` entry per
+    /// indexed skill, mapped by
+    /// [`agent_skills_from_index`](crate::a2a::agent_skills_from_index).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    ///
+    /// let index = adk_skill::load_skill_index(".")?;
+    /// let server = A2aServer::builder()
+    ///     .agent(my_agent)
+    ///     .skill_index(Arc::new(index))
+    ///     .build()?;
+    /// ```
+    pub fn skill_index(mut self, skill_index: Arc<adk_skill::SkillIndex>) -> Self {
+        self.skill_index = Some(skill_index);
+        self
+    }
+
     /// Build the configured A2A server application.
     ///
     /// # Errors
@@ -282,7 +306,14 @@ impl A2aServerBuilder {
             self.push_notifications_enabled,
         );
 
-        let router = create_app_with_a2a(config, Some(&base_url));
+        let router = match self.skill_index {
+            // `ServerBuilder` with only A2A enabled builds the same router as
+            // `create_app_with_a2a`, and is the wiring path for indexed skills.
+            Some(skill_index) => {
+                ServerBuilder::new(config).with_a2a(&base_url).with_skill_index(skill_index).build()
+            }
+            None => create_app_with_a2a(config, Some(&base_url)),
+        };
 
         Ok(A2aServerApp { router, bind_addr: self.bind_addr })
     }

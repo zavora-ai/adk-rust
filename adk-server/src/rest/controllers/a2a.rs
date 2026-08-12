@@ -67,9 +67,35 @@ pub struct A2aController {
 
 impl A2aController {
     pub fn new(config: ServerConfig, base_url: &str) -> Self {
+        Self::build(config, base_url, None)
+    }
+
+    /// Create a controller whose agent card also lists the skills in `skill_index`.
+    ///
+    /// The indexed skills are appended to the agent-derived `skills[]` entries
+    /// via [`agent_skills_from_index`](crate::a2a::agent_skills_from_index) and
+    /// served at `/.well-known/agent.json`.
+    pub fn with_skill_index(
+        config: ServerConfig,
+        base_url: &str,
+        skill_index: Arc<adk_skill::SkillIndex>,
+    ) -> Self {
+        Self::build(config, base_url, Some(skill_index))
+    }
+
+    fn build(
+        config: ServerConfig,
+        base_url: &str,
+        skill_index: Option<Arc<adk_skill::SkillIndex>>,
+    ) -> Self {
         let root_agent = config.agent_loader.root_agent();
         let invoke_url = format!("{}/a2a", base_url.trim_end_matches('/'));
-        let agent_card = build_agent_card(root_agent.as_ref(), &invoke_url);
+        let mut agent_card = build_agent_card(root_agent.as_ref(), &invoke_url);
+        if let Some(skill_index) = skill_index {
+            let indexed = crate::a2a::agent_skills_from_index(&skill_index);
+            tracing::debug!(skill.count = indexed.len(), "appending indexed skills to agent card");
+            agent_card.skills.extend(indexed);
+        }
 
         Self {
             config,
@@ -565,4 +591,110 @@ async fn handle_tasks_cancel(
     };
 
     Json(JsonRpcResponse::success(id, serde_json::to_value(status).unwrap_or_default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use adk_core::{Agent, EventStream, InvocationContext, Result as AdkResult, SingleAgentLoader};
+    use adk_session::InMemorySessionService;
+    use async_trait::async_trait;
+    use futures::stream;
+
+    struct TestAgent;
+
+    #[async_trait]
+    impl Agent for TestAgent {
+        fn name(&self) -> &str {
+            "card_agent"
+        }
+
+        fn description(&self) -> &str {
+            "A card test agent"
+        }
+
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
+
+        async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> AdkResult<EventStream> {
+            Ok(Box::pin(stream::empty()))
+        }
+    }
+
+    fn test_config() -> ServerConfig {
+        let agent_loader = Arc::new(SingleAgentLoader::new(Arc::new(TestAgent)));
+        let session_service = Arc::new(InMemorySessionService::new());
+        ServerConfig::new(agent_loader, session_service)
+    }
+
+    fn skill_doc(name: &str) -> adk_skill::SkillDocument {
+        adk_skill::SkillDocument {
+            id: format!("{name}-0123456789ab"),
+            name: name.to_string(),
+            description: format!("{name} description"),
+            version: None,
+            license: None,
+            compatibility: None,
+            tags: vec!["indexed".to_string()],
+            allowed_tools: vec![],
+            references: vec![],
+            trigger: false,
+            hint: None,
+            metadata: Default::default(),
+            body: String::new(),
+            path: format!("skills/{name}.skill.md").into(),
+            hash: "0123456789ab".to_string(),
+            last_modified: None,
+            triggers: vec![],
+        }
+    }
+
+    #[test]
+    fn with_skill_index_appends_indexed_skills_to_card() {
+        let index = Arc::new(adk_skill::SkillIndex::new(vec![
+            skill_doc("skill-one"),
+            skill_doc("skill-two"),
+        ]));
+
+        let controller =
+            A2aController::with_skill_index(test_config(), "http://localhost:8080", index);
+
+        let expected = serde_json::json!([
+            {
+                "id": "card_agent",
+                "name": "card_agent",
+                "description": "A card test agent",
+                "tags": ["agent"],
+            },
+            {
+                "id": "skill-one",
+                "name": "skill-one",
+                "description": "skill-one description",
+                "tags": ["indexed"],
+            },
+            {
+                "id": "skill-two",
+                "name": "skill-two",
+                "description": "skill-two description",
+                "tags": ["indexed"],
+            },
+        ]);
+        assert_eq!(serde_json::to_value(&controller.agent_card.skills).unwrap(), expected);
+    }
+
+    #[test]
+    fn new_leaves_card_skills_agent_derived() {
+        let controller = A2aController::new(test_config(), "http://localhost:8080");
+
+        let expected = serde_json::json!([
+            {
+                "id": "card_agent",
+                "name": "card_agent",
+                "description": "A card test agent",
+                "tags": ["agent"],
+            },
+        ]);
+        assert_eq!(serde_json::to_value(&controller.agent_card.skills).unwrap(), expected);
+    }
 }

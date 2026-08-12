@@ -87,6 +87,7 @@ dependencies = [
  "adk-core",
  "adk-runner",
  "adk-session",
+ "adk-skill",
  "adk-telemetry",
  "anyhow",
  "async-stream",
