@@ -51,6 +51,12 @@ const VERTEX_MAX_PAGE_TOKEN_BYTES: usize = 64 * 1024;
 const VERTEX_SESSION_SCOPE_CACHE_CAPACITY: usize = 1024;
 const RUST_RAW_EVENT_ENVELOPE_KEY: &str = "_adkRust";
 const VERTEX_IDENTITY_STATE_KEY: &str = "__adk_vertex_identity_v1";
+const ENV_GOOGLE_CLOUD_PROJECT: &str = "GOOGLE_CLOUD_PROJECT";
+const ENV_GOOGLE_CLOUD_LOCATION: &str = "GOOGLE_CLOUD_LOCATION";
+const ENV_GOOGLE_CLOUD_AGENT_ENGINE_ID: &str = "GOOGLE_CLOUD_AGENT_ENGINE_ID";
+// google/cloud/aiplatform/v1beta1/session.proto documents a 24-hour minimum
+// for the input-only `ttl` member of the Session `expiration` oneof.
+const MIN_SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Configuration for the Vertex AI Session API backend.
 #[derive(Debug, Clone)]
@@ -66,6 +72,19 @@ pub struct VertexAiSessionConfig {
     /// The origin receives Google authorization headers plus session and event
     /// data. It must not contain userinfo, a path, a query, or a fragment.
     pub endpoint: Option<String>,
+    /// Optional session time-to-live sent on session create.
+    ///
+    /// `ttl` is a member of the `Session` `expiration` oneof in
+    /// `google/cloud/aiplatform/v1beta1/session.proto`: input-only, serialized
+    /// as a JSON duration string (e.g. `"86400s"`), minimum 24 hours. Mutually
+    /// exclusive with [`expire_time`](Self::expire_time).
+    pub ttl: Option<Duration>,
+    /// Optional absolute session expiration timestamp sent on session create.
+    ///
+    /// `expireTime` is the other `Session` `expiration` oneof member,
+    /// serialized as an RFC 3339 timestamp. Mutually exclusive with
+    /// [`ttl`](Self::ttl).
+    pub expire_time: Option<DateTime<Utc>>,
 }
 
 impl VertexAiSessionConfig {
@@ -76,6 +95,68 @@ impl VertexAiSessionConfig {
             location: location.into(),
             reasoning_engine: None,
             endpoint: None,
+            ttl: None,
+            expire_time: None,
+        }
+    }
+
+    /// Builds a config from the environment variables the Vertex AI Agent
+    /// Engine platform sets inside deployed containers.
+    ///
+    /// Reads `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and
+    /// `GOOGLE_CLOUD_AGENT_ENGINE_ID` (the bare numeric agent engine ID, not a
+    /// full resource name). Values are trimmed; blank values count as missing.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use adk_session::{VertexAiSessionConfig, VertexAiSessionService};
+    ///
+    /// # fn main() -> adk_core::Result<()> {
+    /// let config = VertexAiSessionConfig::from_env()?;
+    /// let service = VertexAiSessionService::new_with_adc(config)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-input error naming every missing or blank variable.
+    pub fn from_env() -> Result<Self> {
+        let read = |key: &str| {
+            std::env::var(key)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        };
+        let project_id = read(ENV_GOOGLE_CLOUD_PROJECT);
+        let location = read(ENV_GOOGLE_CLOUD_LOCATION);
+        let agent_engine_id = read(ENV_GOOGLE_CLOUD_AGENT_ENGINE_ID);
+
+        match (project_id, location, agent_engine_id) {
+            (Some(project_id), Some(location), Some(agent_engine_id)) => {
+                Ok(Self::new(project_id, location).with_reasoning_engine(agent_engine_id))
+            }
+            (project_id, location, agent_engine_id) => {
+                let missing = [
+                    (ENV_GOOGLE_CLOUD_PROJECT, project_id.is_none()),
+                    (ENV_GOOGLE_CLOUD_LOCATION, location.is_none()),
+                    (ENV_GOOGLE_CLOUD_AGENT_ENGINE_ID, agent_engine_id.is_none()),
+                ]
+                .into_iter()
+                .filter_map(|(key, is_missing)| is_missing.then_some(key))
+                .collect::<Vec<_>>()
+                .join(", ");
+                Err(AdkError::new(
+                    ErrorComponent::Session,
+                    ErrorCategory::InvalidInput,
+                    "session.vertex.missing_env",
+                    format!(
+                        "missing or blank environment variable(s): {missing}. The Vertex AI Agent Engine platform sets these inside deployed containers (GOOGLE_CLOUD_AGENT_ENGINE_ID is the bare numeric engine ID); set them explicitly elsewhere, or construct the config with VertexAiSessionConfig::new",
+                    ),
+                )
+                .with_provider("vertex_ai"))
+            }
         }
     }
 
@@ -92,6 +173,45 @@ impl VertexAiSessionConfig {
     /// Userinfo, paths, queries, and fragments are rejected before transport.
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = Some(endpoint.into());
+        self
+    }
+
+    /// Sets the session time-to-live sent on session create.
+    ///
+    /// `ttl` is input-only with a 24-hour minimum and is mutually exclusive
+    /// with [`with_expire_time`](Self::with_expire_time); both constraints are
+    /// enforced at service construction.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_session::VertexAiSessionConfig;
+    /// use std::time::Duration;
+    ///
+    /// let config = VertexAiSessionConfig::new("my-project", "us-central1")
+    ///     .with_ttl(Duration::from_secs(86_400)); // sent as "86400s"
+    /// ```
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = Some(ttl);
+        self
+    }
+
+    /// Sets the absolute session expiration timestamp sent on session create.
+    ///
+    /// Mutually exclusive with [`with_ttl`](Self::with_ttl); the constraint is
+    /// enforced at service construction.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use adk_session::VertexAiSessionConfig;
+    /// use chrono::{Duration, Utc};
+    ///
+    /// let config = VertexAiSessionConfig::new("my-project", "us-central1")
+    ///     .with_expire_time(Utc::now() + Duration::days(7));
+    /// ```
+    pub fn with_expire_time(mut self, expire_time: DateTime<Utc>) -> Self {
+        self.expire_time = Some(expire_time);
         self
     }
 
@@ -208,6 +328,8 @@ pub struct VertexAiSessionService {
     max_response_bytes: usize,
     max_request_bytes: usize,
     pagination_timeout: Duration,
+    session_ttl: Option<String>,
+    session_expire_time: Option<String>,
     credentials: Credentials,
     auth_headers: Arc<RwLock<Option<reqwest::header::HeaderMap>>>,
     session_scopes: Arc<RwLock<VecDeque<(String, SessionScope)>>>,
@@ -237,12 +359,30 @@ impl VertexAiSessionService {
     ///
     /// # Errors
     ///
-    /// Returns an error when the endpoint is not a valid secure origin or the
-    /// bounded, redirect-disabled HTTP client cannot be constructed.
+    /// Returns an error when the endpoint is not a valid secure origin, the
+    /// session expiration config is invalid (both `ttl` and `expire_time`
+    /// set, or a TTL below the 24-hour minimum), or the bounded,
+    /// redirect-disabled HTTP client cannot be constructed.
     pub fn with_credentials(
         config: VertexAiSessionConfig,
         credentials: Credentials,
     ) -> Result<Self> {
+        // `ttl` and `expireTime` form the Session `expiration` oneof in
+        // google/cloud/aiplatform/v1beta1/session.proto, so at most one may
+        // be sent; `ttl` is input-only with a documented 24-hour minimum.
+        if config.ttl.is_some() && config.expire_time.is_some() {
+            return Err(Self::invalid_input(
+                "session ttl and expire_time are mutually exclusive Session.expiration oneof members; configure at most one of with_ttl and with_expire_time",
+            ));
+        }
+        if let Some(ttl) = config.ttl
+            && ttl < MIN_SESSION_TTL
+        {
+            return Err(Self::invalid_input(format!(
+                "session ttl of {}s is below the Vertex AI minimum of 24 hours (86400s)",
+                ttl.as_secs(),
+            )));
+        }
         let http_client = Client::builder()
             .connect_timeout(HTTP_CONNECT_TIMEOUT)
             .timeout(HTTP_REQUEST_TIMEOUT)
@@ -264,6 +404,10 @@ impl VertexAiSessionService {
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
             max_request_bytes: DEFAULT_MAX_REQUEST_BYTES,
             pagination_timeout: PAGINATION_TIMEOUT,
+            session_ttl: config.ttl.map(proto_duration_string),
+            session_expire_time: config.expire_time.map(|expire_time| {
+                expire_time.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+            }),
             credentials,
             auth_headers: Arc::new(RwLock::new(None)),
             session_scopes: Arc::new(RwLock::new(VecDeque::new())),
@@ -1188,8 +1332,12 @@ impl SessionService for VertexAiSessionService {
         insert_vertex_session_identity(&mut stored_state, &identity)?;
         validate_vertex_struct_map(&stored_state, "sessionState")?;
         let parent = self.session_parent(&req.app_name)?;
-        let body =
-            VertexCreateSession { user_id: req.user_id.clone(), session_state: Some(stored_state) };
+        let body = VertexCreateSession {
+            user_id: req.user_id.clone(),
+            session_state: Some(stored_state),
+            ttl: self.session_ttl.clone(),
+            expire_time: self.session_expire_time.clone(),
+        };
         let body = self.encode_request_body(&body, "create-session request")?;
 
         if self.allows_unmarked_sessions_for_app(&req.app_name)
@@ -1834,6 +1982,14 @@ struct VertexCreateSession {
     user_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     session_state: Option<HashMap<String, Value>>,
+    // `ttl` and `expireTime` are the Session `expiration` oneof members in
+    // google/cloud/aiplatform/v1beta1/session.proto. `ttl` is an input-only
+    // JSON duration string (e.g. "86400s") with a 24-hour minimum;
+    // `expireTime` is an RFC 3339 timestamp. At most one is ever set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ttl: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expire_time: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2819,6 +2975,19 @@ fn validate_vertex_operation_name(
         )));
     }
     Ok(())
+}
+
+// JSON representation of google.protobuf.Duration: decimal seconds with an
+// "s" suffix (e.g. "86400s"), fractional digits only when nonzero.
+fn proto_duration_string(duration: Duration) -> String {
+    let nanos = duration.subsec_nanos();
+    if nanos == 0 {
+        format!("{}s", duration.as_secs())
+    } else {
+        let fraction = format!("{nanos:09}");
+        let fraction = fraction.trim_end_matches('0');
+        format!("{}.{fraction}s", duration.as_secs())
+    }
 }
 
 fn proto3_optional_string(value: Option<&str>) -> Option<&str> {
@@ -4790,6 +4959,18 @@ fn bounded_field_names(extra: &Map<String, Value>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_proto_duration_string_matches_protobuf_json_format() {
+        for (duration, expected) in [
+            (Duration::from_secs(86_400), "86400s"),
+            (Duration::from_secs(172_800), "172800s"),
+            (Duration::new(86_400, 500_000_000), "86400.5s"),
+            (Duration::new(86_400, 1), "86400.000000001s"),
+        ] {
+            assert_eq!(proto_duration_string(duration), expected);
+        }
+    }
 
     #[test]
     fn test_vertex_endpoint_routes_global_and_multi_regions() {

@@ -1071,13 +1071,25 @@ pub use adk_enterprise;
 /// `minimal` tier detects Gemini via `GOOGLE_API_KEY`; add `openai` or
 /// `anthropic` to widen detection.
 ///
-/// 1. `ANTHROPIC_API_KEY` → Anthropic (Claude)
-/// 2. `OPENAI_API_KEY` → OpenAI
-/// 3. `GOOGLE_API_KEY` → Gemini
+/// 1. `GOOGLE_GENAI_USE_ENTERPRISE` / `GOOGLE_GENAI_USE_VERTEXAI` truthy
+///    (`1` or case-insensitive `true`) → Gemini on Vertex AI via Application
+///    Default Credentials, using `GOOGLE_CLOUD_PROJECT` and
+///    `GOOGLE_CLOUD_LOCATION` (requires the `gemini-vertex` feature;
+///    `GOOGLE_GENAI_USE_ENTERPRISE` takes precedence when both are set)
+/// 2. `ANTHROPIC_API_KEY` → Anthropic (Claude)
+/// 3. `OPENAI_API_KEY` → OpenAI
+/// 4. `GOOGLE_API_KEY` → Gemini
+///
+/// When a Vertex flag is truthy but the `gemini-vertex` feature is not
+/// compiled, a `tracing` warning is emitted and detection falls through to
+/// the API-key steps, which may select the Gemini Studio endpoint
+/// (`generativelanguage.googleapis.com`).
 ///
 /// # Errors
 ///
-/// Returns [`AdkError`] when no supported environment variable is set.
+/// Returns [`AdkError`] when no supported environment variable is set, or
+/// when a Vertex flag is truthy but `GOOGLE_CLOUD_PROJECT` /
+/// `GOOGLE_CLOUD_LOCATION` is missing.
 ///
 /// # Example
 ///
@@ -1088,6 +1100,24 @@ pub use adk_enterprise;
 /// let model: Arc<dyn adk_rust::Llm> = provider_from_env()?;
 /// ```
 pub fn provider_from_env() -> Result<std::sync::Arc<dyn Llm>> {
+    // The Vertex opt-in flags come before any API-key sniffing so a
+    // deployment pinned to Vertex AI can never be diverted to the Studio
+    // endpoint by a stray API key.
+    #[cfg(feature = "gemini")]
+    {
+        if model::gemini::vertex_env_requested() {
+            #[cfg(feature = "gemini-vertex")]
+            {
+                return Ok(std::sync::Arc::new(model::GeminiModel::from_env("gemini-2.5-flash")?));
+            }
+            #[cfg(not(feature = "gemini-vertex"))]
+            tracing::warn!(
+                env.flags = "GOOGLE_GENAI_USE_ENTERPRISE/GOOGLE_GENAI_USE_VERTEXAI",
+                "vertex backend requested via environment but the gemini-vertex feature is not compiled; api-key detection may select the gemini studio endpoint (generativelanguage.googleapis.com)"
+            );
+        }
+    }
+
     #[cfg(feature = "anthropic")]
     {
         if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {

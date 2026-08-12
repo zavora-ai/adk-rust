@@ -873,6 +873,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -924,6 +925,7 @@ dependencies = [
  "adk-core",
  "adk-runner",
  "adk-session",
+ "adk-skill",
  "adk-telemetry",
  "anyhow",
  "async-stream",
@@ -1010,6 +1012,8 @@ dependencies = [
 name = "adk-telemetry"
 version = "2.0.0"
 dependencies = [
+ "google-cloud-auth 1.12.0",
+ "http 1.4.1",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -1018,6 +1022,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tonic 0.14.6",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -19027,6 +19032,7 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+ "webpki-roots 1.0.7",
  "zstd",
 ]
 

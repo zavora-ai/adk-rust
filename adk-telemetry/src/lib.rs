@@ -35,6 +35,10 @@ pub mod spans;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
+// Telemetry to Google Cloud (feature-gated)
+#[cfg(feature = "gcp")]
+pub mod gcp;
+
 // GenAI Semantic Conventions module (feature-gated)
 #[cfg(feature = "genai-semconv")]
 pub mod semconv;
@@ -57,6 +61,11 @@ pub use spans::*;
 pub use span_exporter::*;
 
 // Re-export init functions and error type
+#[cfg(feature = "gcp")]
+pub use gcp::{
+    CloudLoggingJsonFormat, GCP_OTLP_ENDPOINT, GcpHeaderSupplier, gcp_resource_attributes,
+    init_json_logging, init_with_gcp,
+};
 #[cfg(feature = "sqlite")]
 pub use init::init_with_sqlite;
 pub use init::{TelemetryError, init_telemetry, init_with_adk_exporter, shutdown_telemetry};
