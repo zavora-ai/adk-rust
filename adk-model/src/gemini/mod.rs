@@ -10,7 +10,7 @@ pub mod interactions_target;
 pub mod streaming;
 
 pub use crate::retry::RetryConfig;
-pub use client::GeminiModel;
+pub use client::{GeminiModel, vertex_env_requested};
 
 // Re-export the Interactions transport surface (Beta) so consumers can configure
 // the toggle through `adk_model::gemini::{...}` without reaching into submodules.

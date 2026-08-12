@@ -387,6 +387,7 @@ pub fn create_app_with_a2a(config: ServerConfig, a2a_base_url: Option<&str>) -> 
         .layer(auth_layer.clone());
 
     let runtime_router = Router::new()
+        .route("/run", post(controllers::runtime::run_collect))
         .route("/run/{app_name}/{user_id}/{session_id}", post(controllers::runtime::run_sse))
         .route("/run_sse", post(controllers::runtime::run_sse_compat))
         .with_state(runtime_controller);
@@ -539,6 +540,7 @@ pub struct ServerBuilder {
     api_routes: Vec<Router>,
     root_routes: Vec<Router>,
     shutdown_endpoint: bool,
+    skill_index: Option<Arc<adk_skill::SkillIndex>>,
 }
 
 impl ServerBuilder {
@@ -550,6 +552,7 @@ impl ServerBuilder {
             api_routes: Vec::new(),
             root_routes: Vec::new(),
             shutdown_endpoint: false,
+            skill_index: None,
         }
     }
 
@@ -589,6 +592,30 @@ impl ServerBuilder {
     /// The base URL is used to construct the agent card's endpoint URL.
     pub fn with_a2a(mut self, base_url: impl Into<String>) -> Self {
         self.a2a_base_url = Some(base_url.into());
+        self
+    }
+
+    /// Expose the skills in `skill_index` on the A2A agent card.
+    ///
+    /// When A2A is enabled via [`with_a2a`](Self::with_a2a), the card served at
+    /// `/.well-known/agent.json` appends one `skills[]` entry per indexed
+    /// skill, mapped by [`agent_skills_from_index`](crate::a2a::agent_skills_from_index).
+    /// Has no effect without `with_a2a`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_server::{ServerBuilder, ServerConfig};
+    /// use std::sync::Arc;
+    ///
+    /// let index = adk_skill::load_skill_index(".")?;
+    /// let app = ServerBuilder::new(config)
+    ///     .with_a2a("http://localhost:8080")
+    ///     .with_skill_index(Arc::new(index))
+    ///     .build();
+    /// ```
+    pub fn with_skill_index(mut self, skill_index: Arc<adk_skill::SkillIndex>) -> Self {
+        self.skill_index = Some(skill_index);
         self
     }
 
@@ -710,6 +737,7 @@ impl ServerBuilder {
             .layer(auth_layer.clone());
 
         let runtime_router = Router::new()
+            .route("/run", post(controllers::runtime::run_collect))
             .route("/run/{app_name}/{user_id}/{session_id}", post(controllers::runtime::run_sse))
             .route("/run_sse", post(controllers::runtime::run_sse_compat))
             .with_state(runtime_controller);
@@ -792,7 +820,12 @@ impl ServerBuilder {
         }
 
         if let Some(base_url) = &self.a2a_base_url {
-            let a2a_controller = A2aController::new(config.clone(), base_url);
+            let a2a_controller = match &self.skill_index {
+                Some(skill_index) => {
+                    A2aController::with_skill_index(config.clone(), base_url, skill_index.clone())
+                }
+                None => A2aController::new(config.clone(), base_url),
+            };
             // Same split as `create_app_with_a2a`: discovery is public, RPC is authenticated.
             let a2a_discovery = Router::new()
                 .route("/.well-known/agent.json", get(controllers::a2a::get_agent_card))

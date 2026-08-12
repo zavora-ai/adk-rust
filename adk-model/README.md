@@ -74,6 +74,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+`GeminiModel::from_env(model)` builds the client from the environment: a truthy
+`GOOGLE_GENAI_USE_ENTERPRISE` or `GOOGLE_GENAI_USE_VERTEXAI` (`1` or a
+case-insensitive `true`) selects Vertex AI via Application Default Credentials
+using `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` (requires the
+`gemini-vertex` feature); otherwise the Gemini API via `GOOGLE_API_KEY` or
+`GEMINI_API_KEY`.
+
 ### OpenAI
 
 ```rust

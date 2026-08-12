@@ -178,6 +178,43 @@ let config = VertexAiSessionConfig::new("my-project", "us-central1")
 let service = VertexAiSessionService::new_with_adc(config)?;
 ```
 
+Inside a deployed Vertex AI Agent Engine container the platform provides the
+configuration as environment variables, and `VertexAiSessionConfig::from_env()`
+reads them:
+
+| Variable | Meaning |
+|----------|---------|
+| `GOOGLE_CLOUD_PROJECT` | Google Cloud project ID |
+| `GOOGLE_CLOUD_LOCATION` | GCP region |
+| `GOOGLE_CLOUD_AGENT_ENGINE_ID` | Bare numeric agent engine ID (not a full resource name) |
+
+```rust
+use adk_session::{VertexAiSessionConfig, VertexAiSessionService};
+
+let config = VertexAiSessionConfig::from_env()?;
+let service = VertexAiSessionService::new_with_adc(config)?;
+```
+
+Missing or blank variables produce an invalid-input error naming each one.
+
+#### Session expiration
+
+`ttl` and `expireTime` are the `Session.expiration` oneof members
+(`google/cloud/aiplatform/v1beta1/session.proto`). The config sends at most
+one on session create: `ttl` is input-only, serialized as a JSON duration
+string (e.g. `"86400s"`), with a 24-hour minimum; `expireTime` is an RFC 3339
+timestamp. Setting both members, or a TTL below 24 hours, fails at service
+construction.
+
+```rust
+use adk_session::VertexAiSessionConfig;
+use std::time::Duration;
+
+let config = VertexAiSessionConfig::new("my-project", "us-central1")
+    .with_reasoning_engine("1234567890")
+    .with_ttl(Duration::from_secs(86_400)); // sent as "86400s"
+```
+
 #### Identity isolation
 
 The public session ID is always the ID supplied to `CreateRequest`, or a locally
