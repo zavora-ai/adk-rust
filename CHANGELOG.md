@@ -37,6 +37,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [Vertex-Only Deployments](docs/official_docs/compliance/vertex-only-deployments.md)
   — guaranteeing no `generativelanguage.googleapis.com` traffic for HIPAA and
   data-residency workloads.
+### Added
+
+- **`VertexAiSessionConfig::from_env()`** builds the config from
+  `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and
+  `GOOGLE_CLOUD_AGENT_ENGINE_ID` (the bare numeric engine ID) — the variables
+  the Vertex AI Agent Engine platform sets inside deployed containers. Missing
+  or blank variables produce an actionable invalid-input error naming each one.
+- **Vertex session expiration**: `VertexAiSessionConfig::with_ttl()` and
+  `with_expire_time()` send the `Session.expiration` oneof (`ttl` /
+  `expireTime` from `google/cloud/aiplatform/v1beta1/session.proto`) on
+  session create. Setting both members, or a TTL below the 24-hour minimum,
+  fails at service construction.
+- **adk-server**: `agent_skills_from_index` bridges an `adk_skill::SkillIndex` to A2A
+  agent-card `skills[]` entries (skill name → `id` and `name`, description →
+  `description`, tags → `tags`, version folded into `tags` as `version:{v}`).
+  `ServerBuilder::with_skill_index` and `A2aServerBuilder::skill_index` attach an
+  index so the card served at `/.well-known/agent.json` includes those entries —
+  the surface Agent Registry keyword/prefix search indexes.
+  `A2aController::with_skill_index` is the underlying constructor.
+- **`POST /api/run` plain-JSON endpoint in `adk-server`.** Accepts the same body as
+  `/api/run_sse`, runs the agent to completion, and returns the collected events as a
+  JSON array — parity with Google ADK's `api_server` non-streaming `/run` route.
 
 ## [2.0.0] - 2026-08-09
 

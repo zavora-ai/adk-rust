@@ -9,7 +9,7 @@ pub mod processor;
 pub mod remote_agent;
 pub mod types;
 
-pub use agent_card::{build_agent_card, build_agent_skills};
+pub use agent_card::{agent_skills_from_index, build_agent_card, build_agent_skills};
 pub use client::A2aClient;
 pub use events::{event_to_message, message_to_event};
 pub use executor::{Executor, ExecutorConfig};
