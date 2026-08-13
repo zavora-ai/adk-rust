@@ -178,6 +178,10 @@ jobs:
           - { package: adk-managed, features: full }
           - { package: adk-audio, features: fx }
           - { package: adk-rag, features: lancedb }
+          # adk-rag's SurrealDB backend: gated behind `surrealdb`, so `--workspace` builds
+          # never compiled it. A surrealdb 3.2 parser change broke create_collection while
+          # every required check stayed green. Tests run on the embedded kv-mem engine.
+          - { package: adk-rag, features: surrealdb }
           # adk-auth's SSO/OAuth surface: gated behind `sso`, so `--workspace` without
           # feature flags never compiled it. It had drifted out of the clippy gate, and a
           # jsonwebtoken major bump broke it while every required check stayed green.

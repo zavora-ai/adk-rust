@@ -109,6 +109,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/run_sse`, runs the agent to completion, and returns the collected events as a
   JSON array — parity with Google ADK's `api_server` non-streaming `/run` route.
 
+### Fixed
+
+- **adk-rag: SurrealDB `create_collection` parse error.** The `metadata` field
+  definition used the pre-3.2 modifier order `FLEXIBLE TYPE object`, which
+  surrealdb 3.2 rejects with `FLEXIBLE must be specified after TYPE`. Reordered
+  to `TYPE object FLEXIBLE`, and the `surrealdb` feature now has a PR-tier
+  `feature-coverage` matrix entry so the backend cannot silently break again
+  (#568).
+
 ## [2.0.0] - 2026-08-09
 
 ### Breaking

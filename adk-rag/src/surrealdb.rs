@@ -149,7 +149,7 @@ impl VectorStore for SurrealVectorStore {
             "DEFINE TABLE IF NOT EXISTS {table}; \
              DEFINE FIELD IF NOT EXISTS text ON {table} TYPE string; \
              DEFINE FIELD IF NOT EXISTS embedding ON {table} TYPE array<float>; \
-             DEFINE FIELD IF NOT EXISTS metadata ON {table} FLEXIBLE TYPE object; \
+             DEFINE FIELD IF NOT EXISTS metadata ON {table} TYPE object FLEXIBLE; \
              DEFINE FIELD IF NOT EXISTS document_id ON {table} TYPE string; \
              DEFINE INDEX IF NOT EXISTS idx_{table}_hnsw ON {table} \
                  FIELDS embedding HNSW DIMENSION {dimensions} DIST COSINE;"
