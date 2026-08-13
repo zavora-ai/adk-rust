@@ -3,12 +3,15 @@
 // Implements async task lifecycle for long-running MCP tool operations.
 // Tasks allow tools to be queued and polled rather than blocking.
 
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 pub use rmcp::model::{CreateTaskResult, Task as TaskInfo, TaskStatus};
 
 /// Configuration for MCP task-based execution
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct McpTaskConfig {
     /// Allow task mode when a tool and server negotiate MCP task support.
     pub enable_tasks: bool,
@@ -18,6 +21,8 @@ pub struct McpTaskConfig {
     pub timeout_ms: Option<u64>,
     /// Maximum number of poll attempts (None = unlimited)
     pub max_poll_attempts: Option<u32>,
+    /// Maximum stateless MRTR input rounds before rejecting a looping peer.
+    pub max_input_rounds: usize,
 }
 
 impl Default for McpTaskConfig {
@@ -27,6 +32,7 @@ impl Default for McpTaskConfig {
             poll_interval_ms: 1000,
             timeout_ms: Some(300_000), // 5 minutes default
             max_poll_attempts: None,
+            max_input_rounds: 10,
         }
     }
 }
@@ -58,6 +64,12 @@ impl McpTaskConfig {
     /// Set maximum poll attempts
     pub fn max_attempts(mut self, attempts: u32) -> Self {
         self.max_poll_attempts = Some(attempts);
+        self
+    }
+
+    /// Set the maximum number of MRTR input rounds.
+    pub fn max_input_rounds(mut self, rounds: usize) -> Self {
+        self.max_input_rounds = rounds;
         self
     }
 

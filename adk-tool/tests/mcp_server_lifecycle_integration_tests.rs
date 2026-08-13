@@ -21,6 +21,7 @@ fn playwright_config() -> McpServerConfig {
         disabled: false,
         auto_approve: vec!["browser_click".to_string(), "browser_wait_for".to_string()],
         restart_policy: None,
+        ..Default::default()
     }
 }
 
@@ -37,6 +38,7 @@ fn computer_use_config() -> McpServerConfig {
         disabled: false,
         auto_approve: vec!["wait".to_string()],
         restart_policy: None,
+        ..Default::default()
     }
 }
 

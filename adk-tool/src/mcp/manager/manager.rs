@@ -15,7 +15,9 @@ use adk_core::AdkError;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
-use super::super::elicitation::{AutoDeclineElicitationHandler, ElicitationHandler};
+use super::super::elicitation::{
+    AdkClientHandler, AutoDeclineElicitationHandler, ElicitationHandler,
+};
 use super::super::resource_notifications::ResourceNotificationHandler;
 use super::super::toolset::McpToolset;
 use super::super::{GetPromptResult, Prompt, Resource, ResourceContents, ResourceTemplate};
@@ -329,35 +331,34 @@ impl McpServerManager {
             ))
         })?;
 
-        // Connect via McpToolset with the appropriate handler
+        // Build one handler for both lifecycle negotiation and later MRTR/task input.
         let handler: Arc<dyn ElicitationHandler> =
             elicitation_handler.clone().unwrap_or_else(|| Arc::new(AutoDeclineElicitationHandler));
 
+        let mut adk_handler = AdkClientHandler::new(handler);
+        if config.task_config.enable_tasks {
+            adk_handler = adk_handler.with_tasks();
+        }
+        if let Some(resource_handler) = resource_notification_handler {
+            adk_handler =
+                adk_handler.with_resource_notification_handler(Arc::clone(resource_handler));
+        }
         #[cfg(feature = "mcp-sampling")]
-        let toolset_result = if let Some(sampling) = sampling_handler {
-            if let Some(resource_handler) = resource_notification_handler {
-                McpToolset::with_sampling_and_resource_handlers(
-                    transport,
-                    handler,
-                    Arc::clone(sampling),
-                    Arc::clone(resource_handler),
-                )
-                .await
-            } else {
-                McpToolset::with_sampling_handler(transport, handler, Arc::clone(sampling)).await
-            }
-        } else if let Some(resource_handler) = resource_notification_handler {
-            McpToolset::with_handlers(transport, handler, Arc::clone(resource_handler)).await
-        } else {
-            McpToolset::with_elicitation_handler(transport, handler).await
-        };
+        if let Some(sampling) = sampling_handler {
+            adk_handler = adk_handler.with_sampling_handler(Arc::clone(sampling));
+        }
 
-        #[cfg(not(feature = "mcp-sampling"))]
-        let toolset_result = if let Some(resource_handler) = resource_notification_handler {
-            McpToolset::with_handlers(transport, handler, Arc::clone(resource_handler)).await
-        } else {
-            McpToolset::with_elicitation_handler(transport, handler).await
-        };
+        let input_handler = adk_handler.clone();
+        use rmcp::ClientServiceExt;
+        let toolset_result = adk_handler
+            .serve_with_lifecycle(transport, config.lifecycle.to_rmcp())
+            .await
+            .map(|client| {
+                McpToolset::new(client)
+                    .with_task_support(config.task_config.clone())
+                    .with_mrtr_handler(input_handler)
+            })
+            .map_err(|error| AdkError::tool(format!("failed to connect MCP server: {error}")));
 
         let toolset = toolset_result.map_err(|e| {
             entry.status = ServerStatus::FailedToStart;
@@ -1178,6 +1179,8 @@ mod tests {
                 disabled: true,
                 auto_approve: vec![],
                 restart_policy: None,
+                lifecycle: Default::default(),
+                task_config: Default::default(),
             },
         )]);
         let manager = McpServerManager::new(configs);
@@ -1196,6 +1199,8 @@ mod tests {
                 disabled: false,
                 auto_approve: vec![],
                 restart_policy: None,
+                lifecycle: Default::default(),
+                task_config: Default::default(),
             },
         )]);
         let manager = McpServerManager::new(configs);
@@ -1242,6 +1247,8 @@ mod tests {
                 disabled: false,
                 auto_approve: vec![],
                 restart_policy: None,
+                lifecycle: Default::default(),
+                task_config: Default::default(),
             },
         )]);
         let manager = McpServerManager::new(configs);
@@ -1270,6 +1277,8 @@ mod tests {
                     disabled: false,
                     auto_approve: vec![],
                     restart_policy: None,
+                    lifecycle: Default::default(),
+                    task_config: Default::default(),
                 },
             ),
             (
@@ -1281,6 +1290,8 @@ mod tests {
                     disabled: true,
                     auto_approve: vec![],
                     restart_policy: None,
+                    lifecycle: Default::default(),
+                    task_config: Default::default(),
                 },
             ),
         ]);
@@ -1309,6 +1320,8 @@ mod tests {
                 disabled: false,
                 auto_approve: vec![],
                 restart_policy: None,
+                lifecycle: Default::default(),
+                task_config: Default::default(),
             },
         )]);
         let manager = McpServerManager::new(configs);
@@ -1333,6 +1346,8 @@ mod tests {
                     disabled: false,
                     auto_approve: vec![],
                     restart_policy: None,
+                    lifecycle: Default::default(),
+                    task_config: Default::default(),
                 },
             ),
             (
@@ -1344,6 +1359,8 @@ mod tests {
                     disabled: true,
                     auto_approve: vec![],
                     restart_policy: None,
+                    lifecycle: Default::default(),
+                    task_config: Default::default(),
                 },
             ),
         ]);
@@ -1464,6 +1481,8 @@ mod tests {
                     disabled: false,
                     auto_approve: vec![],
                     restart_policy: None,
+                    lifecycle: Default::default(),
+                    task_config: Default::default(),
                 },
             ),
             (
@@ -1475,6 +1494,8 @@ mod tests {
                     disabled: true,
                     auto_approve: vec![],
                     restart_policy: None,
+                    lifecycle: Default::default(),
+                    task_config: Default::default(),
                 },
             ),
             (
@@ -1486,6 +1507,8 @@ mod tests {
                     disabled: false,
                     auto_approve: vec![],
                     restart_policy: None,
+                    lifecycle: Default::default(),
+                    task_config: Default::default(),
                 },
             ),
         ]);
@@ -1506,6 +1529,8 @@ mod tests {
             disabled: false,
             auto_approve: vec![],
             restart_policy: None,
+            lifecycle: Default::default(),
+            task_config: Default::default(),
         };
         let result = manager.add_server("new-server".to_string(), config).await;
         assert!(result.is_ok());
@@ -1525,6 +1550,8 @@ mod tests {
                 disabled: false,
                 auto_approve: vec![],
                 restart_policy: None,
+                lifecycle: Default::default(),
+                task_config: Default::default(),
             },
         )]);
         let manager = McpServerManager::new(configs);
@@ -1536,6 +1563,8 @@ mod tests {
             disabled: false,
             auto_approve: vec![],
             restart_policy: None,
+            lifecycle: Default::default(),
+            task_config: Default::default(),
         };
         let result = manager.add_server("existing".to_string(), config).await;
         assert!(result.is_err());
@@ -1553,6 +1582,8 @@ mod tests {
             disabled: true,
             auto_approve: vec![],
             restart_policy: None,
+            lifecycle: Default::default(),
+            task_config: Default::default(),
         };
         let result = manager.add_server("disabled-server".to_string(), config).await;
         assert!(result.is_ok());
@@ -1634,6 +1665,8 @@ mod tests {
                 disabled: false,
                 auto_approve: vec![],
                 restart_policy: None,
+                lifecycle: Default::default(),
+                task_config: Default::default(),
             },
         )]);
         let manager = McpServerManager::new(configs);
@@ -1672,6 +1705,8 @@ mod tests {
                     disabled: false,
                     auto_approve: vec![],
                     restart_policy: None,
+                    lifecycle: Default::default(),
+                    task_config: Default::default(),
                 },
             ),
             (
@@ -1683,6 +1718,8 @@ mod tests {
                     disabled: true,
                     auto_approve: vec![],
                     restart_policy: None,
+                    lifecycle: Default::default(),
+                    task_config: Default::default(),
                 },
             ),
             (
@@ -1694,6 +1731,8 @@ mod tests {
                     disabled: false,
                     auto_approve: vec![],
                     restart_policy: None,
+                    lifecycle: Default::default(),
+                    task_config: Default::default(),
                 },
             ),
         ]);
@@ -1759,6 +1798,8 @@ mod tests {
                 disabled: false,
                 auto_approve: vec![],
                 restart_policy: None,
+                lifecycle: Default::default(),
+                task_config: Default::default(),
             },
         )]);
         let manager = McpServerManager::new(configs);

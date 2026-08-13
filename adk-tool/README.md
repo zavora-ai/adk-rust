@@ -266,7 +266,8 @@ let toolset = McpHttpClientBuilder::new("https://mcp.example.com/v1")
 
 ### MCP Task Support (Long-Running Operations)
 
-Enable the negotiated MCP `2025-11-25` task lifecycle for long-running tool operations:
+Enable the negotiated MCP 2026-07-28 SEP-2663 Tasks extension for long-running
+tool operations:
 
 ```rust
 use adk_tool::{McpToolset, McpTaskConfig};
@@ -281,10 +282,39 @@ let toolset = McpToolset::new(client)
     );
 ```
 
-Task mode is used only when the server advertises task support and the selected
-tool declares it. ADK-Rust sends task metadata with `tools/call`, polls
-`tasks/get`, reads `tasks/result`, and requests `tasks/cancel` when the local
-timeout or poll bound is reached.
+Task mode is used only when the client config enables it and the server
+advertises the extension. The server decides per call whether to return a task.
+ADK-Rust polls `tasks/get`, fulfils paused `input_required` requests through the
+configured elicitation handler and `tasks/update`, and requests `tasks/cancel`
+when the local timeout or poll bound is reached.
+
+Managed servers select lifecycle and task policy in `mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "controlled-server": {
+      "command": "controlled-server",
+      "lifecycle": "discover",
+      "taskConfig": {
+        "enableTasks": true,
+        "pollIntervalMs": 500,
+        "timeoutMs": 300000,
+        "maxInputRounds": 10
+      }
+    },
+    "third-party-server": {
+      "command": "third-party-server",
+      "lifecycle": "auto"
+    }
+  }
+}
+```
+
+`discover` requires the stateless 2026 lifecycle. `auto` probes discovery and
+falls back only on `METHOD_NOT_FOUND`. The default remains `initialize` for
+backward compatibility. Stateless MRTR elicitation is driven automatically and
+bounded by `maxInputRounds`; opaque `requestState` is echoed without inspection.
 
 ### MCP Auto-Reconnect (Connection Resilience)
 

@@ -202,6 +202,8 @@ mod tests {
             disabled: false,
             auto_approve: vec![],
             restart_policy: None,
+            lifecycle: Default::default(),
+            task_config: Default::default(),
         };
         let entry = McpServerEntry {
             backoff: BackoffState::new(&config.restart_policy),

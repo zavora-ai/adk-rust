@@ -25,7 +25,7 @@ mod manager;
 pub(crate) mod status;
 mod toolset_impl;
 
-pub use config::{McpServerConfig, RestartPolicy};
+pub use config::{McpLifecycleMode, McpServerConfig, RestartPolicy};
 pub use status::ServerStatus;
 
 pub use manager::McpServerManager;
