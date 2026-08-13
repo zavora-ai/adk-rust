@@ -10,6 +10,8 @@
 //! - [`InMemoryArtifactService`] - Simple in-memory storage
 //! - [`ArtifactService`] - Trait for custom backends
 //! - [`ScopedArtifacts`] - Session-scoped artifact access
+//! - `GcsArtifactService` - Google Cloud Storage backend (feature `gcs`),
+//!   blob-name compatible with adk-python
 //!
 //! ## Quick Start
 //!
@@ -29,11 +31,15 @@
 //! - Share binary data between agent turns
 
 pub mod file;
+#[cfg(feature = "gcs")]
+pub mod gcs;
 pub mod inmemory;
 pub mod scoped;
 pub mod service;
 
 pub use file::FileArtifactService;
+#[cfg(feature = "gcs")]
+pub use gcs::GcsArtifactService;
 pub use inmemory::InMemoryArtifactService;
 pub use scoped::ScopedArtifacts;
 pub use service::{

@@ -551,6 +551,7 @@ export RUST_LOG=warn,my_app=info
 
 ## Related
 
+- [Telemetry to Google Cloud](gcp.md) - Direct Cloud Trace export and Cloud Logging JSON
 - [Callbacks](../callbacks/callbacks.md) - Add telemetry to callbacks
 - [Tools](../tools/function-tools.md) - Instrument custom tools
 - [Deployment](../deployment/server.md) - Production telemetry setup

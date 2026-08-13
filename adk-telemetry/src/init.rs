@@ -5,7 +5,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 use crate::span_exporter::{AdkSpanExporter, AdkSpanLayer};
 
-static INIT: Once = Once::new();
+pub(crate) static INIT: Once = Once::new();
 
 /// Error returned by telemetry initialization functions.
 #[derive(Debug, thiserror::Error)]
@@ -152,6 +152,59 @@ pub fn init_with_otlp(service_name: &str, endpoint: &str) -> Result<(), Telemetr
     Ok(())
 }
 
+/// The tonic OTLP pipeline with a configuration hook on each exporter builder.
+///
+/// The hook is the seam that lets the `gcp` module inject TLS settings and a
+/// per-request auth interceptor without duplicating the exporter/provider
+/// plumbing shared with [`build_otlp_layer`].
+#[cfg(feature = "otlp")]
+pub(crate) mod otlp_pipeline {
+    use super::TelemetryError;
+    use opentelemetry::trace::TracerProvider;
+    use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
+
+    /// Configures a tonic exporter builder before it is built.
+    pub(crate) trait ExporterHook {
+        /// Returns the builder with hook-specific configuration applied.
+        fn configure<B: WithTonicConfig>(&self, builder: B) -> B;
+    }
+
+    /// Hook that leaves the builder unchanged — the plain-collector path.
+    pub(crate) struct NoopHook;
+
+    impl ExporterHook for NoopHook {
+        fn configure<B: WithTonicConfig>(&self, builder: B) -> B {
+            builder
+        }
+    }
+
+    /// Builds the OTLP span pipeline (exporter → batch tracer provider →
+    /// global registration) and returns a tracer for layer construction.
+    pub(crate) fn build_tracer<H: ExporterHook>(
+        resource: opentelemetry_sdk::Resource,
+        endpoint: &str,
+        hook: &H,
+    ) -> Result<opentelemetry_sdk::trace::SdkTracer, TelemetryError> {
+        let span_exporter = hook
+            .configure(
+                opentelemetry_otlp::SpanExporter::builder().with_tonic().with_endpoint(endpoint),
+            )
+            .build()
+            .map_err(|e| {
+                TelemetryError::Init(format!("failed to build OTLP span exporter: {e}"))
+            })?;
+
+        let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(span_exporter)
+            .with_resource(resource)
+            .build();
+
+        let tracer = tracer_provider.tracer("adk-telemetry");
+        opentelemetry::global::set_tracer_provider(tracer_provider);
+        Ok(tracer)
+    }
+}
+
 /// Build an OTLP tracing layer without initializing a global subscriber.
 ///
 /// Returns a boxed [`tracing_subscriber::Layer`] that can be composed with any
@@ -197,7 +250,6 @@ where
         + Send
         + Sync,
 {
-    use opentelemetry::trace::TracerProvider;
     use opentelemetry_otlp::WithExportConfig;
     use tracing_opentelemetry::OpenTelemetryLayer;
 
@@ -205,21 +257,7 @@ where
         .with_attributes([opentelemetry::KeyValue::new("service.name", service_name.to_string())])
         .build();
 
-    // Build OTLP span exporter
-    let span_exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_tonic()
-        .with_endpoint(endpoint)
-        .build()
-        .map_err(|e| TelemetryError::Init(format!("failed to build OTLP span exporter: {e}")))?;
-
-    // Build tracer provider with batch exporter
-    let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
-        .with_batch_exporter(span_exporter)
-        .with_resource(resource.clone())
-        .build();
-
-    let tracer = tracer_provider.tracer("adk-telemetry");
-    opentelemetry::global::set_tracer_provider(tracer_provider);
+    let tracer = otlp_pipeline::build_tracer(resource.clone(), endpoint, &otlp_pipeline::NoopHook)?;
 
     // Build OTLP metric exporter
     let metric_exporter = opentelemetry_otlp::MetricExporter::builder()

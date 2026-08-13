@@ -10,14 +10,40 @@ Binary artifact storage for Rust Agent Development Kit (ADK-Rust) agents.
 
 `adk-artifact` provides versioned binary data storage for the Rust Agent Development Kit ([ADK-Rust](https://github.com/zavora-ai/adk-rust)). Artifacts are useful for storing images, documents, audio, and other binary data that agents produce or consume.
 
-Two storage backends are included:
+Three storage backends are included:
 
 | Backend | Type | Persistence | Use case |
 |---------|------|-------------|----------|
 | `InMemoryArtifactService` | In-memory `HashMap` | Process lifetime only | Development, testing |
 | `FileArtifactService` | Local filesystem | Durable | Single-node production, local dev |
+| `GcsArtifactService` (feature `gcs`) | Google Cloud Storage | Durable | Deployed agents, Gemini Enterprise |
 
-Both implement the `ArtifactService` trait, so you can swap backends without changing application code.
+All implement the `ArtifactService` trait, so you can swap backends without changing application code.
+
+The GCS backend keeps byte-for-byte blob-name parity with adk-python's `GcsArtifactService`, so Rust agents, Python agents, and the Gemini Enterprise console read the same objects:
+
+- Session-scoped: `{app_name}/{user_id}/{session_id}/{filename}/{version}`
+- User-namespaced (filename starts with `user:`): `{app_name}/{user_id}/user/{filename}/{version}`
+
+Auto-assigned versions start at `0` (matching adk-python; the in-memory and file backends start at `1`). Authentication uses Application Default Credentials via `google-cloud-auth`.
+
+> **Important:** save and load must resolve the same `app_name` — the engine ID when deployed. adk-python had a save/load path mismatch (googleapis/python-aiplatform#6521); this implementation takes `app_name` verbatim from each request and never rewrites it.
+
+```toml
+[dependencies]
+adk-artifact = { version = "2.0.0", features = ["gcs"] }
+# or via the umbrella crate:
+adk-rust = { version = "2.0.0", features = ["minimal", "gcs-artifacts"] }
+```
+
+```rust,no_run
+use adk_artifact::GcsArtifactService;
+
+fn main() -> adk_core::Result<()> {
+    let service = GcsArtifactService::new_with_adc("my-artifact-bucket")?;
+    Ok(())
+}
+```
 
 ## Installation
 

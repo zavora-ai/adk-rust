@@ -464,6 +464,8 @@ let response = client
 
 The `GeminiBackend` trait defines `send_request()` and `send_streaming_request()` methods. All `Gemini::new()` / `Gemini::with_model()` constructors use `StudioBackend` by default. Vertex AI constructors (`with_google_cloud`, `with_google_cloud_adc`, etc.) use `VertexBackend`.
 
+**Backend capabilities.** `StudioBackend` supports the full API surface. `VertexBackend` supports generation, streaming, embeddings, and cached content (create, get, update, list, delete). The Files API, batch operations, and the Interactions API are Studio-only and return `GoogleCloudUnsupported` on Vertex.
+
 ```rust
 use adk_gemini::{Gemini, GeminiBuilder};
 
