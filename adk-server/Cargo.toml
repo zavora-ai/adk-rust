@@ -18,6 +18,7 @@ adk-core.workspace = true
 adk-agent = { workspace = true, features = ["skills"] }
 adk-runner = { workspace = true, features = ["artifacts", "plugins", "skills"] }
 adk-session.workspace = true
+adk-skill.workspace = true
 adk-artifact.workspace = true
 adk-telemetry.workspace = true
 tokio = { workspace = true, features = ["sync", "signal", "macros", "rt", "time"] }

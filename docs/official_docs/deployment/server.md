@@ -126,6 +126,37 @@ POST /api/run_sse
 }
 ```
 
+### Run Agent (Non-Streaming)
+
+Execute an agent to completion and receive all events in a single JSON response:
+
+```
+POST /api/run
+```
+
+**Request Body:** same shape as `POST /api/run_sse` (the `streaming` field is ignored):
+```json
+{
+  "appName": "my_agent",
+  "userId": "user123",
+  "sessionId": "session456",
+  "newMessage": {
+    "role": "user",
+    "parts": [
+      {
+        "text": "What is the capital of France?"
+      }
+    ]
+  }
+}
+```
+
+**Response:**
+- Content-Type: `application/json`
+- A JSON array containing every event produced by the run, in order, using the same event format as `/api/run_sse`
+
+This endpoint mirrors Google ADK's `api_server` non-streaming `/run` route.
+
 ### Session Management
 
 #### Create Session

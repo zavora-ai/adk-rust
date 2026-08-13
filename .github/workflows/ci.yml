@@ -185,6 +185,8 @@ jobs:
           - { package: adk-session, features: vertex-session }
           # The GCS artifact backend is opt-in and must keep blob-name parity with adk-python.
           - { package: adk-artifact, features: gcs }
+          # Google Cloud telemetry export is an opt-in transport; no default build compiles it.
+          - { package: adk-telemetry, features: gcp }
           # ACP replay and server transport behavior are gated behind the opt-in server feature.
           - { package: adk-acp, features: server }
           # The Monty Python executors and the MontyPythonCodeTool live path: both gated,

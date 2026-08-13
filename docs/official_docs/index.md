@@ -134,6 +134,10 @@ Long-term memory that outlives a session — the persistent counterpart to sessi
 - [Memory](security/memory.md) - Long-term semantic memory for agents
 - [Payments and Commerce](security/payments.md) - Agentic commerce journeys, protocol support, and validation paths
 
+## Compliance
+
+- [Vertex-Only Deployments](compliance/vertex-only-deployments.md) - Guarantee no Gemini Studio (`generativelanguage.googleapis.com`) traffic for HIPAA and data-residency workloads
+
 ## Studio
 
 - [ADK Studio](studio/studio.md) - Visual development environment for building agents

@@ -15,6 +15,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GcsArtifactService` (session-scoped and `user:`-namespaced layouts, `adkDisplayName`/
   `adkIsText`/`adkFileUri`/`adkFileMimeType` object metadata, versions starting at 0).
   Umbrella feature `gcs-artifacts`, included in the `gemini-agent-platform` meta-feature.
+- **adk-gemini: cached content on Vertex AI.** `VertexBackend` implements the five
+  cached-content operations (create, get, update, list, delete) against the Vertex
+  REST endpoint `…/v1/projects/{project}/locations/{location}/cachedContents`,
+  including TTL refresh via `updateCachedContent` so the runner's cache-refresh
+  path works on Vertex. Studio-style model names (`models/{model}`) in create
+  payloads are normalized to full Vertex resource names. The Files API, batch
+  operations, and the Interactions API remain Studio-only on the Vertex backend.
+- **Telemetry to Google Cloud** (`adk-telemetry` feature `gcp`, umbrella
+  `gcp-telemetry`, included in `gemini-agent-platform`). `init_with_gcp`
+  exports traces to `https://telemetry.googleapis.com` with per-request
+  `Authorization: Bearer` headers minted from Application Default Credentials
+  (refreshed in the background) plus `x-goog-user-project`. Resource
+  attributes (`service.name`, `gcp.project_id`,
+  `cloud.platform = gcp.agent_engine`) are detected from `K_SERVICE`,
+  `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_AGENT_ENGINE_ID`.
+  `init_json_logging` emits Cloud Logging structured JSON (severity mapping,
+  `logging.googleapis.com/trace` correlation). A collector-sidecar fallback is
+  documented in `docs/official_docs/observability/gcp.md`.
+### Changed
+
+- **`provider_from_env()` now consults the Vertex opt-in flags before any API
+  key.** A truthy `GOOGLE_GENAI_USE_ENTERPRISE` or `GOOGLE_GENAI_USE_VERTEXAI`
+  (`1` or a case-insensitive `true`) selects Gemini on Vertex AI — via
+  Application Default Credentials with `GOOGLE_CLOUD_PROJECT` and
+  `GOOGLE_CLOUD_LOCATION` — even when `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or
+  `GOOGLE_API_KEY` is set. Previously these flags were ignored and API-key
+  sniffing alone decided the provider. If you already set a `GOOGLE_GENAI_USE_*`
+  variable for another SDK (e.g. adk-python) and rely on `provider_from_env()`
+  picking Anthropic or OpenAI from an API key, unset the flag or set it to a
+  falsy value. `GOOGLE_GENAI_USE_ENTERPRISE` takes precedence when both flags
+  are set. When a flag is truthy but the `gemini-vertex` feature is not
+  compiled, `provider_from_env()` emits a `tracing` warning and falls through
+  to API-key detection; a truthy flag with `GOOGLE_CLOUD_PROJECT` /
+  `GOOGLE_CLOUD_LOCATION` missing is an error, not a Studio fallback.
+
+### Added
+
+- **`GeminiModel::from_env(model)`** — environment-driven construction: Vertex
+  AI via ADC when `GOOGLE_GENAI_USE_ENTERPRISE` / `GOOGLE_GENAI_USE_VERTEXAI`
+  is truthy (requires the `gemini-vertex` feature; errors when the feature is
+  missing or the Vertex target is incomplete), otherwise the Gemini API via
+  `GOOGLE_API_KEY` or `GEMINI_API_KEY`.
+- **`adk_model::gemini::vertex_env_requested()`** — reports whether the
+  environment opts in to the Vertex AI backend.
+- New docs page
+  [Vertex-Only Deployments](docs/official_docs/compliance/vertex-only-deployments.md)
+  — guaranteeing no `generativelanguage.googleapis.com` traffic for HIPAA and
+  data-residency workloads.
+### Added
+
+- **`VertexAiSessionConfig::from_env()`** builds the config from
+  `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and
+  `GOOGLE_CLOUD_AGENT_ENGINE_ID` (the bare numeric engine ID) — the variables
+  the Vertex AI Agent Engine platform sets inside deployed containers. Missing
+  or blank variables produce an actionable invalid-input error naming each one.
+- **Vertex session expiration**: `VertexAiSessionConfig::with_ttl()` and
+  `with_expire_time()` send the `Session.expiration` oneof (`ttl` /
+  `expireTime` from `google/cloud/aiplatform/v1beta1/session.proto`) on
+  session create. Setting both members, or a TTL below the 24-hour minimum,
+  fails at service construction.
+- **adk-server**: `agent_skills_from_index` bridges an `adk_skill::SkillIndex` to A2A
+  agent-card `skills[]` entries (skill name → `id` and `name`, description →
+  `description`, tags → `tags`, version folded into `tags` as `version:{v}`).
+  `ServerBuilder::with_skill_index` and `A2aServerBuilder::skill_index` attach an
+  index so the card served at `/.well-known/agent.json` includes those entries —
+  the surface Agent Registry keyword/prefix search indexes.
+  `A2aController::with_skill_index` is the underlying constructor.
+- **`POST /api/run` plain-JSON endpoint in `adk-server`.** Accepts the same body as
+  `/api/run_sse`, runs the agent to completion, and returns the collected events as a
+  JSON array — parity with Google ADK's `api_server` non-streaming `/run` route.
 
 ## [2.0.0] - 2026-08-09
 

@@ -108,6 +108,14 @@ let config = VertexAiSessionConfig::new("my-project", "us-central1")
 let service = VertexAiSessionService::new_with_adc(config)?;
 ```
 
+Inside a deployed Vertex AI Agent Engine container,
+`VertexAiSessionConfig::from_env()` reads `GOOGLE_CLOUD_PROJECT`,
+`GOOGLE_CLOUD_LOCATION`, and `GOOGLE_CLOUD_AGENT_ENGINE_ID` (the bare numeric
+engine ID) directly from the platform-provided environment.
+`with_ttl()`/`with_expire_time()` set the `Session.expiration` oneof sent on
+session create; `ttl` has a 24-hour minimum and both members are mutually
+exclusive.
+
 Caller-facing session IDs remain unchanged. The backend derives a deterministic
 remote ID from the complete `(app_name, user_id, session_id)` identity and stores
 a protected identity marker in Vertex session state. The marker is removed from

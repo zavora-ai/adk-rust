@@ -209,6 +209,71 @@ fn interaction_terminal_error(code: &'static str, message: &str) -> adk_core::Ad
     .with_provider("gemini")
 }
 
+/// Returns the value of the environment variable `name` when it is set and
+/// non-empty (after trimming whitespace).
+fn env_non_empty(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+}
+
+/// Returns `true` when an opt-in flag value selects the Vertex AI backend:
+/// `1` or a case-insensitive `true`.
+fn env_flag_truthy(value: &str) -> bool {
+    let v = value.trim();
+    v == "1" || v.eq_ignore_ascii_case("true")
+}
+
+/// Reports whether the environment opts in to the Vertex AI backend.
+///
+/// Consults `GOOGLE_GENAI_USE_ENTERPRISE` first and, when that variable is
+/// unset or empty, the deprecated `GOOGLE_GENAI_USE_VERTEXAI`. A flag is
+/// truthy when its value is `1` or a case-insensitive `true`.
+/// `GOOGLE_GENAI_USE_ENTERPRISE` takes precedence when both are set.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// if adk_model::gemini::vertex_env_requested() {
+///     // route Gemini traffic through Vertex AI
+/// }
+/// ```
+pub fn vertex_env_requested() -> bool {
+    // `GOOGLE_GENAI_USE_VERTEXAI` is the deprecated name adk-python still
+    // honors. Deliberately no deprecation warning for it —
+    // google/adk-python#6168 documents the churn such a warning caused.
+    if let Some(v) = env_non_empty("GOOGLE_GENAI_USE_ENTERPRISE") {
+        return env_flag_truthy(&v);
+    }
+    env_non_empty("GOOGLE_GENAI_USE_VERTEXAI").is_some_and(|v| env_flag_truthy(&v))
+}
+
+/// Reads `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`, erroring with a
+/// message that names whichever variable is missing.
+#[cfg(feature = "gemini-vertex")]
+fn vertex_target_from_env() -> Result<(String, String)> {
+    let project = env_non_empty("GOOGLE_CLOUD_PROJECT");
+    let location = env_non_empty("GOOGLE_CLOUD_LOCATION");
+    if let (Some(project), Some(location)) = (&project, &location) {
+        return Ok((project.clone(), location.clone()));
+    }
+    let mut missing = Vec::new();
+    if project.is_none() {
+        missing.push("GOOGLE_CLOUD_PROJECT");
+    }
+    if location.is_none() {
+        missing.push("GOOGLE_CLOUD_LOCATION");
+    }
+    Err(adk_core::AdkError::new(
+        ErrorComponent::Model,
+        ErrorCategory::InvalidInput,
+        "model.gemini.vertex_env_incomplete",
+        format!(
+            "Vertex AI backend selected via GOOGLE_GENAI_USE_ENTERPRISE/GOOGLE_GENAI_USE_VERTEXAI, but {} not set. Set the missing variable(s) to your Google Cloud project ID and region (e.g. us-central1).",
+            missing.join(" and ")
+        ),
+    )
+    .with_provider("gemini"))
+}
+
 impl GeminiModel {
     fn gemini_part_thought_signature(value: &serde_json::Value) -> Option<String> {
         value.get("thoughtSignature").and_then(serde_json::Value::as_str).map(str::to_string)
@@ -327,6 +392,74 @@ impl GeminiModel {
         .map_err(|e| adk_core::AdkError::model(e.to_string()))?;
 
         Ok(Self::from_client(client, model_name))
+    }
+
+    /// Create a Gemini model from environment variables.
+    ///
+    /// When `GOOGLE_GENAI_USE_ENTERPRISE` or `GOOGLE_GENAI_USE_VERTEXAI` is
+    /// truthy (`1` or a case-insensitive `true`), builds a Vertex AI client
+    /// with Application Default Credentials from `GOOGLE_CLOUD_PROJECT` and
+    /// `GOOGLE_CLOUD_LOCATION` — this path requires the `gemini-vertex`
+    /// feature. Otherwise builds a Gemini API (AI Studio) client from
+    /// `GOOGLE_API_KEY` or `GEMINI_API_KEY`.
+    ///
+    /// `GOOGLE_GENAI_USE_ENTERPRISE` takes precedence when both flags are set.
+    ///
+    /// The Vertex path builds Application Default Credentials, which requires
+    /// a Tokio runtime to be current — call from async code or under
+    /// `#[tokio::main]`.
+    ///
+    /// # Errors
+    ///
+    /// - A Vertex flag is truthy but `GOOGLE_CLOUD_PROJECT` or
+    ///   `GOOGLE_CLOUD_LOCATION` is not set.
+    /// - A Vertex flag is truthy but the `gemini-vertex` feature is not
+    ///   compiled.
+    /// - No Vertex flag is truthy and neither `GOOGLE_API_KEY` nor
+    ///   `GEMINI_API_KEY` is set.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_model::gemini::GeminiModel;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> adk_core::Result<()> {
+    /// let model = GeminiModel::from_env("gemini-2.5-flash")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_env(model: &str) -> Result<Self> {
+        if vertex_env_requested() {
+            #[cfg(feature = "gemini-vertex")]
+            {
+                let (project, location) = vertex_target_from_env()?;
+                return Self::new_google_cloud_adc(project, location, model);
+            }
+            #[cfg(not(feature = "gemini-vertex"))]
+            {
+                return Err(adk_core::AdkError::new(
+                    ErrorComponent::Model,
+                    ErrorCategory::Unsupported,
+                    "model.gemini.vertex_feature_missing",
+                    "Vertex AI backend selected via GOOGLE_GENAI_USE_ENTERPRISE/GOOGLE_GENAI_USE_VERTEXAI, but the `gemini-vertex` feature is not compiled. Enable the `gemini-vertex` feature (or `gemini-agent-platform` on the adk-rust umbrella crate) to route Gemini traffic through Vertex AI.",
+                )
+                .with_provider("gemini"));
+            }
+        }
+
+        let Some(api_key) =
+            env_non_empty("GOOGLE_API_KEY").or_else(|| env_non_empty("GEMINI_API_KEY"))
+        else {
+            return Err(adk_core::AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::InvalidInput,
+                "model.gemini.api_key_missing",
+                "No Gemini API key found. Set GOOGLE_API_KEY or GEMINI_API_KEY, or set GOOGLE_GENAI_USE_ENTERPRISE=true with GOOGLE_CLOUD_PROJECT/GOOGLE_CLOUD_LOCATION for Vertex AI.",
+            )
+            .with_provider("gemini"));
+        };
+        Self::new(api_key, model)
     }
 
     /// Set the retry configuration (builder pattern).
@@ -1720,6 +1853,16 @@ mod tests {
         },
         time::Duration,
     };
+
+    #[test]
+    fn env_flag_truthy_accepts_one_and_case_insensitive_true() {
+        for truthy in ["1", "true", "TRUE", "True", " true ", "tRuE"] {
+            assert!(env_flag_truthy(truthy), "expected {truthy:?} to be truthy");
+        }
+        for falsy in ["0", "false", "FALSE", "yes", "on", "", "2", "vertex"] {
+            assert!(!env_flag_truthy(falsy), "expected {falsy:?} to be falsy");
+        }
+    }
 
     #[test]
     fn constructor_is_backward_compatible_and_sync() {

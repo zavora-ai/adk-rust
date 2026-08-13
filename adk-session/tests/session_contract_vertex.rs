@@ -3,8 +3,8 @@
 mod common;
 
 use adk_core::{
-    AdkIdentity, AppName, Content, FileDataPart, FunctionResponseData, InlineDataPart, Part,
-    SessionId, UserId,
+    AdkIdentity, AppName, Content, ErrorCategory, FileDataPart, FunctionResponseData,
+    InlineDataPart, Part, SessionId, UserId,
 };
 use adk_session::{
     AppendEventRequest, CreateRequest, DeleteRequest, Event, GetRequest, ListRequest,
@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use google_cloud_auth::credentials::api_key_credentials;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
 const VERTEX_IDENTITY_STATE_KEY: &str = "__adk_vertex_identity_v1";
@@ -76,6 +76,10 @@ struct CreateSessionBody {
     user_id: String,
     #[serde(default)]
     session_state: HashMap<String, Value>,
+    // `ttl` and `expireTime` are the Session `expiration` oneof members in
+    // google/cloud/aiplatform/v1beta1/session.proto.
+    ttl: Option<String>,
+    expire_time: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -207,6 +211,31 @@ async fn create_session(
             );
         }
     };
+
+    if session.ttl.is_some() && session.expire_time.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(
+                json!({ "error": { "message": "ttl and expireTime are expiration oneof members" } }),
+            ),
+        );
+    }
+    if let Some(ttl) = session.ttl.as_deref()
+        && ttl.strip_suffix('s').is_none_or(|seconds| seconds.parse::<f64>().is_err())
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": { "message": "ttl must be a JSON duration string" } })),
+        );
+    }
+    if let Some(expire_time) = session.expire_time.as_deref()
+        && DateTime::parse_from_rfc3339(expire_time).is_err()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": { "message": "expireTime must be an RFC 3339 timestamp" } })),
+        );
+    }
 
     let mut db = state.db.lock().await;
     db.create_bodies.push(raw);
@@ -794,6 +823,18 @@ async fn test_service() -> (MockVertexState, VertexAiSessionService, tokio::task
 async fn test_service_with_reasoning_engine(
     reasoning_engine: Option<&str>,
 ) -> (MockVertexState, VertexAiSessionService, tokio::task::JoinHandle<()>) {
+    test_service_configured(|mut config| {
+        if let Some(reasoning_engine) = reasoning_engine {
+            config = config.with_reasoning_engine(reasoning_engine);
+        }
+        config
+    })
+    .await
+}
+
+async fn test_service_configured(
+    configure: impl FnOnce(VertexAiSessionConfig) -> VertexAiSessionConfig,
+) -> (MockVertexState, VertexAiSessionService, tokio::task::JoinHandle<()>) {
     let state = MockVertexState::default();
     let app = Router::new()
         .route(
@@ -816,11 +857,10 @@ async fn test_service_with_reasoning_engine(
         axum::serve(listener, app).await.expect("mock vertex server should run");
     });
 
-    let mut config = VertexAiSessionConfig::new("test-project", "us-central1")
-        .with_endpoint(format!("http://{addr}"));
-    if let Some(reasoning_engine) = reasoning_engine {
-        config = config.with_reasoning_engine(reasoning_engine);
-    }
+    let config = configure(
+        VertexAiSessionConfig::new("test-project", "us-central1")
+            .with_endpoint(format!("http://{addr}")),
+    );
     let credentials = api_key_credentials::Builder::new("test-api-key").build();
     let service =
         VertexAiSessionService::with_credentials(config, credentials).expect("build test service");
@@ -2450,6 +2490,235 @@ async fn test_vertex_rejects_invalid_base64_in_stored_content() {
     drop(db);
 
     server.abort();
+}
+
+#[tokio::test]
+async fn test_vertex_multi_turn_tool_conversation_round_trips_whole_objects() {
+    let (state, service, server) = test_service().await;
+    let created = service
+        .create(CreateRequest {
+            app_name: "1001".to_string(),
+            user_id: "user1".to_string(),
+            session_id: Some("golden-session".to_string()),
+            state: HashMap::new(),
+        })
+        .await
+        .expect("create golden session");
+
+    let mut user_turn = Event::new("inv-golden");
+    user_turn.author = "user".to_string();
+    user_turn.llm_response.content = Some(Content {
+        role: "user".to_string(),
+        parts: vec![Part::Text { text: "chart the weather in Paris".to_string() }],
+    });
+
+    let mut tool_call_turn = Event::new("inv-golden");
+    tool_call_turn.author = "model".to_string();
+    tool_call_turn.llm_response.content = Some(Content {
+        role: "model".to_string(),
+        parts: vec![
+            Part::Text { text: "Looking that up.".to_string() },
+            Part::FunctionCall {
+                name: "get_weather".to_string(),
+                args: json!({ "city": "Paris", "units": "metric" }),
+                id: None,
+                thought_signature: None,
+            },
+        ],
+    });
+
+    let mut tool_response_turn = Event::new("inv-golden");
+    tool_response_turn.author = "tool".to_string();
+    tool_response_turn.llm_response.content = Some(Content {
+        role: "tool".to_string(),
+        parts: vec![Part::FunctionResponse {
+            function_response: FunctionResponseData {
+                name: "get_weather".to_string(),
+                response: json!({ "tempC": 21, "condition": "sunny" }),
+                inline_data: vec![],
+                file_data: vec![],
+            },
+            id: None,
+            annotations: None,
+        }],
+    });
+    tool_response_turn.actions.state_delta.insert("lastCity".to_string(), json!("Paris"));
+
+    let mut answer_turn = Event::new("inv-golden");
+    answer_turn.author = "model".to_string();
+    answer_turn.llm_response.content = Some(Content {
+        role: "model".to_string(),
+        parts: vec![
+            Part::Text { text: "It is 21°C and sunny in Paris.".to_string() },
+            Part::InlineData {
+                mime_type: "image/png".to_string(),
+                data: vec![137, 80, 78, 71, 0, 255],
+                uri: None,
+                annotations: None,
+            },
+        ],
+    });
+
+    let turns = vec![user_turn, tool_call_turn, tool_response_turn, answer_turn];
+    let expected = turns
+        .iter()
+        .map(|event| serde_json::to_value(event).expect("serialize expected turn"))
+        .collect::<Vec<_>>();
+    for turn in turns {
+        service.append_event(created.id(), turn).await.expect("append golden turn");
+    }
+
+    {
+        let db = state.db.lock().await;
+        assert_eq!(db.append_bodies.len(), 4);
+        for body in &db.append_bodies {
+            assert_eq!(
+                body["rawEvent"]["_adkRust"]["contentSource"], "canonical",
+                "text, function call, function response, and inlineData parts must persist canonically",
+            );
+        }
+    }
+
+    let fetched = service
+        .get(GetRequest {
+            app_name: "1001".to_string(),
+            user_id: "user1".to_string(),
+            session_id: created.id().to_string(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("fetch golden session");
+    let restored = fetched
+        .events()
+        .all()
+        .iter()
+        .map(|event| serde_json::to_value(event).expect("serialize restored turn"))
+        .collect::<Vec<_>>();
+    assert_eq!(restored, expected, "reconstructed conversation must equal the appended events");
+    assert_eq!(fetched.state().get("lastCity"), Some(json!("Paris")));
+
+    server.abort();
+}
+
+#[test]
+fn test_vertex_config_from_env_reads_platform_variables() {
+    // Env mutation is process-isolated under nextest; keep every mutation of
+    // these variables inside this single test to avoid intra-process races.
+    unsafe {
+        std::env::remove_var("GOOGLE_CLOUD_PROJECT");
+        std::env::remove_var("GOOGLE_CLOUD_LOCATION");
+        std::env::remove_var("GOOGLE_CLOUD_AGENT_ENGINE_ID");
+    }
+    let error = VertexAiSessionConfig::from_env().expect_err("missing env vars must fail");
+    assert_eq!(error.category, ErrorCategory::InvalidInput);
+    assert_eq!(error.code, "session.vertex.missing_env");
+    assert!(
+        error
+            .message
+            .contains("GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION, GOOGLE_CLOUD_AGENT_ENGINE_ID."),
+        "error must name every missing variable: {}",
+        error.message,
+    );
+
+    unsafe {
+        std::env::set_var("GOOGLE_CLOUD_PROJECT", " test-project ");
+        std::env::set_var("GOOGLE_CLOUD_LOCATION", "us-central1");
+        std::env::set_var("GOOGLE_CLOUD_AGENT_ENGINE_ID", "   ");
+    }
+    let error = VertexAiSessionConfig::from_env().expect_err("blank engine ID counts as missing");
+    assert_eq!(error.category, ErrorCategory::InvalidInput);
+    assert!(
+        error.message.contains("variable(s): GOOGLE_CLOUD_AGENT_ENGINE_ID."),
+        "error must name only the blank variable: {}",
+        error.message,
+    );
+
+    unsafe {
+        std::env::set_var("GOOGLE_CLOUD_AGENT_ENGINE_ID", " 1234567890 ");
+    }
+    let config = VertexAiSessionConfig::from_env().expect("complete platform environment");
+    assert_eq!(config.project_id, "test-project");
+    assert_eq!(config.location, "us-central1");
+    assert_eq!(config.reasoning_engine.as_deref(), Some("1234567890"));
+    assert_eq!(config.ttl, None);
+    assert_eq!(config.expire_time, None);
+
+    unsafe {
+        std::env::remove_var("GOOGLE_CLOUD_PROJECT");
+        std::env::remove_var("GOOGLE_CLOUD_LOCATION");
+        std::env::remove_var("GOOGLE_CLOUD_AGENT_ENGINE_ID");
+    }
+}
+
+#[tokio::test]
+async fn test_vertex_create_sends_expiration_oneof_member() {
+    let (state, service, server) =
+        test_service_configured(|config| config.with_ttl(Duration::from_secs(86_400))).await;
+    service
+        .create(CreateRequest {
+            app_name: "1001".to_string(),
+            user_id: "user1".to_string(),
+            session_id: Some("ttl-session".to_string()),
+            state: HashMap::new(),
+        })
+        .await
+        .expect("create session with ttl");
+    {
+        let db = state.db.lock().await;
+        let body = db.create_bodies.last().expect("captured ttl create body");
+        assert_eq!(body["ttl"], "86400s");
+        assert!(body.get("expireTime").is_none());
+    }
+    server.abort();
+
+    let expire_time = DateTime::parse_from_rfc3339("2027-01-01T00:00:00Z")
+        .expect("parse expire time")
+        .with_timezone(&Utc);
+    let (state, service, server) =
+        test_service_configured(|config| config.with_expire_time(expire_time)).await;
+    service
+        .create(CreateRequest {
+            app_name: "1001".to_string(),
+            user_id: "user1".to_string(),
+            session_id: Some("expire-session".to_string()),
+            state: HashMap::new(),
+        })
+        .await
+        .expect("create session with expire time");
+    {
+        let db = state.db.lock().await;
+        let body = db.create_bodies.last().expect("captured expire-time create body");
+        assert_eq!(body["expireTime"], "2027-01-01T00:00:00Z");
+        assert!(body.get("ttl").is_none());
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn test_vertex_expiration_config_enforces_oneof_and_minimum_ttl() {
+    let config = VertexAiSessionConfig::new("test-project", "us-central1")
+        .with_ttl(Duration::from_secs(86_400))
+        .with_expire_time(Utc::now());
+    let error = VertexAiSessionService::with_credentials(
+        config,
+        api_key_credentials::Builder::new("test-api-key").build(),
+    )
+    .err()
+    .expect("setting both expiration oneof members must fail");
+    assert_eq!(error.category, ErrorCategory::InvalidInput);
+    assert!(error.message.contains("mutually exclusive"), "unexpected message: {}", error.message);
+
+    let config = VertexAiSessionConfig::new("test-project", "us-central1")
+        .with_ttl(Duration::from_secs(3_600));
+    let error = VertexAiSessionService::with_credentials(
+        config,
+        api_key_credentials::Builder::new("test-api-key").build(),
+    )
+    .err()
+    .expect("a TTL below 24 hours must fail");
+    assert_eq!(error.category, ErrorCategory::InvalidInput);
+    assert!(error.message.contains("86400s"), "unexpected message: {}", error.message);
 }
 
 #[tokio::test]
